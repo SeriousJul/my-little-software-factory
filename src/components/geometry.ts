@@ -3,12 +3,16 @@
  *
  * Every pane is a bordered box with one cell of inner padding, so its text
  * area is four cells smaller than the box in each dimension. The list pane
- * takes half the terminal width; the detail pane takes the rest. Keeping the
- * math in one place keeps the two panes in step when the layout changes.
+ * takes half the terminal width; the detail pane takes the rest. The list
+ * box takes its box width from this math as an exact cell count, so one
+ * computation owns the split and the rendered boxes can never drift from
+ * the geometry the panes lay their text on.
  */
 import { useTerminalDimensions } from "@opentui/react";
 
 export interface PaneGeometry {
+	/** The width of the pane's box in cells. */
+	paneCols: number;
 	/** The width of the pane's text area in cells. */
 	usableCols: number;
 	/** The height of the pane's text area in cells. */
@@ -26,6 +30,7 @@ export function usePaneGeometry(kind: "list" | "detail"): PaneGeometry {
 	const { width, height } = useTerminalDimensions();
 	const paneCols = kind === "list" ? Math.floor(width / 2) : width - Math.floor(width / 2);
 	return {
+		paneCols,
 		usableCols: Math.max(1, paneCols - 4),
 		visibleRows: Math.max(1, height - 4),
 	};

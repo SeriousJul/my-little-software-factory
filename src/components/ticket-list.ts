@@ -42,7 +42,11 @@ export function TicketList({ tickets, selectedIndex, focused }: TicketListProps)
 			borderColor: focused ? COLORS.borderFocused : COLORS.border,
 			padding: 1,
 			style: {
-				width: "50%",
+				// An exact cell count from the shared geometry, not "50%":
+				// OpenTUI rounds a percentage up on odd terminal widths, and
+				// the rounded box would no longer match the geometry the
+				// rows and the detail pane lay their text on.
+				width: geometry.paneCols,
 				flexGrow: 0,
 				flexShrink: 0,
 				flexDirection: "column",

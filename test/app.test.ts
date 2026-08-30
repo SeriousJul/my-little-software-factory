@@ -50,13 +50,24 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The panes wrap long text, so substring checks run on the frame with the
 // box borders stripped and the whitespace collapsed: wrapped lines merge
-// back into the source string.
+// back into the source string at their word-boundary breaks.
 const frameText = (frame: string) => frame.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ");
 const rowsOf = (frame: string) => frame.replace(/\n$/, "").split("\n");
 /** The terminal row of the selected ticket in the list pane. */
 const markerRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
+/**
+ * A stable leading substring of a ticket's description, for frame checks.
+ *
+ * It ends at a word boundary, so it survives the merge of wrapped lines:
+ * the wrap points are word boundaries too. The full description is fragile
+ * to a word wider than the pane: the hard wrap cuts the word mid-word, the
+ * merge turns the cut into a space, and the check would fail with a
+ * confusing last-frame dump at the press helper's deadline.
+ */
+const descriptionLeadOf = (ticket: Ticket): string =>
+	ticket.description.split(" ").slice(0, 4).join(" ");
 const showsTicket = (frame: string, ticket: Ticket) =>
-	frameText(frame).includes(ticket.description);
+	frameText(frame).includes(descriptionLeadOf(ticket));
 const agentRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.includes("Agent: unassigned"));
 /** Assert every ticket state badge is on screen, read off the frame. */
@@ -517,6 +528,38 @@ describe("the control plane", () => {
 				height,
 			);
 		}
+	});
+
+	test("odd terminal widths keep the row width and the pane padding intact", async () => {
+		await withApp(
+			async (setup) => {
+				const rows = rowsOf(setup.captureCharFrame());
+				expect(rows).toHaveLength(25);
+				for (const row of rows) {
+					expect(row.length).toBe(75);
+				}
+				// The split puts the list box on columns 0-36 and the detail
+				// box on 37-74. At an odd width a "50%" list would take 38
+				// columns, and the shared geometry would then lay text one
+				// cell off the rendered box.
+				for (const row of rows.slice(1, -1)) {
+					expect(row[0]).toBe("│");
+					expect(row[36]).toBe("│");
+					expect(row[37]).toBe("│");
+					expect(row[74]).toBe("│");
+					// One cell of padding between every border and the text:
+					// no text cell sits adjacent to a border.
+					expect(row[1]).toBe(" ");
+					expect(row[35]).toBe(" ");
+					expect(row[38]).toBe(" ");
+					expect(row[73]).toBe(" ");
+				}
+				// The detail pane carries its content at this size.
+				expect(frameText(setup.captureCharFrame())).toContain("GitHub: open");
+			},
+			75,
+			25,
+		);
 	});
 
 	test("list rows keep the title and drop the repository when the row cannot hold both", async () => {
