@@ -28,6 +28,26 @@ An autonomous program that executes a ticket.
 The control plane is agent-agnostic and assumes no specific agent runtime (pi, codex, claude code, or others).
 _Avoid_: bot, worker
 
+**Agent type**:
+The declarative description of a class of agents: its name, how to start it, and how its settings (model, thinking level) map to the agent's own parameters.
+An agent is a running instance of an agent type.
+_Avoid_: agent definition, plugin, driver
+
 **Handoff**:
-Assigning a ticket to an agent and starting its execution.
-_Avoid_: assign, dispatch
+Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
+_Avoid_: assign, dispatch, launch
+
+**Task type**:
+A one-word category of work (for example "implement", "fix", "review") that selects the prompt template of a handoff.
+_Avoid_: prompt, template
+
+**Environment**:
+The place where an agent runs a ticket.
+Kinds: a live worktree (the existing checkout of the ticket's repository), a worktree (a fresh git worktree created for the ticket), and a container (a future kind, not yet built).
+_Avoid_: sandbox, isolation
+
+**Override**:
+A one-shot change to the settings of a single handoff, made in the override panel before the handoff starts.
+It applies to that handoff only and never becomes a new default.
+The settings are: agent type, environment kind, task type, model, and thinking level.
+_Avoid_: custom setting, tweak
