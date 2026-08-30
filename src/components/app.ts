@@ -23,7 +23,7 @@ import { HANDOFF_ENVIRONMENT_KINDS } from "../domain/ticket.ts";
 import { type HandoffChoice, handOffTicket } from "../handoff.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
-import { type AgentSettings, type OverrideChoice, OverridePanel } from "./override-panel.ts";
+import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import { detailLines, TicketDetail } from "./ticket-detail.ts";
@@ -61,7 +61,7 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	const [detailScroll, setDetailScroll] = useState(0);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
-	const [override, setOverride] = useState<OverrideChoice | null>(null);
+	const [override, setOverride] = useState<HandoffChoice | null>(null);
 
 	// The in-flight guard is a ref, not state: the key parser can deliver
 	// several key events in one tick, and a state read in that tick would
@@ -282,9 +282,9 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 				initial: override,
 				onConfirm: (choice) => {
 					setOverride(null);
-					// The panel's environment row is typed to the handoff
-					// kinds, so the choice needs no cast.
-					startHandoff({ ...choice });
+					// The panel edits the handoff choice directly, so the
+					// confirm needs no join and no cast.
+					startHandoff(choice);
 				},
 				onCancel: () => {
 					setOverride(null);

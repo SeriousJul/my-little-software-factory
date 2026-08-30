@@ -340,18 +340,27 @@ export function settingArgs(
 
 /** Substitute {value} in a setting template and split the result on whitespace. */
 export function renderSettingArgs(template: string, value: string): string[] {
-	return template
-		.replace(/\{value\}/g, value)
-		.split(/\s+/)
-		.filter((part) => part !== "");
+	return (
+		template
+			// The function replacer keeps dollar patterns in the value ($&, $1)
+			// literal: a string replacement would interpret them.
+			.replace(/\{value\}/g, () => value)
+			.split(/\s+/)
+			.filter((part) => part !== "")
+	);
 }
 
 /** Fill the {repository}, {title}, and {description} placeholders of a prompt template. */
 export function renderPrompt(template: string, ticket: Ticket): string {
-	return template
-		.replace(/\{repository\}/g, ticket.repository)
-		.replace(/\{title\}/g, ticket.title)
-		.replace(/\{description\}/g, ticket.description);
+	const values: Record<string, string> = {
+		repository: ticket.repository,
+		title: ticket.title,
+		description: ticket.description,
+	};
+	// One pass with a function replacer and a name lookup: the substituted
+	// values are never re-scanned (a title that carries {description} stays
+	// literal), and dollar patterns in the values stay literal.
+	return template.replace(/\{(repository|title|description)\}/g, (_match, name) => values[name]);
 }
 
 /**

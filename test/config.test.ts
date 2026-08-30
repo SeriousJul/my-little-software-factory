@@ -8,11 +8,11 @@
  * default environment). The error is always one readable line an operator
  * can act on.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test } from "vitest";
 
 import {
 	ConfigError,
@@ -24,10 +24,19 @@ import {
 	validateConfig,
 } from "../src/config.ts";
 
+const tempDirs: string[] = [];
+
 function inTempDir(): (path: string) => string {
 	const dir = mkdtempSync(join(tmpdir(), "factory-config-"));
+	tempDirs.push(dir);
 	return (name: string) => join(dir, name);
 }
+
+afterAll(() => {
+	for (const dir of tempDirs) {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 /** A minimal valid config file body, for the negative tests to break. */
 const validBody = `

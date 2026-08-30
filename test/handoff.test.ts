@@ -76,6 +76,10 @@ describe("renderSettingArgs", () => {
 			"model_reasoning_effort=high",
 		]);
 	});
+
+	test("dollar patterns in the value stay literal", () => {
+		expect(renderSettingArgs("--model {value}", "$&-$1-model")).toEqual(["--model", "$&-$1-model"]);
+	});
 });
 
 describe("renderPrompt", () => {
@@ -84,6 +88,18 @@ describe("renderPrompt", () => {
 		expect(prompt).toBe(
 			"Repo: acme/billing\nTitle: Retry policy for webhooks\nAdd a retry policy.",
 		);
+	});
+
+	test("a value that carries another placeholder is not re-scanned", () => {
+		const tricky: Ticket = { ...ticket, title: "Handle {description} in the body" };
+		const prompt = renderPrompt("Title: {title}\nBody: {description}", tricky);
+		expect(prompt).toBe("Title: Handle {description} in the body\nBody: Add a retry policy.");
+	});
+
+	test("dollar patterns in a value stay literal", () => {
+		const tricky: Ticket = { ...ticket, description: "match $& and $1 verbatim" };
+		const prompt = renderPrompt("Body: {description}", tricky);
+		expect(prompt).toBe("Body: match $& and $1 verbatim");
 	});
 });
 

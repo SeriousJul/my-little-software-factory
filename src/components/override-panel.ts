@@ -26,17 +26,9 @@ import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
 import type { EnvironmentKind } from "../domain/ticket.ts";
+import type { HandoffChoice } from "../handoff.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-/** The handoff choices the panel edits. */
-export interface OverrideChoice {
-	agentType: string;
-	environment: EnvironmentKind;
-	taskType: string;
-	model: string;
-	thinking: string;
-}
 
 /** Which settings an agent type maps, for hiding rows it does not support. */
 export interface AgentSettings {
@@ -51,8 +43,8 @@ interface OverridePanelProps {
 	taskTypes: readonly string[];
 	agentSettings: Readonly<Record<string, AgentSettings>>;
 	/** The values the panel starts on: the config defaults. */
-	initial: OverrideChoice;
-	onConfirm: (choice: OverrideChoice) => void;
+	initial: HandoffChoice;
+	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
 }
 
@@ -128,7 +120,7 @@ export function OverridePanel({
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const geometry = panelGeometry(terminalWidth, terminalHeight);
-	const [choice, setChoice] = useState<OverrideChoice>({ ...initial });
+	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
 	const [selected, setSelected] = useState(0);
 
 	// The key parser can deliver several key events in one tick. React batches
@@ -136,7 +128,7 @@ export function OverridePanel({
 	// stale value and drop every update but the last. The ref mirrors the
 	// choice plus the updates of the current tick, so back-to-back keys and
 	// a confirm in the same tick all see the final value.
-	const choiceRef = useRef<OverrideChoice>(choice);
+	const choiceRef = useRef<HandoffChoice>(choice);
 
 	const allRows = rowsFor(choice, agents, environments, taskTypes, agentSettings);
 	// The terminal too short for every row drops the last one, the settings
@@ -146,7 +138,7 @@ export function OverridePanel({
 	const cursor = Math.min(selected, rows.length - 1);
 	const row = rows[cursor];
 
-	const commit = (update: (current: OverrideChoice) => OverrideChoice) => {
+	const commit = (update: (current: HandoffChoice) => HandoffChoice) => {
 		choiceRef.current = update(choiceRef.current);
 		setChoice(choiceRef.current);
 	};
@@ -275,7 +267,7 @@ function innerWidthOf(geometry: PanelGeometry): number {
 
 /** The rows the panel offers for the current choice, in order. */
 function rowsFor(
-	choice: OverrideChoice,
+	choice: HandoffChoice,
 	agents: readonly string[],
 	environments: readonly string[],
 	taskTypes: readonly string[],

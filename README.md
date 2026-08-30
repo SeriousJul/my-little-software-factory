@@ -161,7 +161,9 @@ prompt an agent receives. The repository mappings are the one section the contro
 writes back: a sibling clone records its path there. The write-back is
 atomic: the config goes to a temp file in the same directory and the rename
 over the target is one step, so a crash leaves either the old file or the
-new one, never a truncated file the next start would reject.
+new one, never a truncated file the next start would reject. The write-back
+serializes the whole config, so operator comments in the file are dropped at
+the first write-back: the data round-trips, the comments do not.
 
 ## Shape
 
