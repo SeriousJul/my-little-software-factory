@@ -19,12 +19,13 @@
 		"typecheck": "tsc"
 	},
 	"engines": {
-		"node": ">=22"
+		"node": ">=26.4.0"
 	},
 	"dependencies": {
 		"@opentui/core": "^0.5.9",
 		"@opentui/react": "^0.5.9",
-		"react": "^19.2.0"
+		"react": "^19.2.0",
+		"string-width": "^8.2.2"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.11",

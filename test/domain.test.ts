@@ -1,12 +1,13 @@
 /**
- * Consumer-level tests for the domain and the built-in data.
+ * Consumer-level tests for the domain.
  *
  * These assert what a consumer of the module can observe: the ticket state
- * machine's transitions and the shape of the sample ticket set.
+ * machine's transitions. The sample data contract is not tested here. It is
+ * observed through the rendered terminal frame in the app tests, the same
+ * way an operator would see it.
  */
 import { describe, expect, test } from "vitest";
 
-import { SAMPLE_TICKETS } from "../src/data/sample-tickets.ts";
 import {
 	advanceTicket,
 	canTransition,
@@ -26,80 +27,35 @@ const TICKET: Ticket = {
 };
 
 describe("the ticket state machine", () => {
-	test("the pipeline is open, handed-off, running, done", () => {
+	test("the state line is open, handed-off, running, done", () => {
 		expect(TICKET_STATES).toEqual(["open", "handed-off", "running", "done"]);
 	});
 
-	test("a ticket advances one step forward at a time", () => {
-		let ticket = TICKET;
-		ticket = advanceTicket(ticket);
-		expect(ticket.state).toBe("handed-off");
-		ticket = advanceTicket(ticket);
-		expect(ticket.state).toBe("running");
-		ticket = advanceTicket(ticket);
-		expect(ticket.state).toBe("done");
-	});
-
-	test("advanceTicket does not mutate the input", () => {
-		const moved = advanceTicket(TICKET);
-		expect(moved).not.toBe(TICKET);
-		expect(TICKET.state).toBe("open");
-	});
-
-	test("a done ticket cannot advance", () => {
-		const done = { ...TICKET, state: "done" as const };
-		expect(() => advanceTicket(done)).toThrow();
-	});
-
-	test("only forward steps are allowed", () => {
+	test("a ticket advances through the state line in order", () => {
 		expect(nextStateOf("open")).toBe("handed-off");
 		expect(nextStateOf("handed-off")).toBe("running");
 		expect(nextStateOf("running")).toBe("done");
-		expect(nextStateOf("done")).toBeNull();
+	});
 
+	test("a done ticket has no next state", () => {
+		expect(nextStateOf("done")).toBeNull();
+	});
+
+	test("advanceTicket returns a new ticket in the next state", () => {
+		const advanced = advanceTicket(TICKET);
+		expect(advanced.state).toBe("handed-off");
+		expect(advanced).not.toBe(TICKET);
+		expect(TICKET.state).toBe("open");
+	});
+
+	test("advanceTicket refuses a done ticket", () => {
+		expect(() => advanceTicket({ ...TICKET, state: "done" })).toThrow();
+	});
+
+	test("transitions only move forward one step", () => {
 		expect(canTransition("open", "handed-off")).toBe(true);
 		expect(canTransition("open", "running")).toBe(false);
 		expect(canTransition("open", "open")).toBe(false);
 		expect(canTransition("done", "open")).toBe(false);
-	});
-});
-
-describe("the built-in sample tickets", () => {
-	test("every sample ticket is a valid ticket", () => {
-		expect(SAMPLE_TICKETS.length).toBeGreaterThanOrEqual(3);
-		expect(SAMPLE_TICKETS.length).toBeLessThanOrEqual(5);
-		for (const ticket of SAMPLE_TICKETS) {
-			expect(TICKET_STATES).toContain(ticket.state);
-			expect(ticket.id).toBeTruthy();
-			expect(ticket.title).toBeTruthy();
-			expect(ticket.repository).toMatch(/^[^/]+\/[^/]+$/);
-		}
-	});
-
-	test("the samples span multiple repositories", () => {
-		const repos = new Set(SAMPLE_TICKETS.map((t) => t.repository));
-		expect(repos.size).toBeGreaterThanOrEqual(2);
-		expect(repos.size).toBeLessThanOrEqual(3);
-	});
-
-	test("at least one ticket sits in each ticket state", () => {
-		const states = new Set(SAMPLE_TICKETS.map((t) => t.state));
-		for (const state of TICKET_STATES) {
-			expect(states).toContain(state);
-		}
-	});
-
-	test("at least one ticket carries the GitHub closed status", () => {
-		expect(SAMPLE_TICKETS.some((t) => t.githubClosed)).toBe(true);
-	});
-
-	test("ticket state and GitHub status stay distinct", () => {
-		// A closed GitHub issue is still a live ticket in the pipeline.
-		const closed = SAMPLE_TICKETS.find((t) => t.githubClosed);
-		expect(closed).toBeDefined();
-		expect(closed?.state).toBe("done");
-		// And an open ticket can exist while its issue is closed or open,
-		// independently of state.
-		expect(SAMPLE_TICKETS.some((t) => t.githubClosed === false && t.state !== "open")).toBe(true);
 	});
 });

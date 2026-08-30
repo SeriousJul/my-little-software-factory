@@ -4,32 +4,61 @@
  * It carries the data a future handoff will need: repository, ticket state,
  * and the assigned agent, plus the GitHub closed status as a source fact.
  *
- * The pane builds its own line list and windows it to the pane height, the
- * same way the list pane windows its tickets. The description wraps to the
- * pane width. No child is ever rendered outside the pane, so the frame stays
- * clean at any terminal size.
+ * The pane windows its lines to the pane height and slides them by
+ * `scroll`. The lines are built by `detailLines`, a pure function: the app
+ * shell needs the line count to know how far the detail can scroll, and
+ * scrolling is a keybinding, not a pane concern.
  */
-import { createElement, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
+import { createElement } from "@opentui/react";
 
 import type { Ticket } from "../domain/ticket.ts";
+import { maxScrollOf } from "./geometry.ts";
+import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS, STATE_COLORS, stateBadge } from "./theme.ts";
 
+/** One line of ticket detail, at most `usableCols` cells wide. */
+export interface DetailLine {
+	text: string;
+	fg: string;
+}
+
+/**
+ * Flatten a ticket's detail into lines.
+ *
+ * The title and the description wrap to the pane width, so long content is
+ * reachable through scrolling instead of clipped away.
+ */
+export function detailLines(ticket: Ticket, usableCols: number): DetailLine[] {
+	const lines: DetailLine[] = [];
+	const pushWrapped = (text: string, fg: string) => {
+		for (const line of wrapToWidth(text, usableCols)) {
+			lines.push({ text: line, fg });
+		}
+	};
+
+	pushWrapped(ticket.title, COLORS.textBright);
+	pushWrapped(ticket.repository, COLORS.text);
+	lines.push({ text: stateBadge(ticket.state), fg: STATE_COLORS[ticket.state] });
+	pushWrapped(`Agent: ${ticket.agent ?? "unassigned"}`, COLORS.text);
+	pushWrapped(`GitHub: ${ticket.githubClosed ? "closed" : "open"}`, COLORS.text);
+	lines.push({ text: " ", fg: COLORS.dim });
+	pushWrapped(ticket.description, COLORS.dim);
+
+	// The last guard: no line may exceed the pane, whatever it holds.
+	return lines.map((line) => ({ text: truncateToWidth(line.text, usableCols), fg: line.fg }));
+}
+
 interface TicketDetailProps {
-	ticket: Ticket;
+	lines: readonly DetailLine[];
+	visibleRows: number;
+	scroll: number;
 	focused: boolean;
 }
 
-export function TicketDetail({ ticket, focused }: TicketDetailProps) {
-	const { width, height } = useTerminalDimensions();
-
-	// The pane takes the half the list does not. The border and the padding
-	// each eat two columns and two rows.
-	const paneCols = Math.floor(width / 2);
-	const usableCols = Math.max(1, paneCols - 4);
-	const visibleRows = Math.max(1, height - 4);
-
-	const lines = detailLines(ticket, usableCols).slice(0, visibleRows);
+export function TicketDetail({ lines, visibleRows, scroll, focused }: TicketDetailProps) {
+	const maxScroll = maxScrollOf(lines.length, visibleRows);
+	const start = Math.max(0, Math.min(scroll, maxScroll));
+	const visible = lines.slice(start, start + visibleRows);
 
 	return createElement(
 		"box",
@@ -45,73 +74,6 @@ export function TicketDetail({ ticket, focused }: TicketDetailProps) {
 				overflow: "hidden",
 			},
 		},
-		...lines,
+		...visible.map((line, i) => createElement("text", { key: i, fg: line.fg }, line.text)),
 	);
-}
-
-function detailLines(ticket: Ticket, usableCols: number): ReactElement[] {
-	const lines: ReactElement[] = [
-		createElement("text", { fg: COLORS.textBright }, clip(ticket.title, usableCols)),
-		createElement("text", { fg: COLORS.text }, clip(ticket.repository, usableCols)),
-		createElement(
-			"text",
-			null,
-			createElement("span", { fg: STATE_COLORS[ticket.state] }, stateBadge(ticket.state)),
-		),
-		createElement(
-			"text",
-			{ fg: COLORS.text },
-			clip(`Agent: ${ticket.agent ?? "unassigned"}`, usableCols),
-		),
-		createElement(
-			"text",
-			{ fg: COLORS.text },
-			clip(`GitHub: ${ticket.githubClosed ? "closed" : "open"}`, usableCols),
-		),
-		createElement("text", null, " "),
-	];
-	for (const line of wrapText(ticket.description, usableCols)) {
-		lines.push(createElement("text", { fg: COLORS.dim }, line));
-	}
-	return lines;
-}
-
-/** Wrap words to a fixed width; a single wider word is cut hard. */
-function wrapText(text: string, width: number): string[] {
-	const lines: string[] = [];
-	let current = "";
-	for (const word of text.split(" ")) {
-		if (word.length === 0) {
-			continue;
-		}
-		let piece = word;
-		while (piece.length > width) {
-			if (current.length > 0) {
-				lines.push(current);
-				current = "";
-			}
-			lines.push(piece.slice(0, width));
-			piece = piece.slice(width);
-		}
-		if (current.length === 0) {
-			current = piece;
-		} else if (current.length + 1 + piece.length <= width) {
-			current = `${current} ${piece}`;
-		} else {
-			lines.push(current);
-			current = piece;
-		}
-	}
-	if (current.length > 0) {
-		lines.push(current);
-	}
-	return lines;
-}
-
-/** Cut a single line to a fixed width. */
-function clip(text: string, width: number): string {
-	if (text.length <= width) {
-		return text;
-	}
-	return `${text.slice(0, width - 3)}...`;
 }
