@@ -15,23 +15,20 @@ export interface PaneGeometry {
 	visibleRows: number;
 }
 
-function usePaneGeometry(kind: "list" | "detail"): PaneGeometry {
+/**
+ * The geometry of one pane of the split.
+ *
+ * "list" takes the left half of the terminal, "detail" takes the half the
+ * list does not take. One function serves both panes, so the two stay in
+ * step when the layout changes.
+ */
+export function usePaneGeometry(kind: "list" | "detail"): PaneGeometry {
 	const { width, height } = useTerminalDimensions();
 	const paneCols = kind === "list" ? Math.floor(width / 2) : width - Math.floor(width / 2);
 	return {
 		usableCols: Math.max(1, paneCols - 4),
 		visibleRows: Math.max(1, height - 4),
 	};
-}
-
-/** The geometry of the list pane: the left half of the terminal. */
-export function useListGeometry(): PaneGeometry {
-	return usePaneGeometry("list");
-}
-
-/** The geometry of the detail pane: the half the list does not take. */
-export function useDetailGeometry(): PaneGeometry {
-	return usePaneGeometry("detail");
 }
 
 /**

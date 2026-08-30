@@ -53,17 +53,3 @@ export function canTransition(from: TicketState, to: TicketState): boolean {
 export function nextStateOf(state: TicketState): TicketState | null {
 	return NEXT_STATE[state];
 }
-
-/**
- * Move a ticket one step forward in the line.
- *
- * Pure: returns a new ticket, does not mutate the input.
- * Throws when the ticket is already done.
- */
-export function advanceTicket(ticket: Ticket): Ticket {
-	const next = NEXT_STATE[ticket.state];
-	if (next === null) {
-		throw new Error(`ticket ${ticket.id} is already done`);
-	}
-	return { ...ticket, state: next };
-}

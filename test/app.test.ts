@@ -6,7 +6,7 @@
  * on what an operator would see. The sample-data contract is observed the
  * same way: no test reads the sample data directly and passes.
  *
- * Two harness rules keep the suite honest:
+ * Three harness rules keep the suite honest:
  *
  * - Waits end on the effect being asserted, or on a hard deadline. Keys
  *   dispatch through the stdin parser's 20ms escape-sequence timer, which
@@ -48,14 +48,15 @@ const STATE_BADGES = TICKET_STATES.map((state) => `[${state}]`);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// The panes wrap long text, so substring checks run on frames with the box
-// borders stripped and the whitespace collapsed: wrapped lines merge back
-// into the source string.
-const flat = (frame: string) => frame.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ");
+// The panes wrap long text, so substring checks run on the frame with the
+// box borders stripped and the whitespace collapsed: wrapped lines merge
+// back into the source string.
+const frameText = (frame: string) => frame.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ");
 const rowsOf = (frame: string) => frame.replace(/\n$/, "").split("\n");
 /** The terminal row of the selected ticket in the list pane. */
 const markerRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
-const showsTicket = (frame: string, ticket: Ticket) => flat(frame).includes(ticket.description);
+const showsTicket = (frame: string, ticket: Ticket) =>
+	frameText(frame).includes(ticket.description);
 const agentRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.includes("Agent: unassigned"));
 /** Assert every ticket state badge is on screen, read off the frame. */
@@ -191,7 +192,7 @@ async function settle(setup: Setup, maxMs = 300): Promise<string> {
 describe("the control plane", () => {
 	test("list pane shows every sample ticket with title, repository, and state badge", async () => {
 		await withApp(async (setup) => {
-			const frame = flat(setup.captureCharFrame());
+			const frame = frameText(setup.captureCharFrame());
 			for (const ticket of SAMPLE_TICKETS) {
 				expect(frame).toContain(ticket.title);
 				expect(frame).toContain(ticket.repository);
@@ -202,7 +203,7 @@ describe("the control plane", () => {
 
 	test("detail pane shows the full detail of the selected ticket", async () => {
 		await withApp(async (setup) => {
-			const frame = flat(setup.captureCharFrame());
+			const frame = frameText(setup.captureCharFrame());
 			const first = SAMPLE_TICKETS[0];
 			// The full title and description live in the detail pane.
 			expect(frame).toContain(first.description);
@@ -214,7 +215,7 @@ describe("the control plane", () => {
 	test("the sample-data contract is observable in the rendered frame", async () => {
 		await withApp(async (setup) => {
 			// Every ticket state is on screen at once.
-			let frame = flat(setup.captureCharFrame());
+			let frame = frameText(setup.captureCharFrame());
 			expectStateBadges(frame);
 
 			// The sample set spans more than one repository, read off the
@@ -229,7 +230,7 @@ describe("the control plane", () => {
 					showsTicket(f, SAMPLE_TICKETS[i]),
 				);
 			}
-			frame = flat(setup.captureCharFrame());
+			frame = frameText(setup.captureCharFrame());
 			expect(frame).toContain("GitHub: closed");
 			// The closed ticket is done: ticket state and GitHub status
 			// stay distinct facts.
@@ -380,7 +381,8 @@ describe("the control plane", () => {
 				}
 				const atBottom = await awaitFrame(
 					setup,
-					(f) => flat(f).includes("their retries.") && !f.includes("Retry policy for webhooks"),
+					(f) =>
+						frameText(f).includes("their retries.") && !f.includes("Retry policy for webhooks"),
 					"the detail to reach its bottom",
 				);
 
@@ -414,7 +416,7 @@ describe("the control plane", () => {
 			async (setup) => {
 				// The pane shows two rows at this height: the first two tickets
 				// only.
-				const frame = flat(setup.captureCharFrame());
+				const frame = frameText(setup.captureCharFrame());
 				expect(frame).toContain(SAMPLE_TICKETS[0].title);
 				expect(frame).toContain(SAMPLE_TICKETS[1].title);
 				expect(frame).not.toContain(SAMPLE_TICKETS[2].title);
@@ -432,14 +434,16 @@ describe("the control plane", () => {
 					"j",
 					"the window to keep the third ticket in view",
 					(f) =>
-						flat(f).includes(SAMPLE_TICKETS[2].title) && !flat(f).includes(SAMPLE_TICKETS[0].title),
+						frameText(f).includes(SAMPLE_TICKETS[2].title) &&
+						!frameText(f).includes(SAMPLE_TICKETS[0].title),
 				);
 				await press(
 					setup,
 					"j",
 					"the window to slide to the last tickets",
 					(f) =>
-						flat(f).includes(SAMPLE_TICKETS[3].title) && !flat(f).includes(SAMPLE_TICKETS[1].title),
+						frameText(f).includes(SAMPLE_TICKETS[3].title) &&
+						!frameText(f).includes(SAMPLE_TICKETS[1].title),
 				);
 			},
 			WIDTH,
@@ -504,7 +508,7 @@ describe("the control plane", () => {
 						expect(row.length).toBe(width);
 					}
 					// Both panes and every sample state survive at this size.
-					const frame = flat(setup.captureCharFrame());
+					const frame = frameText(setup.captureCharFrame());
 					expect(frame).toContain("Tickets");
 					expect(frame).toContain("Detail");
 					expectStateBadges(frame);
@@ -513,6 +517,37 @@ describe("the control plane", () => {
 				height,
 			);
 		}
+	});
+
+	test("list rows keep the title and drop the repository when the row cannot hold both", async () => {
+		await withApp(
+			async (setup) => {
+				const rows = rowsOf(setup.captureCharFrame());
+				expect(rows).toHaveLength(12);
+				// Every terminal row is exactly as wide as the terminal:
+				// nothing wrapped or overflowed.
+				for (const row of rows) {
+					expect(row.length).toBe(60);
+				}
+				// At this width the row budget after the marker and the badge
+				// cannot hold both the repository and a readable title. The
+				// title keeps its space, and the repository drops from the list
+				// row instead of pushing the title out.
+				const row = rows.find((r) => r.includes("[handed-off]"));
+				expect(row).toBeDefined();
+				// The list pane's content cells, borders and padding stripped:
+				// marker, badge, gap, and the title cut to the eleven cells
+				// the row still has.
+				const listHalf = (row ?? "").slice(2, 28);
+				expect(listHalf).toBe("  [handed-off] Fix pan dri");
+				expect(listHalf).not.toContain("acme/");
+				// The repository stays reachable in the detail pane of the
+				// selected ticket.
+				expect(frameText(setup.captureCharFrame())).toContain("acme/billing");
+			},
+			60,
+			12,
+		);
 	});
 
 	test("narrow terminals drop fields instead of corrupting rows", async () => {

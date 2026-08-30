@@ -55,6 +55,8 @@ With the detail focused, they scroll the detail, and a new selection starts
 the detail at the top.
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.
+When a list row cannot hold both, the title is kept and the repository
+drops, so the title stays readable in a split terminal.
 
 ## Shape
 
@@ -64,6 +66,7 @@ instead of wrapping it.
 - `src/domain/`: the Ticket type and the ticket state machine.
 - `src/data/`: the built-in sample tickets.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
-  pane, the shared pane geometry, and the display-width-aware text helpers.
+  pane, the shared pane geometry, the shared palette, and the
+  display-width-aware text helpers.
 - `test/`: the test suite.
   The seam is the rendered terminal frame.

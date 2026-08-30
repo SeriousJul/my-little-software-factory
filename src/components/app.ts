@@ -12,7 +12,7 @@ import { createElement, useKeyboard, useRenderer } from "@opentui/react";
 import { useState } from "react";
 
 import { SAMPLE_TICKETS } from "../data/sample-tickets.ts";
-import { maxScrollOf, useDetailGeometry } from "./geometry.ts";
+import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { detailLines, TicketDetail } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 
@@ -42,7 +42,7 @@ export function App() {
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	const [detailScroll, setDetailScroll] = useState(0);
 
-	const detailGeometry = useDetailGeometry();
+	const detailGeometry = usePaneGeometry("detail");
 	const lines = detailLines(SAMPLE_TICKETS[selectedIndex], detailGeometry.usableCols);
 	const maxScroll = maxScrollOf(lines.length, detailGeometry.visibleRows);
 	const scroll = Math.min(detailScroll, maxScroll);

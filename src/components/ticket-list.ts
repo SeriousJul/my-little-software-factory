@@ -2,16 +2,17 @@
  * The ticket list pane: one row per ticket, windowed to the pane height.
  *
  * Each row carries the ticket's marker, state badge, title, and repository,
- * laid out on an exact cell budget so a row never overflows the pane. When
- * the terminal is narrow, the repository drops out instead of wrapping the
- * row. The window slides so the selected ticket stays visible when the
- * tickets overflow the pane.
+ * laid out on an exact budget of cells so a row never overflows the pane.
+ * When the terminal is narrow, the repository drops out before the title
+ * does, so a row never wraps and the title stays readable. The window
+ * slides so the selected ticket stays visible when the tickets overflow the
+ * pane.
  */
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
 import type { Ticket } from "../domain/ticket.ts";
-import { useListGeometry, windowOf } from "./geometry.ts";
+import { usePaneGeometry, windowOf } from "./geometry.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { BADGE_WIDTH, COLORS, STATE_COLORS, stateBadge } from "./theme.ts";
 
@@ -25,7 +26,7 @@ interface TicketListProps {
 }
 
 export function TicketList({ tickets, selectedIndex, focused }: TicketListProps) {
-	const geometry = useListGeometry();
+	const geometry = usePaneGeometry("list");
 
 	// The window starts where the selection sits on the window's last row.
 	// `windowOf` clamps that start, so the window slides only when the
@@ -63,8 +64,9 @@ export function TicketList({ tickets, selectedIndex, focused }: TicketListProps)
  *
  * The marker and the badge take their fixed widths, the repository keeps
  * its natural width at the right edge with one gap column, and the title
- * takes whatever is left. When the budget cannot hold the repository, the
- * title takes its space instead: a field is dropped, never wrapped.
+ * takes whatever is left. The repository is dropped when it would leave the
+ * title less than a gap column and one text cell, so the title drops last:
+ * a field is dropped, never wrapped.
  */
 function rowSpans(ticket: Ticket, selected: boolean, usableCols: number): ReactElement[] {
 	const spans: ReactElement[] = [];
@@ -90,7 +92,10 @@ function rowSpans(ticket: Ticket, selected: boolean, usableCols: number): ReactE
 
 	const titleFg = selected ? COLORS.textBright : COLORS.text;
 	const repoWidth = widthOf(ticket.repository);
-	const repoFits = budget >= REPO_GAP + repoWidth;
+	// The title keeps at least its gap column and one text cell. When the
+	// repository would take that from it, the repository drops instead.
+	const titleFloor = hasBadge ? REPO_GAP + 1 : 1;
+	const repoFits = budget >= REPO_GAP + repoWidth + titleFloor;
 	let titleField = Math.max(0, budget - (repoFits ? REPO_GAP + repoWidth : 0));
 
 	// A gap column between the badge and the title, so the title never
