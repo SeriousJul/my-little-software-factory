@@ -27,14 +27,25 @@ const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 /** Command output stays small (herdr JSON, git status lines). */
 const COMMAND_MAX_BUFFER = 10 * 1024 * 1024;
 
+/** The limits of the real runner; tests run real commands against small ones. */
+export interface ChildProcessRunnerOptions {
+	/** Kill a command that runs past this. Default: ten minutes. */
+	timeoutMs?: number;
+	/** Fail a command that produces more output than this. Default: 10 MB. */
+	maxBuffer?: number;
+}
+
 /**
  * The real runner: one child process per command through execFile.
  *
- * A program that cannot start (not installed, not in PATH) or a command
- * that runs past the timeout is a failed command with a readable stderr,
- * not a thrown error: the caller reports the reason in the TUI.
+ * A program that cannot start (not installed, not in PATH), a command that
+ * runs past the timeout, and a command that overflows the output buffer are
+ * failed commands with a readable stderr, not thrown errors: the caller
+ * reports the reason in the TUI.
  */
-export function createChildProcessRunner(): CommandRunner {
+export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}): CommandRunner {
+	const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+	const maxBuffer = options.maxBuffer ?? COMMAND_MAX_BUFFER;
 	return {
 		async run(command, args) {
 			try {
@@ -45,13 +56,13 @@ export function createChildProcessRunner(): CommandRunner {
 							[...args],
 							{
 								encoding: "utf8",
-								timeout: COMMAND_TIMEOUT_MS,
-								maxBuffer: COMMAND_MAX_BUFFER,
+								timeout: timeoutMs,
+								maxBuffer,
 							},
 							(error, stdout, stderr) => {
 								if (error && typeof error.code !== "number") {
-									// A spawn-level failure (ENOENT, timeout),
-									// not a non-zero exit.
+									// A spawn-level failure (ENOENT, timeout,
+									// buffer overflow), not a non-zero exit.
 									reject(error);
 								} else {
 									resolve({
@@ -66,24 +77,47 @@ export function createChildProcessRunner(): CommandRunner {
 				);
 				return result;
 			} catch (error) {
-				return commandFailure(command, error);
+				return commandFailure(command, error, timeoutMs, maxBuffer);
 			}
 		},
 	};
 }
 
 /** Map a spawn-level failure to a failed command with a readable reason. */
-function commandFailure(command: string, error: unknown): CommandResult {
+function commandFailure(
+	command: string,
+	error: unknown,
+	timeoutMs: number,
+	maxBuffer: number,
+): CommandResult {
 	const err = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
 	if (err.code === "ENOENT") {
 		return { code: 127, stdout: "", stderr: `${command} not found in PATH` };
+	}
+	if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+		// The buffer kill also sets err.killed on some node versions, so the
+		// explicit code is checked before the timeout case. The two failures
+		// read differently: one is output, the other is time.
+		return {
+			code: 125,
+			stdout: "",
+			stderr: `${command} output exceeded the ${maxBuffer}-byte buffer`,
+		};
 	}
 	if (err.killed || err.signal) {
 		return {
 			code: 124,
 			stdout: "",
-			stderr: `${command} timed out after ${COMMAND_TIMEOUT_MS / 1000}s`,
+			stderr: `${command} timed out after ${timeoutMs / 1000}s`,
 		};
 	}
 	return { code: 1, stdout: "", stderr: String(err.message ?? error) };
+}
+
+/** One readable line for a thrown error, for a status line. */
+export function errorMessage(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	return String(error);
 }

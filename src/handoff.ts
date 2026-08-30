@@ -12,6 +12,10 @@
  *
  * The sequence of external commands is the contract the fake runner tests
  * pin; the herdr CLI contract was verified against herdr 0.8.2.
+ *
+ * A handoff failure leaves no residue: a worktree handoff that fails before
+ * the agent starts removes the worktree and its branch, so a retry can run
+ * instead of failing on the branch the first attempt left behind.
  */
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
@@ -264,9 +268,41 @@ async function startWorktreeHandoff(
 	}
 	const paneId = jsonResultField(created, "root_pane", "pane_id");
 	if (paneId === null) {
+		await removeWorktree(checkout, branch, workspaceId, runner);
 		return { started: false, ok: false, reason: "herdr worktree create returned no pane id" };
 	}
-	return startAgentAndPrompt(name, paneId, agent, args, prompt, runner, warning, mappingToWrite);
+	const outcome = await startAgentAndPrompt(
+		name,
+		paneId,
+		agent,
+		args,
+		prompt,
+		runner,
+		warning,
+		mappingToWrite,
+	);
+	if (!outcome.started) {
+		// The agent never started: the worktree would sit unused, and its
+		// branch would hard-fail every retry with "branch already exists".
+		// Remove both; a retry recreates them.
+		await removeWorktree(checkout, branch, workspaceId, runner);
+	}
+	return outcome;
+}
+
+/**
+ * Remove a worktree handoff's residue: the herdr worktree workspace, and the
+ * branch herdr leaves behind. Best effort: the handoff failure is the reason
+ * the operator sees, and a cleanup error must not replace it.
+ */
+async function removeWorktree(
+	checkout: string,
+	branch: string,
+	workspaceId: string,
+	runner: CommandRunner,
+): Promise<void> {
+	await runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+	await runner.run("git", ["-C", checkout, "branch", "-D", branch]);
 }
 
 /** Start a fresh agent in the pane and send the prompt as its task. */

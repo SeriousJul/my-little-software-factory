@@ -13,9 +13,17 @@
  * settings). Changing the default agent is one line. Tomorrow's agent is a
  * config entry, not a code change.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import os from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 
 import type { EnvironmentKind } from "./domain/ticket.ts";
@@ -242,6 +250,9 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 	}
 	const out: Record<string, TaskTypeConfig> = {};
 	for (const [name, raw] of Object.entries(taskTypes)) {
+		if (/[\s]/.test(name)) {
+			throw new ConfigError(`config: task-types.${name}: must be a one-word name`);
+		}
 		if (!isRecord(raw)) {
 			throw new ConfigError(`config: task-types.${name}: must be a table`);
 		}
@@ -371,8 +382,25 @@ export function configToToml(config: FactoryConfig): string {
  * Persist a config to `path`, creating parent directories. The file written
  * is the complete config, so the next start reads exactly what this session
  * used.
+ *
+ * The write is atomic: the TOML goes to a temp file in the same directory,
+ * and the rename over the target is one step. A crash mid-write leaves
+ * either the old file or the new one, never a truncated file the next start
+ * would reject as invalid TOML.
  */
 export function persistConfig(path: string, config: FactoryConfig): void {
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, configToToml(config), "utf8");
+	const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+	writeFileSync(temp, configToToml(config), "utf8");
+	try {
+		renameSync(temp, path);
+	} catch (error) {
+		// Leave no temp file behind when the rename fails.
+		try {
+			unlinkSync(temp);
+		} catch {
+			// The cleanup is best effort; the rename failure is the error.
+		}
+		throw error;
+	}
 }

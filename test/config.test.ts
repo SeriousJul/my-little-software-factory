@@ -8,7 +8,7 @@
  * default environment). The error is always one readable line an operator
  * can act on.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -271,6 +271,21 @@ describe("validateConfig", () => {
 			'repos["acme/billing"]: must be a non-empty path',
 		);
 	});
+
+	test("a task type name must be one word", () => {
+		// A two-word name would show on the ticket detail line and in the
+		// override panel, and the config write-back would quote it.
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "implement two",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { "implement two": { template: "x" } },
+			},
+			"config: task-types.implement two: must be a one-word name",
+		);
+	});
 });
 
 describe("configToToml and persistConfig", () => {
@@ -291,5 +306,15 @@ describe("configToToml and persistConfig", () => {
 		expect(fromFile).toBe(true);
 		expect(loaded).toEqual(config);
 		expect(readFileSync(path, "utf8")).toContain('"acme/billing"');
+	});
+
+	test("a failed persistConfig write leaves no temp file behind", () => {
+		const temp = inTempDir();
+		const dir = temp("factory");
+		const path = join(dir, "config.toml");
+		// A directory where the file should be: the rename must fail.
+		mkdirSync(path, { recursive: true });
+		expect(() => persistConfig(path, DEFAULT_CONFIG)).toThrow();
+		expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toHaveLength(0);
 	});
 });

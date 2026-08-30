@@ -321,6 +321,91 @@ describe("handOffTicket: the worktree sequence", () => {
 		}
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
 	});
+
+	test("a failed agent start removes the worktree and the branch", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: DEFAULT_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.ok).toBe(false);
+		expect(outcome.started).toBe(false);
+		if (!outcome.ok) {
+			expect(outcome.reason).toContain("agent_name_taken");
+		}
+		// The residue is removed, so a retry can run instead of failing on
+		// the branch the first attempt left behind.
+		const commands = runner.commands();
+		expect(commands).toContain(`herdr worktree remove --workspace ws-wt`);
+		expect(commands).toContain(`git -C ${CHECKOUT} branch -D factory/7-retry-policy-for-webhooks`);
+		// The cleanup runs after the failure, not before it.
+		expect(commands.indexOf(`herdr worktree remove --workspace ws-wt`)).toBeGreaterThan(
+			commands.indexOf(`herdr agent start ${AGENT} --kind pi --pane pane-wt`),
+		);
+	});
+
+	test("a started agent keeps the worktree even when the prompt fails", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+		runner.set("herdr", ["agent", "prompt", AGENT, PROMPT], { code: 1, stderr: "prompt failed\n" });
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: DEFAULT_CONFIG, runner, home: HOME },
+		);
+
+		// The agent is running in the worktree and can be prompted by hand.
+		expect(outcome.ok).toBe(false);
+		expect(outcome.started).toBe(true);
+		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
+	});
 });
 
 describe("handOffTicket: the guard rails", () => {

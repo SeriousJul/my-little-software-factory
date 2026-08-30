@@ -11,14 +11,20 @@
  * otherwise.
  *
  * The keys: j/k and up/down move the rows. left/right and h/l cycle a list
- * value. The model and thinking rows accept typed text, backspace deletes.
- * Enter confirms and hands off. Esc cancels. While it is open, the keys of
- * the app below are disabled.
+ * value. A selected free-text row owns j, k, h, and l: they type into it.
+ * The arrow keys keep their movement, so a text row can always be left.
+ * Backspace deletes. Enter confirms and hands off. Esc cancels. While it is
+ * open, the keys of the app below are disabled.
+ *
+ * The panel sizes itself to the terminal: the value column shrinks first,
+ * then the label column, then the marker. The hint row and the last rows
+ * drop when the terminal cannot hold them. A row never wraps or interleaves:
+ * it carries less, not broken text.
  */
-import { createElement, useKeyboard } from "@opentui/react";
+import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-import { padToWidth, truncateToWidth } from "./text.ts";
+import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** The handoff choices the panel edits. */
@@ -58,12 +64,56 @@ interface PanelRow {
 	options?: readonly string[];
 }
 
-/** The labels take their widest one plus a gap column. */
+/** The desired label column: the widest label plus a gap. */
 const LABEL_WIDTH = 12;
-/** The value column is capped so the modal keeps a stable size. */
+/** The desired value column: an agent name, a model, or an env kind. */
 const VALUE_WIDTH = 30;
+/** The marker column: "❯ " when the row is selected, two spaces otherwise. */
+const MARKER_WIDTH = 2;
+const HINT = "j/k move  left/right change  enter hand off  esc cancel";
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
+
+/** The modal chrome: one border and one padding cell on each side. */
+const CHROME = 4;
+
+/**
+ * The panel geometry sized to the terminal.
+ *
+ * The modal takes what the terminal holds. The value column shrinks first,
+ * then the label column, then the marker. The hint row drops when its text
+ * no longer fits the inner width, and the rows drop from the last when the
+ * height cannot hold them all. The row never wraps.
+ */
+interface PanelGeometry {
+	markerWidth: number;
+	labelWidth: number;
+	valueWidth: number;
+	showHint: boolean;
+	maxRows: number;
+}
+
+function panelGeometry(width: number, height: number): PanelGeometry {
+	const inner = Math.max(0, width - CHROME);
+	// The hint takes a row of its own; the rows need at least one.
+	const showHint = inner >= widthOf(HINT) && height - CHROME >= 2;
+	const maxRows = Math.max(1, height - CHROME - (showHint ? 1 : 0));
+	let markerWidth = MARKER_WIDTH;
+	let labelWidth = LABEL_WIDTH;
+	let valueWidth = VALUE_WIDTH;
+	if (markerWidth + labelWidth + valueWidth > inner) {
+		valueWidth = Math.max(0, inner - markerWidth - labelWidth);
+	}
+	if (markerWidth + labelWidth > inner) {
+		labelWidth = Math.max(0, inner - markerWidth);
+		valueWidth = 0;
+	}
+	if (markerWidth > inner) {
+		markerWidth = inner;
+		labelWidth = 0;
+	}
+	return { markerWidth, labelWidth, valueWidth, showHint, maxRows };
+}
 
 export function OverridePanel({
 	agents,
@@ -74,6 +124,8 @@ export function OverridePanel({
 	onConfirm,
 	onCancel,
 }: OverridePanelProps) {
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
+	const geometry = panelGeometry(terminalWidth, terminalHeight);
 	const [choice, setChoice] = useState<OverrideChoice>({ ...initial });
 	const [selected, setSelected] = useState(0);
 
@@ -84,7 +136,10 @@ export function OverridePanel({
 	// a confirm in the same tick all see the final value.
 	const choiceRef = useRef<OverrideChoice>(choice);
 
-	const rows = rowsFor(choice, agents, environments, taskTypes, agentSettings);
+	const allRows = rowsFor(choice, agents, environments, taskTypes, agentSettings);
+	// The terminal too short for every row drops the last one, the settings
+	// before the core choices.
+	const rows = allRows.slice(0, geometry.maxRows);
 	// Switching the agent can hide the rows below it; the selection clamps.
 	const cursor = Math.min(selected, rows.length - 1);
 	const row = rows[cursor];
@@ -129,6 +184,15 @@ export function OverridePanel({
 
 	useKeyboard((key) => {
 		if (key.ctrl || key.meta) {
+			return;
+		}
+		// A selected text row owns j, k, h, and l: they type into it. The
+		// arrows keep their movement, so the row can always be left.
+		if (
+			row.kind === "text" &&
+			(key.name === "j" || key.name === "k" || key.name === "h" || key.name === "l")
+		) {
+			typeText(key.name);
 			return;
 		}
 		switch (key.name) {
@@ -194,15 +258,21 @@ export function OverridePanel({
 				style: { flexDirection: "column" },
 			},
 			...rows.map((r) =>
-				createElement("text", { key: r.label }, ...rowSpans(r, choice[r.key], r.key === row.key)),
+				createElement(
+					"text",
+					{ key: r.label },
+					...rowSpans(r, choice[r.key], r.key === row.key, geometry),
+				),
 			),
-			createElement(
-				"text",
-				{ fg: COLORS.dim },
-				"j/k move  left/right change  enter hand off  esc cancel",
-			),
+			geometry.showHint &&
+				createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, innerWidthOf(geometry))),
 		),
 	);
+}
+
+/** The inner width of the modal in cells, for the hint row. */
+function innerWidthOf(geometry: PanelGeometry): number {
+	return geometry.markerWidth + geometry.labelWidth + geometry.valueWidth;
 }
 
 /** The rows the panel offers for the current choice, in order. */
@@ -233,16 +303,25 @@ function rowsFor(
 	return rows;
 }
 
-/** One panel row as spans on a stable column: marker, label, value. */
-function rowSpans(r: PanelRow, value: string, selected: boolean): ReactElement[] {
+/** One panel row as spans on the columns the terminal width allows. */
+function rowSpans(
+	r: PanelRow,
+	value: string,
+	selected: boolean,
+	geometry: PanelGeometry,
+): ReactElement[] {
 	const labelFg = selected ? COLORS.textBright : COLORS.dim;
 	const spans: ReactElement[] = [
 		createElement(
 			"span",
 			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			selected ? "❯ " : "  ",
+			truncateToWidth(selected ? "❯ " : "  ", geometry.markerWidth),
 		),
-		createElement("span", { fg: labelFg }, padToWidth(`${r.label} `, LABEL_WIDTH)),
+		createElement(
+			"span",
+			{ fg: labelFg },
+			truncateToWidth(padToWidth(`${r.label} `, geometry.labelWidth), geometry.labelWidth),
+		),
 	];
 	if (r.kind === "list") {
 		// A list row whose value is not an option (the config default "")
@@ -252,7 +331,7 @@ function rowSpans(r: PanelRow, value: string, selected: boolean): ReactElement[]
 			createElement(
 				"span",
 				{ fg: !inList ? COLORS.dim : selected ? COLORS.textBright : COLORS.text },
-				truncateToWidth(inList ? value : UNSET_HINT, VALUE_WIDTH),
+				truncateToWidth(inList ? value : UNSET_HINT, geometry.valueWidth),
 			),
 		);
 	} else {
@@ -261,7 +340,7 @@ function rowSpans(r: PanelRow, value: string, selected: boolean): ReactElement[]
 			createElement(
 				"span",
 				{ fg: value === "" ? COLORS.dim : selected ? COLORS.textBright : COLORS.text },
-				truncateToWidth(shown, VALUE_WIDTH),
+				truncateToWidth(shown, geometry.valueWidth),
 			),
 		);
 	}

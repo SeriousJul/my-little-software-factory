@@ -9,7 +9,9 @@
  * The shell also owns the handoff: Enter on an open ticket hands it off
  * with the config defaults. The e key opens the override panel for a
  * one-shot change. One handoff runs at a time: while one is in flight the
- * keys of the app keep working and a second handoff is refused with a hint.
+ * keys of the app keep working; a second handoff starts nothing and `e` is
+ * refused with a hint on the status line. A handoff failure never rejects:
+ * the reason settles on the status line and the in-flight guard clears.
  */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
@@ -19,7 +21,7 @@ import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } 
 import { SAMPLE_TICKETS } from "../data/sample-tickets.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "../domain/ticket.ts";
 import { type HandoffChoice, handOffTicket } from "../handoff.ts";
-import { type CommandRunner, createChildProcessRunner } from "../runner.ts";
+import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { type AgentSettings, type OverrideChoice, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
@@ -109,45 +111,64 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 			config,
 			runner: commandRunner,
 			home: homeDir,
-		}).then((outcome) => {
-			if (outcome.started) {
-				const handoff = {
-					agentType: choice.agentType,
-					environment: choice.environment,
-					taskType: choice.taskType,
-				};
-				setTickets((all) =>
-					all.map((t, i) => (i === index ? { ...t, state: "handed-off", handoff } : t)),
-				);
-			}
-			if (outcome.mappingToWrite !== undefined) {
-				persistMapping(outcome.mappingToWrite);
-			}
-			if (!outcome.ok) {
-				setStatus({ kind: "error", text: outcome.reason ?? "handoff failed" });
-			} else if (outcome.warning !== undefined) {
-				setStatus({ kind: "warning", text: outcome.warning });
-			} else {
-				setStatus(null);
-			}
-			setInFlight(false);
-		});
+		})
+			.then((outcome) => {
+				if (outcome.started) {
+					const handoff = {
+						agentType: choice.agentType,
+						environment: choice.environment,
+						taskType: choice.taskType,
+					};
+					setTickets((all) =>
+						all.map((t, i) => (i === index ? { ...t, state: "handed-off", handoff } : t)),
+					);
+				}
+				const persistWarning =
+					outcome.mappingToWrite !== undefined ? persistMapping(outcome.mappingToWrite) : undefined;
+				if (!outcome.ok) {
+					setStatus({ kind: "error", text: outcome.reason ?? "handoff failed" });
+				} else if (persistWarning !== undefined) {
+					setStatus({ kind: "warning", text: persistWarning });
+				} else if (outcome.warning !== undefined) {
+					setStatus({ kind: "warning", text: outcome.warning });
+				} else {
+					setStatus(null);
+				}
+				setInFlight(false);
+			})
+			.catch((error) => {
+				// The handoff promises a settled outcome, but a rejection must
+				// never kill the app: the reason goes to the status line and
+				// the guard clears, so a later handoff can run.
+				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
+				setInFlight(false);
+			});
 	};
 
-	/** Fold a sibling-clone mapping into the config file on disk. */
-	const persistMapping = (mapping: { repository: string; path: string }) => {
+	/**
+	 * Fold a sibling-clone mapping into the config file on disk.
+	 *
+	 * Returns a status line warning when the write fails: the in-memory
+	 * config keeps the mapping for this session, and the next start
+	 * re-resolves from disk and writes it back again, but the operator
+	 * still learns the file was not written.
+	 */
+	const persistMapping = (mapping: { repository: string; path: string }): string | undefined => {
 		try {
 			const updated = { ...config, repos: { ...config.repos, [mapping.repository]: mapping.path } };
 			setConfig(updated);
 			persistConfig(configFile, updated);
-		} catch {
-			// The in-memory config keeps the mapping for this session; the
-			// next start re-resolves from disk and writes it back again.
+			return undefined;
+		} catch (error) {
+			return `could not persist the repository mapping: ${errorMessage(error)}`;
 		}
 	};
 
 	const openOverride = () => {
 		if (inFlight) {
+			// The panel would confirm into a refused handoff, so it stays
+			// closed; the refusal shows on the status line.
+			setStatus({ kind: "warning", text: "handoff in flight" });
 			return;
 		}
 		const ticket = tickets[selectedIndex];

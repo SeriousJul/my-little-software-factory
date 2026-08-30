@@ -17,7 +17,8 @@
  *   yields a warning, a sibling clone <name>_1 (or the next free suffix),
  *   and an explicit mapping written back into the config;
  * - a non-git path fails;
- * - a failed clone fails.
+ * - a failed clone fails, and so does a clone target the filesystem
+ *   refuses (a read-only home, a file where the parent should be).
  *
  * Git runs through the command runner (the only exit to the outside world);
  * path existence is plain filesystem work against real directories.
@@ -26,7 +27,7 @@ import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { FactoryConfig } from "./config.ts";
-import type { CommandResult, CommandRunner } from "./runner.ts";
+import { type CommandResult, type CommandRunner, errorMessage } from "./runner.ts";
 
 /** A repository resolved to a checkout path on this machine. */
 export interface ResolvedRepository {
@@ -139,7 +140,18 @@ function cloneRepository(
 	path: string,
 	runner: CommandRunner,
 ): Promise<RepositoryOutcome> {
-	mkdirSync(dirname(path), { recursive: true });
+	try {
+		mkdirSync(dirname(path), { recursive: true });
+	} catch (error) {
+		// The filesystem can refuse the clone target: a read-only home, a
+		// file where the parent should be, a full disk. That is a failed
+		// clone with a reason, not a thrown error: the caller reports the
+		// reason in the TUI and the ticket stays open.
+		return Promise.resolve({
+			ok: false,
+			reason: `cannot create ${dirname(path)}: ${errorMessage(error)}`,
+		});
+	}
 	return runner.run("git", ["clone", githubCloneUrl(repository), path]).then((result) => {
 		if (result.code !== 0) {
 			return {

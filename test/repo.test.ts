@@ -12,7 +12,8 @@
  *   remote: a sibling clone <name>_1, a warning, and a mapping to write;
  * - a missing path is cloned;
  * - a non-git path fails;
- * - a failed clone fails.
+ * - a failed clone fails, and so does a clone target the filesystem
+ *   refuses (a file where the parent should be).
  */
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -269,6 +270,21 @@ describe("resolveRepository", () => {
 			expect(outcome.reason).toContain("clone failed");
 			expect(outcome.reason).toContain("repository not found");
 		}
+	});
+
+	test("a clone target the filesystem refuses fails with a reason", async () => {
+		const home = tempHome();
+		const runner = new FakeRunner();
+		// A file where ~/src should be: mkdir cannot create the clone parent.
+		writeFileSync(join(home, "src"), "a file");
+		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok) {
+			expect(outcome.reason).toContain("cannot create");
+			expect(outcome.reason).toContain(join(home, "src"));
+		}
+		// The failure is before git: no command ran.
+		expect(runner.calls).toHaveLength(0);
 	});
 
 	test("a missing parent directory is created for the clone", async () => {

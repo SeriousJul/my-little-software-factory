@@ -52,18 +52,25 @@ The panel is a modal. While it is open, the keys of the app below are inert.
 
 | Key             | What it does                                                        |
 | --------------- | ------------------------------------------------------------------- |
-| `j` / `k`      | Move between the setting rows                                     |
+| `j` / `k`      | Move between the setting rows, or type into the selected free-text row |
 | `Up` / `Down`  | Move between the setting rows                                     |
-| `h` / `l`      | Cycle a list value (agent type, environment, task type, thinking)  |
+| `h` / `l`      | Cycle a list value, or type into the selected free-text row        |
 | `Left` / `Right` | Cycle a list value (agent type, environment, task type, thinking) |
 | typed text      | Edit the selected free-text row (model, or thinking without a list) |
 | `Backspace`     | Delete in the selected free-text row                                |
 | `Enter`         | Confirm: the handoff starts with these settings                     |
 | `Esc`           | Cancel: nothing runs, nothing changes                               |
 
+A free-text row owns `j`, `k`, `h`, and `l`, so `Up` and `Down` move the
+selection past it.
 A row shows `(empty)` for an unset free-text value and `(unset)` for a list
 value that is not one of its options. The container environment is a future
 kind and is not offered by the panel.
+
+The panel sizes itself to the terminal. When the rows do not fit, the value
+column shrinks first, then the label column, then the marker. When the
+terminal is too small, the hint row and the last rows drop. A row never
+wraps: it carries less, not broken text.
 
 ## Layout
 
@@ -89,7 +96,8 @@ Under the panes sits a status line. It carries the progress and the outcome
 of the last handoff: `handing off "..."...` while one is in flight, the
 warning a sibling clone raises, or the readable reason a handoff failed.
 A clean handoff clears the line. While a handoff is in flight the keys keep
-working, and a second handoff is refused until the first one settles.
+working, a second handoff is refused until the first one settles, and `e` is
+refused with a hint on the line.
 
 ## Handoffs
 
@@ -101,14 +109,17 @@ The override panel changes them for that one handoff only.
   lets herdr create a git worktree first.
 - A worktree handoff branches `factory/<ticket id>-<title slug>` from the
   checkout's current `HEAD`, and an existing branch is a hard failure.
+  A worktree handoff that fails before the agent starts removes the
+  worktree and the branch, so a retry can run.
 - The agent starts under the title slug as its herdr name, with the settings
   the agent type maps (model, thinking level), and receives the prompt
   rendered from the task type's template with the ticket's repository,
   title, and description.
 - The ticket moves to `handed-off` when the agent starts, even if the prompt
   later fails. The agent is running and can be prompted by hand. A failure
-  before the start (a missing herdr, a missing checkout) leaves the ticket
-  open and shows the reason on the status line.
+  before the start (a missing herdr, a missing checkout, a clone target the
+  filesystem refuses) leaves the ticket open and shows the reason on the
+  status line. The app never crashes on a handoff failure.
 
 ### Repository resolution
 
@@ -137,9 +148,12 @@ typo surfaces at startup, not at handoff time.
 The config carries the defaults a handoff starts from (`default-agent`,
 `default-environment`, `default-task-type`), the agent types (their herdr
 kind and how model and thinking map to the agent's parameters), the task
-types (their prompt templates), and the repository mappings. The
-repository mappings are the one section the control plane writes back:
-a sibling clone records its path there.
+types (their prompt templates; a name must be one word), and the repository
+mappings. The repository mappings are the one section the control plane
+writes back: a sibling clone records its path there. The write-back is
+atomic: the config goes to a temp file in the same directory and the rename
+over the target is one step, so a crash leaves either the old file or the
+new one, never a truncated file the next start would reject.
 
 ## Shape
 

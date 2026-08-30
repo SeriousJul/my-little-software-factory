@@ -1,7 +1,10 @@
 /**
  * The handoff through the real UI: Enter starts it, `e` opens the override
  * panel, failures settle the ticket, and the in-flight state refuses a
- * second handoff.
+ * second handoff. A non-open ticket gets the hint instead, a filesystem
+ * failure on the clone path shows the reason and keeps the app alive, a
+ * failed mapping write-back warns, and the panel sizes itself to a narrow
+ * terminal instead of corrupting rows.
  *
  * These tests boot the app through the same harness as the frame tests,
  * but with a fake command runner and a temporary home, so the full
@@ -20,12 +23,15 @@ import type { CommandResult, CommandRunner } from "../src/runner.ts";
 import {
 	awaitFrame,
 	detailPaneText,
+	frameText,
 	HEIGHT,
 	markerRowOf,
 	press,
 	pressArrow,
 	rowsOf,
 	type Setup,
+	settle,
+	showsTicket,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -218,6 +224,104 @@ describe("the Enter handoff", () => {
 			props,
 		);
 	});
+
+	test("a handoff attempt on a non-open ticket shows the hint and issues no command", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				// The second sample ticket is already handed off.
+				await press(setup, "j", "the selection to move to the second ticket", (f) =>
+					showsTicket(f, SAMPLE_TICKETS[1]),
+				);
+				setup.mockInput.pressEnter();
+				const frame = await awaitFrame(
+					setup,
+					(f) => rowsOf(f)[HEIGHT - 1].includes("only open tickets can be handed off"),
+					"the non-open hint",
+				);
+
+				// The hint sits on the status line, the ticket stays where it is.
+				expect(selectedRow(frame)).toContain("[handed-off]");
+				// No command ever ran.
+				expect(runner.calls).toHaveLength(0);
+
+				// The panel is refused the same way: e shows the hint, no panel.
+				setup.mockInput.pressKey("e");
+				const refused = await settle(setup);
+				expect(refused).not.toContain("Override");
+				expect(rowsOf(refused)[HEIGHT - 1]).toContain("only open tickets can be handed off");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a filesystem error on the clone path shows the reason and keeps the app alive", async () => {
+		const runner = new FakeRunner();
+		// A file where ~/src should be: mkdir cannot create the clone parent.
+		rmSync(join(home, "src"), { recursive: true, force: true });
+		writeFileSync(join(home, "src"), "a file");
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressEnter();
+				const frame = await awaitFrame(
+					setup,
+					(f) => rowsOf(f)[HEIGHT - 1].includes("cannot create"),
+					"the clone failure reason",
+				);
+
+				// The reason sits on the status line, the ticket stays open,
+				// and no command ran: the failure is before git clone.
+				expect(selectedRow(frame)).toContain("[open]");
+				expect(runner.calls).toHaveLength(0);
+
+				// Repair the filesystem: the clone can succeed now.
+				rmSync(join(home, "src"), { recursive: true, force: true });
+				mkdirSync(join(home, "src"));
+				stubLiveHandoff(runner);
+				runner.set(
+					"git",
+					["clone", "https://github.com/acme/billing.git", join(home, "src", "billing")],
+					{
+						code: 0,
+					},
+				);
+
+				// The in-flight guard cleared and the app is alive: a retry on
+				// the same ticket runs the handoff to completion.
+				setup.mockInput.pressEnter();
+				const settled = await awaitFrame(
+					setup,
+					(f) => selectedIs(f, "[handed-off]"),
+					"the retry to settle",
+				);
+				// The retry re-resolved the repository: the clone ran this time.
+				expect(runner.commands()).toContain(
+					`git clone https://github.com/acme/billing.git ${join(home, "src", "billing")}`,
+				);
+				// A clean handoff clears the status line: the failure reason
+				// is gone.
+				expect(settled).not.toContain("cannot create");
+
+				// Keys still move the selection.
+				const moved = await press(
+					setup,
+					"j",
+					"the selection to move on",
+					(f) => markerRowOf(f) === 3,
+				);
+				expect(selectedRow(moved)).toContain("Fix pan drift");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
 });
 
 describe("the in-flight guard", () => {
@@ -323,17 +427,24 @@ describe("the override panel", () => {
 				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Task type"));
 				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Model"));
-				await press(setup, "j", "the row selection to move to the thinking row", (f) =>
-					f.includes("❯ Thinking"),
-				);
-				// The first right lands on the first option, not the second.
+				// The Model row is free text: j would type into it, so the arrow
+				// moves the selection past it.
 				const frame = await pressArrow(
+					setup,
+					"down",
+					"the row selection to move to the thinking row",
+					(f) => f.includes("❯ Thinking"),
+				);
+				// The arrow moved the selection; nothing was typed into the row.
+				expect(frameText(frame)).toContain("Model (empty)");
+				// The first right lands on the first option, not the second.
+				const cycled = await pressArrow(
 					setup,
 					"right",
 					"the thinking to become the first option",
 					(f) => !f.includes("(unset)"),
 				);
-				expect(frame).not.toContain("(unset)");
+				expect(cycled).not.toContain("(unset)");
 			},
 			WIDTH,
 			HEIGHT,
@@ -467,6 +578,224 @@ describe("the override panel", () => {
 				expect(written).toContain(`"acme/billing" = "${sibling}"`);
 				// The handoff ran at the sibling, not the conflicting path.
 				expect(runner.commands()).toContain(`herdr workspace create --cwd ${sibling} --no-focus`);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("e while a handoff is in flight is refused on the status line", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const slow = new DelayedRunner(runner, 400);
+		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await pressEnter(setup, "the in-flight status", "handing off");
+
+				// The panel is refused while the handoff is in flight, and the
+				// refusal shows on the status line.
+				setup.mockInput.pressKey("e");
+				const refused = await awaitFrame(
+					setup,
+					(f) => rowsOf(f)[HEIGHT - 1].includes("handoff in flight"),
+					"the refusal on the status line",
+				);
+				expect(refused).not.toContain("Override");
+
+				// The first handoff still settles.
+				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a failed mapping write-back warns on the status line", async () => {
+		const runner = new FakeRunner();
+		// The convention path holds a different repository: a sibling clone.
+		const path = checkout();
+		runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+			stdout: "https://github.com/acme/portal.git\n",
+		});
+		const sibling = join(home, "src", "billing_1");
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1"),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+		// The config file cannot be written: a directory sits at its path.
+		mkdirSync(configPath, { recursive: true });
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const frame = await pressEnter(
+					setup,
+					"the write-back warning to appear",
+					"could not persist",
+				);
+
+				// The handoff itself succeeded: the ticket is handed off... and
+				// the warning sits on the status line.
+				expect(selectedRow(frame)).toContain("[handed-off]");
+				expect(rowsOf(frame)[HEIGHT - 1]).toContain("could not persist");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("j, k, h, and l type into the selected free-text row", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the row selection to move to the model", (f) =>
+					f.includes("❯ Model"),
+				);
+
+				// "claude" carries an l: the movement keys type, they do not
+				// move the selection off the row.
+				await setup.mockInput.typeText("claude");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model claude"),
+					"the model to carry the typed text",
+				);
+				expect(frame).toContain("❯ Model");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"claude",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const frame = await press(setup, "e", "the override panel to open", (f) =>
+					f.includes("Override"),
+				);
+
+				const rows = rowsOf(frame);
+				expect(rows).toHaveLength(12);
+				for (const row of rows) {
+					// No row wraps: every row is exactly one terminal line.
+					expect(row.length).toBe(30);
+				}
+
+				// Every row keeps its columns: the labels stay intact... and the
+				// values truncate to the value column instead of wrapping...
+				for (const label of ["Agent", "Environment", "Task type", "Model", "Thinking"]) {
+					expect(frameText(frame)).toContain(label);
+				}
+				expect(frameText(frame)).toContain("Environment live-worktre");
+				// ...and the hint row drops when it does not fit.
+				expect(frame).not.toContain("j/k move");
+			},
+			30,
+			12,
+			props,
+		);
+
+		await withApp(
+			async (setup) => {
+				const frame = await press(setup, "e", "the override panel to open", (f) =>
+					f.includes("Override"),
+				);
+
+				const rows = rowsOf(frame);
+				expect(rows).toHaveLength(8);
+				for (const row of rows) {
+					expect(row.length).toBe(24);
+				}
+
+				// The height cannot hold every row: the last row, Thinking,
+				// drops, and the rows above it keep their columns.
+				expect(frameText(frame)).toContain("Model");
+				expect(frameText(frame)).not.toContain("Thinking");
+			},
+			24,
+			8,
+			props,
+		);
+	});
+
+	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubWorktreeHandoff(runner);
+		runner.set("herdr", ["agent", "start", firstAgent, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr: "agent name is already used\n",
+		});
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				// The value column shows the new kind; "live-worktree" still
+				// carries "worktree", so the full row is the predicate.
+				await press(setup, "right", "the environment to cycle to worktree", (f) =>
+					frameText(f).includes("Environment worktree"),
+				);
+				const frame = await pressEnter(
+					setup,
+					"the failure reason to appear",
+					"agent name is already used",
+				);
+
+				// The reason sits on the status line, the ticket stays open.
+				expect(rowsOf(frame)[HEIGHT - 1]).toContain("agent name is already used");
+				expect(selectedRow(frame)).toContain("[open]");
+
+				// The residue is removed: the worktree and the branch, so a
+				// retry can run.
+				const commands = runner.commands();
+				expect(commands).toContain("herdr worktree remove --workspace ws-wt");
+				expect(commands).toContain(
+					`git -C ${checkout()} branch -D factory/${first.id}-${firstAgent}`,
+				);
 			},
 			WIDTH,
 			HEIGHT,
