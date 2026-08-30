@@ -12,7 +12,7 @@
 import { createElement } from "@opentui/react";
 
 import type { Ticket } from "../domain/ticket.ts";
-import { maxScrollOf } from "./geometry.ts";
+import { windowOf } from "./geometry.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS, STATE_COLORS, stateBadge } from "./theme.ts";
 
@@ -56,9 +56,7 @@ interface TicketDetailProps {
 }
 
 export function TicketDetail({ lines, visibleRows, scroll, focused }: TicketDetailProps) {
-	const maxScroll = maxScrollOf(lines.length, visibleRows);
-	const start = Math.max(0, Math.min(scroll, maxScroll));
-	const visible = lines.slice(start, start + visibleRows);
+	const visible = windowOf(lines, scroll, visibleRows);
 
 	return createElement(
 		"box",

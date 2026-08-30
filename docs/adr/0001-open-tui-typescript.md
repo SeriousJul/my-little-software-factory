@@ -1,6 +1,7 @@
 # ADR 0001: Build the control plane on OpenTUI and TypeScript
 
-Status: accepted. Date: 2026-08-30.
+Status: accepted
+Date: 2026-08-30
 
 ## Context
 

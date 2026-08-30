@@ -11,7 +11,7 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
 import type { Ticket } from "../domain/ticket.ts";
-import { useListGeometry } from "./geometry.ts";
+import { useListGeometry, windowOf } from "./geometry.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { BADGE_WIDTH, COLORS, STATE_COLORS, stateBadge } from "./theme.ts";
 
@@ -27,15 +27,11 @@ interface TicketListProps {
 export function TicketList({ tickets, selectedIndex, focused }: TicketListProps) {
 	const geometry = useListGeometry();
 
-	// Slide the window so the selected ticket stays visible.
-	let first = 0;
-	if (selectedIndex >= first + geometry.visibleRows) {
-		first = selectedIndex - geometry.visibleRows + 1;
-	}
-	if (first > tickets.length - geometry.visibleRows) {
-		first = Math.max(0, tickets.length - geometry.visibleRows);
-	}
-	const visible = tickets.slice(first, first + geometry.visibleRows);
+	// The window starts where the selection sits on the window's last row.
+	// `windowOf` clamps that start, so the window slides only when the
+	// selection would run off the bottom of the pane.
+	const start = selectedIndex - geometry.visibleRows + 1;
+	const visible = windowOf(tickets, start, geometry.visibleRows);
 
 	return createElement(
 		"box",
@@ -52,11 +48,11 @@ export function TicketList({ tickets, selectedIndex, focused }: TicketListProps)
 				overflow: "hidden",
 			},
 		},
-		...visible.map((ticket, i) =>
+		...visible.map((ticket) =>
 			createElement(
 				"text",
 				{ key: ticket.id },
-				...rowSpans(ticket, first + i === selectedIndex, geometry.usableCols),
+				...rowSpans(ticket, ticket.id === tickets[selectedIndex].id, geometry.usableCols),
 			),
 		),
 	);
