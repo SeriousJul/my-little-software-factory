@@ -1,0 +1,37 @@
+{
+	"name": "my-little-software-factory",
+	"version": "0.1.0",
+	"description": "The control plane of my little software factory. A terminal app that observes tickets and issues work to agents.",
+	"type": "module",
+	"license": "MIT",
+	"bin": {
+		"factory": "./bin/factory.mjs"
+	},
+	"files": [
+		"bin",
+		"src"
+	],
+	"scripts": {
+		"dev": "NODE_OPTIONS=--experimental-ffi node --watch src/factory.ts",
+		"test": "NODE_OPTIONS=--experimental-ffi vitest run",
+		"lint": "biome check .",
+		"fmt": "biome check --write .",
+		"typecheck": "tsc"
+	},
+	"engines": {
+		"node": ">=26.4.0"
+	},
+	"dependencies": {
+		"@opentui/core": "^0.5.9",
+		"@opentui/react": "^0.5.9",
+		"react": "^19.2.0",
+		"string-width": "^8.2.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.11",
+		"@types/node": "^26.0.0",
+		"@types/react": "^19.2.0",
+		"typescript": "^5.9.0",
+		"vitest": "^4.1.11"
+	}
+}
