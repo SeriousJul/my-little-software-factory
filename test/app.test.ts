@@ -58,6 +58,12 @@ const markerRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.star
 const showsTicket = (frame: string, ticket: Ticket) => flat(frame).includes(ticket.description);
 const agentRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.includes("Agent: unassigned"));
+/** Assert every ticket state badge is on screen, read off the frame. */
+function expectStateBadges(frame: string): void {
+	for (const badge of STATE_BADGES) {
+		expect(frame).toContain(badge);
+	}
+}
 /** Frame predicate: the detail pane holds the focus. */
 const detailFocused = (frame: string) => frame.includes("❯ Detail") && !frame.includes("❯ Tickets");
 /** Frame predicate: the list pane holds the focus. */
@@ -190,9 +196,7 @@ describe("the control plane", () => {
 				expect(frame).toContain(ticket.title);
 				expect(frame).toContain(ticket.repository);
 			}
-			for (const badge of STATE_BADGES) {
-				expect(frame).toContain(badge);
-			}
+			expectStateBadges(frame);
 		});
 	});
 
@@ -211,9 +215,7 @@ describe("the control plane", () => {
 		await withApp(async (setup) => {
 			// Every ticket state is on screen at once.
 			let frame = flat(setup.captureCharFrame());
-			for (const badge of STATE_BADGES) {
-				expect(frame).toContain(badge);
-			}
+			expectStateBadges(frame);
 
 			// The sample set spans more than one repository, read off the
 			// frame, not the data.
@@ -505,9 +507,7 @@ describe("the control plane", () => {
 					const frame = flat(setup.captureCharFrame());
 					expect(frame).toContain("Tickets");
 					expect(frame).toContain("Detail");
-					for (const badge of STATE_BADGES) {
-						expect(frame).toContain(badge);
-					}
+					expectStateBadges(frame);
 				},
 				width,
 				height,

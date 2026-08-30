@@ -55,7 +55,7 @@ export function TicketList({ tickets, selectedIndex, focused }: TicketListProps)
 		...visible.map((ticket, i) =>
 			createElement(
 				"text",
-				null,
+				{ key: ticket.id },
 				...rowSpans(ticket, first + i === selectedIndex, geometry.usableCols),
 			),
 		),
