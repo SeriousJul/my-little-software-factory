@@ -58,6 +58,20 @@ interface HandoffOptions {
 	home: string;
 }
 
+/**
+ * What the handoff steps share: the command egress plus the warning and the
+ * mapping the repository resolution carried. Both travel with every outcome
+ * a step returns, so a failure still warns and still hands back the mapping
+ * to persist.
+ */
+interface HandoffContext {
+	runner: CommandRunner;
+	/** A warning worth showing after a success, e.g. a sibling clone. */
+	warning?: string;
+	/** A repository mapping the caller must persist into the config. */
+	mappingToWrite?: { repository: string; path: string };
+}
+
 /** Hand a ticket off, returning the facts the app records on it. */
 export async function handOffTicket(
 	ticket: Ticket,
@@ -91,28 +105,21 @@ export async function handOffTicket(
 	if (!resolved.ok) {
 		return { started: false, ok: false, reason: resolved.reason };
 	}
-	const checkout = resolved.repository.path;
-	const warning = resolved.repository.warning;
-	const mappingToWrite = resolved.repository.mappingToWrite;
 
+	const ctx: HandoffContext = {
+		runner,
+		warning: resolved.repository.warning,
+		mappingToWrite: resolved.repository.mappingToWrite,
+	};
+	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
 	const prompt = renderPrompt(taskType.template, ticket);
 	const name = agentNameFor(ticket);
 
 	if (choice.environment === "live-worktree") {
-		return startLiveHandoff(checkout, name, agent, args, prompt, runner, warning, mappingToWrite);
+		return startLiveHandoff(checkout, name, agent, args, prompt, ctx);
 	}
-	return startWorktreeHandoff(
-		ticket,
-		checkout,
-		name,
-		agent,
-		args,
-		prompt,
-		runner,
-		warning,
-		mappingToWrite,
-	);
+	return startWorktreeHandoff(ticket, checkout, name, agent, args, prompt, ctx);
 }
 
 /**
@@ -127,17 +134,15 @@ async function startLiveHandoff(
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
-	runner: CommandRunner,
-	warning?: string,
-	mappingToWrite?: { repository: string; path: string },
+	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
-	const listed = await runner.run("herdr", ["workspace", "list"]);
+	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
 	if (listed.code !== 0) {
-		return failed(listed, warning);
+		return failedCommand(listed, ctx);
 	}
 	const workspaceId = findWorkspaceIdAt(listed, checkout);
 	if (workspaceId === null) {
-		const created = await runner.run("herdr", [
+		const created = await ctx.runner.run("herdr", [
 			"workspace",
 			"create",
 			"--cwd",
@@ -145,39 +150,15 @@ async function startLiveHandoff(
 			"--no-focus",
 		]);
 		if (created.code !== 0) {
-			return failed(created, warning);
+			return failedCommand(created, ctx);
 		}
 		const id = jsonResultField(created, "workspace", "workspace_id");
 		if (id === null) {
-			return {
-				started: false,
-				ok: false,
-				reason: "herdr workspace create returned no workspace id",
-			};
+			return failed("herdr workspace create returned no workspace id", ctx);
 		}
-		return startAgentInNewTab(
-			id,
-			checkout,
-			name,
-			agent,
-			args,
-			prompt,
-			runner,
-			warning,
-			mappingToWrite,
-		);
+		return startAgentInNewTab(id, checkout, name, agent, args, prompt, ctx);
 	}
-	return startAgentInNewTab(
-		workspaceId,
-		checkout,
-		name,
-		agent,
-		args,
-		prompt,
-		runner,
-		warning,
-		mappingToWrite,
-	);
+	return startAgentInNewTab(workspaceId, checkout, name, agent, args, prompt, ctx);
 }
 
 async function startAgentInNewTab(
@@ -187,11 +168,9 @@ async function startAgentInNewTab(
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
-	runner: CommandRunner,
-	warning?: string,
-	mappingToWrite?: { repository: string; path: string },
+	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
-	const tab = await runner.run("herdr", [
+	const tab = await ctx.runner.run("herdr", [
 		"tab",
 		"create",
 		"--workspace",
@@ -201,13 +180,13 @@ async function startAgentInNewTab(
 		"--no-focus",
 	]);
 	if (tab.code !== 0) {
-		return failed(tab, warning);
+		return failedCommand(tab, ctx);
 	}
 	const paneId = jsonResultField(tab, "root_pane", "pane_id");
 	if (paneId === null) {
-		return { started: false, ok: false, reason: "herdr tab create returned no pane id" };
+		return failed("herdr tab create returned no pane id", ctx);
 	}
-	return startAgentAndPrompt(name, paneId, agent, args, prompt, runner, warning, mappingToWrite);
+	return startAgentAndPrompt(name, paneId, agent, args, prompt, ctx);
 }
 
 /**
@@ -223,32 +202,22 @@ async function startWorktreeHandoff(
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
-	runner: CommandRunner,
-	warning?: string,
-	mappingToWrite?: { repository: string; path: string },
+	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
 	const branch = branchNameFor(ticket);
-	const listed = await runner.run("git", ["-C", checkout, "branch", "--list", branch]);
+	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
 	if (listed.code !== 0) {
-		return {
-			started: false,
-			ok: false,
-			reason: `cannot check branch in ${checkout}: ${commandFailureText(listed)}`,
-		};
+		return failed(`cannot check branch in ${checkout}: ${commandFailureText(listed)}`, ctx);
 	}
 	if (listed.stdout.trim() !== "") {
-		return { started: false, ok: false, reason: `branch already exists: ${branch}` };
+		return failed(`branch already exists: ${branch}`, ctx);
 	}
-	const head = await runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
+	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
 	if (head.code !== 0) {
-		return {
-			started: false,
-			ok: false,
-			reason: `cannot read HEAD in ${checkout}: ${commandFailureText(head)}`,
-		};
+		return failed(`cannot read HEAD in ${checkout}: ${commandFailureText(head)}`, ctx);
 	}
 	const base = head.stdout.trim();
-	const created = await runner.run("herdr", [
+	const created = await ctx.runner.run("herdr", [
 		"worktree",
 		"create",
 		"--cwd",
@@ -260,32 +229,29 @@ async function startWorktreeHandoff(
 		"--no-focus",
 	]);
 	if (created.code !== 0) {
-		return failed(created, warning);
+		return failedCommand(created, ctx);
 	}
 	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
 	if (workspaceId === null) {
-		return { started: false, ok: false, reason: "herdr worktree create returned no workspace id" };
+		// The cleanup needs the workspace id, so it cannot run here. The
+		// branch herdr created survives and would hard-fail every retry, so
+		// the reason points at it.
+		return failed(
+			`herdr worktree create returned no workspace id; check for a leftover branch ${branch}`,
+			ctx,
+		);
 	}
 	const paneId = jsonResultField(created, "root_pane", "pane_id");
 	if (paneId === null) {
-		await removeWorktree(checkout, branch, workspaceId, runner);
-		return { started: false, ok: false, reason: "herdr worktree create returned no pane id" };
+		await removeWorktree(checkout, branch, workspaceId, ctx);
+		return failed("herdr worktree create returned no pane id", ctx);
 	}
-	const outcome = await startAgentAndPrompt(
-		name,
-		paneId,
-		agent,
-		args,
-		prompt,
-		runner,
-		warning,
-		mappingToWrite,
-	);
+	const outcome = await startAgentAndPrompt(name, paneId, agent, args, prompt, ctx);
 	if (!outcome.started) {
 		// The agent never started: the worktree would sit unused, and its
 		// branch would hard-fail every retry with "branch already exists".
 		// Remove both; a retry recreates them.
-		await removeWorktree(checkout, branch, workspaceId, runner);
+		await removeWorktree(checkout, branch, workspaceId, ctx);
 	}
 	return outcome;
 }
@@ -299,10 +265,10 @@ async function removeWorktree(
 	checkout: string,
 	branch: string,
 	workspaceId: string,
-	runner: CommandRunner,
+	ctx: HandoffContext,
 ): Promise<void> {
-	await runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
-	await runner.run("git", ["-C", checkout, "branch", "-D", branch]);
+	await ctx.runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+	await ctx.runner.run("git", ["-C", checkout, "branch", "-D", branch]);
 }
 
 /** Start a fresh agent in the pane and send the prompt as its task. */
@@ -312,35 +278,45 @@ async function startAgentAndPrompt(
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
-	runner: CommandRunner,
-	warning?: string,
-	mappingToWrite?: { repository: string; path: string },
+	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
 	const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
 	if (args.length > 0) {
 		startArgs.push("--", ...args);
 	}
-	const started = await runner.run("herdr", startArgs);
+	const started = await ctx.runner.run("herdr", startArgs);
 	if (started.code !== 0) {
-		return failed(started, warning);
+		return failedCommand(started, ctx);
 	}
 	// The agent is running: from here the ticket is handed-off even if the
 	// prompt fails. The operator can prompt the agent manually in herdr.
-	const sent = await runner.run("herdr", ["agent", "prompt", name, prompt]);
+	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
 	if (sent.code !== 0) {
 		return {
 			started: true,
 			ok: false,
 			reason: `agent ${name} started, but the prompt failed: ${commandFailureText(sent)}`,
-			mappingToWrite,
+			warning: ctx.warning,
+			mappingToWrite: ctx.mappingToWrite,
 		};
 	}
-	return { started: true, ok: true, warning, mappingToWrite };
+	return { started: true, ok: true, warning: ctx.warning, mappingToWrite: ctx.mappingToWrite };
 }
 
 /** A failed herdr call: the ticket stays open, the reason goes to the TUI. */
-function failed(result: CommandResult, warning?: string): HandoffOutcome {
-	return { started: false, ok: false, reason: commandFailureText(result), warning };
+function failedCommand(result: CommandResult, ctx: HandoffContext): HandoffOutcome {
+	return failed(commandFailureText(result), ctx);
+}
+
+/** A failed step: the ticket stays open, the reason goes to the TUI. */
+function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
+	return {
+		started: false,
+		ok: false,
+		reason,
+		warning: ctx.warning,
+		mappingToWrite: ctx.mappingToWrite,
+	};
 }
 
 /**

@@ -232,6 +232,31 @@ describe("validateConfig", () => {
 		);
 	});
 
+	test("any brace pair is a placeholder, not only letters", () => {
+		// A {ticket-id} or a {value2} would stay literal in the prompt the
+		// agent receives, so it is an error, not an unknown-letter miss.
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "hello {ticket-id}" } },
+			},
+			"unknown placeholder {ticket-id}",
+		);
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi", model: "--model {value2}" } },
+				"task-types": { t: { template: "x" } },
+			},
+			"template must contain the {value} placeholder",
+		);
+	});
+
 	test("the default agent must match an agent", () => {
 		expectConfigError(
 			{

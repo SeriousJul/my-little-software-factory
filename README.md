@@ -127,19 +127,24 @@ The control plane finds the ticket's repository in this order:
 
 1. An explicit mapping in the config: `[repos] "owner/name" = "/path"`.
    A mapped path must hold a git checkout of exactly that repository.
+   The remote is matched by repository, not by URL shape: https and ssh,
+   the scp-style git@github.com:owner/name, a port, a trailing slash, a
+   .git suffix, and other casing all count.
    A mismatch is a hard failure; the control plane never uses the wrong tree.
 2. The convention `~/src/<repository name>`.
 
 When the convention path holds a different repository, the control plane
 clones the ticket's repository to a sibling path (for example
-`~/src/billing_1`), hands off there, warns on the status line, and writes
-the mapping back to the config file, so the next handoff resolves it
-explicitly.
+`~/src/billing_1`), hands off there, warns on the status line, and hands the
+mapping back to be written to the config file, so the next handoff resolves
+it explicitly. The mapping is handed back even when a later step of the
+handoff fails, so the clone is not lost.
 
 ## Configuration
 
 The config lives at `~/.config/factory/config.toml`. A missing file yields
-the shipped defaults, so the control plane starts with no config at all.
+the shipped defaults, so the control plane starts with no config at all, and
+the start says so before the UI takes over, with the path to put a file at.
 A file that does not parse or does not validate stops the control plane
 with a readable error before the UI starts: every key the control plane
 reads must be present, and every key it does not read is an error, so a
@@ -149,7 +154,10 @@ The config carries the defaults a handoff starts from (`default-agent`,
 `default-environment`, `default-task-type`), the agent types (their herdr
 kind and how model and thinking map to the agent's parameters), the task
 types (their prompt templates; a name must be one word), and the repository
-mappings. The repository mappings are the one section the control plane
+mappings. A template's brace pairs are placeholders, and the task types
+know only `{repository}`, `{title}`, and `{description}`: any other brace
+pair is a startup error, so a `{ticket-id}` cannot stay literal in the
+prompt an agent receives. The repository mappings are the one section the control plane
 writes back: a sibling clone records its path there. The write-back is
 atomic: the config goes to a temp file in the same directory and the rename
 over the target is one step, so a crash leaves either the old file or the

@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG } from "../src/config.ts";
+import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import { SAMPLE_TICKETS } from "../src/data/sample-tickets.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import type { CommandResult, CommandRunner } from "../src/runner.ts";
@@ -350,6 +350,66 @@ describe("the in-flight guard", () => {
 			props,
 		);
 	});
+
+	test("two Enters in one tick start one handoff", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const slow = new DelayedRunner(runner, 400);
+		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				// Both Enters are queued before a render: the key parser
+				// delivers them in one tick, where a state-based guard would
+				// still read the stale value and let both through.
+				setup.mockInput.pressEnter();
+				setup.mockInput.pressEnter();
+
+				await pressEnterToHandoff(setup);
+
+				// Exactly one handoff ran, not two.
+				expect(runner.commands()).toHaveLength(7);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("j and k keep moving the selection while a handoff is in flight", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const slow = new DelayedRunner(runner, 400);
+		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await pressEnter(setup, "the in-flight status", "handing off");
+				// The keys keep working while the handoff is in flight: the
+				// selection moves on...
+				await press(
+					setup,
+					"j",
+					"the selection to move while in flight",
+					(f) => markerRowOf(f) === 3,
+				);
+				// ...and moves back.
+				await press(
+					setup,
+					"k",
+					"the selection to move back while in flight",
+					(f) => markerRowOf(f) === 2,
+				);
+				// The first handoff still settles, on the ticket it started on.
+				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
 });
 
 describe("the override panel", () => {
@@ -445,6 +505,73 @@ describe("the override panel", () => {
 					(f) => !f.includes("(unset)"),
 				);
 				expect(cycled).not.toContain("(unset)");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the settings rows hide for an agent that does not map them", async () => {
+		const runner = new FakeRunner();
+		// A fourth agent that maps no setting at all.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				// pi maps both settings: both rows are offered.
+				await pressArrow(setup, "right", "the agent to become codex", (f) =>
+					frameText(f).includes("Agent codex"),
+				);
+				await pressArrow(setup, "right", "the agent to become claude", (f) =>
+					frameText(f).includes("Agent claude"),
+				);
+				const frame = await pressArrow(setup, "right", "the agent to become cursor", (f) =>
+					frameText(f).includes("Agent cursor"),
+				);
+				// cursor maps no setting: its rows are not offered.
+				expect(frame).not.toContain("Model");
+				expect(frame).not.toContain("Thinking");
+				// The core rows stay.
+				expect(frame).toContain("Agent");
+				expect(frame).toContain("Environment");
+				expect(frame).toContain("Task type");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the task type row cycles through the task types and wraps", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await pressArrow(setup, "right", "the task type to become fix", (f) =>
+					frameText(f).includes("Task type fix"),
+				);
+				await pressArrow(setup, "right", "the task type to become review", (f) =>
+					frameText(f).includes("Task type review"),
+				);
+				// Wraps back to the first task type.
+				const wrapped = await pressArrow(setup, "right", "the task type to wrap back", (f) =>
+					frameText(f).includes("Task type implement"),
+				);
+				expect(frameText(wrapped)).toContain("Task type implement");
 			},
 			WIDTH,
 			HEIGHT,

@@ -371,6 +371,47 @@ describe("handOffTicket: the worktree sequence", () => {
 		);
 	});
 
+	test("a worktree create without a workspace id points at the leftover branch", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		// A worktree create result without the workspace block.
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123",
+				"--no-focus",
+			],
+			{ stdout: JSON.stringify({ result: { root_pane: { pane_id: "pane-wt" } } }) },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: DEFAULT_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.ok).toBe(false);
+		expect(outcome.started).toBe(false);
+		if (!outcome.ok) {
+			expect(outcome.reason).toContain("no workspace id");
+			expect(outcome.reason).toContain("leftover branch factory/7-retry-policy-for-webhooks");
+		}
+		// The cleanup needs the workspace id, so it cannot run and no
+		// command ran after the failed step.
+		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
+	});
+
 	test("a started agent keeps the worktree even when the prompt fails", async () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);
@@ -449,6 +490,36 @@ describe("handOffTicket: the guard rails", () => {
 		);
 		expect(task.ok).toBe(false);
 		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("a failed herdr step after a sibling clone still hands back the mapping", async () => {
+		const runner = new FakeRunner();
+		// The convention path holds a different repository: a sibling clone.
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], {
+			stdout: "https://github.com/acme/portal.git\n",
+		});
+		const sibling = join(HOME, "src", "billing_1");
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", sibling, "--no-focus"], {
+			code: 1,
+			stderr: "error: herdr is not running\n",
+		});
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.ok).toBe(false);
+		expect(outcome.started).toBe(false);
+		// The clone ran and the handoff failed after it: the mapping must not
+		// wait for a later successful handoff.
+		expect(outcome.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
+		if (!outcome.ok) {
+			expect(outcome.reason).toBe("error: herdr is not running");
+		}
 	});
 
 	test("a sibling clone warns and hands back the mapping to persist", async () => {

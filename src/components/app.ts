@@ -15,11 +15,11 @@
  */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } from "../config.ts";
 import { SAMPLE_TICKETS } from "../data/sample-tickets.ts";
-import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "../domain/ticket.ts";
+import { HANDOFF_ENVIRONMENT_KINDS } from "../domain/ticket.ts";
 import { type HandoffChoice, handOffTicket } from "../handoff.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
@@ -61,8 +61,14 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	const [detailScroll, setDetailScroll] = useState(0);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
-	const [inFlight, setInFlight] = useState(false);
 	const [override, setOverride] = useState<OverrideChoice | null>(null);
+
+	// The in-flight guard is a ref, not state: the key parser can deliver
+	// several key events in one tick, and a state read in that tick would
+	// see the stale value, so two Enters in one tick could both pass the
+	// guard. The ref updates synchronously, the way choiceRef mirrors the
+	// choice in the override panel.
+	const inFlightRef = useRef(false);
 
 	const commandRunner: CommandRunner = runner ?? realRunner;
 	const homeDir = home ?? os.homedir();
@@ -96,7 +102,7 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 	};
 
 	const startHandoff = (choice: HandoffChoice) => {
-		if (inFlight) {
+		if (inFlightRef.current) {
 			return;
 		}
 		const index = selectedIndex;
@@ -105,7 +111,7 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 			setStatus({ kind: "warning", text: "only open tickets can be handed off" });
 			return;
 		}
-		setInFlight(true);
+		inFlightRef.current = true;
 		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
 		void handOffTicket(ticket, choice, {
 			config,
@@ -126,7 +132,13 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 				const persistWarning =
 					outcome.mappingToWrite !== undefined ? persistMapping(outcome.mappingToWrite) : undefined;
 				if (!outcome.ok) {
-					setStatus({ kind: "error", text: outcome.reason ?? "handoff failed" });
+					// A sibling-clone mapping that also failed to persist is not
+					// lost under the failure reason.
+					const reason = outcome.reason ?? "handoff failed";
+					setStatus({
+						kind: "error",
+						text: persistWarning !== undefined ? `${reason}; ${persistWarning}` : reason,
+					});
 				} else if (persistWarning !== undefined) {
 					setStatus({ kind: "warning", text: persistWarning });
 				} else if (outcome.warning !== undefined) {
@@ -134,14 +146,14 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 				} else {
 					setStatus(null);
 				}
-				setInFlight(false);
+				inFlightRef.current = false;
 			})
 			.catch((error) => {
 				// The handoff promises a settled outcome, but a rejection must
 				// never kill the app: the reason goes to the status line and
 				// the guard clears, so a later handoff can run.
 				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
-				setInFlight(false);
+				inFlightRef.current = false;
 			});
 	};
 
@@ -165,7 +177,7 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 	};
 
 	const openOverride = () => {
-		if (inFlight) {
+		if (inFlightRef.current) {
 			// The panel would confirm into a refused handoff, so it stays
 			// closed; the refusal shows on the status line.
 			setStatus({ kind: "warning", text: "handoff in flight" });
@@ -270,12 +282,9 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 				initial: override,
 				onConfirm: (choice) => {
 					setOverride(null);
-					// The environments list is HANDOFF_ENVIRONMENT_KINDS, so the
-					// value the panel returns is always a handoff kind.
-					startHandoff({
-						...choice,
-						environment: choice.environment as EnvironmentKind,
-					});
+					// The panel's environment row is typed to the handoff
+					// kinds, so the choice needs no cast.
+					startHandoff({ ...choice });
 				},
 				onCancel: () => {
 					setOverride(null);

@@ -24,13 +24,15 @@
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
+
+import type { EnvironmentKind } from "../domain/ticket.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** The handoff choices the panel edits. */
 export interface OverrideChoice {
 	agentType: string;
-	environment: string;
+	environment: EnvironmentKind;
 	taskType: string;
 	model: string;
 	thinking: string;
@@ -45,7 +47,7 @@ export interface AgentSettings {
 
 interface OverridePanelProps {
 	agents: readonly string[];
-	environments: readonly string[];
+	environments: readonly EnvironmentKind[];
 	taskTypes: readonly string[];
 	agentSettings: Readonly<Record<string, AgentSettings>>;
 	/** The values the panel starts on: the config defaults. */
@@ -147,10 +149,6 @@ export function OverridePanel({
 	const commit = (update: (current: OverrideChoice) => OverrideChoice) => {
 		choiceRef.current = update(choiceRef.current);
 		setChoice(choiceRef.current);
-	};
-
-	const _setValue = (key: ListKey | TextKey, value: string) => {
-		commit((current) => ({ ...current, [key]: value }));
 	};
 
 	const move = (delta: number) => {

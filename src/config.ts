@@ -310,7 +310,10 @@ function settingTemplate(template: string, where: string): string {
 /** The names of the {placeholder} markers in a template. */
 function placeholderNames(template: string): string[] {
 	const names: string[] = [];
-	for (const match of template.matchAll(/\{([a-zA-Z]+)\}/g)) {
+	// Any brace pair is a candidate placeholder, not just {letters}: a
+	// {ticket-id} or a {value2} would otherwise pass validation and stay
+	// literal in the prompt the agent receives.
+	for (const match of template.matchAll(/\{([^{}]+)\}/g)) {
 		names.push(match[1]);
 	}
 	return names;

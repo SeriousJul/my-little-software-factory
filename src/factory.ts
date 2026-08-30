@@ -21,11 +21,18 @@ if (!isSupportedNodeVersion(process.versions.node)) {
 }
 
 // The config is read and validated before the UI starts. A missing file
-// yields the shipped defaults. An invalid file stops the control plane with
-// a readable error, so a wrong flag surfaces before any handoff.
+// yields the shipped defaults, and the start says so before the UI takes
+// over, so the operator knows where to put a file. An invalid file stops
+// the control plane with a readable error, so a wrong flag surfaces before
+// any handoff.
+const configPath = defaultConfigPath();
 let config: FactoryConfig;
 try {
-	({ config } = loadConfigFile(defaultConfigPath()));
+	const loaded = loadConfigFile(configPath);
+	if (!loaded.fromFile) {
+		process.stderr.write(`no config file at ${configPath}, using the shipped defaults\n`);
+	}
+	config = loaded.config;
 } catch (error) {
 	if (error instanceof ConfigError) {
 		process.stderr.write(`${error.message}\n`);

@@ -198,23 +198,55 @@ async function originRemoteOf(path: string, runner: CommandRunner): Promise<stri
 /**
  * Whether a remote URL points at the given repository on GitHub.
  *
- * Accepts the common GitHub remote shapes: https, ssh, and the scp-style
- * git@github.com:owner/name, with or without a .git suffix. A URL that is
- * not a parseable GitHub remote is unverifiable, not a match.
+ * The URL is normalized before the compare, so the common GitHub remote
+ * shapes all match: https and ssh, the scp-style git@github.com:owner/name,
+ * with or without a .git suffix, a port, a trailing slash, or other
+ * casing. A URL that is not a parseable GitHub remote is unverifiable, not
+ * a match.
  */
 export function matchesGitHubRepository(remote: string | null, repository: string): boolean {
 	if (remote === null) {
 		return false;
 	}
-	const forms = [
-		`https://github.com/${repository}`,
-		`https://github.com/${repository}.git`,
-		`git@github.com:${repository}`,
-		`git@github.com:${repository}.git`,
-		`ssh://git@github.com/${repository}`,
-		`ssh://git@github.com/${repository}.git`,
-	];
-	return forms.includes(remote);
+	const expected = normalizeGitHubRemote(`https://github.com/${repository}`);
+	const actual = normalizeGitHubRemote(remote);
+	return actual !== null && actual === expected;
+}
+
+/**
+ * The normalized form of a GitHub remote: the lowercased host plus the
+ * lowercased repository path, with the port, a .git suffix, and leading
+ * and trailing slashes dropped. Null when the URL is not a parseable
+ * remote or not on github.com.
+ */
+function normalizeGitHubRemote(url: string): string | null {
+	let host = "";
+	let path = "";
+	// The scp-style form (git@github.com:owner/name) is not a URL, so it is
+	// split by hand before the URL parse.
+	const scp = url.match(/^[^@/]+@([^/:]+):(.+)$/);
+	if (scp !== null) {
+		host = scp[1];
+		path = scp[2];
+	} else {
+		let parsed: URL;
+		try {
+			parsed = new URL(url);
+		} catch {
+			return null;
+		}
+		host = parsed.hostname;
+		path = parsed.pathname;
+	}
+	host = host.toLowerCase();
+	if (host !== "github.com") {
+		return null;
+	}
+	path = path
+		.toLowerCase()
+		.replace(/^\/+|\/+$/g, "")
+		.replace(/\.git$/, "");
+	return `${host}/${path}`;
 }
 
 /** The first line of a failed command's stderr, trimmed. */

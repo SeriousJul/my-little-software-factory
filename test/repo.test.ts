@@ -82,6 +82,18 @@ describe("matchesGitHubRepository", () => {
 		expect(matchesGitHubRepository("git@github.com:acme/billing.git", "acme/billing")).toBe(true);
 	});
 
+	test("a remote with a port, a trailing slash, or other casing still matches", () => {
+		expect(matchesGitHubRepository("https://github.com/acme/billing/", "acme/billing")).toBe(true);
+		expect(matchesGitHubRepository("https://github.com:443/acme/billing.git", "acme/billing")).toBe(
+			true,
+		);
+		expect(matchesGitHubRepository("HTTPS://GITHUB.COM/ACME/BILLING", "acme/billing")).toBe(true);
+		expect(matchesGitHubRepository("ssh://git@github.com:22/acme/billing", "acme/billing")).toBe(
+			true,
+		);
+		expect(matchesGitHubRepository("git@GITHUB.COM:ACME/BILLING.git", "acme/billing")).toBe(true);
+	});
+
 	test("a different repository, a null remote, or an unknown shape is not a match", () => {
 		expect(matchesGitHubRepository("https://github.com/acme/portal", "acme/billing")).toBe(false);
 		expect(matchesGitHubRepository(null, "acme/billing")).toBe(false);
