@@ -6,8 +6,8 @@
  */
 import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
-
 import { App } from "./components/app.ts";
+import { ConfigError, defaultConfigPath, type FactoryConfig, loadConfigFile } from "./config.ts";
 import { isSupportedNodeVersion, MIN_NODE_VERSION } from "./runtime.ts";
 
 // The OpenTUI native renderer needs node 26.4 or newer. Fail with an
@@ -20,5 +20,19 @@ if (!isSupportedNodeVersion(process.versions.node)) {
 	process.exit(1);
 }
 
+// The config is read and validated before the UI starts. A missing file
+// yields the shipped defaults. An invalid file stops the control plane with
+// a readable error, so a wrong flag surfaces before any handoff.
+let config: FactoryConfig;
+try {
+	({ config } = loadConfigFile(defaultConfigPath()));
+} catch (error) {
+	if (error instanceof ConfigError) {
+		process.stderr.write(`${error.message}\n`);
+		process.exit(1);
+	}
+	throw error;
+}
+
 const renderer = await createCliRenderer({ exitOnCtrlC: true });
-createRoot(renderer).render(createElement(App));
+createRoot(renderer).render(createElement(App, { config }));

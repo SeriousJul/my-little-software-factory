@@ -25,14 +25,19 @@ export interface PaneGeometry {
  * "list" takes the left half of the terminal, "detail" takes the half the
  * list does not take. One function serves both panes, so the two stay in
  * step when the layout changes.
+ *
+ * `reservedRows` are terminal rows the panes do not take: the app shell
+ * reserves one for the status line when it carries a message, and the pane
+ * boxes render one row shorter. The window math must agree with the boxes,
+ * so the reservation travels to the panes as a prop.
  */
-export function usePaneGeometry(kind: "list" | "detail"): PaneGeometry {
+export function usePaneGeometry(kind: "list" | "detail", reservedRows = 0): PaneGeometry {
 	const { width, height } = useTerminalDimensions();
 	const paneCols = kind === "list" ? Math.floor(width / 2) : width - Math.floor(width / 2);
 	return {
 		paneCols,
 		usableCols: Math.max(1, paneCols - 4),
-		visibleRows: Math.max(1, height - 4),
+		visibleRows: Math.max(1, height - reservedRows - 4),
 	};
 }
 

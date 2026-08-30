@@ -6,9 +6,12 @@ It watches tickets and hands them off to agents.
 
 Today it renders built-in sample tickets, so the control plane already shows
 its future shape while it watches the real factory in the future.
+It can already hand an open ticket off to a real agent: Enter starts the
+handoff through herdr, and the `e` key opens the override panel for a
+one-shot change of the handoff settings.
 
-See `CONTEXT.md` for the domain language and `docs/adr/` for the framework
-decision (ADR 0001: OpenTUI and TypeScript).
+See `CONTEXT.md` for the domain language and `docs/adr/` for the decisions
+(ADR 0001: OpenTUI and TypeScript, ADR 0002: handoffs run through herdr).
 
 ## Requirements
 
@@ -17,6 +20,9 @@ decision (ADR 0001: OpenTUI and TypeScript).
   behind `--experimental-ffi`, and the `factory` binary re-execs node with that flag.
 - The project pins the node version in `.tool-versions`.
   Run the commands through mise to get that version.
+- [herdr](https://github.com/seriousjul/herdr) on the `PATH` for handoffs.
+  The control plane drives it through its CLI and never starts an agent
+  process itself (ADR 0002).
 
 ## Commands
 
@@ -36,7 +42,28 @@ decision (ADR 0001: OpenTUI and TypeScript).
 | `Up` / `Down`    | Move the selection, or scroll the detail, depending on the focused pane |
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
+| `Enter`          | Hand the selected open ticket off with the config defaults              |
+| `e`              | Open the override panel for the selected open ticket                    |
 | `q`              | Quit                                                                    |
+
+### Override panel keys
+
+The panel is a modal. While it is open, the keys of the app below are inert.
+
+| Key             | What it does                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| `j` / `k`      | Move between the setting rows                                     |
+| `Up` / `Down`  | Move between the setting rows                                     |
+| `h` / `l`      | Cycle a list value (agent type, environment, task type, thinking)  |
+| `Left` / `Right` | Cycle a list value (agent type, environment, task type, thinking) |
+| typed text      | Edit the selected free-text row (model, or thinking without a list) |
+| `Backspace`     | Delete in the selected free-text row                                |
+| `Enter`         | Confirm: the handoff starts with these settings                     |
+| `Esc`           | Cancel: nothing runs, nothing changes                               |
+
+A row shows `(empty)` for an unset free-text value and `(unset)` for a list
+value that is not one of its options. The container environment is a future
+kind and is not offered by the panel.
 
 ## Layout
 
@@ -58,15 +85,82 @@ instead of wrapping it.
 When a list row cannot hold both, the title is kept and the repository
 drops, so the title stays readable in a split terminal.
 
+Under the panes sits a status line. It carries the progress and the outcome
+of the last handoff: `handing off "..."...` while one is in flight, the
+warning a sibling clone raises, or the readable reason a handoff failed.
+A clean handoff clears the line. While a handoff is in flight the keys keep
+working, and a second handoff is refused until the first one settles.
+
+## Handoffs
+
+Enter on an open ticket starts a handoff with the config defaults.
+The override panel changes them for that one handoff only.
+
+- The agent runs through herdr (ADR 0002): a live worktree handoff creates a
+  herdr workspace at the checkout with a fresh tab, and a worktree handoff
+  lets herdr create a git worktree first.
+- A worktree handoff branches `factory/<ticket id>-<title slug>` from the
+  checkout's current `HEAD`, and an existing branch is a hard failure.
+- The agent starts under the title slug as its herdr name, with the settings
+  the agent type maps (model, thinking level), and receives the prompt
+  rendered from the task type's template with the ticket's repository,
+  title, and description.
+- The ticket moves to `handed-off` when the agent starts, even if the prompt
+  later fails. The agent is running and can be prompted by hand. A failure
+  before the start (a missing herdr, a missing checkout) leaves the ticket
+  open and shows the reason on the status line.
+
+### Repository resolution
+
+The control plane finds the ticket's repository in this order:
+
+1. An explicit mapping in the config: `[repos] "owner/name" = "/path"`.
+   A mapped path must hold a git checkout of exactly that repository.
+   A mismatch is a hard failure; the control plane never uses the wrong tree.
+2. The convention `~/src/<repository name>`.
+
+When the convention path holds a different repository, the control plane
+clones the ticket's repository to a sibling path (for example
+`~/src/billing_1`), hands off there, warns on the status line, and writes
+the mapping back to the config file, so the next handoff resolves it
+explicitly.
+
+## Configuration
+
+The config lives at `~/.config/factory/config.toml`. A missing file yields
+the shipped defaults, so the control plane starts with no config at all.
+A file that does not parse or does not validate stops the control plane
+with a readable error before the UI starts: every key the control plane
+reads must be present, and every key it does not read is an error, so a
+typo surfaces at startup, not at handoff time.
+
+The config carries the defaults a handoff starts from (`default-agent`,
+`default-environment`, `default-task-type`), the agent types (their herdr
+kind and how model and thinking map to the agent's parameters), the task
+types (their prompt templates), and the repository mappings. The
+repository mappings are the one section the control plane writes back:
+a sibling clone records its path there.
+
 ## Shape
 
 - `src/factory.ts`: the entry module.
-  Checks the node version, boots the renderer, and mounts the app.
+  Checks the node version, loads and validates the config, boots the
+  renderer, and mounts the app.
 - `src/runtime.ts`: the node version gate.
+- `src/config.ts`: the config types, the shipped defaults, the loader, the
+  strict validation, and the TOML write-back.
 - `src/domain/`: the Ticket type and the ticket state machine.
+- `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
+  command sequence through herdr, starts the agent, and sends the prompt.
+- `src/repo.ts`: the repository resolution and the sibling clone.
+- `src/naming.ts`: the branch names and the herdr agent names.
+- `src/runner.ts`: the single egress for commands.
+  Every external command goes through one `CommandRunner`, and the tests
+  inject a fake that records the calls.
 - `src/data/`: the built-in sample tickets.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
-  pane, the shared pane geometry, the shared palette, and the
-  display-width-aware text helpers.
+  pane, the override panel, the shared pane geometry, the shared palette,
+  and the display-width-aware text helpers.
 - `test/`: the test suite.
-  The seam is the rendered terminal frame.
+  The seam is the rendered terminal frame and the recorded command sequence.
+  No test touches a real herdr session or a real git repository.
