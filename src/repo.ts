@@ -27,6 +27,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { FactoryConfig } from "./config.ts";
+import type { RepositoryRef } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 import { type CommandResult, type CommandRunner, errorMessage } from "./runner.ts";
@@ -71,70 +72,75 @@ interface ResolutionOptions {
 
 /** Resolve the checkout for one repository, cloning when it is missing. */
 export async function resolveRepository(
-	repository: string,
+	repository: string | RepositoryRef,
 	config: FactoryConfig,
 	{ runner, home }: ResolutionOptions,
 ): Promise<RepositoryOutcome> {
-	const name = repository.split("/").pop() ?? repository;
-	const mapped = config.repos[repository];
+	const reference = repositoryReference(repository);
+	const name = reference.displayName.split("/").pop() ?? reference.displayName;
+	// The short legacy key is accepted for current installations. New source
+	// data writes the host-qualified identity only.
+	const mapped = config.repos[reference.mappingKey] ?? config.repos[reference.displayName];
 	const path = mapped !== undefined ? expandHome(mapped, home) : join(home, "src", name);
 	const explicit = mapped !== undefined;
 
-	if (!(await fileExists(path))) {
-		return cloneRepository(repository, path, runner);
-	}
-	if (!(await isGitRepository(path, runner))) {
+	if (!(await fileExists(path))) return cloneRepositoryReference(reference, path, runner);
+	if (!(await isGitRepository(path, runner)))
 		return { ok: false, reason: `${path} is not a git repository` };
-	}
 	const remote = await originRemoteOf(path, runner);
-
 	if (explicit) {
-		if (!matchesGitHubRepository(remote, repository)) {
+		if (!matchesRepository(remote, reference.identity)) {
 			const holds = remote === null ? "no origin remote" : `a different repository (${remote})`;
 			return {
 				ok: false,
-				reason: `explicit mapping conflict: ${path} holds ${holds}, not ${repository}`,
+				reason: `explicit mapping conflict: ${path} holds ${holds}, not ${reference.displayName}`,
 			};
 		}
 		return { ok: true, repository: { path } };
 	}
-
-	if (matchesGitHubRepository(remote, repository)) {
-		return { ok: true, repository: { path } };
-	}
-
-	// A conflicting convention path: the wrong tree is never used. A sibling
-	// clone takes the work, and the mapping is written back so the next
-	// handoff is explicit.
+	if (matchesRepository(remote, reference.identity)) return { ok: true, repository: { path } };
 	const warning =
 		remote === null
-			? `~/src/${name} has no verifiable origin remote; cloned ${repository} to a sibling`
-			: `~/src/${name} holds ${remote}, not ${repository}; cloned ${repository} to a sibling`;
-	const sibling = await findSiblingClone(repository, name, home, runner);
-	if (!sibling.ok) {
-		return sibling;
-	}
+			? `~/src/${name} has no verifiable origin remote; cloned ${reference.displayName} to a sibling`
+			: `~/src/${name} holds ${remote}, not ${reference.displayName}; cloned ${reference.displayName} to a sibling`;
+	const sibling = await findSiblingCloneReference(reference, name, home, runner);
+	if (!sibling.ok) return sibling;
 	return {
 		ok: true,
 		repository: {
 			path: sibling.path,
-			notes: {
-				mappingToWrite: { repository, path: sibling.path },
-				warning,
-			},
+			notes: { mappingToWrite: { repository: reference.mappingKey, path: sibling.path }, warning },
 		},
 	};
 }
 
-/**
- * The first usable sibling clone under ~/src: <name>_1, then _2, ...
- *
- * A candidate that is missing is cloned. A candidate that already holds the
- * same repository is reused, so a retry after a crash never clones again.
- * A candidate that holds something else is skipped for the next suffix.
- */
-async function findSiblingClone(
-	repository: string,
+interface RepositoryReference {
+	identity: string;
+	displayName: string;
+	cloneUrl: string;
+	/** The key a new sibling clone writes to config. */
+	mappingKey: string;
+}
+
+function repositoryReference(repository: string | RepositoryRef): RepositoryReference {
+	if (typeof repository !== "string") {
+		return {
+			identity: repository.identity.toLowerCase(),
+			displayName: repository.displayName,
+			cloneUrl: repository.cloneUrl,
+			mappingKey: repository.identity,
+		};
+	}
+	return {
+		identity: `github.com/${repository}`.toLowerCase(),
+		displayName: repository,
+		cloneUrl: githubCloneUrl(repository),
+		mappingKey: repository,
+	};
+}
+
+async function findSiblingCloneReference(
+	repository: RepositoryReference,
 	name: string,
 	home: string,
 	runner: CommandRunner,
@@ -142,43 +148,33 @@ async function findSiblingClone(
 	for (let suffix = 1; ; suffix += 1) {
 		const candidate = join(home, "src", `${name}_${suffix}`);
 		if (!(await fileExists(candidate))) {
-			const outcome = await cloneRepository(repository, candidate, runner);
+			const outcome = await cloneRepositoryReference(repository, candidate, runner);
 			return outcome.ok ? { ok: true, path: candidate } : { ok: false, reason: outcome.reason };
 		}
 		if (
 			(await isGitRepository(candidate, runner)) &&
-			matchesGitHubRepository(await originRemoteOf(candidate, runner), repository)
-		) {
+			matchesRepository(await originRemoteOf(candidate, runner), repository.identity)
+		)
 			return { ok: true, path: candidate };
-		}
 	}
 }
 
-/** Clone a GitHub repository into `path`, creating parent directories. */
-async function cloneRepository(
-	repository: string,
+async function cloneRepositoryReference(
+	repository: RepositoryReference,
 	path: string,
 	runner: CommandRunner,
 ): Promise<RepositoryOutcome> {
 	try {
 		await mkdir(dirname(path), { recursive: true });
 	} catch (error) {
-		// The filesystem can refuse the clone target: a read-only home, a
-		// file where the parent should be, a full disk. That is a failed
-		// clone with a reason, not a thrown error: the caller reports the
-		// reason in the TUI and the ticket stays open.
+		return { ok: false, reason: `cannot create ${dirname(path)}: ${errorMessage(error)}` };
+	}
+	const result = await runner.run("git", ["clone", repository.cloneUrl, path]);
+	if (result.code !== 0)
 		return {
 			ok: false,
-			reason: `cannot create ${dirname(path)}: ${errorMessage(error)}`,
+			reason: `clone failed for ${repository.displayName}: ${commandFailureText(result)}`,
 		};
-	}
-	const result = await runner.run("git", ["clone", githubCloneUrl(repository), path]);
-	if (result.code !== 0) {
-		return {
-			ok: false,
-			reason: `clone failed for ${repository}: ${commandFailureText(result)}`,
-		};
-	}
 	return { ok: true, repository: { path } };
 }
 
@@ -224,11 +220,14 @@ async function originRemoteOf(path: string, runner: CommandRunner): Promise<stri
  * a match.
  */
 export function matchesGitHubRepository(remote: string | null, repository: string): boolean {
-	if (remote === null) {
-		return false;
-	}
-	const expected = normalizeGitHubRemote(`https://github.com/${repository}`);
-	const actual = normalizeGitHubRemote(remote);
+	return matchesRepository(remote, `github.com/${repository}`);
+}
+
+/** Match a remote against a host-qualified repository identity. */
+export function matchesRepository(remote: string | null, identity: string): boolean {
+	if (remote === null) return false;
+	const expected = normalizeRemote(`https://${identity}`);
+	const actual = normalizeRemote(remote);
 	return actual !== null && actual === expected;
 }
 
@@ -238,7 +237,7 @@ export function matchesGitHubRepository(remote: string | null, repository: strin
  * and trailing slashes dropped. Null when the URL is not a parseable
  * remote or not on github.com.
  */
-function normalizeGitHubRemote(url: string): string | null {
+function normalizeRemote(url: string): string | null {
 	let host = "";
 	let path = "";
 	// The scp-style form (git@github.com:owner/name) is not a URL, so it is
@@ -258,9 +257,7 @@ function normalizeGitHubRemote(url: string): string | null {
 		path = parsed.pathname;
 	}
 	host = host.toLowerCase();
-	if (host !== "github.com") {
-		return null;
-	}
+	if (host === "") return null;
 	path = path
 		.toLowerCase()
 		.replace(/^\/+|\/+$/g, "")

@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Pi agent task data
 .pi/
+
+# Checked-in development config state
+config/.factory-development.sqlite*

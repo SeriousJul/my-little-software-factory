@@ -1,12 +1,10 @@
-import type { Ticket } from "../domain/ticket.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 
 /**
- * Built-in sample tickets.
+ * Deterministic tickets for legacy rendered-frame tests.
  *
- * They span multiple repositories, cover every ticket state, carry a
- * GitHub closed status as a source fact, and carry the facts of their last
- * handoff: the agent type, the environment, and the task type used. The
- * open ones are not handed off yet. Data resets on every start.
+ * They span multiple repositories and factory states. Production never
+ * imports this data: live tickets come through configured ticket sources.
  */
 export const SAMPLE_TICKETS: readonly Ticket[] = [
 	{

@@ -18,8 +18,14 @@ export interface CommandResult {
 }
 
 /** One command, argv split, no shell. */
+/** Environment values for one command. Values marked secret never become command facts. */
+export interface CommandOptions {
+	env?: Record<string, string>;
+	secretEnv?: readonly string[];
+}
+
 export interface CommandRunner {
-	run(command: string, args: readonly string[]): Promise<CommandResult>;
+	run(command: string, args: readonly string[], options?: CommandOptions): Promise<CommandResult>;
 }
 
 /** Give a command ten minutes; handoffs clone repositories. */
@@ -47,7 +53,7 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
 	const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
 	const maxBuffer = options.maxBuffer ?? COMMAND_MAX_BUFFER;
 	return {
-		async run(command, args) {
+		async run(command, args, options) {
 			try {
 				const result = await new Promise<{ code: number; stdout: string; stderr: string }>(
 					(resolve, reject) => {
@@ -58,6 +64,7 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
 								encoding: "utf8",
 								timeout: timeoutMs,
 								maxBuffer,
+								env: options?.env === undefined ? process.env : { ...process.env, ...options.env },
 							},
 							(error, stdout, stderr) => {
 								if (error && typeof error.code !== "number") {

@@ -24,9 +24,16 @@ interface TicketListProps {
 	selectedIndex: number;
 	focused: boolean;
 	reservedRows: number;
+	emptyMessage?: string;
 }
 
-export function TicketList({ tickets, selectedIndex, focused, reservedRows }: TicketListProps) {
+export function TicketList({
+	tickets,
+	selectedIndex,
+	focused,
+	reservedRows,
+	emptyMessage,
+}: TicketListProps) {
 	const geometry = usePaneGeometry("list", reservedRows);
 
 	// The window starts where the selection sits on the window's last row.
@@ -54,13 +61,21 @@ export function TicketList({ tickets, selectedIndex, focused, reservedRows }: Ti
 				overflow: "hidden",
 			},
 		},
-		...visible.map((ticket) =>
-			createElement(
-				"text",
-				{ key: ticket.id },
-				...rowSpans(ticket, ticket.id === tickets[selectedIndex].id, geometry.usableCols),
-			),
-		),
+		...(visible.length === 0 && emptyMessage !== undefined
+			? [
+					createElement(
+						"text",
+						{ key: "empty", fg: COLORS.dim },
+						truncateToWidth(emptyMessage, geometry.usableCols),
+					),
+				]
+			: visible.map((ticket) =>
+					createElement(
+						"text",
+						{ key: ticket.id },
+						...rowSpans(ticket, ticket.id === tickets[selectedIndex].id, geometry.usableCols),
+					),
+				)),
 	);
 }
 

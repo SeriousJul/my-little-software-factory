@@ -17,7 +17,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
-import { SAMPLE_TICKETS } from "../src/data/sample-tickets.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import type { CommandResult, CommandRunner } from "../src/runner.ts";
 import {
@@ -43,6 +42,7 @@ import {
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
+import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 let home = "";
 let configPath = "";
@@ -593,7 +593,10 @@ describe("the override panel", () => {
 				await pressArrow(setup, "right", "the task type to become review", (f) =>
 					frameText(f).includes("Task type review"),
 				);
-				// Wraps back to the first task type.
+				await pressArrow(setup, "right", "the task type to become rework", (f) =>
+					frameText(f).includes("Task type rework"),
+				);
+				// Rework is a shipped task type. The next value wraps to the first.
 				const wrapped = await pressArrow(setup, "right", "the task type to wrap back", (f) =>
 					frameText(f).includes("Task type implement"),
 				);

@@ -1,0 +1,57 @@
+# Live development path. It uses normal gh authentication and separate state.
+state-file = ".factory-development.sqlite"
+default-agent = "pi"
+default-environment = "worktree"
+default-task-type = "implement"
+
+[agents.pi]
+kind = "pi"
+model = "--model {value}"
+thinking = "--thinking {value}"
+thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+[agents.codex]
+kind = "codex"
+model = "--model {value}"
+thinking = "-c model_reasoning_effort={value}"
+
+[agents.claude]
+kind = "claude"
+model = "--model {value}"
+thinking = "--effort {value}"
+
+[task-types.implement]
+template = "Implement the following {source-kind}.\n\nRepository: {repository}\n\n{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+
+[task-types.fix]
+template = "Fix the following {source-kind}.\n\nRepository: {repository}\n\n{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+
+[task-types.review]
+template = "Review pull request {external-key}: {title}.\n\nRepository: {repository}\nPull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+
+[task-types.rework]
+template = "Rework pull request {external-key}: {title}.\n\nRepository: {repository}\nPull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+
+[[sources]]
+name = "factory-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = ["SeriousJul/my-little-software-factory"]
+
+[[sources]]
+name = "factory-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 60
+repositories = ["SeriousJul/my-little-software-factory"]
+
+[[task-rules]]
+task-type = "rework"
+[task-rules.when]
+source-kind = "github-pull-request"
+labels-any = ["needs-work"]
+
+[[task-rules]]
+task-type = "review"
+[task-rules.when]
+source-kind = "github-pull-request"
+labels-any = ["ready-for-review"]

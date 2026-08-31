@@ -30,7 +30,8 @@ export interface DetailLine {
  * The title and the description wrap to the pane width, so long content is
  * reachable through scrolling instead of clipped away.
  */
-export function detailLines(ticket: Ticket, usableCols: number): DetailLine[] {
+export function detailLines(ticket: Ticket | undefined, usableCols: number): DetailLine[] {
+	if (ticket === undefined) return [{ text: "no ticket selected", fg: COLORS.dim }];
 	const lines: DetailLine[] = [];
 	const pushWrapped = (text: string, fg: string) => {
 		for (const line of wrapToWidth(text, usableCols)) {
@@ -46,7 +47,23 @@ export function detailLines(ticket: Ticket, usableCols: number): DetailLine[] {
 		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
 		pushWrapped(`Task type: ${ticket.handoff.taskType}`, COLORS.text);
 	}
-	pushWrapped(`GitHub: ${ticket.githubClosed ? "closed" : "open"}`, COLORS.text);
+	if (ticket.sourceKind !== undefined) {
+		pushWrapped(`Source kind: ${ticket.sourceKind}`, COLORS.text);
+		pushWrapped(`External key: ${ticket.externalKey ?? "unknown"}`, COLORS.text);
+		pushWrapped(`Source state: ${ticket.sourceState ?? "unknown"}`, COLORS.text);
+		pushWrapped(`Source URL: ${ticket.url ?? "unknown"}`, COLORS.text);
+		pushWrapped(`Labels: ${ticket.labels?.join(", ") || "none"}`, COLORS.text);
+		for (const membership of ticket.memberships ?? []) {
+			pushWrapped(
+				`Source ${membership.sourceName}: ${membership.health}`,
+				membership.health === "stale" ? COLORS.statusWarning : COLORS.dim,
+			);
+		}
+		if (ticket.handoffRecoveryRequired)
+			pushWrapped("Handoff: recovery required", COLORS.statusWarning);
+	} else {
+		pushWrapped(`GitHub: ${ticket.githubClosed ? "closed" : "open"}`, COLORS.text);
+	}
 	lines.push({ text: " ", fg: COLORS.dim });
 	pushWrapped(ticket.description, COLORS.dim);
 

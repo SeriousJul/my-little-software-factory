@@ -27,7 +27,12 @@ export function titleSlug(title: string): string {
  * One ticket owns one branch; a second ticket never shares the first's.
  */
 export function branchNameFor(ticket: Ticket): string {
-	return `factory/${ticket.id}-${titleSlug(ticket.title)}`;
+	// A stable provider identity can contain ':' or other ref-invalid bytes.
+	// The source-visible external key is safe after this narrow normalization.
+	const key =
+		(ticket.externalKey ?? ticket.id).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") ||
+		"ticket";
+	return `factory/${key}-${titleSlug(ticket.title)}`;
 }
 
 /**

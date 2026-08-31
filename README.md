@@ -4,14 +4,14 @@ The control plane of my little software factory.
 It is a terminal app that observes the factory and issues work.
 It watches tickets and hands them off to agents.
 
-Today it renders built-in sample tickets, so the control plane already shows
-its future shape while it watches the real factory in the future.
-It can already hand an open ticket off to a real agent: Enter starts the
-handoff through herdr, and the `e` key opens the override panel for a
-one-shot change of the handoff settings.
+It fetches configured GitHub issue and pull request sources, stores factory
+state in SQLite, and refreshes each source without resetting a ticket's work
+cycle. Enter hands an actionable open ticket off through herdr. The `e` key
+opens the override panel for a one-shot change of the handoff settings.
 
-See `CONTEXT.md` for the domain language and `docs/adr/` for the decisions
-(ADR 0001: OpenTUI and TypeScript, ADR 0002: handoffs run through herdr).
+See `CONTEXT.md` for the domain language, `docs/labels.md` for source-label
+meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and TypeScript,
+ADR 0002: handoffs run through herdr).
 
 ## Requirements
 
@@ -44,6 +44,7 @@ See `CONTEXT.md` for the domain language and `docs/adr/` for the decisions
 | `Left` / `Right` | Switch focus between the list and detail                                |
 | `Enter`          | Hand the selected open ticket off with the config defaults              |
 | `e`              | Open the override panel for the selected open ticket                    |
+| `r`              | Refresh every ticket source now                                        |
 | `q`              | Quit                                                                    |
 
 ### Override panel keys
@@ -78,8 +79,9 @@ Two panes side by side, flex-sized to the terminal.
 The list pane on the left shows every ticket with its state badge, title,
 and repository.
 The detail pane on the right shows the full detail of the selected ticket:
-repository, ticket state, assigned agent, and the GitHub status as a separate
-source fact.
+repository, ticket state, assigned agent, source name, source kind, external
+key, source state, URL, labels, and source health. Factory ticket state and
+external source state stay separate.
 The panes share one focus.
 Switching focus never moves the selection.
 
@@ -125,7 +127,7 @@ The override panel changes them for that one handoff only.
 
 The control plane finds the ticket's repository in this order:
 
-1. An explicit mapping in the config: `[repos] "owner/name" = "/path"`.
+1. An explicit mapping in the config: `[repos] "github.com/owner/name" = "/path"`.
    A mapped path must hold a git checkout of exactly that repository.
    The remote is matched by repository, not by URL shape: https and ssh,
    the scp-style git@github.com:owner/name, a port, a trailing slash, a
@@ -151,14 +153,20 @@ reads must be present, and every key it does not read is an error, so a
 typo surfaces at startup, not at handoff time.
 
 The config carries the defaults a handoff starts from (`default-agent`,
-`default-environment`, `default-task-type`), the agent types (their herdr
-kind and how model and thinking map to the agent's parameters), the task
-types (their prompt templates; a name must be one word), and the repository
-mappings. A template's brace pairs are placeholders, and the task types
-know only `{repository}`, `{title}`, and `{description}`: any other brace
-pair is a startup error, so a `{ticket-id}` cannot stay literal in the
-prompt an agent receives. The repository mappings are the one section the control plane
-writes back: a sibling clone records its path there. The write-back is
+`default-environment`, `default-task-type`), agent types, task types,
+repository mappings, ticket sources, ordered task rules, and an optional
+`state-file`. A source has a unique name, a GitHub adapter kind
+(`github-issues` or `github-pull-requests`), repositories, and a positive
+`refresh-interval-seconds`. Sources can use normal `gh` authentication, a
+literal token, a token environment variable, or a named authenticated account.
+The shipped defaults have no sources. `config/development.toml` configures the
+live development path for this repository through `--config`. A template's
+brace pairs are placeholders. Task types know `{repository}`, `{title}`,
+`{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, and
+`{labels}`. Any other brace pair is a startup error, so a `{ticket-id}`
+cannot stay literal in the prompt an agent receives. Repository mappings are
+the one section the control plane writes back: a sibling clone records its
+path there. The write-back is
 atomic: the config goes to a temp file in the same directory and the rename
 over the target is one step, so a crash leaves either the old file or the
 new one, never a truncated file the next start would reject. The write-back
@@ -171,8 +179,14 @@ the first write-back: the data round-trips, the comments do not.
   Checks the node version, loads and validates the config, boots the
   renderer, and mounts the app.
 - `src/runtime.ts`: the node version gate.
-- `src/config.ts`: the config types, the shipped defaults, the loader, the
-  strict validation, and the TOML write-back.
+- `src/config.ts`: config types, strict startup validation, state path
+  resolution, and atomic TOML write-back.
+- `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
+  and Pull Requests adapters.
+- `src/refresh.ts`: independent source refresh scheduling.
+- `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
+  handoff attempts, and the process lease.
+- `src/task-selection.ts`: ordered task-rule selection.
 - `src/domain/`: the Ticket type and the ticket state machine.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
   command sequence through herdr, starts the agent, and sends the prompt.
@@ -181,7 +195,7 @@ the first write-back: the data round-trips, the comments do not.
 - `src/runner.ts`: the single egress for commands.
   Every external command goes through one `CommandRunner`, and the tests
   inject a fake that records the calls.
-- `src/data/`: the built-in sample tickets.
+- `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
   pane, the override panel, the shared pane geometry, the shared palette,
   and the display-width-aware text helpers.
