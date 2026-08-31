@@ -8,7 +8,15 @@
  * default environment). The error is always one readable line an operator
  * can act on.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -21,6 +29,7 @@ import {
 	type FactoryConfig,
 	loadConfigFile,
 	persistConfig,
+	type TicketSourceConfig,
 	validateConfig,
 } from "../src/config.ts";
 
@@ -124,6 +133,124 @@ describe("loadConfigFile", () => {
 });
 
 describe("validateConfig", () => {
+	test("parses a custom host and filter and round-trips both", () => {
+		const config = validateConfig({
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+			sources: [
+				{
+					name: "ghe",
+					kind: "github-pull-requests",
+					"refresh-interval-seconds": 30,
+					repositories: ["acme/private"],
+					host: "GITHUB.ACME.COM",
+					filter: "label:epic author:me",
+				},
+			],
+		});
+		expect(config.sources[0].host).toBe("github.acme.com");
+		expect(config.sources[0].filter).toBe("label:epic author:me");
+
+		// A non-default host and the filter must survive a write/read cycle.
+		const roundTrip = validateConfig(parseToml(configToToml(config)));
+		expect(roundTrip.sources[0].host).toBe("github.acme.com");
+		expect(roundTrip.sources[0].filter).toBe("label:epic author:me");
+	});
+
+	test("rejects a non-numeric or non-positive refresh interval and an empty repository list", () => {
+		const base = {
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+		};
+		const source = (over: Record<string, unknown>) => ({
+			name: "s",
+			kind: "github-issues",
+			"refresh-interval-seconds": 60,
+			repositories: ["acme/factory"],
+			...over,
+		});
+		expectConfigError(
+			{ ...base, sources: [source({ "refresh-interval-seconds": "60" })] },
+			"must be a positive number",
+		);
+		expectConfigError(
+			{ ...base, sources: [source({ "refresh-interval-seconds": -5 })] },
+			"must be a positive number",
+		);
+		expectConfigError(
+			{ ...base, sources: [source({ repositories: [] })] },
+			"non-empty list of owner/name",
+		);
+	});
+
+	test("task-rule label conditions must be non-empty lists of strings", () => {
+		const base = {
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+		};
+		const rules = (when: Record<string, unknown>) => ({
+			...base,
+			"task-rules": [{ "task-type": "implement", when }],
+		});
+		expectConfigError(rules({ "labels-all": [] }), "labels-all");
+		expectConfigError(rules({ "labels-any": ["ok", ""] }), "labels-any");
+		expectConfigError(rules({ "labels-none": 5 }), "labels-none");
+	});
+
+	describe("secret round-trip", () => {
+		const sourceWithAuth = (auth: Record<string, string>): TicketSourceConfig => ({
+			name: "issues",
+			kind: "github-issues",
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+			auth,
+		});
+
+		test("a literal token persists to an owner-only file and comes back intact", async () => {
+			const path = inTempDir()("secret/config.toml");
+			const config = {
+				...DEFAULT_CONFIG,
+				sources: [sourceWithAuth({ token: "ghp_secret_token_value" })],
+			};
+			await persistConfig(path, config);
+			expect(statSync(path).mode & 0o777).toBe(0o600);
+			const { config: loaded } = await loadConfigFile(path);
+			expect(loaded.sources[0]?.auth).toEqual({ token: "ghp_secret_token_value" });
+		});
+
+		test("an environment token stays out of the written TOML", async () => {
+			const path = inTempDir()("env-token/config.toml");
+			const config = {
+				...DEFAULT_CONFIG,
+				sources: [sourceWithAuth({ tokenEnv: "FACTORY_TEST_TOKEN" })],
+			};
+			process.env.FACTORY_TEST_TOKEN = "ghp_must_not_be_written";
+			try {
+				await persistConfig(path, config);
+				const written = readFileSync(path, "utf8");
+				expect(written).toContain("FACTORY_TEST_TOKEN");
+				expect(written).not.toContain("ghp_must_not_be_written");
+				const { config: loaded } = await loadConfigFile(path);
+				expect(loaded.sources[0]?.auth).toEqual({ tokenEnv: "FACTORY_TEST_TOKEN" });
+			} finally {
+				delete process.env.FACTORY_TEST_TOKEN;
+			}
+		});
+	});
+
 	test("every required top-level key is read", () => {
 		expectConfigError(
 			{ defaultAgent: "pi", agents: {}, "task-types": {} },
@@ -428,6 +555,18 @@ describe("ticket source configuration", () => {
 		expectConfigError(
 			{ ...base, "task-rules": [{ "task-type": "missing", when: { unknown: "x" } }] },
 			"unknown task type",
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "implement", when: { bogus: 1 } }] },
+			'when: unknown key "bogus"',
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "implement", when: "labels" }] },
+			"when: must be a table",
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "implement", when: {}, bogus: 1 }] },
+			'task-rules[0]: unknown key "bogus"',
 		);
 	});
 

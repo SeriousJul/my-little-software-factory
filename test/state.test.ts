@@ -1,10 +1,12 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState } from "../src/state.ts";
+import { openFactoryState, StateError } from "../src/state.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -152,6 +154,144 @@ describe("factory SQLite state", () => {
 		const pending = reopened.claimHandoff(persisted.identity, choice);
 		expect(pending).toEqual(expect.objectContaining({ ok: false }));
 		reopened.close();
+	});
+
+	test("stops with a readable error for a database from a newer schema version", () => {
+		const path = statePath();
+		const db = new DatabaseSync(path);
+		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
+		db.prepare("INSERT INTO schema_version(version) VALUES (2)").run();
+		db.close();
+
+		let error: unknown;
+		try {
+			openFactoryState(path);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(StateError);
+		expect(String(error)).toContain("newer schema version 2");
+		expect(String(error)).toContain(path);
+	});
+
+	test("stops on a damaged database without deleting the data", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.close();
+
+		// Corrupt the header of the last page: the schema stays readable, but the
+		// integrity check must fail on the damaged data.
+		const buffer = readFileSync(path);
+		buffer[(buffer.byteLength / 4096 - 1) * 4096] = 0;
+		writeFileSync(path, buffer);
+
+		let error: unknown;
+		try {
+			openFactoryState(path);
+		} catch (caught) {
+			error = caught;
+		}
+		expect(error).toBeInstanceOf(StateError);
+		expect(String(error)).toContain("integrity check failed");
+		expect(String(error)).toContain(path);
+		expect(statSync(path).size).toBeGreaterThan(0);
+	});
+
+	test("starts a new work cycle only when a done ticket leaves every source and returns", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+
+		// No agent API exists to finish a ticket yet, so the completion is
+		// recorded the way the agent will record it: a state row update.
+		const markDone = () => {
+			const db = new DatabaseSync(path);
+			db.prepare("UPDATE tickets SET state = 'done' WHERE identity = ?").run(
+				"github:github.com:I_5",
+			);
+			db.close();
+		};
+		const workCycle = () => {
+			const db = new DatabaseSync(path);
+			const row = db
+				.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
+				.get("github:github.com:I_5") as { state: string; work_cycle: number };
+			db.close();
+			return row;
+		};
+
+		markDone();
+		// A continuously matching done ticket stays done in the same work cycle.
+		state.applyFetch(sourceA, success([fetched()]));
+		expect(workCycle()).toEqual({ state: "done", work_cycle: 1 });
+
+		// The ticket leaves every source and later returns: a new work cycle starts.
+		state.applyFetch(sourceA, success([]));
+		state.applyFetch(sourceA, success([fetched()]));
+		expect(workCycle()).toEqual({ state: "open", work_cycle: 2 });
+
+		state.close();
+	});
+
+	test("keeps prior work cycles and their handoffs in history", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [first] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(first.identity, choice);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+
+		// The cycle completes, the ticket leaves every source and returns.
+		const db = new DatabaseSync(path);
+		db.prepare("UPDATE tickets SET state = 'done' WHERE identity = ?").run(first.identity);
+		db.close();
+		state.applyFetch(sourceA, success([]));
+		state.applyFetch(sourceA, success([fetched()]));
+		const [second] = state.visibleTickets([], "implement");
+		const secondClaim = state.claimHandoff(second.identity, choice);
+		if (!secondClaim.ok) throw new Error(secondClaim.reason);
+		state.settleHandoff(secondClaim.claim.attemptId, true);
+
+		const history = new DatabaseSync(path)
+			.prepare("SELECT work_cycle FROM handoffs WHERE ticket_identity = ? ORDER BY work_cycle")
+			.all(first.identity) as Array<{ work_cycle: number }>;
+		expect(history).toEqual([{ work_cycle: 1 }, { work_cycle: 2 }]);
+
+		state.close();
+	});
+
+	test("reclaims a dead local owner's lease but never a lease from another host", () => {
+		const path = statePath();
+		const deadPid = spawnSync("true").pid;
+		expect(deadPid).toBeGreaterThan(0);
+		// Let the real migration create the schema first.
+		const primed = openFactoryState(path);
+		primed.close();
+		const seedLease = (ownerPid: number, ownerHost: string) => {
+			const db = new DatabaseSync(path);
+			db.prepare(
+				"INSERT OR REPLACE INTO lease(name, owner_token, pid, host, heartbeat_at) " +
+					"VALUES ('control-plane', 'stale-owner', ?, ?, ?)",
+			).run(ownerPid, ownerHost, Date.now());
+			db.close();
+		};
+
+		// A dead local pid is a safe reclaim signal: that owner cannot be running.
+		seedLease(deadPid, os.hostname());
+		const first = openFactoryState(path);
+		first.acquireLease();
+		first.close();
+
+		// A lease owned by another host is never reclaimed by local pid liveness.
+		seedLease(process.pid, "other-host");
+		const second = openFactoryState(path);
+		expect(() => second.acquireLease()).toThrow("already in use");
+		second.close();
 	});
 
 	test("keeps an unresolved handoff attempt blocked after restart", () => {

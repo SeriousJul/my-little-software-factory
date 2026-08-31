@@ -26,6 +26,7 @@ import {
 	expandHome,
 	githubCloneUrl,
 	matchesGitHubRepository,
+	matchesRepository,
 	resolveRepository,
 } from "../src/repo.ts";
 import { FakeRunner } from "./fake-runner.ts";
@@ -309,6 +310,96 @@ describe("resolveRepository", () => {
 		);
 		expect(outcome.ok).toBe(true);
 		expect(existsSync(join(home, "deep", "nested"))).toBe(true);
+	});
+});
+
+describe("host-qualified repository references", () => {
+	const gitlabBilling = {
+		identity: "gitlab.com/acme/billing",
+		displayName: "acme/billing",
+		cloneUrl: "https://gitlab.com/acme/billing.git",
+	};
+
+	test("a remote matches only against its own host", () => {
+		expect(matchesRepository("https://gitlab.com/acme/billing.git", gitlabBilling.identity)).toBe(
+			true,
+		);
+		expect(matchesRepository("git@gitlab.com:acme/billing", gitlabBilling.identity)).toBe(true);
+		expect(matchesRepository("https://github.com/acme/billing.git", gitlabBilling.identity)).toBe(
+			false,
+		);
+		expect(matchesRepository(null, gitlabBilling.identity)).toBe(false);
+	});
+
+	test("a missing convention path clones from the reference's own clone URL", async () => {
+		const home = tempHome();
+		const runner = new FakeRunner();
+		const outcome = await resolveRepository(gitlabBilling, DEFAULT_CONFIG, { runner, home });
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) {
+			return;
+		}
+		// The convention name comes from the display name, not the identity.
+		expect(outcome.repository.path).toBe(join(home, "src", "billing"));
+		expect(runner.commands()).toEqual([
+			`git clone https://gitlab.com/acme/billing.git ${join(home, "src", "billing")}`,
+		]);
+	});
+
+	test("a mapping keyed by the host-qualified identity wins", async () => {
+		const home = tempHome();
+		const runner = new FakeRunner();
+		const mapped = checkout(home, "elsewhere", runner, "https://gitlab.com/acme/billing.git");
+		const outcome = await resolveRepository(
+			gitlabBilling,
+			configWith({ "gitlab.com/acme/billing": "~/src/elsewhere" }),
+			{ runner, home },
+		);
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.repository.path).toBe(mapped);
+		}
+	});
+
+	test("the same owner/name on another host is a different repository", async () => {
+		const home = tempHome();
+		const runner = new FakeRunner();
+		// The convention path holds the github.com twin, not the gitlab.com repository.
+		checkout(home, "billing", runner, "https://github.com/acme/billing.git");
+		const outcome = await resolveRepository(gitlabBilling, DEFAULT_CONFIG, { runner, home });
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) {
+			return;
+		}
+		const sibling = join(home, "src", "billing_1");
+		expect(outcome.repository.path).toBe(sibling);
+		expect(outcome.repository.notes?.warning).toContain("github.com/acme/billing");
+		// The mapping written back is keyed by the host-qualified identity.
+		expect(outcome.repository.notes?.mappingToWrite).toEqual({
+			repository: "gitlab.com/acme/billing",
+			path: sibling,
+		});
+		expect(runner.commands()).toContain(`git clone https://gitlab.com/acme/billing.git ${sibling}`);
+	});
+
+	test("a legacy owner/name mapping still resolves a github reference", async () => {
+		const home = tempHome();
+		const runner = new FakeRunner();
+		const mapped = checkout(home, "elsewhere", runner, "https://github.com/acme/billing.git");
+		const githubBilling = {
+			identity: "github.com/acme/billing",
+			displayName: "acme/billing",
+			cloneUrl: "https://github.com/acme/billing.git",
+		};
+		const outcome = await resolveRepository(
+			githubBilling,
+			configWith({ "acme/billing": "~/src/elsewhere" }),
+			{ runner, home },
+		);
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.repository.path).toBe(mapped);
+		}
 	});
 });
 
