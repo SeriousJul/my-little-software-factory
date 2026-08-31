@@ -1,7 +1,7 @@
 # Control Plane
 
 The terminal application that observes the software factory and issues work.
-It monitors tickets and hands them off to agents.
+It monitors tickets, hands them off to agents, and watches for their completion.
 
 ## Language
 
@@ -49,14 +49,18 @@ Its last tickets stay visible, but they cannot be handed off until the source re
 _Avoid_: offline source
 
 **Work cycle**:
-One passage of a ticket from `open` through the factory to `done`.
-A done ticket that leaves all sources and later returns starts a new work cycle.
+One passage of a ticket from `open` through the factory to cycle close.
+A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number.
 _Avoid_: ticket generation, run
 
 **Ticket state**:
-The position of a ticket in the factory: `open`, `handed-off`, `running`, `done`.
+The position of a ticket in the factory: `open`, `handed-off`, `running`, `awaiting`.
 The external source's own state is a separate source fact, not a ticket state.
 _Avoid_: status, phase
+
+**Awaiting**:
+The ticket state where the agent has settled its turn, the last message is captured, and no completion decision is made yet.
+_Avoid_: finished, pending review
 
 **Agent**:
 An autonomous program that executes a ticket.
@@ -68,6 +72,16 @@ The declarative description of a class of agents: its name, how to start it, and
 An agent is a running instance of an agent type.
 _Avoid_: agent definition, plugin, driver
 
+**Blocked**:
+The observation that an agent shows an approval or question UI.
+The ticket stays `running` and still counts against the parallel limit.
+_Avoid_: stalled, waiting
+
+**Missing agent**:
+The observation that the stored pane is gone or holds no agent.
+The agent does not process. The operator can restart or abandon the cycle.
+_Avoid_: dead agent, orphaned
+
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
 _Avoid_: assign, dispatch, launch
@@ -77,6 +91,21 @@ The durable record created before a handoff makes its first external change.
 An unresolved attempt prevents another handoff of the same ticket after a crash.
 _Avoid_: pending ticket, handoff state
 
+**Auto-handoff mode**:
+The session-level mode in which the control plane hands off eligible open tickets by itself.
+The config file carries the startup default; the UI toggle is session-only.
+_Avoid_: auto dispatch, dispatch mode
+
+**Parallel limit**:
+The maximum number of agents in flight, counted as tickets in `handed-off` or `running` state whose agent is alive.
+It gates auto-handoff only; a manual handoff is always allowed.
+_Avoid_: concurrency cap, max agents
+
+**Handoff limit**:
+The per-ticket cap on started handoffs that stops the close-and-rehandoff loop.
+It gates auto-handoff only; a manual handoff may pass it.
+_Avoid_: turn counter, dispatch budget
+
 **Task type**:
 A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff.
 _Avoid_: prompt, template
@@ -85,6 +114,24 @@ _Avoid_: prompt, template
 A configured condition that selects the suggested task type for a ticket before handoff.
 Rules are ordered, and the first matching rule wins; an override can replace the suggestion.
 _Avoid_: task mapping, task route
+
+**Workflow**:
+A configured routing from one completed task type to the next.
+An edge can pin the agent type and environment of the next handoff.
+_Avoid_: pipeline, state machine
+
+**Auto-close**:
+A property of a task type. For its completions the control plane decides without the operator: exactly one outgoing edge hands off with that task, any other edge count closes the cycle.
+_Avoid_: auto complete, auto done
+
+**Completion decision**:
+The choice made on a settled agent turn: close the cycle, go to the agent, or hand off with a workflow task.
+_Avoid_: action, verdict
+
+**Completion trace**:
+The durable record of a settled agent turn: task type, agent, completion time, last message, and decision.
+A cycle holds one trace per settled turn.
+_Avoid_: log, transcript
 
 **Environment**:
 The place where an agent runs a ticket.
@@ -98,7 +145,7 @@ The settings are: agent type, environment kind, task type, model, and thinking l
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/factory/config.toml` that carries the handoff defaults, ticket sources, task rules, agent types, task types, state file, and repository mappings.
+The TOML file at `~/.config/factory/config.toml` that carries the handoff defaults, the auto-handoff default, the limits, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
 A missing file yields the shipped defaults. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 
