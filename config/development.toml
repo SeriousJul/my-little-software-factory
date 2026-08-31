@@ -23,23 +23,21 @@ thinking = "--effort {value}"
 [task-types.implement]
 template = '''
 Implement the following {source-kind}. 
-Create a new branch and commit the changes to it. 
-Then create a pull request with the changes.
 
-Repository: {repository}
+### Instructions
 
-{external-key}: {title}
+1. **Develop Code**
+   - Implement all acceptance criteria on this branch.
+   - Commit all changes to this branch.
 
-URL: {source-url}
+2. **Create Pull Request**
+   - Open a new Pull Request.
+   - List any technical choices made when specifications were not clear.
+   - Add the **`ready-for-review`** label.
+   - Add the **`ready-for-agent`** label.
 
-Labels: {labels}
-
-Description:
-{description}'''
-
-[task-types.fix]
-template = '''
-Fix the following {source-kind}.
+3. **Update Ticket**
+   - Remove the **`ready-for-agent`** label
 
 Repository: {repository}
 
@@ -56,6 +54,31 @@ Description:
 template = '''
 Review pull request {external-key}: {title}.
 
+### Rules
+1. **Verify Specification**
+   - Check if the code satisfies all acceptance criteria in the ticket.
+   - List missing requirements or incorrect behavior.
+
+2. **Assess Code Quality**
+   - Check design, modularity, readability, and testing standards.
+   - List maintainability, security, or performance issues.
+
+3. **Calculate Score**
+   - Give a total score from 0 to 100 based on both areas.
+
+### Output Format
+
+- **Score:** [0-100] / 100
+- **Specification Check:** [Pass/Fail - Details]
+- **Quality Check:** [Pass/Fail - Details]
+- **Required Changes:** [Bullet points]
+
+### Outcome
+- Post the output as a comment on the pull request.
+- Remove label 'ready-for-review'.
+- Set label to **`ready-to-ship`** if score is 92 or higher.
+- Set label to **`needs-work`** if score is less than 92.
+
 Repository: {repository}
 Pull request: {source-url}
 
@@ -67,6 +90,22 @@ Description:
 [task-types.rework]
 template = '''
 Rework pull request {external-key}: {title}.
+
+### Instructions
+
+1. **Read Comments**
+   - Read last review comments.
+
+2. **Make Changes**
+   - Correct the code according to the review comments.
+
+3. **Update Repository**
+   - Commit and push changes to this branch.
+
+4. **Update Pull Request**
+   - Write a summary of your changes in a new comment.
+   - Remove the **`needs-work`** label.
+   - Add the **`ready-for-review`** label.
 
 Repository: {repository}
 Pull request: {source-url}
