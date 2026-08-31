@@ -281,8 +281,7 @@ function normalizeGitHubNode(
 	}
 	if (
 		!config.repositories.some(
-			(repositoryName) =>
-				repositoryName.localeCompare(nameWithOwner, undefined, { sensitivity: "accent" }) === 0,
+			(repositoryName) => repositoryName.toLowerCase() === nameWithOwner.toLowerCase(),
 		)
 	) {
 		return {

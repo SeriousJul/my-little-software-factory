@@ -106,7 +106,7 @@ export async function handOffTicket(
 	}
 
 	onStage?.("resolving-repository");
-	const resolved = await resolveRepository(ticket.repositoryRef ?? ticket.repository, config, {
+	const resolved = await resolveRepository(ticket.repositoryRef, config, {
 		runner,
 		home,
 	});
@@ -363,10 +363,10 @@ export function renderPrompt(template: string, ticket: Ticket): string {
 		repository: ticket.repository,
 		title: ticket.title,
 		description: ticket.description,
-		"source-kind": ticket.sourceKind ?? "ticket",
-		"external-key": ticket.externalKey ?? ticket.id,
-		"source-url": ticket.url ?? "",
-		labels: ticket.labels?.join(", ") ?? "",
+		"source-kind": ticket.sourceKind,
+		"external-key": ticket.externalKey,
+		"source-url": ticket.url,
+		labels: ticket.labels.join(", "),
 	};
 	return template.replace(
 		/\{(repository|title|description|source-kind|external-key|source-url|labels)\}/g,

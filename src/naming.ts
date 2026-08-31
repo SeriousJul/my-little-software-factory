@@ -30,8 +30,7 @@ export function branchNameFor(ticket: Ticket): string {
 	// A stable provider identity can contain ':' or other ref-invalid bytes.
 	// The source-visible external key is safe after this narrow normalization.
 	const key =
-		(ticket.externalKey ?? ticket.id).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") ||
-		"ticket";
+		ticket.externalKey.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
 	return `factory/${key}-${titleSlug(ticket.title)}`;
 }
 

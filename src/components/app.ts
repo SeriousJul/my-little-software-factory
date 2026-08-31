@@ -69,14 +69,13 @@ export function App({
 	const [detailScroll, setDetailScroll] = useState(0);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
-	const [, setRefreshRevision] = useState(0);
+	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const inFlightRef = useRef(false);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
-	const healths = state?.sourceHealths() ?? [];
 	const healthLine = healths
 		.filter((health) => health.health === "stale" || health.health === "removed")
 		.map(
@@ -96,18 +95,18 @@ export function App({
 		const currentConfig = configRef.current;
 		const next = state.visibleTickets(currentConfig.taskRules, currentConfig.defaultTaskType);
 		const currentIndex = selectedIndexRef.current;
-		const selectedId = ticketsRef.current[currentIndex]?.id;
+		const selectedId = ticketsRef.current[currentIndex]?.identity;
 		const preserved =
-			selectedId === undefined ? -1 : next.findIndex((ticket) => ticket.id === selectedId);
+			selectedId === undefined ? -1 : next.findIndex((ticket) => ticket.identity === selectedId);
 		const nextIndex =
 			preserved >= 0 ? preserved : Math.max(0, Math.min(currentIndex, next.length - 1));
 		ticketsRef.current = next;
 		selectedIndexRef.current = nextIndex;
 		setTickets(next);
+		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
-		if (selectedId === undefined || !next.some((ticket) => ticket.id === selectedId))
+		if (selectedId === undefined || !next.some((ticket) => ticket.identity === selectedId))
 			setDetailScroll(0);
-		setRefreshRevision((revision) => revision + 1);
 	}, [state]);
 
 	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
@@ -162,7 +161,7 @@ export function App({
 			});
 			return;
 		}
-		const claim = state?.claimHandoff(ticket.identity ?? ticket.id, choice);
+		const claim = state?.claimHandoff(ticket.identity, choice);
 		if (claim !== undefined && !claim.ok) {
 			setStatus({ kind: "warning", text: claim.reason });
 			return;
@@ -242,7 +241,9 @@ export function App({
 		if (ticket.actionable === false) {
 			setStatus({
 				kind: "warning",
-				text: "ticket is not actionable because its sources are stale, removed, or absent",
+				text: ticket.handoffRecoveryRequired
+					? "handoff recovery is required before another handoff"
+					: "ticket is not actionable because its sources are stale, removed, or absent",
 			});
 			return;
 		}
@@ -317,7 +318,7 @@ export function App({
 			? undefined
 			: config.sources.length === 0
 				? "no ticket sources configured"
-				: healths.some((health) => health.health === "loading")
+				: healths.length === 0 || healths.some((health) => health.health === "loading")
 					? "loading tickets..."
 					: "no tickets match the configured sources";
 	const statusColor =

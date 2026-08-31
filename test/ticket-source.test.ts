@@ -121,6 +121,19 @@ describe("GitHub ticket sources", () => {
 		);
 	});
 
+	test("rejects an item outside the configured repository scope", async () => {
+		const runner = new SourceRunner([
+			page([{ ...issue(), repository: { name: "other", nameWithOwner: "acme/other" } }]),
+		]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				reason: expect.stringContaining("outside configured"),
+			}),
+		);
+	});
+
 	test("passes literal tokens through a secret environment, not argv or command facts", async () => {
 		const runner = new SourceRunner([page([issue()])]);
 		const outcome = await createTicketSource(

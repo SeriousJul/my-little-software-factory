@@ -72,8 +72,12 @@ export function TicketList({
 			: visible.map((ticket) =>
 					createElement(
 						"text",
-						{ key: ticket.id },
-						...rowSpans(ticket, ticket.id === tickets[selectedIndex].id, geometry.usableCols),
+						{ key: ticket.identity },
+						...rowSpans(
+							ticket,
+							ticket.identity === tickets[selectedIndex].identity,
+							geometry.usableCols,
+						),
 					),
 				)),
 	);

@@ -36,6 +36,10 @@ export interface HandoffClaim {
 
 export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reason: string };
 
+interface StoredMembership extends SourceMembership {
+	active: boolean;
+}
+
 interface MembershipRow {
 	source_name: string;
 	health: Health;
@@ -315,19 +319,18 @@ export class FactoryState {
 		}>;
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
-			const memberships = this.membershipsFor(row.identity, row.state);
-			const active = memberships.filter(
-				(membership) =>
-					membership.health !== "removed" && this.membershipActive(membership, row.identity),
+			const storedMemberships = this.membershipsFor(row.identity, row.state);
+			const active = storedMemberships.filter(
+				(membership) => membership.active && membership.health !== "removed",
 			);
 			const pending = this.hasUnresolvedAttempt(row.identity);
 			const actionable =
 				row.state === "open" &&
 				!pending &&
 				active.some((membership) => membership.health === "healthy");
-			if (memberships.length === 0 && row.state !== "handed-off" && row.state !== "running")
+			if (storedMemberships.length === 0 && row.state !== "handed-off" && row.state !== "running")
 				continue;
-			const facts = [...memberships].sort(
+			const facts = [...storedMemberships].sort(
 				(a, b) =>
 					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
 					a.sourceName.localeCompare(b.sourceName),
@@ -335,13 +338,11 @@ export class FactoryState {
 			if (facts === undefined) continue;
 			const handoff = this.handoffFor(row.identity);
 			tickets.push({
-				id: row.identity,
 				identity: row.identity,
 				title: facts.title,
 				repository: facts.repository.displayName,
 				state: row.state,
 				handoff,
-				githubClosed: facts.sourceState === "closed" || facts.sourceState === "merged",
 				description: facts.description,
 				sourceKind: facts.sourceKind,
 				externalKey: facts.externalKey,
@@ -350,9 +351,9 @@ export class FactoryState {
 				labels: facts.labels,
 				externalUpdatedAt: facts.externalUpdatedAt,
 				repositoryRef: facts.repository,
-				memberships,
+				memberships: storedMemberships.map(({ active: _active, ...membership }) => membership),
 				suggestedTaskType: selectTaskType(
-					memberships.filter((membership) => this.membershipActive(membership, row.identity)),
+					storedMemberships.filter((membership) => membership.active),
 					rules,
 					fallbackTaskType,
 				),
@@ -363,12 +364,12 @@ export class FactoryState {
 		return tickets.sort(
 			(left, right) =>
 				attentionGroup(left) - attentionGroup(right) ||
-				(right.externalUpdatedAt ?? "").localeCompare(left.externalUpdatedAt ?? "") ||
-				left.id.localeCompare(right.id),
+				right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
+				left.identity.localeCompare(right.identity),
 		);
 	}
 
-	private membershipsFor(identity: string, state: TicketState): SourceMembership[] {
+	private membershipsFor(identity: string, state: TicketState): StoredMembership[] {
 		const where = state === "handed-off" || state === "running" ? "" : "AND m.active = 1";
 		const rows = this.db
 			.prepare(`
@@ -377,6 +378,7 @@ export class FactoryState {
 		`)
 			.all(identity) as unknown as MembershipRow[];
 		return rows.map((row) => ({
+			active: row.active === 1,
 			sourceName: row.source_name,
 			health: row.health,
 			identity,
@@ -397,12 +399,6 @@ export class FactoryState {
 		}));
 	}
 
-	private membershipActive(membership: SourceMembership, identity: string): boolean {
-		const row = this.db
-			.prepare("SELECT active FROM memberships WHERE source_name = ? AND ticket_identity = ?")
-			.get(membership.sourceName, identity) as { active: number } | undefined;
-		return row?.active === 1;
-	}
 	private hasUnresolvedAttempt(identity: string): boolean {
 		return (
 			this.db
@@ -542,6 +538,9 @@ export class FactoryState {
 
 	private isDeadLocalOwner(current: { pid: number; host: string }, host: string): boolean {
 		if (current.host !== host) return false;
+		// PID liveness is the safe local reclaim signal. A PID can theoretically
+		// be reused before this check, so the heartbeat remains diagnostic data,
+		// not proof that a different process owns the lease.
 		try {
 			process.kill(current.pid, 0);
 			return false;

@@ -91,7 +91,7 @@ describe("the control plane", () => {
 			// The full title and description live in the detail pane.
 			expect(detail).toContain(first.description);
 			expect(detail).toContain("Agent: unassigned");
-			expect(detail).toContain("GitHub: open");
+			expect(detail).toContain("Source state: open");
 		});
 	});
 
@@ -114,7 +114,7 @@ describe("the control plane", () => {
 				);
 			}
 			frame = frameText(setup.captureCharFrame());
-			expect(frame).toContain("GitHub: closed");
+			expect(frame).toContain("Source state: closed");
 			// The closed ticket is done: ticket state and GitHub status
 			// stay distinct facts.
 			expect(frame).toContain("[done]");
@@ -258,7 +258,7 @@ describe("the control plane", () => {
 				// Press j past the bottom edge, one key at a time. The detail
 				// settles on its last page: the final description line is
 				// visible and the title is out of view.
-				for (let i = 0; i < 12; i += 1) {
+				for (let i = 0; i < 30; i += 1) {
 					setup.mockInput.pressKey("j");
 					await sleep(25);
 				}
@@ -427,7 +427,7 @@ describe("the control plane", () => {
 					expect(row[73]).toBe(" ");
 				}
 				// The detail pane carries its content at this size.
-				expect(frameText(setup.captureCharFrame())).toContain("GitHub: open");
+				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
 			},
 			75,
 			25,

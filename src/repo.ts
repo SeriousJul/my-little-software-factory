@@ -232,10 +232,9 @@ export function matchesRepository(remote: string | null, identity: string): bool
 }
 
 /**
- * The normalized form of a GitHub remote: the lowercased host plus the
- * lowercased repository path, with the port, a .git suffix, and leading
- * and trailing slashes dropped. Null when the URL is not a parseable
- * remote or not on github.com.
+ * The normalized form of a remote: the lowercased host plus the lowercased
+ * repository path, with the port, a .git suffix, and leading and trailing
+ * slashes dropped. Null when the URL is not a parseable remote.
  */
 function normalizeRemote(url: string): string | null {
 	let host = "";

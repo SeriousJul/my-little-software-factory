@@ -57,14 +57,14 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		expect(state.visibleTickets([], "implement")).toEqual([
-			expect.objectContaining({ id: "github:github.com:I_5", actionable: true }),
+			expect.objectContaining({ identity: "github:github.com:I_5", actionable: true }),
 		]);
 
 		state.applyFetch(sourceA, { status: "failed", reason: "GitHub rate limit exceeded" });
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(expect.objectContaining({ actionable: false }));
 		expect(ticket.memberships?.[0]).toEqual(expect.objectContaining({ health: "stale" }));
-		expect(state.claimHandoff(ticket.id, choice)).toEqual(
+		expect(state.claimHandoff(ticket.identity, choice)).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("not actionable") }),
 		);
 		state.close();
@@ -81,10 +81,10 @@ describe("factory SQLite state", () => {
 		expect(ticket.actionable).toBe(true);
 		expect(ticket.memberships).toHaveLength(2);
 
-		const claimed = state.claimHandoff(ticket.id, choice);
+		const claimed = state.claimHandoff(ticket.identity, choice);
 		expect(claimed.ok).toBe(true);
 		if (!claimed.ok) return;
-		expect(state.claimHandoff(ticket.id, choice)).toEqual(
+		expect(state.claimHandoff(ticket.identity, choice)).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
 		);
 		state.settleHandoff(claimed.claim.attemptId, true);
@@ -106,10 +106,12 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const [ticket] = state.visibleTickets([], "implement");
-		const first = state.claimHandoff(ticket.id, choice);
+		const first = state.claimHandoff(ticket.identity, choice);
 		if (!first.ok) throw new Error(first.reason);
 		state.settleHandoff(first.claim.attemptId, false, "herdr is unavailable");
-		expect(state.claimHandoff(ticket.id, choice)).toEqual(expect.objectContaining({ ok: true }));
+		expect(state.claimHandoff(ticket.identity, choice)).toEqual(
+			expect.objectContaining({ ok: true }),
+		);
 		state.close();
 	});
 
