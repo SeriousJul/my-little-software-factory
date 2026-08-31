@@ -374,6 +374,63 @@ describe("ticket source configuration", () => {
 		]);
 	});
 
+	test("rejects malformed source and task-rule settings", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "x" } },
+		};
+		expectConfigError(
+			{
+				...base,
+				sources: [
+					{
+						name: "x",
+						kind: "gitlab",
+						"refresh-interval-seconds": 60,
+						repositories: ["acme/factory"],
+					},
+				],
+			},
+			"unknown source kind",
+		);
+		expectConfigError(
+			{
+				...base,
+				sources: [
+					{
+						name: "x",
+						kind: "github-issues",
+						"refresh-interval-seconds": 0,
+						repositories: ["acme/factory"],
+						extra: true,
+					},
+				],
+			},
+			"unknown key",
+		);
+		expectConfigError(
+			{
+				...base,
+				sources: [
+					{
+						name: "x",
+						kind: "github-issues",
+						"refresh-interval-seconds": 60,
+						repositories: ["factory"],
+					},
+				],
+			},
+			"owner/name",
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "missing", when: { unknown: "x" } }] },
+			"unknown task type",
+		);
+	});
+
 	test("rejects duplicate source names and ambiguous authentication", () => {
 		const source = {
 			name: "issues",

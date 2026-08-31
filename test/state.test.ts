@@ -115,6 +115,63 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("keeps identity and state when a configured source is renamed", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.initializeSources([sourceB]);
+		state.applyFetch(sourceB, success([fetched()]));
+		const tickets = state.visibleTickets([], "implement");
+		expect(tickets).toHaveLength(1);
+		expect(tickets[0]).toEqual(
+			expect.objectContaining({ identity: "github:github.com:I_5", state: "open" }),
+		);
+		state.close();
+	});
+
+	test("retains handed-off work after a source is removed and blocks pending handoff recovery", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const started = state.claimHandoff(ticket.identity, choice);
+		if (!started.ok) throw new Error(started.reason);
+		state.settleHandoff(started.claim.attemptId, true);
+		state.initializeSources([]);
+		expect(state.visibleTickets([], "implement")).toEqual([
+			expect.objectContaining({
+				state: "handed-off",
+				memberships: [expect.objectContaining({ health: "removed" })],
+			}),
+		]);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		const [persisted] = reopened.visibleTickets([], "implement");
+		const pending = reopened.claimHandoff(persisted.identity, choice);
+		expect(pending).toEqual(expect.objectContaining({ ok: false }));
+		reopened.close();
+	});
+
+	test("keeps an unresolved handoff attempt blocked after restart", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.close();
+		const reopened = openFactoryState(path);
+		const [persisted] = reopened.visibleTickets([], "implement");
+		expect(persisted.handoffRecoveryRequired).toBe(true);
+		expect(reopened.claimHandoff(persisted.identity, choice)).toEqual(
+			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
+		);
+		reopened.close();
+	});
+
 	test("permits only one live lease for a database", () => {
 		const path = statePath();
 		const first = openFactoryState(path);
