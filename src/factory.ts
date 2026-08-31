@@ -28,7 +28,7 @@ if (!isSupportedNodeVersion(process.versions.node)) {
 const configPath = defaultConfigPath();
 let config: FactoryConfig;
 try {
-	const loaded = loadConfigFile(configPath);
+	const loaded = await loadConfigFile(configPath);
 	if (!loaded.fromFile) {
 		process.stderr.write(`no config file at ${configPath}, using the shipped defaults\n`);
 	}

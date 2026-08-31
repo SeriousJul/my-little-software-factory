@@ -14,20 +14,14 @@
  * config entry, not a code change.
  */
 import { randomUUID } from "node:crypto";
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	renameSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 
-import type { EnvironmentKind } from "./domain/ticket.ts";
-import { HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
+import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
+import { fileExists } from "./fs.ts";
+import { firstNonEmptyLine } from "./lines.ts";
 
 /** The kind of an agent as herdr knows it (the `--kind` of agent start). */
 export interface AgentTypeConfig {
@@ -125,13 +119,15 @@ export function defaultConfigPath(): string {
  * read, parsed, or validated throws a ConfigError with a readable message;
  * the caller stops the control plane with that message.
  */
-export function loadConfigFile(path: string): { config: FactoryConfig; fromFile: boolean } {
-	if (!existsSync(path)) {
+export async function loadConfigFile(
+	path: string,
+): Promise<{ config: FactoryConfig; fromFile: boolean }> {
+	if (!(await fileExists(path))) {
 		return { config: DEFAULT_CONFIG, fromFile: false };
 	}
 	let text: string;
 	try {
-		text = readFileSync(path, "utf8");
+		text = await readFile(path, "utf8");
 	} catch (error) {
 		throw new ConfigError(`cannot read ${path}: ${String(error)}`);
 	}
@@ -147,8 +143,7 @@ export function loadConfigFile(path: string): { config: FactoryConfig; fromFile:
 /** Reduce a TOML parse failure to one readable line. */
 function readableParseError(error: unknown): string {
 	const message = String(error);
-	const line = message.split("\n").find((part) => part.trim() !== "");
-	return line ?? message;
+	return firstNonEmptyLine(message) ?? message.trim();
 }
 
 /**
@@ -391,16 +386,16 @@ export function configToToml(config: FactoryConfig): string {
  * either the old file or the new one, never a truncated file the next start
  * would reject as invalid TOML.
  */
-export function persistConfig(path: string, config: FactoryConfig): void {
-	mkdirSync(dirname(path), { recursive: true });
+export async function persistConfig(path: string, config: FactoryConfig): Promise<void> {
+	await mkdir(dirname(path), { recursive: true });
 	const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-	writeFileSync(temp, configToToml(config), "utf8");
+	await writeFile(temp, configToToml(config), "utf8");
 	try {
-		renameSync(temp, path);
+		await rename(temp, path);
 	} catch (error) {
 		// Leave no temp file behind when the rename fails.
 		try {
-			unlinkSync(temp);
+			await unlink(temp);
 		} catch {
 			// The cleanup is best effort; the rename failure is the error.
 		}

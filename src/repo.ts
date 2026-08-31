@@ -23,19 +23,40 @@
  * Git runs through the command runner (the only exit to the outside world);
  * path existence is plain filesystem work against real directories.
  */
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { mkdir, realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { FactoryConfig } from "./config.ts";
+import { fileExists } from "./fs.ts";
+import { firstNonEmptyLine } from "./lines.ts";
 import { type CommandResult, type CommandRunner, errorMessage } from "./runner.ts";
+
+/** An explicit repository mapping: a GitHub repository pinned to a checkout path. */
+export interface RepositoryMapping {
+	repository: string;
+	path: string;
+}
+
+/**
+ * The note the repository resolution carries with its result: a warning
+ * worth showing to the operator and, when the resolution bent to a sibling
+ * clone, the mapping to persist into the config.
+ *
+ * The two travel together through every handoff outcome, so they are one
+ * type and a failure of a later step still carries both.
+ */
+export interface ResolutionNotes {
+	/** A warning worth showing to the operator, if the resolution bent. */
+	warning?: string;
+	/** A sibling clone was resolved; this mapping belongs in the config. */
+	mappingToWrite?: RepositoryMapping;
+}
 
 /** A repository resolved to a checkout path on this machine. */
 export interface ResolvedRepository {
 	path: string;
-	/** A sibling clone was resolved; this mapping belongs in the config. */
-	mappingToWrite?: { repository: string; path: string };
-	/** A warning worth showing to the operator, if the resolution bent. */
-	warning?: string;
+	/** The note the resolution bent with, if it bent at all. */
+	notes?: ResolutionNotes;
 }
 
 export type RepositoryOutcome =
@@ -59,7 +80,7 @@ export async function resolveRepository(
 	const path = mapped !== undefined ? expandHome(mapped, home) : join(home, "src", name);
 	const explicit = mapped !== undefined;
 
-	if (!existsSync(path)) {
+	if (!(await fileExists(path))) {
 		return cloneRepository(repository, path, runner);
 	}
 	if (!(await isGitRepository(path, runner))) {
@@ -97,8 +118,10 @@ export async function resolveRepository(
 		ok: true,
 		repository: {
 			path: sibling.path,
-			mappingToWrite: { repository, path: sibling.path },
-			warning,
+			notes: {
+				mappingToWrite: { repository, path: sibling.path },
+				warning,
+			},
 		},
 	};
 }
@@ -118,12 +141,9 @@ async function findSiblingClone(
 ): Promise<{ ok: true; path: string } | { ok: false; reason: string }> {
 	for (let suffix = 1; ; suffix += 1) {
 		const candidate = join(home, "src", `${name}_${suffix}`);
-		if (!existsSync(candidate)) {
-			return cloneRepository(repository, candidate, runner).then((outcome) =>
-				outcome.ok
-					? { ok: true as const, path: candidate }
-					: { ok: false as const, reason: outcome.reason },
-			);
+		if (!(await fileExists(candidate))) {
+			const outcome = await cloneRepository(repository, candidate, runner);
+			return outcome.ok ? { ok: true, path: candidate } : { ok: false, reason: outcome.reason };
 		}
 		if (
 			(await isGitRepository(candidate, runner)) &&
@@ -135,32 +155,31 @@ async function findSiblingClone(
 }
 
 /** Clone a GitHub repository into `path`, creating parent directories. */
-function cloneRepository(
+async function cloneRepository(
 	repository: string,
 	path: string,
 	runner: CommandRunner,
 ): Promise<RepositoryOutcome> {
 	try {
-		mkdirSync(dirname(path), { recursive: true });
+		await mkdir(dirname(path), { recursive: true });
 	} catch (error) {
 		// The filesystem can refuse the clone target: a read-only home, a
 		// file where the parent should be, a full disk. That is a failed
 		// clone with a reason, not a thrown error: the caller reports the
 		// reason in the TUI and the ticket stays open.
-		return Promise.resolve({
+		return {
 			ok: false,
 			reason: `cannot create ${dirname(path)}: ${errorMessage(error)}`,
-		});
+		};
 	}
-	return runner.run("git", ["clone", githubCloneUrl(repository), path]).then((result) => {
-		if (result.code !== 0) {
-			return {
-				ok: false as const,
-				reason: `clone failed for ${repository}: ${commandFailureText(result)}`,
-			};
-		}
-		return { ok: true as const, repository: { path } };
-	});
+	const result = await runner.run("git", ["clone", githubCloneUrl(repository), path]);
+	if (result.code !== 0) {
+		return {
+			ok: false,
+			reason: `clone failed for ${repository}: ${commandFailureText(result)}`,
+		};
+	}
+	return { ok: true, repository: { path } };
 }
 
 /** The GitHub URL a repository clones from. */
@@ -249,18 +268,12 @@ function normalizeGitHubRemote(url: string): string | null {
 	return `${host}/${path}`;
 }
 
-/** The first line of a failed command's stderr, trimmed. */
+/**
+ * The first non-empty line of a failed command's stderr, trimmed.
+ * A result with no message at all reports its exit code.
+ */
 export function commandFailureText(result: CommandResult): string {
-	if (result.stderr !== "") {
-		const line = result.stderr
-			.split("\n")
-			.map((part) => part.trim())
-			.find((part) => part !== "");
-		if (line !== undefined) {
-			return line;
-		}
-	}
-	return `exit code ${result.code}`;
+	return firstNonEmptyLine(result.stderr) ?? `exit code ${result.code}`;
 }
 
 /**
@@ -268,9 +281,9 @@ export function commandFailureText(result: CommandResult): string {
  * checkout path herdr records on a workspace (a symlinked checkout must
  * still match the workspace it already has).
  */
-export function realPathOf(path: string): string {
+export async function realPathOf(path: string): Promise<string> {
 	try {
-		return realpathSync(path);
+		return await realpath(path);
 	} catch {
 		return path;
 	}

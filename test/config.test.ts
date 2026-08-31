@@ -69,9 +69,9 @@ function expectConfigError(data: unknown, fragment: string): void {
 }
 
 describe("loadConfigFile", () => {
-	test("a missing file yields the shipped defaults", () => {
+	test("a missing file yields the shipped defaults", async () => {
 		const path = inTempDir()("config.toml");
-		const { config, fromFile } = loadConfigFile(path);
+		const { config, fromFile } = await loadConfigFile(path);
 		expect(fromFile).toBe(false);
 		expect(config).toEqual(DEFAULT_CONFIG);
 	});
@@ -85,10 +85,10 @@ describe("loadConfigFile", () => {
 		expect(DEFAULT_CONFIG.defaultEnvironment).toBe("live-worktree");
 	});
 
-	test("a valid file loads", () => {
+	test("a valid file loads", async () => {
 		const path = inTempDir()("config.toml");
 		writeFileSync(path, validBody);
-		const { config, fromFile } = loadConfigFile(path);
+		const { config, fromFile } = await loadConfigFile(path);
 		expect(fromFile).toBe(true);
 		expect(config.defaultAgent).toBe("pi");
 		expect(config.defaultEnvironment).toBe("live-worktree");
@@ -101,19 +101,19 @@ describe("loadConfigFile", () => {
 		expect(config.repos).toEqual({});
 	});
 
-	test("an explicit repository mapping loads", () => {
+	test("an explicit repository mapping loads", async () => {
 		const path = inTempDir()("config.toml");
 		writeFileSync(path, `${validBody}\n[repos]\n"acme/billing" = "~/src/billing"\n`);
-		const { config } = loadConfigFile(path);
+		const { config } = await loadConfigFile(path);
 		expect(config.repos).toEqual({ "acme/billing": "~/src/billing" });
 	});
 
-	test("unreadable TOML is a readable error", () => {
+	test("unreadable TOML is a readable error", async () => {
 		const path = inTempDir()("config.toml");
 		writeFileSync(path, "default-agent = ");
 		let message = "";
 		try {
-			loadConfigFile(path);
+			await loadConfigFile(path);
 		} catch (error) {
 			expect(error).toBeInstanceOf(ConfigError);
 			message = String(error);
@@ -328,27 +328,27 @@ describe("configToToml and persistConfig", () => {
 		expect(config).toEqual(DEFAULT_CONFIG);
 	});
 
-	test("persistConfig writes a file the loader reads back", () => {
+	test("persistConfig writes a file the loader reads back", async () => {
 		const temp = inTempDir();
 		const path = temp("factory/config.toml");
 		const config: FactoryConfig = {
 			...DEFAULT_CONFIG,
 			repos: { "acme/billing": "~/src/billing_1" },
 		};
-		persistConfig(path, config);
-		const { config: loaded, fromFile } = loadConfigFile(path);
+		await persistConfig(path, config);
+		const { config: loaded, fromFile } = await loadConfigFile(path);
 		expect(fromFile).toBe(true);
 		expect(loaded).toEqual(config);
 		expect(readFileSync(path, "utf8")).toContain('"acme/billing"');
 	});
 
-	test("a failed persistConfig write leaves no temp file behind", () => {
+	test("a failed persistConfig write leaves no temp file behind", async () => {
 		const temp = inTempDir();
 		const dir = temp("factory");
 		const path = join(dir, "config.toml");
 		// A directory where the file should be: the rename must fail.
 		mkdirSync(path, { recursive: true });
-		expect(() => persistConfig(path, DEFAULT_CONFIG)).toThrow();
+		await expect(persistConfig(path, DEFAULT_CONFIG)).rejects.toThrow();
 		expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toHaveLength(0);
 	});
 });

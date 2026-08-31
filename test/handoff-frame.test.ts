@@ -225,6 +225,33 @@ describe("the Enter handoff", () => {
 		);
 	});
 
+	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const frame = await pressEnter(
+					setup,
+					"the failure reason to appear",
+					"readable workspace list",
+				);
+
+				// The reason sits on the status line, the ticket stays open...
+				expect(rowsOf(frame)[HEIGHT - 1]).toContain("readable workspace list");
+				expect(selectedRow(frame)).toContain("[open]");
+				// ...and no second workspace is created for the checkout:
+				// unreadable is not "no workspace".
+				expect(runner.commands()).not.toContain(expect.stringContaining("workspace create"));
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a handoff attempt on a non-open ticket shows the hint and issues no command", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
@@ -668,6 +695,82 @@ describe("the override panel", () => {
 					"--model",
 					"gpt-5.6",
 				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the row selection to move to the model", (f) =>
+					f.includes("❯ Model"),
+				);
+				// "é" is outside the ASCII range: it must not be dropped.
+				await setup.mockInput.typeText("gpt-é");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model gpt-é"),
+					"the non-ASCII model to show in the row",
+				);
+				expect(frameText(frame)).toContain("Model gpt-é");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"gpt-é",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a move and a cycle in the same tick act on the moved row", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				// Both keys are queued before a render: the key parser delivers
+				// them in one tick, where a render-closure row would still
+				// point at the Agent row.
+				setup.mockInput.pressKey("j");
+				setup.mockInput.pressArrow("right");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Environment worktree"),
+					"the cycle to land on the moved row",
+				);
+				// The cycle acted on the Environment row, not the Agent row.
+				expect(frameText(frame)).toContain("Environment worktree");
+				expect(frameText(frame)).not.toContain("Agent codex");
+				expect(frame).toContain("❯ Environment");
 			},
 			WIDTH,
 			HEIGHT,

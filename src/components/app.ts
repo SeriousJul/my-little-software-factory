@@ -19,8 +19,9 @@ import { useRef, useState } from "react";
 
 import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } from "../config.ts";
 import { SAMPLE_TICKETS } from "../data/sample-tickets.ts";
-import { HANDOFF_ENVIRONMENT_KINDS } from "../domain/ticket.ts";
+import { HANDOFF_ENVIRONMENT_KINDS, nextStateOf } from "../domain/ticket.ts";
 import { type HandoffChoice, handOffTicket } from "../handoff.ts";
+import type { RepositoryMapping } from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
@@ -118,7 +119,7 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 			runner: commandRunner,
 			home: homeDir,
 		})
-			.then((outcome) => {
+			.then(async (outcome) => {
 				if (outcome.started) {
 					const handoff = {
 						agentType: choice.agentType,
@@ -126,11 +127,22 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 						taskType: choice.taskType,
 					};
 					setTickets((all) =>
-						all.map((t, i) => (i === index ? { ...t, state: "handed-off", handoff } : t)),
+						all.map((t, i) => {
+							if (i !== index) {
+								return t;
+							}
+							// The state machine owns the move: the open ticket
+							// steps to its next state, the handed-off position.
+							const to = nextStateOf(t.state);
+							return to === null ? t : { ...t, state: to, handoff };
+						}),
 					);
 				}
+				const notes = outcome.notes;
 				const persistWarning =
-					outcome.mappingToWrite !== undefined ? persistMapping(outcome.mappingToWrite) : undefined;
+					notes?.mappingToWrite !== undefined
+						? await persistMapping(notes.mappingToWrite)
+						: undefined;
 				if (!outcome.ok) {
 					// A sibling-clone mapping that also failed to persist is not
 					// lost under the failure reason.
@@ -141,8 +153,8 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 					});
 				} else if (persistWarning !== undefined) {
 					setStatus({ kind: "warning", text: persistWarning });
-				} else if (outcome.warning !== undefined) {
-					setStatus({ kind: "warning", text: outcome.warning });
+				} else if (notes?.warning !== undefined) {
+					setStatus({ kind: "warning", text: notes.warning });
 				} else {
 					setStatus(null);
 				}
@@ -165,11 +177,11 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 	 * re-resolves from disk and writes it back again, but the operator
 	 * still learns the file was not written.
 	 */
-	const persistMapping = (mapping: { repository: string; path: string }): string | undefined => {
+	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		try {
 			const updated = { ...config, repos: { ...config.repos, [mapping.repository]: mapping.path } };
 			setConfig(updated);
-			persistConfig(configFile, updated);
+			await persistConfig(configFile, updated);
 			return undefined;
 		} catch (error) {
 			return `could not persist the repository mapping: ${errorMessage(error)}`;

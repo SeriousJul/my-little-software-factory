@@ -22,8 +22,7 @@
  * it carries less, not broken text.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
-import { useRef, useState } from "react";
+import { type ReactElement, useRef, useState } from "react";
 
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
@@ -124,11 +123,13 @@ export function OverridePanel({
 	const [selected, setSelected] = useState(0);
 
 	// The key parser can deliver several key events in one tick. React batches
-	// their state updates, so a closure that reads `choice` would see the
-	// stale value and drop every update but the last. The ref mirrors the
-	// choice plus the updates of the current tick, so back-to-back keys and
-	// a confirm in the same tick all see the final value.
+	// their state updates, so a closure that reads `choice` or `selected`
+	// would see the stale value and drop or misaddress an update. The refs
+	// mirror both, so back-to-back keys, a confirm in the same tick, and a
+	// move followed by a cycle in the same tick all act on the values the
+	// previous key left behind.
 	const choiceRef = useRef<HandoffChoice>(choice);
+	const selectedRef = useRef(0);
 
 	const allRows = rowsFor(choice, agents, environments, taskTypes, agentSettings);
 	// The terminal too short for every row drops the last one, the settings
@@ -143,43 +144,64 @@ export function OverridePanel({
 		setChoice(choiceRef.current);
 	};
 
+	// The rows as the keys see them, from the mirrored choice: a key of the
+	// current tick must act on the rows the previous key of the same tick
+	// left behind, and the render closure would still hold the old ones.
+	const visibleRows = (): PanelRow[] =>
+		rowsFor(choiceRef.current, agents, environments, taskTypes, agentSettings).slice(
+			0,
+			geometry.maxRows,
+		);
+
+	// The row under the cursor, clamped the way the render clamps it.
+	const cursorRow = (): PanelRow => {
+		const visible = visibleRows();
+		return visible[Math.min(selectedRef.current, visible.length - 1)];
+	};
+
 	const move = (delta: number) => {
-		setSelected((s) => (s + delta + rows.length) % rows.length);
+		const count = visibleRows().length;
+		const at = Math.min(selectedRef.current, count - 1);
+		selectedRef.current = (at + delta + count) % count;
+		setSelected(selectedRef.current);
 	};
 
 	const cycle = (delta: number) => {
+		const target = cursorRow();
 		commit((current) => {
-			const options = row.options;
+			const options = target.options;
 			if (options === undefined) {
 				return current;
 			}
-			const index = options.indexOf(current[row.key]);
+			const index = options.indexOf(current[target.key]);
 			// An unset value (the config default "") is not an option. The
 			// first right lands on the first option, the first left on the last.
 			if (index === -1) {
 				const next = options[(delta > 0 ? 0 : options.length - 1) % options.length];
-				return { ...current, [row.key]: next };
+				return { ...current, [target.key]: next };
 			}
 			const next = options[(index + delta + options.length) % options.length];
-			return { ...current, [row.key]: next };
+			return { ...current, [target.key]: next };
 		});
 	};
 
 	const typeText = (text: string) => {
-		if (row.kind !== "text") {
+		const target = cursorRow();
+		if (target.kind !== "text") {
 			return;
 		}
-		commit((current) => ({ ...current, [row.key]: current[row.key] + text }));
+		commit((current) => ({ ...current, [target.key]: current[target.key] + text }));
 	};
 
 	useKeyboard((key) => {
 		if (key.ctrl || key.meta) {
 			return;
 		}
+		const target = cursorRow();
 		// A selected text row owns j, k, h, and l: they type into it. The
 		// arrows keep their movement, so the row can always be left.
 		if (
-			row.kind === "text" &&
+			target.kind === "text" &&
 			(key.name === "j" || key.name === "k" || key.name === "h" || key.name === "l")
 		) {
 			typeText(key.name);
@@ -210,12 +232,18 @@ export function OverridePanel({
 				break;
 			case "backspace":
 				commit((current) =>
-					row.kind === "text" ? { ...current, [row.key]: current[row.key].slice(0, -1) } : current,
+					target.kind === "text"
+						? { ...current, [target.key]: current[target.key].slice(0, -1) }
+						: current,
 				);
 				break;
 			default:
 				// A printable character goes into the selected free-text row.
-				if (key.name.length === 1 && key.name >= " " && key.name <= "~") {
+				// Any script is accepted, not only the ASCII range: a model
+				// name in another script is still a model name. Named keys
+				// carry a name of several characters, and a control character
+				// is never printable.
+				if ([...key.name].length === 1 && !/\p{Cc}/u.test(key.name)) {
 					typeText(key.name);
 				}
 				break;

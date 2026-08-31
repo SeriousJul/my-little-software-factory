@@ -20,7 +20,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
 import { agentNameFor, branchNameFor } from "./naming.ts";
-import { commandFailureText, realPathOf, resolveRepository } from "./repo.ts";
+import { commandFailureText, type ResolutionNotes, realPathOf, resolveRepository } from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
 
 /** One handoff's choices: the defaults plus whatever an override changed. */
@@ -41,15 +41,17 @@ export interface HandoffChoice {
  * prompt) failed: the agent is running and can be prompted manually in
  * herdr, so the ticket moves to handed-off. Any earlier failure leaves the
  * ticket open and carries a `reason` for the TUI.
+ *
+ * `notes` carries the warning and the mapping the repository resolution
+ * bent with, through every outcome: a failure of a later step still warns
+ * and still hands back the mapping to persist.
  */
 export interface HandoffOutcome {
 	started: boolean;
 	ok: boolean;
 	reason?: string;
-	/** A warning worth showing after a success, e.g. a sibling clone. */
-	warning?: string;
-	/** A repository mapping the caller must persist into the config. */
-	mappingToWrite?: { repository: string; path: string };
+	/** The note the repository resolution carried, if it bent. */
+	notes?: ResolutionNotes;
 }
 
 interface HandoffOptions {
@@ -59,17 +61,15 @@ interface HandoffOptions {
 }
 
 /**
- * What the handoff steps share: the command egress plus the warning and the
- * mapping the repository resolution carried. Both travel with every outcome
- * a step returns, so a failure still warns and still hands back the mapping
- * to persist.
+ * What the handoff steps share: the command egress plus the note the
+ * repository resolution carried. The note travels with every outcome a step
+ * returns, so a failure still warns and still hands back the mapping to
+ * persist.
  */
 interface HandoffContext {
 	runner: CommandRunner;
-	/** A warning worth showing after a success, e.g. a sibling clone. */
-	warning?: string;
-	/** A repository mapping the caller must persist into the config. */
-	mappingToWrite?: { repository: string; path: string };
+	/** The note the repository resolution carried, if it bent. */
+	notes?: ResolutionNotes;
 }
 
 /** Hand a ticket off, returning the facts the app records on it. */
@@ -106,11 +106,7 @@ export async function handOffTicket(
 		return { started: false, ok: false, reason: resolved.reason };
 	}
 
-	const ctx: HandoffContext = {
-		runner,
-		warning: resolved.repository.warning,
-		mappingToWrite: resolved.repository.mappingToWrite,
-	};
+	const ctx: HandoffContext = { runner, notes: resolved.repository.notes };
 	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
 	const prompt = renderPrompt(taskType.template, ticket);
@@ -140,25 +136,32 @@ async function startLiveHandoff(
 	if (listed.code !== 0) {
 		return failedCommand(listed, ctx);
 	}
-	const workspaceId = findWorkspaceIdAt(listed, checkout);
-	if (workspaceId === null) {
-		const created = await ctx.runner.run("herdr", [
-			"workspace",
-			"create",
-			"--cwd",
-			checkout,
-			"--no-focus",
-		]);
-		if (created.code !== 0) {
-			return failedCommand(created, ctx);
-		}
-		const id = jsonResultField(created, "workspace", "workspace_id");
-		if (id === null) {
-			return failed("herdr workspace create returned no workspace id", ctx);
-		}
-		return startAgentInNewTab(id, checkout, name, agent, args, prompt, ctx);
+	const found = await findWorkspaceAt(listed, checkout);
+	if (found.status === "unreadable") {
+		// Unreadable is not "no workspace": the list may already hold the
+		// checkout's workspace, and a second create would break the
+		// one-workspace-per-repository rule. The handoff fails with a reason.
+		return failed(found.reason, ctx);
 	}
-	return startAgentInNewTab(workspaceId, checkout, name, agent, args, prompt, ctx);
+	if (found.status === "found") {
+		return startAgentInNewTab(found.id, checkout, name, agent, args, prompt, ctx);
+	}
+	// No workspace holds the checkout: create one.
+	const created = await ctx.runner.run("herdr", [
+		"workspace",
+		"create",
+		"--cwd",
+		checkout,
+		"--no-focus",
+	]);
+	if (created.code !== 0) {
+		return failedCommand(created, ctx);
+	}
+	const id = jsonResultField(created, "workspace", "workspace_id");
+	if (id === null) {
+		return failed("herdr workspace create returned no workspace id", ctx);
+	}
+	return startAgentInNewTab(id, checkout, name, agent, args, prompt, ctx);
 }
 
 async function startAgentInNewTab(
@@ -296,11 +299,10 @@ async function startAgentAndPrompt(
 			started: true,
 			ok: false,
 			reason: `agent ${name} started, but the prompt failed: ${commandFailureText(sent)}`,
-			warning: ctx.warning,
-			mappingToWrite: ctx.mappingToWrite,
+			notes: ctx.notes,
 		};
 	}
-	return { started: true, ok: true, warning: ctx.warning, mappingToWrite: ctx.mappingToWrite };
+	return { started: true, ok: true, notes: ctx.notes };
 }
 
 /** A failed herdr call: the ticket stays open, the reason goes to the TUI. */
@@ -314,8 +316,7 @@ function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
 		started: false,
 		ok: false,
 		reason,
-		warning: ctx.warning,
-		mappingToWrite: ctx.mappingToWrite,
+		notes: ctx.notes,
 	};
 }
 
@@ -370,13 +371,26 @@ export function renderPrompt(template: string, ticket: Ticket): string {
  * A match is the recorded checkout path, compared raw and then through
  * realpath, so a symlinked checkout still matches the workspace herdr
  * already holds for it.
+ *
+ * A list that does not parse is a failure with a reason, not "no
+ * workspace": the list may already hold the checkout's workspace, and a
+ * second `workspace create` would break the one-workspace-per-repository
+ * rule.
  */
-function findWorkspaceIdAt(listed: CommandResult, checkout: string): string | null {
+type WorkspaceLookup =
+	| { status: "found"; id: string }
+	| { status: "none" }
+	| { status: "unreadable"; reason: string };
+
+async function findWorkspaceAt(listed: CommandResult, checkout: string): Promise<WorkspaceLookup> {
 	let data: unknown;
 	try {
 		data = JSON.parse(listed.stdout);
 	} catch {
-		return null;
+		return {
+			status: "unreadable",
+			reason: "herdr workspace list did not return a readable workspace list",
+		};
 	}
 	const result = data as {
 		result?: {
@@ -384,17 +398,17 @@ function findWorkspaceIdAt(listed: CommandResult, checkout: string): string | nu
 		};
 	};
 	const workspaces = result.result?.workspaces ?? [];
-	const checkoutReal = realPathOf(checkout);
+	const checkoutReal = await realPathOf(checkout);
 	for (const workspace of workspaces) {
 		const recorded = workspace.worktree?.checkout_path;
 		if (recorded === undefined) {
 			continue;
 		}
-		if (recorded === checkout || realPathOf(recorded) === checkoutReal) {
-			return workspace.workspace_id;
+		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal) {
+			return { status: "found", id: workspace.workspace_id };
 		}
 	}
-	return null;
+	return { status: "none" };
 }
 
 /** Read result.<field>.<key> out of a herdr JSON response. */

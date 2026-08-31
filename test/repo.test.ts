@@ -125,8 +125,7 @@ describe("resolveRepository", () => {
 			return;
 		}
 		expect(outcome.repository.path).toBe(join(home, "src", "billing"));
-		expect(outcome.repository.mappingToWrite).toBeUndefined();
-		expect(outcome.repository.warning).toBeUndefined();
+		expect(outcome.repository.notes).toBeUndefined();
 		expect(runner.commands()).toEqual([
 			`git clone https://github.com/acme/billing.git ${join(home, "src", "billing")}`,
 		]);
@@ -199,11 +198,11 @@ describe("resolveRepository", () => {
 		}
 		const sibling = join(home, "src", "billing_1");
 		expect(outcome.repository.path).toBe(sibling);
-		expect(outcome.repository.mappingToWrite).toEqual({
+		expect(outcome.repository.notes?.mappingToWrite).toEqual({
 			repository: "acme/billing",
 			path: sibling,
 		});
-		expect(outcome.repository.warning).toContain("acme/portal");
+		expect(outcome.repository.notes?.warning).toContain("acme/portal");
 		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
 	});
 
@@ -214,7 +213,7 @@ describe("resolveRepository", () => {
 		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (outcome.ok) {
-			expect(outcome.repository.warning).toContain("no verifiable origin remote");
+			expect(outcome.repository.notes?.warning).toContain("no verifiable origin remote");
 		}
 	});
 
@@ -240,7 +239,7 @@ describe("resolveRepository", () => {
 		expect(outcome.ok).toBe(true);
 		if (outcome.ok) {
 			expect(outcome.repository.path).toBe(join(home, "src", "billing_1"));
-			expect(outcome.repository.mappingToWrite).toEqual({
+			expect(outcome.repository.notes?.mappingToWrite).toEqual({
 				repository: "acme/billing",
 				path: join(home, "src", "billing_1"),
 			});

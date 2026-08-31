@@ -58,50 +58,53 @@ export const SAMPLE_TICKETS: readonly Ticket[] = [
 	},
 	{
 		id: "5",
-		title: "Show handoff facts in detail",
+		title: "Observe the agent state",
 		repository: "acme/portal",
 		state: "open",
 		githubClosed: false,
 		handoff: null,
 		description:
-			"The detail pane shows the repository and the state. Add the agent " +
-			"type, the environment, and the task type of the last handoff, so the " +
-			"operator sees who picked up the ticket without leaving the pane.",
+			"The state line open to done moves only on its first step: the handoff " +
+			"steps an open ticket to handed-off. Observe the agent in herdr and " +
+			"step the ticket to running when the agent works and to done when it " +
+			"reports the work finished.",
 	},
 	{
 		id: "6",
-		title: "Read defaults from config",
+		title: "Keep tickets across starts",
 		repository: "acme/billing",
 		state: "open",
 		githubClosed: false,
 		handoff: null,
 		description:
-			"The defaults live in code. Read them from a TOML config file: the " +
-			"shipped defaults when the file is missing, a readable error when the " +
-			"file is invalid, and the defaults in one place for the operators.",
+			"The tickets reset to the sample data on every start of the control " +
+			"plane. Persist the tickets and their states to a file so a restart " +
+			"finds the factory where it left it, and load the file in place of " +
+			"the sample data.",
 	},
 	{
 		id: "7",
-		title: "Run handoff via one runner",
+		title: "Run the container environment",
 		repository: "acme/ingest",
 		state: "open",
 		githubClosed: false,
 		handoff: null,
 		description:
-			"The handoff shells out to herdr and to git. Run every command through " +
-			"one injected runner so the tests fake the egress and never touch a " +
-			"real herdr session or a real repository.",
+			"The container kind is known to the domain, but nothing can build one " +
+			"and the panel never offers it. Run a ticket in a disposable " +
+			"container with its image and its mounts, and offer the kind for a " +
+			"handoff.",
 	},
 	{
 		id: "8",
-		title: "Show handoff failures below",
+		title: "Put the ticket id in the name",
 		repository: "acme/portal",
 		state: "open",
 		githubClosed: false,
 		handoff: null,
 		description:
-			"A failed handoff is silent today. Show the outcome in a status line " +
-			"under the panes: the failure reason, or the warning a bent " +
-			"resolution carries. The ticket stays open until the agent starts.",
+			"Two tickets whose titles share a long prefix get the same herdr agent " +
+			"name, and the second handoff fails on the taken name. Put a short " +
+			"ticket id into the name so a collision is not the discovery path.",
 	},
 ];

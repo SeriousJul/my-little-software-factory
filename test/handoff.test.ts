@@ -273,6 +273,27 @@ describe("handOffTicket: the live worktree sequence", () => {
 		expect(outcome.ok).toBe(false);
 		expect(outcome.reason).toContain("started, but the prompt failed");
 	});
+
+	test("an unreadable workspace list fails instead of creating a second workspace", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.ok).toBe(false);
+		expect(outcome.started).toBe(false);
+		if (!outcome.ok) {
+			expect(outcome.reason).toContain("readable workspace list");
+		}
+		// Unreadable is not "no workspace": the one-workspace-per-repository
+		// rule holds, so no second workspace is created for the checkout.
+		expect(runner.commands()).not.toContain(expect.stringContaining("workspace create"));
+	});
 });
 
 describe("handOffTicket: the worktree sequence", () => {
@@ -532,7 +553,7 @@ describe("handOffTicket: the guard rails", () => {
 		expect(outcome.started).toBe(false);
 		// The clone ran and the handoff failed after it: the mapping must not
 		// wait for a later successful handoff.
-		expect(outcome.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
+		expect(outcome.notes?.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
 		if (!outcome.ok) {
 			expect(outcome.reason).toBe("error: herdr is not running");
 		}
@@ -562,8 +583,8 @@ describe("handOffTicket: the guard rails", () => {
 		});
 
 		expect(outcome.ok).toBe(true);
-		expect(outcome.warning).toContain("sibling");
-		expect(outcome.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
+		expect(outcome.notes?.warning).toContain("sibling");
+		expect(outcome.notes?.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
 		// The handoff runs at the sibling, not the conflicting path.
 		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
 	});
