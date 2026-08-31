@@ -23,10 +23,11 @@ interface TicketListProps {
 	tickets: readonly Ticket[];
 	selectedIndex: number;
 	focused: boolean;
+	reservedRows: number;
 }
 
-export function TicketList({ tickets, selectedIndex, focused }: TicketListProps) {
-	const geometry = usePaneGeometry("list");
+export function TicketList({ tickets, selectedIndex, focused, reservedRows }: TicketListProps) {
+	const geometry = usePaneGeometry("list", reservedRows);
 
 	// The window starts where the selection sits on the window's last row.
 	// `windowOf` clamps that start, so the window slides only when the

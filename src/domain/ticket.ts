@@ -11,6 +11,29 @@ export const TICKET_STATES = ["open", "handed-off", "running", "done"] as const;
 
 export type TicketState = (typeof TICKET_STATES)[number];
 
+/**
+ * Where an agent runs a ticket.
+ *
+ * `container` is a reserved future kind: it exists in the domain, is not
+ * implemented, and is not offered for a handoff.
+ */
+export const ENVIRONMENT_KINDS = ["live-worktree", "worktree", "container"] as const;
+
+export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
+
+/** The environment kinds a handoff can use today. */
+export const HANDOFF_ENVIRONMENT_KINDS = ["live-worktree", "worktree"] as const;
+
+/**
+ * The facts of the last handoff of a ticket: which agent type was started,
+ * where it runs, and which task type shaped its prompt.
+ */
+export interface Handoff {
+	agentType: string;
+	environment: EnvironmentKind;
+	taskType: string;
+}
+
 export interface Ticket {
 	/** Factory-local identifier. */
 	id: string;
@@ -19,11 +42,8 @@ export interface Ticket {
 	repository: string;
 	/** The ticket's position in the factory. */
 	state: TicketState;
-	/**
-	 * The assigned agent, if any. Agent-agnostic: a name or runtime identifier,
-	 * no assumed runtime. Data only. The control plane launches no agents.
-	 */
-	agent: string | null;
+	/** The facts of the last handoff, if the ticket has been handed off. */
+	handoff: Handoff | null;
 	/** Source fact: whether the ticket is closed on GitHub. */
 	githubClosed: boolean;
 	description: string;

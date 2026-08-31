@@ -27,178 +27,29 @@
  * own cleanup.
  */
 import { CliRenderEvents } from "@opentui/core";
-import { createElement } from "@opentui/react";
-import { testRender } from "@opentui/react/test-utils";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
-import { App, type AppKey } from "../src/components/app.ts";
 import { SAMPLE_TICKETS } from "../src/data/sample-tickets.ts";
-import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
-
-type Setup = Awaited<ReturnType<typeof testRender>>;
-
-const WIDTH = 120;
-const HEIGHT = 30;
-const FRAME_POLL_MS = 10;
-const FRAME_DEADLINE_MS = 2000;
-/** The dispatch grace `settle` waits out before trusting stability. */
-const SETTLE_GRACE_MS = 30;
-/** The state badge the list pane renders for each ticket state. */
-const STATE_BADGES = TICKET_STATES.map((state) => `[${state}]`);
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// The panes wrap long text, so substring checks run on the frame with the
-// box borders stripped and the whitespace collapsed: wrapped lines merge
-// back into the source string at their word-boundary breaks.
-const frameText = (frame: string) => frame.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ");
-const rowsOf = (frame: string) => frame.replace(/\n$/, "").split("\n");
-/** The terminal row of the selected ticket in the list pane. */
-const markerRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
-/**
- * A stable leading substring of a ticket's description, for frame checks.
- *
- * It ends at a word boundary, so it survives the merge of wrapped lines:
- * the wrap points are word boundaries too. The full description is fragile
- * to a word wider than the pane: the hard wrap cuts the word mid-word, the
- * merge turns the cut into a space, and the check would fail with a
- * confusing last-frame dump at the press helper's deadline.
- */
-const descriptionLeadOf = (ticket: Ticket): string =>
-	ticket.description.split(" ").slice(0, 4).join(" ");
-const showsTicket = (frame: string, ticket: Ticket) =>
-	frameText(frame).includes(descriptionLeadOf(ticket));
-const agentRowOf = (frame: string) =>
-	rowsOf(frame).findIndex((row) => row.includes("Agent: unassigned"));
-/** Assert every ticket state badge is on screen, read off the frame. */
-function expectStateBadges(frame: string): void {
-	for (const badge of STATE_BADGES) {
-		expect(frame).toContain(badge);
-	}
-}
-/** Frame predicate: the detail pane holds the focus. */
-const detailFocused = (frame: string) => frame.includes("❯ Detail") && !frame.includes("❯ Tickets");
-/** Frame predicate: the list pane holds the focus. */
-const listFocused = (frame: string) => frame.includes("❯ Tickets") && !frame.includes("❯ Detail");
-
-let errorCalls: string[];
-let errorSpy: ReturnType<typeof vi.spyOn>;
-
-beforeEach(() => {
-	errorCalls = [];
-	errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-		errorCalls.push(args.map(String).join(" "));
-	});
-});
-
-afterEach(() => {
-	const unexpected = errorCalls.filter((call) => !/was not wrapped in act/.test(call));
-	expect(unexpected, `unexpected console.error output:\n${unexpected.join("\n---\n")}`).toEqual([]);
-	errorSpy.mockRestore();
-});
-
-async function bootApp(width = WIDTH, height = HEIGHT) {
-	const setup = await testRender(createElement(App), { width, height });
-	await setup.flush();
-	return setup;
-}
-
-/**
- * Boot the app at a fixed size, run `body`, and always destroy the
- * renderer, no matter how the body ends.
- */
-async function withApp(
-	body: (setup: Setup) => Promise<void>,
-	width = WIDTH,
-	height = HEIGHT,
-): Promise<void> {
-	const setup = await bootApp(width, height);
-	try {
-		await body(setup);
-	} finally {
-		setup.renderer.destroy();
-	}
-}
-
-/**
- * Wait for the rendered frame to satisfy `predicate`, and return it.
- *
- * The wait ends when the effect appears, or the deadline fails the test
- * with the last frame. A stale frame can never pass an assertion.
- */
-async function awaitFrame(
-	setup: Setup,
-	predicate: (frame: string) => boolean,
-	what: string,
-): Promise<string> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
-	let frame = setup.captureCharFrame();
-	for (;;) {
-		if (predicate(frame)) {
-			return frame;
-		}
-		if (Date.now() >= deadline) {
-			throw new Error(`timed out waiting for ${what}\nlast frame:\n${frame}`);
-		}
-		await sleep(FRAME_POLL_MS);
-		frame = setup.captureCharFrame();
-	}
-}
-
-/** Press a key the shell handles, and wait for the effect it should produce. */
-async function press(
-	setup: Setup,
-	key: AppKey,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	setup.mockInput.pressKey(key);
-	return awaitFrame(setup, predicate, what);
-}
-
-/** Press an arrow key and wait for the effect it should produce. */
-async function pressArrow(
-	setup: Setup,
-	direction: "up" | "down" | "left" | "right",
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	setup.mockInput.pressArrow(direction);
-	return awaitFrame(setup, predicate, what);
-}
-
-/** Press `l` and wait for the detail pane to take focus. */
-async function focusDetail(setup: Setup): Promise<string> {
-	return press(setup, "l", "the detail pane to take focus", detailFocused);
-}
-
-/**
- * Wait for the frame to stop changing, and return it.
- *
- * For keys that should change nothing, stability is the assertion.
- */
-async function settle(setup: Setup, maxMs = 300): Promise<string> {
-	await sleep(SETTLE_GRACE_MS);
-	const deadline = Date.now() + maxMs;
-	let last = setup.captureCharFrame();
-	let stablePolls = 0;
-	for (;;) {
-		await sleep(FRAME_POLL_MS);
-		const current = setup.captureCharFrame();
-		if (current === last) {
-			stablePolls += 1;
-			if (stablePolls >= 2) {
-				return current;
-			}
-		} else {
-			stablePolls = 0;
-			last = current;
-		}
-		if (Date.now() >= deadline) {
-			return current;
-		}
-	}
-}
+import {
+	agentRowOf,
+	awaitFrame,
+	bootApp,
+	detailFocused,
+	detailPaneText,
+	expectStateBadges,
+	focusDetail,
+	frameText,
+	listFocused,
+	markerRowOf,
+	press,
+	pressArrow,
+	rowsOf,
+	settle,
+	showsTicket,
+	sleep,
+	WIDTH,
+	withApp,
+} from "./app-harness.ts";
 
 describe("the control plane", () => {
 	test("list pane shows every sample ticket with title, repository, and state badge", async () => {
@@ -214,12 +65,12 @@ describe("the control plane", () => {
 
 	test("detail pane shows the full detail of the selected ticket", async () => {
 		await withApp(async (setup) => {
-			const frame = frameText(setup.captureCharFrame());
+			const detail = detailPaneText(setup.captureCharFrame());
 			const first = SAMPLE_TICKETS[0];
 			// The full title and description live in the detail pane.
-			expect(frame).toContain(first.description);
-			expect(frame).toContain("Agent: unassigned");
-			expect(frame).toContain("GitHub: open");
+			expect(detail).toContain(first.description);
+			expect(detail).toContain("Agent: unassigned");
+			expect(detail).toContain("GitHub: open");
 		});
 	});
 

@@ -1,8 +1,10 @@
 /**
  * The ticket detail pane: the full detail of the selected ticket.
  *
- * It carries the data a future handoff will need: repository, ticket state,
- * and the assigned agent, plus the GitHub closed status as a source fact.
+ * It carries repository, ticket state, the GitHub closed status as a source
+ * fact, and the facts of the ticket's last handoff: the agent type, the
+ * environment kind, and the task type used. A ticket that has not been
+ * handed off shows the Agent line as unassigned and no handoff lines.
  *
  * The pane windows its lines to the pane height and slides them by
  * `scroll`. The lines are built by `detailLines`, a pure function: the app
@@ -39,7 +41,11 @@ export function detailLines(ticket: Ticket, usableCols: number): DetailLine[] {
 	pushWrapped(ticket.title, COLORS.textBright);
 	pushWrapped(ticket.repository, COLORS.text);
 	lines.push({ text: stateBadge(ticket.state), fg: STATE_COLORS[ticket.state] });
-	pushWrapped(`Agent: ${ticket.agent ?? "unassigned"}`, COLORS.text);
+	pushWrapped(`Agent: ${ticket.handoff?.agentType ?? "unassigned"}`, COLORS.text);
+	if (ticket.handoff !== null) {
+		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
+		pushWrapped(`Task type: ${ticket.handoff.taskType}`, COLORS.text);
+	}
 	pushWrapped(`GitHub: ${ticket.githubClosed ? "closed" : "open"}`, COLORS.text);
 	lines.push({ text: " ", fg: COLORS.dim });
 	pushWrapped(ticket.description, COLORS.dim);

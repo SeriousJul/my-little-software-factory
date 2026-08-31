@@ -10,6 +10,16 @@ export const COLORS = {
 	text: "#c9d1d9",
 	textBright: "#e6edf3",
 	dim: "#8b949e",
+	/**
+	 * The surface the override panel's overlay fills with.
+	 *
+	 * A fixed dark surface by decision: a modal carries its own background,
+	 * so it stays readable on any terminal background, dark or light. The
+	 * panes below paint no background and follow the terminal's own.
+	 */
+	overlay: "#0d1117",
+	statusError: "#f85149",
+	statusWarning: "#d29922",
 } as const;
 
 export const STATE_COLORS: Record<TicketState, string> = {
