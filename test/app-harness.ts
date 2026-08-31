@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { App, type AppKey, type AppProps } from "../src/components/app.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
+import { emptyAgentRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
@@ -94,18 +95,36 @@ afterEach(() => {
 	errorSpy.mockRestore();
 });
 
+/** A booted app: the test renderer plus the app's teardown handle. */
+export interface AppSetup extends Setup {
+	/**
+	 * Stops the app's background loops. The test renderer's unmount does not
+	 * run effect cleanups reliably, so tests stop the app explicitly before
+	 * closing the state.
+	 */
+	stopApp: () => void;
+}
+
 export async function bootApp(
 	props: AppProps = {},
 	width = WIDTH,
 	height = HEIGHT,
-): Promise<Setup> {
+): Promise<AppSetup> {
 	// Existing frame tests keep deterministic data at the App seam. A source
 	// or state passed explicitly opts into the real empty/loading behavior.
+	// A state without an explicit runner gets the empty-agent fake runner, so
+	// the observation loop stays hermetic: no test can reach a real herdr.
+	const runner = "runner" in props ? props : { runner: emptyAgentRunner() };
 	const appProps =
-		"state" in props || "sources" in props ? props : { initialTickets: SAMPLE_TICKETS, ...props };
-	const setup = await testRender(createElement(App, appProps), { width, height });
+		"state" in props || "sources" in props
+			? { ...runner, ...props }
+			: { initialTickets: SAMPLE_TICKETS, ...runner, ...props };
+	let stopApp: (() => void) | null = null;
+	const wired: AppProps =
+		"onReady" in appProps ? appProps : { ...appProps, onReady: (ready) => (stopApp = ready.stop) };
+	const setup = await testRender(createElement(App, wired), { width, height });
 	await setup.flush();
-	return setup;
+	return { ...setup, stopApp: () => stopApp?.() };
 }
 
 /**
@@ -113,7 +132,7 @@ export async function bootApp(
  * renderer, no matter how the body ends.
  */
 export async function withApp(
-	body: (setup: Setup) => Promise<void>,
+	body: (setup: AppSetup) => Promise<void>,
 	width = WIDTH,
 	height = HEIGHT,
 	props: AppProps = {},
@@ -122,7 +141,11 @@ export async function withApp(
 	try {
 		await body(setup);
 	} finally {
-		setup.renderer.destroy();
+		await setup.renderer.destroy();
+		// Stop the app's loops before the test closes the state: the test
+		// renderer's unmount does not run effect cleanups, and a loop that
+		// outlives the state reads a closed database.
+		setup.stopApp();
 	}
 }
 

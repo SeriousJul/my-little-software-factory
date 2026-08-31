@@ -14,9 +14,16 @@ import type { ReactElement } from "react";
 import type { Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry, windowOf } from "./geometry.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { BADGE_WIDTH, COLORS, STATE_COLORS, stateBadge } from "./theme.ts";
+import {
+	BADGE_WIDTH,
+	COLORS,
+	MARKER_COLORS,
+	MARKER_WIDTH,
+	markerText,
+	STATE_COLORS,
+	stateBadge,
+} from "./theme.ts";
 
-const MARKER_WIDTH = 2;
 const REPO_GAP = 1;
 
 interface TicketListProps {
@@ -25,6 +32,8 @@ interface TicketListProps {
 	focused: boolean;
 	reservedRows: number;
 	emptyMessage?: string;
+	/** The failure marker of a ticket from the last observation, or null. */
+	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
 }
 
 export function TicketList({
@@ -33,6 +42,7 @@ export function TicketList({
 	focused,
 	reservedRows,
 	emptyMessage,
+	markerOf,
 }: TicketListProps) {
 	const geometry = usePaneGeometry("list", reservedRows);
 
@@ -77,6 +87,7 @@ export function TicketList({
 							ticket,
 							ticket.identity === tickets[selectedIndex].identity,
 							geometry.usableCols,
+							markerOf(ticket),
 						),
 					),
 				)),
@@ -92,7 +103,12 @@ export function TicketList({
  * title less than a gap column and one text cell, so the title drops last:
  * a field is dropped, never wrapped.
  */
-function rowSpans(ticket: Ticket, selected: boolean, usableCols: number): ReactElement[] {
+function rowSpans(
+	ticket: Ticket,
+	selected: boolean,
+	usableCols: number,
+	marker: "blocked" | "missing" | null,
+): ReactElement[] {
 	const spans: ReactElement[] = [];
 	let budget = usableCols;
 
@@ -107,24 +123,37 @@ function rowSpans(ticket: Ticket, selected: boolean, usableCols: number): ReactE
 		budget -= MARKER_WIDTH;
 	}
 
-	let hasBadge = false;
 	if (budget >= BADGE_WIDTH) {
 		spans.push(createElement("span", { fg: STATE_COLORS[ticket.state] }, stateBadge(ticket.state)));
 		budget -= BADGE_WIDTH;
-		hasBadge = true;
+	}
+
+	// The failure marker slot: the agent's pane gone, or the agent blocked.
+	// It keeps one cell for the title, so the title still drops last.
+	let markerRendered = false;
+	if (budget >= MARKER_WIDTH + 1) {
+		spans.push(
+			createElement(
+				"span",
+				{ fg: marker === null ? COLORS.dim : MARKER_COLORS[marker] },
+				markerText(marker),
+			),
+		);
+		budget -= MARKER_WIDTH;
+		markerRendered = true;
 	}
 
 	const titleFg = selected ? COLORS.textBright : COLORS.text;
 	const repoWidth = widthOf(ticket.repository);
-	// The title keeps at least its gap column and one text cell. When the
-	// repository would take that from it, the repository drops instead.
-	const titleFloor = hasBadge ? REPO_GAP + 1 : 1;
-	const repoFits = budget >= REPO_GAP + repoWidth + titleFloor;
+	// The title keeps at least one text cell. When the repository would take
+	// that from it, the repository drops instead.
+	const repoFits = budget >= REPO_GAP + repoWidth + 1;
 	let titleField = Math.max(0, budget - (repoFits ? REPO_GAP + repoWidth : 0));
 
-	// A gap column between the badge and the title, so the title never
-	// glues onto the badge when the badge takes its full width.
-	if (hasBadge && titleField >= 1) {
+	// A gap column between the badge and the title. The marker slot's own
+	// trailing space is the gap when it renders; a row without the slot
+	// spends one cell so the title never glues onto the badge.
+	if (!markerRendered && titleField >= 1) {
 		spans.push(createElement("span", { fg: titleFg }, " "));
 		titleField -= 1;
 	}

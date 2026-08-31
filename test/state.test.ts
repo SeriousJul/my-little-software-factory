@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, StateError } from "../src/state.ts";
+import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -66,7 +66,7 @@ describe("factory SQLite state", () => {
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(expect.objectContaining({ actionable: false }));
 		expect(ticket.memberships?.[0]).toEqual(expect.objectContaining({ health: "stale" }));
-		expect(state.claimHandoff(ticket.identity, choice)).toEqual(
+		expect(state.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("not actionable") }),
 		);
 		state.close();
@@ -83,10 +83,10 @@ describe("factory SQLite state", () => {
 		expect(ticket.actionable).toBe(true);
 		expect(ticket.memberships).toHaveLength(2);
 
-		const claimed = state.claimHandoff(ticket.identity, choice);
+		const claimed = state.claimHandoff(ticket.identity, choice, "open");
 		expect(claimed.ok).toBe(true);
 		if (!claimed.ok) return;
-		expect(state.claimHandoff(ticket.identity, choice)).toEqual(
+		expect(state.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
 		);
 		state.settleHandoff(claimed.claim.attemptId, true);
@@ -97,7 +97,11 @@ describe("factory SQLite state", () => {
 		expect(persisted).toEqual(
 			expect.objectContaining({
 				state: "handed-off",
-				handoff: { agentType: "pi", environment: "worktree", taskType: "implement" },
+				handoff: expect.objectContaining({
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+				}),
 			}),
 		);
 		reopened.close();
@@ -108,10 +112,10 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const [ticket] = state.visibleTickets([], "implement");
-		const first = state.claimHandoff(ticket.identity, choice);
+		const first = state.claimHandoff(ticket.identity, choice, "open");
 		if (!first.ok) throw new Error(first.reason);
 		state.settleHandoff(first.claim.attemptId, false, "herdr is unavailable");
-		expect(state.claimHandoff(ticket.identity, choice)).toEqual(
+		expect(state.claimHandoff(ticket.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: true }),
 		);
 		state.close();
@@ -137,7 +141,7 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const [ticket] = state.visibleTickets([], "implement");
-		const started = state.claimHandoff(ticket.identity, choice);
+		const started = state.claimHandoff(ticket.identity, choice, "open");
 		if (!started.ok) throw new Error(started.reason);
 		state.settleHandoff(started.claim.attemptId, true);
 		state.initializeSources([]);
@@ -151,7 +155,7 @@ describe("factory SQLite state", () => {
 
 		const reopened = openFactoryState(path);
 		const [persisted] = reopened.visibleTickets([], "implement");
-		const pending = reopened.claimHandoff(persisted.identity, choice);
+		const pending = reopened.claimHandoff(persisted.identity, choice, "open");
 		expect(pending).toEqual(expect.objectContaining({ ok: false }));
 		reopened.close();
 	});
@@ -160,7 +164,7 @@ describe("factory SQLite state", () => {
 		const path = statePath();
 		const db = new DatabaseSync(path);
 		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
-		db.prepare("INSERT INTO schema_version(version) VALUES (2)").run();
+		db.prepare("INSERT INTO schema_version(version) VALUES (3)").run();
 		db.close();
 
 		let error: unknown;
@@ -170,7 +174,7 @@ describe("factory SQLite state", () => {
 			error = caught;
 		}
 		expect(error).toBeInstanceOf(StateError);
-		expect(String(error)).toContain("newer schema version 2");
+		expect(String(error)).toContain("newer schema version 3");
 		expect(String(error)).toContain(path);
 	});
 
@@ -199,76 +203,262 @@ describe("factory SQLite state", () => {
 		expect(statSync(path).size).toBeGreaterThan(0);
 	});
 
-	test("starts a new work cycle only when a done ticket leaves every source and returns", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
+	test("a settled turn rests in awaiting with a pending completion trace", () => {
+		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-7",
+			tabId: "tab-7",
+			workspaceId: "ws-7",
+		});
 
-		// No agent API exists to finish a ticket yet, so the completion is
-		// recorded the way the agent will record it: a state row update.
-		const markDone = () => {
-			const db = new DatabaseSync(path);
-			db.prepare("UPDATE tickets SET state = 'done' WHERE identity = ?").run(
-				"github:github.com:I_5",
-			);
-			db.close();
-		};
-		const workCycle = () => {
-			const db = new DatabaseSync(path);
-			const row = db
-				.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
-				.get("github:github.com:I_5") as { state: string; work_cycle: number };
-			db.close();
-			return row;
-		};
+		// The agent reports working, then settles the turn.
+		expect(state.markTicketRunning(ticket.identity)).toBe(true);
+		expect(state.markTicketRunning(ticket.identity)).toBe(false);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "The work is done. Tests pass.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
 
-		markDone();
-		// A continuously matching done ticket stays done in the same work cycle
-		// and stays visible while a source still carries it.
-		state.applyFetch(sourceA, success([fetched()]));
-		expect(workCycle()).toEqual({ state: "done", work_cycle: 1 });
-		expect(state.visibleTickets([], "implement").map((t) => t.identity)).toContain(
-			"github:github.com:I_5",
+		const [rested] = state.visibleTickets([], "implement");
+		expect(rested.state).toBe("awaiting");
+		// The herdr handles the handoff started are stored on the ticket.
+		expect(rested.handoff).toEqual(
+			expect.objectContaining({
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				paneId: "pane-7",
+				tabId: "tab-7",
+				workspaceId: "ws-7",
+			}),
 		);
-
-		// The ticket leaves every source: it is hidden from the list, and its
-		// later return starts a new work cycle.
-		state.applyFetch(sourceA, success([]));
-		expect(state.visibleTickets([], "implement").map((t) => t.identity)).not.toContain(
-			"github:github.com:I_5",
+		expect(rested.lastCompletion).toEqual(
+			expect.objectContaining({
+				taskType: "implement",
+				agentType: "pi",
+				message: "The work is done. Tests pass.",
+				decision: null,
+			}),
 		);
-		state.applyFetch(sourceA, success([fetched()]));
-		expect(workCycle()).toEqual({ state: "open", work_cycle: 2 });
-
 		state.close();
 	});
 
-	test("keeps prior work cycles and their handoffs in history", () => {
+	test("a second settle of the same turn refreshes the trace instead of adding one", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
-		const [first] = state.visibleTickets([], "implement");
-		const claim = state.claimHandoff(first.identity, choice);
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "First capture.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "Last capture.",
+			completedAt: "2026-08-31T11:05:00Z",
+		});
 
-		// The cycle completes, the ticket leaves every source and returns.
-		const db = new DatabaseSync(path);
-		db.prepare("UPDATE tickets SET state = 'done' WHERE identity = ?").run(first.identity);
-		db.close();
-		state.applyFetch(sourceA, success([]));
+		const [rested] = state.visibleTickets([], "implement");
+		expect(rested.lastCompletion?.message).toBe("Last capture.");
+		const traceCount = new DatabaseSync(path)
+			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
+			.get(ticket.identity) as { n: number };
+		expect(traceCount.n).toBe(1);
+		state.close();
+	});
+
+	test("a closed decision ends the work cycle: back to open with the cycle incremented", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
-		const [second] = state.visibleTickets([], "implement");
-		const secondClaim = state.claimHandoff(second.identity, choice);
-		if (!secondClaim.ok) throw new Error(secondClaim.reason);
-		state.settleHandoff(secondClaim.claim.attemptId, true);
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "Done.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
 
-		const history = new DatabaseSync(path)
+		// The decision records on the trace and ends the cycle.
+		state.applyCompletionDecision({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		const [returned] = state.visibleTickets([], "implement");
+		expect(returned.state).toBe("open");
+		expect(returned.lastCompletion?.decision).toBe("closed");
+
+		// The next handoff runs in work cycle 2.
+		const second = state.claimHandoff(returned.identity, choice, "open");
+		expect(second.ok).toBe(true);
+		if (!second.ok) return;
+		state.settleHandoff(second.claim.attemptId, true);
+		const cycles = new DatabaseSync(path)
 			.prepare("SELECT work_cycle FROM handoffs WHERE ticket_identity = ? ORDER BY work_cycle")
-			.all(first.identity) as Array<{ work_cycle: number }>;
-		expect(history).toEqual([{ work_cycle: 1 }, { work_cycle: 2 }]);
+			.all(ticket.identity) as Array<{ work_cycle: number }>;
+		expect(cycles).toEqual([{ work_cycle: 1 }, { work_cycle: 2 }]);
+		state.close();
+	});
+
+	test("an abandoned decision ends the work cycle too", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "Lost.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			decision: "abandoned",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		const [returned] = state.visibleTickets([], "implement");
+		expect(returned.state).toBe("open");
+		state.close();
+	});
+
+	test("a workflow claim needs awaiting, a restart claim needs in-flight", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "Done.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+
+		// Awaiting: a workflow handoff is allowed, an open claim is not.
+		expect(state.claimHandoff(ticket.identity, choice, "workflow").ok).toBe(true);
+		expect(state.claimHandoff(ticket.identity, choice, "open")).toEqual(
+			expect.objectContaining({ ok: false }),
+		);
+		// A restart needs an in-flight ticket, and the open workflow claim
+		// blocks every further claim until it resolves.
+		expect(state.claimHandoff(ticket.identity, choice, "restart")).toEqual(
+			expect.objectContaining({
+				ok: false,
+				reason: expect.stringContaining("in-flight"),
+			}),
+		);
+		expect(state.claimHandoff(ticket.identity, choice, "workflow")).toEqual(
+			expect.objectContaining({
+				ok: false,
+				reason: expect.stringContaining("recovery"),
+			}),
+		);
+		state.close();
+	});
+
+	test("a v1 database migrates to v2: done becomes open and the traces table appears", () => {
+		const path = statePath();
+		const db = new DatabaseSync(path);
+		db.exec("PRAGMA foreign_keys = ON");
+		db.exec(SCHEMA_V1);
+		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
+		db.prepare("INSERT INTO schema_version(version) VALUES (1)").run();
+		db.prepare(
+			"INSERT INTO source_health VALUES ('issues', 'github-issues', 'healthy', NULL, '2026-08-31T09:00:00Z')",
+		).run();
+		db.prepare("INSERT INTO tickets VALUES ('github:github.com:I_5', 'done', 1, 0)").run();
+		db.prepare(
+			"INSERT INTO memberships (" +
+				"source_name, ticket_identity, active, source_kind, external_key, source_state, url, " +
+				"title, description, labels_json, external_updated_at, repository_identity, " +
+				"repository_display_name, repository_clone_url, attributes_json) " +
+				"VALUES ('issues', 'github:github.com:I_5', 1, 'github-issue', '#5', 'open', " +
+				"'https://github.com/acme/billing/issues/5', 'Persist source facts', 'Persist them.', " +
+				"'[]', '2026-08-31T09:00:00Z', 'acme/billing', 'acme/billing', " +
+				"'https://github.com/acme/billing.git', '{}')",
+		).run();
+		db.close();
+
+		const state = openFactoryState(path);
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(expect.objectContaining({ state: "open" }));
+		const tables = new DatabaseSync(path)
+			.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+			.all() as Array<{ name: string }>;
+		expect(tables.map((t) => t.name)).toContain("completion_traces");
+		state.close();
+	});
+
+	test("keeps an awaiting ticket visible while every source is gone", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			agentName: "factory-implement-I_5",
+			message: "Done.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+
+		// The agent closes the external item while working: the ticket leaves
+		// the source, but a pending decision keeps it visible.
+		state.applyFetch(sourceA, success([]));
+		const visible = state.visibleTickets([], "implement");
+		expect(visible).toEqual([
+			expect.objectContaining({ identity: ticket.identity, state: "awaiting" }),
+		]);
 
 		state.close();
 	});
@@ -327,13 +517,13 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const [ticket] = state.visibleTickets([], "implement");
-		const claim = state.claimHandoff(ticket.identity, choice);
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.close();
 		const reopened = openFactoryState(path);
 		const [persisted] = reopened.visibleTickets([], "implement");
 		expect(persisted.handoffRecoveryRequired).toBe(true);
-		expect(reopened.claimHandoff(persisted.identity, choice)).toEqual(
+		expect(reopened.claimHandoff(persisted.identity, choice, "open")).toEqual(
 			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
 		);
 		reopened.close();

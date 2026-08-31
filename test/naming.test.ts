@@ -28,6 +28,8 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	handoffCount: 0,
+	lastCompletion: null,
 });
 
 describe("titleSlug", () => {

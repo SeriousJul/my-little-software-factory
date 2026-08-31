@@ -271,7 +271,7 @@ describe("source-driven frames", () => {
 			]),
 		);
 		const [first] = state.visibleTickets(DEFAULT_CONFIG.taskRules, DEFAULT_CONFIG.defaultTaskType);
-		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE);
+		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true);
 		// The config no longer lists the source: a restart marks it removed.
@@ -326,7 +326,7 @@ describe("source-driven frames", () => {
 		}
 	});
 
-	test("orders the list by attention: running, handed-off, actionable open, non-actionable open, done", async () => {
+	test("orders the list by attention: awaiting, running, handed-off, actionable open, non-actionable open", async () => {
 		const state = freshState();
 		const issues = { name: "issues", kind: "github-issues" };
 		const pulls = { name: "pulls", kind: "github-pull-requests" };
@@ -338,9 +338,9 @@ describe("source-driven frames", () => {
 			externalKey: "#2",
 			title: "Off ticket",
 		});
-		const doneTicket = ticket("github:github.com:I_done", {
+		const awaitTicket = ticket("github:github.com:I_await", {
 			externalKey: "#4",
-			title: "Done ticket",
+			title: "Awaiting ticket",
 		});
 		const openTicket = ticket("github:github.com:I_open", {
 			externalKey: "#3",
@@ -354,24 +354,24 @@ describe("source-driven frames", () => {
 			externalUpdatedAt: "2026-08-31T09:00:00Z",
 		});
 		state.initializeSources([issues, pulls]);
-		state.applyFetch(issues, success([runTicket, offTicket, openTicket, doneTicket]));
+		state.applyFetch(issues, success([runTicket, offTicket, openTicket, awaitTicket]));
 		state.applyFetch(pulls, success([pendingTicket]));
 		const off = state
 			.visibleTickets(DEFAULT_CONFIG.taskRules, "implement")
 			.find((t) => t.title === "Off ticket");
 		if (off === undefined) throw new Error("Off ticket is missing");
-		const claim = state.claimHandoff(off.identity, HANDOFF_CHOICE);
+		const claim = state.claimHandoff(off.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true);
 
-		// No agent API exists to finish a ticket yet, so these transitions are
-		// recorded the way the agent will record them: state row updates.
+		// These transitions are recorded the way the observation loop records
+		// them: state row updates.
 		const db = new DatabaseSync(state.path);
 		db.prepare(
 			"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_run'",
 		).run();
 		db.prepare(
-			"UPDATE tickets SET state = 'done' WHERE identity = 'github:github.com:I_done'",
+			"UPDATE tickets SET state = 'awaiting' WHERE identity = 'github:github.com:I_await'",
 		).run();
 		db.close();
 
@@ -384,7 +384,7 @@ describe("source-driven frames", () => {
 				const loading = await awaitFrame(
 					setup,
 					(f) =>
-						["Run ticket", "Off ticket", "Open ticket", "Pending ticket", "Done ticket"].every(
+						["Run ticket", "Off ticket", "Open ticket", "Pending ticket", "Awaiting ticket"].every(
 							(title) => listRowOf(f, title) >= 0,
 						),
 					"all five tickets",
@@ -397,13 +397,19 @@ describe("source-driven frames", () => {
 				// set, so every ticket survives the refresh. The open ticket
 				// becomes actionable and jumps above the pending one, whose
 				// source (pulls) stays in flight and remains not actionable.
-				issuesSource.settle(success([runTicket, offTicket, openTicket, doneTicket]));
+				issuesSource.settle(success([runTicket, offTicket, openTicket, awaitTicket]));
 				const frame = await awaitFrame(
 					setup,
 					(f) => listRowOf(f, "Open ticket") < listRowOf(f, "Pending ticket"),
 					"the settled source to make its ticket actionable",
 				);
-				const order = ["Run ticket", "Off ticket", "Open ticket", "Pending ticket", "Done ticket"];
+				const order = [
+					"Awaiting ticket",
+					"Run ticket",
+					"Off ticket",
+					"Open ticket",
+					"Pending ticket",
+				];
 				const positions = order.map((title) => listRowOf(frame, title));
 				expect(new Set(positions).size).toBe(order.length);
 				expect(positions).toEqual([...positions].sort((a, b) => a - b));
@@ -491,7 +497,7 @@ describe("source-driven frames", () => {
 		state.initializeSources([definition]);
 		state.applyFetch(definition, success([ticket()]));
 		const [first] = state.visibleTickets(DEFAULT_CONFIG.taskRules, DEFAULT_CONFIG.defaultTaskType);
-		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE);
+		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		// The attempt stays unresolved: the process died before settling it.
 

@@ -25,6 +25,18 @@ export function detailLines(ticket: Ticket | undefined, usableCols: number): Det
 		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
 		pushWrapped(`Task type: ${ticket.handoff.taskType}`, COLORS.text);
 	}
+	pushWrapped(`Handoffs: ${ticket.handoffCount}`, COLORS.text);
+	if (ticket.lastCompletion !== null) {
+		const completion = ticket.lastCompletion;
+		pushWrapped(
+			`Last completion: ${completion.taskType} by ${completion.agentName} (${completion.agentType})`,
+			COLORS.text,
+		);
+		for (const line of completion.message.split("\n")) {
+			for (const wrapped of wrapToWidth(line, usableCols))
+				lines.push({ text: wrapped, fg: COLORS.dim });
+		}
+	}
 	pushWrapped(`Source kind: ${ticket.sourceKind}`, COLORS.text);
 	pushWrapped(`External key: ${ticket.externalKey}`, COLORS.text);
 	pushWrapped(`Source state: ${ticket.sourceState}`, COLORS.text);

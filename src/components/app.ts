@@ -1,16 +1,38 @@
-/** The control plane shell: panes, refresh, selection, and handoff. */
+/**
+ * The control plane shell: panes, refresh, selection, handoff, and the
+ * herdr observation loop (ADR 0005, ADR 0006).
+ *
+ * The mode line carries the auto-handoff state and the in-flight count
+ * against the parallel limit. Enter on an open ticket hands it off; Enter
+ * on an awaiting ticket opens the decision panel (a workflow handoff or
+ * close); Enter on an in-flight ticket whose pane herdr no longer lists
+ * opens the missing panel (restart or abandon). `a` toggles auto-handoff.
+ */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } from "../config.ts";
-import { HANDOFF_ENVIRONMENT_KINDS, type Ticket } from "../domain/ticket.ts";
-import { type HandoffChoice, handOffTicket } from "../handoff.ts";
+import { HANDOFF_ENVIRONMENT_KINDS, type Handoff, type Ticket } from "../domain/ticket.ts";
+import {
+	type HandoffChoice,
+	type HandoffOutcome,
+	handOffStoredWorkspace,
+	handOffTicket,
+} from "../handoff.ts";
+import {
+	type HandoffIntent,
+	type HerdrAgent,
+	HerdrAgentReader,
+	normalizeAgentStatus,
+	ObservationCoordinator,
+} from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
-import type { FactoryState } from "../state.ts";
+import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
+import { ActionPanel, type ActionRow } from "./action-panel.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
@@ -23,7 +45,22 @@ interface StatusMessage {
 	kind: "info" | "warning" | "error";
 	text: string;
 }
-export type AppKey = "j" | "k" | "h" | "l" | "q" | "e" | "r" | "up" | "down" | "left" | "right";
+/** The action modal open above the panes, if any. */
+type Panel = null | { kind: "decision"; identity: string } | { kind: "missing"; identity: string };
+
+export type AppKey =
+	| "j"
+	| "k"
+	| "h"
+	| "l"
+	| "q"
+	| "e"
+	| "r"
+	| "a"
+	| "up"
+	| "down"
+	| "left"
+	| "right";
 
 export interface AppProps {
 	config?: FactoryConfig;
@@ -36,6 +73,22 @@ export interface AppProps {
 	sources?: readonly TicketSource[];
 	/** Test-only deterministic ticket projection. It has no production caller. */
 	initialTickets?: readonly Ticket[];
+	/**
+	 * Test-only observation poll interval in milliseconds. Production reads
+	 * it from the config's agent-poll-interval-seconds.
+	 */
+	pollIntervalMs?: number;
+	/**
+	 * Receives the teardown handle once the app is mounted. The owner calls
+	 * stop before closing the state: the background loops must not outlive
+	 * it. Production relies on process exit instead.
+	 */
+	onReady?: (ready: AppTeardown) => void;
+}
+
+export interface AppTeardown {
+	/** Stops the refresh and observation loops. Safe to call twice. */
+	stop: () => void;
 }
 
 const EMPTY_SOURCES: readonly TicketSource[] = [];
@@ -53,6 +106,8 @@ export function App({
 	state,
 	sources = EMPTY_SOURCES,
 	initialTickets,
+	pollIntervalMs,
+	onReady,
 }: AppProps) {
 	const renderer = useRenderer();
 	const { width: terminalWidth } = useTerminalDimensions();
@@ -70,8 +125,19 @@ export function App({
 	const [status, setStatus] = useState<StatusMessage | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
+	const [panel, setPanel] = useState<Panel>(null);
+	const [autoMode, setAutoMode] = useState<boolean>(
+		() => (configProp ?? DEFAULT_CONFIG).autoHandoff,
+	);
+	const autoModeRef = useRef(autoMode);
+	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
+	// The key handler outlives the render that made the decision it acts on,
+	// so the marker it re-checks reads the latest list through a ref.
+	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
+	agentsRef.current = agents;
 	const inFlightRef = useRef(false);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
+	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
@@ -83,7 +149,20 @@ export function App({
 				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
 		)
 		.join("; ");
-	const reservedRows = (status === null ? 0 : 1) + (healthLine === "" ? 0 : 1);
+	// The mode line carries the auto-handoff state and the in-flight count
+	// against the parallel limit. It exists only when the control plane has
+	// state to observe.
+	const inFlightCount = tickets.filter(
+		(ticket) => ticket.state === "handed-off" || ticket.state === "running",
+	).length;
+	const modeLine =
+		state === undefined
+			? ""
+			: `auto-handoff: ${autoMode ? "on" : "off"}, agents ${inFlightCount}/${
+					config.maxParallelAgents === 0 ? "unlimited" : config.maxParallelAgents
+				}`;
+	const reservedRows =
+		(status === null ? 0 : 1) + (healthLine === "" ? 0 : 1) + (modeLine === "" ? 0 : 1);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
 	const lines = detailLines(selectedTicket, detailGeometry.usableCols);
@@ -136,6 +215,18 @@ export function App({
 		thinking: config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
 	});
 
+	/** The failure marker of an in-flight ticket from the last observation. */
+	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
+		if (ticket.state !== "handed-off" && ticket.state !== "running") return null;
+		const paneId = ticket.handoff?.paneId ?? null;
+		// No successful observation yet: an unreadable herdr must not read
+		// as "every pane is missing".
+		if (paneId === null || agentsRef.current === null) return null;
+		const agent = agentsRef.current.find((candidate) => candidate.paneId === paneId);
+		if (agent === undefined) return "missing";
+		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
+	};
+
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		try {
 			const updated = { ...config, repos: { ...config.repos, [mapping.repository]: mapping.path } };
@@ -146,6 +237,111 @@ export function App({
 			return `could not persist the repository mapping: ${errorMessage(error)}`;
 		}
 	};
+
+	/** The status line after a handoff outcome, mapping warnings included. */
+	const finishOutcome = async (outcome: HandoffOutcome): Promise<void> => {
+		const persistWarning =
+			outcome.notes?.mappingToWrite === undefined
+				? undefined
+				: await persistMapping(outcome.notes.mappingToWrite);
+		if (outcome.status !== "ok")
+			setStatus({
+				kind: "error",
+				text:
+					persistWarning === undefined ? outcome.reason : `${outcome.reason}; ${persistWarning}`,
+			});
+		else if (persistWarning !== undefined) setStatus({ kind: "warning", text: persistWarning });
+		else if (outcome.notes?.warning !== undefined)
+			setStatus({ kind: "warning", text: outcome.notes.warning });
+		else setStatus(null);
+	};
+
+	/**
+	 * Run the external work of a claimed handoff, settle it, and refresh.
+	 *
+	 * A workflow handoff and a restart run in the workspace of the ticket's
+	 * previous handoff; an open-ticket handoff builds the environment from
+	 * scratch.
+	 */
+	const runClaimedHandoff = (
+		ticket: Ticket,
+		choice: HandoffChoice,
+		origin: HandoffOrigin,
+		claim: HandoffClaim,
+		previousMessage: string,
+	) => {
+		if (state === undefined) return;
+		inFlightRef.current = true;
+		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
+		const onStage = (stage: string) => state.advanceHandoffAttempt(claim.attemptId, stage);
+		const run =
+			origin === "open"
+				? handOffTicket(ticket, choice, {
+						config: configRef.current,
+						runner: commandRunner,
+						home: homeDir,
+						onStage,
+					})
+				: handOffStoredWorkspace({
+						ticket,
+						choice,
+						config: configRef.current,
+						runner: commandRunner,
+						home: homeDir,
+						workspaceId: ticket.handoff?.workspaceId ?? null,
+						environment: ticket.handoff?.environment ?? configRef.current.defaultEnvironment,
+						previousTabId: ticket.handoff?.tabId ?? null,
+						previousMessage,
+						onStage,
+					});
+		void run
+			.then(async (outcome) => {
+				state.settleHandoff(
+					claim.attemptId,
+					outcome.status !== "failed",
+					outcome.status === "failed" ? outcome.reason : undefined,
+					outcome.status === "failed"
+						? undefined
+						: {
+								paneId: outcome.agent.paneId,
+								tabId: outcome.agent.tabId,
+								workspaceId: outcome.agent.workspaceId,
+							},
+				);
+				replaceTickets();
+				await finishOutcome(outcome);
+				inFlightRef.current = false;
+			})
+			.catch((error) => {
+				state.settleHandoff(claim.attemptId, false, errorMessage(error));
+				replaceTickets();
+				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
+				inFlightRef.current = false;
+			});
+	};
+
+	/**
+	 * The observation loop's handoff path: it decides, the app runs.
+	 *
+	 * The coordinator dispatches through a ref, so the loop never restarts
+	 * when a render recreates this function.
+	 */
+	const runIntent = (intent: HandoffIntent): Promise<void> => {
+		if (inFlightRef.current || state === undefined) return Promise.resolve();
+		const currentConfig = configRef.current;
+		const all = state.visibleTickets(currentConfig.taskRules, currentConfig.defaultTaskType);
+		const ticket = all.find((candidate) => candidate.identity === intent.ticketIdentity);
+		if (ticket === undefined) return Promise.resolve();
+		const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
+		if (!claim.ok) {
+			setStatus({ kind: "warning", text: claim.reason });
+			return Promise.resolve();
+		}
+		runClaimedHandoff(ticket, intent.choice, intent.origin, claim.claim, intent.previousMessage);
+		return Promise.resolve();
+	};
+	const runIntentRef = useRef(runIntent);
+	runIntentRef.current = runIntent;
 
 	const startHandoff = (choice: HandoffChoice) => {
 		if (inFlightRef.current) {
@@ -170,34 +366,32 @@ export function App({
 			});
 			return;
 		}
-		const claim = state?.claimHandoff(ticket.identity, choice);
-		if (claim !== undefined && !claim.ok) {
-			setStatus({ kind: "warning", text: claim.reason });
+		if (state !== undefined) {
+			const claim = state.claimHandoff(ticket.identity, choice, "open");
+			if (!claim.ok) {
+				setStatus({ kind: "warning", text: claim.reason });
+				return;
+			}
+			runClaimedHandoff(ticket, choice, "open", claim.claim, "");
 			return;
 		}
+		// The no-state test projection: no claim, and the settle patches the
+		// ticket list by hand instead of reading it back from SQLite.
 		inFlightRef.current = true;
 		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
-		void handOffTicket(ticket, choice, {
-			config,
-			runner: commandRunner,
-			home: homeDir,
-			onStage: (stage) => {
-				if (state && claim?.ok) state.advanceHandoffAttempt(claim.claim.attemptId, stage);
-			},
-		})
+		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
-				if (state && claim?.ok) {
-					state.settleHandoff(
-						claim.claim.attemptId,
-						outcome.status !== "failed",
-						outcome.status === "ok" ? undefined : outcome.reason,
-					);
-					replaceTickets();
-				} else if (outcome.status !== "failed") {
-					const handoff = {
+				if (outcome.status !== "failed") {
+					const handoff: Handoff = {
 						agentType: choice.agentType,
 						environment: choice.environment,
 						taskType: choice.taskType,
+						model: choice.model,
+						thinking: choice.thinking,
+						attemptId: "manual",
+						paneId: outcome.agent.paneId,
+						tabId: outcome.agent.tabId,
+						workspaceId: outcome.agent.workspaceId,
 					};
 					setTickets((all) => {
 						const next = all.map((candidate, index) =>
@@ -209,29 +403,10 @@ export function App({
 						return next;
 					});
 				}
-				const persistWarning =
-					outcome.notes?.mappingToWrite === undefined
-						? undefined
-						: await persistMapping(outcome.notes.mappingToWrite);
-				if (outcome.status !== "ok")
-					setStatus({
-						kind: "error",
-						text:
-							persistWarning === undefined
-								? outcome.reason
-								: `${outcome.reason}; ${persistWarning}`,
-					});
-				else if (persistWarning !== undefined) setStatus({ kind: "warning", text: persistWarning });
-				else if (outcome.notes?.warning !== undefined)
-					setStatus({ kind: "warning", text: outcome.notes.warning });
-				else setStatus(null);
+				await finishOutcome(outcome);
 				inFlightRef.current = false;
 			})
 			.catch((error) => {
-				if (state && claim?.ok) {
-					state.settleHandoff(claim.claim.attemptId, false, errorMessage(error));
-					replaceTickets();
-				}
 				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
 				inFlightRef.current = false;
 			});
@@ -259,8 +434,129 @@ export function App({
 		setOverride(choiceFor(ticket));
 	};
 
+	/**
+	 * Toggle auto-handoff for this session. The config's value is the
+	 * startup default only; the toggle never writes the config.
+	 */
+	const toggleAutoHandoff = () => {
+		const next = !autoModeRef.current;
+		autoModeRef.current = next;
+		setAutoMode(next);
+		setStatus({ kind: "info", text: `auto-handoff ${next ? "on" : "off"}` });
+	};
+
+	/** The decision panel's rows: one per workflow target, plus close. */
+	const decisionFor = (ticket: Ticket): { actions: ActionRow[]; body: string[] } => {
+		const taskType =
+			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const actions: ActionRow[] = [];
+		for (const edge of configRef.current.workflows) {
+			if (edge.from !== taskType) continue;
+			for (const target of edge.to)
+				actions.push({ key: `route:${target}`, label: "Handoff", detail: target });
+		}
+		actions.push({ key: "close", label: "Close" });
+		return {
+			actions,
+			body: ticket.lastCompletion === null ? [] : ticket.lastCompletion.message.split("\n"),
+		};
+	};
+
+	const runDecisionAction = (ticket: Ticket, key: string) => {
+		setPanel(null);
+		if (state === undefined) return;
+		const handoffId = ticket.handoff?.attemptId ?? "";
+		if (key === "close") {
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId,
+				decision: "closed",
+				decidedAt: new Date().toISOString(),
+			});
+			replaceTickets();
+			setStatus({ kind: "info", text: `ticket ${ticket.identity} closed` });
+			return;
+		}
+		const target = key.slice("route:".length);
+		const taskType =
+			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const edge = configRef.current.workflows.find(
+			(candidate) => candidate.from === taskType && candidate.to.includes(target),
+		);
+		const choice: HandoffChoice = {
+			agentType: edge?.agent ?? configRef.current.defaultAgent,
+			environment: edge?.environment ?? configRef.current.defaultEnvironment,
+			taskType: target,
+			model: "",
+			thinking: "",
+		};
+		if (inFlightRef.current) {
+			setStatus({ kind: "warning", text: "handoff in flight" });
+			return;
+		}
+		// The decision is recorded first: the trace holds it, and the
+		// handoff's settle moves the state out of awaiting.
+		state.applyCompletionDecision({
+			ticketIdentity: ticket.identity,
+			handoffId,
+			decision: "handed-off",
+			decidedAt: new Date().toISOString(),
+		});
+		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
+		if (!claim.ok) {
+			setStatus({ kind: "warning", text: claim.reason });
+			return;
+		}
+		runClaimedHandoff(
+			ticket,
+			choice,
+			"workflow",
+			claim.claim,
+			ticket.lastCompletion?.message ?? "",
+		);
+	};
+
+	const runMissingAction = (ticket: Ticket, key: string) => {
+		setPanel(null);
+		if (state === undefined) return;
+		const handoffId = ticket.handoff?.attemptId ?? "";
+		if (key === "abandon") {
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId,
+				decision: "abandoned",
+				decidedAt: new Date().toISOString(),
+			});
+			replaceTickets();
+			setStatus({ kind: "info", text: `ticket ${ticket.identity} abandoned` });
+			return;
+		}
+		// Restart: the same choices, in the workspace the handoff recorded.
+		const stored = ticket.handoff;
+		const choice: HandoffChoice =
+			stored === null
+				? choiceFor(ticket)
+				: {
+						agentType: stored.agentType,
+						environment: stored.environment,
+						taskType: stored.taskType,
+						model: stored.model,
+						thinking: stored.thinking,
+					};
+		if (inFlightRef.current) {
+			setStatus({ kind: "warning", text: "handoff in flight" });
+			return;
+		}
+		const claim = state.claimHandoff(ticket.identity, choice, "restart");
+		if (!claim.ok) {
+			setStatus({ kind: "warning", text: claim.reason });
+			return;
+		}
+		runClaimedHandoff(ticket, choice, "restart", claim.claim, ticket.lastCompletion?.message ?? "");
+	};
+
 	useKeyboard((key) => {
-		if (override !== null) return;
+		if (override !== null || panel !== null) return;
 		switch (key.name) {
 			case "q":
 				renderer.destroy();
@@ -281,12 +577,29 @@ export function App({
 			case "up":
 				moveVertical(-1);
 				break;
-			case "return":
-				if (ticketsRef.current[selectedIndexRef.current] !== undefined)
-					startHandoff(choiceFor(ticketsRef.current[selectedIndexRef.current]));
+			case "return": {
+				const ticket = ticketsRef.current[selectedIndexRef.current];
+				if (ticket === undefined) break;
+				if (ticket.state === "open") {
+					startHandoff(choiceFor(ticket));
+					break;
+				}
+				if (ticket.state === "awaiting") {
+					setPanel({ kind: "decision", identity: ticket.identity });
+					break;
+				}
+				if (markerOf(ticket) === "missing") {
+					setPanel({ kind: "missing", identity: ticket.identity });
+					break;
+				}
+				setStatus({ kind: "warning", text: "only open tickets can be handed off" });
 				break;
+			}
 			case "e":
 				openOverride();
+				break;
+			case "a":
+				toggleAutoHandoff();
 				break;
 			case "r":
 				coordinatorRef.current?.refreshAll();
@@ -296,11 +609,23 @@ export function App({
 		}
 	});
 
+	// A state may already hold tickets when the app boots: read them once at
+	// mount, before any refresh or observation cycle runs.
+	useEffect(() => {
+		if (state === undefined) return;
+		replaceTickets();
+	}, [state, replaceTickets]);
+
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
 		if (state === undefined) return;
-		const coordinator = new RefreshCoordinator(sources, state, replaceTickets);
+		const coordinator = new RefreshCoordinator(sources, state, () => {
+			replaceTickets();
+			// A fetch may have made a ticket actionable: let the observation
+			// loop act on it now instead of on the next poll.
+			observationRef.current?.tick();
+		});
 		coordinatorRef.current = coordinator;
 		coordinator.start();
 		return () => {
@@ -308,6 +633,37 @@ export function App({
 			coordinatorRef.current = undefined;
 		};
 	}, [state, sources, replaceTickets]);
+
+	// The observation loop runs only on the real projection: a test
+	// projection has no agents to observe, and a deterministic frame test
+	// must not race a poll.
+	useEffect(() => {
+		if (state === undefined || initialTickets !== undefined) return;
+		const coordinator = new ObservationCoordinator({
+			state,
+			herdr: new HerdrAgentReader(commandRunner),
+			config: configRef.current,
+			dispatch: (intent) => runIntentRef.current(intent),
+			now: () => Date.now(),
+			mode: () => autoModeRef.current,
+			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
+			onChanged: replaceTickets,
+			onAgents: (agents) => setAgents(agents),
+			onStatus: (kind, text) => setStatus({ kind, text }),
+		});
+		observationRef.current = coordinator;
+		coordinator.start();
+		onReady?.({
+			stop: () => {
+				coordinatorRef.current?.stop();
+				observationRef.current?.stop();
+			},
+		});
+		return () => {
+			coordinator.stop();
+			observationRef.current = undefined;
+		};
+	}, [state, initialTickets, pollIntervalMs, replaceTickets, commandRunner, onReady]);
 
 	function moveVertical(delta: number) {
 		if (focusedPane === "detail")
@@ -322,6 +678,14 @@ export function App({
 		}
 	}
 
+	const panelTicket =
+		panel === null
+			? undefined
+			: ticketsRef.current.find((ticket) => ticket.identity === panel.identity);
+	const decision =
+		panel !== null && panel.kind === "decision" && panelTicket !== undefined
+			? decisionFor(panelTicket)
+			: undefined;
 	const emptyMessage =
 		state === undefined
 			? undefined
@@ -348,6 +712,7 @@ export function App({
 				focused: focusedPane === "list",
 				reservedRows,
 				emptyMessage,
+				markerOf,
 			}),
 			createElement(TicketDetail, {
 				lines,
@@ -361,6 +726,12 @@ export function App({
 				"text",
 				{ style: { width: "100%", fg: COLORS.statusWarning } },
 				truncateToWidth(healthLine, terminalWidth),
+			),
+		modeLine !== "" &&
+			createElement(
+				"text",
+				{ style: { width: "100%", fg: COLORS.dim } },
+				truncateToWidth(modeLine, terminalWidth),
 			),
 		status !== null &&
 			createElement(
@@ -382,6 +753,29 @@ export function App({
 				},
 				onCancel: () => setOverride(null),
 			}),
+		panel !== null &&
+			panelTicket !== undefined &&
+			(panel.kind === "decision" && decision !== undefined
+				? createElement(ActionPanel, {
+						title: truncateToWidth(`Decision: ${panelTicket.title}`, 40),
+						bodyLines: decision.body,
+						actions: decision.actions,
+						onAction: (key) => runDecisionAction(panelTicket, key),
+						onCancel: () => setPanel(null),
+					})
+				: createElement(ActionPanel, {
+						title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
+						bodyLines: [
+							"The agent's pane is not in herdr's agent list.",
+							`Handoffs: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
+						],
+						actions: [
+							{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
+							{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
+						],
+						onAction: (key) => runMissingAction(panelTicket, key),
+						onCancel: () => setPanel(null),
+					})),
 	);
 }
 

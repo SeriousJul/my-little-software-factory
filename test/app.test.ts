@@ -107,7 +107,7 @@ describe("the control plane", () => {
 			expect(repos.size).toBeGreaterThanOrEqual(2);
 
 			// A ticket can carry the GitHub closed status. Navigate to the
-			// done ticket and read the source fact in the detail pane.
+			// awaiting ticket and read the source fact in the detail pane.
 			for (let i = 1; i <= 3; i += 1) {
 				await press(setup, "j", `the selection to move to ticket ${i + 1}`, (f) =>
 					showsTicket(f, SAMPLE_TICKETS[i]),
@@ -115,9 +115,9 @@ describe("the control plane", () => {
 			}
 			frame = frameText(setup.captureCharFrame());
 			expect(frame).toContain("Source state: closed");
-			// The closed ticket is done: ticket state and GitHub status
-			// stay distinct facts.
-			expect(frame).toContain("[done]");
+			// The awaiting ticket is done with its turn: ticket state and
+			// GitHub status stay distinct facts.
+			expect(frame).toContain("[awaiting]");
 		});
 	});
 
@@ -454,7 +454,9 @@ describe("the control plane", () => {
 				// marker, badge, gap, and the title cut to the eleven cells
 				// the row still has.
 				const listHalf = (row ?? "").slice(2, 28);
-				expect(listHalf).toBe("  [handed-off] Fix pan dri");
+				// Marker slot included: the two-cell badge-to-title gap is the
+				// slot's own trailing space.
+				expect(listHalf).toBe("  [handed-off]  Fix pan dr");
 				expect(listHalf).not.toContain("acme/");
 				// The repository stays reachable in the detail pane of the
 				// selected ticket.

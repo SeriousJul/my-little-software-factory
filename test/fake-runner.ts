@@ -44,6 +44,37 @@ export class FakeRunner implements CommandRunner {
 	}
 }
 
+/** One agent of a herdr `agent list` result. */
+export interface ListedAgent {
+	paneId: string;
+	tabId: string;
+	workspaceId: string;
+	agent: string;
+	status: string;
+}
+
+/** A herdr `agent list` JSON response. */
+export function agentListJson(agents: ListedAgent[]): string {
+	return JSON.stringify({
+		result: {
+			agents: agents.map((a) => ({
+				pane_id: a.paneId,
+				tab_id: a.tabId,
+				workspace_id: a.workspaceId,
+				agent: a.agent,
+				agent_status: a.status,
+			})),
+		},
+	});
+}
+
+/** A fake runner that answers an empty `agent list` for the observation loop. */
+export function emptyAgentRunner(): FakeRunner {
+	const runner = new FakeRunner();
+	runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	return runner;
+}
+
 /** The workspaces of a herdr `workspace list` result. */
 export interface ListedWorkspace {
 	id: string;
@@ -74,10 +105,11 @@ export function workspaceCreateJson(id: string, pane = "pane-w"): string {
 }
 
 /** A herdr `tab create` JSON response. */
-export function tabCreateJson(pane: string): string {
+/** The created tab's id defaults to the stored handle's id in most fakes. */
+export function tabCreateJson(pane: string, tabId = "tab-1"): string {
 	return JSON.stringify({
 		result: {
-			tab: { tab_id: "tab-1" },
+			tab: { tab_id: tabId },
 			root_pane: { pane_id: pane },
 		},
 	});

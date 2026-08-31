@@ -8,27 +8,44 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { canTransition, nextStateOf, TICKET_STATES } from "../src/domain/ticket.ts";
+import { canTransition, TICKET_STATES } from "../src/domain/ticket.ts";
 
 describe("the ticket state machine", () => {
-	test("the state line is open, handed-off, running, done", () => {
-		expect(TICKET_STATES).toEqual(["open", "handed-off", "running", "done"]);
+	test("the state line is open, handed-off, running, awaiting", () => {
+		expect(TICKET_STATES).toEqual(["open", "handed-off", "running", "awaiting"]);
 	});
 
-	test("a ticket advances through the state line in order", () => {
-		expect(nextStateOf("open")).toBe("handed-off");
-		expect(nextStateOf("handed-off")).toBe("running");
-		expect(nextStateOf("running")).toBe("done");
-	});
-
-	test("a done ticket has no next state", () => {
-		expect(nextStateOf("done")).toBeNull();
-	});
-
-	test("transitions only move forward one step", () => {
+	test("a work cycle walks open to handed-off to running to awaiting", () => {
 		expect(canTransition("open", "handed-off")).toBe(true);
+		expect(canTransition("handed-off", "running")).toBe(true);
+		expect(canTransition("running", "awaiting")).toBe(true);
+	});
+
+	test("a settle may land directly from handed-off", () => {
+		expect(canTransition("handed-off", "awaiting")).toBe(true);
+	});
+
+	test("close ends the work cycle back at open", () => {
+		expect(canTransition("awaiting", "open")).toBe(true);
+	});
+
+	test("a workflow handoff or restart continues the cycle from awaiting", () => {
+		expect(canTransition("awaiting", "handed-off")).toBe(true);
+	});
+
+	test("goto refocuses the existing agent", () => {
+		expect(canTransition("awaiting", "running")).toBe(true);
+	});
+
+	test("transitions never move backward in the cycle", () => {
 		expect(canTransition("open", "running")).toBe(false);
-		expect(canTransition("open", "open")).toBe(false);
-		expect(canTransition("done", "open")).toBe(false);
+		expect(canTransition("open", "awaiting")).toBe(false);
+		expect(canTransition("handed-off", "open")).toBe(false);
+		expect(canTransition("running", "open")).toBe(false);
+		expect(canTransition("running", "handed-off")).toBe(false);
+	});
+
+	test("a state is not its own transition", () => {
+		for (const state of TICKET_STATES) expect(canTransition(state, state)).toBe(false);
 	});
 });
