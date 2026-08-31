@@ -122,7 +122,7 @@ export function App({
 	const choiceFor = (ticket: Ticket): HandoffChoice => ({
 		agentType: config.defaultAgent,
 		environment: config.defaultEnvironment,
-		taskType: ticket.suggestedTaskType ?? config.defaultTaskType,
+		taskType: ticket.suggestedTaskType,
 		model: "",
 		thinking: "",
 	});

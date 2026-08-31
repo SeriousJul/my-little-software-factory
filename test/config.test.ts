@@ -337,6 +337,75 @@ describe("validateConfig", () => {
 	});
 });
 
+describe("ticket source configuration", () => {
+	test("validates sources, authentication, task rules, and a relative state file", () => {
+		const config = validateConfig({
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			"state-file": "state.sqlite",
+			agents: { pi: { kind: "pi" } },
+			"task-types": {
+				implement: { template: "{source-kind} {external-key} {source-url} {labels}" },
+			},
+			sources: [
+				{
+					name: "issues",
+					kind: "github-issues",
+					"refresh-interval-seconds": 60,
+					repositories: ["acme/factory"],
+					auth: { "token-env": "FACTORY_TOKEN" },
+				},
+			],
+			"task-rules": [
+				{
+					"task-type": "implement",
+					when: { "source-kind": "github-issue", "labels-all": ["ready-for-agent"] },
+				},
+			],
+		});
+		expect(config.stateFile).toBe("state.sqlite");
+		expect(config.sources[0].auth).toEqual({ tokenEnv: "FACTORY_TOKEN" });
+		expect(config.taskRules).toEqual([
+			{
+				taskType: "implement",
+				when: { sourceKind: "github-issue", labelsAll: ["ready-for-agent"] },
+			},
+		]);
+	});
+
+	test("rejects duplicate source names and ambiguous authentication", () => {
+		const source = {
+			name: "issues",
+			kind: "github-issues",
+			"refresh-interval-seconds": 60,
+			repositories: ["acme/factory"],
+		};
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "implement",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { implement: { template: "x" } },
+				sources: [source, source],
+			},
+			"duplicate source name",
+		);
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "implement",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { implement: { template: "x" } },
+				sources: [{ ...source, auth: { token: "a", account: "me" } }],
+			},
+			"specify exactly one",
+		);
+	});
+});
+
 describe("configToToml and persistConfig", () => {
 	test("the shipped defaults round-trip through TOML", () => {
 		const config = validateConfig(parseToml(configToToml(DEFAULT_CONFIG)));
