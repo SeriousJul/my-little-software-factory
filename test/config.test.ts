@@ -8,9 +8,18 @@
  * default environment). The error is always one readable line an operator
  * can act on.
  */
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
 import { afterAll, describe, expect, test } from "vitest";
 
@@ -21,6 +30,7 @@ import {
 	type FactoryConfig,
 	loadConfigFile,
 	persistConfig,
+	type TicketSourceConfig,
 	validateConfig,
 } from "../src/config.ts";
 
@@ -124,6 +134,169 @@ describe("loadConfigFile", () => {
 });
 
 describe("validateConfig", () => {
+	test("parses a custom host and filter and round-trips both", () => {
+		const config = validateConfig({
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+			sources: [
+				{
+					name: "ghe",
+					kind: "github-pull-requests",
+					"refresh-interval-seconds": 30,
+					repositories: ["acme/private"],
+					host: "GITHUB.ACME.COM",
+					filter: "label:epic author:me",
+				},
+			],
+		});
+		expect(config.sources[0].host).toBe("github.acme.com");
+		expect(config.sources[0].filter).toBe("label:epic author:me");
+
+		// A non-default host and the filter must survive a write/read cycle.
+		const roundTrip = validateConfig(parseToml(configToToml(config)));
+		expect(roundTrip.sources[0].host).toBe("github.acme.com");
+		expect(roundTrip.sources[0].filter).toBe("label:epic author:me");
+	});
+
+	test("rejects a non-numeric or non-positive refresh interval and an empty repository list", () => {
+		const base = {
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+		};
+		const source = (over: Record<string, unknown>) => ({
+			name: "s",
+			kind: "github-issues",
+			"refresh-interval-seconds": 60,
+			repositories: ["acme/factory"],
+			...over,
+		});
+		expectConfigError(
+			{ ...base, sources: [source({ "refresh-interval-seconds": "60" })] },
+			"must be a positive number",
+		);
+		expectConfigError(
+			{ ...base, sources: [source({ "refresh-interval-seconds": -5 })] },
+			"must be a positive number",
+		);
+		expectConfigError(
+			{ ...base, sources: [source({ repositories: [] })] },
+			"non-empty list of owner/name",
+		);
+	});
+
+	test("task-rule label conditions must be non-empty lists of strings", () => {
+		const base = {
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+		};
+		const rules = (when: Record<string, unknown>) => ({
+			...base,
+			"task-rules": [{ "task-type": "implement", when }],
+		});
+		expectConfigError(rules({ "labels-all": [] }), "labels-all");
+		expectConfigError(rules({ "labels-any": ["ok", ""] }), "labels-any");
+		expectConfigError(rules({ "labels-none": 5 }), "labels-none");
+	});
+
+	describe("secret round-trip", () => {
+		const sourceWithAuth = (auth: Record<string, string>): TicketSourceConfig => ({
+			name: "issues",
+			kind: "github-issues",
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+			auth,
+		});
+
+		test("a literal token persists to an owner-only file and comes back intact", async () => {
+			const path = inTempDir()("secret/config.toml");
+			const config = {
+				...DEFAULT_CONFIG,
+				sources: [sourceWithAuth({ token: "ghp_secret_token_value" })],
+			};
+			await persistConfig(path, config);
+			expect(statSync(path).mode & 0o777).toBe(0o600);
+			const { config: loaded } = await loadConfigFile(path);
+			expect(loaded.sources[0]?.auth).toEqual({ token: "ghp_secret_token_value" });
+		});
+
+		test("an environment token stays out of the written TOML", async () => {
+			const path = inTempDir()("env-token/config.toml");
+			const config = {
+				...DEFAULT_CONFIG,
+				sources: [sourceWithAuth({ tokenEnv: "FACTORY_TEST_TOKEN" })],
+			};
+			process.env.FACTORY_TEST_TOKEN = "ghp_must_not_be_written";
+			try {
+				await persistConfig(path, config);
+				const written = readFileSync(path, "utf8");
+				expect(written).toContain("FACTORY_TEST_TOKEN");
+				expect(written).not.toContain("ghp_must_not_be_written");
+				const { config: loaded } = await loadConfigFile(path);
+				expect(loaded.sources[0]?.auth).toEqual({ tokenEnv: "FACTORY_TEST_TOKEN" });
+			} finally {
+				delete process.env.FACTORY_TEST_TOKEN;
+			}
+		});
+	});
+
+	describe("checked-in development config", () => {
+		test("is complete and valid, and points both adapters at this repository", async () => {
+			const path = fileURLToPath(new URL("../config/development.toml", import.meta.url));
+			const { config, fromFile } = await loadConfigFile(path);
+			expect(fromFile).toBe(true);
+			expect(config.defaultAgent).toBe("pi");
+			expect(config.defaultEnvironment).toBe("worktree");
+			// Separate development state, resolved relative to the config file
+			// and ignored by git.
+			expect(config.stateFile).toBe(".factory-development.sqlite");
+			expect(config.sources).toEqual([
+				{
+					name: "factory-issues",
+					kind: "github-issues",
+					refreshIntervalSeconds: 60,
+					repositories: ["SeriousJul/my-little-software-factory"],
+					host: "github.com",
+				},
+				{
+					name: "factory-pull-requests",
+					kind: "github-pull-requests",
+					refreshIntervalSeconds: 60,
+					repositories: ["SeriousJul/my-little-software-factory"],
+					host: "github.com",
+				},
+			]);
+			// Normal gh authentication and no explicit filters: the file reads
+			// neither an auth table nor a filter, so no token is committed.
+			for (const source of config.sources) {
+				expect(source.auth).toBeUndefined();
+				expect(source.filter).toBeUndefined();
+			}
+			expect(config.taskRules).toEqual([
+				{
+					taskType: "rework",
+					when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+				},
+				{
+					taskType: "review",
+					when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+				},
+			]);
+		});
+	});
+
 	test("every required top-level key is read", () => {
 		expectConfigError(
 			{ defaultAgent: "pi", agents: {}, "task-types": {} },
@@ -333,6 +506,144 @@ describe("validateConfig", () => {
 				"task-types": { "implement two": { template: "x" } },
 			},
 			"config: task-types.implement two: must be a one-word name",
+		);
+	});
+});
+
+describe("ticket source configuration", () => {
+	test("validates sources, authentication, task rules, and a relative state file", () => {
+		const config = validateConfig({
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			"state-file": "state.sqlite",
+			agents: { pi: { kind: "pi" } },
+			"task-types": {
+				implement: { template: "{source-kind} {external-key} {source-url} {labels}" },
+			},
+			sources: [
+				{
+					name: "issues",
+					kind: "github-issues",
+					"refresh-interval-seconds": 60,
+					repositories: ["acme/factory"],
+					auth: { "token-env": "FACTORY_TOKEN" },
+				},
+			],
+			"task-rules": [
+				{
+					"task-type": "implement",
+					when: { "source-kind": "github-issue", "labels-all": ["ready-for-agent"] },
+				},
+			],
+		});
+		expect(config.stateFile).toBe("state.sqlite");
+		expect(config.sources[0].auth).toEqual({ tokenEnv: "FACTORY_TOKEN" });
+		expect(config.taskRules).toEqual([
+			{
+				taskType: "implement",
+				when: { sourceKind: "github-issue", labelsAll: ["ready-for-agent"] },
+			},
+		]);
+	});
+
+	test("rejects malformed source and task-rule settings", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "x" } },
+		};
+		expectConfigError(
+			{
+				...base,
+				sources: [
+					{
+						name: "x",
+						kind: "gitlab",
+						"refresh-interval-seconds": 60,
+						repositories: ["acme/factory"],
+					},
+				],
+			},
+			"unknown source kind",
+		);
+		expectConfigError(
+			{
+				...base,
+				sources: [
+					{
+						name: "x",
+						kind: "github-issues",
+						"refresh-interval-seconds": 0,
+						repositories: ["acme/factory"],
+						extra: true,
+					},
+				],
+			},
+			"unknown key",
+		);
+		expectConfigError(
+			{
+				...base,
+				sources: [
+					{
+						name: "x",
+						kind: "github-issues",
+						"refresh-interval-seconds": 60,
+						repositories: ["factory"],
+					},
+				],
+			},
+			"owner/name",
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "missing", when: { unknown: "x" } }] },
+			"unknown task type",
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "implement", when: { bogus: 1 } }] },
+			'when: unknown key "bogus"',
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "implement", when: "labels" }] },
+			"when: must be a table",
+		);
+		expectConfigError(
+			{ ...base, "task-rules": [{ "task-type": "implement", when: {}, bogus: 1 }] },
+			'task-rules[0]: unknown key "bogus"',
+		);
+	});
+
+	test("rejects duplicate source names and ambiguous authentication", () => {
+		const source = {
+			name: "issues",
+			kind: "github-issues",
+			"refresh-interval-seconds": 60,
+			repositories: ["acme/factory"],
+		};
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "implement",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { implement: { template: "x" } },
+				sources: [source, source],
+			},
+			"duplicate source name",
+		);
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "implement",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { implement: { template: "x" } },
+				sources: [{ ...source, auth: { token: "a", account: "me" } }],
+			},
+			"specify exactly one",
 		);
 	});
 });

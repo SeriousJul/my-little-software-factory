@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { App, type AppKey, type AppProps } from "../src/components/app.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
+import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
 
@@ -98,7 +99,11 @@ export async function bootApp(
 	width = WIDTH,
 	height = HEIGHT,
 ): Promise<Setup> {
-	const setup = await testRender(createElement(App, props), { width, height });
+	// Existing frame tests keep deterministic data at the App seam. A source
+	// or state passed explicitly opts into the real empty/loading behavior.
+	const appProps =
+		"state" in props || "sources" in props ? props : { initialTickets: SAMPLE_TICKETS, ...props };
+	const setup = await testRender(createElement(App, appProps), { width, height });
 	await setup.flush();
 	return setup;
 }

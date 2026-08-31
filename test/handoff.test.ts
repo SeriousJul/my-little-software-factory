@@ -53,13 +53,27 @@ afterAll(() => {
 });
 
 const ticket: Ticket = {
-	id: "7",
+	identity: "github:github.com:I_7",
 	title: "Retry policy for webhooks",
 	repository: "acme/billing",
+	repositoryRef: {
+		identity: "github.com/acme/billing",
+		displayName: "acme/billing",
+		cloneUrl: "https://github.com/acme/billing.git",
+	},
 	state: "open",
-	githubClosed: false,
 	handoff: null,
 	description: "Add a retry policy.",
+	sourceKind: "github-issue",
+	externalKey: "#7",
+	sourceState: "open",
+	url: "https://github.com/acme/billing/issues/7",
+	labels: [],
+	externalUpdatedAt: "2026-01-01T00:00:00Z",
+	memberships: [],
+	suggestedTaskType: "implement",
+	actionable: true,
+	handoffRecoveryRequired: false,
 };
 
 const defaultChoice = {
@@ -550,7 +564,10 @@ describe("handOffTicket: the guard rails", () => {
 		expect(outcome.status).toBe("failed");
 		// The clone ran and the handoff failed after it: the mapping must not
 		// wait for a later successful handoff.
-		expect(outcome.notes?.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
+		expect(outcome.notes?.mappingToWrite).toEqual({
+			repository: "github.com/acme/billing",
+			path: sibling,
+		});
 		expect(reasonOf(outcome)).toBe("error: herdr is not running");
 	});
 
@@ -579,7 +596,10 @@ describe("handOffTicket: the guard rails", () => {
 
 		expect(outcome.status).toBe("ok");
 		expect(outcome.notes?.warning).toContain("sibling");
-		expect(outcome.notes?.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
+		expect(outcome.notes?.mappingToWrite).toEqual({
+			repository: "github.com/acme/billing",
+			path: sibling,
+		});
 		// The handoff runs at the sibling, not the conflicting path.
 		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
 	});

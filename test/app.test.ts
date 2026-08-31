@@ -28,8 +28,7 @@
  */
 import { CliRenderEvents } from "@opentui/core";
 import { describe, expect, test } from "vitest";
-
-import { SAMPLE_TICKETS } from "../src/data/sample-tickets.ts";
+import { openFactoryState } from "../src/state.ts";
 import {
 	agentRowOf,
 	awaitFrame,
@@ -50,8 +49,30 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 describe("the control plane", () => {
+	test("production starts with no configured ticket sources instead of sample data", async () => {
+		const state = openFactoryState(":memory:");
+		try {
+			await withApp(
+				async (setup) => {
+					const frame = await awaitFrame(
+						setup,
+						(candidate) => candidate.includes("no ticket sources configured"),
+						"the no-sources state",
+					);
+					expect(frame).not.toContain(SAMPLE_TICKETS[0].title);
+				},
+				WIDTH,
+				30,
+				{ state },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("list pane shows every sample ticket with title, repository, and state badge", async () => {
 		await withApp(async (setup) => {
 			const frame = frameText(setup.captureCharFrame());
@@ -70,7 +91,7 @@ describe("the control plane", () => {
 			// The full title and description live in the detail pane.
 			expect(detail).toContain(first.description);
 			expect(detail).toContain("Agent: unassigned");
-			expect(detail).toContain("GitHub: open");
+			expect(detail).toContain("Source state: open");
 		});
 	});
 
@@ -93,7 +114,7 @@ describe("the control plane", () => {
 				);
 			}
 			frame = frameText(setup.captureCharFrame());
-			expect(frame).toContain("GitHub: closed");
+			expect(frame).toContain("Source state: closed");
 			// The closed ticket is done: ticket state and GitHub status
 			// stay distinct facts.
 			expect(frame).toContain("[done]");
@@ -237,7 +258,7 @@ describe("the control plane", () => {
 				// Press j past the bottom edge, one key at a time. The detail
 				// settles on its last page: the final description line is
 				// visible and the title is out of view.
-				for (let i = 0; i < 12; i += 1) {
+				for (let i = 0; i < 30; i += 1) {
 					setup.mockInput.pressKey("j");
 					await sleep(25);
 				}
@@ -406,7 +427,7 @@ describe("the control plane", () => {
 					expect(row[73]).toBe(" ");
 				}
 				// The detail pane carries its content at this size.
-				expect(frameText(setup.captureCharFrame())).toContain("GitHub: open");
+				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
 			},
 			75,
 			25,

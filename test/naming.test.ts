@@ -6,14 +6,28 @@ import { describe, expect, test } from "vitest";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { agentNameFor, branchNameFor, titleSlug } from "../src/naming.ts";
 
-const ticket = (title: string, id = "1"): Ticket => ({
-	id,
+const ticket = (title: string, externalKey = "#1"): Ticket => ({
+	identity: `github:github.com:I_${externalKey.slice(1)}`,
 	title,
 	repository: "acme/billing",
+	repositoryRef: {
+		identity: "github.com/acme/billing",
+		displayName: "acme/billing",
+		cloneUrl: "https://github.com/acme/billing.git",
+	},
 	state: "open",
-	githubClosed: false,
 	handoff: null,
 	description: "A description.",
+	sourceKind: "github-issue",
+	externalKey,
+	sourceState: "open",
+	url: "https://github.com/acme/billing/issues/1",
+	labels: [],
+	externalUpdatedAt: "2026-01-01T00:00:00Z",
+	memberships: [],
+	suggestedTaskType: "implement",
+	actionable: true,
+	handoffRecoveryRequired: false,
 });
 
 describe("titleSlug", () => {

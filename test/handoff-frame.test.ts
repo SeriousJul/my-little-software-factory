@@ -17,7 +17,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
-import { SAMPLE_TICKETS } from "../src/data/sample-tickets.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import type { CommandResult, CommandRunner } from "../src/runner.ts";
 import {
@@ -43,6 +42,7 @@ import {
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
+import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 let home = "";
 let configPath = "";
@@ -89,9 +89,13 @@ function stubLiveHandoff(runner: FakeRunner): void {
 /** Stub a successful worktree handoff at the convention checkout. */
 function stubWorktreeHandoff(runner: FakeRunner): void {
 	const path = checkout();
-	runner.set("git", ["-C", path, "branch", "--list", `factory/${first.id}-${firstAgent}`], {
-		stdout: "",
-	});
+	runner.set(
+		"git",
+		["-C", path, "branch", "--list", `factory/${first.externalKey.slice(1)}-${firstAgent}`],
+		{
+			stdout: "",
+		},
+	);
 	runner.set("git", ["-C", path, "rev-parse", "HEAD"], { stdout: "deadbeef\n" });
 	runner.set(
 		"herdr",
@@ -101,7 +105,7 @@ function stubWorktreeHandoff(runner: FakeRunner): void {
 			"--cwd",
 			path,
 			"--branch",
-			`factory/${first.id}-${firstAgent}`,
+			`factory/${first.externalKey.slice(1)}-${firstAgent}`,
 			"--base",
 			"deadbeef",
 			"--no-focus",
@@ -486,11 +490,11 @@ describe("the override panel", () => {
 
 				// The worktree sequence ran, based on the read HEAD, not a default.
 				expect(runner.commands()).toContain(
-					`git -C ${checkout()} branch --list factory/${first.id}-${firstAgent}`,
+					`git -C ${checkout()} branch --list factory/${first.externalKey.slice(1)}-${firstAgent}`,
 				);
 				expect(runner.commands()).toContain(`git -C ${checkout()} rev-parse HEAD`);
 				expect(runner.commands()).toContain(
-					`herdr worktree create --cwd ${checkout()} --branch factory/${first.id}-${firstAgent} --base deadbeef --no-focus`,
+					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstAgent} --base deadbeef --no-focus`,
 				);
 				expect(runner.commands()).toContain(
 					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
@@ -593,7 +597,10 @@ describe("the override panel", () => {
 				await pressArrow(setup, "right", "the task type to become review", (f) =>
 					frameText(f).includes("Task type review"),
 				);
-				// Wraps back to the first task type.
+				await pressArrow(setup, "right", "the task type to become rework", (f) =>
+					frameText(f).includes("Task type rework"),
+				);
+				// Rework is a shipped task type. The next value wraps to the first.
 				const wrapped = await pressArrow(setup, "right", "the task type to wrap back", (f) =>
 					frameText(f).includes("Task type implement"),
 				);
@@ -804,7 +811,7 @@ describe("the override panel", () => {
 				// The mapping was written back to the config file.
 				const written = readFileSync(configPath, "utf8");
 				expect(written).toContain(`[repos]`);
-				expect(written).toContain(`"acme/billing" = "${sibling}"`);
+				expect(written).toContain(`"github.com/acme/billing" = "${sibling}"`);
 				// The handoff ran at the sibling, not the conflicting path.
 				expect(runner.commands()).toContain(`herdr workspace create --cwd ${sibling} --no-focus`);
 			},
@@ -1037,7 +1044,7 @@ describe("the override panel", () => {
 				const commands = runner.commands();
 				expect(commands).toContain("herdr worktree remove --workspace ws-wt");
 				expect(commands).toContain(
-					`git -C ${checkout()} branch -D factory/${first.id}-${firstAgent}`,
+					`git -C ${checkout()} branch -D factory/${first.externalKey.slice(1)}-${firstAgent}`,
 				);
 			},
 			WIDTH,

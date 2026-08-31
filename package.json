@@ -12,7 +12,7 @@
 		"src"
 	],
 	"scripts": {
-		"dev": "NODE_OPTIONS=--experimental-ffi node --watch src/factory.ts",
+		"dev": "NODE_OPTIONS=--experimental-ffi node --watch src/factory.ts --config config/development.toml",
 		"test": "NODE_OPTIONS=--experimental-ffi vitest run",
 		"lint": "biome check .",
 		"fmt": "biome check --write .",

@@ -61,6 +61,8 @@ interface HandoffOptions {
 	config: FactoryConfig;
 	runner: CommandRunner;
 	home: string;
+	/** Records durable progress after the claim and before external work. */
+	onStage?: (stage: string) => void;
 }
 
 /**
@@ -71,6 +73,7 @@ interface HandoffOptions {
  */
 interface HandoffContext {
 	runner: CommandRunner;
+	onStage?: (stage: string) => void;
 	/** The note the repository resolution carried, if it bent. */
 	notes?: ResolutionNotes;
 }
@@ -79,7 +82,7 @@ interface HandoffContext {
 export async function handOffTicket(
 	ticket: Ticket,
 	choice: HandoffChoice,
-	{ config, runner, home }: HandoffOptions,
+	{ config, runner, home, onStage }: HandoffOptions,
 ): Promise<HandoffOutcome> {
 	if (ticket.state !== "open") {
 		return {
@@ -102,12 +105,16 @@ export async function handOffTicket(
 		return { status: "failed", reason: `unknown task type: ${choice.taskType}` };
 	}
 
-	const resolved = await resolveRepository(ticket.repository, config, { runner, home });
+	onStage?.("resolving-repository");
+	const resolved = await resolveRepository(ticket.repositoryRef, config, {
+		runner,
+		home,
+	});
 	if (!resolved.ok) {
 		return { status: "failed", reason: resolved.reason };
 	}
 
-	const ctx: HandoffContext = { runner, notes: resolved.repository.notes };
+	const ctx: HandoffContext = { runner, onStage, notes: resolved.repository.notes };
 	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
 	const prompt = renderPrompt(taskType.template, ticket);
@@ -133,6 +140,7 @@ async function startLiveHandoff(
 	prompt: string,
 	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
+	ctx.onStage?.("creating-environment");
 	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
 	if (listed.code !== 0) {
 		return failedCommand(listed, ctx);
@@ -209,6 +217,7 @@ async function startWorktreeHandoff(
 	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
 	const branch = branchNameFor(ticket);
+	ctx.onStage?.("creating-environment");
 	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
 	if (listed.code !== 0) {
 		return failed(`cannot check branch in ${checkout}: ${commandFailureText(listed)}`, ctx);
@@ -284,6 +293,7 @@ async function startAgentAndPrompt(
 	prompt: string,
 	ctx: HandoffContext,
 ): Promise<HandoffOutcome> {
+	ctx.onStage?.("starting-agent");
 	const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
 	if (args.length > 0) {
 		startArgs.push("--", ...args);
@@ -294,6 +304,7 @@ async function startAgentAndPrompt(
 	}
 	// The agent is running: from here the ticket is handed-off even if the
 	// prompt fails. The operator can prompt the agent manually in herdr.
+	ctx.onStage?.("sending-prompt");
 	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
 	if (sent.code !== 0) {
 		return {
@@ -346,17 +357,21 @@ export function renderSettingArgs(template: string, value: string): string[] {
 	);
 }
 
-/** Fill the {repository}, {title}, and {description} placeholders of a prompt template. */
+/** Fill prompt placeholders with source facts, never the internal identity. */
 export function renderPrompt(template: string, ticket: Ticket): string {
 	const values: Record<string, string> = {
 		repository: ticket.repository,
 		title: ticket.title,
 		description: ticket.description,
+		"source-kind": ticket.sourceKind,
+		"external-key": ticket.externalKey,
+		"source-url": ticket.url,
+		labels: ticket.labels.join(", "),
 	};
-	// One pass with a function replacer and a name lookup: the substituted
-	// values are never re-scanned (a title that carries {description} stays
-	// literal), and dollar patterns in the values stay literal.
-	return template.replace(/\{(repository|title|description)\}/g, (_match, name) => values[name]);
+	return template.replace(
+		/\{(repository|title|description|source-kind|external-key|source-url|labels)\}/g,
+		(_match, name) => values[name],
+	);
 }
 
 /**

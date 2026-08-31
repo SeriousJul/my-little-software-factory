@@ -1,56 +1,75 @@
-/**
- * The factory config: one TOML file at ~/.config/factory/config.toml.
- *
- * The file holds the handoff defaults (agent type, environment kind, task
- * type), the agent type blocks, the task type blocks, and the repository
- * mappings. It is read once at startup and validated against this schema:
- *
- * - A missing file is not an error: the shipped default config is used.
- * - An invalid file stops the control plane at startup with a readable
- *   error, so a wrong flag surfaces before any handoff.
- *
- * A new agent is one block (the herdr kind plus argument templates for the
- * settings). Changing the default agent is one line. Tomorrow's agent is a
- * config entry, not a code change.
- */
+/** The strict, startup-only factory configuration. */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
 
-/** The kind of an agent as herdr knows it (the `--kind` of agent start). */
 export interface AgentTypeConfig {
 	kind: string;
-	/** Argument template for the model setting; omitted when unsupported. */
 	model?: string;
-	/** Argument template for the thinking setting; omitted when unsupported. */
 	thinking?: string;
-	/** The thinking levels this agent accepts; omitted for free text. */
 	thinkingValues?: string[];
 }
 
-/** One task type: a one-word name and the prompt template it renders. */
 export interface TaskTypeConfig {
 	template: string;
 }
 
-/** The validated factory config. */
+export type GitHubSourceKind = "github-issues" | "github-pull-requests";
+
+export interface GitHubAuthentication {
+	/** A literal token. It is never passed in argv. */
+	token?: string;
+	/** The environment variable that contains a token. */
+	tokenEnv?: string;
+	/** An account already authenticated by gh. */
+	account?: string;
+}
+
+export interface TicketSourceConfig {
+	name: string;
+	kind: GitHubSourceKind;
+	refreshIntervalSeconds: number;
+	repositories: string[];
+	host: string;
+	filter?: string;
+	auth?: GitHubAuthentication;
+}
+
+export interface TaskRuleWhen {
+	sourceName?: string;
+	sourceKind?: string;
+	repository?: string;
+	labelsAll?: string[];
+	labelsAny?: string[];
+	labelsNone?: string[];
+}
+
+export interface TaskRule {
+	taskType: string;
+	when: TaskRuleWhen;
+}
+
 export interface FactoryConfig {
 	defaultAgent: string;
 	defaultEnvironment: EnvironmentKind;
 	defaultTaskType: string;
 	agents: Record<string, AgentTypeConfig>;
 	taskTypes: Record<string, TaskTypeConfig>;
-	/** Explicit repository mappings: "owner/name" to a checkout path. */
+	/** Repository identity to checkout path. */
 	repos: Record<string, string>;
+	/** No shipped source points at the maintainer repository. */
+	sources: TicketSourceConfig[];
+	taskRules: TaskRule[];
+	/** An optional state file. Relative paths use the selected config directory. */
+	stateFile?: string;
 }
 
-/** A config problem with a message an operator can act on. */
 export class ConfigError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -58,13 +77,6 @@ export class ConfigError extends Error {
 	}
 }
 
-/**
- * The shipped default config, used when no config file exists.
- *
- * It ships the agents pi, codex, and claude with argument templates for the
- * model and the thinking level, and three task types whose templates form
- * the prompt sent to the agent.
- */
 export const DEFAULT_CONFIG: FactoryConfig = {
 	defaultAgent: "pi",
 	defaultEnvironment: "live-worktree",
@@ -81,44 +93,62 @@ export const DEFAULT_CONFIG: FactoryConfig = {
 			model: "--model {value}",
 			thinking: "-c model_reasoning_effort={value}",
 		},
-		claude: {
-			kind: "claude",
-			model: "--model {value}",
-			thinking: "--effort {value}",
-		},
+		claude: { kind: "claude", model: "--model {value}", thinking: "--effort {value}" },
 	},
 	taskTypes: {
 		implement: {
 			template:
-				"Implement the following ticket.\n\n" +
-				"Repository: {repository}\n\nTitle: {title}\n\nDescription:\n{description}",
+				"Implement the following {source-kind}.\n\nRepository: {repository}\n\n" +
+				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
 		},
 		fix: {
 			template:
-				"Fix the following ticket.\n\n" +
-				"Repository: {repository}\n\nTitle: {title}\n\nDescription:\n{description}",
+				"Fix the following {source-kind}.\n\nRepository: {repository}\n\n" +
+				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
 		},
 		review: {
 			template:
-				"Review the following ticket.\n\n" +
-				"Repository: {repository}\n\nTitle: {title}\n\nDescription:\n{description}",
+				"Review pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
+				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
+		},
+		rework: {
+			template:
+				"Rework pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
+				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
 		},
 	},
 	repos: {},
+	sources: [],
+	taskRules: [
+		{ taskType: "rework", when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] } },
+		{
+			taskType: "review",
+			when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+		},
+	],
 };
 
-/** The config file path: ~/.config/factory/config.toml. */
 export function defaultConfigPath(): string {
 	return join(os.homedir(), ".config", "factory", "config.toml");
 }
 
-/**
- * Load and validate the factory config from `path`.
- *
- * A missing file yields the shipped default config. A file that cannot be
- * read, parsed, or validated throws a ConfigError with a readable message;
- * the caller stops the control plane with that message.
- */
+export function defaultStatePath(
+	home = os.homedir(),
+	xdgStateHome = process.env.XDG_STATE_HOME,
+): string {
+	return join(xdgStateHome || join(home, ".local", "state"), "factory", "state.sqlite");
+}
+
+/** Resolve a configured state path relative to the selected config file. */
+export function statePathFor(config: FactoryConfig, configPath: string): string {
+	if (config.stateFile === undefined) {
+		return defaultStatePath();
+	}
+	return isAbsolute(config.stateFile)
+		? config.stateFile
+		: resolve(dirname(configPath), config.stateFile);
+}
+
 export async function loadConfigFile(
 	path: string,
 ): Promise<{ config: FactoryConfig; fromFile: boolean }> {
@@ -131,28 +161,21 @@ export async function loadConfigFile(
 	} catch (error) {
 		throw new ConfigError(`cannot read ${path}: ${String(error)}`);
 	}
-	let data: unknown;
 	try {
-		data = parse(text);
+		return { config: validateConfig(parse(text)), fromFile: true };
 	} catch (error) {
+		if (error instanceof ConfigError) {
+			throw error;
+		}
 		throw new ConfigError(`invalid TOML in ${path}: ${readableParseError(error)}`);
 	}
-	return { config: validateConfig(data), fromFile: true };
 }
 
-/** Reduce a TOML parse failure to one readable line. */
 function readableParseError(error: unknown): string {
 	const message = String(error);
 	return firstNonEmptyLine(message) ?? message.trim();
 }
 
-/**
- * Validate parsed TOML data against the config schema.
- *
- * The file is the complete config: every key the control plane reads must
- * be present, and every key the control plane does not read is an error, so
- * a typo in a flag name surfaces at startup instead of at handoff time.
- */
 export function validateConfig(data: unknown): FactoryConfig {
 	if (!isRecord(data)) {
 		throw new ConfigError("config: the top level must be a table of key = value pairs");
@@ -164,13 +187,19 @@ export function validateConfig(data: unknown): FactoryConfig {
 		"agents",
 		"task-types",
 		"repos",
+		"sources",
+		"ticket-sources",
+		"task-rules",
+		"state-file",
 	]);
 	for (const key of Object.keys(data)) {
 		if (!knownTop.has(key)) {
 			throw new ConfigError(`config: unknown top-level key "${key}"`);
 		}
 	}
-
+	if ("sources" in data && "ticket-sources" in data) {
+		throw new ConfigError("config: use either sources or ticket-sources, not both");
+	}
 	const defaultAgent = stringField(data, "default-agent");
 	const defaultEnvironment = stringField(data, "default-environment");
 	const handoffKinds = HANDOFF_ENVIRONMENT_KINDS as readonly string[];
@@ -178,11 +207,12 @@ export function validateConfig(data: unknown): FactoryConfig {
 		throw new ConfigError(`config: default-environment must be one of: ${handoffKinds.join(", ")}`);
 	}
 	const defaultTaskType = stringField(data, "default-task-type");
-
 	const agents = validateAgents(data.agents);
 	const taskTypes = validateTaskTypes(data["task-types"]);
 	const repos = validateRepos(data.repos);
-
+	const sources = validateSources(data.sources ?? data["ticket-sources"]);
+	const taskRules = validateTaskRules(data["task-rules"], taskTypes);
+	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
 	if (!(defaultAgent in agents)) {
 		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
 	}
@@ -191,7 +221,6 @@ export function validateConfig(data: unknown): FactoryConfig {
 			`config: default-task-type "${defaultTaskType}" does not match any task type`,
 		);
 	}
-
 	return {
 		defaultAgent,
 		defaultEnvironment: defaultEnvironment as EnvironmentKind,
@@ -199,37 +228,37 @@ export function validateConfig(data: unknown): FactoryConfig {
 		agents,
 		taskTypes,
 		repos,
+		sources,
+		taskRules,
+		...(stateFile === undefined ? {} : { stateFile }),
 	};
 }
 
 function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 	const agents = tableField(value === undefined ? {} : value, "agents");
-	if (Object.keys(agents).length === 0) {
+	if (Object.keys(agents).length === 0)
 		throw new ConfigError("config: at least one agent is required under [agents]");
-	}
 	const out: Record<string, AgentTypeConfig> = {};
 	for (const [name, raw] of Object.entries(agents)) {
-		if (!isRecord(raw)) {
-			throw new ConfigError(`config: agents.${name}: must be a table`);
-		}
+		if (!isRecord(raw)) throw new ConfigError(`config: agents.${name}: must be a table`);
 		const agent: AgentTypeConfig = { kind: stringField(raw, "kind", `agents.${name}`) };
 		const model = optionalStringField(raw, "model", `agents.${name}`);
 		const thinking = optionalStringField(raw, "thinking", `agents.${name}`);
-		if (model !== undefined) {
-			agent.model = settingTemplate(model, `agents.${name}.model`);
-		}
-		if (thinking !== undefined) {
+		if (model !== undefined) agent.model = settingTemplate(model, `agents.${name}.model`);
+		if (thinking !== undefined)
 			agent.thinking = settingTemplate(thinking, `agents.${name}.thinking`);
-		}
 		if ("thinking-values" in raw) {
 			const values = raw["thinking-values"];
-			if (!Array.isArray(values) || values.some((v) => typeof v !== "string" || v === "")) {
+			if (
+				!Array.isArray(values) ||
+				values.some((item) => typeof item !== "string" || item === "")
+			) {
 				throw new ConfigError(`config: agents.${name}.thinking-values: must be a list of strings`);
 			}
 			agent.thinkingValues = [...values];
 		}
 		for (const key of Object.keys(raw)) {
-			if (!["kind", "model", "thinking", "thinking-values"].includes(key)) {
+			if (!new Set(["kind", "model", "thinking", "thinking-values"]).has(key)) {
 				throw new ConfigError(`config: agents.${name}: unknown key "${key}"`);
 			}
 		}
@@ -238,168 +267,294 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 	return out;
 }
 
+const PROMPT_PLACEHOLDERS = [
+	"repository",
+	"title",
+	"description",
+	"source-kind",
+	"external-key",
+	"source-url",
+	"labels",
+];
 function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 	const taskTypes = tableField(value === undefined ? {} : value, "task-types");
-	if (Object.keys(taskTypes).length === 0) {
+	if (Object.keys(taskTypes).length === 0)
 		throw new ConfigError("config: at least one task type is required under [task-types]");
-	}
 	const out: Record<string, TaskTypeConfig> = {};
 	for (const [name, raw] of Object.entries(taskTypes)) {
-		if (/[\s]/.test(name)) {
+		if (/\s/.test(name))
 			throw new ConfigError(`config: task-types.${name}: must be a one-word name`);
-		}
-		if (!isRecord(raw)) {
-			throw new ConfigError(`config: task-types.${name}: must be a table`);
-		}
+		if (!isRecord(raw)) throw new ConfigError(`config: task-types.${name}: must be a table`);
 		const template = stringField(raw, "template", `task-types.${name}`);
-		const placeholders = placeholderNames(template);
-		for (const placeholder of placeholders) {
-			if (!["repository", "title", "description"].includes(placeholder)) {
+		for (const placeholder of placeholderNames(template)) {
+			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
-					`config: task-types.${name}.template: unknown placeholder {${placeholder}}; ` +
-						"use {repository}, {title}, {description}",
+					`config: task-types.${name}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
 				);
 			}
 		}
-		for (const key of Object.keys(raw)) {
-			if (key !== "template") {
+		for (const key of Object.keys(raw))
+			if (key !== "template")
 				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
-			}
-		}
 		out[name] = { template };
 	}
 	return out;
 }
 
 function validateRepos(value: unknown): Record<string, string> {
-	if (value === undefined) {
-		return {};
-	}
-	if (!isRecord(value)) {
-		throw new ConfigError('config: repos: must be a table of "owner/name" to checkout path');
-	}
+	if (value === undefined) return {};
+	if (!isRecord(value))
+		throw new ConfigError("config: repos: must be a table of repository identity to checkout path");
 	const out: Record<string, string> = {};
 	for (const [repository, raw] of Object.entries(value)) {
-		if (typeof raw !== "string" || raw === "") {
+		if (typeof raw !== "string" || raw === "")
 			throw new ConfigError(`config: repos["${repository}"]: must be a non-empty path`);
-		}
 		out[repository] = raw;
 	}
 	return out;
 }
 
-/** A setting template must carry the {value} placeholder and nothing else. */
+function validateSources(value: unknown): TicketSourceConfig[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value))
+		throw new ConfigError("config: sources: must be a list of source tables");
+	const names = new Set<string>();
+	return value.map((raw, index) => {
+		const where = `sources[${index}]`;
+		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+		for (const key of Object.keys(raw)) {
+			if (
+				!new Set([
+					"name",
+					"kind",
+					"refresh-interval-seconds",
+					"repositories",
+					"host",
+					"filter",
+					"auth",
+				]).has(key)
+			) {
+				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+			}
+		}
+		const name = stringField(raw, "name", where);
+		if (names.has(name)) throw new ConfigError(`config: duplicate source name "${name}"`);
+		names.add(name);
+		const kind = stringField(raw, "kind", where);
+		if (kind !== "github-issues" && kind !== "github-pull-requests") {
+			throw new ConfigError(`config: ${where}.kind: unknown source kind "${kind}"`);
+		}
+		const interval = raw["refresh-interval-seconds"];
+		if (typeof interval !== "number" || !Number.isFinite(interval) || interval <= 0) {
+			throw new ConfigError(`config: ${where}.refresh-interval-seconds: must be a positive number`);
+		}
+		if (
+			!Array.isArray(raw.repositories) ||
+			raw.repositories.length === 0 ||
+			raw.repositories.some((repo) => typeof repo !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(repo))
+		) {
+			throw new ConfigError(
+				`config: ${where}.repositories: must be a non-empty list of owner/name strings`,
+			);
+		}
+		const host =
+			raw.host === undefined ? "github.com" : stringField(raw, "host", where).toLowerCase();
+		const filter = raw.filter === undefined ? undefined : stringField(raw, "filter", where);
+		const auth = raw.auth === undefined ? undefined : validateAuth(raw.auth, `${where}.auth`);
+		return {
+			name,
+			kind,
+			refreshIntervalSeconds: interval,
+			repositories: [...raw.repositories] as string[],
+			host,
+			...(filter === undefined ? {} : { filter }),
+			...(auth === undefined ? {} : { auth }),
+		};
+	});
+}
+
+function validateAuth(value: unknown, where: string): GitHubAuthentication {
+	if (!isRecord(value)) throw new ConfigError(`config: ${where}: must be a table`);
+	for (const key of Object.keys(value))
+		if (!new Set(["token", "token-env", "account"]).has(key))
+			throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+	const token = value.token === undefined ? undefined : stringField(value, "token", where);
+	const tokenEnv =
+		value["token-env"] === undefined ? undefined : stringField(value, "token-env", where);
+	const account = value.account === undefined ? undefined : stringField(value, "account", where);
+	if ([token, tokenEnv, account].filter((item) => item !== undefined).length !== 1) {
+		throw new ConfigError(`config: ${where}: specify exactly one of token, token-env, or account`);
+	}
+	return {
+		...(token === undefined ? {} : { token }),
+		...(tokenEnv === undefined ? {} : { tokenEnv }),
+		...(account === undefined ? {} : { account }),
+	};
+}
+
+function validateTaskRules(value: unknown, taskTypes: Record<string, TaskTypeConfig>): TaskRule[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value))
+		throw new ConfigError("config: task-rules: must be a list of rule tables");
+	return value.map((raw, index) => {
+		const where = `task-rules[${index}]`;
+		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+		for (const key of Object.keys(raw))
+			if (key !== "task-type" && key !== "when")
+				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+		const taskType = stringField(raw, "task-type", where);
+		if (!(taskType in taskTypes))
+			throw new ConfigError(`config: ${where}.task-type: unknown task type "${taskType}"`);
+		if (!isRecord(raw.when)) throw new ConfigError(`config: ${where}.when: must be a table`);
+		const whenRaw = raw.when;
+		const known = [
+			"source-name",
+			"source-kind",
+			"repository",
+			"labels-all",
+			"labels-any",
+			"labels-none",
+		];
+		for (const key of Object.keys(whenRaw))
+			if (!known.includes(key))
+				throw new ConfigError(`config: ${where}.when: unknown key "${key}"`);
+		const stringCondition = (key: "source-name" | "source-kind" | "repository") =>
+			whenRaw[key] === undefined ? undefined : stringField(whenRaw, key, `${where}.when`);
+		const labels = (key: "labels-all" | "labels-any" | "labels-none") => {
+			const rawLabels = whenRaw[key];
+			if (rawLabels === undefined) return undefined;
+			if (
+				!Array.isArray(rawLabels) ||
+				rawLabels.length === 0 ||
+				rawLabels.some((label) => typeof label !== "string" || label === "")
+			)
+				throw new ConfigError(`config: ${where}.when.${key}: must be a non-empty list of strings`);
+			return [...rawLabels] as string[];
+		};
+		return {
+			taskType,
+			when: {
+				...(stringCondition("source-name") === undefined
+					? {}
+					: { sourceName: stringCondition("source-name") }),
+				...(stringCondition("source-kind") === undefined
+					? {}
+					: { sourceKind: stringCondition("source-kind") }),
+				...(stringCondition("repository") === undefined
+					? {}
+					: { repository: stringCondition("repository") }),
+				...(labels("labels-all") === undefined ? {} : { labelsAll: labels("labels-all") }),
+				...(labels("labels-any") === undefined ? {} : { labelsAny: labels("labels-any") }),
+				...(labels("labels-none") === undefined ? {} : { labelsNone: labels("labels-none") }),
+			},
+		};
+	});
+}
+
 function settingTemplate(template: string, where: string): string {
 	const placeholders = placeholderNames(template);
-	if (!placeholders.includes("value")) {
+	if (!placeholders.includes("value"))
 		throw new ConfigError(`config: ${where}: template must contain the {value} placeholder`);
-	}
-	for (const placeholder of placeholders) {
-		if (placeholder !== "value") {
+	for (const placeholder of placeholders)
+		if (placeholder !== "value")
 			throw new ConfigError(`config: ${where}: unknown placeholder {${placeholder}}`);
-		}
-	}
 	return template;
 }
-
-/** The names of the {placeholder} markers in a template. */
 function placeholderNames(template: string): string[] {
-	const names: string[] = [];
-	// Any brace pair is a candidate placeholder, not just {letters}: a
-	// {ticket-id} or a {value2} would otherwise pass validation and stay
-	// literal in the prompt the agent receives. The pair may be empty:
-	// a {} is still a brace pair, and it stays literal too.
-	for (const match of template.matchAll(/\{([^{}]*)\}/g)) {
-		names.push(match[1]);
-	}
-	return names;
+	return [...template.matchAll(/\{([^{}]*)\}/g)].map((match) => match[1]);
 }
-
 function stringField(record: Record<string, unknown>, key: string, where?: string): string {
 	const value = record[key];
-	if (typeof value !== "string" || value === "") {
-		const at = where ? `${where}.${key}` : key;
-		throw new ConfigError(`config: ${at}: must be a non-empty string`);
-	}
+	if (typeof value !== "string" || value === "")
+		throw new ConfigError(`config: ${where ? `${where}.${key}` : key}: must be a non-empty string`);
 	return value;
 }
-
 function optionalStringField(
 	record: Record<string, unknown>,
 	key: string,
 	where: string,
 ): string | undefined {
-	if (!(key in record)) {
-		return undefined;
-	}
-	return stringField(record, key, where);
+	return key in record ? stringField(record, key, where) : undefined;
 }
-
 function tableField(value: unknown, key: string): Record<string, unknown> {
-	if (!isRecord(value)) {
-		throw new ConfigError(`config: ${key}: must be a table`);
-	}
+	if (!isRecord(value)) throw new ConfigError(`config: ${key}: must be a table`);
 	return value;
 }
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Serialize a config back to TOML. Used to write a repository mapping into
- * the config file when a conflicting path yields a sibling clone.
- */
 export function configToToml(config: FactoryConfig): string {
 	return stringify({
 		"default-agent": config.defaultAgent,
 		"default-environment": config.defaultEnvironment,
 		"default-task-type": config.defaultTaskType,
+		...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
 		agents: Object.fromEntries(
-			Object.entries(config.agents).map(([name, agent]) => {
-				const block: Record<string, unknown> = { kind: agent.kind };
-				if (agent.model !== undefined) {
-					block.model = agent.model;
-				}
-				if (agent.thinking !== undefined) {
-					block.thinking = agent.thinking;
-				}
-				if (agent.thinkingValues !== undefined) {
-					block["thinking-values"] = agent.thinkingValues;
-				}
-				return [name, block];
-			}),
+			Object.entries(config.agents).map(([name, agent]) => [
+				name,
+				{
+					kind: agent.kind,
+					...(agent.model === undefined ? {} : { model: agent.model }),
+					...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
+					...(agent.thinkingValues === undefined
+						? {}
+						: { "thinking-values": agent.thinkingValues }),
+				},
+			]),
 		),
 		"task-types": Object.fromEntries(
 			Object.entries(config.taskTypes).map(([name, task]) => [name, { template: task.template }]),
 		),
 		repos: config.repos,
+		sources: config.sources.map((source) => ({
+			name: source.name,
+			kind: source.kind,
+			"refresh-interval-seconds": source.refreshIntervalSeconds,
+			repositories: source.repositories,
+			...(source.host === "github.com" ? {} : { host: source.host }),
+			...(source.filter === undefined ? {} : { filter: source.filter }),
+			...(source.auth === undefined
+				? {}
+				: {
+						auth: {
+							...(source.auth.token === undefined ? {} : { token: source.auth.token }),
+							...(source.auth.tokenEnv === undefined ? {} : { "token-env": source.auth.tokenEnv }),
+							...(source.auth.account === undefined ? {} : { account: source.auth.account }),
+						},
+					}),
+		})),
+		"task-rules": config.taskRules.map((rule) => ({
+			"task-type": rule.taskType,
+			when: {
+				...(rule.when.sourceName === undefined ? {} : { "source-name": rule.when.sourceName }),
+				...(rule.when.sourceKind === undefined ? {} : { "source-kind": rule.when.sourceKind }),
+				...(rule.when.repository === undefined ? {} : { repository: rule.when.repository }),
+				...(rule.when.labelsAll === undefined ? {} : { "labels-all": rule.when.labelsAll }),
+				...(rule.when.labelsAny === undefined ? {} : { "labels-any": rule.when.labelsAny }),
+				...(rule.when.labelsNone === undefined ? {} : { "labels-none": rule.when.labelsNone }),
+			},
+		})),
 	});
 }
 
-/**
- * Persist a config to `path`, creating parent directories. The file written
- * is the complete config, so the next start reads exactly what this session
- * used.
- *
- * The write is atomic: the TOML goes to a temp file in the same directory,
- * and the rename over the target is one step. A crash mid-write leaves
- * either the old file or the new one, never a truncated file the next start
- * would reject as invalid TOML.
- */
 export async function persistConfig(path: string, config: FactoryConfig): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });
 	const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-	await writeFile(temp, configToToml(config), "utf8");
+	await writeFile(temp, configToToml(config), {
+		encoding: "utf8",
+		mode: containsLiteralToken(config) ? 0o600 : 0o666,
+	});
+	if (containsLiteralToken(config)) await chmod(temp, 0o600);
 	try {
 		await rename(temp, path);
 	} catch (error) {
-		// Leave no temp file behind when the rename fails.
 		try {
 			await unlink(temp);
-		} catch {
-			// The cleanup is best effort; the rename failure is the error.
-		}
+		} catch {}
 		throw error;
 	}
+}
+function containsLiteralToken(config: FactoryConfig): boolean {
+	return config.sources.some((source) => source.auth?.token !== undefined);
 }
