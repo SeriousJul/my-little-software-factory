@@ -57,6 +57,11 @@ function page(
 	};
 }
 
+function searchQueryOf(call: SafeCall): string {
+	const index = call.args.findIndex((arg) => arg.startsWith("searchQuery="));
+	return call.args[index].slice("searchQuery=".length);
+}
+
 function issue(number = 5): object {
 	return {
 		__typename: "Issue",
@@ -99,7 +104,7 @@ describe("GitHub ticket sources", () => {
 		const request = runner.calls[0].args.join(" ");
 		expect(request).toContain("is:open is:issue");
 		expect(request).toContain("repo:acme/factory");
-		expect(request).toContain("label:ready-for-agent -label:blocked");
+		expect(request).toContain("-label:blocked label:ready-for-agent");
 	});
 
 	test("reads every page before returning a snapshot", async () => {
@@ -192,27 +197,64 @@ describe("GitHub ticket source contract", () => {
 		expect(prRequest).not.toContain("draft:false");
 	});
 
-	test("the default pull request policy lets needs-work drafts through but not ready-for-review drafts", async () => {
-		const runner = new SourceRunner([page([pullRequest()])]);
-		await createTicketSource(source("github-pull-requests"), runner).fetch();
-		const request = runner.calls[0].args.join(" ");
-		expect(request).toContain("is:open is:pr");
-		expect(request).toContain("-label:blocked");
-		expect(request).toContain("(label:needs-work OR (label:ready-for-review draft:false))");
+	test("the default pull request policy splits draft rules into separate queries", async () => {
+		const runner = new SourceRunner([page([pullRequest()]), page([pullRequest()])]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		expect(runner.calls).toHaveLength(2);
+		const needsWork = runner.calls[0].args.join(" ");
+		const review = runner.calls[1].args.join(" ");
+		expect(needsWork).toContain("is:open is:pr repo:acme/factory -label:blocked label:needs-work");
+		expect(needsWork).not.toContain("no:draft");
+		expect(review).toContain(
+			"is:open is:pr repo:acme/factory -label:blocked label:ready-for-review no:draft",
+		);
+		for (const query of [searchQueryOf(runner.calls[0]), searchQueryOf(runner.calls[1])]) {
+			expect(query).not.toMatch(/\bOR\b/);
+			expect(query).not.toContain("(");
+			expect(query).not.toContain("draft:false");
+		}
+		// Both queries matched the same pull request. The snapshot keeps one copy.
+		if (outcome.status === "success") expect(outcome.tickets).toHaveLength(1);
 	});
 
-	test("multiple repositories produce one OR-joined scope", async () => {
-		const runner = new SourceRunner([page([issue()])]);
-		await createTicketSource(
+	test("multiple repositories produce one query per repository", async () => {
+		const runner = new SourceRunner([page([issue()]), page([issue()])]);
+		const outcome = await createTicketSource(
 			{ ...source("github-issues"), repositories: ["acme/factory", "acme/portal"] },
 			runner,
 		).fetch();
-		expect(runner.calls[0].args.join(" ")).toContain("(repo:acme/factory OR repo:acme/portal)");
+		expect(outcome).toMatchObject({ status: "success" });
+		expect(runner.calls).toHaveLength(2);
+		expect(searchQueryOf(runner.calls[0])).toContain("repo:acme/factory");
+		expect(searchQueryOf(runner.calls[1])).toContain("repo:acme/portal");
+		for (const call of runner.calls) {
+			const query = searchQueryOf(call);
+			expect(query).not.toMatch(/\bOR\b/);
+			expect(query).not.toContain("(");
+		}
+		// Both queries matched the same issue. The snapshot keeps one copy.
+		if (outcome.status === "success") expect(outcome.tickets).toHaveLength(1);
+	});
+
+	test("a failure on a later query fails the whole fetch", async () => {
+		const runner = new SourceRunner([
+			page([pullRequest()]),
+			{ code: 1, stdout: "", stderr: "HTTP 502: bad gateway\n" },
+		]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				reason: "GitHub request failed: HTTP 502: bad gateway",
+			}),
+		);
 	});
 
 	test("normalizes a draft pull request and carries the draft fact in its attributes", async () => {
 		const runner = new SourceRunner([
 			page([pullRequest(7, { isDraft: true, labels: { nodes: [{ name: "needs-work" }] } })]),
+			page([]),
 		]);
 		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });

@@ -192,6 +192,46 @@ describe("validateConfig", () => {
 		);
 	});
 
+	test("rejects GitHub search filter syntax that GitHub fails or empties silently", () => {
+		const base = {
+			"state-file": "~/factory/state.sqlite",
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "{title}" } },
+		};
+		const source = (filter: string) => ({
+			...base,
+			sources: [
+				{
+					name: "s",
+					kind: "github-issues",
+					"refresh-interval-seconds": 60,
+					repositories: ["acme/factory"],
+					filter,
+				},
+			],
+		});
+		expectConfigError(source("label:bug OR label:crash"), "apply to search text");
+		expectConfigError(source("label:bug OR regression"), "apply to search text");
+		expectConfigError(source("label:bug AND label:crash"), "apply to search text");
+		expectConfigError(source("(label:bug OR label:crash)"), "parentheses");
+		expectConfigError(source('label:bug OR "crash'), "not closed");
+		expectConfigError(source("'crash"), "not closed");
+
+		// Pure text operators, quoted phrases, and plain qualifier lists stay valid.
+		expect(validateConfig(source("regression OR crash")).sources[0].filter).toBe(
+			"regression OR crash",
+		);
+		expect(validateConfig(source("label:bug author:me")).sources[0].filter).toBe(
+			"label:bug author:me",
+		);
+		expect(validateConfig(source('in:title "fix OR retry"')).sources[0].filter).toBe(
+			'in:title "fix OR retry"',
+		);
+	});
+
 	test("task-rule label conditions must be non-empty lists of strings", () => {
 		const base = {
 			"state-file": "~/factory/state.sqlite",

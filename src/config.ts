@@ -267,6 +267,60 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 	return out;
 }
 
+/**
+ * GitHub issue search applies AND, OR, and NOT to search text only, and it
+ * has no parenthesized grouping. Unsupported shapes fail or return zero
+ * results silently, turning a source into a healthy-but-empty list. This is
+ * the single home of that rule; the built-in policies in ticket-source.ts
+ * are built from it. Reject the shapes at config time.
+ */
+function validateSearchFilter(filter: string, where: string): void {
+	const parsed = tokenizeSearchFilter(filter);
+	if (parsed.quotesOpen)
+		throw new ConfigError(`${where}: a quoted search term is not closed; add the matching quote`);
+	const tokens = parsed.tokens;
+	if (tokens.some((token) => token.includes("(") || token.includes(")")))
+		throw new ConfigError(
+			`${where}: parentheses do not group GitHub search queries; define one source per query branch`,
+		);
+	const logicalOperators = new Set(["AND", "OR", "NOT"]);
+	const hasOperator = tokens.some((token) => logicalOperators.has(token.toUpperCase()));
+	if (!hasOperator) return;
+	const hasQualifier = tokens.some(
+		(token) => token.includes(":") && !token.startsWith('"') && !token.startsWith("'"),
+	);
+	if (hasQualifier)
+		throw new ConfigError(
+			`${where}: AND, OR, and NOT apply to search text, not to qualifiers like label:; define one source per query branch`,
+		);
+}
+
+/** Split a filter into tokens, keeping quoted phrases as single text terms. */
+function tokenizeSearchFilter(filter: string): { tokens: string[]; quotesOpen: boolean } {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: string | undefined;
+	for (const char of filter) {
+		if (quote === undefined) {
+			if (char === '"' || char === "'") {
+				quote = char;
+				current += char;
+				continue;
+			}
+			if (/\s/.test(char)) {
+				if (current !== "") tokens.push(current);
+				current = "";
+				continue;
+			}
+		} else if (char === quote) {
+			quote = undefined;
+		}
+		current += char;
+	}
+	if (current !== "") tokens.push(current);
+	return { tokens, quotesOpen: quote !== undefined };
+}
+
 const PROMPT_PLACEHOLDERS = [
 	"repository",
 	"title",
@@ -360,6 +414,7 @@ function validateSources(value: unknown): TicketSourceConfig[] {
 		const host =
 			raw.host === undefined ? "github.com" : stringField(raw, "host", where).toLowerCase();
 		const filter = raw.filter === undefined ? undefined : stringField(raw, "filter", where);
+		if (filter !== undefined) validateSearchFilter(filter, `${where}.filter`);
 		const auth = raw.auth === undefined ? undefined : validateAuth(raw.auth, `${where}.auth`);
 		return {
 			name,

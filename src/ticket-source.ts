@@ -49,6 +49,8 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
   }
 }`;
 
+type GhOptions = { env?: Record<string, string>; secretEnv?: readonly string[] };
+
 class GitHubTicketSource implements TicketSource {
 	readonly name: string;
 	readonly kind: string;
@@ -71,48 +73,17 @@ class GitHubTicketSource implements TicketSource {
 		try {
 			const authentication = await this.authentication();
 			if (!authentication.ok) return { status: "failed", reason: authentication.reason };
-			const tickets: FetchedTicket[] = [];
-			let cursor: string | undefined;
-			let issueCount: number | undefined;
-			for (;;) {
-				const args = [
-					"api",
-					"graphql",
-					"--hostname",
-					this.config.host,
-					"-f",
-					`query=${SEARCH_QUERY}`,
-					"-f",
-					`searchQuery=${this.searchFilter()}`,
-				];
-				if (cursor !== undefined) args.push("-f", `after=${cursor}`);
-				const result = await this.runner.run("gh", args, authentication.options);
-				if (result.code !== 0) {
-					return {
-						status: "failed",
-						reason: `GitHub request failed: ${commandFailureText(result)}`,
-					};
-				}
-				const page = parseSearchPage(result.stdout);
-				if (!page.ok) return { status: "failed", reason: page.reason };
-				issueCount ??= page.issueCount;
-				if (issueCount >= 1000) {
-					return {
-						status: "failed",
-						reason: "GitHub search has 1,000 or more results and is incomplete",
-					};
-				}
-				for (const node of page.nodes) {
-					const normalized = normalizeGitHubNode(node, this.config);
-					if (!normalized.ok) return { status: "failed", reason: normalized.reason };
-					tickets.push(normalized.ticket);
-				}
-				if (!page.hasNextPage)
-					return { status: "success", fetchedAt: new Date().toISOString(), tickets };
-				if (page.endCursor === undefined)
-					return { status: "failed", reason: "GitHub returned a next page without a cursor" };
-				cursor = page.endCursor;
+			const byIdentity = new Map<string, FetchedTicket>();
+			for (const searchQuery of this.searchQueries()) {
+				const query = await this.fetchQuery(searchQuery, authentication.options);
+				if (query.status === "failed") return query;
+				for (const ticket of query.tickets) byIdentity.set(ticket.identity, ticket);
 			}
+			return {
+				status: "success",
+				fetchedAt: new Date().toISOString(),
+				tickets: [...byIdentity.values()],
+			};
 		} catch (error) {
 			// A source bug must not terminate the control plane. Do not print
 			// auth values: the string is only the error message, never argv/env.
@@ -123,17 +94,73 @@ class GitHubTicketSource implements TicketSource {
 		}
 	}
 
-	private searchFilter(): string {
-		const scope = this.config.repositories.map((repository) => `repo:${repository}`).join(" OR ");
-		const scoped = this.config.repositories.length === 1 ? scope : `(${scope})`;
-		if (this.config.filter !== undefined) {
-			return `${this.kindQualifier()} ${scoped} ${this.config.filter}`;
+	/** Read one search query to completion. A failure means the snapshot is incomplete. */
+	private async fetchQuery(searchQuery: string, options: GhOptions): Promise<FetchOutcome> {
+		const tickets: FetchedTicket[] = [];
+		let cursor: string | undefined;
+		let issueCount: number | undefined;
+		for (;;) {
+			const args = [
+				"api",
+				"graphql",
+				"--hostname",
+				this.config.host,
+				"-f",
+				`query=${SEARCH_QUERY}`,
+				"-f",
+				`searchQuery=${searchQuery}`,
+			];
+			if (cursor !== undefined) args.push("-f", `after=${cursor}`);
+			const result = await this.runner.run("gh", args, options);
+			if (result.code !== 0) {
+				return { status: "failed", reason: `GitHub request failed: ${commandFailureText(result)}` };
+			}
+			const page = parseSearchPage(result.stdout);
+			if (!page.ok) return { status: "failed", reason: page.reason };
+			issueCount ??= page.issueCount;
+			if (issueCount >= 1000) {
+				return {
+					status: "failed",
+					reason: "GitHub search has 1,000 or more results and is incomplete",
+				};
+			}
+			for (const node of page.nodes) {
+				const normalized = normalizeGitHubNode(node, this.config);
+				if (!normalized.ok) return { status: "failed", reason: normalized.reason };
+				tickets.push(normalized.ticket);
+			}
+			if (!page.hasNextPage)
+				return { status: "success", fetchedAt: new Date().toISOString(), tickets };
+			if (page.endCursor === undefined)
+				return { status: "failed", reason: "GitHub returned a next page without a cursor" };
+			cursor = page.endCursor;
 		}
-		if (this.config.kind === "github-issues") {
-			return `is:open is:issue ${scoped} label:ready-for-agent -label:blocked`;
+	}
+
+	/**
+	 * One query per repository and per policy branch. GitHub issue search does
+	 * not join qualifier values with AND/OR and has no parenthesized grouping:
+	 * such queries fail or return zero silently. Merging separate queries is
+	 * the only supported way to express a union. Config validation rejects
+	 * user filters that carry these shapes.
+	 */
+	private searchQueries(): string[] {
+		const queries: string[] = [];
+		for (const repository of this.config.repositories) {
+			if (this.config.filter !== undefined) {
+				queries.push(`${this.kindQualifier()} repo:${repository} ${this.config.filter}`);
+				continue;
+			}
+			const scope = `is:open ${this.kindQualifier()} repo:${repository} -label:blocked`;
+			if (this.kind === "github-issues") {
+				queries.push(`${scope} label:ready-for-agent`);
+			} else {
+				// `needs-work` intentionally does not test draft. The review half does.
+				queries.push(`${scope} label:needs-work`);
+				queries.push(`${scope} label:ready-for-review no:draft`);
+			}
 		}
-		// `needs-work` intentionally does not test draft. The review half does.
-		return `is:open is:pr ${scoped} -label:blocked (label:needs-work OR (label:ready-for-review draft:false))`;
+		return queries;
 	}
 
 	private kindQualifier(): string {
@@ -141,8 +168,7 @@ class GitHubTicketSource implements TicketSource {
 	}
 
 	private async authentication(): Promise<
-		| { ok: true; options: { env?: Record<string, string>; secretEnv?: readonly string[] } }
-		| { ok: false; reason: string }
+		{ ok: true; options: GhOptions } | { ok: false; reason: string }
 	> {
 		const auth = this.config.auth;
 		if (auth === undefined) return { ok: true, options: {} };
@@ -161,10 +187,7 @@ class GitHubTicketSource implements TicketSource {
 
 	private async accountAuthentication(
 		auth: GitHubAuthentication,
-	): Promise<
-		| { ok: true; options: { env?: Record<string, string>; secretEnv?: readonly string[] } }
-		| { ok: false; reason: string }
-	> {
+	): Promise<{ ok: true; options: GhOptions } | { ok: false; reason: string }> {
 		if (this.accountToken !== undefined) return secretToken(this.accountToken);
 		const result = await this.runner.run("gh", [
 			"auth",
