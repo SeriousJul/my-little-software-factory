@@ -385,6 +385,7 @@ const PROMPT_PLACEHOLDERS = [
 	"external-key",
 	"source-url",
 	"labels",
+	"previous-message",
 ];
 function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 	const taskTypes = tableField(value === undefined ? {} : value, "task-types");

@@ -124,7 +124,6 @@ function seed(shape: "open" | "in-flight" | "awaiting"): FactoryState {
 				handoffId: claim.claim.attemptId,
 				taskType: "implement",
 				agentType: "pi",
-				agentName: "persist-source-facts",
 				message: "The turn is done.",
 				completedAt: "2026-08-31T11:00:00Z",
 			});
@@ -201,15 +200,11 @@ describe("the mode line and the a key", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("auto-handoff: off, agents 0/2"),
-					"the mode line",
-				);
-				await press(setup, "a", "auto on", (f) => f.includes("auto-handoff: on, agents 0/2"));
+				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
+				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
 				// Session-only: the toggle never writes the config file.
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
-				await press(setup, "a", "auto off", (f) => f.includes("auto-handoff: off, agents 0/2"));
+				await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
 			WIDTH,
@@ -240,13 +235,13 @@ describe("the failure markers", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => ticketRow(f).includes("!"),
-					"the blocked marker",
+					(f) => ticketRow(f).includes("blocked"),
+					"the blocked badge",
 				);
-				// The agent is alive but not working: the badge stays, the
-				// marker says blocked.
-				expect(ticketRow(frame)).toContain("[handed-off]");
-				expect(frame).toContain("agents 1/2");
+				// The agent is alive but not working: the state badge is replaced by the
+				// blocked badge, and the live agent count still holds its slot.
+				expect(ticketRow(frame)).toContain("blocked");
+				expect(frame).toContain("auto: off 1/2");
 			},
 			WIDTH,
 			HEIGHT,
@@ -264,13 +259,14 @@ describe("the failure markers", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => ticketRow(f).includes("✗"),
-					"the missing marker",
+					(f) => ticketRow(f).includes("missing"),
+					"the missing badge",
 				);
-				// The marker appears although no state changed: manual mode
-				// never acts on a missing agent.
-				expect(frame).toContain("agents 1/2");
-				expect(ticketRow(frame)).toContain("[handed-off]");
+				// The missing badge replaces the state badge although no state changed:
+				// manual mode never acts on a missing agent. The missing agent holds no
+				// slot, so the live count is zero.
+				expect(frame).toContain("auto: off 0/2");
+				expect(ticketRow(frame)).toContain("missing");
 
 				// Enter on the in-flight missing ticket opens the missing panel.
 				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
@@ -281,8 +277,8 @@ describe("the failure markers", () => {
 				// Abandon is the last action: one down, confirm.
 				await press(setup, "j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
-				// The open ticket keeps no failure marker.
-				expect(ticketRow(await settle(setup))).not.toContain("✗");
+				// The open ticket keeps no failure badge.
+				expect(ticketRow(await settle(setup))).not.toContain("missing");
 			},
 			WIDTH,
 			HEIGHT,
@@ -317,13 +313,16 @@ describe("the decision panel", () => {
 				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("The turn is done.");
-				expect(panel).toContain("Handoff review");
+				expect(panel).toContain("Handoff: review");
+				expect(panel).toContain("Goto");
 				expect(panel).toContain("Close");
 
-				// Confirm the first action: the workflow handoff.
-				await pressReturn(setup, "the routed handoff", (f) =>
-					ticketRow(f).includes("[handed-off]"),
+				// Close is the default; the workflow handoff is the last row: down twice.
+				await press(setup, "j", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await press(setup, "j", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
 				);
+				await pressReturn(setup, "the routed handoff", (f) => f.includes("Task type: review"));
 
 				// The prompt carried the last captured message, and the
 				// settled agent's tab was closed once the new agent started.
@@ -359,10 +358,12 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto-handoff: on, agents 1/2"),
+					(f) => f.includes("auto: on 0/2") && f.includes("Agent: pi"),
 					"the dispatch",
 				);
-				expect(ticketRow(frame)).toContain("[handed-off]");
+				// The new agent's pane is not in the faked list: the row wears
+				// the missing badge, and the detail pane shows the handoff.
+				expect(ticketRow(frame)).toContain("missing");
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
@@ -381,11 +382,7 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				const frame = await awaitFrame(
-					setup,
-					(f) => f.includes("auto-handoff: off, agents 0/2"),
-					"the mode line",
-				);
+				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
 				expect(ticketRow(frame)).toContain("[open]");
 				// No herdr handoff commands: only the agent list polls.
 				const commands = app.runner.commands();

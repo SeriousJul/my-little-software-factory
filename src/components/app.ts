@@ -2,11 +2,13 @@
  * The control plane shell: panes, refresh, selection, handoff, and the
  * herdr observation loop (ADR 0005, ADR 0006).
  *
- * The mode line carries the auto-handoff state and the in-flight count
+ * The mode line carries the auto-handoff state and the live agent count
  * against the parallel limit. Enter on an open ticket hands it off; Enter
- * on an awaiting ticket opens the decision panel (a workflow handoff or
- * close); Enter on an in-flight ticket whose pane herdr no longer lists
- * opens the missing panel (restart or abandon). `a` toggles auto-handoff.
+ * on an awaiting ticket opens the decision panel (close, Goto, or a
+ * workflow handoff), unless the task type is auto-close and decides alone;
+ * Enter on a blocked ticket Gotos the agent; Enter on an in-flight ticket
+ * whose pane herdr no longer lists opens the missing panel (restart or
+ * abandon). `a` toggles auto-handoff.
  */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
@@ -15,12 +17,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } from "../config.ts";
 import { HANDOFF_ENVIRONMENT_KINDS, type Handoff, type Ticket } from "../domain/ticket.ts";
 import {
+	baseChoice,
+	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
 	handOffStoredWorkspace,
 	handOffTicket,
 } from "../handoff.ts";
 import {
+	type DispatchResult,
 	type HandoffIntent,
 	type HerdrAgent,
 	HerdrAgentReader,
@@ -28,7 +33,7 @@ import {
 	ObservationCoordinator,
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
-import type { RepositoryMapping } from "../repo.ts";
+import { commandFailureText, type RepositoryMapping } from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
@@ -136,6 +141,17 @@ export function App({
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
 	const inFlightRef = useRef(false);
+	// Handoffs claimed while another is in flight: they run in claim order
+	// once the running one settles.
+	const queueRef = useRef<
+		readonly {
+			ticket: Ticket;
+			choice: HandoffChoice;
+			origin: HandoffOrigin;
+			claim: HandoffClaim;
+			previousMessage: string;
+		}[]
+	>([]);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 
@@ -149,23 +165,30 @@ export function App({
 				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
 		)
 		.join("; ");
-	// The mode line carries the auto-handoff state and the in-flight count
-	// against the parallel limit. It exists only when the control plane has
-	// state to observe.
-	const inFlightCount = tickets.filter(
-		(ticket) => ticket.state === "handed-off" || ticket.state === "running",
-	).length;
+	// The mode line carries the auto-handoff state and the live agent count:
+	// the in-flight tickets whose agent was alive in the latest poll, against
+	// the parallel limit. It exists only when the control plane has state to
+	// observe.
+	const liveCount =
+		agents === null
+			? 0
+			: tickets.filter(
+					(ticket) =>
+						(ticket.state === "handed-off" || ticket.state === "running") &&
+						(ticket.handoff?.paneId ?? null) !== null &&
+						agents.some((agent) => agent.paneId === ticket.handoff?.paneId),
+				).length;
 	const modeLine =
 		state === undefined
 			? ""
-			: `auto-handoff: ${autoMode ? "on" : "off"}, agents ${inFlightCount}/${
-					config.maxParallelAgents === 0 ? "unlimited" : config.maxParallelAgents
+			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
+					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
 				}`;
 	const reservedRows =
 		(status === null ? 0 : 1) + (healthLine === "" ? 0 : 1) + (modeLine === "" ? 0 : 1);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
-	const lines = detailLines(selectedTicket, detailGeometry.usableCols);
+	const lines = detailLines(selectedTicket, detailGeometry.usableCols, config.maxHandoffsPerTicket);
 	const maxScroll = maxScrollOf(lines.length, detailGeometry.visibleRows);
 	const scroll = Math.min(detailScroll, maxScroll);
 
@@ -203,17 +226,18 @@ export function App({
 	const thinkingDefaults: Record<string, string | undefined> = Object.fromEntries(
 		Object.entries(config.taskTypes).map(([name, type]) => [name, type.thinking]),
 	);
-	const choiceFor = (ticket: Ticket): HandoffChoice => ({
-		agentType: config.defaultAgent,
-		environment: config.defaultEnvironment,
-		taskType: ticket.suggestedTaskType,
-		model: "",
-		// The task type's thinking default: the panel shows it as the
-		// starting value of the thinking row, and Enter applies it. The
-		// operator picks another level in the panel, or clears a free-text
-		// row to leave the level to the agent.
-		thinking: config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
-	});
+	const choiceFor = (ticket: Ticket): HandoffChoice =>
+		baseChoice(
+			config.defaultAgent,
+			config.defaultEnvironment,
+			ticket.suggestedTaskType,
+			"",
+			// The task type's thinking default: the panel shows it as the
+			// starting value of the thinking row, and Enter applies it. The
+			// operator picks another level in the panel, or clears a free-text
+			// row to leave the level to the agent.
+			config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
+		);
 
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
@@ -261,7 +285,8 @@ export function App({
 	 *
 	 * A workflow handoff and a restart run in the workspace of the ticket's
 	 * previous handoff; an open-ticket handoff builds the environment from
-	 * scratch.
+	 * scratch. A handoff claimed while another runs queues behind it: the
+	 * claim has already moved the ticket, so only the external work waits.
 	 */
 	const runClaimedHandoff = (
 		ticket: Ticket,
@@ -271,6 +296,10 @@ export function App({
 		previousMessage: string,
 	) => {
 		if (state === undefined) return;
+		if (inFlightRef.current) {
+			queueRef.current = [...queueRef.current, { ticket, choice, origin, claim, previousMessage }];
+			return;
+		}
 		inFlightRef.current = true;
 		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
 		const onStage = (stage: string) => state.advanceHandoffAttempt(claim.attemptId, stage);
@@ -318,6 +347,16 @@ export function App({
 				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
 				inFlightRef.current = false;
 			});
+		void runNextQueued();
+	};
+
+	// Run the next queued handoff, if the seat is free.
+	const runNextQueued = (): Promise<void> => {
+		if (inFlightRef.current || queueRef.current.length === 0) return Promise.resolve();
+		const next = queueRef.current[0];
+		queueRef.current = queueRef.current.slice(1);
+		runClaimedHandoff(next.ticket, next.choice, next.origin, next.claim, next.previousMessage);
+		return Promise.resolve();
 	};
 
 	/**
@@ -326,28 +365,25 @@ export function App({
 	 * The coordinator dispatches through a ref, so the loop never restarts
 	 * when a render recreates this function.
 	 */
-	const runIntent = (intent: HandoffIntent): Promise<void> => {
-		if (inFlightRef.current || state === undefined) return Promise.resolve();
+	// The intent is claimed now: the ticket moves out of its current state at
+	// once, so a second cycle cannot claim the same work. The external work
+	// runs immediately or behind the handoff already in flight.
+	const runIntent = (intent: HandoffIntent): Promise<DispatchResult> => {
+		if (state === undefined) return Promise.resolve({ ok: false, reason: "the state is not open" });
 		const currentConfig = configRef.current;
 		const all = state.visibleTickets(currentConfig.taskRules, currentConfig.defaultTaskType);
 		const ticket = all.find((candidate) => candidate.identity === intent.ticketIdentity);
-		if (ticket === undefined) return Promise.resolve();
+		if (ticket === undefined)
+			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
 		const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
-		if (!claim.ok) {
-			setStatus({ kind: "warning", text: claim.reason });
-			return Promise.resolve();
-		}
+		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
 		runClaimedHandoff(ticket, intent.choice, intent.origin, claim.claim, intent.previousMessage);
-		return Promise.resolve();
+		return Promise.resolve({ ok: true });
 	};
 	const runIntentRef = useRef(runIntent);
 	runIntentRef.current = runIntent;
 
 	const startHandoff = (choice: HandoffChoice) => {
-		if (inFlightRef.current) {
-			setStatus({ kind: "warning", text: "handoff in flight" });
-			return;
-		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
 		if (ticket === undefined) {
 			setStatus({ kind: "warning", text: "no ticket is selected" });
@@ -376,7 +412,12 @@ export function App({
 			return;
 		}
 		// The no-state test projection: no claim, and the settle patches the
-		// ticket list by hand instead of reading it back from SQLite.
+		// ticket list by hand instead of reading it back from SQLite. It has no
+		// queue, so it refuses to run behind a handoff already in flight.
+		if (inFlightRef.current) {
+			setStatus({ kind: "warning", text: "handoff in flight" });
+			return;
+		}
 		inFlightRef.current = true;
 		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
@@ -445,68 +486,117 @@ export function App({
 		setStatus({ kind: "info", text: `auto-handoff ${next ? "on" : "off"}` });
 	};
 
-	/** The decision panel's rows: one per workflow target, plus close. */
+	// The decision panel's rows: Close first, selected by default, then a Goto,
+	// then one handoff per workflow target in config order.
 	const decisionFor = (ticket: Ticket): { actions: ActionRow[]; body: string[] } => {
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
-		const actions: ActionRow[] = [];
+		const actions: ActionRow[] = [
+			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
+			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
+		];
 		for (const edge of configRef.current.workflows) {
 			if (edge.from !== taskType) continue;
 			for (const target of edge.to)
-				actions.push({ key: `route:${target}`, label: "Handoff", detail: target });
+				actions.push({ key: `route:${target}`, label: `Handoff: ${target}`, detail: target });
 		}
-		actions.push({ key: "close", label: "Close" });
 		return {
 			actions,
 			body: ticket.lastCompletion === null ? [] : ticket.lastCompletion.message.split("\n"),
 		};
 	};
 
+	// Goto: the operator focuses the agent's pane in herdr and the handoff
+	// stays open. The ticket moves awaiting to running; the next settle
+	// starts the turn's next trace.
+	const runGoto = (ticket: Ticket) => {
+		if (state === undefined) return;
+		const paneId = ticket.handoff?.paneId ?? null;
+		if (paneId === null) {
+			setStatus({ kind: "warning", text: "no agent pane is recorded for this ticket" });
+			return;
+		}
+		void commandRunner.run("herdr", ["agent", "focus", paneId]).then((result) => {
+			if (result.code !== 0) {
+				setStatus({ kind: "error", text: `agent focus failed: ${commandFailureText(result)}` });
+				return;
+			}
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: ticket.handoff?.attemptId ?? "",
+				decision: "goto",
+				decidedAt: new Date().toISOString(),
+			});
+			replaceTickets();
+			setStatus({ kind: "info", text: `focused the agent of ticket ${ticket.identity}` });
+		});
+	};
+
+	// Run a decision-panel action: close (with the Close cleanup), Goto, a
+	// workflow handoff, or (from the missing panel) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
 		setPanel(null);
 		if (state === undefined) return;
 		const handoffId = ticket.handoff?.attemptId ?? "";
 		if (key === "close") {
-			state.applyCompletionDecision({
+			const applied = state.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
 				handoffId,
 				decision: "closed",
 				decidedAt: new Date().toISOString(),
 			});
 			replaceTickets();
+			if (!applied) {
+				setStatus({ kind: "warning", text: `ticket ${ticket.identity} already decided` });
+				return;
+			}
+			// The Close cleanup: the environment of the handoff the decision ends.
+			const stored = state.latestHandoff(ticket.identity);
+			if (stored !== null) {
+				void closeHandoffEnvironment(stored, commandRunner).then((failure) => {
+					if (failure !== undefined) {
+						setStatus({
+							kind: "error",
+							text: `ticket ${ticket.identity} closed; the close cleanup failed: ${failure}`,
+						});
+					}
+				});
+			}
 			setStatus({ kind: "info", text: `ticket ${ticket.identity} closed` });
 			return;
 		}
+		if (key === "goto") {
+			runGoto(ticket);
+			return;
+		}
+		// key === `route:<target>`
 		const target = key.slice("route:".length);
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
 		const edge = configRef.current.workflows.find(
 			(candidate) => candidate.from === taskType && candidate.to.includes(target),
 		);
-		const choice: HandoffChoice = {
-			agentType: edge?.agent ?? configRef.current.defaultAgent,
-			environment: edge?.environment ?? configRef.current.defaultEnvironment,
-			taskType: target,
-			model: "",
-			thinking: "",
-		};
-		if (inFlightRef.current) {
-			setStatus({ kind: "warning", text: "handoff in flight" });
+		const stored = ticket.handoff;
+		// Claim first: a refused claim leaves the ticket where it was, and the
+		// decision is recorded only for a handoff that actually starts.
+		const choice = baseChoice(
+			edge?.agent ?? configRef.current.defaultAgent,
+			edge?.environment ?? configRef.current.defaultEnvironment,
+			target,
+			stored?.model ?? "",
+			stored?.thinking ?? "",
+		);
+		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
+		if (!claim.ok) {
+			setStatus({ kind: "warning", text: claim.reason });
 			return;
 		}
-		// The decision is recorded first: the trace holds it, and the
-		// handoff's settle moves the state out of awaiting.
 		state.applyCompletionDecision({
 			ticketIdentity: ticket.identity,
 			handoffId,
 			decision: "handed-off",
 			decidedAt: new Date().toISOString(),
 		});
-		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
-		if (!claim.ok) {
-			setStatus({ kind: "warning", text: claim.reason });
-			return;
-		}
 		runClaimedHandoff(
 			ticket,
 			choice,
@@ -519,34 +609,44 @@ export function App({
 	const runMissingAction = (ticket: Ticket, key: string) => {
 		setPanel(null);
 		if (state === undefined) return;
-		const handoffId = ticket.handoff?.attemptId ?? "";
 		if (key === "abandon") {
-			state.applyCompletionDecision({
+			const applied = state.applyCompletionDecision({
 				ticketIdentity: ticket.identity,
-				handoffId,
+				handoffId: ticket.handoff?.attemptId ?? "",
 				decision: "abandoned",
 				decidedAt: new Date().toISOString(),
 			});
 			replaceTickets();
-			setStatus({ kind: "info", text: `ticket ${ticket.identity} abandoned` });
+			if (!applied) {
+				setStatus({ kind: "warning", text: `ticket ${ticket.identity} already decided` });
+				return;
+			}
+			const stored = state.latestHandoff(ticket.identity);
+			if (stored !== null) {
+				void closeHandoffEnvironment(stored, commandRunner).then((failure) => {
+					if (failure !== undefined) {
+						setStatus({
+							kind: "error",
+							text: `ticket ${ticket.identity} abandoned; the close cleanup failed: ${failure}`,
+						});
+					}
+				});
+			}
+			setStatus({ kind: "warning", text: `ticket ${ticket.identity} abandoned` });
 			return;
 		}
 		// Restart: the same choices, in the workspace the handoff recorded.
 		const stored = ticket.handoff;
-		const choice: HandoffChoice =
+		const choice =
 			stored === null
 				? choiceFor(ticket)
-				: {
-						agentType: stored.agentType,
-						environment: stored.environment,
-						taskType: stored.taskType,
-						model: stored.model,
-						thinking: stored.thinking,
-					};
-		if (inFlightRef.current) {
-			setStatus({ kind: "warning", text: "handoff in flight" });
-			return;
-		}
+				: baseChoice(
+						stored.agentType,
+						stored.environment,
+						stored.taskType,
+						stored.model,
+						stored.thinking,
+					);
 		const claim = state.claimHandoff(ticket.identity, choice, "restart");
 		if (!claim.ok) {
 			setStatus({ kind: "warning", text: claim.reason });
@@ -585,7 +685,22 @@ export function App({
 					break;
 				}
 				if (ticket.state === "awaiting") {
+					// An auto-close type decides by itself: the operator has no panel for
+					// it.
+					const taskType =
+						ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+					if (configRef.current.taskTypes[taskType]?.autoClose === true) {
+						setStatus({
+							kind: "info",
+							text: `task type ${taskType} is auto-close: the factory decides this ticket`,
+						});
+						break;
+					}
 					setPanel({ kind: "decision", identity: ticket.identity });
+					break;
+				}
+				if (markerOf(ticket) === "blocked") {
+					runGoto(ticket);
 					break;
 				}
 				if (markerOf(ticket) === "missing") {
@@ -642,8 +757,19 @@ export function App({
 		const coordinator = new ObservationCoordinator({
 			state,
 			herdr: new HerdrAgentReader(commandRunner),
-			config: configRef.current,
+			config: () => configRef.current,
 			dispatch: (intent) => runIntentRef.current(intent),
+			// The Close cleanup of an auto-ended cycle: the environment of the
+			// handoff the decision ends.
+			cleanup: (handoff) =>
+				closeHandoffEnvironment(
+					{
+						environment: handoff.environment,
+						tabId: handoff.tabId,
+						workspaceId: handoff.workspaceId,
+					},
+					commandRunner,
+				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
@@ -713,6 +839,7 @@ export function App({
 				reservedRows,
 				emptyMessage,
 				markerOf,
+				limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
 			}),
 			createElement(TicketDetail, {
 				lines,

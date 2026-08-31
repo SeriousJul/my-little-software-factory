@@ -3,9 +3,10 @@
  * confirm on it.
  *
  * The control plane opens it in two places. On an awaiting ticket it is
- * the decision: one row per workflow handoff the ticket's task type allows,
- * plus close. On an in-flight ticket whose pane herdr no longer lists it
- * is the missing panel: restart or abandon.
+ * the decision: close (first, selected by default), a Goto, and one
+ * handoff row per workflow target the ticket's task type allows. On an
+ * in-flight ticket whose pane herdr no longer lists it is the missing
+ * panel: restart or abandon.
  *
  * The keys: j/k move the action rows, up and down scroll the message,
  * enter confirms the selected action, esc cancels. While it is open, the

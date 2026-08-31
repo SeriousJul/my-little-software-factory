@@ -11,7 +11,11 @@ export interface DetailLine {
 	fg: string;
 }
 
-export function detailLines(ticket: Ticket | undefined, usableCols: number): DetailLine[] {
+export function detailLines(
+	ticket: Ticket | undefined,
+	usableCols: number,
+	handoffLimit: number,
+): DetailLine[] {
 	if (ticket === undefined) return [{ text: "no ticket selected", fg: COLORS.dim }];
 	const lines: DetailLine[] = [];
 	const pushWrapped = (text: string, fg: string) => {
@@ -25,11 +29,15 @@ export function detailLines(ticket: Ticket | undefined, usableCols: number): Det
 		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
 		pushWrapped(`Task type: ${ticket.handoff.taskType}`, COLORS.text);
 	}
-	pushWrapped(`Handoffs: ${ticket.handoffCount}`, COLORS.text);
+	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, COLORS.text);
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;
+		// The date is the first minute of the stored completion time; the
+		// decision is `pending` until one is made on the turn.
+		const date = completion.completedAt.slice(0, 16).replace("T", " ");
+		const decision = completion.decision ?? "pending";
 		pushWrapped(
-			`Last completion: ${completion.taskType} by ${completion.agentName} (${completion.agentType})`,
+			`Last completion: ${date} ${completion.taskType} by ${completion.agentName} (${completion.agentType}) ${decision}`,
 			COLORS.text,
 		);
 		for (const line of completion.message.split("\n")) {

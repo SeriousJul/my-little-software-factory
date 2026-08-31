@@ -37,17 +37,16 @@ export function stateBadge(state: TicketState): string {
 	return `[${state}]`.padEnd(BADGE_WIDTH);
 }
 
-/** The failure markers a ticket row can hold, after the state badge. */
+/** The colors of the failure badges a ticket row can hold. */
 export const MARKER_COLORS: Record<TicketMarker, string> = {
 	blocked: "#d29922",
 	missing: "#f85149",
 };
 
-/** The two-cell marker slot: `! ` blocked, `✗ ` missing, blank otherwise. */
-export const MARKER_WIDTH = 2;
-
-export function markerText(marker: TicketMarker | null): string {
-	if (marker === "blocked") return "! ";
-	if (marker === "missing") return "✗ ";
-	return "  ";
+/**
+ * The failure badge: `blocked` or `missing` in place of the state badge,
+ * padded to the badge width so the row columns stay aligned.
+ */
+export function failureBadge(marker: TicketMarker): string {
+	return marker.padEnd(BADGE_WIDTH);
 }

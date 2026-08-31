@@ -42,8 +42,8 @@ export function branchNameFor(ticket: Ticket): string {
  * with a letter), and the result is cut to 32 characters on a safe boundary
  * so the cut never leaves a trailing hyphen.
  */
-export function agentNameFor(ticket: Ticket): string {
-	let name = titleSlug(ticket.title);
+export function agentNameFor(title: string): string {
+	let name = titleSlug(title);
 	if (!/^[a-z]/.test(name)) {
 		name = `t-${name}`;
 	}

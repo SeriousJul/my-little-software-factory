@@ -41,7 +41,7 @@ export interface Completion {
 	/** The last captured message of the settled agent turn. */
 	message: string;
 	/** Null until a decision was made on this completion. */
-	decision: string | null;
+	decision: CompletionDecision | null;
 }
 
 /** The latest handoff of a ticket, including the herdr handles it started. */

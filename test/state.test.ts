@@ -224,7 +224,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "The work is done. Tests pass.",
 			completedAt: "2026-08-31T11:00:00Z",
 		});
@@ -267,7 +266,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "First capture.",
 			completedAt: "2026-08-31T11:00:00Z",
 		});
@@ -276,7 +274,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "Last capture.",
 			completedAt: "2026-08-31T11:05:00Z",
 		});
@@ -304,7 +301,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "Done.",
 			completedAt: "2026-08-31T11:00:00Z",
 		});
@@ -346,7 +342,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "Lost.",
 			completedAt: "2026-08-31T11:00:00Z",
 		});
@@ -374,7 +369,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "Done.",
 			completedAt: "2026-08-31T11:00:00Z",
 		});
@@ -447,7 +441,6 @@ describe("factory SQLite state", () => {
 			handoffId: claim.claim.attemptId,
 			taskType: "implement",
 			agentType: "pi",
-			agentName: "factory-implement-I_5",
 			message: "Done.",
 			completedAt: "2026-08-31T11:00:00Z",
 		});

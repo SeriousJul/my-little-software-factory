@@ -50,6 +50,21 @@ export interface HandoffChoice {
 }
 
 /**
+ * The base shape of a handoff's choices: a task type on an agent type in an
+ * environment, with the model and thinking left to the agent's defaults.
+ * A restart passes the previous handoff's model and thinking through.
+ */
+export function baseChoice(
+	agentType: string,
+	environment: EnvironmentKind,
+	taskType: string,
+	model = "",
+	thinking = "",
+): HandoffChoice {
+	return { agentType, environment, taskType, model, thinking };
+}
+
+/**
  * The herdr handles a handoff started: the pane, tab, and workspace of the
  * new agent. The control plane stores them with the handoff, and the
  * observation loop keys its agent lookups on the pane id.
@@ -152,7 +167,7 @@ export async function handOffTicket(
 	const checkout = resolved.repository.path;
 	const args = settingArgs(checked.agent, choice);
 	const prompt = renderPrompt(checked.taskType.template, ticket);
-	const name = agentNameFor(ticket);
+	const name = agentNameFor(ticket.title);
 
 	if (choice.environment === "live-worktree") {
 		return startLiveHandoff(checkout, name, checked.agent, args, prompt, ctx);
@@ -215,7 +230,7 @@ export async function handOffStoredWorkspace({
 	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
 	const prompt = renderPrompt(taskType.template, ticket, previousMessage);
-	const name = agentNameFor(ticket);
+	const name = agentNameFor(ticket.title);
 
 	const storedMatches = workspaceId !== null && environment === choice.environment;
 	if (storedMatches) {
@@ -707,6 +722,36 @@ async function closePreviousTab(
 	if (previousTabId === null || previousTabId === undefined) return;
 	if (previousTabId === newTabId) return;
 	await ctx.runner.run("herdr", ["tab", "close", previousTabId]);
+}
+
+/**
+ * The Close cleanup, distinct from the failure cleanup: it clears the
+ * herdr environment of a finished work cycle without touching the git
+ * branch, so pushed work and pull requests survive.
+ *
+ * - The worktree environment loses its herdr worktree workspace; the git
+ *   branch stays.
+ * - The live worktree environment loses the handoff's tab; the workspace
+ *   stays.
+ *
+ * Returns a readable reason when the cleanup command fails; the caller
+ * keeps the state transition and warns on the status line.
+ */
+export async function closeHandoffEnvironment(
+	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },
+	runner: CommandRunner,
+): Promise<string | undefined> {
+	if (handoff.environment === "worktree") {
+		if (handoff.workspaceId === null) return undefined;
+		const result = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
+		return result.code === 0 ? undefined : commandFailureText(result);
+	}
+	if (handoff.environment === "live-worktree") {
+		if (handoff.tabId === null) return undefined;
+		const result = await runner.run("herdr", ["tab", "close", handoff.tabId]);
+		return result.code === 0 ? undefined : commandFailureText(result);
+	}
+	return undefined;
 }
 
 /** A failed herdr call: the ticket stays where the claim left it. */

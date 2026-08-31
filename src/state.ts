@@ -20,6 +20,7 @@ import type {
 	TicketState,
 } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
+import { agentNameFor } from "./naming.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 
@@ -61,7 +62,6 @@ interface SettleTurnInput {
 	handoffId: string;
 	taskType: string;
 	agentType: string;
-	agentName: string;
 	message: string;
 	completedAt: string;
 }
@@ -555,7 +555,46 @@ export class FactoryState {
 			agentName: row.agent_name,
 			completedAt: row.completed_at,
 			message: row.last_message,
-			decision: row.decision,
+			decision: row.decision as CompletionDecision | null,
+		};
+	}
+
+	/**
+	 * The name the factory started the ticket's agent with: derived from
+	 * the ticket title by the same rule the handoff applies. The herdr
+	 * list does not expose it, and its own agent field holds the kind.
+	 */
+	agentNameForTicket(identity: string): string {
+		const row = this.db
+			.prepare(
+				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? AND m.active = 1 ORDER BY m.source_name LIMIT 1",
+			)
+			.get(identity) as { title: string } | undefined;
+		return row === undefined ? "" : agentNameFor(row.title);
+	}
+
+	/**
+	 * The environment handles of the ticket's latest handoff: what a Close
+	 * cleanup closes. Null when the ticket never had a handoff.
+	 */
+	latestHandoff(identity: string): {
+		environment: EnvironmentKind;
+		tabId: string | null;
+		workspaceId: string | null;
+	} | null {
+		const row = this.db
+			.prepare(
+				"SELECT choice_json, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as
+			| { choice_json: string; tab_id: string | null; workspace_id: string | null }
+			| undefined;
+		if (row === undefined) return null;
+		const choice = jsonChoice(row.choice_json);
+		return {
+			environment: choice?.environment ?? "worktree",
+			tabId: row.tab_id,
+			workspaceId: row.workspace_id,
 		};
 	}
 
@@ -651,7 +690,7 @@ export class FactoryState {
 						handoff.work_cycle,
 						input.taskType,
 						input.agentType,
-						input.agentName,
+						this.agentNameForTicket(input.ticketIdentity),
 						input.completedAt,
 						input.message,
 					);
@@ -660,39 +699,86 @@ export class FactoryState {
 	}
 
 	/**
-	 * Make the decision on a settled turn.
+	 * Make the decision on one settled turn.
 	 *
 	 * `closed`, `auto-closed`, and `abandoned` end the work cycle: the
 	 * ticket returns to open with the cycle incremented. `goto` refocuses
-	 * the existing agent. A handoff decision leaves the state to the
-	 * handoff that follows it.
+	 * the existing agent and moves an awaiting ticket back to running.
+	 * A handoff decision leaves the state to the handoff that follows it.
+	 *
+	 * The decision lands on the handoff's pending trace row. When the turn
+	 * never settled there is no pending row, and only `abandoned` and
+	 * `goto` still write one - once per handoff - so an un-settled cycle
+	 * leaves a complete trace. The ticket state moves only when this call
+	 * wrote or updated the trace, so a double decision can never bump the
+	 * cycle number twice. Returns whether the decision was applied.
 	 */
-	applyCompletionDecision(input: CompletionDecisionInput): void {
-		this.transaction(() => {
-			this.db
+	applyCompletionDecision(input: CompletionDecisionInput): boolean {
+		return this.transaction(() => {
+			const decided = this.db
 				.prepare(
 					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
 				)
 				.run(input.decision, input.decidedAt, input.handoffId);
-			if (input.decision === "goto") {
-				this.db
-					.prepare(
-						"UPDATE tickets SET state = 'running' WHERE identity = ? AND state IN ('awaiting', 'handed-off', 'running')",
-					)
-					.run(input.ticketIdentity);
-			} else if (
-				input.decision === "closed" ||
-				input.decision === "auto-closed" ||
-				input.decision === "abandoned"
-			) {
-				this.db
-					.prepare(
-						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
-					)
-					.run(input.ticketIdentity);
+			if (Number(decided.changes) > 0) {
+				this.applyDecisionStateChange(input);
+				return true;
 			}
-			// handed-off and auto-handed-off: the handoff's settle moves the state.
+			// No pending row: the turn never settled. Abandon and Goto record
+			// their decision anyway, once per handoff, so the trace stays
+			// complete and the cycle number moves exactly once.
+			if (input.decision !== "abandoned" && input.decision !== "goto") return false;
+			const existing = this.db
+				.prepare(
+					"SELECT COUNT(*) AS count FROM completion_traces WHERE handoff_id = ? AND decision = ?",
+				)
+				.get(input.handoffId, input.decision) as { count: number };
+			if (existing.count > 0) return false;
+			const handoff = this.db
+				.prepare("SELECT work_cycle, choice_json FROM handoffs WHERE attempt_id = ?")
+				.get(input.handoffId) as { work_cycle: number; choice_json: string } | undefined;
+			if (handoff === undefined) return false;
+			const choice = jsonChoice(handoff.choice_json);
+			this.db
+				.prepare(
+					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					randomUUID(),
+					input.handoffId,
+					input.ticketIdentity,
+					handoff.work_cycle,
+					choice?.taskType ?? "",
+					choice?.agentType ?? "",
+					this.agentNameForTicket(input.ticketIdentity),
+					input.decidedAt,
+					"",
+					input.decision,
+					input.decidedAt,
+				);
+			this.applyDecisionStateChange(input);
+			return true;
 		});
+	}
+
+	/** The ticket state move of a decision this call applied. */
+	private applyDecisionStateChange(input: CompletionDecisionInput): void {
+		if (input.decision === "goto") {
+			this.db
+				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
+				.run(input.ticketIdentity);
+		} else if (
+			input.decision === "closed" ||
+			input.decision === "auto-closed" ||
+			input.decision === "abandoned"
+		) {
+			this.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
+				)
+				.run(input.ticketIdentity);
+		}
+		// handed-off and auto-handed-off: the handoff's settle moves the state.
 	}
 
 	/** Claim before the first external command. It rechecks all eligibility atomically. */

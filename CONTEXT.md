@@ -214,7 +214,7 @@ An edge can pin the agent type and environment of the next handoff.
 _Avoid_: pipeline, state machine
 
 **Auto-close**:
-A property of a task type. For its completions the control plane decides without the operator: exactly one outgoing edge hands off with that task, any other edge count closes the cycle.
+A property of a task type. For its completions the control plane decides without the operator, in both modes: exactly one outgoing edge and a free parallel slot hand off with that task, a full parallel slot leaves the ticket awaiting, any other edge count closes the cycle, and a route at the ticket's handoff limit degrades to close.
 _Avoid_: auto complete, auto done
 
 **Completion decision**:

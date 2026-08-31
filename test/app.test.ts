@@ -444,19 +444,16 @@ describe("the control plane", () => {
 				for (const row of rows) {
 					expect(row.length).toBe(60);
 				}
-				// At this width the row budget after the marker and the badge
-				// cannot hold both the repository and a readable title. The
-				// title keeps its space, and the repository drops from the list
-				// row instead of pushing the title out.
+				// At this width the row budget after the badge cannot hold
+				// both the repository and a readable title. The title keeps
+				// its space, and the repository drops from the list row instead
+				// of pushing the title out.
 				const row = rows.find((r) => r.includes("[handed-off]"));
 				expect(row).toBeDefined();
 				// The list pane's content cells, borders and padding stripped:
-				// marker, badge, gap, and the title cut to the eleven cells
-				// the row still has.
+				// badge, gap, and the title cut to the cells the row still has.
 				const listHalf = (row ?? "").slice(2, 28);
-				// Marker slot included: the two-cell badge-to-title gap is the
-				// slot's own trailing space.
-				expect(listHalf).toBe("  [handed-off]  Fix pan dr");
+				expect(listHalf).toBe("  [handed-off] Fix pan dri");
 				expect(listHalf).not.toContain("acme/");
 				// The repository stays reachable in the detail pane of the
 				// selected ticket.
