@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
 import { afterAll, describe, expect, test } from "vitest";
 
@@ -248,6 +249,51 @@ describe("validateConfig", () => {
 			} finally {
 				delete process.env.FACTORY_TEST_TOKEN;
 			}
+		});
+	});
+
+	describe("checked-in development config", () => {
+		test("is complete and valid, and points both adapters at this repository", async () => {
+			const path = fileURLToPath(new URL("../config/development.toml", import.meta.url));
+			const { config, fromFile } = await loadConfigFile(path);
+			expect(fromFile).toBe(true);
+			expect(config.defaultAgent).toBe("pi");
+			expect(config.defaultEnvironment).toBe("worktree");
+			// Separate development state, resolved relative to the config file
+			// and ignored by git.
+			expect(config.stateFile).toBe(".factory-development.sqlite");
+			expect(config.sources).toEqual([
+				{
+					name: "factory-issues",
+					kind: "github-issues",
+					refreshIntervalSeconds: 60,
+					repositories: ["SeriousJul/my-little-software-factory"],
+					host: "github.com",
+				},
+				{
+					name: "factory-pull-requests",
+					kind: "github-pull-requests",
+					refreshIntervalSeconds: 60,
+					repositories: ["SeriousJul/my-little-software-factory"],
+					host: "github.com",
+				},
+			]);
+			// Normal gh authentication and no explicit filters: the file reads
+			// neither an auth table nor a filter, so no token is committed.
+			for (const source of config.sources) {
+				expect(source.auth).toBeUndefined();
+				expect(source.filter).toBeUndefined();
+			}
+			expect(config.taskRules).toEqual([
+				{
+					taskType: "rework",
+					when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+				},
+				{
+					taskType: "review",
+					when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+				},
+			]);
 		});
 	});
 

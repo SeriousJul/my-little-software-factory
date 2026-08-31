@@ -224,12 +224,20 @@ describe("factory SQLite state", () => {
 		};
 
 		markDone();
-		// A continuously matching done ticket stays done in the same work cycle.
+		// A continuously matching done ticket stays done in the same work cycle
+		// and stays visible while a source still carries it.
 		state.applyFetch(sourceA, success([fetched()]));
 		expect(workCycle()).toEqual({ state: "done", work_cycle: 1 });
+		expect(state.visibleTickets([], "implement").map((t) => t.identity)).toContain(
+			"github:github.com:I_5",
+		);
 
-		// The ticket leaves every source and later returns: a new work cycle starts.
+		// The ticket leaves every source: it is hidden from the list, and its
+		// later return starts a new work cycle.
 		state.applyFetch(sourceA, success([]));
+		expect(state.visibleTickets([], "implement").map((t) => t.identity)).not.toContain(
+			"github:github.com:I_5",
+		);
 		state.applyFetch(sourceA, success([fetched()]));
 		expect(workCycle()).toEqual({ state: "open", work_cycle: 2 });
 
@@ -292,6 +300,25 @@ describe("factory SQLite state", () => {
 		const second = openFactoryState(path);
 		expect(() => second.acquireLease()).toThrow("already in use");
 		second.close();
+	});
+
+	test("opens in WAL mode with foreign keys enforced", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		// Read the two pragmas on the live connection the state uses.
+		const db = (state as unknown as { db: DatabaseSync }).db;
+		const journal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+		const foreignKeys = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
+		expect(journal.journal_mode).toBe("wal");
+		expect(foreignKeys.foreign_keys).toBe(1);
+		// WAL is a durable database property: a second connection, as the
+		// agent's tooling would use, reads the same mode while the state is open.
+		const other = new DatabaseSync(path);
+		expect(
+			(other.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
+		).toBe("wal");
+		other.close();
+		state.close();
 	});
 
 	test("keeps an unresolved handoff attempt blocked after restart", () => {
