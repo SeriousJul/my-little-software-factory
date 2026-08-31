@@ -51,7 +51,16 @@ export interface AppProps {
 	configPath?: string;
 }
 
-const realRunner = createChildProcessRunner();
+/**
+ * The real runner, created on first use, not at import time: a test that
+ * injects a fake runner must not build a child process egress just by
+ * importing the app.
+ */
+let lazyRealRunner: CommandRunner | undefined;
+function realRunner(): CommandRunner {
+	lazyRealRunner ??= createChildProcessRunner();
+	return lazyRealRunner;
+}
 
 export function App({ config: configProp, runner, home, configPath }: AppProps) {
 	const renderer = useRenderer();
@@ -71,7 +80,7 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 	// choice in the override panel.
 	const inFlightRef = useRef(false);
 
-	const commandRunner: CommandRunner = runner ?? realRunner;
+	const commandRunner: CommandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
 
@@ -120,7 +129,9 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 			home: homeDir,
 		})
 			.then(async (outcome) => {
-				if (outcome.started) {
+				// The agent started: the ticket moves to handed-off, even
+				// when the prompt later failed.
+				if (outcome.status !== "failed") {
 					const handoff = {
 						agentType: choice.agentType,
 						environment: choice.environment,
@@ -143,10 +154,11 @@ export function App({ config: configProp, runner, home, configPath }: AppProps) 
 					notes?.mappingToWrite !== undefined
 						? await persistMapping(notes.mappingToWrite)
 						: undefined;
-				if (!outcome.ok) {
-					// A sibling-clone mapping that also failed to persist is not
-					// lost under the failure reason.
-					const reason = outcome.reason ?? "handoff failed";
+				if (outcome.status !== "ok") {
+					// A failure always carries its reason: no fallback here.
+					// A sibling-clone mapping that also failed to persist is
+					// not lost under the failure reason.
+					const reason = outcome.reason;
 					setStatus({
 						kind: "error",
 						text: persistWarning !== undefined ? `${reason}; ${persistWarning}` : reason,

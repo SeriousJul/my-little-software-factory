@@ -307,8 +307,9 @@ function placeholderNames(template: string): string[] {
 	const names: string[] = [];
 	// Any brace pair is a candidate placeholder, not just {letters}: a
 	// {ticket-id} or a {value2} would otherwise pass validation and stay
-	// literal in the prompt the agent receives.
-	for (const match of template.matchAll(/\{([^{}]+)\}/g)) {
+	// literal in the prompt the agent receives. The pair may be empty:
+	// a {} is still a brace pair, and it stays literal too.
+	for (const match of template.matchAll(/\{([^{}]*)\}/g)) {
 		names.push(match[1]);
 	}
 	return names;

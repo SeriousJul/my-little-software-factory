@@ -266,6 +266,21 @@ describe("validateConfig", () => {
 		);
 	});
 
+	test("an empty brace pair is a placeholder too", () => {
+		// A {} is still a brace pair: it would stay literal in the prompt
+		// the agent receives, so it is a startup error, not a silent miss.
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "hello {}" } },
+			},
+			"unknown placeholder {}",
+		);
+	});
+
 	test("the default agent must match an agent", () => {
 		expectConfigError(
 			{

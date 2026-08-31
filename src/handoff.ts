@@ -35,24 +35,27 @@ export interface HandoffChoice {
 }
 
 /**
- * The outcome of one handoff attempt.
+ * The outcome of one handoff attempt, as one of three facts.
  *
- * `started` is true when the agent started, even if a later step (the
- * prompt) failed: the agent is running and can be prompted manually in
- * herdr, so the ticket moves to handed-off. Any earlier failure leaves the
- * ticket open and carries a `reason` for the TUI.
+ * - `failed`: the agent never started. The ticket stays open, and the
+ *   reason goes to the status line.
+ * - `prompt-failed`: the agent started but the prompt did not get through.
+ *   The agent is running and can be prompted manually in herdr, so the
+ *   ticket moves to handed-off, and the reason goes to the status line.
+ * - `ok`: the agent started and received the prompt.
+ *
+ * The shape carries no boolean pair, so a state the handoff cannot be in
+ * (a success that never started, a failure without a reason) is not
+ * writable.
  *
  * `notes` carries the warning and the mapping the repository resolution
  * bent with, through every outcome: a failure of a later step still warns
  * and still hands back the mapping to persist.
  */
-export interface HandoffOutcome {
-	started: boolean;
-	ok: boolean;
-	reason?: string;
-	/** The note the repository resolution carried, if it bent. */
-	notes?: ResolutionNotes;
-}
+export type HandoffOutcome =
+	| { status: "failed"; reason: string; notes?: ResolutionNotes }
+	| { status: "prompt-failed"; reason: string; notes?: ResolutionNotes }
+	| { status: "ok"; notes?: ResolutionNotes };
 
 interface HandoffOptions {
 	config: FactoryConfig;
@@ -80,30 +83,28 @@ export async function handOffTicket(
 ): Promise<HandoffOutcome> {
 	if (ticket.state !== "open") {
 		return {
-			started: false,
-			ok: false,
+			status: "failed",
 			reason: `only open tickets can be handed off (this one is ${ticket.state})`,
 		};
 	}
 	if (choice.environment === "container") {
 		return {
-			started: false,
-			ok: false,
+			status: "failed",
 			reason: "the container environment is reserved and not yet built",
 		};
 	}
 	const agent = config.agents[choice.agentType];
 	if (agent === undefined) {
-		return { started: false, ok: false, reason: `unknown agent type: ${choice.agentType}` };
+		return { status: "failed", reason: `unknown agent type: ${choice.agentType}` };
 	}
 	const taskType = config.taskTypes[choice.taskType];
 	if (taskType === undefined) {
-		return { started: false, ok: false, reason: `unknown task type: ${choice.taskType}` };
+		return { status: "failed", reason: `unknown task type: ${choice.taskType}` };
 	}
 
 	const resolved = await resolveRepository(ticket.repository, config, { runner, home });
 	if (!resolved.ok) {
-		return { started: false, ok: false, reason: resolved.reason };
+		return { status: "failed", reason: resolved.reason };
 	}
 
 	const ctx: HandoffContext = { runner, notes: resolved.repository.notes };
@@ -250,7 +251,7 @@ async function startWorktreeHandoff(
 		return failed("herdr worktree create returned no pane id", ctx);
 	}
 	const outcome = await startAgentAndPrompt(name, paneId, agent, args, prompt, ctx);
-	if (!outcome.started) {
+	if (outcome.status === "failed") {
 		// The agent never started: the worktree would sit unused, and its
 		// branch would hard-fail every retry with "branch already exists".
 		// Remove both; a retry recreates them.
@@ -296,13 +297,12 @@ async function startAgentAndPrompt(
 	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
 	if (sent.code !== 0) {
 		return {
-			started: true,
-			ok: false,
+			status: "prompt-failed",
 			reason: `agent ${name} started, but the prompt failed: ${commandFailureText(sent)}`,
 			notes: ctx.notes,
 		};
 	}
-	return { started: true, ok: true, notes: ctx.notes };
+	return { status: "ok", notes: ctx.notes };
 }
 
 /** A failed herdr call: the ticket stays open, the reason goes to the TUI. */
@@ -312,12 +312,7 @@ function failedCommand(result: CommandResult, ctx: HandoffContext): HandoffOutco
 
 /** A failed step: the ticket stays open, the reason goes to the TUI. */
 function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
-	return {
-		started: false,
-		ok: false,
-		reason,
-		notes: ctx.notes,
-	};
+	return { status: "failed", reason, notes: ctx.notes };
 }
 
 /**

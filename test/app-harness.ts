@@ -179,6 +179,21 @@ export async function focusList(setup: Setup): Promise<string> {
 }
 
 /**
+ * Open the override panel, and wait until it owns the keys.
+ *
+ * Opening the panel renders it in the same commit as the press, but the
+ * panel's key handler subscribes in an effect that flushes after the
+ * commit. A panel key sent in that window reaches the app below and is
+ * lost: the test would time out on its first panel key. The settle after
+ * the open closes the window: when this returns, the subscription is live
+ * and the next key is safe.
+ */
+export async function openPanel(setup: Setup): Promise<string> {
+	await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+	return await settle(setup);
+}
+
+/**
  * Wait for the frame to stop changing, and return it.
  *
  * For keys that should change nothing, stability is the assertion.

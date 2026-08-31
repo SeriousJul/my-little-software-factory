@@ -13,7 +13,13 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import { handOffTicket, renderPrompt, renderSettingArgs, settingArgs } from "../src/handoff.ts";
+import {
+	type HandoffOutcome,
+	handOffTicket,
+	renderPrompt,
+	renderSettingArgs,
+	settingArgs,
+} from "../src/handoff.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -24,6 +30,14 @@ import {
 
 let HOME = "";
 let CHECKOUT = "";
+
+/** The reason a non-ok outcome carries; a success has none to read. */
+function reasonOf(outcome: HandoffOutcome): string {
+	if (outcome.status === "ok") {
+		throw new Error("no reason on an ok outcome");
+	}
+	return outcome.reason;
+}
 
 beforeAll(() => {
 	// A real home with a real checkout directory: resolution does real
@@ -150,7 +164,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome).toEqual({ started: true, ok: true });
+		expect(outcome).toEqual({ status: "ok" });
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
@@ -185,7 +199,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome.ok).toBe(true);
+		expect(outcome.status).toBe("ok");
 		const commands = runner.commands();
 		expect(commands).not.toContain(`herdr workspace create --cwd ${CHECKOUT} --no-focus`);
 		expect(commands).toContain(`herdr tab create --workspace ws-mine --cwd ${CHECKOUT} --no-focus`);
@@ -209,7 +223,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome.ok).toBe(true);
+		expect(outcome.status).toBe("ok");
 		const start = runner.calls.find(
 			(c) => c.command === "herdr" && c.args[0] === "agent" && c.args[1] === "start",
 		);
@@ -244,7 +258,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome).toEqual({ started: false, ok: false, reason: "error: herdr is not running" });
+		expect(outcome).toEqual({ status: "failed", reason: "error: herdr is not running" });
 		// Nothing after the failed step runs.
 		expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
 	});
@@ -269,9 +283,8 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome.started).toBe(true);
-		expect(outcome.ok).toBe(false);
-		expect(outcome.reason).toContain("started, but the prompt failed");
+		expect(outcome.status).toBe("prompt-failed");
+		expect(reasonOf(outcome)).toContain("started, but the prompt failed");
 	});
 
 	test("an unreadable workspace list fails instead of creating a second workspace", async () => {
@@ -285,11 +298,8 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome.ok).toBe(false);
-		expect(outcome.started).toBe(false);
-		if (!outcome.ok) {
-			expect(outcome.reason).toContain("readable workspace list");
-		}
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("readable workspace list");
 		// Unreadable is not "no workspace": the one-workspace-per-repository
 		// rule holds, so no second workspace is created for the checkout.
 		expect(runner.commands()).not.toContain(expect.stringContaining("workspace create"));
@@ -326,7 +336,7 @@ describe("handOffTicket: the worktree sequence", () => {
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
 
-		expect(outcome.ok).toBe(true);
+		expect(outcome.status).toBe("ok");
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
@@ -351,11 +361,8 @@ describe("handOffTicket: the worktree sequence", () => {
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
 
-		expect(outcome.ok).toBe(false);
-		expect(outcome.started).toBe(false);
-		if (!outcome.ok) {
-			expect(outcome.reason).toBe("branch already exists: factory/7-retry-policy-for-webhooks");
-		}
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe("branch already exists: factory/7-retry-policy-for-webhooks");
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
 	});
 
@@ -392,11 +399,8 @@ describe("handOffTicket: the worktree sequence", () => {
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
 
-		expect(outcome.ok).toBe(false);
-		expect(outcome.started).toBe(false);
-		if (!outcome.ok) {
-			expect(outcome.reason).toContain("agent_name_taken");
-		}
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("agent_name_taken");
 		// The residue is removed, so a retry can run instead of failing on
 		// the branch the first attempt left behind.
 		const commands = runner.commands();
@@ -438,12 +442,9 @@ describe("handOffTicket: the worktree sequence", () => {
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
 
-		expect(outcome.ok).toBe(false);
-		expect(outcome.started).toBe(false);
-		if (!outcome.ok) {
-			expect(outcome.reason).toContain("no workspace id");
-			expect(outcome.reason).toContain("leftover branch factory/7-retry-policy-for-webhooks");
-		}
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("no workspace id");
+		expect(reasonOf(outcome)).toContain("leftover branch factory/7-retry-policy-for-webhooks");
 		// The cleanup needs the workspace id, so it cannot run and no
 		// command ran after the failed step.
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
@@ -480,8 +481,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		);
 
 		// The agent is running in the worktree and can be prompted by hand.
-		expect(outcome.ok).toBe(false);
-		expect(outcome.started).toBe(true);
+		expect(outcome.status).toBe("prompt-failed");
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
 	});
 });
@@ -494,7 +494,7 @@ describe("handOffTicket: the guard rails", () => {
 			runner,
 			home: HOME,
 		});
-		expect(outcome.ok).toBe(false);
+		expect(outcome.status).toBe("failed");
 		expect(runner.calls).toHaveLength(0);
 	});
 
@@ -505,10 +505,8 @@ describe("handOffTicket: the guard rails", () => {
 			{ ...defaultChoice, environment: "container" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(outcome.ok).toBe(false);
-		if (!outcome.ok) {
-			expect(outcome.reason).toContain("reserved");
-		}
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("reserved");
 		expect(runner.calls).toHaveLength(0);
 	});
 
@@ -519,13 +517,13 @@ describe("handOffTicket: the guard rails", () => {
 			{ ...defaultChoice, agentType: "cursor" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(agent.ok).toBe(false);
+		expect(agent.status).toBe("failed");
 		const task = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, taskType: "refactor" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(task.ok).toBe(false);
+		expect(task.status).toBe("failed");
 		expect(runner.calls).toHaveLength(0);
 	});
 
@@ -549,14 +547,11 @@ describe("handOffTicket: the guard rails", () => {
 			home: HOME,
 		});
 
-		expect(outcome.ok).toBe(false);
-		expect(outcome.started).toBe(false);
+		expect(outcome.status).toBe("failed");
 		// The clone ran and the handoff failed after it: the mapping must not
 		// wait for a later successful handoff.
 		expect(outcome.notes?.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
-		if (!outcome.ok) {
-			expect(outcome.reason).toBe("error: herdr is not running");
-		}
+		expect(reasonOf(outcome)).toBe("error: herdr is not running");
 	});
 
 	test("a sibling clone warns and hands back the mapping to persist", async () => {
@@ -582,7 +577,7 @@ describe("handOffTicket: the guard rails", () => {
 			home: HOME,
 		});
 
-		expect(outcome.ok).toBe(true);
+		expect(outcome.status).toBe("ok");
 		expect(outcome.notes?.warning).toContain("sibling");
 		expect(outcome.notes?.mappingToWrite).toEqual({ repository: "acme/billing", path: sibling });
 		// The handoff runs at the sibling, not the conflicting path.

@@ -63,7 +63,10 @@ const LABEL_WIDTH = 12;
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 const MARKER_WIDTH = 2;
-const HINT = "j/k move  left/right change  enter hand off  esc cancel";
+// The hint row documents every key group the panel owns: the movement
+// keys, the list cycle keys, and the typed text of the free-text rows. It
+// must fit the modal's column width at the default geometry, or it drops.
+const HINT = "j/k move  h/l cycle  type text  enter esc";
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
 
@@ -88,9 +91,6 @@ interface PanelGeometry {
 
 function panelGeometry(width: number, height: number): PanelGeometry {
 	const inner = Math.max(0, width - CHROME);
-	// The hint takes a row of its own; the rows need at least one.
-	const showHint = inner >= widthOf(HINT) && height - CHROME >= 2;
-	const maxRows = Math.max(1, height - CHROME - (showHint ? 1 : 0));
 	let markerWidth = MARKER_WIDTH;
 	let labelWidth = LABEL_WIDTH;
 	let valueWidth = VALUE_WIDTH;
@@ -105,6 +105,13 @@ function panelGeometry(width: number, height: number): PanelGeometry {
 		markerWidth = inner;
 		labelWidth = 0;
 	}
+	// The hint renders inside the modal, so it must fit the width the rows
+	// use, not the terminal: a hint wider than the box would render
+	// truncated, and a row never carries broken text.
+	const columns = markerWidth + labelWidth + valueWidth;
+	const showHint = columns >= widthOf(HINT) && height - CHROME >= 2;
+	// The hint takes a row of its own; the rows need at least one.
+	const maxRows = Math.max(1, height - CHROME - (showHint ? 1 : 0));
 	return { markerWidth, labelWidth, valueWidth, showHint, maxRows };
 }
 
@@ -261,7 +268,7 @@ export function OverridePanel({
 				width: "100%",
 				height: "100%",
 				zIndex: 10,
-				backgroundColor: COLORS.background,
+				backgroundColor: COLORS.overlay,
 				alignItems: "center",
 				justifyContent: "center",
 			},

@@ -26,6 +26,7 @@ import {
 	frameText,
 	HEIGHT,
 	markerRowOf,
+	openPanel,
 	press,
 	pressArrow,
 	rowsOf,
@@ -448,9 +449,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				const opened = await press(setup, "e", "the override panel to open", (f) =>
-					f.includes("Override"),
-				);
+				const opened = await openPanel(setup);
 				// The panel covers the app: the ticket list is not visible.
 				expect(opened).not.toContain("[open]");
 
@@ -509,7 +508,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("(unset)"));
+				await openPanel(setup);
 				// Move to the Thinking row (Agent, Environment, Task type, Model, Thinking).
 				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Task type"));
@@ -550,7 +549,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				// pi maps both settings: both rows are offered.
 				await pressArrow(setup, "right", "the agent to become codex", (f) =>
 					frameText(f).includes("Agent codex"),
@@ -581,7 +580,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
 				);
@@ -612,7 +611,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				// Move to the Environment row and cycle through every offered value.
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -640,7 +639,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				await pressArrow(setup, "right", "the agent to change", (f) => f.includes("codex"));
 				setup.mockInput.pressEscape();
 				const closed = await awaitFrame(
@@ -668,7 +667,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				// Move to the Model row (Agent, Environment, Task type, then Model).
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -710,7 +709,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
 				);
@@ -756,7 +755,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				// Both keys are queued before a render: the key parser delivers
 				// them in one tick, where a render-closure row would still
 				// point at the Agent row.
@@ -892,7 +891,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
 				);
@@ -934,15 +933,31 @@ describe("the override panel", () => {
 		);
 	});
 
+	test("the hint row documents the movement, cycle, and typing keys", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const frame = await openPanel(setup);
+				// Every key group the panel owns is on the hint row: the
+				// movement keys, the list cycle keys, and the typed text of
+				// the free-text rows. The hint fits the modal untruncated.
+				expect(frameText(frame)).toContain("j/k move h/l cycle type text enter esc");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
 
 		await withApp(
 			async (setup) => {
-				const frame = await press(setup, "e", "the override panel to open", (f) =>
-					f.includes("Override"),
-				);
+				const frame = await openPanel(setup);
 
 				const rows = rowsOf(frame);
 				expect(rows).toHaveLength(12);
@@ -967,9 +982,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				const frame = await press(setup, "e", "the override panel to open", (f) =>
-					f.includes("Override"),
-				);
+				const frame = await openPanel(setup);
 
 				const rows = rowsOf(frame);
 				expect(rows).toHaveLength(8);
@@ -1000,7 +1013,7 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
 				);
