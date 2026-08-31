@@ -5,17 +5,22 @@
  * A handoff runs through herdr (ADR 0002): the control plane never starts an
  * agent process itself. The live worktree environment reuses the herdr
  * workspace of the checkout and adds a fresh tab; the worktree environment
- * creates a fresh git worktree branched factory/<ticket id>-<title slug>
- * from the current HEAD of the main checkout. Every handoff starts a fresh
- * agent in a fresh pane and sends the rendered task type template as its
- * prompt. A running agent is never reused.
+ * works the ticket on its own branch factory/<ticket id>-<title slug>: a
+ * missing branch is created from the current HEAD of the main checkout, an
+ * existing branch is reused in the worktree that holds it (or a fresh
+ * worktree when no worktree holds it). Every handoff starts a fresh agent
+ * in a fresh pane and sends the rendered task type template as its prompt.
+ * A running agent is never reused.
  *
  * The sequence of external commands is the contract the fake runner tests
  * pin; the herdr CLI contract was verified against herdr 0.8.2.
  *
  * A handoff failure leaves no residue: a worktree handoff that fails before
- * the agent starts removes the worktree and its branch, so a retry can run
- * instead of failing on the branch the first attempt left behind.
+ * the agent starts removes what the handoff created (the fresh worktree,
+ * the attached workspace, the fresh tab), so a retry can run instead of
+ * failing on residue the first attempt left behind. It never deletes a
+ * branch that pre-dates the handoff: that branch may hold the ticket's
+ * earlier work.
  */
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
@@ -202,10 +207,11 @@ async function startAgentInNewTab(
 }
 
 /**
- * The worktree sequence: verify the branch does not exist in the checkout,
- * create the herdr worktree (branch from the current HEAD of the main
- * checkout, herdr's generated label), start a fresh agent in the new
- * workspace, send the prompt.
+ * The worktree sequence: check the branch in the checkout, then get the
+ * ticket a herdr worktree on it. A missing branch is created from the
+ * current HEAD of the main checkout; an existing branch is reused (see
+ * startReusedBranchHandoff). The agent starts in a fresh pane, receives
+ * the prompt.
  */
 async function startWorktreeHandoff(
 	ticket: Ticket,
@@ -223,7 +229,7 @@ async function startWorktreeHandoff(
 		return failed(`cannot check branch in ${checkout}: ${commandFailureText(listed)}`, ctx);
 	}
 	if (listed.stdout.trim() !== "") {
-		return failed(`branch already exists: ${branch}`, ctx);
+		return startReusedBranchHandoff(checkout, branch, name, agent, args, prompt, ctx);
 	}
 	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
 	if (head.code !== 0) {
@@ -259,12 +265,162 @@ async function startWorktreeHandoff(
 		await removeWorktree(checkout, branch, workspaceId, ctx);
 		return failed("herdr worktree create returned no pane id", ctx);
 	}
+	return startAgentOrCleanUp(name, paneId, agent, args, prompt, ctx, () =>
+		removeWorktree(checkout, branch, workspaceId, ctx),
+	);
+}
+
+/**
+ * The reuse sequence for a branch that already exists in the checkout: the
+ * ticket keeps its branch and its earlier work. `worktree open` finds the
+ * worktree that holds the branch and gives it a workspace (reusing one
+ * that is already open); a branch no worktree holds is checked out into a
+ * fresh worktree. The agent starts in a fresh pane: a fresh tab when a
+ * workspace was already open, the attached workspace's first pane when
+ * herdr just opened it.
+ *
+ * Cleanup removes only what this handoff created (the fresh tab, the
+ * attached workspace, the fresh worktree). It never deletes the branch:
+ * the branch pre-dates the handoff and may hold the ticket's earlier work.
+ */
+async function startReusedBranchHandoff(
+	checkout: string,
+	branch: string,
+	name: string,
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	prompt: string,
+	ctx: HandoffContext,
+): Promise<HandoffOutcome> {
+	const opened = await ctx.runner.run("herdr", [
+		"worktree",
+		"open",
+		"--cwd",
+		checkout,
+		"--branch",
+		branch,
+		"--no-focus",
+	]);
+	if (opened.code === 0) {
+		return startInOpenedWorktree(opened, name, agent, args, prompt, ctx);
+	}
+	if (herdrErrorCode(opened) !== "worktree_not_found") {
+		return failedCommand(opened, ctx);
+	}
+	// No worktree holds the branch: check it out into a fresh worktree.
+	const created = await ctx.runner.run("herdr", [
+		"worktree",
+		"create",
+		"--cwd",
+		checkout,
+		"--branch",
+		branch,
+		"--no-focus",
+	]);
+	if (created.code !== 0) {
+		return failedCommand(created, ctx);
+	}
+	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
+	if (workspaceId === null) {
+		// The cleanup needs the workspace id, so it cannot run here. The
+		// worktree herdr created survives and would block every retry, so
+		// the reason points at it.
+		return failed(
+			`herdr worktree create returned no workspace id; check for a leftover worktree on branch ${branch}`,
+			ctx,
+		);
+	}
+	const paneId = jsonResultField(created, "root_pane", "pane_id");
+	if (paneId === null) {
+		await removeWorktreeCheckout(workspaceId, ctx);
+		return failed("herdr worktree create returned no pane id", ctx);
+	}
+	return startAgentOrCleanUp(name, paneId, agent, args, prompt, ctx, () =>
+		removeWorktreeCheckout(workspaceId, ctx),
+	);
+}
+
+/**
+ * The agent starts in a fresh pane of the workspace `worktree open`
+ * returned: a fresh tab when a workspace was already open on the
+ * worktree, the attached workspace's first pane when herdr just opened it.
+ */
+async function startInOpenedWorktree(
+	opened: CommandResult,
+	name: string,
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	prompt: string,
+	ctx: HandoffContext,
+): Promise<HandoffOutcome> {
+	const workspaceId = jsonResultField(opened, "workspace", "workspace_id");
+	if (workspaceId === null) {
+		return failed("herdr worktree open returned no workspace id", ctx);
+	}
+	if (worktreeAlreadyOpen(opened)) {
+		// A workspace was already open on the worktree: add a fresh tab in it.
+		const worktreePath = jsonResultField(opened, "worktree", "path");
+		if (worktreePath === null) {
+			return failed("herdr worktree open returned no worktree path", ctx);
+		}
+		const tab = await ctx.runner.run("herdr", [
+			"tab",
+			"create",
+			"--workspace",
+			workspaceId,
+			"--cwd",
+			worktreePath,
+			"--no-focus",
+		]);
+		if (tab.code !== 0) {
+			// The workspace pre-dates the handoff: leave it, report the step.
+			return failedCommand(tab, ctx);
+		}
+		const paneId = jsonResultField(tab, "root_pane", "pane_id");
+		const tabId = jsonResultField(tab, "tab", "tab_id");
+		if (paneId === null) {
+			if (tabId !== null) {
+				await closeTab(tabId, ctx);
+			}
+			return failed("herdr tab create returned no pane id", ctx);
+		}
+		return startAgentOrCleanUp(name, paneId, agent, args, prompt, ctx, () => {
+			if (tabId !== null) {
+				return closeTab(tabId, ctx);
+			}
+			return Promise.resolve();
+		});
+	}
+	// herdr attached a fresh workspace: its first pane is fresh.
+	const paneId = jsonResultField(opened, "root_pane", "pane_id");
+	if (paneId === null) {
+		await closeWorkspace(workspaceId, ctx);
+		return failed("herdr worktree open returned no pane id", ctx);
+	}
+	return startAgentOrCleanUp(name, paneId, agent, args, prompt, ctx, () =>
+		closeWorkspace(workspaceId, ctx),
+	);
+}
+
+/**
+ * Start the agent in the pane. When it never starts, run the cleanup for
+ * the residue the handoff just created. A started agent is never rolled
+ * back: even a failed prompt settles the ticket as handed off.
+ */
+async function startAgentOrCleanUp(
+	name: string,
+	paneId: string,
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	prompt: string,
+	ctx: HandoffContext,
+	cleanup: () => Promise<void>,
+): Promise<HandoffOutcome> {
 	const outcome = await startAgentAndPrompt(name, paneId, agent, args, prompt, ctx);
 	if (outcome.status === "failed") {
-		// The agent never started: the worktree would sit unused, and its
-		// branch would hard-fail every retry with "branch already exists".
-		// Remove both; a retry recreates them.
-		await removeWorktree(checkout, branch, workspaceId, ctx);
+		// The agent never started: remove what the handoff created, so a
+		// retry can run instead of failing on the first attempt's residue.
+		await cleanup();
 	}
 	return outcome;
 }
@@ -280,8 +436,23 @@ async function removeWorktree(
 	workspaceId: string,
 	ctx: HandoffContext,
 ): Promise<void> {
-	await ctx.runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+	await removeWorktreeCheckout(workspaceId, ctx);
 	await ctx.runner.run("git", ["-C", checkout, "branch", "-D", branch]);
+}
+
+/** Remove a herdr worktree checkout, best effort. The branch stays. */
+async function removeWorktreeCheckout(workspaceId: string, ctx: HandoffContext): Promise<void> {
+	await ctx.runner.run("herdr", ["worktree", "remove", "--workspace", workspaceId]);
+}
+
+/** Close a herdr workspace, best effort. Its worktree and branch stay. */
+async function closeWorkspace(workspaceId: string, ctx: HandoffContext): Promise<void> {
+	await ctx.runner.run("herdr", ["workspace", "close", workspaceId]);
+}
+
+/** Close a herdr tab, best effort. */
+async function closeTab(tabId: string, ctx: HandoffContext): Promise<void> {
+	await ctx.runner.run("herdr", ["tab", "close", tabId]);
 }
 
 /** Start a fresh agent in the pane and send the prompt as its task. */
@@ -419,6 +590,35 @@ async function findWorkspaceAt(listed: CommandResult, checkout: string): Promise
 		}
 	}
 	return { status: "none" };
+}
+
+/**
+ * The stable error code a failed herdr call carries, if any. herdr emits
+ * its CLI errors as one JSON object on stderr.
+ */
+function herdrErrorCode(result: CommandResult): string | null {
+	if (result.code === 0) {
+		return null;
+	}
+	let data: unknown;
+	try {
+		data = JSON.parse(result.stderr);
+	} catch {
+		return null;
+	}
+	const code = (data as { error?: { code?: unknown } }).error?.code;
+	return typeof code === "string" && code !== "" ? code : null;
+}
+
+/** True when a `worktree open` result says a workspace was already open. */
+function worktreeAlreadyOpen(result: CommandResult): boolean {
+	let data: unknown;
+	try {
+		data = JSON.parse(result.stdout);
+	} catch {
+		return false;
+	}
+	return (data as { result?: { already_open?: unknown } }).result?.already_open === true;
 }
 
 /** Read result.<field>.<key> out of a herdr JSON response. */

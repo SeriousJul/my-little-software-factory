@@ -83,6 +83,27 @@ export function tabCreateJson(pane: string): string {
 	});
 }
 
+/** A herdr `worktree open` JSON response. */
+export function worktreeOpenJson(
+	workspaceId: string,
+	pane: string,
+	{ alreadyOpen, worktreePath }: { alreadyOpen: boolean; worktreePath: string },
+): string {
+	return JSON.stringify({
+		result: {
+			already_open: alreadyOpen,
+			workspace: { workspace_id: workspaceId },
+			tab: { tab_id: `tab-${workspaceId}` },
+			root_pane: { pane_id: pane },
+			worktree: { path: worktreePath },
+		},
+	});
+}
+
+/** The herdr error a `worktree open` returns when no worktree holds the branch. */
+export const WORKTREE_NOT_FOUND_ERROR =
+	'{"error":{"code":"worktree_not_found","message":"worktree branch not found"},"id":"cli:worktree:open"}\n';
+
 /** A herdr `worktree create` JSON response. */
 export function worktreeCreateJson(workspaceId: string, pane: string): string {
 	return JSON.stringify({
