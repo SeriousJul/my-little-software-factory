@@ -21,16 +21,60 @@ model = "--model {value}"
 thinking = "--effort {value}"
 
 [task-types.implement]
-template = "Implement the following {source-kind}.\n\nRepository: {repository}\n\n{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+template = '''
+Implement the following {source-kind}. 
+Create a new branch and commit the changes to it. 
+Then create a pull request with the changes.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
 
 [task-types.fix]
-template = "Fix the following {source-kind}.\n\nRepository: {repository}\n\n{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+template = '''
+Fix the following {source-kind}.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
 
 [task-types.review]
-template = "Review pull request {external-key}: {title}.\n\nRepository: {repository}\nPull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+template = '''
+Review pull request {external-key}: {title}.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
 
 [task-types.rework]
-template = "Rework pull request {external-key}: {title}.\n\nRepository: {repository}\nPull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}"
+template = '''
+Rework pull request {external-key}: {title}.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
 
 [[sources]]
 name = "factory-issues"
