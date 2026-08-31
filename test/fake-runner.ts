@@ -7,7 +7,7 @@
  * read the responses the flow must parse. No test in the suite can reach a
  * real herdr session or a real repository through it.
  */
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
+import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 
 export interface RecordedCommand {
 	command: string;
@@ -34,7 +34,14 @@ export class FakeRunner implements CommandRunner {
 		return this.calls.map((c) => `${c.command} ${c.args.join(" ")}`.trim());
 	}
 
-	async run(command: string, args: readonly string[]): Promise<CommandResult> {
+	async run(
+		command: string,
+		args: readonly string[],
+		options?: CommandOptions,
+	): Promise<CommandResult> {
+		// The fake ignores the run options: the tests pin argv, not process
+		// options.
+		void options;
 		this.calls.push({ command, args });
 		return this.responses.get(this.key(command, args)) ?? this.fallback;
 	}

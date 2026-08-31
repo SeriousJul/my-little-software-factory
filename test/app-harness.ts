@@ -153,14 +153,16 @@ export async function withApp(
  * Wait for the rendered frame to satisfy `predicate`, and return it.
  *
  * The wait ends when the effect appears, or the deadline fails the test
- * with the last frame. A stale frame can never pass an assertion.
+ * with the last frame. A stale frame can never pass an assertion. A test
+ * that holds a seat with a timed command can pass a longer deadline.
  */
 export async function awaitFrame(
 	setup: Setup,
 	predicate: (frame: string) => boolean,
 	what: string,
+	deadlineMs: number = FRAME_DEADLINE_MS,
 ): Promise<string> {
-	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	const deadline = Date.now() + deadlineMs;
 	let frame = setup.captureCharFrame();
 	for (;;) {
 		if (predicate(frame)) {

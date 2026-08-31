@@ -560,6 +560,18 @@ export class FactoryState {
 	}
 
 	/**
+	 * The durable state of one ticket, or undefined when the ticket no
+	 * longer exists. A queued handoff re-reads it before it runs: the
+	 * projection filters visibility, but a handoff waits on the state.
+	 */
+	ticketState(identity: string): TicketState | undefined {
+		const row = this.db.prepare("SELECT state FROM tickets WHERE identity = ?").get(identity) as
+			| { state: TicketState }
+			| undefined;
+		return row?.state;
+	}
+
+	/**
 	 * The name the factory started the ticket's agent with: derived from
 	 * the ticket title by the same rule the handoff applies. The herdr
 	 * list does not expose it, and its own agent field holds the kind.

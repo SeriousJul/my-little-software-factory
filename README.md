@@ -102,7 +102,9 @@ message. The panel offers the choices the state allows.
 
 The first row, "Close", ends the work cycle: the ticket returns to open
 with its cycle number incremented, and the handoff's environment is closed
-(a worktree handoff's herdr workspace, a live worktree handoff's tab).
+without touching the git branch, so pushed work and pull requests survive:
+a worktree handoff loses its worktree checkout and its herdr workspace,
+a live worktree handoff loses its tab.
 The second row, "Goto", focuses the agent's pane so the operator can steer
 it; the ticket returns to `running` and the trace records the decision.
 Then one "Handoff: `<task type>`" row per outgoing workflow edge of the

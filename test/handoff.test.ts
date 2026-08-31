@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
+	closeHandoffEnvironment,
 	type HandoffOutcome,
 	handOffStoredWorkspace,
 	handOffTicket,
@@ -1181,5 +1182,86 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		expect(commands).toContain("herdr tab close tab-1");
 		// The previous tab belongs to the settled turn: it is not closed here.
 		expect(commands).not.toContain("herdr tab close tab-prev");
+	});
+});
+
+describe("closeHandoffEnvironment: the Close cleanup", () => {
+	test("a worktree handoff removes the checkout, then the herdr workspace; the branch stays", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		// worktree remove first: it runs git worktree remove and never deletes
+		// the branch. workspace close after: it clears only herdr state.
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace close ws-1",
+		]);
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("branch -D");
+		expect(joined).not.toContain("branch --delete");
+		expect(joined).not.toContain("tab close");
+	});
+
+	test("a worktree handoff that fails to remove the checkout never closes the workspace", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr: "error: the worktree has uncommitted changes; pass --force\n",
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+		);
+
+		// The reason is the command's stderr: the caller reports it on the
+		// status line with the ticket identity.
+		expect(failure).toBe("error: the worktree has uncommitted changes; pass --force");
+		// The workspace stays: the checkout is still there.
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("a worktree handoff without a stored workspace runs nothing", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: null },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([]);
+	});
+
+	test("a live worktree handoff closes only the tab it made", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("worktree remove");
+		expect(joined).not.toContain("workspace close");
+	});
+
+	test("a live worktree handoff without a stored tab runs nothing", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: null, workspaceId: null },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([]);
 	});
 });

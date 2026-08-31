@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { AppProps } from "../src/components/app.ts";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
@@ -24,9 +25,11 @@ import {
 	awaitFrame,
 	frameText,
 	HEIGHT,
+	markerRowOf,
 	press,
 	rowsOf,
 	settle,
+	sleep,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -46,16 +49,18 @@ afterEach(() => {
 
 const source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
+const secondIdentity = "github:github.com:I_6";
 const repoIdentity = "github.com/acme/factory";
 
-function fetched(): FetchedTicket {
+/** A fetched ticket of the issues source; the index is the issue number. */
+function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
 	return {
-		identity,
+		identity: `github:github.com:I_${index}`,
 		sourceKind: "github-issue",
-		externalKey: "#5",
+		externalKey: `#${index}`,
 		sourceState: "open",
-		url: "https://github.com/acme/factory/issues/5",
-		title: "Persist source facts",
+		url: `https://github.com/acme/factory/issues/${index}`,
+		title,
 		description: "Keep state independent from GitHub.",
 		labels: ["ready-for-agent"],
 		externalUpdatedAt: "2026-08-31T10:00:00Z",
@@ -72,6 +77,13 @@ const success: FetchOutcome = {
 	status: "success",
 	fetchedAt: "2026-08-31T10:01:00Z",
 	tickets: [fetched()],
+};
+
+/** Two open tickets of the same repository: a queue the dispatch can form. */
+const pairSuccess: FetchOutcome = {
+	status: "success",
+	fetchedAt: "2026-08-31T10:01:00Z",
+	tickets: [fetched(5, "Persist source facts"), fetched(6, "Watch agent turns")],
 };
 
 /** A checkout directory the config maps the ticket's repository to. */
@@ -92,20 +104,25 @@ function stubCheckout(app: SeededApp): void {
 
 /**
  * A state with the ticket in the given shape: open, in flight with the
- * stored herdr handles, or awaiting with a settled completion.
+ * stored herdr handles, or awaiting with a settled completion. The stored
+ * handoff takes the given environment kind.
  */
-function seed(shape: "open" | "in-flight" | "awaiting"): FactoryState {
+function seed(
+	shape: "open" | "in-flight" | "awaiting",
+	outcome: FetchOutcome = success,
+	environment: "live-worktree" | "worktree" = "live-worktree",
+): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
 	const state = openFactoryState(join(dir, "state.sqlite"));
 	state.initializeSources([source]);
-	state.applyFetch(source, success);
+	state.applyFetch(source, outcome);
 	if (shape !== "open") {
 		const claim = state.claimHandoff(
 			identity,
 			{
 				agentType: "pi",
-				environment: "live-worktree",
+				environment,
 				taskType: "implement",
 				model: "",
 				thinking: "",
@@ -144,8 +161,10 @@ interface SeededApp {
 function seededApp(
 	shape: "open" | "in-flight" | "awaiting",
 	extra: Partial<FactoryConfig> = {},
+	outcome: FetchOutcome = success,
+	environment: "live-worktree" | "worktree" = "live-worktree",
 ): SeededApp {
-	const state = seed(shape);
+	const state = seed(shape, outcome, environment);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -158,8 +177,25 @@ function seededApp(
 		...extra,
 	};
 	const runner = new FakeRunner();
-	const src = new FakeSource("issues", "github-issues", success);
+	const src = new FakeSource("issues", "github-issues", outcome);
 	return { state, config, runner, configPath, src };
+}
+
+/**
+ * A runner that passes through to a fake runner while holding one command
+ * for a fixed time. A frame test uses it to hold the handoff seat: the
+ * in-flight handoff keeps the queue blocked while the operator works the
+ * ticket behind it, so the drain runs while that ticket is still moving.
+ */
+function holding(runner: FakeRunner, command: string, ms: number): CommandRunner {
+	return {
+		run: async (name, args, options) => {
+			if ([name, ...args].join(" ").trim() === command) {
+				await new Promise((resolve) => setTimeout(resolve, ms));
+			}
+			return runner.run(name, args, options);
+		},
+	};
 }
 
 function propsOf(app: SeededApp): AppProps {
@@ -184,10 +220,10 @@ async function pressReturn(
 }
 
 /** The ticket's list row, by its title. */
-function ticketRow(frame: string): string {
+function ticketRow(frame: string, title = "Persist source facts"): string {
 	const rows = rowsOf(frame);
-	const row = rows.find((line) => line.includes("Persist source facts"));
-	if (row === undefined) throw new Error(`no ticket row in frame:\n${frame}`);
+	const row = rows.find((line) => line.includes(title));
+	if (row === undefined) throw new Error(`no ticket row for ${title} in frame:\n${frame}`);
 	return row;
 }
 
@@ -337,6 +373,141 @@ describe("the decision panel", () => {
 		);
 		app.state.close();
 	});
+
+	test("goto focuses the stored pane and leaves the handoff open", async () => {
+		const app = seededApp("awaiting");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				// Goto is the second row: one down, confirm.
+				await press(setup, "j", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
+				// The focus went to the stored pane, and the handoff stayed
+				// open: the ticket is running, and the row wears the missing
+				// badge only because the faked agent list is empty.
+				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
+				const visible = app.state.visibleTickets(app.config.taskRules, app.config.defaultTaskType);
+				expect(visible[0]?.state).toBe("running");
+				expect(ticketRow(await settle(setup))).toContain("missing");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
+describe("the Close cleanup", () => {
+	test("close on a worktree handoff removes the checkout, then the herdr workspace", async () => {
+		const app = seededApp("awaiting", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				// Close is the default row: confirm.
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				const commands = app.runner.commands();
+				// The checkout first: herdr worktree remove runs git worktree
+				// remove and never deletes the branch, so pushed work and pull
+				// requests survive. The herdr state of the workspace after.
+				const removeIndex = commands.indexOf("herdr worktree remove --workspace ws-1");
+				const closeIndex = commands.indexOf("herdr workspace close ws-1");
+				expect(removeIndex).toBeGreaterThanOrEqual(0);
+				expect(closeIndex).toBeGreaterThan(removeIndex);
+				const joined = commands.join("\n");
+				expect(joined).not.toContain("branch -D");
+				expect(joined).not.toContain("branch --delete");
+				expect(joined).not.toContain("tab close");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("close on a live worktree handoff closes only the tab it made", async () => {
+		const app = seededApp("awaiting");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				const commands = app.runner.commands();
+				expect(commands).toContain("herdr tab close tab-1");
+				const joined = commands.join("\n");
+				expect(joined).not.toContain("worktree remove");
+				expect(joined).not.toContain("workspace close");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("abandon on a worktree handoff removes the checkout, then the herdr workspace", async () => {
+		const app = seededApp("in-flight", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				await press(setup, "j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+				const commands = app.runner.commands();
+				const removeIndex = commands.indexOf("herdr worktree remove --workspace ws-1");
+				const closeIndex = commands.indexOf("herdr workspace close ws-1");
+				expect(removeIndex).toBeGreaterThanOrEqual(0);
+				expect(closeIndex).toBeGreaterThan(removeIndex);
+				const joined = commands.join("\n");
+				expect(joined).not.toContain("branch -D");
+				expect(joined).not.toContain("branch --delete");
+				expect(joined).not.toContain("tab close");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("abandon on a live worktree handoff closes only the tab it made", async () => {
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				await press(setup, "j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+				const commands = app.runner.commands();
+				expect(commands).toContain("herdr tab close tab-1");
+				const joined = commands.join("\n");
+				expect(joined).not.toContain("worktree remove");
+				expect(joined).not.toContain("workspace close");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
 });
 
 describe("the auto dispatch", () => {
@@ -375,6 +546,56 @@ describe("the auto dispatch", () => {
 		app.state.close();
 	});
 
+	test("two open tickets dispatch in one cycle, and the queue drains when the seat frees", async () => {
+		const app = seededApp("open", { autoHandoff: true }, pairSuccess);
+		stubCheckout(app);
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				// The first cycle dispatches both tickets: the first handoff
+				// runs, the second queues behind it. When the first settles,
+				// the seat frees, and the drain starts the second.
+				await awaitFrame(
+					setup,
+					(f) =>
+						f.includes("auto: on 0/2") &&
+						ticketRow(f).includes("missing") &&
+						ticketRow(f, "Watch agent turns").includes("missing"),
+					"both dispatches",
+				);
+				// One herdr agent start per ticket, under the ticket's own
+				// name: the queue drained, and no handoff ran twice.
+				const starts = app.runner.commands().filter((c) => c.startsWith("herdr agent start"));
+				expect(starts).toEqual([
+					"herdr agent start persist-source-facts --kind pi --pane pane-1",
+					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
+				]);
+				// No ticket is left with an unresolved handoff: every claim
+				// the queue held settled, so nothing needs recovery.
+				const visible = app.state.visibleTickets(app.config.taskRules, app.config.defaultTaskType);
+				expect(visible).toHaveLength(2);
+				for (const ticket of visible) {
+					expect(ticket.handoffRecoveryRequired).toBe(false);
+					expect(ticket.state).toBe("handed-off");
+				}
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("manual mode leaves the open ticket alone", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -394,5 +615,197 @@ describe("the auto dispatch", () => {
 			propsOf(app),
 		);
 		app.state.close();
+	});
+});
+
+describe("the handoff queue", () => {
+	test("a queued handoff whose ticket moved on settles its claim as failed", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
+		paths.push(dir);
+		// The seeded in-flight ticket carries the newer external update: once
+		// the open ticket's handoff puts both tickets in the in-flight group,
+		// the tie-break sorts the in-flight one first, and the list move
+		// lands on it.
+		const pairMoved: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [
+				fetched(5, "Persist source facts"),
+				{ ...fetched(6, "Watch agent turns"), externalUpdatedAt: "2026-08-31T10:05:00Z" },
+			],
+		};
+		const state = openFactoryState(join(dir, "state.sqlite"));
+		state.initializeSources([source]);
+		state.applyFetch(source, pairMoved);
+		// The second ticket starts in flight, with the stored herdr handles.
+		const claim = state.claimHandoff(
+			secondIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-2",
+		});
+
+		const path = checkout();
+		const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
+		paths.push(home);
+		const configPath = join(home, "config.toml");
+		writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			repos: { [repoIdentity]: path },
+			workflows: [{ from: "implement", to: ["review"] }],
+		};
+		const inner = new FakeRunner();
+		inner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		inner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+			stdout: `https://${repoIdentity}.git\n`,
+		});
+		inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		inner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		inner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		});
+		inner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+		// Hold the first handoff's agent start: the seat stays busy through
+		// the whole key sequence, so the drain runs after the last key, while
+		// the ticket the queued restart waits on has already moved on.
+		const runner = holding(
+			inner,
+			"herdr agent start persist-source-facts --kind pi --pane pane-1",
+			4000,
+		);
+		const src = new FakeSource("issues", "github-issues", pairMoved);
+
+		await withApp(
+			async (setup) => {
+				src.settle(pairMoved);
+				// Let the settle's state updates commit before any key goes
+				// out: the test renderer stalls a key that lands while the
+				// refresh chain's updates are still in flight.
+				await sleep(250);
+				// The in-flight ticket is missing: its badge shows.
+				await awaitFrame(
+					setup,
+					(f) => ticketRow(f, "Watch agent turns").includes("missing"),
+					"the missing badge",
+				);
+				// Every key here waits for its effect and then for the chained
+				// updates (the observation tick, the status line) to go quiet:
+				// a key that lands while they are in flight stalls the test
+				// renderer.
+				const pressQuiet = async (
+					key: Parameters<typeof press>[1],
+					what: string,
+					predicate: (f: string) => boolean,
+				): Promise<string> => {
+					const frame = await press(setup, key, what, predicate);
+					await sleep(150);
+					return frame;
+				};
+				const pressReturnQuiet = async (
+					what: string,
+					predicate: (f: string) => boolean,
+				): Promise<string> => {
+					const frame = await pressReturn(setup, what, predicate);
+					await sleep(150);
+					return frame;
+				};
+				// Hand off the open ticket: it runs, and it holds the seat.
+				// The list rows sit on frame lines two and three: line one is
+				// the box border, and the list pads a blank line above its
+				// first row. The in-flight ticket is first, and it is the
+				// initial selection, so the move down lands the marker on
+				// line three - a line it was not on, so the key is applied
+				// before the next key is pressed.
+				await pressQuiet("j", "select the open ticket", (f) => markerRowOf(f) === 3);
+				await pressReturnQuiet("the handoff to start", (f) => f.includes("handing off"));
+				// Back to the missing ticket: its restart queues behind the
+				// handoff in flight.
+				await pressQuiet("k", "select the missing ticket", (f) => markerRowOf(f) === 2);
+				await pressReturnQuiet("the missing panel", (f) => f.includes("Missing:"));
+				await pressReturnQuiet("the restart to queue", (f) => !f.includes("Missing:"));
+				// And while the restart is queued, the ticket moves on:
+				// abandon it.
+				await pressReturnQuiet("the missing panel again", (f) => f.includes("Missing:"));
+				await pressQuiet("j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressReturnQuiet("the abandonment", (f) =>
+					ticketRow(f, "Watch agent turns").includes("[open]"),
+				);
+				// The handoff settles, and the queue drains: the restart's
+				// claim settles as failed, because the ticket is open now.
+				await awaitFrame(
+					setup,
+					(f) => f.includes("was not run"),
+					"the drained queue warning",
+					5000,
+				);
+				expect(frameText(setup.captureCharFrame())).toContain(
+					'queued handoff for "Watch agent turns" was not run: the ticket is now open',
+				);
+
+				// The queue held exactly one handoff: the open ticket's.
+				// No agent started for the ticket that moved on.
+				const starts = inner.commands().filter((c) => c.startsWith("herdr agent start"));
+				expect(starts).toEqual(["herdr agent start persist-source-facts --kind pi --pane pane-1"]);
+				// The abandonment ran the Close cleanup on the stored
+				// environment.
+				expect(inner.commands()).toContain("herdr tab close tab-2");
+				const visible = state.visibleTickets(config.taskRules, config.defaultTaskType);
+				const movedOn = visible.find((t) => t.identity === secondIdentity);
+				const inFlight = visible.find((t) => t.identity === identity);
+				expect(movedOn?.state).toBe("open");
+				expect(movedOn?.handoffRecoveryRequired).toBe(false);
+				expect(movedOn?.actionable).toBe(true);
+				expect(inFlight?.state).toBe("handed-off");
+				expect(inFlight?.handoffRecoveryRequired).toBe(false);
+
+				// The claim settled, so the ticket is not dead: it hands off
+				// again on demand.
+				await pressQuiet("j", "select the open ticket", (f) => markerRowOf(f) === 3);
+				await pressReturnQuiet("the re-handoff", (f) => f.includes("handing off"));
+				await awaitFrame(
+					setup,
+					() =>
+						inner
+							.commands()
+							.includes("herdr agent start watch-agent-turns --kind pi --pane pane-1"),
+					"the re-handoff start",
+				);
+				await settle(setup);
+				const startsAfter = inner.commands().filter((c) => c.startsWith("herdr agent start"));
+				expect(startsAfter).toEqual([
+					"herdr agent start persist-source-facts --kind pi --pane pane-1",
+					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
+				]);
+				const finalVisible = state.visibleTickets(config.taskRules, config.defaultTaskType);
+				const reHandled = finalVisible.find((t) => t.identity === secondIdentity);
+				expect(reHandled?.state).toBe("handed-off");
+				expect(reHandled?.handoffRecoveryRequired).toBe(false);
+			},
+			WIDTH,
+			HEIGHT,
+			{
+				config,
+				state,
+				runner,
+				configPath,
+				sources: [src],
+				pollIntervalMs: 60_000,
+			},
+		);
+		state.close();
 	});
 });

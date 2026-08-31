@@ -729,12 +729,14 @@ async function closePreviousTab(
  * herdr environment of a finished work cycle without touching the git
  * branch, so pushed work and pull requests survive.
  *
- * - The worktree environment loses its herdr worktree workspace; the git
- *   branch stays.
+ * - The worktree environment loses its worktree checkout (herdr
+ *   `worktree remove` runs `git worktree remove` and never deletes the
+ *   branch) and the herdr state behind it (herdr `workspace close` closes
+ *   only herdr state). The git branch stays.
  * - The live worktree environment loses the handoff's tab; the workspace
  *   stays.
  *
- * Returns a readable reason when the cleanup command fails; the caller
+ * Returns a readable reason when a cleanup command fails; the caller
  * keeps the state transition and warns on the status line.
  */
 export async function closeHandoffEnvironment(
@@ -743,8 +745,18 @@ export async function closeHandoffEnvironment(
 ): Promise<string | undefined> {
 	if (handoff.environment === "worktree") {
 		if (handoff.workspaceId === null) return undefined;
-		const result = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
-		return result.code === 0 ? undefined : commandFailureText(result);
+		// The checkout on disk: herdr worktree remove never deletes the
+		// branch, so pushed work and pull requests survive.
+		const removed = await runner.run("herdr", [
+			"worktree",
+			"remove",
+			"--workspace",
+			handoff.workspaceId,
+		]);
+		if (removed.code !== 0) return commandFailureText(removed);
+		// The herdr state of the workspace: it holds only herdr state.
+		const closed = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
+		return closed.code === 0 ? undefined : commandFailureText(closed);
 	}
 	if (handoff.environment === "live-worktree") {
 		if (handoff.tabId === null) return undefined;

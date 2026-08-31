@@ -15,7 +15,12 @@ import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } from "../config.ts";
-import { HANDOFF_ENVIRONMENT_KINDS, type Handoff, type Ticket } from "../domain/ticket.ts";
+import {
+	HANDOFF_ENVIRONMENT_KINDS,
+	type Handoff,
+	type Ticket,
+	type TicketState,
+} from "../domain/ticket.ts";
 import {
 	baseChoice,
 	closeHandoffEnvironment,
@@ -287,6 +292,8 @@ export function App({
 	 * previous handoff; an open-ticket handoff builds the environment from
 	 * scratch. A handoff claimed while another runs queues behind it: the
 	 * claim has already moved the ticket, so only the external work waits.
+	 * When the in-flight handoff settles, the queue drains: the seat is
+	 * free, so the next claimed handoff starts.
 	 */
 	const runClaimedHandoff = (
 		ticket: Ticket,
@@ -340,23 +347,59 @@ export function App({
 				replaceTickets();
 				await finishOutcome(outcome);
 				inFlightRef.current = false;
+				drainQueue();
 			})
 			.catch((error) => {
 				state.settleHandoff(claim.attemptId, false, errorMessage(error));
 				replaceTickets();
 				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
 				inFlightRef.current = false;
+				drainQueue();
 			});
-		void runNextQueued();
 	};
 
-	// Run the next queued handoff, if the seat is free.
-	const runNextQueued = (): Promise<void> => {
-		if (inFlightRef.current || queueRef.current.length === 0) return Promise.resolve();
-		const next = queueRef.current[0];
-		queueRef.current = queueRef.current.slice(1);
-		runClaimedHandoff(next.ticket, next.choice, next.origin, next.claim, next.previousMessage);
-		return Promise.resolve();
+	/**
+	 * Drain the handoff queue once the seat is free.
+	 *
+	 * Every queued handoff re-checks the ticket's durable state before it
+	 * runs: the claim passed when the queue formed, and the ticket may
+	 * have moved on since (the cycle closed, the turn settled, the ticket
+	 * left the state). A moved-on ticket settles its claim as failed
+	 * instead of running a handoff on a stale snapshot, and the queue
+	 * keeps draining, so a later item still starts when the seat frees.
+	 */
+	const drainQueue = (): void => {
+		if (state === undefined) return;
+		while (queueRef.current.length > 0 && !inFlightRef.current) {
+			const next = queueRef.current[0];
+			queueRef.current = queueRef.current.slice(1);
+			const currentState = state.ticketState(next.ticket.identity);
+			if (currentState === undefined || !handoffAllowsState(next.origin, currentState)) {
+				state.settleHandoff(
+					next.claim.attemptId,
+					false,
+					currentState === undefined
+						? "the ticket no longer exists"
+						: `the ticket is now ${currentState}`,
+				);
+				replaceTickets();
+				setStatus({
+					kind: "warning",
+					text:
+						currentState === undefined
+							? `queued handoff for "${next.ticket.title}" was not run: the ticket no longer exists`
+							: `queued handoff for "${next.ticket.title}" was not run: the ticket is now ${currentState}`,
+				});
+				continue;
+			}
+			// The fresh projection when the ticket is visible, else the claim's
+			// snapshot: the handoff runs on the ticket it claimed.
+			const snapshot =
+				state
+					.visibleTickets(configRef.current.taskRules, configRef.current.defaultTaskType)
+					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
+			runClaimedHandoff(snapshot, next.choice, next.origin, next.claim, next.previousMessage);
+		}
 	};
 
 	/**
@@ -908,4 +951,22 @@ export function App({
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(value, max));
+}
+
+/**
+ * The states a handoff origin may still start from when its turn comes.
+ *
+ * The claim passes in the claim's state, and the queue waits on the seat.
+ * If the ticket moved on while it waited, its state no longer matches the
+ * origin, and the claim settles as failed instead of starting the handoff.
+ */
+function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean {
+	switch (origin) {
+		case "open":
+			return state === "open";
+		case "workflow":
+			return state === "awaiting";
+		case "restart":
+			return state === "handed-off" || state === "running";
+	}
 }
