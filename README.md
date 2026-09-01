@@ -107,11 +107,17 @@ The second row, "Goto", focuses the agent's pane so the operator can steer
 it; the ticket returns to `running`. Goto is a state move, not a completion
 decision, so the trace does not record it: the turn's pending trace stays
 pending, and the next settle refreshes it with the agent's new last message.
-Then one "Handoff: `<task type>`" row per distinct target the outgoing
-workflow edges allow from the completed task type, in config order: two
-edges to the same target offer one row. Choosing it hands the ticket off
-again with the edge's target task type, pinning the edge's agent type and
-environment when the edge defines them.
+Then one "Handoff: `<task type>`" row per outgoing workflow edge the
+completed task type has, in config order: an edge naming several targets
+offers one row per target, and two edges to the same target keep both
+rows, so every edge stays reachable. The row's detail shows the edge's
+pinned agent type and environment when the edge defines them, so two
+rows that share a target differ. Choosing a row hands the ticket off again with that
+target task type, pinning the edge's agent type and environment when the
+edge defines them. The row's "handed-off" decision lands on the turn's
+trace only when the routed handoff settles with the agent started; a
+failed route leaves the trace pending, so Close and Goto keep working
+on the awaiting ticket.
 
 ### Missing agent panel keys
 

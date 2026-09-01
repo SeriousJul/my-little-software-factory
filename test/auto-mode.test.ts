@@ -371,6 +371,105 @@ describe("the decision panel", () => {
 				const prompt = commands.find((c) => c.startsWith("herdr agent prompt"));
 				expect(prompt?.includes("The turn is done.")).toBe(true);
 				expect(commands.at(-1)).toBe("herdr tab close tab-1");
+				// The route's decision landed on the settled turn's trace when
+				// the routed handoff started, not at the claim.
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("each outgoing edge offers its own row, and the pinning shows on the row", async () => {
+		const app = seededApp("awaiting", {
+			workflows: [
+				{ from: "implement", to: ["review"] },
+				{ from: "implement", to: ["review"], agent: "codex" },
+			],
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				// Two edges to the same target keep both rows, so every edge
+				// stays reachable. The second row's detail shows the pinning
+				// that tells the rows apart.
+				expect(panel.split("Handoff: review").length - 1).toBe(2);
+				expect(panel).toContain("agent codex");
+
+				// The pinned row is the last one: down three (close, goto,
+				// first edge), confirm.
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the first edge", (f) =>
+					frameText(f).includes("❯ Handoff: review review"),
+				);
+				await pressArrow(setup, "down", "the pinned edge", (f) =>
+					frameText(f).includes("❯ Handoff: review agent codex"),
+				);
+				await pressReturn(setup, "the routed handoff", (f) => f.includes("Task type: review"));
+
+				// The handoff ran with the edge's pinned agent, and the
+				// route's decision landed on the settled turn's trace when the
+				// routed handoff started.
+				expect(app.runner.commands()).toContain(
+					"herdr agent start persist-source-facts --kind codex --pane pane-9",
+				);
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a failed route leaves the trace pending, and Close still ends the cycle", async () => {
+		const app = seededApp("awaiting");
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The stored workspace still lists, but the fresh tab cannot be made:
+		// the handoff fails before the agent starts.
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			code: 1,
+			stderr: "the workspace is gone",
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await pressReturn(setup, "the failed route", (f) => f.includes("the workspace is gone"));
+
+				// The handoff never started: the ticket still awaits, and the
+				// turn's trace is still pending, so the decision panel keeps
+				// working on it.
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				await pressReturn(setup, "the decision panel again", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
 			},
 			WIDTH,
 			HEIGHT,

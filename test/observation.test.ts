@@ -11,6 +11,7 @@ import {
 	ObservationCoordinator,
 	stripAnsi,
 } from "../src/observation.ts";
+import type { RefreshClock } from "../src/refresh.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
@@ -755,6 +756,88 @@ describe("the open dispatch", () => {
 		}
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
+		state.close();
+	});
+});
+
+describe("the injectable clock", () => {
+	/** The scheduling clock, faked: time moves only when the test fires it. */
+	class FakeClock implements RefreshClock {
+		readonly delays: number[] = [];
+		private nextId = 1;
+		private readonly live = new Map<number, { delay: number; callback: () => void }>();
+
+		setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> {
+			const id = this.nextId++;
+			this.live.set(id, { delay: milliseconds, callback });
+			this.delays.push(milliseconds);
+			return id as unknown as ReturnType<typeof setTimeout>;
+		}
+
+		clearTimeout(handle: ReturnType<typeof setTimeout>): void {
+			this.live.delete(Number(handle));
+		}
+
+		/** Fire the oldest pending timer. */
+		fireOldest(): void {
+			const [id, timer] = [...this.live.entries()][0] ?? [];
+			if (timer === undefined) return;
+			this.live.delete(id);
+			timer.callback();
+		}
+
+		get pending(): number {
+			return this.live.size;
+		}
+	}
+
+	/** Drain every pending microtask before continuing the test. */
+	async function turns(): Promise<void> {
+		await new Promise((resolve) => setImmediate(resolve));
+		await Promise.resolve();
+	}
+
+	test("the loop polls on the clock, and stop clears the pending poll", async () => {
+		const clock = new FakeClock();
+		let listCalls = 0;
+		const state = openFactoryState(":memory:");
+		state.initializeSources([source]);
+		state.applyFetch(source, success([fetched()]));
+		const coordinator = new ObservationCoordinator({
+			state,
+			herdr: {
+				listAgents: async () => {
+					listCalls += 1;
+					return { kind: "ok", agents: [] };
+				},
+				readPane: async () => null,
+			},
+			config: () => config,
+			dispatch: async () => ({ ok: true }),
+			cleanup: async () => undefined,
+			now: () => Date.parse("2026-08-31T11:00:00Z"),
+			mode: () => false,
+			intervalMs: 5_000,
+			clock,
+			onChanged: () => undefined,
+			onStatus: () => undefined,
+		});
+		coordinator.start();
+		await turns();
+		// The first cycle ran at once, and the next poll waits on the clock.
+		expect(listCalls).toBe(1);
+		expect(clock.delays).toEqual([5_000]);
+		expect(clock.pending).toBe(1);
+
+		// Firing the pending poll runs a second cycle and schedules the next.
+		clock.fireOldest();
+		await turns();
+		expect(listCalls).toBe(2);
+		expect(clock.delays).toEqual([5_000, 5_000]);
+
+		// Stop cleared the pending poll: nothing is left on the clock.
+		coordinator.stop();
+		expect(clock.pending).toBe(0);
 		state.close();
 	});
 });

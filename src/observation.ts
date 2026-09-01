@@ -34,6 +34,7 @@
 
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import { baseChoice, type HandoffChoice } from "./handoff.ts";
+import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { commandFailureText } from "./repo.ts";
 import type { CommandRunner } from "./runner.ts";
 import type { FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
@@ -209,6 +210,11 @@ interface ObservationOptions {
 	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	/** A message for the status line. */
 	onStatus: (kind: "info" | "warning" | "error", text: string) => void;
+	/**
+	 * The scheduling clock, the same injectable interface the refresh
+	 * coordinator takes. Defaults to the system clock.
+	 */
+	clock?: RefreshClock;
 }
 
 export class ObservationCoordinator {
@@ -223,7 +229,8 @@ export class ObservationCoordinator {
 	private readonly onChanged: () => void;
 	private readonly onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	private readonly onStatus: (kind: "info" | "warning" | "error", text: string) => void;
-	private timer: NodeJS.Timeout | null = null;
+	private readonly clock: RefreshClock;
+	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
 	private cycleInFlight = false;
 	private holdingHerdrError = false;
@@ -256,16 +263,26 @@ export class ObservationCoordinator {
 		this.onChanged = options.onChanged;
 		this.onAgents = options.onAgents;
 		this.onStatus = options.onStatus;
+		this.clock = options.clock ?? SYSTEM_CLOCK;
 	}
 
 	/** Begin polling. The first cycle runs immediately. */
 	start(): void {
-		if (this.timer !== null) return;
+		if (this.timer !== null || this.stopped) return;
 		void this.safeCycle();
-		this.timer = setInterval(() => {
-			void this.safeCycle();
-		}, this.intervalMs);
+		this.scheduleNext();
 	}
+
+	/** Schedule the next cycle on the clock; a stopped loop schedules none. */
+	private scheduleNext(): void {
+		if (this.stopped || this.timer !== null) return;
+		this.timer = this.clock.setTimeout(this.nextCycle, this.intervalMs);
+	}
+
+	private nextCycle = (): void => {
+		this.timer = null;
+		void this.safeCycle().finally(() => this.scheduleNext());
+	};
 
 	/** Run one cycle when one is not already running. Returns when it is done. */
 	async tick(): Promise<void> {
@@ -276,7 +293,7 @@ export class ObservationCoordinator {
 	stop(): void {
 		this.stopped = true;
 		if (this.timer !== null) {
-			clearInterval(this.timer);
+			this.clock.clearTimeout(this.timer);
 			this.timer = null;
 		}
 	}

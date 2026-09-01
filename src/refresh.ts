@@ -7,7 +7,7 @@ export interface RefreshClock {
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void;
 }
 
-const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
+export const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
 
 export class RefreshCoordinator {
 	private readonly inFlight = new Set<string>();

@@ -14,7 +14,13 @@ import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { DEFAULT_CONFIG, defaultConfigPath, type FactoryConfig, persistConfig } from "../config.ts";
+import {
+	DEFAULT_CONFIG,
+	defaultConfigPath,
+	type FactoryConfig,
+	persistConfig,
+	type WorkflowEdge,
+} from "../config.ts";
 import {
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
@@ -344,6 +350,22 @@ export function App({
 								workspaceId: outcome.agent.workspaceId,
 							},
 				);
+				// The manual route's decision lands here, on the settled turn's
+				// trace, and only when the routed handoff actually started:
+				// the agent's pane is live, so the ticket reads as handed-off
+				// where the agent is. A failed route leaves the trace pending,
+				// so Close and Goto keep working on the awaiting ticket.
+				if (outcome.status !== "failed" && origin === "workflow") {
+					const previousHandoffId = ticket.handoff?.attemptId ?? "";
+					if (previousHandoffId !== "") {
+						state.applyCompletionDecision({
+							ticketIdentity: ticket.identity,
+							handoffId: previousHandoffId,
+							decision: "handed-off",
+							decidedAt: new Date().toISOString(),
+						});
+					}
+				}
 				replaceTickets();
 				await finishOutcome(outcome);
 				inFlightRef.current = false;
@@ -530,8 +552,11 @@ export function App({
 	};
 
 	// The decision panel's rows: Close first, selected by default, then a Goto,
-	// then one handoff per distinct target the outgoing workflow edges allow,
-	// in config order. Two edges to the same target offer one row.
+	// then one handoff row per outgoing workflow edge the completed task type
+	// has, in config order: every edge stays reachable, and an edge naming
+	// several targets offers one row per target. Two edges to the same target
+	// offer two rows, and the row's detail shows the edge's pinning so the
+	// operator can tell them apart.
 	const decisionFor = (ticket: Ticket): { actions: ActionRow[]; body: string[] } => {
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
@@ -539,19 +564,28 @@ export function App({
 			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
 			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
 		];
-		const seen = new Set<string>();
-		for (const edge of configRef.current.workflows) {
-			if (edge.from !== taskType) continue;
+		configRef.current.workflows.forEach((edge, index) => {
+			if (edge.from !== taskType) return;
 			for (const target of edge.to) {
-				if (seen.has(target)) continue;
-				seen.add(target);
-				actions.push({ key: `route:${target}`, label: `Handoff: ${target}`, detail: target });
+				actions.push({
+					key: `route:${index}:${target}`,
+					label: `Handoff: ${target}`,
+					detail: routeDetail(edge, target),
+				});
 			}
-		}
+		});
 		return {
 			actions,
 			body: ticket.lastCompletion === null ? [] : ticket.lastCompletion.message.split("\n"),
 		};
+	};
+
+	/** The handoff row's detail: the edge's pinning, or the target. */
+	const routeDetail = (edge: WorkflowEdge, target: string): string => {
+		const pin: string[] = [];
+		if (edge.agent !== undefined) pin.push(`agent ${edge.agent}`);
+		if (edge.environment !== undefined) pin.push(`environment ${edge.environment}`);
+		return pin.length > 0 ? pin.join(", ") : target;
 	};
 
 	// Goto: the operator focuses the agent's pane in herdr and the handoff
@@ -617,19 +651,28 @@ export function App({
 			runGoto(ticket);
 			return;
 		}
-		// key === `route:<target>`
-		const target = key.slice("route:".length);
+		// key === `route:<edge index>:<target>`: the row's edge, re-read from
+		// the config, so a runtime config change cannot point the action at a
+		// moved or removed edge.
+		const rest = key.slice("route:".length);
+		const separator = rest.indexOf(":");
+		const edge = configRef.current.workflows[Number(rest.slice(0, separator))];
+		const target = rest.slice(separator + 1);
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
-		const edge = configRef.current.workflows.find(
-			(candidate) => candidate.from === taskType && candidate.to.includes(target),
-		);
+		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
+			setStatus({ kind: "warning", text: `no workflow edge from ${taskType} to ${target}` });
+			return;
+		}
 		const stored = ticket.handoff;
-		// Claim first: a refused claim leaves the ticket where it was, and the
-		// decision is recorded only for a handoff that actually starts.
+		// Claim first: a refused claim leaves the ticket where it was. The
+		// turn's decision is not recorded here: it lands on the settled
+		// turn's trace in the handoff's settle path, and only when the
+		// routed handoff actually started. A failed route leaves the trace
+		// pending, so Close and Goto keep working.
 		const choice = baseChoice(
-			edge?.agent ?? configRef.current.defaultAgent,
-			edge?.environment ?? configRef.current.defaultEnvironment,
+			edge.agent ?? configRef.current.defaultAgent,
+			edge.environment ?? configRef.current.defaultEnvironment,
 			target,
 			stored?.model ?? "",
 			stored?.thinking ?? "",
@@ -639,12 +682,6 @@ export function App({
 			setStatus({ kind: "warning", text: claim.reason });
 			return;
 		}
-		state.applyCompletionDecision({
-			ticketIdentity: ticket.identity,
-			handoffId,
-			decision: "handed-off",
-			decidedAt: new Date().toISOString(),
-		});
 		runClaimedHandoff(
 			ticket,
 			choice,
