@@ -11,10 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG } from "../src/config.ts";
+import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
+	closeHandoffEnvironment,
 	type HandoffOutcome,
+	handOffStoredWorkspace,
 	handOffTicket,
 	renderPrompt,
 	renderSettingArgs,
@@ -79,6 +81,8 @@ const ticket: Ticket = {
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	handoffCount: 0,
+	lastCompletion: null,
 };
 
 const defaultChoice = {
@@ -133,6 +137,12 @@ describe("renderPrompt", () => {
 		const tricky: Ticket = { ...ticket, description: "match $& and $1 verbatim" };
 		const prompt = renderPrompt("Body: {description}", tricky);
 		expect(prompt).toBe("Body: match $& and $1 verbatim");
+	});
+
+	test("{previous-message} takes the last captured message, empty for open tickets", () => {
+		const prompt = renderPrompt("Prev: {previous-message}\n{description}", ticket, "settled");
+		expect(prompt).toBe("Prev: settled\nAdd a retry policy.");
+		expect(renderPrompt("Prev: {previous-message}", ticket)).toBe("Prev: ");
 	});
 });
 
@@ -194,7 +204,10 @@ describe("handOffTicket: the live worktree sequence", () => {
 			home: HOME,
 		});
 
-		expect(outcome).toEqual({ status: "ok" });
+		expect(outcome).toEqual({
+			status: "ok",
+			agent: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-new" },
+		});
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
@@ -928,5 +941,327 @@ describe("handOffTicket: the guard rails", () => {
 		});
 		// The handoff runs at the sibling, not the conflicting path.
 		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
+	});
+});
+
+/** A config whose implement template carries the previous message. */
+const previousMessageConfig: FactoryConfig = {
+	...DEFAULT_CONFIG,
+	taskTypes: {
+		...DEFAULT_CONFIG.taskTypes,
+		implement: {
+			...DEFAULT_CONFIG.taskTypes.implement,
+			template: "Previous: {previous-message}\n{description}",
+		},
+	},
+};
+
+describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
+	test("reuses the stored live workspace, tabs without a cwd, closes the previous tab", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-2"),
+		});
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: defaultChoice,
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent).toEqual({
+			paneId: "pane-2",
+			tabId: "tab-1",
+			workspaceId: "ws-stored",
+		});
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			"herdr workspace list",
+			"herdr tab create --workspace ws-stored --no-focus",
+			`herdr agent start ${AGENT} --kind pi --pane pane-2`,
+			`herdr agent prompt ${AGENT} ${PROMPT}`,
+			"herdr tab close tab-prev",
+		]);
+	});
+
+	test("the prompt carries the last captured message through the placeholder", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-2"),
+		});
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: defaultChoice,
+			config: previousMessageConfig,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: null,
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("ok");
+		const prompt = runner.calls.find(
+			(c) => c.command === "herdr" && c.args[0] === "agent" && c.args[1] === "prompt",
+		);
+		// `herdr agent prompt <name> <prompt>`: the prompt is the last argument.
+		expect(prompt?.args.at(-1)).toBe("Previous: settled earlier\nAdd a retry policy.");
+		// No previous tab: nothing to close.
+		expect(runner.commands()).not.toContain(expect.stringContaining("tab close"));
+	});
+
+	test("a stored worktree that is gone is reopened on its branch", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-reopen", "pane-ro") },
+		);
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: { ...defaultChoice, environment: "worktree" },
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-gone",
+			environment: "worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("ok");
+		// Reopen does not recheck the branch or read HEAD: the branch is the
+		// branch, and herdr's open owns it.
+		const commands = runner.commands();
+		expect(commands).not.toContain(expect.stringContaining("branch --list"));
+		expect(commands).not.toContain(expect.stringContaining("rev-parse HEAD"));
+		expect(commands).toContain(
+			`herdr worktree open --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
+		);
+		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-ro`);
+		expect(commands).toContain("herdr tab close tab-prev");
+	});
+
+	test("a stored live workspace that is gone falls back to the live sequence", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-still", checkoutPath: CHECKOUT }]),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-still", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-3") },
+		);
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: defaultChoice,
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-gone",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		// The live sequence found the workspace the checkout still lives in.
+		expect(commands).toContain(
+			`herdr tab create --workspace ws-still --cwd ${CHECKOUT} --no-focus`,
+		);
+		expect(commands).not.toContain(expect.stringContaining("workspace create"));
+		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-3`);
+		expect(commands).toContain("herdr tab close tab-prev");
+	});
+
+	test("a stored workspace of another environment kind is not reused", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: { ...defaultChoice, environment: "worktree" },
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-live",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("ok");
+		// The choice says worktree, the storage says live: build fresh.
+		const commands = runner.commands();
+		expect(commands).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base abc123 --no-focus`,
+		);
+		expect(commands).not.toContain(expect.stringContaining("tab create --workspace ws-live"));
+	});
+
+	test("an agent that fails in a reused workspace closes the tab the handoff made", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-2"),
+		});
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-2"], {
+			code: 1,
+			stderr: "error: herdr is not running\n",
+		});
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: defaultChoice,
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("failed");
+		const commands = runner.commands();
+		// The fresh tab is closed, so no empty residue sits in the workspace.
+		expect(commands).toContain("herdr tab close tab-1");
+		// The previous tab belongs to the settled turn: it is not closed here.
+		expect(commands).not.toContain("herdr tab close tab-prev");
+	});
+});
+
+describe("closeHandoffEnvironment: the Close cleanup", () => {
+	test("a worktree handoff removes the checkout, then the herdr workspace; the branch stays", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		// worktree remove first: it runs git worktree remove and never deletes
+		// the branch. workspace close after: it clears only herdr state.
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace close ws-1",
+		]);
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("branch -D");
+		expect(joined).not.toContain("branch --delete");
+		expect(joined).not.toContain("tab close");
+	});
+
+	test("a worktree handoff that fails to remove the checkout never closes the workspace", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr: "error: the worktree has uncommitted changes; pass --force\n",
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+		);
+
+		// The reason is the command's stderr: the caller reports it on the
+		// status line with the ticket identity.
+		expect(failure).toBe("error: the worktree has uncommitted changes; pass --force");
+		// The workspace stays: the checkout is still there.
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("a worktree handoff without a stored workspace runs nothing", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: null },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([]);
+	});
+
+	test("a live worktree handoff closes only the tab it made", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("worktree remove");
+		expect(joined).not.toContain("workspace close");
+	});
+
+	test("a live worktree handoff without a stored tab runs nothing", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: null, workspaceId: null },
+			runner,
+		);
+
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([]);
 	});
 });

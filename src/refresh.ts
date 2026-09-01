@@ -7,7 +7,7 @@ export interface RefreshClock {
 	clearTimeout(handle: ReturnType<typeof setTimeout>): void;
 }
 
-const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
+export const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
 
 export class RefreshCoordinator {
 	private readonly inFlight = new Set<string>();
@@ -45,8 +45,14 @@ export class RefreshCoordinator {
 		this.inFlight.add(source.name);
 		void Promise.resolve()
 			.then(() => source.fetch())
-			.then((outcome) => this.state.applyFetch(sourceDefinition(source), outcome))
+			// A fetch can outlive the coordinator: the shutdown window between
+			// stop() and the state closing must not touch either.
+			.then((outcome) => {
+				if (this.stopped) return;
+				this.state.applyFetch(sourceDefinition(source), outcome);
+			})
 			.catch((error) => {
+				if (this.stopped) return;
 				this.state.applyFetch(sourceDefinition(source), {
 					status: "failed",
 					reason: `unexpected source failure: ${error instanceof Error ? error.message : String(error)}`,
@@ -54,11 +60,10 @@ export class RefreshCoordinator {
 			})
 			.finally(() => {
 				this.inFlight.delete(source.name);
+				if (this.stopped) return;
 				this.changed();
-				if (!this.stopped) {
-					const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
-					this.timers.set(source.name, timer);
-				}
+				const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
+				this.timers.set(source.name, timer);
 			});
 	}
 

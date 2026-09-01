@@ -28,6 +28,8 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	handoffCount: 0,
+	lastCompletion: null,
 });
 
 describe("titleSlug", () => {
@@ -58,16 +60,16 @@ describe("branchNameFor", () => {
 
 describe("agentNameFor", () => {
 	test("is the title slug, which already fits herdr's name rule", () => {
-		expect(agentNameFor(ticket("Retry policy for webhooks"))).toBe("retry-policy-for-webhooks");
+		expect(agentNameFor("Retry policy for webhooks")).toBe("retry-policy-for-webhooks");
 	});
 
 	test("a slug that starts with a digit gets a t- prefix", () => {
-		expect(agentNameFor(ticket("2fa rollout"))).toBe("t-2fa-rollout");
+		expect(agentNameFor("2fa rollout")).toBe("t-2fa-rollout");
 	});
 
 	test("a long slug is cut to 32 characters without a trailing hyphen", () => {
 		const title = "a-very-long-title-that-goes-on-and-on-past-thirty-two-characters";
-		const name = agentNameFor(ticket(title));
+		const name = agentNameFor(title);
 		expect(name.length).toBeLessThanOrEqual(32);
 		expect(name.endsWith("-")).toBe(false);
 		expect(/^[a-z][a-z0-9_-]*$/.test(name)).toBe(true);

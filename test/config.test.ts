@@ -93,6 +93,15 @@ describe("loadConfigFile", () => {
 		expect(DEFAULT_CONFIG.agents).toHaveProperty("claude");
 		expect(DEFAULT_CONFIG.taskTypes).toHaveProperty("implement");
 		expect(DEFAULT_CONFIG.defaultEnvironment).toBe("live-worktree");
+		expect(DEFAULT_CONFIG.autoHandoff).toBe(false);
+		expect(DEFAULT_CONFIG.maxParallelAgents).toBe(2);
+		expect(DEFAULT_CONFIG.agentPollIntervalSeconds).toBe(5);
+		expect(DEFAULT_CONFIG.completionMessageLines).toBe(200);
+		expect(DEFAULT_CONFIG.maxHandoffsPerTicket).toBe(10);
+		expect(DEFAULT_CONFIG.workflows).toEqual([]);
+		for (const task of Object.values(DEFAULT_CONFIG.taskTypes)) {
+			expect(task.autoClose).toBe(false);
+		}
 	});
 
 	test("a valid file loads", async () => {
@@ -328,6 +337,7 @@ describe("validateConfig", () => {
 			expect(config.taskTypes.merge).toEqual({
 				template: expect.stringContaining("Squash and merge"),
 				thinking: "low",
+				autoClose: false,
 			});
 			expect(config.taskRules).toEqual([
 				{
@@ -450,7 +460,7 @@ describe("validateConfig", () => {
 		);
 	});
 
-	test("a task type template only knows the three placeholders", () => {
+	test("a task type template only knows the prompt placeholders", () => {
 		expectConfigError(
 			{
 				"default-agent": "pi",
@@ -553,10 +563,18 @@ describe("validateConfig", () => {
 				merge: { template: "Merge {title}", thinking: "low" },
 			},
 		});
-		expect(config.taskTypes.merge).toEqual({ template: "Merge {title}", thinking: "low" });
+		expect(config.taskTypes.merge).toEqual({
+			template: "Merge {title}",
+			thinking: "low",
+			autoClose: false,
+		});
 		// The thinking default survives a write/read cycle.
 		const roundTrip = validateConfig(parseToml(configToToml(config)));
-		expect(roundTrip.taskTypes.merge).toEqual({ template: "Merge {title}", thinking: "low" });
+		expect(roundTrip.taskTypes.merge).toEqual({
+			template: "Merge {title}",
+			thinking: "low",
+			autoClose: false,
+		});
 	});
 
 	test("a task type thinking level must be a non-empty string", () => {
@@ -743,6 +761,138 @@ describe("ticket source configuration", () => {
 			},
 			"specify exactly one",
 		);
+	});
+});
+
+describe("auto-handoff config keys", () => {
+	/** The minimal config every test in this block breaks in one place. */
+	const base = () => ({
+		"default-agent": "pi",
+		"default-environment": "live-worktree",
+		"default-task-type": "implement",
+		agents: { pi: { kind: "pi" } },
+		"task-types": { implement: { template: "x" } },
+	});
+
+	test("absent keys take the shipped defaults", () => {
+		const config = validateConfig(base());
+		expect(config.autoHandoff).toBe(false);
+		expect(config.maxParallelAgents).toBe(2);
+		expect(config.agentPollIntervalSeconds).toBe(5);
+		expect(config.completionMessageLines).toBe(200);
+		expect(config.maxHandoffsPerTicket).toBe(10);
+		expect(config.workflows).toEqual([]);
+		expect(config.taskTypes.implement.autoClose).toBe(false);
+	});
+
+	test("the new keys validate their types and ranges", () => {
+		expectConfigError({ ...base(), "auto-handoff": "yes" }, "auto-handoff: must be a boolean");
+		expectConfigError(
+			{ ...base(), "max-parallel-agents": -1 },
+			"max-parallel-agents: must be a whole number of 0 or more",
+		);
+		expectConfigError(
+			{ ...base(), "max-parallel-agents": 2.5 },
+			"max-parallel-agents: must be a whole number of 0 or more",
+		);
+		expectConfigError(
+			{ ...base(), "agent-poll-interval-seconds": 0 },
+			"agent-poll-interval-seconds: must be a positive number",
+		);
+		expectConfigError(
+			{ ...base(), "completion-message-lines": 0 },
+			"completion-message-lines: must be a whole number greater than 0",
+		);
+		expectConfigError(
+			{ ...base(), "max-handoffs-per-ticket": 0 },
+			"max-handoffs-per-ticket: must be a whole number greater than 0",
+		);
+	});
+
+	test("a zero parallel limit means unlimited and a value parses", () => {
+		const zero = validateConfig({ ...base(), "max-parallel-agents": 0 });
+		expect(zero.maxParallelAgents).toBe(0);
+		const three = validateConfig({ ...base(), "max-parallel-agents": 3, "auto-handoff": true });
+		expect(three.maxParallelAgents).toBe(3);
+		expect(three.autoHandoff).toBe(true);
+	});
+
+	test("a task type can set auto-close to a boolean only", () => {
+		const config = validateConfig({
+			...base(),
+			"task-types": { implement: { template: "x", "auto-close": true } },
+		});
+		expect(config.taskTypes.implement.autoClose).toBe(true);
+		expectConfigError(
+			{
+				...base(),
+				"task-types": { implement: { template: "x", "auto-close": "yes" } },
+			},
+			"auto-close: must be a boolean",
+		);
+	});
+
+	test("workflows route a completed task type and pin the handoff", () => {
+		const config = validateConfig({
+			...base(),
+			"task-types": {
+				implement: { template: "x" },
+				review: { template: "x" },
+			},
+			workflows: [
+				{ from: "implement", to: ["review"], agent: "pi", environment: "worktree" },
+				{ from: "implement", to: ["review", "implement"] },
+			],
+		});
+		expect(config.workflows).toEqual([
+			{ from: "implement", to: ["review"], agent: "pi", environment: "worktree" },
+			{ from: "implement", to: ["review", "implement"] },
+		]);
+	});
+
+	test("workflow edges reject unknown or malformed parts", () => {
+		const withReview = () => ({
+			...base(),
+			"task-types": { implement: { template: "x" }, review: { template: "x" } },
+		});
+		expectConfigError(
+			{ ...withReview(), workflows: "no" },
+			"workflows: must be a list of [[workflows]] tables",
+		);
+		expectConfigError(
+			{ ...withReview(), workflows: [{ from: "build", to: ["review"] }] },
+			'workflows[0].from: unknown task type "build"',
+		);
+		expectConfigError(
+			{ ...withReview(), workflows: [{ from: "implement", to: ["build"] }] },
+			'workflows[0].to: unknown task type "build"',
+		);
+		expectConfigError(
+			{ ...withReview(), workflows: [{ from: "implement", to: [] }] },
+			"workflows[0].to: must be a non-empty list of task types",
+		);
+		expectConfigError(
+			{ ...withReview(), workflows: [{ from: "implement", to: ["review"], agent: "cursor" }] },
+			'workflows[0].agent: unknown agent "cursor"',
+		);
+		expectConfigError(
+			{
+				...withReview(),
+				workflows: [{ from: "implement", to: ["review"], environment: "container" }],
+			},
+			"workflows[0].environment: must be one of",
+		);
+		expectConfigError(
+			{ ...withReview(), workflows: [{ from: "implement", to: ["review"], pin: "x" }] },
+			'workflows[0]: unknown key "pin"',
+		);
+	});
+
+	test("the previous-message placeholder is a known prompt placeholder", () => {
+		const data = base();
+		data["task-types"].implement.template = "then: {previous-message}";
+		const config = validateConfig(data);
+		expect(config.taskTypes.implement.template).toContain("{previous-message}");
 	});
 });
 

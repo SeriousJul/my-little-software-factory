@@ -9,9 +9,16 @@ state in SQLite, and refreshes each source without resetting a ticket's work
 cycle. Enter hands an actionable open ticket off through herdr. The `e` key
 opens the override panel for a one-shot change of the handoff settings.
 
+The control plane polls herdr for the agents it started. It marks a blocked
+agent and a missing agent on the ticket, captures the agent's last message
+when a turn settles, and records a completion trace. In auto-handoff mode it
+hands eligible open tickets off by itself within the configured limits, and
+routes or closes completed turns along the configured workflows.
+
 See `CONTEXT.md` for the domain language, `docs/labels.md` for source-label
-meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and TypeScript,
-ADR 0002: handoffs run through herdr).
+meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and
+TypeScript, ADR 0002: handoffs run through herdr, ADR 0005: a work cycle
+ends at close, ADR 0006: the control plane polls herdr).
 
 ## Requirements
 
@@ -42,8 +49,9 @@ ADR 0002: handoffs run through herdr).
 | `Up` / `Down`    | Move the selection, or scroll the detail, depending on the focused pane |
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
-| `Enter`          | Hand the selected open ticket off with the config defaults              |
+| `Enter`          | Hand the selected open ticket off, or open the decision panel on an awaiting ticket, or the missing panel on a ticket whose agent is gone, or focus the agent of a blocked ticket |
 | `e`              | Open the override panel for the selected open ticket                    |
+| `a`              | Toggle auto-handoff mode for this session                              |
 | `r`              | Refresh every ticket source now                                        |
 | `q`              | Quit                                                                    |
 
@@ -78,6 +86,56 @@ column shrinks first, then the label column, then the marker. When the
 terminal is too small, the hint row and the last rows drop. A row never
 wraps: it carries less, not broken text.
 
+### Completion decision panel keys
+
+Enter on an `awaiting` ticket shows the last completion: the agent's last
+message. The panel offers the choices the state allows.
+
+| Key             | What it does                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| `Up` / `Down`  | Move between the choice rows                                      |
+| `j` / `k`      | Scroll the completion message                                     |
+| `Enter`         | Choose the selected row                                            |
+| `Esc`           | Close the panel: nothing runs, the ticket stays awaiting           |
+
+The first row, "Close", ends the work cycle: the ticket returns to open
+with its cycle number incremented, and the handoff's environment is closed
+without touching the git branch, so pushed work and pull requests survive:
+a worktree handoff loses its worktree checkout and its herdr workspace,
+a live worktree handoff loses its tab.
+The second row, "Goto", focuses the agent's pane so the operator can steer
+it; the ticket returns to `running`. Goto is a state move, not a completion
+decision, so the trace does not record it: the turn's pending trace stays
+pending, and the next settle refreshes it with the agent's new last message.
+Then one "Handoff: `<task type>`" row per outgoing workflow edge the
+completed task type has, in config order: an edge naming several targets
+offers one row per target, and two edges to the same target keep both
+rows, so every edge stays reachable. The row's detail shows the edge's
+pinned agent type and environment when the edge defines them, so two
+rows that share a target differ. Choosing a row hands the ticket off again with that
+target task type, pinning the edge's agent type and environment when the
+edge defines them. The row's "handed-off" decision lands on the turn's
+trace only when the routed handoff settles with the agent started; a
+failed route leaves the trace pending, so Close and Goto keep working
+on the awaiting ticket.
+
+### Missing agent panel keys
+
+Enter on a ticket whose agent is missing shows the missing panel.
+
+| Key             | What it does                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| `Up` / `Down`  | Move between the choice rows                                      |
+| `j` / `k`      | Scroll the panel message                                          |
+| `Enter`         | Choose the selected row                                            |
+| `Esc`           | Close the panel: nothing runs, the badge stays                     |
+
+"Restart" hands the ticket off again with the same choices, in the
+workspace the handoff recorded, and the last completion's message as the
+previous message. "Abandon" ends the work cycle: the ticket returns to open
+with its cycle number incremented, the handoff's environment is closed,
+and the missing badge clears.
+
 ## Layout
 
 Two panes side by side, flex-sized to the terminal.
@@ -85,8 +143,11 @@ The list pane on the left shows every ticket with its state badge, title,
 and repository.
 The detail pane on the right shows the full detail of the selected ticket:
 repository, ticket state, assigned agent, source name, source kind, external
-key, source state, URL, labels, and source health. Factory ticket state and
-external source state stay separate.
+key, source state, URL, labels, and source health. The detail also carries
+the ticket's handoff count against its per-ticket limit, counting the
+handoffs of every work cycle the ticket ran, and, when one exists, the last
+completion: its date, the task type, the agent, and the recorded decision.
+Factory ticket state and external source state stay separate.
 The panes share one focus.
 Switching focus never moves the selection.
 
@@ -103,8 +164,30 @@ Under the panes sits a status line. It carries the progress and the outcome
 of the last handoff: `handing off "..."...` while one is in flight, the
 warning a sibling clone raises, or the readable reason a handoff failed.
 A clean handoff clears the line. While a handoff is in flight the keys keep
-working, a second handoff is refused until the first one settles, and `e` is
-refused with a hint on the line.
+working, and `e` is refused with a hint on the line. A second handoff claim
+records its attempt, which blocks a further claim on the same ticket, and
+queues its external work until the in-flight handoff settles; the ticket
+moves to `handed-off` only when the handoff settles and its agent starts,
+so claims never race each other.
+
+Above the panes sits a mode line. It shows the auto-handoff state and the
+live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
+when no limit is set. The count is the in-flight tickets whose agent was
+alive in the latest herdr poll. The `a` key toggles the mode for the
+session; the config's `auto-handoff` key sets the startup value only.
+
+A blocked agent replaces the state badge in the list row with a `blocked`
+badge: the agent shows an approval or question UI and waits for a human.
+The ticket stays in flight, in `handed-off` or `running`, and still counts
+against the parallel limit. A missing agent replaces the state badge with a
+`missing` badge: the stored pane is gone or holds no agent, so the work
+stops there until the operator restarts or abandons the cycle. Both badges
+clear when the next poll no longer shows the condition. The first poll has
+not landed yet, so no badge appears before it.
+A ticket that has used up its per-ticket handoff limit wears a trailing
+`handoff limit` marker at the end of the row, and the detail pane shows the
+count as `Handoffs: 2/2`. Auto-handoff leaves such a ticket open; a manual
+handoff may still pass the limit.
 
 ## Handoffs
 
@@ -147,6 +230,55 @@ mapping back to be written to the config file, so the next handoff resolves
 it explicitly. The mapping is handed back even when a later step of the
 handoff fails, so the clone is not lost.
 
+## Completion and auto-handoff
+
+The control plane polls herdr for its agents every
+`agent-poll-interval-seconds`. The poll reads the agent list, and it reads
+the last message of an agent that has settled its turn. It never writes to
+herdr.
+
+When the agent settles its turn (herdr reports it as done, or it is idle at
+the end of the turn), the ticket moves to `awaiting`. The
+completion trace records the task type, the agent, the completion time, the
+last message, and the decision that ends the awaiting state. A workflow
+handoff that follows an awaiting ticket renders its prompt with the
+`{previous-message}` placeholder filled from that last message, so the next
+agent reads what the previous one left behind.
+
+In manual mode, `awaiting` waits for the operator. Enter opens the decision
+panel. The operator routes the ticket to a workflow target or closes the
+work cycle.
+
+Auto-handoff mode decides without the operator, within the configured
+limits:
+
+- Automatic decisions apply to auto-close task types only, and they apply
+  in both modes. A settled turn of an auto-close type routes when its task
+  type has exactly one outgoing workflow edge with exactly one target, and
+  the parallel limit has room. At the per-ticket handoff limit the route
+  degrades to close. Zero or multiple edges close the cycle. A full
+  parallel limit leaves the ticket awaiting until a slot frees.
+- A task type that is not auto-close always leaves its settled turn
+  awaiting for the operator, in both modes.
+- Every eligible open ticket is handed off with the config defaults when the
+  parallel limit allows it. The limit counts the live agents: the in-flight
+  tickets in `handed-off` or `running` whose agent was alive in the latest
+  poll. A blocked agent still counts; a missing agent holds no slot.
+- The per-ticket handoff limit stops the close-and-rehandoff loop. When a
+ticket reaches it, auto-handoff leaves it open. A manual handoff may pass
+  the limit.
+
+Both limits gate auto-handoff only. A manual handoff is always allowed.
+
+A missing agent in auto mode restarts the handoff once, with the last
+message as the previous message. At the per-ticket handoff limit, the
+cycle is abandoned instead. When the agent is missing again, or the
+parallel limit is full, the control plane stops: the `missing` badge stays
+until the operator restarts or abandons from the missing panel. In manual
+mode the control plane never touches a missing agent. Abandon ends the
+work cycle, closes the handoff's environment, and returns the ticket to
+open with its cycle number incremented.
+
 ## Configuration
 
 The config lives at `~/.config/factory/config.toml`. A missing file yields
@@ -158,20 +290,38 @@ reads must be present, and every key it does not read is an error, so a
 typo surfaces at startup, not at handoff time.
 
 The config carries the defaults a handoff starts from (`default-agent`,
-`default-environment`, `default-task-type`), agent types, task types,
-repository mappings, ticket sources, ordered task rules, and an optional
-`state-file`. A source has a unique name, a GitHub adapter kind
+`default-environment`, `default-task-type`), the auto-handoff startup value
+(`auto-handoff`, default `false`), the parallel limit
+(`max-parallel-agents`, default `2`), the herdr poll interval
+(`agent-poll-interval-seconds`, default `5`), the completion message line
+cap (`completion-message-lines`, default `200`), the per-ticket handoff limit
+(`max-handoffs-per-ticket`, default `10`), the workflow edges (`workflows`),
+agent types, task types, repository mappings, ticket sources, ordered task
+rules, and an optional `state-file`. A source has a unique name, a GitHub adapter kind
 (`github-issues` or `github-pull-requests`), repositories, and a positive
 `refresh-interval-seconds`. Sources can use normal `gh` authentication, a
 literal token, a token environment variable, or a named authenticated account.
 The shipped defaults have no sources. `config/development.toml` configures the
 live development path for this repository through `--config`. A template's
 brace pairs are placeholders. Task types know `{repository}`, `{title}`,
-`{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, and
-`{labels}`. A task type can also set a `thinking` level. A handoff then
+`{description}`, `{source-kind}`, `{external-key}`, `{source-url}`,
+`{labels}`, and `{previous-message}`. The last one is empty on a first
+handoff and carries the previous agent's last message on a workflow handoff.
+A task type can also set a `thinking` level. A handoff then
 starts on that level, and the override panel shows it as the starting value
 of the thinking row. Any other brace pair is a startup error, so a `{ticket-id}`
-cannot stay literal in the prompt an agent receives. Repository mappings are
+cannot stay literal in the prompt an agent receives.
+
+A task type can set `auto-close = true`. For its completions the control
+plane decides without the operator, in both modes: exactly one outgoing
+workflow edge hands off with that task while the parallel limit has room,
+any other edge count closes the cycle, and a route at the per-ticket
+handoff limit degrades to close.
+
+A `[[workflows]]` edge routes a completed task type to the next one. It
+names the `from` task type, the list of `to` task types it may start, and
+optionally pins the `agent` type and `environment` of the handoff it
+triggers. Repository mappings are
 the one section the control plane writes back: a sibling clone records its
 path there. The write-back is
 atomic: the config goes to a temp file in the same directory and the rename
@@ -191,8 +341,13 @@ the first write-back: the data round-trips, the comments do not.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
   and Pull Requests adapters.
 - `src/refresh.ts`: independent source refresh scheduling.
+- `src/observation.ts`: the herdr observation loop. Polls the agent list,
+  reads the settled agent's last message, marks blocked and missing agents,
+  settles turns into `awaiting`, applies the automatic completion rule, and
+  dispatches open tickets in auto-handoff mode.
 - `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
-  handoff attempts, and the process lease.
+  completion traces, completion decisions, handoff attempts, and the
+  process lease.
 - `src/task-selection.ts`: ordered task-rule selection.
 - `src/domain/`: the Ticket type and the ticket state machine.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
@@ -204,8 +359,9 @@ the first write-back: the data round-trips, the comments do not.
   inject a fake that records the calls.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
-  pane, the override panel, the shared pane geometry, the shared palette,
-  and the display-width-aware text helpers.
+  pane, the override panel, the shared action panel (the completion decision
+  and the missing agent panel both render through it), the shared pane
+  geometry, the shared palette, and the display-width-aware text helpers.
 - `test/`: the test suite.
   The seam is the rendered terminal frame and the recorded command sequence.
   No test touches a real herdr session or a real git repository.

@@ -7,7 +7,7 @@
  * read the responses the flow must parse. No test in the suite can reach a
  * real herdr session or a real repository through it.
  */
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
+import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 
 export interface RecordedCommand {
 	command: string;
@@ -34,7 +34,14 @@ export class FakeRunner implements CommandRunner {
 		return this.calls.map((c) => `${c.command} ${c.args.join(" ")}`.trim());
 	}
 
-	async run(command: string, args: readonly string[]): Promise<CommandResult> {
+	async run(
+		command: string,
+		args: readonly string[],
+		options?: CommandOptions,
+	): Promise<CommandResult> {
+		// The fake ignores the run options: the tests pin argv, not process
+		// options.
+		void options;
 		this.calls.push({ command, args });
 		return this.responses.get(this.key(command, args)) ?? this.fallback;
 	}
@@ -42,6 +49,37 @@ export class FakeRunner implements CommandRunner {
 	private key(command: string, args: readonly string[]): string {
 		return [command, ...args].join("\u0000");
 	}
+}
+
+/** One agent of a herdr `agent list` result. */
+export interface ListedAgent {
+	paneId: string;
+	tabId: string;
+	workspaceId: string;
+	agent: string;
+	status: string;
+}
+
+/** A herdr `agent list` JSON response. */
+export function agentListJson(agents: ListedAgent[]): string {
+	return JSON.stringify({
+		result: {
+			agents: agents.map((a) => ({
+				pane_id: a.paneId,
+				tab_id: a.tabId,
+				workspace_id: a.workspaceId,
+				agent: a.agent,
+				agent_status: a.status,
+			})),
+		},
+	});
+}
+
+/** A fake runner that answers an empty `agent list` for the observation loop. */
+export function emptyAgentRunner(): FakeRunner {
+	const runner = new FakeRunner();
+	runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+	return runner;
 }
 
 /** The workspaces of a herdr `workspace list` result. */
@@ -74,10 +112,11 @@ export function workspaceCreateJson(id: string, pane = "pane-w"): string {
 }
 
 /** A herdr `tab create` JSON response. */
-export function tabCreateJson(pane: string): string {
+/** The created tab's id defaults to the stored handle's id in most fakes. */
+export function tabCreateJson(pane: string, tabId = "tab-1"): string {
 	return JSON.stringify({
 		result: {
-			tab: { tab_id: "tab-1" },
+			tab: { tab_id: tabId },
 			root_pane: { pane_id: pane },
 		},
 	});

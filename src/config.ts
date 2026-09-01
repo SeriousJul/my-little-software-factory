@@ -20,6 +20,20 @@ export interface TaskTypeConfig {
 	template: string;
 	/** The thinking level of its handoffs when no explicit choice is made. Omitted leaves the setting to the agent. */
 	thinking?: string;
+	/** Settle turns of this type without an operator decision. */
+	autoClose: boolean;
+}
+
+/**
+ * One workflow edge: from a task type to the task types a settled turn of
+ * it can hand off to. The edge's optional agent and environment override
+ * the config defaults for that handoff.
+ */
+export interface WorkflowEdge {
+	from: string;
+	to: string[];
+	agent?: string;
+	environment?: EnvironmentKind;
 }
 
 export type GitHubSourceKind = "github-issues" | "github-pull-requests";
@@ -63,6 +77,18 @@ export interface FactoryConfig {
 	defaultTaskType: string;
 	agents: Record<string, AgentTypeConfig>;
 	taskTypes: Record<string, TaskTypeConfig>;
+	/** Whether the control plane auto-hands-off open tickets. Off at startup. */
+	autoHandoff: boolean;
+	/** Agents the control plane keeps in flight; 0 means unlimited. */
+	maxParallelAgents: number;
+	/** How often the control plane polls herdr for agent states. */
+	agentPollIntervalSeconds: number;
+	/** How many lines of an agent it captures when the agent settles. */
+	completionMessageLines: number;
+	/** Handoffs per ticket after which the control plane stops dispatching it. */
+	maxHandoffsPerTicket: number;
+	/** Workflows a settled turn can hand off to. */
+	workflows: WorkflowEdge[];
 	/** Repository identity to checkout path. */
 	repos: Record<string, string>;
 	/** No shipped source points at the maintainer repository. */
@@ -102,23 +128,33 @@ export const DEFAULT_CONFIG: FactoryConfig = {
 			template:
 				"Implement the following {source-kind}.\n\nRepository: {repository}\n\n" +
 				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
+			autoClose: false,
 		},
 		fix: {
 			template:
 				"Fix the following {source-kind}.\n\nRepository: {repository}\n\n" +
 				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
+			autoClose: false,
 		},
 		review: {
 			template:
 				"Review pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
 				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
+			autoClose: false,
 		},
 		rework: {
 			template:
 				"Rework pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
 				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
+			autoClose: false,
 		},
 	},
+	autoHandoff: false,
+	maxParallelAgents: 2,
+	agentPollIntervalSeconds: 5,
+	completionMessageLines: 200,
+	maxHandoffsPerTicket: 10,
+	workflows: [],
 	repos: {},
 	sources: [],
 	taskRules: [
@@ -193,6 +229,12 @@ export function validateConfig(data: unknown): FactoryConfig {
 		"ticket-sources",
 		"task-rules",
 		"state-file",
+		"auto-handoff",
+		"max-parallel-agents",
+		"agent-poll-interval-seconds",
+		"completion-message-lines",
+		"max-handoffs-per-ticket",
+		"workflows",
 	]);
 	for (const key of Object.keys(data)) {
 		if (!knownTop.has(key)) {
@@ -214,7 +256,13 @@ export function validateConfig(data: unknown): FactoryConfig {
 	const repos = validateRepos(data.repos);
 	const sources = validateSources(data.sources ?? data["ticket-sources"]);
 	const taskRules = validateTaskRules(data["task-rules"], taskTypes);
+	const workflows = validateWorkflows(data.workflows, taskTypes, agents);
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
+	const autoHandoff = booleanField(data, "auto-handoff", false);
+	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
+	const agentPollIntervalSeconds = positiveNumberField(data, "agent-poll-interval-seconds", 5);
+	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
+	const maxHandoffsPerTicket = positiveIntField(data, "max-handoffs-per-ticket", 10);
 	if (!(defaultAgent in agents)) {
 		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
 	}
@@ -229,6 +277,12 @@ export function validateConfig(data: unknown): FactoryConfig {
 		defaultTaskType,
 		agents,
 		taskTypes,
+		autoHandoff,
+		maxParallelAgents,
+		agentPollIntervalSeconds,
+		completionMessageLines,
+		maxHandoffsPerTicket,
+		workflows,
 		repos,
 		sources,
 		taskRules,
@@ -331,6 +385,7 @@ const PROMPT_PLACEHOLDERS = [
 	"external-key",
 	"source-url",
 	"labels",
+	"previous-message",
 ];
 function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 	const taskTypes = tableField(value === undefined ? {} : value, "task-types");
@@ -350,12 +405,69 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 				);
 			}
 		}
+		const autoClose = booleanField(raw, "auto-close", false);
 		for (const key of Object.keys(raw))
-			if (key !== "template" && key !== "thinking")
+			if (key !== "template" && key !== "thinking" && key !== "auto-close")
 				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
-		out[name] = thinking === undefined ? { template } : { template, thinking };
+		out[name] =
+			thinking === undefined ? { template, autoClose } : { template, thinking, autoClose };
 	}
 	return out;
+}
+
+function validateWorkflows(
+	value: unknown,
+	taskTypes: Record<string, TaskTypeConfig>,
+	agents: Record<string, AgentTypeConfig>,
+): WorkflowEdge[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value))
+		throw new ConfigError("config: workflows: must be a list of [[workflows]] tables");
+	return value.map((raw, index) => {
+		const where = `workflows[${index}]`;
+		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+		for (const key of Object.keys(raw))
+			if (!new Set(["from", "to", "agent", "environment"]).has(key))
+				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+		const from = stringField(raw, "from", where);
+		if (!(from in taskTypes))
+			throw new ConfigError(`config: ${where}.from: unknown task type "${from}"`);
+		const toRaw = raw.to;
+		if (
+			!Array.isArray(toRaw) ||
+			toRaw.length === 0 ||
+			toRaw.some((target) => typeof target !== "string" || target === "")
+		) {
+			throw new ConfigError(`config: ${where}.to: must be a non-empty list of task types`);
+		}
+		const to = toRaw.map((target) => {
+			if (!(target in taskTypes))
+				throw new ConfigError(`config: ${where}.to: unknown task type "${target}"`);
+			return target;
+		});
+		let agent: string | undefined;
+		if (raw.agent !== undefined) {
+			agent = stringField(raw, "agent", where);
+			if (!(agent in agents))
+				throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
+		}
+		let environment: EnvironmentKind | undefined;
+		if (raw.environment !== undefined) {
+			const kind = stringField(raw, "environment", where);
+			if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
+				throw new ConfigError(
+					`config: ${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
+				);
+			}
+			environment = kind as EnvironmentKind;
+		}
+		return {
+			from,
+			to,
+			...(agent === undefined ? {} : { agent }),
+			...(environment === undefined ? {} : { environment }),
+		};
+	});
 }
 
 function validateRepos(value: unknown): Record<string, string> {
@@ -527,6 +639,42 @@ function stringField(record: Record<string, unknown>, key: string, where?: strin
 		throw new ConfigError(`config: ${where ? `${where}.${key}` : key}: must be a non-empty string`);
 	return value;
 }
+
+/** A boolean top-level key: absent takes the default, present must be a boolean. */
+function booleanField(record: Record<string, unknown>, key: string, def: boolean): boolean {
+	const value = record[key];
+	if (value === undefined) return def;
+	if (typeof value !== "boolean")
+		throw new ConfigError(`config: ${key}: must be a boolean (true or false)`);
+	return value;
+}
+
+/** An integer top-level key of 0 or more; absent takes the default. */
+function nonNegativeIntField(record: Record<string, unknown>, key: string, def: number): number {
+	const value = record[key];
+	if (value === undefined) return def;
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 0)
+		throw new ConfigError(`config: ${key}: must be a whole number of 0 or more`);
+	return value;
+}
+
+/** A positive whole-number top-level key; absent takes the default. */
+function positiveIntField(record: Record<string, unknown>, key: string, def: number): number {
+	const value = record[key];
+	if (value === undefined) return def;
+	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
+		throw new ConfigError(`config: ${key}: must be a whole number greater than 0`);
+	return value;
+}
+
+/** A positive-number top-level key; absent takes the default. */
+function positiveNumberField(record: Record<string, unknown>, key: string, def: number): number {
+	const value = record[key];
+	if (value === undefined) return def;
+	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+		throw new ConfigError(`config: ${key}: must be a positive number`);
+	return value;
+}
 function optionalStringField(
 	record: Record<string, unknown>,
 	key: string,
@@ -567,9 +715,21 @@ export function configToToml(config: FactoryConfig): string {
 				{
 					template: task.template,
 					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+					...(task.autoClose ? { "auto-close": true } : {}),
 				},
 			]),
 		),
+		"auto-handoff": config.autoHandoff,
+		"max-parallel-agents": config.maxParallelAgents,
+		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
+		"completion-message-lines": config.completionMessageLines,
+		"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
+		workflows: config.workflows.map((edge) => ({
+			from: edge.from,
+			to: edge.to,
+			...(edge.agent === undefined ? {} : { agent: edge.agent }),
+			...(edge.environment === undefined ? {} : { environment: edge.environment }),
+		})),
 		repos: config.repos,
 		sources: config.sources.map((source) => ({
 			name: source.name,

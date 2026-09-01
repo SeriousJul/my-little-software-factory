@@ -2,7 +2,7 @@
  * Shared palette and badge helpers for the panes.
  * One place for the colors so the list and the detail stay in step.
  */
-import type { TicketState } from "../domain/ticket.ts";
+import type { TicketMarker, TicketState } from "../domain/ticket.ts";
 
 export const COLORS = {
 	border: "#30363d",
@@ -26,7 +26,7 @@ export const STATE_COLORS: Record<TicketState, string> = {
 	open: "#58a6ff",
 	"handed-off": "#d29922",
 	running: "#3fb950",
-	done: "#bc8cff",
+	awaiting: "#bc8cff",
 };
 
 /** The widest badge, "[handed-off]". State badges are padded to this width. */
@@ -35,4 +35,18 @@ export const BADGE_WIDTH = 12;
 /** Render a ticket state as a colored, fixed-width badge like `[open]`. */
 export function stateBadge(state: TicketState): string {
 	return `[${state}]`.padEnd(BADGE_WIDTH);
+}
+
+/** The colors of the failure badges a ticket row can hold. */
+export const MARKER_COLORS: Record<TicketMarker, string> = {
+	blocked: "#d29922",
+	missing: "#f85149",
+};
+
+/**
+ * The failure badge: `blocked` or `missing` in place of the state badge,
+ * padded to the badge width so the row columns stay aligned.
+ */
+export function failureBadge(marker: TicketMarker): string {
+	return marker.padEnd(BADGE_WIDTH);
 }
