@@ -1186,7 +1186,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 });
 
 describe("closeHandoffEnvironment: the Close cleanup", () => {
-	test("a worktree handoff removes the checkout, then the herdr workspace; the branch stays", async () => {
+	test("a worktree handoff removes the checkout; herdr closes the workspace with it", async () => {
 		const runner = new FakeRunner();
 
 		const failure = await closeHandoffEnvironment(
@@ -1195,23 +1195,22 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		);
 
 		expect(failure).toBeUndefined();
-		// worktree remove first: it runs git worktree remove and never deletes
-		// the branch. workspace close after: it clears only herdr state.
-		expect(runner.commands()).toEqual([
-			"herdr worktree remove --workspace ws-1",
-			"herdr workspace close ws-1",
-		]);
+		// worktree remove closes the workspace with the checkout and never
+		// deletes the branch: there is no workspace close after it.
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
 		const joined = runner.commands().join("\n");
 		expect(joined).not.toContain("branch -D");
 		expect(joined).not.toContain("branch --delete");
+		expect(joined).not.toContain("workspace close");
 		expect(joined).not.toContain("tab close");
 	});
 
-	test("a worktree handoff that fails to remove the checkout never closes the workspace", async () => {
+	test("a worktree handoff with a dirty checkout reports the removal and keeps the workspace", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
 			code: 1,
-			stderr: "error: the worktree has uncommitted changes; pass --force\n",
+			stderr:
+				'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree has uncommitted changes, use --force to delete it"},"id":"cli:worktree:remove"}\n',
 		});
 
 		const failure = await closeHandoffEnvironment(
@@ -1221,9 +1220,73 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 
 		// The reason is the command's stderr: the caller reports it on the
 		// status line with the ticket identity.
-		expect(failure).toBe("error: the worktree has uncommitted changes; pass --force");
+		expect(failure).toContain("dirty_worktree_requires_force");
 		// The workspace stays: the checkout is still there.
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("a worktree handoff whose workspace is already gone is a clean close", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"workspace_not_found","message":"workspace ws-1 not found"},"id":"cli:worktree:remove"}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+		);
+
+		// The workspace is gone: there is no environment left to clean up.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("a worktree handoff whose checkout is gone closes the left workspace", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"worktree_remove_failed","message":"fatal: the path is not a working tree"},"id":"cli:worktree:remove"}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+		);
+
+		// The checkout was deleted outside herdr: workspace close clears the
+		// herdr state that remains, so the close is clean.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace close ws-1",
+		]);
+	});
+
+	test("a worktree handoff whose checkout is gone and whose close fails reports the close", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"worktree_remove_failed","message":"fatal: the path is not a working tree"},"id":"cli:worktree:remove"}\n',
+		});
+		runner.set("herdr", ["workspace", "close", "ws-1"], {
+			code: 1,
+			stderr: "error: the herdr server is down\n",
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+		);
+
+		expect(failure).toBe("error: the herdr server is down");
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace close ws-1",
+		]);
 	});
 
 	test("a worktree handoff without a stored workspace runs nothing", async () => {

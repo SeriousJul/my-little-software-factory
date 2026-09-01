@@ -733,10 +733,11 @@ async function closePreviousTab(
  * herdr environment of a finished work cycle without touching the git
  * branch, so pushed work and pull requests survive.
  *
- * - The worktree environment loses its worktree checkout (herdr
- *   `worktree remove` runs `git worktree remove` and never deletes the
- *   branch) and the herdr state behind it (herdr `workspace close` closes
- *   only herdr state). The git branch stays.
+ * - The worktree environment loses its worktree checkout and the herdr
+ *   workspace behind it: herdr `worktree remove` closes the workspace with
+ *   the checkout and never deletes the branch. When the checkout is already
+ *   gone (deleted outside herdr), the workspace is what remains, and herdr
+ *   `workspace close` clears it. The git branch stays.
  * - The live worktree environment loses the handoff's tab; the workspace
  *   stays.
  *
@@ -749,18 +750,36 @@ export async function closeHandoffEnvironment(
 ): Promise<string | undefined> {
 	if (handoff.environment === "worktree") {
 		if (handoff.workspaceId === null) return undefined;
-		// The checkout on disk: herdr worktree remove never deletes the
-		// branch, so pushed work and pull requests survive.
+		// The checkout on disk and the herdr workspace behind it: herdr
+		// worktree remove closes the workspace with the checkout and never
+		// deletes the branch, so pushed work and pull requests survive.
 		const removed = await runner.run("herdr", [
 			"worktree",
 			"remove",
 			"--workspace",
 			handoff.workspaceId,
 		]);
-		if (removed.code !== 0) return commandFailureText(removed);
-		// The herdr state of the workspace: it holds only herdr state.
-		const closed = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
-		return closed.code === 0 ? undefined : commandFailureText(closed);
+		if (removed.code === 0) {
+			// The workspace closed with the checkout: the environment is gone.
+			return undefined;
+		}
+		const code = herdrErrorCode(removed);
+		if (code === "workspace_not_found") {
+			// The workspace is already gone: there is nothing to clean up.
+			return undefined;
+		}
+		if (code === "worktree_remove_failed") {
+			// The checkout is gone (deleted outside herdr): the workspace is
+			// what remains, so close it.
+			const closed = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
+			if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
+				return undefined;
+			}
+			return commandFailureText(closed);
+		}
+		// The checkout is still there (for example dirty): leave the
+		// workspace open for the operator and report why the removal failed.
+		return commandFailureText(removed);
 	}
 	if (handoff.environment === "live-worktree") {
 		if (handoff.tabId === null) return undefined;

@@ -764,7 +764,7 @@ describe("the herdr-unreachable line", () => {
 });
 
 describe("the Close cleanup", () => {
-	test("close on a worktree handoff removes the checkout, then the herdr workspace", async () => {
+	test("close on a worktree handoff removes the checkout and the herdr workspace", async () => {
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -776,16 +776,14 @@ describe("the Close cleanup", () => {
 				// Close is the default row: confirm.
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
-				// The checkout first: herdr worktree remove runs git worktree
-				// remove and never deletes the branch, so pushed work and pull
-				// requests survive. The herdr state of the workspace after.
-				const removeIndex = commands.indexOf("herdr worktree remove --workspace ws-1");
-				const closeIndex = commands.indexOf("herdr workspace close ws-1");
-				expect(removeIndex).toBeGreaterThanOrEqual(0);
-				expect(closeIndex).toBeGreaterThan(removeIndex);
+				// herdr worktree remove closes the workspace with the checkout
+				// and never deletes the branch, so pushed work and pull requests
+				// survive. There is no workspace close after it.
+				expect(commands).toContain("herdr worktree remove --workspace ws-1");
 				const joined = commands.join("\n");
 				expect(joined).not.toContain("branch -D");
 				expect(joined).not.toContain("branch --delete");
+				expect(joined).not.toContain("workspace close");
 				expect(joined).not.toContain("tab close");
 			},
 			WIDTH,
@@ -818,7 +816,7 @@ describe("the Close cleanup", () => {
 		app.state.close();
 	});
 
-	test("abandon on a worktree handoff removes the checkout, then the herdr workspace", async () => {
+	test("abandon on a worktree handoff removes the checkout and the herdr workspace", async () => {
 		const app = seededApp("in-flight", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -832,13 +830,13 @@ describe("the Close cleanup", () => {
 				);
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
-				const removeIndex = commands.indexOf("herdr worktree remove --workspace ws-1");
-				const closeIndex = commands.indexOf("herdr workspace close ws-1");
-				expect(removeIndex).toBeGreaterThanOrEqual(0);
-				expect(closeIndex).toBeGreaterThan(removeIndex);
+				// herdr worktree remove closes the workspace with the checkout
+				// and never deletes the branch: there is no workspace close after it.
+				expect(commands).toContain("herdr worktree remove --workspace ws-1");
 				const joined = commands.join("\n");
 				expect(joined).not.toContain("branch -D");
 				expect(joined).not.toContain("branch --delete");
+				expect(joined).not.toContain("workspace close");
 				expect(joined).not.toContain("tab close");
 			},
 			WIDTH,
