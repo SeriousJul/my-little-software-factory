@@ -8,7 +8,10 @@
  * maps. A setting the agent does not map is hidden, so the panel shows only
  * what the chosen agent supports. The model row accepts free text; the
  * thinking row takes the agent's value list when it has one and free text
- * otherwise.
+ * otherwise. The thinking row starts on the suggested task type's thinking
+ * default, and switching the task type re-derives it while the operator has
+ * not set the row, so the panel always shows what the handoff will run on.
+ * Clearing a free-text row leaves the setting to the agent.
  *
  * The keys: j/k and up/down move the rows. left/right and h/l cycle a list
  * value. A selected free-text row owns j, k, h, and l: they type into it.
@@ -41,6 +44,8 @@ interface OverridePanelProps {
 	environments: readonly EnvironmentKind[];
 	taskTypes: readonly string[];
 	agentSettings: Readonly<Record<string, AgentSettings>>;
+	/** The task types' thinking defaults, keyed by task type name. */
+	thinkingDefaults: Readonly<Record<string, string | undefined>>;
 	/** The values the panel starts on: the config defaults. */
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
@@ -120,6 +125,7 @@ export function OverridePanel({
 	environments,
 	taskTypes,
 	agentSettings,
+	thinkingDefaults,
 	initial,
 	onConfirm,
 	onCancel,
@@ -137,6 +143,11 @@ export function OverridePanel({
 	// previous key left behind.
 	const choiceRef = useRef<HandoffChoice>(choice);
 	const selectedRef = useRef(0);
+	// True once the operator sets the thinking row themselves. While it
+	// stays false, switching the task type re-derives the row from the new
+	// task type's default, so the panel keeps showing what the handoff will
+	// run on.
+	const thinkingTouchedRef = useRef(false);
 
 	const allRows = rowsFor(choice, agents, environments, taskTypes, agentSettings);
 	// The terminal too short for every row drops the last one, the settings
@@ -175,6 +186,9 @@ export function OverridePanel({
 
 	const cycle = (delta: number) => {
 		const target = cursorRow();
+		if (target.kind === "list" && target.key === "thinking") {
+			thinkingTouchedRef.current = true;
+		}
 		commit((current) => {
 			const options = target.options;
 			if (options === undefined) {
@@ -183,11 +197,15 @@ export function OverridePanel({
 			const index = options.indexOf(current[target.key]);
 			// An unset value (the config default "") is not an option. The
 			// first right lands on the first option, the first left on the last.
-			if (index === -1) {
-				const next = options[(delta > 0 ? 0 : options.length - 1) % options.length];
-				return { ...current, [target.key]: next };
+			const next =
+				index === -1
+					? options[(delta > 0 ? 0 : options.length - 1) % options.length]
+					: options[(index + delta + options.length) % options.length];
+			// Switching the task type re-derives an untouched thinking row,
+			// so the row keeps showing what the handoff will run on.
+			if (target.key === "taskType" && !thinkingTouchedRef.current) {
+				return { ...current, taskType: next, thinking: thinkingDefaults[next] ?? "" };
 			}
-			const next = options[(index + delta + options.length) % options.length];
 			return { ...current, [target.key]: next };
 		});
 	};
@@ -196,6 +214,9 @@ export function OverridePanel({
 		const target = cursorRow();
 		if (target.kind !== "text") {
 			return;
+		}
+		if (target.key === "thinking") {
+			thinkingTouchedRef.current = true;
 		}
 		commit((current) => ({ ...current, [target.key]: current[target.key] + text }));
 	};
@@ -238,6 +259,9 @@ export function OverridePanel({
 				cycle(1);
 				break;
 			case "backspace":
+				if (target.kind === "text" && target.key === "thinking") {
+					thinkingTouchedRef.current = true;
+				}
 				commit((current) =>
 					target.kind === "text"
 						? { ...current, [target.key]: current[target.key].slice(0, -1) }

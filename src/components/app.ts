@@ -119,12 +119,21 @@ export function App({
 			},
 		]),
 	);
+	// The task types' thinking defaults, keyed by task type name, for the
+	// override panel's thinking row.
+	const thinkingDefaults: Record<string, string | undefined> = Object.fromEntries(
+		Object.entries(config.taskTypes).map(([name, type]) => [name, type.thinking]),
+	);
 	const choiceFor = (ticket: Ticket): HandoffChoice => ({
 		agentType: config.defaultAgent,
 		environment: config.defaultEnvironment,
 		taskType: ticket.suggestedTaskType,
 		model: "",
-		thinking: "",
+		// The task type's thinking default: the panel shows it as the
+		// starting value of the thinking row, and Enter applies it. The
+		// operator picks another level in the panel, or clears a free-text
+		// row to leave the level to the agent.
+		thinking: config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
 	});
 
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
@@ -365,6 +374,7 @@ export function App({
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
+				thinkingDefaults,
 				initial: override,
 				onConfirm: (choice) => {
 					setOverride(null);

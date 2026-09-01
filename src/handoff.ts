@@ -35,7 +35,10 @@ export interface HandoffChoice {
 	taskType: string;
 	/** Free-text model; empty means the setting is left to the agent. */
 	model: string;
-	/** Free-text thinking level; empty means the setting is left to the agent. */
+	/** Free-text thinking level; empty means the level is left to the agent.
+	 *  The app prefills the suggested task type's thinking default here, so
+	 *  the panel shows the level the handoff will run on, and clearing the
+	 *  row in the panel hands the level back to the agent. */
 	thinking: string;
 }
 
@@ -500,7 +503,8 @@ function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
 /**
  * The setting arguments of a handoff: each chosen setting the agent type
  * maps is substituted into its argument template and split on whitespace
- * into argv. An omitted setting is ignored: no template, no arguments.
+ * into argv. A setting left empty is ignored: no template, no arguments,
+ * and the setting is left to the agent.
  */
 export function settingArgs(
 	agent: FactoryConfig["agents"][string],

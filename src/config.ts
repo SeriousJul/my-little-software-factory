@@ -18,6 +18,8 @@ export interface AgentTypeConfig {
 
 export interface TaskTypeConfig {
 	template: string;
+	/** The thinking level of its handoffs when no explicit choice is made. Omitted leaves the setting to the agent. */
+	thinking?: string;
 }
 
 export type GitHubSourceKind = "github-issues" | "github-pull-requests";
@@ -340,6 +342,7 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 			throw new ConfigError(`config: task-types.${name}: must be a one-word name`);
 		if (!isRecord(raw)) throw new ConfigError(`config: task-types.${name}: must be a table`);
 		const template = stringField(raw, "template", `task-types.${name}`);
+		const thinking = optionalStringField(raw, "thinking", `task-types.${name}`);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
@@ -348,9 +351,9 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 			}
 		}
 		for (const key of Object.keys(raw))
-			if (key !== "template")
+			if (key !== "template" && key !== "thinking")
 				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
-		out[name] = { template };
+		out[name] = thinking === undefined ? { template } : { template, thinking };
 	}
 	return out;
 }
@@ -559,7 +562,13 @@ export function configToToml(config: FactoryConfig): string {
 			]),
 		),
 		"task-types": Object.fromEntries(
-			Object.entries(config.taskTypes).map(([name, task]) => [name, { template: task.template }]),
+			Object.entries(config.taskTypes).map(([name, task]) => [
+				name,
+				{
+					template: task.template,
+					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+				},
+			]),
 		),
 		repos: config.repos,
 		sources: config.sources.map((source) => ({

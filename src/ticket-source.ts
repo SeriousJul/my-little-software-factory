@@ -155,9 +155,11 @@ class GitHubTicketSource implements TicketSource {
 			if (this.kind === "github-issues") {
 				queries.push(`${scope} label:ready-for-agent`);
 			} else {
-				// `needs-work` intentionally does not test draft. The review half does.
+				// `needs-work` intentionally does not test draft. The review and
+				// merge halves do: a draft cannot be reviewed to a verdict or merged.
 				queries.push(`${scope} label:needs-work`);
 				queries.push(`${scope} label:ready-for-review no:draft`);
+				queries.push(`${scope} label:ready-to-ship no:draft`);
 			}
 		}
 		return queries;

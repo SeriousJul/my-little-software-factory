@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import type { CommandResult, CommandRunner } from "../src/runner.ts";
 import {
@@ -535,6 +536,161 @@ describe("the override panel", () => {
 					(f) => !f.includes("(unset)"),
 				);
 				expect(cycled).not.toContain("(unset)");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a task type thinking default shows in the panel and rides on the start", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				merge: { template: "Merge pull request {external-key}.", thinking: "low" },
+			},
+		};
+		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				// The thinking row shows the task type default, not the unset hint.
+				expect(frameText(opened)).toContain("Thinking low");
+				expect(opened).not.toContain("(unset)");
+
+				const settled = await pressEnterToHandoff(setup);
+				expect(selectedRow(settled)).toContain("[handed-off]");
+				// The default rides on the agent start, where the agent type
+				// maps it to its own flag.
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--thinking",
+					"low",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("switching the task type re-derives an untouched thinking row", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				merge: { template: "Merge pull request {external-key}.", thinking: "low" },
+			},
+		};
+		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				// The thinking row shows the suggested task type's default.
+				expect(frameText(opened)).toContain("Thinking low");
+				// Move to the Task type row (Agent, Environment, Task type) and
+				// cycle away from merge. The untouched thinking row re-derives
+				// from the new task type, so the row keeps showing what the
+				// handoff will run on.
+				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Task type"));
+				const toImplement = await pressArrow(
+					setup,
+					"right",
+					"the task type to wrap to implement",
+					(f) => frameText(f).includes("Task type implement"),
+				);
+				// implement sets no default: the row is left to the agent.
+				expect(frameText(toImplement)).toContain("Thinking (unset)");
+				// Cycling back restores the default.
+				await pressArrow(setup, "right", "the task type to become fix", (f) =>
+					frameText(f).includes("Task type fix"),
+				);
+				await pressArrow(setup, "right", "the task type to become review", (f) =>
+					frameText(f).includes("Task type review"),
+				);
+				await pressArrow(setup, "right", "the task type to become rework", (f) =>
+					frameText(f).includes("Task type rework"),
+				);
+				const back = await pressArrow(setup, "right", "the task type to become merge", (f) =>
+					frameText(f).includes("Task type merge"),
+				);
+				expect(frameText(back)).toContain("Thinking low");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a touched thinking row survives a task type switch", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				merge: { template: "Merge pull request {external-key}.", thinking: "low" },
+			},
+		};
+		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Thinking low");
+				// Move to the Thinking row: j walks the list rows, and the arrow
+				// passes the free-text Model row.
+				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the row selection to move on", (f) => f.includes("❯ Model"));
+				await pressArrow(setup, "down", "the row selection to move to the thinking row", (f) =>
+					f.includes("❯ Thinking"),
+				);
+				// Touch the row: cycle the level past its default.
+				await pressArrow(setup, "right", "the thinking to become medium", (f) =>
+					frameText(f).includes("Thinking medium"),
+				);
+				// Move back to the Task type row and switch away from merge.
+				await pressArrow(setup, "up", "the row selection to move on", (f) => f.includes("❯ Model"));
+				await pressArrow(setup, "up", "the row selection to move on", (f) =>
+					f.includes("❯ Task type"),
+				);
+				const switched = await pressArrow(
+					setup,
+					"right",
+					"the task type to wrap to implement",
+					(f) => frameText(f).includes("Task type implement"),
+				);
+				// The explicit choice rides on, not the new task type's default.
+				expect(frameText(switched)).toContain("Thinking medium");
+
+				const settled = await pressEnterToHandoff(setup);
+				expect(selectedRow(settled)).toContain("[handed-off]");
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("--thinking");
+				expect(start?.args).toContain("medium");
 			},
 			WIDTH,
 			HEIGHT,

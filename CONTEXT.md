@@ -32,7 +32,7 @@ It includes controls that the action bar does not show.
 _Avoid_: help popup, keybinding popin, shortcut window
 
 **Interaction mode**:
-The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Key guide, or Message view.
+The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, or Message view.
 _Avoid_: context, screen
 
 **Ticket**:
@@ -84,24 +84,91 @@ The ticket state where the agent has settled its turn, the last message is captu
 _Avoid_: finished, pending review
 
 **Agent**:
-An autonomous program that executes a ticket.
+An autonomous program that executes a Ticket or leads a Consultation.
 The control plane is agent-agnostic and assumes no specific agent runtime (pi, codex, claude code, or others).
 _Avoid_: bot, worker
 
 **Agent type**:
 The declarative description of a class of agents: its name, how to start it, and how its settings (model, thinking level) map to the agent's own parameters.
-An agent is a running instance of an agent type.
+An Agent is a running instance of an Agent type.
 _Avoid_: agent definition, plugin, driver
 
+**Consultation**:
+An operator-started interactive exchange with an Agent in a Repository that is independent of a Ticket and stays open until the operator closes it.
+_Avoid_: agent session, quick task
+
+**Consultation type**:
+A configured kind of Consultation that selects an Agent type and default Environment, then combines fixed opening instructions with the operator's initial input.
+_Avoid_: quick template, session template
+
+**Consultation state**:
+The position of a Consultation: `opening`, `working`, `awaiting-response`, `missing`, `failed`, `closing`, or `closed`.
+_Avoid_: status, Agent state
+
+**Awaiting response**:
+The Consultation state where the Agent waits for operator input and the operator has not responded or closed the Consultation.
+The Agent waits when it has settled its turn, or when it shows an approval or question UI (Blocked).
+_Avoid_: blocked, idle, done
+
+**Response draft**:
+Operator input saved for an `awaiting-response` Consultation but not yet accepted by its Agent.
+_Avoid_: queued response, pending prompt
+
+**Consultation launcher**:
+The Interaction mode that collects a Consultation type, Repository, and initial operator input before opening a Consultation.
+_Avoid_: new consultation modal, quick prompt
+
+**Consultation view**:
+The Interaction mode that shows Consultations, their Agent output or Captured history, and takes the operator input that continues them.
+_Avoid_: session list, consultation panel
+
+**Replacement Consultation**:
+A new Consultation opened with recovery context and an explicit link to a missing or failed Consultation.
+It never closes or hides the Consultation it replaces.
+_Avoid_: retry, resumed Consultation
+
+**Agent view**:
+The scrollable presentation of an Agent's current and recent terminal output inside the control plane.
+It does not promise a normalized conversation transcript.
+_Avoid_: transcript, chat history
+
+**Captured history**:
+The saved operator inputs and settled or partial Agent output shown when live Agent output is no longer available.
+_Avoid_: live output, exact transcript
+
+**Agent terminal**:
+The Interaction mode that shows an Agent's terminal and forwards operator input to it while reserving a configurable, keyboard-layout-independent control to return keyboard ownership to the control plane.
+_Avoid_: terminal handoff, attach mode
+
 **Blocked**:
-The observation that an agent shows an approval or question UI.
-The ticket stays `running` and still counts against the parallel limit.
+The observation that an Agent shows an approval or question UI.
+A Ticket stays `running`; a Consultation moves to `awaiting-response`.
 _Avoid_: stalled, waiting
 
 **Missing agent**:
-The observation that the stored pane is gone or holds no agent.
-The agent does not process. The operator can restart or abandon the cycle.
+The observation that the stored pane is gone or holds no Agent.
+The operator must explicitly recover or close the affected work.
 _Avoid_: dead agent, orphaned
+
+**Stale agent observation**:
+The condition where the latest Agent poll failed or was unreadable.
+The last known Consultation states stay visible and cannot become `missing` from that poll.
+_Avoid_: missing Agent, Herdr offline
+
+**Stale Agent output**:
+The condition where the latest read of an Agent terminal failed.
+The last Agent view stays visible while lifecycle observation continues.
+_Avoid_: stale Agent observation, missing output
+
+**Recovery required**:
+The condition where a Consultation cannot continue or close without an explicit operator decision, such as after a missing Agent or interrupted resource change.
+It stays separate from `awaiting-response`, where the Agent needs ordinary input.
+_Avoid_: awaiting response, blocked
+
+**Force-close**:
+Closing a Consultation record after resource cleanup cannot be confirmed.
+It records the resources that might remain and never removes a worktree or branch.
+_Avoid_: abandon, force delete
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
@@ -128,8 +195,13 @@ It gates auto-handoff only; a manual handoff may pass it.
 _Avoid_: turn counter, dispatch budget
 
 **Task type**:
-A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff.
+A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and, optionally, the thinking level its handoffs start on. The operator picks another level in the override panel, or clears a free-text row to leave the level to the agent.
 _Avoid_: prompt, template
+
+**Suggested task type**:
+The Task type proposed for a Ticket's next Handoff by the first matching Task rule, or by the configured default when no rule matches.
+An Override can replace it for one Handoff.
+_Avoid_: detected task type, inferred task type
 
 **Task rule**:
 A configured condition that selects the suggested task type for a ticket before handoff.
@@ -155,9 +227,14 @@ A cycle holds one trace per settled turn.
 _Avoid_: log, transcript
 
 **Environment**:
-The place where an agent runs a ticket.
-Kinds: a live worktree (the existing checkout of the ticket's repository), a worktree (a fresh git worktree created for the ticket), and a container (a future kind, not yet built).
+The place where an Agent executes a Ticket or leads a Consultation.
+Kinds: a live worktree (an existing checkout), a worktree (a fresh git worktree), and a container (a future kind, not yet built).
 _Avoid_: sandbox, isolation
+
+**Live checkout conflict**:
+The condition where an Agent would start in a live checkout already used by another active Agent.
+It blocks the start unless the operator gives a one-shot safety confirmation.
+_Avoid_: dirty checkout, parallel limit
 
 **Override**:
 A one-shot change to the settings of a single handoff, made in the override panel before the handoff starts.

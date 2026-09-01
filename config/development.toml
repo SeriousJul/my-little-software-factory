@@ -115,6 +115,29 @@ Labels: {labels}
 Description:
 {description}'''
 
+[task-types.merge]
+thinking = "low"
+template = '''
+Merge pull request {external-key}: {title}.
+
+### Instructions
+
+1. **Squash and Merge**
+   - Squash and merge the pull request into its base branch.
+
+2. **On a Blocked Merge**
+   - If the pull request has a merge conflict or a failing CI check, do not merge.
+   - Remove the **`ready-to-ship`** label.
+   - Add the **`needs-work`** label.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+
 [[sources]]
 name = "factory-issues"
 kind = "github-issues"
@@ -138,3 +161,9 @@ task-type = "review"
 [task-rules.when]
 source-kind = "github-pull-request"
 labels-any = ["ready-for-review"]
+
+[[task-rules]]
+task-type = "merge"
+[task-rules.when]
+source-kind = "github-pull-request"
+labels-any = ["ready-to-ship"]

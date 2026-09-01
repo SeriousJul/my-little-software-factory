@@ -65,8 +65,13 @@ The panel is a modal. While it is open, the keys of the app below are inert.
 A free-text row owns `j`, `k`, `h`, and `l`, so `Up` and `Down` move the
 selection past it.
 A row shows `(empty)` for an unset free-text value and `(unset)` for a list
-value that is not one of its options. The container environment is a future
-kind and is not offered by the panel.
+value that is not one of its options. The thinking row starts on the
+suggested task type's `thinking` level when the task type sets one. The
+operator picks another level, or clears a free-text row to leave the level
+to the agent. Switching the task type row re-derives the thinking row from
+the new task type's level while the operator has not set it, so the panel
+always shows what the handoff will run on. The container environment is a
+future kind and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
 column shrinks first, then the label column, then the marker. When the
@@ -163,7 +168,9 @@ The shipped defaults have no sources. `config/development.toml` configures the
 live development path for this repository through `--config`. A template's
 brace pairs are placeholders. Task types know `{repository}`, `{title}`,
 `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, and
-`{labels}`. Any other brace pair is a startup error, so a `{ticket-id}`
+`{labels}`. A task type can also set a `thinking` level. A handoff then
+starts on that level, and the override panel shows it as the starting value
+of the thinking row. Any other brace pair is a startup error, so a `{ticket-id}`
 cannot stay literal in the prompt an agent receives. Repository mappings are
 the one section the control plane writes back: a sibling clone records its
 path there. The write-back is

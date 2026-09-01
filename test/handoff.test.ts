@@ -159,6 +159,17 @@ describe("settingArgs", () => {
 			settingArgs({ kind: "cursor" }, { ...defaultChoice, model: "m", thinking: "high" }),
 		).toEqual([]);
 	});
+
+	test("an empty thinking is left to the agent: no fallback, no arguments", () => {
+		// The task type's thinking default is prefilled into the choice by
+		// the app, not applied here: an empty choice stays empty, so the
+		// panel can show exactly what the handoff will run on.
+		expect(settingArgs(DEFAULT_CONFIG.agents.pi, defaultChoice)).toEqual([]);
+		expect(settingArgs(DEFAULT_CONFIG.agents.pi, { ...defaultChoice, thinking: "low" })).toEqual([
+			"--thinking",
+			"low",
+		]);
+	});
 });
 
 describe("handOffTicket: the live worktree sequence", () => {

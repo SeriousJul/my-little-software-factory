@@ -198,23 +198,36 @@ describe("GitHub ticket source contract", () => {
 	});
 
 	test("the default pull request policy splits draft rules into separate queries", async () => {
-		const runner = new SourceRunner([page([pullRequest()]), page([pullRequest()])]);
+		const runner = new SourceRunner([
+			page([pullRequest()]),
+			page([pullRequest()]),
+			page([pullRequest()]),
+		]);
 		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
-		expect(runner.calls).toHaveLength(2);
+		expect(runner.calls).toHaveLength(3);
 		const needsWork = runner.calls[0].args.join(" ");
 		const review = runner.calls[1].args.join(" ");
+		const merge = runner.calls[2].args.join(" ");
 		expect(needsWork).toContain("is:open is:pr repo:acme/factory -label:blocked label:needs-work");
 		expect(needsWork).not.toContain("no:draft");
 		expect(review).toContain(
 			"is:open is:pr repo:acme/factory -label:blocked label:ready-for-review no:draft",
 		);
-		for (const query of [searchQueryOf(runner.calls[0]), searchQueryOf(runner.calls[1])]) {
+		// The merge half keeps the draft rule with the review half.
+		expect(merge).toContain(
+			"is:open is:pr repo:acme/factory -label:blocked label:ready-to-ship no:draft",
+		);
+		for (const query of [
+			searchQueryOf(runner.calls[0]),
+			searchQueryOf(runner.calls[1]),
+			searchQueryOf(runner.calls[2]),
+		]) {
 			expect(query).not.toMatch(/\bOR\b/);
 			expect(query).not.toContain("(");
 			expect(query).not.toContain("draft:false");
 		}
-		// Both queries matched the same pull request. The snapshot keeps one copy.
+		// All queries matched the same pull request. The snapshot keeps one copy.
 		if (outcome.status === "success") expect(outcome.tickets).toHaveLength(1);
 	});
 
@@ -254,6 +267,7 @@ describe("GitHub ticket source contract", () => {
 	test("normalizes a draft pull request and carries the draft fact in its attributes", async () => {
 		const runner = new SourceRunner([
 			page([pullRequest(7, { isDraft: true, labels: { nodes: [{ name: "needs-work" }] } })]),
+			page([]),
 			page([]),
 		]);
 		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();

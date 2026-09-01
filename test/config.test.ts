@@ -324,6 +324,11 @@ describe("validateConfig", () => {
 				expect(source.auth).toBeUndefined();
 				expect(source.filter).toBeUndefined();
 			}
+			// The merge task type runs its handoffs on a low thinking level.
+			expect(config.taskTypes.merge).toEqual({
+				template: expect.stringContaining("Squash and merge"),
+				thinking: "low",
+			});
 			expect(config.taskRules).toEqual([
 				{
 					taskType: "rework",
@@ -332,6 +337,10 @@ describe("validateConfig", () => {
 				{
 					taskType: "review",
 					when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+				},
+				{
+					taskType: "merge",
+					when: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
 				},
 			]);
 		});
@@ -531,6 +540,55 @@ describe("validateConfig", () => {
 				repos: { "acme/billing": "" },
 			},
 			'repos["acme/billing"]: must be a non-empty path',
+		);
+	});
+
+	test("a task type carries an optional thinking level and round-trips it", () => {
+		const config = validateConfig({
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "merge",
+			agents: { pi: { kind: "pi" } },
+			"task-types": {
+				merge: { template: "Merge {title}", thinking: "low" },
+			},
+		});
+		expect(config.taskTypes.merge).toEqual({ template: "Merge {title}", thinking: "low" });
+		// The thinking default survives a write/read cycle.
+		const roundTrip = validateConfig(parseToml(configToToml(config)));
+		expect(roundTrip.taskTypes.merge).toEqual({ template: "Merge {title}", thinking: "low" });
+	});
+
+	test("a task type thinking level must be a non-empty string", () => {
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "x", thinking: "" } },
+			},
+			"task-types.t.thinking: must be a non-empty string",
+		);
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "x", thinking: 5 } },
+			},
+			"task-types.t.thinking: must be a non-empty string",
+		);
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "x", extra: "y" } },
+			},
+			'task-types.t: unknown key "extra"',
 		);
 	});
 
