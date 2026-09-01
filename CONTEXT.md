@@ -14,6 +14,27 @@ This TUI.
 It observes the factory and issues work to agents.
 _Avoid_: dashboard, UI
 
+**Action bar**:
+The persistent guide to controls that are relevant to the operator's current interaction mode.
+_Avoid_: status bar, shortcut bar, footer
+
+**Message line**:
+The temporary surface for progress, warnings, errors, and other operational feedback.
+_Avoid_: status line, notification bar
+
+**Message view**:
+The on-demand, read-only presentation of a full message that does not fit on the Message line.
+_Avoid_: message modal, error popup
+
+**Key guide**:
+The on-demand catalog of all controls, with the current interaction mode and global controls shown first.
+It includes controls that the action bar does not show.
+_Avoid_: help popup, keybinding popin, shortcut window
+
+**Interaction mode**:
+The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Key guide, or Message view.
+_Avoid_: context, screen
+
 **Ticket**:
 An actionable unit of work from an external ticket source, carrying the repository it belongs to.
 An issue or pull request is a source fact, not a different factory concept.
