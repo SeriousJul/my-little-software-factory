@@ -41,7 +41,7 @@ const PTY_SUPPORT: Partial<
 	Record<NodeJS.Platform, { libcPaths: string[]; fSetFl: number; oNonBlock: bigint }>
 > = {
 	linux: { libcPaths: ["libc.so.6", "libc.so"], fSetFl: 4, oNonBlock: 2048n },
-	darwin: { libcPaths: ["/usr/lib/libSystem.dylib"], fSetFl: 3, oNonBlock: 16384n },
+	darwin: { libcPaths: ["/usr/lib/libSystem.dylib"], fSetFl: 4, oNonBlock: 2048n },
 };
 
 function loadPtyLibs(): PtyLibs | null {
@@ -111,16 +111,16 @@ export async function openControlPlanePty(
 
 	const amaster = new Int32Array(1);
 	const aslave = new Int32Array(1);
-	if (libs.openpty(amaster, aslave) !== 0) {
-		libs.close(amaster[0]);
-		libs.close(aslave[0]);
-		return null;
-	}
+	if (libs.openpty(amaster, aslave) !== 0) return null;
 	const master = amaster[0];
 	const slave = aslave[0];
 	// Non-blocking master: readSync must report EAGAIN, not stall the
 	// event loop, on a PTY with no pending output.
-	libs.fcntl(master, support.fSetFl, support.oNonBlock);
+	if (libs.fcntl(master, support.fSetFl, support.oNonBlock) === -1) {
+		libs.close(master);
+		libs.close(slave);
+		return null;
+	}
 
 	const child = spawn(process.execPath, [CONTROLLER_BIN, ...args], {
 		stdio: [slave, slave, slave],
