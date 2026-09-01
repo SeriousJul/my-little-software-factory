@@ -32,6 +32,7 @@ Implement the following {source-kind}.
 
 2. **Create Pull Request**
    - Open a new Pull Request.
+   - Link the pull request to the ticket.
    - List any technical choices made when specifications were not clear.
    - Add the **`ready-for-review`** label.
    - Add the **`ready-for-agent`** label.

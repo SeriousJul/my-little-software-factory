@@ -16,8 +16,8 @@ import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/reac
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
-import { windowOf } from "./geometry.ts";
-import { padToWidth, truncateToWidth, wrapToWidth } from "./text.ts";
+import { maxScrollOf, windowOf } from "./geometry.ts";
+import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** One confirmable action, with its label and an optional detail. */
@@ -40,24 +40,59 @@ interface ActionPanelProps {
 const CHROME = 4;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 const MARKER_WIDTH = 2;
-/** The label column: the widest action label plus its gap. */
-const LABEL_WIDTH = 12;
-/** The body and the detail column share this width. */
-const CONTENT_WIDTH = 60;
-/** The message window caps here; the rest scrolls. */
-const MAX_BODY_ROWS = 8;
+/** The label column: enough for the usual "Handoff: <type>" action. */
+const LABEL_WIDTH = 20;
+/** The body and action detail columns share this maximum width. */
+const CONTENT_WIDTH = 80;
+/** The message window is large enough for an agent's useful conclusion. */
+const MAX_BODY_ROWS = 16;
 const HINT = "up/down select  j/k message  enter  esc";
 
-export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
-	const { width: terminalWidth } = useTerminalDimensions();
-	// The body wraps to the content width; the wide terminals cap it there
-	// and the narrow ones keep what they hold.
-	const bodyCols = Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
-	const wrapped = (bodyLines ?? []).flatMap((line) =>
-		line === "" ? [""] : wrapToWidth(line, bodyCols),
+interface PanelGeometry {
+	contentWidth: number;
+	maxBodyRows: number;
+	showHint: boolean;
+}
+
+/**
+ * Fit the panel within the terminal while preserving every action row.
+ *
+ * Message rows yield first when the terminal is short. The key hint yields
+ * before the message, so the operator can still read at least one row when
+ * there is room after the actions.
+ */
+function panelGeometry(width: number, height: number, actionRows: number): PanelGeometry {
+	const contentWidth = Math.max(1, Math.min(CONTENT_WIDTH, width - CHROME));
+	const innerRows = Math.max(0, height - CHROME);
+	const showHint = contentWidth >= widthOf(HINT) && innerRows >= actionRows + 2;
+	const maxBodyRows = Math.min(
+		MAX_BODY_ROWS,
+		Math.max(0, innerRows - actionRows - (showHint ? 1 : 0)),
 	);
-	const bodyRows = Math.min(wrapped.length, MAX_BODY_ROWS);
-	const [bodyScroll, setBodyScroll] = useState(0);
+	return { contentWidth, maxBodyRows, showHint };
+}
+
+/** Wrap the message, retaining explicit blank lines. */
+function wrapBody(lines: readonly string[], width: number): string[] {
+	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
+}
+
+export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
+	const geometry = panelGeometry(terminalWidth, terminalHeight, actions.length);
+	// Reserve a column for the scrollbar only when the message needs one. A
+	// scrollbar can add wrap rows, so determine overflow once at full width,
+	// then make the final window from the narrower text width.
+	const fullWidthBody = wrapBody(bodyLines ?? [], geometry.contentWidth);
+	const hasScrollbar = fullWidthBody.length > geometry.maxBodyRows;
+	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
+	const wrapped = hasScrollbar ? wrapBody(bodyLines ?? [], bodyWidth) : fullWidthBody;
+	const bodyRows = Math.min(wrapped.length, geometry.maxBodyRows);
+	const maxBodyScroll = maxScrollOf(wrapped.length, bodyRows);
+	// A completed turn ends with its conclusion, so open the panel at the
+	// newest message row. The current position stays stable while the
+	// operator uses j and k.
+	const [bodyScroll, setBodyScroll] = useState(() => maxBodyScroll);
 	const [selected, setSelected] = useState(0);
 	const selectedRef = useRef(0);
 
@@ -86,7 +121,7 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 				move(-1);
 				break;
 			case "j":
-				setBodyScroll((current) => Math.min(current + 1, Math.max(0, wrapped.length - bodyRows)));
+				setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
 				break;
 			case "k":
 				setBodyScroll((current) => Math.max(0, current - 1));
@@ -96,8 +131,9 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 		}
 	});
 
-	const scroll = Math.min(bodyScroll, Math.max(0, wrapped.length - bodyRows));
+	const scroll = Math.min(bodyScroll, maxBodyScroll);
 	const visibleBody = windowOf(wrapped, scroll, bodyRows);
+	const thumbRows = hasScrollbar ? scrollbarRows(wrapped.length, bodyRows, scroll) : null;
 
 	return createElement(
 		"box",
@@ -127,32 +163,65 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 			...visibleBody.map((line, index) =>
 				createElement(
 					"text",
-					{ key: `body-${index}`, fg: COLORS.dim },
-					truncateToWidth(line, bodyCols),
+					{ key: `body-${index}` },
+					...bodySpans(line, bodyWidth, thumbRows?.has(index)),
 				),
 			),
 			...actions.map((row, index) =>
-				createElement("text", { key: row.key }, ...actionSpans(row, index === selected)),
+				createElement(
+					"text",
+					{ key: row.key },
+					...actionSpans(row, index === selected, geometry.contentWidth),
+				),
 			),
-			createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, bodyCols)),
+			geometry.showHint &&
+				createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, geometry.contentWidth)),
 		),
 	);
 }
 
+/** The proportional scrollbar rows for the message window. */
+function scrollbarRows(
+	lineCount: number,
+	visibleRows: number,
+	scroll: number,
+): ReadonlySet<number> {
+	const thumbHeight = Math.max(1, Math.ceil((visibleRows * visibleRows) / lineCount));
+	const travel = Math.max(0, visibleRows - thumbHeight);
+	const maxScroll = maxScrollOf(lineCount, visibleRows);
+	const start = maxScroll === 0 ? 0 : Math.round((scroll / maxScroll) * travel);
+	return new Set(Array.from({ length: thumbHeight }, (_, index) => start + index));
+}
+
+/** One message row, with a dim track and bright thumb when it scrolls. */
+function bodySpans(line: string, width: number, thumb: boolean | undefined): ReactElement[] {
+	const spans: ReactElement[] = [
+		createElement("span", { fg: COLORS.dim }, truncateToWidth(line, width)),
+	];
+	if (thumb !== undefined) {
+		spans.push(
+			createElement("span", { fg: thumb ? COLORS.textBright : COLORS.dim }, thumb ? "█" : "│"),
+		);
+	}
+	return spans;
+}
+
 /** One action row as spans: the marker, the label, the dim detail. */
-function actionSpans(row: ActionRow, selected: boolean): ReactElement[] {
+function actionSpans(row: ActionRow, selected: boolean, contentWidth: number): ReactElement[] {
+	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
+	const labelWidth = Math.min(LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
+	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
 	const detail = row.detail ?? "";
-	const detailWidth = Math.max(0, CONTENT_WIDTH - MARKER_WIDTH - LABEL_WIDTH);
 	return [
 		createElement(
 			"span",
 			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			selected ? "❯ " : "  ",
+			truncateToWidth(selected ? "❯ " : "  ", markerWidth),
 		),
 		createElement(
 			"span",
 			{ fg: selected ? COLORS.textBright : COLORS.text },
-			padToWidth(`${row.label} `, LABEL_WIDTH),
+			truncateToWidth(padToWidth(`${row.label} `, labelWidth), labelWidth),
 		),
 		createElement(
 			"span",

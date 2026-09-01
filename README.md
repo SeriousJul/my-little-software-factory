@@ -89,12 +89,14 @@ wraps: it carries less, not broken text.
 ### Completion decision panel keys
 
 Enter on an `awaiting` ticket shows the last completion: the agent's last
-message. The panel offers the choices the state allows.
+message. The panel opens at the bottom, where the latest conclusion is. A
+large message window and its scrollbar show more output and the current
+position. The panel offers the choices the state allows.
 
 | Key             | What it does                                                        |
 | --------------- | ------------------------------------------------------------------- |
 | `Up` / `Down`  | Move between the choice rows                                      |
-| `j` / `k`      | Scroll the completion message                                     |
+| `j` / `k`      | Scroll the completion message, up or down                         |
 | `Enter`         | Choose the selected row                                            |
 | `Esc`           | Close the panel: nothing runs, the ticket stays awaiting           |
 

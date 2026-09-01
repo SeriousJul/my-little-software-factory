@@ -673,8 +673,8 @@ describe("the decision panel", () => {
 		app.state.close();
 	});
 
-	test("up and down select the rows, j and k scroll the message", async () => {
-		const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+	test("shows a larger message window at its bottom, with a scrollbar", async () => {
+		const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
 		const app = seededApp("awaiting", {}, success, "live-worktree", lines);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -683,24 +683,33 @@ describe("the decision panel", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
-				const panel = frameText(await settle(setup));
-				// The body holds eight lines: the first window is one to eight.
-				expect(panel).toContain("line 1");
-				expect(panel).not.toContain("line 9");
+				const panel = await settle(setup);
+				const text = frameText(panel);
+				// The panel holds 16 message lines. It opens at the bottom, where
+				// the agent's conclusion is, and the scrollbar thumb rests there.
+				expect(text).toContain("line 5");
+				expect(text).toContain("line 20");
+				expect(text).not.toContain("line 4");
+				expect(text).toContain("█");
+				const bottomThumbRow = rowsOf(panel).findIndex((row) => row.includes("█"));
+				expect(bottomThumbRow).toBeGreaterThan(-1);
 
-				// j scrolls the message down, and k scrolls it back.
-				await press(
-					setup,
-					"j",
-					"scroll the message",
-					(f) => f.includes("line 9") && !f.includes("line 1"),
-				);
-				await press(
+				// k scrolls up through the message and moves the thumb with it. j
+				// returns to the latest message and its bottom thumb position.
+				const above = await press(
 					setup,
 					"k",
-					"scroll the message back",
-					(f) => f.includes("line 1") && !f.includes("line 9"),
+					"scroll the message up",
+					(f) => f.includes("line 4") && !f.includes("line 20"),
 				);
+				expect(rowsOf(above).findIndex((row) => row.includes("█"))).toBeLessThan(bottomThumbRow);
+				const backAtBottom = await press(
+					setup,
+					"j",
+					"scroll the message to its bottom",
+					(f) => f.includes("line 20") && !f.includes("line 4"),
+				);
+				expect(rowsOf(backAtBottom).findIndex((row) => row.includes("█"))).toBe(bottomThumbRow);
 
 				// up and down move the action row.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
