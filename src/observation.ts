@@ -49,7 +49,7 @@ export interface HerdrAgent {
 }
 
 /** The normalized states the factory reasons about. */
-export type AgentStatus = "working" | "done" | "idle" | "blocked" | "error" | "unknown";
+export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
 
 /** The result of asking herdr for its agents. */
 export type HerdrProbe = { kind: "ok"; agents: HerdrAgent[] } | { kind: "error"; reason: string };
@@ -127,16 +127,17 @@ export class HerdrAgentReader implements AgentReader {
 /**
  * Map a herdr agent status onto the factory's vocabulary.
  *
- * The set herdr reports is an open set, so anything unrecognized maps to
- * `unknown`, which settles nothing and fails nothing.
+ * The set herdr 0.8.2 reports is closed: working, idle, done, blocked,
+ * and unknown. Anything outside it is a herdr the factory has not
+ * verified, so it maps to `unknown`, which settles nothing and fails
+ * nothing.
  */
 export function normalizeAgentStatus(raw: string): AgentStatus {
 	const value = raw.trim().toLowerCase();
-	if (value === "working" || value === "busy" || value === "running") return "working";
-	if (value === "done" || value === "complete" || value === "completed") return "done";
+	if (value === "working") return "working";
+	if (value === "done") return "done";
 	if (value === "idle") return "idle";
 	if (value === "blocked") return "blocked";
-	if (value === "error" || value === "failed") return "error";
 	return "unknown";
 }
 
@@ -505,6 +506,8 @@ export class ObservationCoordinator {
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
+		// The same choices the previous handoff ran with: the auto route
+		// matches the operator's model and thinking, not the defaults.
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
@@ -512,6 +515,8 @@ export class ObservationCoordinator {
 				edge.agent ?? config.defaultAgent,
 				edge.environment ?? config.defaultEnvironment,
 				edge.to[0],
+				ticket.model,
+				ticket.thinking,
 			),
 			previousMessage,
 		});

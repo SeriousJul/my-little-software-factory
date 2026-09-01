@@ -27,6 +27,7 @@ import {
 	HEIGHT,
 	markerRowOf,
 	press,
+	pressArrow,
 	rowsOf,
 	settle,
 	sleep,
@@ -111,6 +112,7 @@ function seed(
 	shape: "open" | "in-flight" | "awaiting",
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
+	message = "The turn is done.",
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
@@ -141,7 +143,7 @@ function seed(
 				handoffId: claim.claim.attemptId,
 				taskType: "implement",
 				agentType: "pi",
-				message: "The turn is done.",
+				message,
 				completedAt: "2026-08-31T11:00:00Z",
 			});
 		}
@@ -163,8 +165,9 @@ function seededApp(
 	extra: Partial<FactoryConfig> = {},
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
+	message = "The turn is done.",
 ): SeededApp {
-	const state = seed(shape, outcome, environment);
+	const state = seed(shape, outcome, environment, message);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -311,7 +314,9 @@ describe("the failure markers", () => {
 				expect(panel).toContain("Abandon");
 
 				// Abandon is the last action: one down, confirm.
-				await press(setup, "j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressArrow(setup, "down", "select abandon", (f) =>
+					frameText(f).includes("❯ Abandon"),
+				);
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				// The open ticket keeps no failure badge.
 				expect(ticketRow(await settle(setup))).not.toContain("missing");
@@ -354,8 +359,8 @@ describe("the decision panel", () => {
 				expect(panel).toContain("Close");
 
 				// Close is the default; the workflow handoff is the last row: down twice.
-				await press(setup, "j", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await press(setup, "j", "the handoff row", (f) =>
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
 					frameText(f).includes("❯ Handoff: review"),
 				);
 				await pressReturn(setup, "the routed handoff", (f) => f.includes("Task type: review"));
@@ -384,7 +389,7 @@ describe("the decision panel", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
 				// Goto is the second row: one down, confirm.
-				await press(setup, "j", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
 				// The focus went to the stored pane, and the handoff stayed
 				// open: the ticket is running, and the row wears the missing
@@ -393,6 +398,73 @@ describe("the decision panel", () => {
 				const visible = app.state.visibleTickets(app.config.taskRules, app.config.defaultTaskType);
 				expect(visible[0]?.state).toBe("running");
 				expect(ticketRow(await settle(setup))).toContain("missing");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("up and down select the rows, j and k scroll the message", async () => {
+		const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+		const app = seededApp("awaiting", {}, success, "live-worktree", lines);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				// The body holds eight lines: the first window is one to eight.
+				expect(panel).toContain("line 1");
+				expect(panel).not.toContain("line 9");
+
+				// j scrolls the message down, and k scrolls it back.
+				await press(
+					setup,
+					"j",
+					"scroll the message",
+					(f) => f.includes("line 9") && !f.includes("line 1"),
+				);
+				await press(
+					setup,
+					"k",
+					"scroll the message back",
+					(f) => f.includes("line 1") && !f.includes("line 9"),
+				);
+
+				// up and down move the action row.
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "up", "back to close", (f) => frameText(f).includes("❯ Close"));
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
+describe("the herdr-unreachable line", () => {
+	test("a failed agent list warns and the observation holds", async () => {
+		const app = seededApp("in-flight");
+		// herdr cannot be reached: the agent list fails.
+		app.runner.set("herdr", ["agent", "list"], { code: 1, stderr: "no herdr session" });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("herdr is unreachable"),
+					"the herdr-unreachable warning",
+				);
+				// The loop holds: the failed list marks nothing, so the
+				// in-flight ticket runs on without a marker.
+				expect(ticketRow(setup.captureCharFrame())).not.toContain("missing");
+				expect(ticketRow(setup.captureCharFrame())).not.toContain("blocked");
 			},
 			WIDTH,
 			HEIGHT,
@@ -466,7 +538,9 @@ describe("the Close cleanup", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
-				await press(setup, "j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressArrow(setup, "down", "select abandon", (f) =>
+					frameText(f).includes("❯ Abandon"),
+				);
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				const removeIndex = commands.indexOf("herdr worktree remove --workspace ws-1");
@@ -494,7 +568,9 @@ describe("the Close cleanup", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
 				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
-				await press(setup, "j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressArrow(setup, "down", "select abandon", (f) =>
+					frameText(f).includes("❯ Abandon"),
+				);
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
@@ -740,7 +816,10 @@ describe("the handoff queue", () => {
 				// And while the restart is queued, the ticket moves on:
 				// abandon it.
 				await pressReturnQuiet("the missing panel again", (f) => f.includes("Missing:"));
-				await pressQuiet("j", "select abandon", (f) => frameText(f).includes("❯ Abandon"));
+				await pressArrow(setup, "down", "select abandon", (f) =>
+					frameText(f).includes("❯ Abandon"),
+				);
+				await sleep(150);
 				await pressReturnQuiet("the abandonment", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);

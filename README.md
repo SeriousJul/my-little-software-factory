@@ -93,10 +93,8 @@ message. The panel offers the choices the state allows.
 
 | Key             | What it does                                                        |
 | --------------- | ------------------------------------------------------------------- |
-| `j` / `k`      | Move between the choice rows                                      |
 | `Up` / `Down`  | Move between the choice rows                                      |
-| `h` / `l`      | Choose the selected row                                            |
-| `Left` / `Right` | Choose the selected row                                          |
+| `j` / `k`      | Scroll the completion message                                     |
 | `Enter`         | Choose the selected row                                            |
 | `Esc`           | Close the panel: nothing runs, the ticket stays awaiting           |
 
@@ -106,11 +104,14 @@ without touching the git branch, so pushed work and pull requests survive:
 a worktree handoff loses its worktree checkout and its herdr workspace,
 a live worktree handoff loses its tab.
 The second row, "Goto", focuses the agent's pane so the operator can steer
-it; the ticket returns to `running` and the trace records the decision.
-Then one "Handoff: `<task type>`" row per outgoing workflow edge of the
-completed task type: choosing it hands the ticket off again with the edge's
-target task type, pinning the edge's agent type and environment when the
-edge defines them.
+it; the ticket returns to `running`. Goto is a state move, not a completion
+decision, so the trace does not record it: the turn's pending trace stays
+pending, and the next settle refreshes it with the agent's new last message.
+Then one "Handoff: `<task type>`" row per distinct target the outgoing
+workflow edges allow from the completed task type, in config order: two
+edges to the same target offer one row. Choosing it hands the ticket off
+again with the edge's target task type, pinning the edge's agent type and
+environment when the edge defines them.
 
 ### Missing agent panel keys
 
@@ -118,10 +119,8 @@ Enter on a ticket whose agent is missing shows the missing panel.
 
 | Key             | What it does                                                        |
 | --------------- | ------------------------------------------------------------------- |
-| `j` / `k`      | Move between the choice rows                                      |
 | `Up` / `Down`  | Move between the choice rows                                      |
-| `h` / `l`      | Choose the selected row                                            |
-| `Left` / `Right` | Choose the selected row                                          |
+| `j` / `k`      | Scroll the panel message                                          |
 | `Enter`         | Choose the selected row                                            |
 | `Esc`           | Close the panel: nothing runs, the badge stays                     |
 
@@ -159,9 +158,11 @@ Under the panes sits a status line. It carries the progress and the outcome
 of the last handoff: `handing off "..."...` while one is in flight, the
 warning a sibling clone raises, or the readable reason a handoff failed.
 A clean handoff clears the line. While a handoff is in flight the keys keep
-working, and `e` is refused with a hint on the line. A second handoff
-claim moves its ticket to `handed-off` at once and queues its external
-work until the in-flight handoff settles, so claims never race each other.
+working, and `e` is refused with a hint on the line. A second handoff claim
+records its attempt, which blocks a further claim on the same ticket, and
+queues its external work until the in-flight handoff settles; the ticket
+moves to `handed-off` only when the handoff settles and its agent starts,
+so claims never race each other.
 
 Above the panes sits a mode line. It shows the auto-handoff state and the
 live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`

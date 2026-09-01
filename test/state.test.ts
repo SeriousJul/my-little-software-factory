@@ -356,6 +356,106 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("a goto moves awaiting back to running and leaves the trace pending", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
+
+		// Goto is a state move, not a completion decision: the ticket runs
+		// again, and the settled turn stays pending on its trace.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "goto",
+				decidedAt: "2026-08-31T11:30:00Z",
+			}),
+		).toBe(true);
+		const [running] = state.visibleTickets([], "implement");
+		expect(running.state).toBe("running");
+		expect(running.lastCompletion?.decision).toBeNull();
+		expect(running.lastCompletion?.message).toBe("Done.");
+		const db = new DatabaseSync(path, { readOnly: true });
+		const traceCount = db
+			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
+			.get(ticket.identity) as { n: number };
+		db.close();
+		expect(traceCount.n).toBe(1);
+
+		// A second goto moves nothing: the ticket already runs.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "goto",
+				decidedAt: "2026-08-31T11:31:00Z",
+			}),
+		).toBe(false);
+		state.close();
+	});
+
+	test("a goto on a handoff that never settled writes no completion trace", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		// The ticket is in flight and its turn unsettled: the blocked agent's
+		// goto focuses the pane without touching the trace or the state.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "goto",
+				decidedAt: "2026-08-31T11:30:00Z",
+			}),
+		).toBe(false);
+		const [inFlight] = state.visibleTickets([], "implement");
+		expect(inFlight.state).toBe("handed-off");
+		expect(inFlight.lastCompletion).toBeNull();
+		state.close();
+	});
+
+	test("a settled turn keeps the agent name after the ticket loses its active membership", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		// The agent closes its own source item before the turn settles: the
+		// membership goes stale, but the title still names the agent.
+		state.applyFetch(sourceA, success([]));
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		const [rested] = state.visibleTickets([], "implement");
+		expect(rested.lastCompletion?.agentName).toBe("persist-source-facts");
+		state.close();
+	});
+
 	test("a workflow claim needs awaiting, a restart claim needs in-flight", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);

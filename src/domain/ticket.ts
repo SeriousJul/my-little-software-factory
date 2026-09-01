@@ -17,12 +17,15 @@ export type EnvironmentKind = (typeof ENVIRONMENT_KINDS)[number];
 export const HANDOFF_ENVIRONMENT_KINDS = ["live-worktree", "worktree"] as const;
 
 /**
- * The decision made on one settled turn.
+ * The decision the control plane applies on one turn.
  *
+ * The trace records the decisions that decide the settled turn:
  * `handed-off` and `auto-handed-off` started a workflow handoff from the
- * awaiting state; `closed` and `auto-closed` ended the work cycle; `abandoned`
- * ended a cycle whose agent went missing; `goto` refocused the existing
- * agent and left the ticket running.
+ * awaiting state; `closed` and `auto-closed` ended the work cycle;
+ * `abandoned` ended a cycle whose agent went missing. `goto` is a state
+ * move, not a completion decision: it refocused the existing agent and
+ * moved the ticket back to running, and the trace does not record it. The
+ * turn's pending trace stays pending, and the next settle refreshes it.
  */
 export type CompletionDecision =
 	| "closed"

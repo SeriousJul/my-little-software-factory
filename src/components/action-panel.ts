@@ -8,7 +8,7 @@
  * in-flight ticket whose pane herdr no longer lists it is the missing
  * panel: restart or abandon.
  *
- * The keys: j/k move the action rows, up and down scroll the message,
+ * The keys: up and down move the action rows, j/k scroll the message,
  * enter confirms the selected action, esc cancels. While it is open, the
  * keys of the app below are disabled.
  */
@@ -46,7 +46,7 @@ const LABEL_WIDTH = 12;
 const CONTENT_WIDTH = 60;
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
-const HINT = "j/k select  up/down message  enter  esc";
+const HINT = "up/down select  j/k message  enter  esc";
 
 export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
 	const { width: terminalWidth } = useTerminalDimensions();
@@ -79,16 +79,16 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 			case "return":
 				onAction(actions[Math.min(selectedRef.current, actions.length - 1)].key);
 				break;
-			case "j":
+			case "down":
 				move(1);
 				break;
-			case "k":
+			case "up":
 				move(-1);
 				break;
-			case "down":
+			case "j":
 				setBodyScroll((current) => Math.min(current + 1, Math.max(0, wrapped.length - bodyRows)));
 				break;
-			case "up":
+			case "k":
 				setBodyScroll((current) => Math.max(0, current - 1));
 				break;
 			default:

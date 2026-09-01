@@ -163,13 +163,12 @@ function settleFor(state: FactoryState, identity: string, taskType: string): str
 }
 
 describe("normalizeAgentStatus", () => {
-	test("maps the herdr vocabulary and falls back to unknown", () => {
+	test("maps the closed herdr 0.8.2 status set and falls back to unknown", () => {
 		expect(normalizeAgentStatus("working")).toBe("working");
 		expect(normalizeAgentStatus("Done")).toBe("done");
-		expect(normalizeAgentStatus("complete")).toBe("done");
 		expect(normalizeAgentStatus("idle")).toBe("idle");
 		expect(normalizeAgentStatus("blocked")).toBe("blocked");
-		expect(normalizeAgentStatus("failed")).toBe("error");
+		expect(normalizeAgentStatus("unknown")).toBe("unknown");
 		expect(normalizeAgentStatus("meditating")).toBe("unknown");
 	});
 });
@@ -534,6 +533,45 @@ describe("the awaiting rule", () => {
 		expect(
 			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to implement"),
 		).toBe(true);
+		state.close();
+	});
+
+	test("a route keeps the model and thinking the previous handoff ran with", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const claim = state.claimHandoff(
+			"github:github.com:I_5",
+			{ ...choice, taskType: "route", model: "opus-4", thinking: "high" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-route",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: claim.claim.attemptId,
+			taskType: "route",
+			agentType: "pi",
+			message: "settled the turn",
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				ticketIdentity: "github:github.com:I_5",
+				previousMessage: "settled the turn",
+				choice: {
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "implement",
+					model: "opus-4",
+					thinking: "high",
+				},
+			}),
+		]);
 		state.close();
 	});
 

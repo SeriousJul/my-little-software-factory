@@ -530,7 +530,8 @@ export function App({
 	};
 
 	// The decision panel's rows: Close first, selected by default, then a Goto,
-	// then one handoff per workflow target in config order.
+	// then one handoff per distinct target the outgoing workflow edges allow,
+	// in config order. Two edges to the same target offer one row.
 	const decisionFor = (ticket: Ticket): { actions: ActionRow[]; body: string[] } => {
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
@@ -538,10 +539,14 @@ export function App({
 			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
 			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
 		];
+		const seen = new Set<string>();
 		for (const edge of configRef.current.workflows) {
 			if (edge.from !== taskType) continue;
-			for (const target of edge.to)
+			for (const target of edge.to) {
+				if (seen.has(target)) continue;
+				seen.add(target);
 				actions.push({ key: `route:${target}`, label: `Handoff: ${target}`, detail: target });
+			}
 		}
 		return {
 			actions,
@@ -550,8 +555,8 @@ export function App({
 	};
 
 	// Goto: the operator focuses the agent's pane in herdr and the handoff
-	// stays open. The ticket moves awaiting to running; the next settle
-	// starts the turn's next trace.
+	// stays open. The ticket moves awaiting to running; the trace does not
+	// record it, and the next settle refreshes the turn's pending trace.
 	const runGoto = (ticket: Ticket) => {
 		if (state === undefined) return;
 		const paneId = ticket.handoff?.paneId ?? null;

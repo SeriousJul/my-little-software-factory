@@ -579,11 +579,16 @@ export class FactoryState {
 	 * The name the factory started the ticket's agent with: derived from
 	 * the ticket title by the same rule the handoff applies. The herdr
 	 * list does not expose it, and its own agent field holds the kind.
+	 *
+	 * An active membership holds the current title. When the ticket lost
+	 * every active membership (the agent closed its own source item, or the
+	 * source was removed), the stale title still names the agent, so the
+	 * lookup falls back to the ticket's remaining memberships.
 	 */
 	agentNameForTicket(identity: string): string {
 		const row = this.db
 			.prepare(
-				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? AND m.active = 1 ORDER BY m.source_name LIMIT 1",
+				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? ORDER BY m.active DESC, m.source_name LIMIT 1",
 			)
 			.get(identity) as { title: string } | undefined;
 		return row === undefined ? "" : agentNameFor(row.title);
@@ -720,19 +725,30 @@ export class FactoryState {
 	 * Make the decision on one settled turn.
 	 *
 	 * `closed`, `auto-closed`, and `abandoned` end the work cycle: the
-	 * ticket returns to open with the cycle incremented. `goto` refocuses
-	 * the existing agent and moves an awaiting ticket back to running.
-	 * A handoff decision leaves the state to the handoff that follows it.
+	 * ticket returns to open with the cycle incremented. A handoff decision
+	 * leaves the state to the handoff that follows it. `goto` is not a
+	 * completion decision: it refocuses the existing agent and moves an
+	 * awaiting ticket back to running, and the trace does not record it. The
+	 * turn's pending trace stays pending, and the next settle refreshes it.
 	 *
-	 * The decision lands on the handoff's pending trace row. When the turn
-	 * never settled there is no pending row, and only `abandoned` and
-	 * `goto` still write one - once per handoff - so an un-settled cycle
-	 * leaves a complete trace. The ticket state moves only when this call
-	 * wrote or updated the trace, so a double decision can never bump the
-	 * cycle number twice. Returns whether the decision was applied.
+	 * A trace decision lands on the handoff's pending row. When the turn
+	 * never settled there is no pending row, and only `abandoned` still
+	 * writes one - once per handoff - so an un-settled cycle leaves a
+	 * complete trace. The ticket state moves only when this call wrote or
+	 * updated the trace (or, for `goto`, moved the state), so a double
+	 * decision can never bump the cycle number twice. Returns whether the
+	 * decision was applied.
 	 */
 	applyCompletionDecision(input: CompletionDecisionInput): boolean {
 		return this.transaction(() => {
+			if (input.decision === "goto") {
+				// A state move only: the trace keeps recording the settled turn,
+				// pending a real decision.
+				const moved = this.db
+					.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
+					.run(input.ticketIdentity);
+				return Number(moved.changes) > 0;
+			}
 			const decided = this.db
 				.prepare(
 					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
@@ -742,10 +758,10 @@ export class FactoryState {
 				this.applyDecisionStateChange(input);
 				return true;
 			}
-			// No pending row: the turn never settled. Abandon and Goto record
-			// their decision anyway, once per handoff, so the trace stays
-			// complete and the cycle number moves exactly once.
-			if (input.decision !== "abandoned" && input.decision !== "goto") return false;
+			// No pending row: the turn never settled. Abandon records its
+			// decision anyway, once per handoff, so the trace stays complete
+			// and the cycle number moves exactly once.
+			if (input.decision !== "abandoned") return false;
 			const existing = this.db
 				.prepare(
 					"SELECT COUNT(*) AS count FROM completion_traces WHERE handoff_id = ? AND decision = ?",
@@ -781,11 +797,7 @@ export class FactoryState {
 
 	/** The ticket state move of a decision this call applied. */
 	private applyDecisionStateChange(input: CompletionDecisionInput): void {
-		if (input.decision === "goto") {
-			this.db
-				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
-				.run(input.ticketIdentity);
-		} else if (
+		if (
 			input.decision === "closed" ||
 			input.decision === "auto-closed" ||
 			input.decision === "abandoned"
