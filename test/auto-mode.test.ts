@@ -23,6 +23,7 @@ import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	type AppSetup,
 	awaitFrame,
+	detailPaneText,
 	frameText,
 	HEIGHT,
 	markerRowOf,
@@ -222,6 +223,16 @@ async function pressReturn(
 	return await awaitFrame(setup, predicate, what);
 }
 
+/** Escape through the real key path, then wait for its effect. */
+async function pressEscape(
+	setup: AppSetup,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressEscape();
+	return await awaitFrame(setup, predicate, what);
+}
+
 /** The ticket's list row, by its title. */
 function ticketRow(frame: string, title = "Persist source facts"): string {
 	const rows = rowsOf(frame);
@@ -245,6 +256,41 @@ describe("the mode line and the a key", () => {
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 				await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an unlimited parallel limit shows the bare count on the mode line", async () => {
+		const app = seededApp("in-flight", { maxParallelAgents: 0 });
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "blocked",
+				},
+			]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("auto: off 1"),
+					"the unlimited mode line",
+				);
+				// The count stands without a limit after it: no `/0` anywhere.
+				expect(frame).toContain("auto: off 1");
+				expect(frame).not.toContain("/0");
+				// The blocked agent still holds its seat, with no limit to hold it to.
+				expect(ticketRow(frame)).toContain("blocked");
 			},
 			WIDTH,
 			HEIGHT,
@@ -320,6 +366,124 @@ describe("the failure markers", () => {
 				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
 				// The open ticket keeps no failure badge.
 				expect(ticketRow(await settle(setup))).not.toContain("missing");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("enter on a blocked ticket focuses the agent's pane", async () => {
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "blocked",
+				},
+			]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("blocked"), "the blocked badge");
+				// Enter on the blocked ticket runs the Goto: it focuses the stored pane.
+				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
+				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
+				// The focus does not settle the turn: the ticket stays in flight,
+				// and the blocked badge stands until the next poll.
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(ticketRow(await settle(setup))).toContain("blocked");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("esc on the missing panel closes it and leaves the ticket in flight", async () => {
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				// The panel key handler subscribes in an effect that flushes after
+				// the commit; a settled frame proves the panel is open and ready.
+				await settle(setup);
+				// Esc cancels: nothing runs, no decision lands.
+				await pressEscape(setup, "the panel to close", (f) => !f.includes("Missing:"));
+				// The ticket is still in flight with its missing agent.
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(ticketRow(await settle(setup))).toContain("missing");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a ticket at the handoff limit wears the trailing marker on its row", async () => {
+		const app = seededApp("in-flight", { maxHandoffsPerTicket: 1 });
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("handoff limit"),
+					"the handoff limit marker",
+				);
+				// The marker rides at the end of the list row. The terminal row
+				// also carries the detail pane, so check only the list half.
+				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
+				expect(row.endsWith("handoff limit")).toBe(true);
+				// The limit does not unhand the ticket: it stays in flight, and its
+				// missing agent still stands out in the badge's place.
+				expect(row).toContain("missing");
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
+describe("the detail pane", () => {
+	test("shows the handoff count and the last completion of the ticket", async () => {
+		const app = seededApp("awaiting");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[awaiting]"),
+					"the awaiting ticket",
+				);
+				// The detail pane shows the selected ticket, which is the awaiting
+				// one: first in the attention order.
+				const detail = detailPaneText(frame);
+				// The handoff count is the ticket's handoffs against its limit.
+				expect(detail).toContain("Handoffs: 1/10");
+				// The last completion: date, task type, agent, decision, message.
+				expect(detail).toContain(
+					"Last completion: 2026-08-31 11:00 implement by persist-source-facts (pi) pending",
+				);
+				expect(detail).toContain("The turn is done.");
 			},
 			WIDTH,
 			HEIGHT,
@@ -537,6 +701,32 @@ describe("the decision panel", () => {
 				// up and down move the action row.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				await pressArrow(setup, "up", "back to close", (f) => frameText(f).includes("❯ Close"));
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("esc closes the panel and leaves the ticket awaiting", async () => {
+		const app = seededApp("awaiting");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				// The panel key handler subscribes in an effect that flushes after
+				// the commit; a settled frame proves the panel is open and ready.
+				await settle(setup);
+				// Esc cancels: nothing runs, no decision lands.
+				await pressEscape(setup, "the panel to close", (f) => !f.includes("Decision:"));
+				// The ticket is still awaiting, and the turn is still pending.
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
 			},
 			WIDTH,
 			HEIGHT,

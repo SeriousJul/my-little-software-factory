@@ -665,8 +665,14 @@ export class FactoryState {
 	}
 
 	/**
-	 * An in-flight ticket whose agent reports working. A no-op when the
-	 * ticket already runs; returns whether the state changed.
+	 * The state correction the observation poll makes on read.
+	 *
+	 * The poll reads herdr, which owns the fact of whether the agent is
+	 * working, and corrects a handed-off ticket to running to match that
+	 * fact; the control plane never asks herdr to move a ticket. The
+	 * correction is guarded on handed-off, so a settled, decided, or already
+	 * running ticket is never moved by a late poll. Returns whether the
+	 * state changed.
 	 */
 	markTicketRunning(identity: string): boolean {
 		const result = this.db

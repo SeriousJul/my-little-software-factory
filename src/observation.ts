@@ -373,6 +373,10 @@ export class ObservationCoordinator {
 				continue;
 			}
 			const status = normalizeAgentStatus(agent.status);
+			// A state correction on read: herdr owns the fact of whether the
+			// agent is working, so the poll corrects the stored state to
+			// match it, and the list shows reality without the control plane
+			// ever writing to herdr.
 			if (status === "working" && this.state.markTicketRunning(ticket.ticketIdentity)) {
 				changed = true;
 			}

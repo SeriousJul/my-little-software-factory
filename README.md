@@ -144,10 +144,10 @@ and repository.
 The detail pane on the right shows the full detail of the selected ticket:
 repository, ticket state, assigned agent, source name, source kind, external
 key, source state, URL, labels, and source health. The detail also carries
-the handoff count of the work cycle against its per-ticket limit and, when
-one exists, the last completion: its date, the task type, the agent, and
-the recorded decision. Factory ticket state and
-external source state stay separate.
+the ticket's handoff count against its per-ticket limit, counting the
+handoffs of every work cycle the ticket ran, and, when one exists, the last
+completion: its date, the task type, the agent, and the recorded decision.
+Factory ticket state and external source state stay separate.
 The panes share one focus.
 Switching focus never moves the selection.
 
