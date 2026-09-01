@@ -35,6 +35,11 @@ _Avoid_: help popup, keybinding popin, shortcut window
 The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, or Message view.
 _Avoid_: context, screen
 
+**Text field**:
+A single-line control in which the operator enters or edits a free-text value.
+Model and Thinking can be Text fields in the override panel, depending on the Agent type.
+_Avoid_: input, free-text row
+
 **Ticket**:
 An actionable unit of work from an external ticket source, carrying the repository it belongs to.
 An issue or pull request is a source fact, not a different factory concept.
@@ -155,6 +160,11 @@ The condition where the latest Agent poll failed or was unreadable.
 The last known Consultation states stay visible and cannot become `missing` from that poll.
 _Avoid_: missing Agent, Herdr offline
 
+**Restart**:
+A recovery Handoff after a Missing agent.
+It repeats the interrupted Handoff's choices and counts toward the Handoff limit.
+_Avoid_: retry, Workflow Handoff
+
 **Stale Agent output**:
 The condition where the latest read of an Agent terminal failed.
 The last Agent view stays visible while lifecycle observation continues.
@@ -195,7 +205,7 @@ It gates auto-handoff only; a manual handoff may pass it.
 _Avoid_: turn counter, dispatch budget
 
 **Task type**:
-A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and, optionally, the thinking level its handoffs start on. The operator picks another level in the override panel, or clears a free-text row to leave the level to the agent.
+A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and, optionally, the thinking level its handoffs start on. The operator picks another level in the override panel, or clears a Text field to leave the level to the agent.
 _Avoid_: prompt, template
 
 **Suggested task type**:
@@ -237,9 +247,10 @@ It blocks the start unless the operator gives a one-shot safety confirmation.
 _Avoid_: dirty checkout, parallel limit
 
 **Override**:
-A one-shot change to the settings of a single handoff, made in the override panel before the handoff starts.
-It applies to that handoff only and never becomes a new default.
-The settings are: agent type, environment kind, task type, model, and thinking level.
+A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
+It applies to that Handoff only and never becomes a new default.
+A Workflow Handoff does not inherit it. A Restart repeats the interrupted Handoff's choices as recovery.
+The settings are: Agent type, Environment kind, Task type, Model, and Thinking level.
 _Avoid_: custom setting, tweak
 
 **Config file**:
