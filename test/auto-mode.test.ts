@@ -114,6 +114,8 @@ function seed(
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
 	message = "The turn is done.",
+	model = "",
+	thinking = "",
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
@@ -127,8 +129,8 @@ function seed(
 				agentType: "pi",
 				environment,
 				taskType: "implement",
-				model: "",
-				thinking: "",
+				model,
+				thinking,
 			},
 			"open",
 		);
@@ -167,8 +169,10 @@ function seededApp(
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
 	message = "The turn is done.",
+	model = "",
+	thinking = "",
 ): SeededApp {
-	const state = seed(shape, outcome, environment, message);
+	const state = seed(shape, outcome, environment, message, model, thinking);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -540,6 +544,56 @@ describe("the decision panel", () => {
 				// The route's decision landed on the settled turn's trace when
 				// the routed handoff started, not at the claim.
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a manual workflow route starts with fresh model and target thinking", async () => {
+		const app = seededApp(
+			"awaiting",
+			{
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					review: { ...DEFAULT_CONFIG.taskTypes.review, thinking: "low" },
+				},
+			},
+			success,
+			"live-worktree",
+			"The turn is done.",
+			"opus-4",
+			"high",
+		);
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
+
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain("--kind pi --pane pane-9 -- --thinking low");
+				expect(start).not.toContain("--model");
 			},
 			WIDTH,
 			HEIGHT,

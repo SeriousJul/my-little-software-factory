@@ -664,18 +664,20 @@ export function App({
 			setStatus({ kind: "warning", text: `no workflow edge from ${taskType} to ${target}` });
 			return;
 		}
-		const stored = ticket.handoff;
 		// Claim first: a refused claim leaves the ticket where it was. The
 		// turn's decision is not recorded here: it lands on the settled
 		// turn's trace in the handoff's settle path, and only when the
 		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working.
+		// pending, so Close and Goto keep working. A Workflow Handoff never
+		// inherits the previous Handoff's Model or Thinking: the model
+		// starts empty, and the thinking starts on the target task type's
+		// own default.
 		const choice = baseChoice(
 			edge.agent ?? configRef.current.defaultAgent,
 			edge.environment ?? configRef.current.defaultEnvironment,
 			target,
-			stored?.model ?? "",
-			stored?.thinking ?? "",
+			"",
+			configRef.current.taskTypes[target]?.thinking ?? "",
 		);
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {

@@ -59,19 +59,27 @@ ends at close, ADR 0006: the control plane polls herdr).
 
 The panel is a modal. While it is open, the keys of the app below are inert.
 
-| Key             | What it does                                                        |
-| --------------- | ------------------------------------------------------------------- |
-| `j` / `k`      | Move between the setting rows, or type into the selected free-text row |
-| `Up` / `Down`  | Move between the setting rows                                     |
-| `h` / `l`      | Cycle a list value, or type into the selected free-text row        |
-| `Left` / `Right` | Cycle a list value (agent type, environment, task type, thinking) |
-| typed text      | Edit the selected free-text row (model, or thinking without a list) |
-| `Backspace`     | Delete in the selected free-text row                                |
-| `Enter`         | Confirm: the handoff starts with these settings                     |
-| `Esc`           | Cancel: nothing runs, nothing changes                               |
+| Key                              | What it does                                                          |
+| -------------------------------- | --------------------------------------------------------------------- |
+| `j` / `k`                        | Move rows, or type into the selected free-text row                    |
+| `Up` / `Down`                    | Move between setting rows                                             |
+| `Tab`                            | Move to the next setting row                                          |
+| `Shift` + `Tab`                  | Move to the previous setting row                                      |
+| `h` / `l`                        | Cycle a list value, or type into the selected free-text row           |
+| `Left` / `Right`                 | Move the caret in a text row, or cycle a list value                   |
+| `Home` / `End`                   | Move the caret to the start or end of a text row                      |
+| `Shift` + Left/Right, `Home`, `End` | Select text in a text row                                             |
+| typed text                       | Insert text at the caret                                              |
+| `Backspace` / `Delete`           | Delete before or at the caret                                         |
+| `Ctrl` + `Backspace` / `Delete`  | Delete one word before or after the caret                             |
+| `Ctrl` + `Z` / `Y`               | Undo or redo text editing                                             |
+| bracketed terminal paste         | Insert sanitized text at the caret; ANSI and line breaks are removed  |
+| `Enter`                          | Confirm: the handoff starts with these settings                       |
+| `Esc`                            | Cancel: nothing runs, nothing changes                                 |
 
-A free-text row owns `j`, `k`, `h`, and `l`, so `Up` and `Down` move the
-selection past it.
+A free-text row owns `j`, `k`, `h`, and `l`, so `Up`, `Down`, `Tab`, and
+`Shift` + `Tab` move the selection past it. The guide at the bottom follows
+the selected row and shows its available controls.
 A row shows `(empty)` for an unset free-text value and `(unset)` for a list
 value that is not one of its options. The thinking row starts on the
 suggested task type's `thinking` level when the task type sets one. The
@@ -82,9 +90,10 @@ always shows what the handoff will run on. The container environment is a
 future kind and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
-column shrinks first, then the label column, then the marker. When the
-terminal is too small, the hint row and the last rows drop. A row never
-wraps: it carries less, not broken text.
+column shrinks first, then the label column, then the marker. The guide drops
+when it does not fit. The rows scroll within the remaining viewport, and the
+selected row stays visible. A row never wraps: it carries less, not broken
+text.
 
 ### Completion decision panel keys
 
@@ -205,7 +214,10 @@ handoff may still pass the limit.
 ## Handoffs
 
 Enter on an open ticket starts a handoff with the config defaults.
-The override panel changes them for that one handoff only.
+The override panel changes them for that one handoff only. A workflow
+handoff starts with an empty Model and the target task type's own thinking
+default; it does not inherit either value from the previous handoff. A
+Restart repeats the interrupted handoff's Model and Thinking.
 
 - The agent runs through herdr (ADR 0002): a live worktree handoff creates a
   herdr workspace at the checkout with a fresh tab, and a worktree handoff

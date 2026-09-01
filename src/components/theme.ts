@@ -9,6 +9,7 @@ export const COLORS = {
 	borderFocused: "#58a6ff",
 	text: "#c9d1d9",
 	textBright: "#e6edf3",
+	focusedBackground: "#21262d",
 	dim: "#8b949e",
 	/**
 	 * The surface the override panel's overlay fills with.
