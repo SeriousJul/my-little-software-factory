@@ -369,7 +369,9 @@ export class ObservationCoordinator {
 			if (this.stopped) return;
 		}
 
-		// A fresh count: tickets this cycle settled are no longer in flight.
+		// The count is what this poll saw alive, before the settles above:
+		// a ticket that settled this cycle still holds its seat here. The
+		// next poll no longer sees it in flight and frees the seat.
 		if (autoOn) {
 			changed = this.dispatchOpen(liveCount) || changed;
 		}
@@ -441,10 +443,18 @@ export class ObservationCoordinator {
 		if (this.restarted.has(ticket.ticketIdentity)) return false;
 		this.restarted.add(ticket.ticketIdentity);
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
+		// The same choices the previous handoff ran with: the operator's
+		// restart keeps the model and thinking, and the auto one matches it.
 		const result = await this.dispatch({
 			origin: "restart",
 			ticketIdentity: ticket.ticketIdentity,
-			choice: baseChoice(ticket.agentType, ticket.environment, ticket.taskType),
+			choice: baseChoice(
+				ticket.agentType,
+				ticket.environment,
+				ticket.taskType,
+				ticket.model,
+				ticket.thinking,
+			),
 			previousMessage,
 		});
 		if (this.stopped) return true;

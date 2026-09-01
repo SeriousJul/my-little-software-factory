@@ -24,10 +24,14 @@
  *
  * A handoff failure leaves no residue: a worktree handoff that fails before
  * the agent starts removes what the handoff created (the fresh worktree,
- * the attached workspace, the fresh tab), so a retry can run instead of
- * failing on residue the first attempt left behind. It never deletes a
- * branch that pre-dates the handoff: that branch may hold the ticket's
- * earlier work.
+ * the attached workspace, the fresh tab, and the branch when the handoff
+ * created it), so a retry can run instead of failing on residue the first
+ * attempt left behind. It never deletes a branch that pre-dates the
+ * handoff: that branch may hold the ticket's earlier work.
+ *
+ * The Close cleanup of a finished work cycle is a different cut: it removes
+ * the worktree checkout but never the branch, so pushed work and pull
+ * requests survive. See closeHandoffEnvironment.
  */
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
@@ -417,9 +421,9 @@ async function startWorktreeHandoff(
 	}
 	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
 	if (workspaceId === null) {
-		// The cleanup needs the workspace id, so it cannot run here. The
-		// branch herdr created survives and would hard-fail every retry, so
-		// the reason points at it.
+		// The cleanup needs the workspace id, so it cannot run here. A retry
+		// reuses the branch herdr created, so it can still run; the reason
+		// points at the branch in case the leftover worktree blocks it.
 		return failed(
 			`herdr worktree create returned no workspace id; check for a leftover branch ${branch}`,
 			ctx,

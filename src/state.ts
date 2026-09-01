@@ -109,6 +109,10 @@ export interface HandoffTicket {
 	taskType: string;
 	agentType: string;
 	environment: EnvironmentKind;
+	/** The model the latest handoff chose; empty leaves it to the agent. */
+	model: string;
+	/** The thinking level the latest handoff chose; empty leaves it to the agent. */
+	thinking: string;
 	paneId: string | null;
 	tabId: string | null;
 	workspaceId: string | null;
@@ -644,6 +648,8 @@ export class FactoryState {
 				taskType: choice.taskType,
 				agentType: choice.agentType,
 				environment: choice.environment,
+				model: choice.model,
+				thinking: choice.thinking,
 				paneId: row.pane_id,
 				tabId: row.tab_id,
 				workspaceId: row.workspace_id,

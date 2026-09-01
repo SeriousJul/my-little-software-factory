@@ -363,6 +363,36 @@ describe("missing agents", () => {
 		state.close();
 	});
 
+	test("a restart keeps the model and thinking the previous handoff ran with", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const claim = state.claimHandoff(
+			"github:github.com:I_5",
+			{ ...choice, model: "opus-4", thinking: "high" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-implement",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "restart",
+				ticketIdentity: "github:github.com:I_5",
+				choice: {
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "opus-4",
+					thinking: "high",
+				},
+			}),
+		]);
+		state.close();
+	});
+
 	test("manual mode leaves a missing agent for the operator's panel", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
 		handOut(state, "github:github.com:I_5");
