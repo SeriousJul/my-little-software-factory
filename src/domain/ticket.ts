@@ -127,15 +127,19 @@ export type TicketMarker = "blocked" | "missing";
  * - open -> handed-off: a handoff started the agent.
  * - handed-off -> running: herdr reports the agent working.
  * - handed-off/running -> awaiting: herdr reports the agent done or idle,
- *   and the turn settled.
+ *   and the turn settled. A handed-off ticket waits out its startup grace
+ *   first: its agent may still be booting.
  * - awaiting -> open: the operator or an auto-close decision closed the
  *   work cycle.
  * - awaiting -> handed-off: a workflow handoff or a restart started a new
  *   turn in the same cycle.
- * - awaiting -> running: goto refocused the existing agent.
+ * - awaiting -> running: goto refocused the existing agent, or the poll
+ *   saw the agent working again on its still-pending turn.
  *
  * A settle may land directly from handed-off: an agent can finish inside
- * one poll interval, before a working observation ever saw it.
+ * one poll interval, before a working observation ever saw it. The settle
+ * then waits out the startup grace, the window in which a booted agent
+ * reports idle before it picks up the prompt and starts working.
  */
 const TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
 	open: ["handed-off"],

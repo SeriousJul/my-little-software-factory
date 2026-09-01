@@ -12,7 +12,13 @@
  * 1. An in-flight ticket whose agent reports working runs. One whose agent
  *    reports done or idle settles: the pane's last output is captured into
  *    a completion trace, capped at the configured line count, and the
- *    ticket rests in awaiting.
+ *    ticket rests in awaiting. A settle is trusted only when the turn
+ *    demonstrably started: a running ticket settles at once, but a
+ *    handed-off ticket that never showed working waits out its startup
+ *    grace, the window in which a booted agent reports idle before it
+ *    picks up the prompt. An awaiting ticket whose agent is working again
+ *    reopens: its still-pending turn did not end, and the next settle
+ *    refreshes the trace in place.
  * 2. A pane herdr no longer lists is missing. With auto-handoff on the
  *    loop restarts the agent once per episode, or abandons the cycle when
  *    the ticket has used up its handoffs.
@@ -51,6 +57,18 @@ export interface HerdrAgent {
 
 /** The normalized states the factory reasons about. */
 export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
+
+/**
+ * The startup grace a handoff's agent gets before an idle or done report
+ * settles its turn.
+ *
+ * herdr reports the agent idle from the moment the handoff records the
+ * pane until the agent picks up the prompt and starts working. A probe
+ * that lands in that window sees an idle agent whose turn never ran.
+ * Thirty seconds is far longer than any agent boot observed so far, and
+ * costs at most one extra poll when the agent never worked at all.
+ */
+export const STARTUP_GRACE_MS = 30_000;
 
 /** The result of asking herdr for its agents. */
 export type HerdrProbe = { kind: "ok"; agents: HerdrAgent[] } | { kind: "error"; reason: string };
@@ -200,6 +218,11 @@ interface ObservationOptions {
 	/** The auto-handoff mode, read at the start of each cycle. */
 	mode: () => boolean;
 	intervalMs: number;
+	/**
+	 * The startup grace a fresh handoff's idle agent waits out. Tests
+	 * shrink it. Defaults to STARTUP_GRACE_MS.
+	 */
+	startupGraceMs?: number;
 	/** One UI frame changed. */
 	onChanged: () => void;
 	/**
@@ -226,6 +249,7 @@ export class ObservationCoordinator {
 	private readonly now: () => number;
 	private readonly mode: () => boolean;
 	private readonly intervalMs: number;
+	private readonly startupGraceMs: number;
 	private readonly onChanged: () => void;
 	private readonly onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	private readonly onStatus: (kind: "info" | "warning" | "error", text: string) => void;
@@ -260,6 +284,7 @@ export class ObservationCoordinator {
 		this.now = options.now;
 		this.mode = options.mode;
 		this.intervalMs = options.intervalMs;
+		this.startupGraceMs = options.startupGraceMs ?? STARTUP_GRACE_MS;
 		this.onChanged = options.onChanged;
 		this.onAgents = options.onAgents;
 		this.onStatus = options.onStatus;
@@ -380,9 +405,25 @@ export class ObservationCoordinator {
 			if (status === "working" && this.state.markTicketRunning(ticket.ticketIdentity)) {
 				changed = true;
 			}
-			if (status === "done" || status === "idle") {
+			if ((status === "done" || status === "idle") && this.turnSettles(ticket)) {
 				changed = (await this.settle(ticket, agent)) || changed;
 				if (this.stopped) return;
+			}
+		}
+
+		// A state correction on read, for a turn that settled too early:
+		// herdr reports the agent of an awaiting ticket working again while
+		// the settled turn is still pending, so the turn did not end. The
+		// ticket goes back to running and holds a seat again, and the next
+		// settle refreshes the pending trace in place.
+		for (const ticket of this.state.ticketsByState(["awaiting"])) {
+			if (ticket.paneId === null) continue;
+			const agent = byPane.get(ticket.paneId);
+			if (agent === undefined) continue;
+			if (normalizeAgentStatus(agent.status) !== "working") continue;
+			if (this.state.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
+				changed = true;
+				liveCount += 1;
 			}
 		}
 
@@ -400,6 +441,21 @@ export class ObservationCoordinator {
 
 		if (changed) this.onChanged();
 		this.onAgents?.(probe.agents);
+	}
+
+	/**
+	 * Whether a done or idle agent settles the ticket's turn.
+	 *
+	 * A running ticket settles at once: the working observation proved the
+	 * turn started, so an idle or done agent ends it. A handed-off ticket
+	 * never showed working: until the handoff outgrows the startup grace,
+	 * the idle agent is its boot, and settling it would park the ticket in
+	 * awaiting while it works. Past the grace the idle agent is trusted:
+	 * the turn either finished inside one poll gap or never started.
+	 */
+	private turnSettles(ticket: HandoffTicket): boolean {
+		if (ticket.state === "running") return true;
+		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
 	}
 
 	/** A settled turn: capture the message, rest the ticket in awaiting. */

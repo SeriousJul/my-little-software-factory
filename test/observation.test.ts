@@ -76,11 +76,11 @@ function success(tickets: FetchedTicket[]) {
 }
 
 function reader(
-	agents: HerdrAgent[],
+	agents: () => HerdrAgent[],
 	readPane?: (paneId: string, lines: number) => Promise<string | null>,
 ): AgentReader {
 	return {
-		listAgents: async () => ({ kind: "ok", agents }),
+		listAgents: async () => ({ kind: "ok", agents: agents() }),
 		// The AgentReader contract: pane output comes back ANSI stripped.
 		readPane:
 			readPane ?? (async (paneId) => stripAnsi(`\u001b[1mDone.\u001b[0m message of ${paneId}`)),
@@ -97,6 +97,10 @@ interface Rig {
 	statuses: Array<{ kind: "info" | "warning" | "error"; text: string }>;
 	cleanups: Array<{ paneId: string | null; tabId: string | null; workspaceId: string | null }>;
 	coordinator: ObservationCoordinator;
+	/** Advance the clock the state and the loop share. */
+	advance: (ms: number) => void;
+	/** Swap the agent list the next probe returns. */
+	setAgents: (next: HerdrAgent[]) => void;
 }
 
 function rig(options: {
@@ -104,7 +108,11 @@ function rig(options: {
 	agents?: HerdrAgent[];
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
 }): Rig {
-	const state = openFactoryState(":memory:");
+	let nowMs = Date.parse("2026-08-31T11:00:00Z");
+	let agents = [...(options.agents ?? [])];
+	// The state and the loop share the clock, so a handoff's age is
+	// deterministic: advance() ages it.
+	const state = openFactoryState(":memory:", () => nowMs);
 	state.initializeSources([source]);
 	state.applyFetch(source, success([fetched()]));
 	const intents: HandoffIntent[] = [];
@@ -112,7 +120,7 @@ function rig(options: {
 	const cleanups: Rig["cleanups"] = [];
 	const coordinator = new ObservationCoordinator({
 		state,
-		herdr: reader(options.agents ?? [], options.readPane),
+		herdr: reader(() => agents, options.readPane),
 		config: () => config,
 		dispatch: async (intent) => {
 			intents.push(intent);
@@ -126,7 +134,7 @@ function rig(options: {
 			});
 			return undefined;
 		},
-		now: () => Date.parse("2026-08-31T11:00:00Z"),
+		now: () => nowMs,
 		mode: () => options.autoOn ?? false,
 		intervalMs: 60_000,
 		onChanged: () => {},
@@ -134,7 +142,19 @@ function rig(options: {
 			statuses.push({ kind, text });
 		},
 	});
-	return { state, intents, statuses, cleanups, coordinator };
+	return {
+		state,
+		intents,
+		statuses,
+		cleanups,
+		coordinator,
+		advance: (ms: number) => {
+			nowMs += ms;
+		},
+		setAgents: (next: HerdrAgent[]) => {
+			agents = next;
+		},
+	};
 }
 
 /** Hand an in-flight ticket out so its pane is known to the loop. */
@@ -230,6 +250,7 @@ describe("the observation cycle", () => {
 
 		const done = rig({ agents: [agent("pane-implement", "done")] });
 		handOut(done.state, "github:github.com:I_5");
+		done.advance(30_001);
 		await done.coordinator.tick();
 		const [ticket] = done.state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -245,12 +266,102 @@ describe("the observation cycle", () => {
 	});
 
 	test("an idle agent settles too: the turn ended, even without an explicit done", async () => {
-		const { state, coordinator } = rig({ agents: [agent("pane-implement", "idle")] });
+		const { state, coordinator, advance } = rig({ agents: [agent("pane-implement", "idle")] });
 		handOut(state, "github:github.com:I_5");
+		advance(30_001);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toEqual([
 			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
 		]);
+		state.close();
+	});
+
+	test("an idle agent in the startup window does not settle: the handoff is still booting", async () => {
+		const { state, coordinator, advance, statuses } = rig({
+			agents: [agent("pane-implement", "idle")],
+		});
+		handOut(state, "github:github.com:I_5");
+		await coordinator.tick();
+		// The agent is still booting: the ticket rests in handed-off, with no
+		// trace and no settle message.
+		expect(state.ticketsByState(["handed-off"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
+		]);
+		expect(statuses.filter((status) => status.text.includes("settled"))).toHaveLength(0);
+		// Past the grace, the same idle agent settles.
+		advance(30_001);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
+		]);
+		state.close();
+	});
+
+	test("a running ticket settles on idle at once: the grace only guards a boot", async () => {
+		const { state, coordinator, setAgents } = rig({
+			agents: [agent("pane-implement", "working")],
+		});
+		handOut(state, "github:github.com:I_5");
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toHaveLength(1);
+		// The turn ran, so the grace no longer applies: an idle agent
+		// settles at once, without waiting.
+		setAgents([agent("pane-implement", "idle")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
+		state.close();
+	});
+
+	test("an awaiting ticket whose agent works again reopens its pending turn", async () => {
+		const { state, coordinator, setAgents, advance } = rig({
+			agents: [agent("pane-implement", "idle")],
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
+		// The agent works again: the settle was premature, and the ticket
+		// goes back to running.
+		setAgents([agent("pane-implement", "working")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toHaveLength(1);
+		// The next settle refreshes the pending trace in place.
+		advance(1_000);
+		setAgents([agent("pane-implement", "done")]);
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({
+					completedAt: "2026-08-31T11:00:31.001Z",
+					decision: null,
+				}),
+			}),
+		);
+		state.close();
+	});
+
+	test("an awaiting ticket with a decided trace does not reopen on a working agent", async () => {
+		const { state, coordinator, setAgents, advance } = rig({
+			agents: [agent("pane-implement", "idle")],
+		});
+		const attempt = handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
+		// The turn is decided: the routed handoff has not settled yet, so the
+		// ticket rests in awaiting wearing a decided trace.
+		state.applyCompletionDecision({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: attempt,
+			decision: "handed-off",
+			decidedAt: "2026-08-31T11:01:00Z",
+		});
+		setAgents([agent("pane-implement", "working")]);
+		await coordinator.tick();
+		// The working agent does not reopen a decided turn.
+		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
 		state.close();
 	});
 
@@ -266,7 +377,7 @@ describe("the observation cycle", () => {
 
 	test("settle reads the last completion lines from the pane", async () => {
 		const seen: Array<[string, number]> = [];
-		const { state, coordinator } = rig({
+		const { state, coordinator, advance } = rig({
 			agents: [agent("pane-implement", "done")],
 			readPane: async (paneId, lines) => {
 				seen.push([paneId, lines]);
@@ -274,6 +385,7 @@ describe("the observation cycle", () => {
 			},
 		});
 		handOut(state, "github:github.com:I_5");
+		advance(30_001);
 		await coordinator.tick();
 		expect(seen).toEqual([["pane-implement", config.completionMessageLines]]);
 		const [ticket] = state.visibleTickets([], "implement");
