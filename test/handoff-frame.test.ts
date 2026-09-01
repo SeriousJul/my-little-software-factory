@@ -551,7 +551,11 @@ describe("the override panel", () => {
 			...DEFAULT_CONFIG,
 			taskTypes: {
 				...DEFAULT_CONFIG.taskTypes,
-				merge: { template: "Merge pull request {external-key}.", thinking: "low" },
+				merge: {
+					template: "Merge pull request {external-key}.",
+					thinking: "low",
+					autoClose: false,
+				},
 			},
 		};
 		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
@@ -596,7 +600,11 @@ describe("the override panel", () => {
 			...DEFAULT_CONFIG,
 			taskTypes: {
 				...DEFAULT_CONFIG.taskTypes,
-				merge: { template: "Merge pull request {external-key}.", thinking: "low" },
+				merge: {
+					template: "Merge pull request {external-key}.",
+					thinking: "low",
+					autoClose: false,
+				},
 			},
 		};
 		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
@@ -650,7 +658,11 @@ describe("the override panel", () => {
 			...DEFAULT_CONFIG,
 			taskTypes: {
 				...DEFAULT_CONFIG.taskTypes,
-				merge: { template: "Merge pull request {external-key}.", thinking: "low" },
+				merge: {
+					template: "Merge pull request {external-key}.",
+					thinking: "low",
+					autoClose: false,
+				},
 			},
 		};
 		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };

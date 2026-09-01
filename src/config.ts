@@ -409,9 +409,8 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 		for (const key of Object.keys(raw))
 			if (key !== "template" && key !== "thinking" && key !== "auto-close")
 				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
-		out[name] = thinking === undefined
-			? { template, autoClose }
-			: { template, thinking, autoClose };
+		out[name] =
+			thinking === undefined ? { template, autoClose } : { template, thinking, autoClose };
 	}
 	return out;
 }

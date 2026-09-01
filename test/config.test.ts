@@ -337,6 +337,7 @@ describe("validateConfig", () => {
 			expect(config.taskTypes.merge).toEqual({
 				template: expect.stringContaining("Squash and merge"),
 				thinking: "low",
+				autoClose: false,
 			});
 			expect(config.taskRules).toEqual([
 				{
@@ -562,10 +563,18 @@ describe("validateConfig", () => {
 				merge: { template: "Merge {title}", thinking: "low" },
 			},
 		});
-		expect(config.taskTypes.merge).toEqual({ template: "Merge {title}", thinking: "low" });
+		expect(config.taskTypes.merge).toEqual({
+			template: "Merge {title}",
+			thinking: "low",
+			autoClose: false,
+		});
 		// The thinking default survives a write/read cycle.
 		const roundTrip = validateConfig(parseToml(configToToml(config)));
-		expect(roundTrip.taskTypes.merge).toEqual({ template: "Merge {title}", thinking: "low" });
+		expect(roundTrip.taskTypes.merge).toEqual({
+			template: "Merge {title}",
+			thinking: "low",
+			autoClose: false,
+		});
 	});
 
 	test("a task type thinking level must be a non-empty string", () => {
