@@ -139,11 +139,19 @@ and the missing badge clears.
 ## Layout
 
 Two panes side by side, flex-sized to the terminal.
-The list pane on the left shows every ticket with its state badge, title,
-and repository.
-The detail pane on the right shows the full detail of the selected ticket:
-repository, ticket state, assigned agent, source name, source kind, external
-key, source state, URL, labels, and source health. The detail also carries
+The list pane on the left shows every ticket with its state badge, task
+type badge, title, and repository. The task type badge is the type the
+control plane would hand off: an open ticket shows its suggested task type,
+every other ticket shows the task type its recorded handoff started with.
+A non-open ticket without a recorded handoff shows `[unknown]`, and only
+that badge wears a warning color; every configured task type uses one
+neutral style. The detail pane on the right shows the full detail of the
+selected ticket: repository, ticket state, assigned agent, source name,
+source kind, external key, source state, URL, labels, and source health. It
+carries one explicit task type line for every ticket: `Suggested task
+type:` for an open ticket, `Handoff task type:` for every other, with
+`Handoff task type: unknown` when the handoff data is absent. The detail
+also carries
 the ticket's handoff count against its per-ticket limit, counting the
 handoffs of every work cycle the ticket ran, and, when one exists, the last
 completion: its date, the task type, the agent, and the recorded decision.
@@ -157,8 +165,11 @@ With the detail focused, they scroll the detail, and a new selection starts
 the detail at the top.
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.
-When a list row cannot hold both, the title is kept and the repository
-drops, so the title stays readable in a split terminal.
+The repository drops before the title does, and the task type badge is
+complete or absent: the row keeps the whole badge with a readable title,
+or the badge drops and the title takes the cells. A partial badge could
+read as another task type, so it never truncates; the full value stays in
+the detail pane.
 
 Under the panes sits a status line. It carries the progress and the outcome
 of the last handoff: `handing off "..."...` while one is in flight, the

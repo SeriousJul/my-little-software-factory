@@ -28,6 +28,7 @@ import {
 	detailPaneText,
 	HEIGHT,
 	markerRowOf,
+	press,
 	rowsOf,
 	settle,
 	sleep,
@@ -314,6 +315,9 @@ describe("source-driven frames", () => {
 					expect(detail).toContain("Source kind: github-issue");
 					expect(detail).toContain("External key: #5");
 					expect(detail).toContain("Source state: open");
+					// No task rule matches an issue, so the open ticket's task
+					// type line carries the configured default.
+					expect(detail).toContain("Suggested task type: implement");
 					expect(detail).toContain("Source URL: https://github.com/acme/factory/issues/5");
 					expect(detail).toContain("Labels: ready-for-agent");
 				},
@@ -324,6 +328,62 @@ describe("source-driven frames", () => {
 		} finally {
 			state.close();
 		}
+	});
+
+	test("a task rule match and the default fallback drive the badge through the real source path", async () => {
+		const state = freshState();
+		const issues = { name: "issues", kind: "github-issues" };
+		const pulls = { name: "pulls", kind: "github-pull-requests" };
+		// The pull request's label matches the review rule; the issue
+		// matches no rule and falls back to the configured default.
+		const reviewTicket = ticket("github:github.com:PR_7", {
+			externalKey: "#7",
+			title: "Review ticket",
+			sourceKind: "github-pull-request",
+			labels: ["ready-for-review"],
+			url: "https://github.com/acme/factory/pull/7",
+		});
+		const fallbackTicket = ticket("github:github.com:I_8", {
+			externalKey: "#8",
+			title: "Fallback ticket",
+		});
+		state.initializeSources([issues, pulls]);
+
+		const issuesSource = new FakeSource("issues", "github-issues", success([fallbackTicket]));
+		const pullsSource = new FakeSource("pulls", "github-pull-requests", success([reviewTicket]));
+
+		await withApp(
+			async (setup) => {
+				issuesSource.settle(success([fallbackTicket]));
+				pullsSource.settle(success([reviewTicket]));
+				const frame = await awaitFrame(
+					setup,
+					(f) => listRowOf(f, "Review ticket") >= 0 && listRowOf(f, "Fallback ticket") >= 0,
+					"both tickets",
+				);
+				// The badges ride the row the real path produced.
+				expect(rowsOf(frame)[listRowOf(frame, "Review ticket")]).toContain("[review]");
+				expect(rowsOf(frame)[listRowOf(frame, "Fallback ticket")]).toContain("[implement]");
+
+				// The detail pane carries the explicit line for whichever
+				// ticket the list selected, and the other on the move.
+				const marker = rowsOf(frame)[markerRowOf(frame)];
+				const firstLine = marker.includes("Review ticket")
+					? "Suggested task type: review"
+					: "Suggested task type: implement";
+				const secondLine = marker.includes("Review ticket")
+					? "Suggested task type: implement"
+					: "Suggested task type: review";
+				expect(detailPaneText(frame)).toContain(firstLine);
+				await press(setup, "j", "the selection to move to the other ticket", (f) =>
+					detailPaneText(f).includes(secondLine),
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: pullsConfig, state, sources: [issuesSource, pullsSource] },
+		);
+		state.close();
 	});
 
 	test("orders the list by attention: awaiting, running, handed-off, actionable open, non-actionable open", async () => {
