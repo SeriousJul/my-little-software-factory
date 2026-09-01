@@ -114,6 +114,25 @@ describe("durable Consultation lifecycle", () => {
 		state.close();
 	});
 
+	test("preserves a draft when a durable response send fails", () => {
+		const state = makeState();
+		const consultation = createConsultation(state);
+		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.settleConsultationTurn(consultation.id, 1, "answer");
+		state.setConsultationDraft(consultation.id, "follow up");
+		const turn = state.beginConsultationResponse(consultation.id, "follow up", 1);
+		expect(turn).toBeDefined();
+		expect(state.consultation(consultation.id)?.state).toBe("working");
+		if (turn === undefined) return;
+		expect(state.cancelConsultationResponse(consultation.id, turn.id)).toBe(true);
+		expect(state.consultation(consultation.id)).toMatchObject({
+			state: "awaiting-response",
+			draft: "follow up",
+		});
+		expect(state.consultationTurns(consultation.id)).toHaveLength(1);
+		state.close();
+	});
+
 	test("serializes operations for one repository and does not block another", async () => {
 		const queues = new Map<string, Promise<void>>();
 		const events: string[] = [];
