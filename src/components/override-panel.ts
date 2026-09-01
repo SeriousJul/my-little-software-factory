@@ -80,10 +80,11 @@ const LABEL_WIDTH = 12;
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 const MARKER_WIDTH = 2;
-// The hint row documents the movement and cycle keys and the typed text of
-// the free-text rows. It must fit the modal's column width at the default
-// geometry, or it drops.
-const HINT = "j/k move  h/l cycle  type text  enter esc";
+// The hint row follows the selected row. Keep both variants short enough for
+// the default value column, or the guide drops on a narrow terminal.
+const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
+const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
+const HINT_WIDTH = Math.max(widthOf(LIST_HINT), widthOf(TEXT_HINT));
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
 /**
@@ -121,25 +122,24 @@ interface PanelGeometry {
 
 function panelGeometry(width: number, height: number): PanelGeometry {
 	const inner = Math.max(0, width - CHROME);
-	let markerWidth = MARKER_WIDTH;
-	let labelWidth = LABEL_WIDTH;
-	let valueWidth = VALUE_WIDTH;
-	if (markerWidth + labelWidth + valueWidth > inner) {
-		valueWidth = Math.max(0, inner - markerWidth - labelWidth);
-	}
-	if (markerWidth + labelWidth > inner) {
-		labelWidth = Math.max(0, inner - markerWidth);
-		valueWidth = 0;
-	}
-	if (markerWidth > inner) {
-		markerWidth = inner;
-		labelWidth = 0;
+	// Reserve one cell for the value before shrinking the marker at the
+	// smallest renderable widths.
+	const markerWidth = Math.min(MARKER_WIDTH, Math.max(0, inner - 1));
+	let labelWidth = 0;
+	let valueWidth = 0;
+	if (inner > markerWidth) {
+		const contentWidth = inner - markerWidth;
+		// Keep one value cell whenever the panel has room beyond its marker.
+		// The value shrinks first, then the label, while all three columns
+		// continue to add up to the modal's inner width.
+		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, contentWidth - LABEL_WIDTH));
+		labelWidth = Math.min(LABEL_WIDTH, contentWidth - valueWidth);
 	}
 	// The hint renders inside the modal, so it must fit the width the rows
 	// use, not the terminal: a hint wider than the box would render
 	// truncated, and a row never carries broken text.
 	const columns = markerWidth + labelWidth + valueWidth;
-	const showHint = columns >= widthOf(HINT) && height - CHROME >= 2;
+	const showHint = columns >= HINT_WIDTH && height - CHROME >= 2;
 	// The hint takes a row of its own; the rows need at least one.
 	const maxRows = Math.max(1, height - CHROME - (showHint ? 1 : 0));
 	return { markerWidth, labelWidth, valueWidth, showHint, maxRows };
@@ -267,11 +267,13 @@ export function OverridePanel({
 				key.preventDefault();
 				return;
 			case "tab":
+				move(key.shift ? -1 : 1);
+				key.preventDefault();
+				return;
 			case "down":
 				move(1);
 				key.preventDefault();
 				return;
-			case "shift+tab":
 			case "up":
 				move(-1);
 				key.preventDefault();
@@ -335,9 +337,18 @@ export function OverridePanel({
 			},
 			...rows.map((r) => rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput)),
 			geometry.showHint &&
-				createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, innerWidthOf(geometry))),
+				createElement(
+					"text",
+					{ fg: COLORS.dim },
+					truncateToWidth(hintForRow(row), innerWidthOf(geometry)),
+				),
 		),
 	);
+}
+
+/** The short control guide for the selected row. */
+function hintForRow(row: PanelRow): string {
+	return row.kind === "text" ? TEXT_HINT : LIST_HINT;
 }
 
 /** The inner width of the modal in cells, for the hint row. */
@@ -420,9 +431,10 @@ function rowElement(
 				focused: selected,
 				placeholder: EMPTY_HINT,
 				placeholderColor: COLORS.dim,
-				textColor: selected ? COLORS.textBright : COLORS.text,
+				textColor: COLORS.text,
+				focusedTextColor: COLORS.textBright,
 				backgroundColor: "transparent",
-				focusedBackgroundColor: "transparent",
+				focusedBackgroundColor: COLORS.focusedBackground,
 				keyBindings: INPUT_KEY_BINDINGS,
 				onInput: handleInput(r.key as TextKey),
 			}),
