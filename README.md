@@ -72,6 +72,8 @@ launches, `Shift+Enter` inserts a newline, and `Esc` cancels. `Enter` on an
 awaiting response opens the response editor. The editor stores its draft in
 SQLite, `Enter` submits it, `Shift+Enter` inserts a newline, and `Esc` leaves
 the draft in place. `End` follows the latest Agent output after scrolling.
+Closed history shows cleanup results and retained resources, including resources
+left by a Force-close.
 
 A blocked Agent uses Agent interaction mode instead of the response editor.
 The default exit key is `F12`; configure `interaction-exit-key` with a
