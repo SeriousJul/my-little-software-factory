@@ -129,6 +129,7 @@ Merge pull request {external-key}: {title}.
    - If the pull request has a merge conflict or a failing CI check, do not merge.
    - Remove the **`ready-to-ship`** label.
    - Add the **`needs-work`** label.
+   - Post a comment explaining the reason for the blocked merge.
 
 Repository: {repository}
 Pull request: {source-url}
