@@ -509,7 +509,7 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("a v1 database migrates to v2: done becomes open and the traces table appears", () => {
+	test("a v1 database migrates to v2: done becomes awaiting and the traces table appears", () => {
 		const path = statePath();
 		const db = new DatabaseSync(path);
 		db.exec("PRAGMA foreign_keys = ON");
@@ -534,7 +534,7 @@ describe("factory SQLite state", () => {
 
 		const state = openFactoryState(path);
 		const [ticket] = state.visibleTickets([], "implement");
-		expect(ticket).toEqual(expect.objectContaining({ state: "open" }));
+		expect(ticket).toEqual(expect.objectContaining({ state: "awaiting" }));
 		const tables = new DatabaseSync(path)
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
 			.all() as Array<{ name: string }>;

@@ -10,6 +10,7 @@
  * whose pane herdr no longer lists opens the missing modal (restart or
  * abandon). `a` toggles auto-handoff.
  */
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -22,6 +23,16 @@ import {
 	type WorkflowEdge,
 } from "../config.ts";
 import {
+	type ConsultationRepositoryOption,
+	consultationRepositoryCatalog,
+	inspectLiveCheckout,
+	isLiteralText,
+	type LiveCheckoutSafety,
+	serializeRepositoryOperation,
+	translateAgentKey,
+	validateResponseInput,
+} from "../consultation.ts";
+import {
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
 	type Ticket,
@@ -32,9 +43,12 @@ import {
 	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
+	handOffConsultation,
 	handOffStoredWorkspace,
 	handOffTicket,
+	renderConsultationPrompt,
 } from "../handoff.ts";
+import { consultationAgentName } from "../naming.ts";
 import {
 	type DispatchResult,
 	type HandoffIntent,
@@ -44,13 +58,34 @@ import {
 	ObservationCoordinator,
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
-import { commandFailureText, type RepositoryMapping } from "../repo.ts";
-import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
-import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
+import { commandFailureText, expandHome, type RepositoryMapping } from "../repo.ts";
+import {
+	type CommandResult,
+	type CommandRunner,
+	createChildProcessRunner,
+	errorMessage,
+} from "../runner.ts";
+import type {
+	Consultation,
+	ConsultationResource,
+	FactoryState,
+	HandoffClaim,
+	HandoffOrigin,
+} from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
+import { ActionPanel } from "./action-panel.ts";
+import {
+	type ActionContext,
+	ActionGuide,
+	type ActionUtility,
+	actionBarElement,
+} from "./consultation-actions.ts";
+import { ConsultationDetail, consultationDetailLines } from "./consultation-detail.ts";
+import { ConsultationLauncher } from "./consultation-launcher.ts";
+import { ConsultationList } from "./consultation-list.ts";
 import { DecisionModal } from "./decision-modal.ts";
-import { usePaneGeometry } from "./geometry.ts";
+import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { type ActionRow, MissingModal } from "./missing-modal.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
@@ -59,12 +94,19 @@ import { TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 
 type Pane = "list" | "detail";
+type MainView = "tickets" | "consultations";
 interface StatusMessage {
 	kind: "info" | "warning" | "error";
 	text: string;
 }
 /** The action modal open above the panes, if any. */
-type Panel = null | { kind: "decision"; identity: string } | { kind: "missing"; identity: string };
+type Panel =
+	| null
+	| { kind: "decision"; identity: string }
+	| { kind: "missing"; identity: string }
+	| { kind: "consultation-close"; identity: string }
+	| { kind: "consultation-delete"; identity: string }
+	| { kind: "consultation-safety"; identity: string };
 
 export type AppKey =
 	| "j"
@@ -75,6 +117,12 @@ export type AppKey =
 	| "e"
 	| "r"
 	| "a"
+	| "c"
+	| "v"
+	| "t"
+	| "f"
+	| "x"
+	| "d"
 	| "up"
 	| "down"
 	| "left"
@@ -82,7 +130,9 @@ export type AppKey =
 	| "pageup"
 	| "pagedown"
 	| "home"
-	| "end";
+	| "end"
+	| "?"
+	| "m";
 
 export interface AppProps {
 	config?: FactoryConfig;
@@ -138,10 +188,38 @@ export function App({
 	// the empty SQLite projection while configured sources refresh.
 	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
 	const ticketsRef = useRef(tickets);
+	const [view, setView] = useState<MainView>("tickets");
+	const viewRef = useRef<MainView>("tickets");
+	const [consultations, setConsultations] = useState<Consultation[]>(
+		() => state?.consultations("open") ?? [],
+	);
+	const consultationsRef = useRef(consultations);
+	const [consultationIndex, setConsultationIndex] = useState(0);
+	const consultationIndexRef = useRef(0);
+	const [historyFilter, setHistoryFilter] = useState<"open" | "closed" | "all">("open");
+	const historyFilterRef = useRef<"open" | "closed" | "all">("open");
+	const [launcher, setLauncher] = useState(false);
+	const [replacementConsultationId, setReplacementConsultationId] = useState<string | null>(null);
+	const [consultationSafety, setConsultationSafety] = useState<{
+		consultationId: string;
+		safety: LiveCheckoutSafety;
+	} | null>(null);
+	const [responseEditor, setResponseEditor] = useState(false);
+	const [responseDraft, setResponseDraft] = useState("");
+	const responseDraftRef = useRef("");
+	const [interaction, setInteraction] = useState(false);
+	const [liveOutput, setLiveOutput] = useState<string | null>(null);
+	const [consultationScroll, setConsultationScroll] = useState(0);
+	const consultationFollowRef = useRef(true);
+	const [newOutput, setNewOutput] = useState(false);
+	const [bell, setBell] = useState(false);
+	const [utility, setUtility] = useState<ActionUtility | null>(null);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const selectedIndexRef = useRef(0);
 	const configRef = useRef(config);
 	configRef.current = config;
+	viewRef.current = view;
+	historyFilterRef.current = historyFilter;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	// Focus keys can arrive before React publishes the next render. The ref
 	// records that immediate intent, so the next navigation key stays with
@@ -175,6 +253,8 @@ export function App({
 	>([]);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
+	const consultationOperationQueues = useRef(new Map<string, Promise<void>>());
+	const configWriteQueue = useRef(Promise.resolve());
 
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
@@ -205,10 +285,67 @@ export function App({
 			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
 				}`;
+	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
+	const attentionLine =
+		state === undefined
+			? ""
+			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${bell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
 	const reservedRows =
-		(status === null ? 0 : 1) + (healthLine === "" ? 0 : 1) + (modeLine === "" ? 0 : 1);
+		(status === null ? 0 : 1) +
+		(healthLine === "" ? 0 : 1) +
+		(modeLine === "" ? 0 : 1) +
+		(attentionLine === "" ? 0 : 1) +
+		(state === undefined ? 0 : 1);
 	const listGeometry = usePaneGeometry("list", reservedRows);
+	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
+	const selectedConsultation = consultations[consultationIndex];
+	const actionContext: ActionContext = {
+		view,
+		focusedPane,
+		selectedConsultation,
+		status,
+		launcher,
+		modal: override !== null || panel !== null,
+		responseEditor,
+		interaction,
+	};
+	const selectedConsultationAgentStatus =
+		selectedConsultation === undefined || selectedConsultation.paneId === null || agents === null
+			? null
+			: normalizeAgentStatus(
+					agents.find((agent) => agent.paneId === selectedConsultation.paneId)?.status ?? "unknown",
+				);
+	const consultationTurns =
+		selectedConsultation === undefined || state === undefined
+			? []
+			: state.consultationTurns(selectedConsultation.id);
+	const consultationSnapshots =
+		selectedConsultation === undefined || state === undefined
+			? []
+			: state.consultationSnapshots(selectedConsultation.id);
+	const replacementIds =
+		selectedConsultation === undefined || state === undefined
+			? []
+			: state
+					.consultations("all")
+					.filter((item) => item.replacementOf === selectedConsultation.id)
+					.map((item) => item.id);
+	const consultationNarrow = view === "consultations" && terminalWidth < 80;
+	const consultationWidth = consultationNarrow
+		? Math.max(1, terminalWidth - 4)
+		: detailGeometry.usableCols;
+	const consultationLines = consultationDetailLines(
+		selectedConsultation,
+		consultationTurns,
+		consultationSnapshots,
+		consultationWidth,
+		liveOutput,
+		replacementIds,
+		selectedConsultationAgentStatus,
+	);
+	const consultationMaxScroll = maxScrollOf(consultationLines.length, detailGeometry.visibleRows);
+	const consultationDetailScroll = Math.min(consultationScroll, consultationMaxScroll);
 
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
@@ -225,6 +362,26 @@ export function App({
 		setTickets(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
+	}, [state]);
+
+	const replaceConsultations = useCallback(() => {
+		if (state === undefined) return;
+		const next = state.consultations(historyFilterRef.current);
+		const currentIndex = consultationIndexRef.current;
+		const selectedId = consultationsRef.current[currentIndex]?.id;
+		const preserved =
+			selectedId === undefined ? -1 : next.findIndex((item) => item.id === selectedId);
+		const nextIndex =
+			preserved >= 0 ? preserved : Math.max(0, Math.min(currentIndex, next.length - 1));
+		consultationsRef.current = next;
+		consultationIndexRef.current = nextIndex;
+		setConsultations(next);
+		setConsultationIndex(nextIndex);
+		if (selectedId === undefined || !next.some((item) => item.id === selectedId)) {
+			setConsultationScroll(0);
+			consultationFollowRef.current = true;
+			setLiveOutput(null);
+		}
 	}, [state]);
 
 	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
@@ -268,14 +425,28 @@ export function App({
 	};
 
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
-		try {
-			const updated = { ...config, repos: { ...config.repos, [mapping.repository]: mapping.path } };
-			setConfig(updated);
-			await persistConfig(configFile, updated);
-			return undefined;
-		} catch (error) {
-			return `could not persist the repository mapping: ${errorMessage(error)}`;
-		}
+		const write = configWriteQueue.current
+			.catch(() => undefined)
+			.then(async () => {
+				try {
+					const currentConfig = configRef.current;
+					const updated = {
+						...currentConfig,
+						repos: { ...currentConfig.repos, [mapping.repository]: mapping.path },
+					};
+					configRef.current = updated;
+					setConfig(updated);
+					await persistConfig(configFile, updated);
+					return undefined;
+				} catch (error) {
+					return `could not persist the repository mapping: ${errorMessage(error)}`;
+				}
+			});
+		configWriteQueue.current = write.then(
+			() => undefined,
+			() => undefined,
+		);
+		return write;
 	};
 
 	/** The status line after a handoff outcome, mapping warnings included. */
@@ -712,6 +883,468 @@ export function App({
 		);
 	};
 
+	const launchConsultation = (consultation: Consultation) => {
+		if (state === undefined) return;
+		const onStage = (stage: string) =>
+			setStatus({ kind: "info", text: `Consultation ${consultation.id.slice(0, 8)}: ${stage}` });
+		void serializeRepositoryOperation(
+			consultationOperationQueues.current,
+			consultation.repository.identity,
+			() =>
+				handOffConsultation({
+					consultation,
+					config: configRef.current,
+					runner: commandRunner,
+					home: homeDir,
+					onStage,
+					onRepositoryResolved: (path) =>
+						state.setConsultationRepositoryPath(consultation.id, path),
+					onAgentStarted: (agent) => state.recordConsultationAgentHandles(consultation.id, agent),
+					onResource: (kind, resourceId, owned, details) =>
+						state.recordConsultationResource(consultation.id, {
+							kind,
+							resourceId,
+							owned,
+							details: details ?? "",
+						}),
+				}),
+		)
+			.then(async (outcome) => {
+				if (outcome.status === "failed") {
+					state.failConsultationOpening(consultation.id, outcome.reason);
+					setStatus({
+						kind: "error",
+						text: `Consultation ${consultation.id.slice(0, 8)} failed: ${outcome.reason}`,
+					});
+				} else {
+					state.setConsultationAgent(consultation.id, {
+						paneId: outcome.agent.paneId,
+						tabId: outcome.agent.tabId,
+						workspaceId: outcome.agent.workspaceId,
+						sessionId: outcome.agent.sessionId,
+					});
+					if (outcome.status === "prompt-failed") {
+						state.setConsultationDraft(consultation.id, consultation.renderedOpeningPrompt);
+						setStatus({ kind: "error", text: outcome.reason });
+					} else {
+						const warning = state.consultation(consultation.id)?.warning;
+						setStatus(
+							outcome.notes?.warning === undefined
+								? warning === null || warning === undefined
+									? null
+									: { kind: "warning", text: warning }
+								: { kind: "warning", text: outcome.notes.warning },
+						);
+					}
+				}
+				await finishOutcome(outcome);
+				const warning = state.consultation(consultation.id)?.warning;
+				if (warning !== null && warning !== undefined)
+					setStatus({ kind: "warning", text: warning });
+				replaceConsultations();
+			})
+			.catch((error) => {
+				state.failConsultationOpening(consultation.id, errorMessage(error));
+				replaceConsultations();
+				setStatus({
+					kind: "error",
+					text: `Consultation ${consultation.id.slice(0, 8)} failed: ${errorMessage(error)}`,
+				});
+			});
+	};
+
+	const beginConsultationLaunch = (consultation: Consultation) => {
+		if (state === undefined) return;
+		if (consultation.environment !== "live-worktree") {
+			launchConsultation(consultation);
+			return;
+		}
+		setStatus({
+			kind: "info",
+			text: `checking live checkout safety for Consultation ${consultation.id.slice(0, 8)}...`,
+		});
+		void new HerdrAgentReader(commandRunner)
+			.listAgents()
+			.then((probe) => {
+				if (probe.kind === "error") {
+					state.failConsultationOpening(
+						consultation.id,
+						`cannot verify live checkout safety: ${probe.reason}`,
+					);
+					replaceConsultations();
+					setStatus({
+						kind: "error",
+						text: `Consultation ${consultation.id.slice(0, 8)} was not opened: Agent list is unavailable`,
+					});
+					return;
+				}
+				void inspectLiveCheckout(
+					expandHome(consultation.repository.path, homeDir),
+					commandRunner,
+					ticketsRef.current,
+					state.consultations("open"),
+					probe.agents,
+					consultation.repository.identity,
+				)
+					.then((safety) => {
+						if (safety.warning !== undefined)
+							state.setConsultationWarning(consultation.id, safety.warning);
+						if (safety.conflicts.length > 0) {
+							setConsultationSafety({ consultationId: consultation.id, safety });
+							setPanel({ kind: "consultation-safety", identity: consultation.id });
+							setStatus({
+								kind: "warning",
+								text: "live checkout conflict: explicit confirmation is required",
+							});
+							return;
+						}
+						launchConsultation(consultation);
+					})
+					.catch((error) => {
+						state.failConsultationOpening(consultation.id, errorMessage(error));
+						replaceConsultations();
+						setStatus({
+							kind: "error",
+							text: `Consultation safety check failed: ${errorMessage(error)}`,
+						});
+					});
+			})
+			.catch((error) => {
+				state.failConsultationOpening(consultation.id, errorMessage(error));
+				replaceConsultations();
+				setStatus({
+					kind: "error",
+					text: `Consultation safety check failed: ${errorMessage(error)}`,
+				});
+			});
+	};
+
+	const startConsultation = (
+		typeName: string,
+		repository: ConsultationRepositoryOption,
+		input: string,
+	) => {
+		if (state === undefined) {
+			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
+			return;
+		}
+		const type = configRef.current.consultationTypes[typeName];
+		if (type === undefined) {
+			setStatus({ kind: "error", text: `unknown Consultation type ${typeName}` });
+			return;
+		}
+		const id = randomUUID();
+		const consultation = state.createConsultation({
+			id,
+			typeName,
+			agentType: type.agent,
+			environment: type.environment,
+			model: type.model,
+			thinking: type.thinking,
+			template: type.template,
+			initialInput: input,
+			renderedOpeningPrompt: renderConsultationPrompt(type.template, input),
+			repository,
+			replacementOf: replacementConsultationId ?? undefined,
+			agentName: consultationAgentName(id),
+		});
+		setLauncher(false);
+		setReplacementConsultationId(null);
+		historyFilterRef.current = "open";
+		setHistoryFilter("open");
+		openConsultations();
+		replaceConsultations();
+		setStatus({ kind: "info", text: `opening Consultation ${consultation.id.slice(0, 8)}...` });
+		beginConsultationLaunch(consultation);
+	};
+
+	const retryConsultation = (consultation: Consultation) => {
+		if (state === undefined || consultation.state !== "failed") return;
+		if (!state.retryConsultationOpening(consultation.id)) {
+			setStatus({
+				kind: "warning",
+				text: "Consultation retry is blocked until its recorded resources are closed",
+			});
+			return;
+		}
+		const reopened = state.consultation(consultation.id);
+		if (reopened === undefined) return;
+		replaceConsultations();
+		setStatus({ kind: "info", text: `retrying Consultation ${consultation.id.slice(0, 8)}...` });
+		beginConsultationLaunch(reopened);
+	};
+
+	const beginResponse = (consultation: Consultation) => {
+		if (consultation.state !== "awaiting-response") {
+			setStatus({ kind: "warning", text: "the Consultation is not awaiting a response" });
+			return;
+		}
+		responseDraftRef.current = consultation.draft;
+		setResponseDraft(consultation.draft);
+		setResponseEditor(true);
+	};
+
+	const submitResponse = () => {
+		if (state === undefined || selectedConsultation === undefined) return;
+		const consultation = selectedConsultation;
+		const draft = responseDraftRef.current;
+		const error = validateResponseInput(draft);
+		if (error !== undefined) {
+			setStatus({ kind: "error", text: error });
+			return;
+		}
+		state.setConsultationDraft(consultation.id, draft);
+		const turn = state.beginConsultationResponse(
+			consultation.id,
+			draft,
+			consultation.latestSequence,
+		);
+		if (turn === undefined) {
+			setStatus({ kind: "warning", text: "the Consultation changed before the response was sent" });
+			return;
+		}
+		setResponseEditor(false);
+		setStatus({
+			kind: "info",
+			text: `sending response to Consultation ${consultation.id.slice(0, 8)}...`,
+		});
+		void commandRunner
+			.run("herdr", ["agent", "prompt", consultation.agentName, draft])
+			.then((result) => {
+				if (result.code !== 0) {
+					state.cancelConsultationResponse(consultation.id, turn.id);
+					replaceConsultations();
+					setResponseEditor(true);
+					setStatus({ kind: "error", text: `response failed: ${commandFailureText(result)}` });
+					return;
+				}
+				const completed = state.completeConsultationResponse(consultation.id, turn.id);
+				replaceConsultations();
+				if (!completed) {
+					setResponseEditor(true);
+					setStatus({
+						kind: "warning",
+						text: "response was sent, but the Consultation state changed; review the saved draft",
+					});
+				} else setStatus(null);
+			})
+			.catch((error) => {
+				state.cancelConsultationResponse(consultation.id, turn.id);
+				replaceConsultations();
+				setResponseEditor(true);
+				setStatus({ kind: "error", text: `response failed: ${errorMessage(error)}` });
+			});
+	};
+
+	const openConsultations = () => {
+		viewRef.current = "consultations";
+		setView("consultations");
+		setFocusedPane("list");
+	};
+
+	const openAttention = () => {
+		if (state === undefined) return false;
+		const current = state.consultations("open");
+		const target =
+			current.find((item) => item.state === "awaiting-response") ??
+			current.find(
+				(item) =>
+					item.state === "missing" ||
+					item.state === "failed" ||
+					item.state === "opening" ||
+					item.state === "closing",
+			);
+		if (target === undefined) return false;
+		historyFilterRef.current = "open";
+		setHistoryFilter("open");
+		replaceConsultations();
+		openConsultations();
+		const index = current.findIndex((item) => item.id === target.id);
+		consultationIndexRef.current = index;
+		setConsultationIndex(index);
+		consultationFollowRef.current = true;
+		setConsultationScroll(999999);
+		setNewOutput(false);
+		return true;
+	};
+
+	const cycleConsultationHistory = () => {
+		const next =
+			historyFilterRef.current === "open"
+				? "closed"
+				: historyFilterRef.current === "closed"
+					? "all"
+					: "open";
+		historyFilterRef.current = next;
+		setHistoryFilter(next);
+		replaceConsultations();
+	};
+
+	const closeConsultation = (consultation: Consultation) => {
+		if (state === undefined) return;
+		const current = state.consultation(consultation.id) ?? consultation;
+		if (current.state === "closed") {
+			setStatus({
+				kind: "warning",
+				text: `Consultation ${current.id.slice(0, 8)} is already closed`,
+			});
+			return;
+		}
+		const wasAlreadyClosing = current.state === "closing";
+		const started = wasAlreadyClosing || state.beginConsultationClose(current.id);
+		if (!started) {
+			setStatus({
+				kind: "warning",
+				text: `Consultation ${consultation.id.slice(0, 8)} is already closing or closed`,
+			});
+			return;
+		}
+		replaceConsultations();
+		setStatus({ kind: "info", text: `closing Consultation ${current.id.slice(0, 8)}...` });
+		const capture = () =>
+			current.paneId === null
+				? Promise.resolve(null)
+				: new HerdrAgentReader(commandRunner).readPane(
+						current.paneId,
+						configRef.current.completionMessageLines,
+					);
+		void serializeRepositoryOperation(
+			consultationOperationQueues.current,
+			current.repository.identity,
+			async () => {
+				const output = await capture();
+				if (output !== null) state.captureConsultationPartial(consultation.id, output);
+				const commands: Array<{
+					promise: Promise<import("../runner.ts").CommandResult>;
+					closes: ConsultationResource[];
+				}> = [];
+				const resources = current.resources.filter((item) => item.owned && !item.confirmedClosed);
+				let agentStop: Promise<CommandResult> | undefined;
+				if (
+					!wasAlreadyClosing &&
+					current.state !== "missing" &&
+					current.state !== "failed" &&
+					current.agentName !== "" &&
+					current.paneId !== null
+				) {
+					agentStop = commandRunner.run("herdr", ["agent", "stop", current.agentName]);
+					commands.push({ promise: agentStop, closes: [] });
+					const stopped = await agentStop;
+					if (stopped.code !== 0) return { results: [stopped], commands };
+					agentStop = undefined;
+				}
+				let cleanupTail: Promise<CommandResult> | undefined = agentStop;
+				const addCleanup = (args: readonly string[], closes: ConsultationResource[]) => {
+					const run = () => commandRunner.run("herdr", args);
+					const promise =
+						cleanupTail === undefined
+							? run()
+							: cleanupTail.then((result) => (result.code === 0 ? run() : result));
+					cleanupTail = promise;
+					commands.push({ promise, closes });
+				};
+				const workspace = resources.find((resource) => resource.kind === "workspace");
+				const worktree = resources.find((resource) => resource.kind === "worktree");
+				const tabs = resources.filter((resource) => resource.kind === "tab");
+				if (workspace !== undefined) {
+					const topology = await workspaceTopology(
+						commandRunner,
+						workspace.resourceId,
+						current.paneId,
+						tabs[0]?.resourceId ?? current.tabId,
+					);
+					if (!topology.known) {
+						const failure: CommandResult = {
+							code: 1,
+							stdout: "",
+							stderr: "could not verify whether the workspace is shared",
+						};
+						commands.push({ promise: Promise.resolve(failure), closes: [] });
+					} else if (topology.exclusive) {
+						if (current.environment === "worktree") {
+							addCleanup(
+								["worktree", "remove", "--workspace", (worktree ?? workspace).resourceId],
+								worktree === undefined ? [] : [worktree],
+							);
+						}
+						addCleanup(["workspace", "close", workspace.resourceId], [workspace, ...tabs]);
+					} else {
+						// The workspace became shared. Close only the tab owned by this
+						// Consultation and leave the shared workspace alive.
+						state.markConsultationResourceShared(current.id, "workspace", workspace.resourceId);
+						if (worktree !== undefined)
+							state.markConsultationResourceShared(current.id, "worktree", worktree.resourceId);
+						for (const resource of tabs)
+							addCleanup(["tab", "close", resource.resourceId], [resource]);
+					}
+				} else {
+					for (const resource of tabs)
+						addCleanup(["tab", "close", resource.resourceId], [resource]);
+				}
+				return Promise.all(commands.map((command) => command.promise)).then((results) => ({
+					results,
+					commands,
+				}));
+			},
+		)
+			.then(({ results, commands }) => {
+				for (const [index, command] of commands.entries()) {
+					if (results[index]?.code !== 0) continue;
+					for (const resource of command.closes)
+						state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
+				}
+				const failure = results.find((result) => result.code !== 0);
+				if (failure !== undefined) {
+					state.recordConsultationCloseFailure(current.id, commandFailureText(failure));
+					replaceConsultations();
+					setStatus({
+						kind: "error",
+						text: `Consultation close needs recovery: ${commandFailureText(failure)}`,
+					});
+					return;
+				}
+				state.finishConsultationClose(consultation.id);
+				replaceConsultations();
+				setStatus({ kind: "info", text: `Consultation ${consultation.id.slice(0, 8)} closed` });
+			})
+			.catch((error) => {
+				state.recordConsultationCloseFailure(current.id, errorMessage(error));
+				replaceConsultations();
+				setStatus({
+					kind: "error",
+					text: `Consultation close needs recovery: ${errorMessage(error)}`,
+				});
+			});
+	};
+
+	const forceCloseConsultation = (consultation: Consultation) => {
+		if (state === undefined) return;
+		if (consultation.state !== "closing" && !state.beginConsultationClose(consultation.id)) {
+			setStatus({ kind: "warning", text: "Consultation cleanup has already finished" });
+			return;
+		}
+		state.finishConsultationClose(
+			consultation.id,
+			"force-closed by operator; owned resources may remain",
+			true,
+		);
+		replaceConsultations();
+		setStatus({
+			kind: "warning",
+			text: `Consultation ${consultation.id.slice(0, 8)} force-closed; recovery resources remain recorded`,
+		});
+	};
+
+	const deleteConsultation = (consultation: Consultation) => {
+		if (state?.deleteConsultation(consultation.id)) {
+			replaceConsultations();
+			setStatus({
+				kind: "info",
+				text: `Consultation ${consultation.id.slice(0, 8)} deleted; backups may retain data`,
+			});
+		}
+	};
+
 	const runMissingAction = (ticket: Ticket, key: string) => {
 		setPanel(null);
 		if (state === undefined) return;
@@ -762,10 +1395,119 @@ export function App({
 	};
 
 	useKeyboard((key) => {
-		if (override !== null || panel !== null) return;
+		if (override !== null || panel !== null || launcher || utility !== null) return;
+		if (interaction) {
+			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
+			if (
+				key.name.toLowerCase() === exit ||
+				(key.ctrl && exit === `ctrl+${key.name.toLowerCase()}`)
+			) {
+				setInteraction(false);
+				setStatus({ kind: "info", text: "left Agent interaction mode" });
+				return;
+			}
+			const selected = consultationsRef.current[consultationIndexRef.current];
+			const event =
+				selected?.paneId === null || selected?.paneId === undefined
+					? null
+					: translateAgentKey(key, configRef.current.interactionExitKey);
+			if (selected !== undefined && event !== null) {
+				const command =
+					event.kind === "text"
+						? ["pane", "send-text", selected.paneId as string, event.text]
+						: ["pane", "send-keys", selected.paneId as string, event.key];
+				void commandRunner.run("herdr", command).then((result) => {
+					if (result.code === 0) setNewOutput(true);
+					else
+						setStatus({
+							kind: "error",
+							text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
+						});
+				});
+			}
+			return;
+		}
+		if (responseEditor) {
+			if (key.name === "escape") {
+				setResponseEditor(false);
+				return;
+			}
+			if (key.name === "return") {
+				if (key.shift) {
+					responseDraftRef.current += "\n";
+					setResponseDraft(responseDraftRef.current);
+					if (state !== undefined && selectedConsultation !== undefined)
+						state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+				} else submitResponse();
+				return;
+			}
+			if (key.name === "backspace") {
+				responseDraftRef.current = responseDraftRef.current.slice(0, -1);
+				setResponseDraft(responseDraftRef.current);
+				if (state !== undefined && selectedConsultation !== undefined)
+					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+				return;
+			}
+			if ([...key.name].length > 0 && isLiteralText(key.name)) {
+				responseDraftRef.current += key.name;
+				setResponseDraft(responseDraftRef.current);
+				if (state !== undefined && selectedConsultation !== undefined)
+					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+			}
+			return;
+		}
 		switch (key.name) {
 			case "q":
 				renderer.destroy();
+				break;
+			case "?":
+				setUtility("guide");
+				break;
+			case "m":
+				if (status !== null) setUtility("message");
+				break;
+			case "t":
+				viewRef.current = "tickets";
+				setView("tickets");
+				setFocusedPane("list");
+				break;
+			case "v":
+				openConsultations();
+				break;
+			case "c":
+				if (Object.keys(configRef.current.consultationTypes).length === 0)
+					setStatus({
+						kind: "warning",
+						text: "no Consultation types configured; add [consultation-types.<name>] to the config file",
+					});
+				else if (
+					viewRef.current === "consultations" &&
+					(selectedConsultation?.state === "missing" || selectedConsultation?.state === "failed")
+				) {
+					setReplacementConsultationId(selectedConsultation.id);
+					setLauncher(true);
+				} else setLauncher(true);
+				break;
+			case "f":
+				if (viewRef.current === "consultations") cycleConsultationHistory();
+				break;
+			case "x":
+				if (viewRef.current === "consultations" && selectedConsultation !== undefined) {
+					if (selectedConsultation.state === "opening" || selectedConsultation.state === "working")
+						setPanel({ kind: "consultation-close", identity: selectedConsultation.id });
+					else if (
+						selectedConsultation.state === "awaiting-response" ||
+						selectedConsultation.state === "missing" ||
+						selectedConsultation.state === "failed"
+					)
+						closeConsultation(selectedConsultation);
+					else if (selectedConsultation.state === "closing")
+						setPanel({ kind: "consultation-close", identity: selectedConsultation.id });
+				}
+				break;
+			case "d":
+				if (viewRef.current === "consultations" && selectedConsultation?.state === "closed")
+					setPanel({ kind: "consultation-delete", identity: selectedConsultation.id });
 				break;
 			case "h":
 			case "left":
@@ -793,9 +1535,34 @@ export function App({
 				moveEdge("start");
 				break;
 			case "end":
-				moveEdge("end");
+				if (viewRef.current === "consultations" && focusedPaneRef.current === "detail") {
+					consultationFollowRef.current = true;
+					setConsultationScroll(999999);
+					setNewOutput(false);
+				} else moveEdge("end");
 				break;
 			case "return": {
+				if (viewRef.current === "consultations") {
+					if (selectedConsultation === undefined) break;
+					if (selectedConsultation.state === "awaiting-response") {
+						const latestTurn = consultationTurns[consultationTurns.length - 1];
+						if (latestTurn?.settledStatus === "blocked" && selectedConsultation.paneId !== null)
+							setInteraction(true);
+						else beginResponse(selectedConsultation);
+					} else if (
+						selectedConsultation.state === "missing" ||
+						selectedConsultation.state === "failed"
+					)
+						setStatus({ kind: "warning", text: "use c to open a Replacement Consultation" });
+					else if (selectedConsultation.state === "working" && selectedConsultation.paneId !== null)
+						setInteraction(true);
+					else
+						setStatus({
+							kind: "info",
+							text: `Consultation ${selectedConsultation.id.slice(0, 8)} is ${selectedConsultation.state}`,
+						});
+					break;
+				}
 				const ticket = ticketsRef.current[selectedIndexRef.current];
 				if (ticket === undefined) break;
 				if (ticket.state === "open") {
@@ -832,10 +1599,12 @@ export function App({
 				openOverride();
 				break;
 			case "a":
-				toggleAutoHandoff();
+				if (!openAttention()) toggleAutoHandoff();
 				break;
 			case "r":
-				coordinatorRef.current?.refreshAll();
+				if (viewRef.current === "consultations" && selectedConsultation?.state === "failed")
+					retryConsultation(selectedConsultation);
+				else coordinatorRef.current?.refreshAll();
 				break;
 			default:
 				break;
@@ -847,7 +1616,64 @@ export function App({
 	useEffect(() => {
 		if (state === undefined) return;
 		replaceTickets();
-	}, [state, replaceTickets]);
+		replaceConsultations();
+	}, [state, replaceTickets, replaceConsultations]);
+
+	// The selected Agent output refreshes at one-second cadence. Lifecycle
+	// polling remains owned by the shared observation coordinator.
+	useEffect(() => {
+		if (
+			state === undefined ||
+			view !== "consultations" ||
+			selectedConsultation?.paneId === null ||
+			selectedConsultation === undefined
+		) {
+			setLiveOutput(null);
+			return;
+		}
+		let active = true;
+		const reader = new HerdrAgentReader(commandRunner);
+		const refresh = async () => {
+			const output = interaction
+				? await reader.readPaneAnsi(
+						selectedConsultation.paneId as string,
+						configRef.current.completionMessageLines,
+					)
+				: await reader.readPane(
+						selectedConsultation.paneId as string,
+						configRef.current.completionMessageLines,
+					);
+			if (!active) return;
+			if (output === null) {
+				const current = state.consultation(selectedConsultation.id);
+				if (current !== undefined && current.warning !== "Stale Agent output") {
+					state.setConsultationWarning(current.id, "Stale Agent output");
+					replaceConsultations();
+				}
+				return;
+			}
+			const current = state.consultation(selectedConsultation.id);
+			if (current?.warning === "Stale Agent output") {
+				state.setConsultationWarning(current.id, null);
+				replaceConsultations();
+			}
+			if (consultationFollowRef.current) {
+				setConsultationScroll(999999);
+				setNewOutput(false);
+			}
+			setLiveOutput((previous) => {
+				if (!consultationFollowRef.current && previous !== null && previous !== output)
+					setNewOutput(true);
+				return output;
+			});
+		};
+		void refresh();
+		const timer = setInterval(() => void refresh(), interaction ? 250 : 1000);
+		return () => {
+			active = false;
+			clearInterval(timer);
+		};
+	}, [commandRunner, interaction, replaceConsultations, selectedConsultation, state, view]);
 
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
@@ -855,6 +1681,7 @@ export function App({
 		if (state === undefined) return;
 		const coordinator = new RefreshCoordinator(sources, state, () => {
 			replaceTickets();
+			replaceConsultations();
 			// A fetch may have made a ticket actionable: let the observation
 			// loop act on it now instead of on the next poll.
 			observationRef.current?.tick();
@@ -865,7 +1692,7 @@ export function App({
 			coordinator.stop();
 			coordinatorRef.current = undefined;
 		};
-	}, [state, sources, replaceTickets]);
+	}, [state, sources, replaceTickets, replaceConsultations]);
 
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test
@@ -891,8 +1718,20 @@ export function App({
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
-			onChanged: replaceTickets,
+			onChanged: () => {
+				replaceTickets();
+				replaceConsultations();
+			},
 			onAgents: (agents) => setAgents(agents),
+			onConsultationsChanged: replaceConsultations,
+			onConsultationAttention: (_id) => {
+				if (configRef.current.attentionBell) {
+					setBell(true);
+					setTimeout(() => setBell(false), 250);
+					process.stdout.write("\u0007");
+				}
+			},
+			reconcileOnly: true,
 			onStatus: (kind, text) => setStatus({ kind, text }),
 		});
 		observationRef.current = coordinator;
@@ -907,7 +1746,15 @@ export function App({
 			coordinator.stop();
 			observationRef.current = undefined;
 		};
-	}, [state, initialTickets, pollIntervalMs, replaceTickets, commandRunner, onReady]);
+	}, [
+		state,
+		initialTickets,
+		pollIntervalMs,
+		replaceTickets,
+		replaceConsultations,
+		commandRunner,
+		onReady,
+	]);
 
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;
@@ -926,6 +1773,22 @@ export function App({
 	}
 
 	function moveVertical(delta: number) {
+		if (viewRef.current === "consultations") {
+			if (focusedPaneRef.current === "detail") {
+				consultationFollowRef.current = false;
+				setConsultationScroll((current) => clamp(current + delta, 0, consultationMaxScroll));
+			} else {
+				setConsultationIndex((index) => {
+					const next = clamp(index + delta, 0, consultationsRef.current.length - 1);
+					consultationIndexRef.current = next;
+					return next;
+				});
+				setConsultationScroll(0);
+				consultationFollowRef.current = true;
+				setNewOutput(false);
+			}
+			return;
+		}
 		if (focusedPaneRef.current === "detail")
 			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
 		else moveList(delta);
@@ -941,15 +1804,23 @@ export function App({
 		if (focusedPaneRef.current === "detail") {
 			if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
-		} else {
-			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
-		}
+		} else selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
 
 	const panelTicket =
-		panel === null
+		panel === null ||
+		panel.kind === "consultation-close" ||
+		panel.kind === "consultation-delete" ||
+		panel.kind === "consultation-safety"
 			? undefined
 			: ticketsRef.current.find((ticket) => ticket.identity === panel.identity);
+	const panelConsultation =
+		panel !== null &&
+		(panel.kind === "consultation-close" ||
+			panel.kind === "consultation-delete" ||
+			panel.kind === "consultation-safety")
+			? consultationsRef.current.find((item) => item.id === panel.identity)
+			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
@@ -962,6 +1833,17 @@ export function App({
 				: healths.length === 0 || healths.some((health) => health.health === "loading")
 					? "loading tickets..."
 					: "no tickets match the configured sources";
+	const repositoryOptions = consultationRepositoryCatalog(config, tickets);
+	const replacementConsultation =
+		replacementConsultationId === null
+			? undefined
+			: consultations.find((item) => item.id === replacementConsultationId);
+	const launcherInitialType =
+		replacementConsultation !== undefined ? replacementConsultation.typeName : undefined;
+	const launcherInitialInput =
+		replacementConsultation === undefined || state === undefined
+			? ""
+			: state.replacementInput(replacementConsultation.id);
 	const statusColor =
 		status?.kind === "error"
 			? COLORS.statusError
@@ -986,29 +1868,85 @@ export function App({
 					overflow: "hidden",
 				},
 			},
-			createElement(TicketList, {
-				tickets,
-				selectedIndex,
-				focused: focusedPane === "list",
-				reservedRows,
-				emptyMessage,
-				markerOf,
-				limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
-				active: override === null && panel === null,
-				onFocus: () => focusPane("list"),
-				onSelect: selectTicket,
-				onMove: moveList,
-			}),
-			createElement(TicketDetail, {
-				ref: detailRef,
-				ticket: selectedTicket,
-				focused: focusedPane === "detail",
-				active: override === null && panel === null,
-				reservedRows,
-				handoffLimit: config.maxHandoffsPerTicket,
-				scroll: config.scroll,
-				onFocus: () => focusPane("detail"),
-			}),
+			view === "tickets"
+				? createElement(TicketList, {
+						tickets,
+						selectedIndex,
+						focused: focusedPane === "list",
+						reservedRows,
+						emptyMessage,
+						markerOf,
+						limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+						active: override === null && panel === null,
+						onFocus: () => focusPane("list"),
+						onSelect: selectTicket,
+						onMove: moveList,
+					})
+				: consultationNarrow
+					? null
+					: createElement(ConsultationList, {
+							consultations,
+							selectedIndex: consultationIndex,
+							focused: focusedPane === "list",
+							reservedRows,
+							emptyMessage:
+								state === undefined
+									? "Consultations require SQLite state"
+									: historyFilter === "closed"
+										? "no closed Consultations"
+										: historyFilter === "all"
+											? "no Consultations"
+											: "no open Consultations",
+						}),
+			view === "tickets"
+				? createElement(TicketDetail, {
+						ref: detailRef,
+						ticket: selectedTicket,
+						focused: focusedPane === "detail",
+						active: override === null && panel === null,
+						reservedRows,
+						handoffLimit: config.maxHandoffsPerTicket,
+						scroll: config.scroll,
+						onFocus: () => focusPane("detail"),
+					})
+				: createElement(
+						"box",
+						{ style: { flexGrow: 1, flexDirection: "column" } },
+						createElement(ConsultationDetail, {
+							lines: consultationLines,
+							visibleRows: Math.max(1, detailGeometry.visibleRows - (responseEditor ? 3 : 0)),
+							scroll: consultationDetailScroll,
+							focused: focusedPane === "detail" && !responseEditor,
+							compactHeading:
+								consultationNarrow && selectedConsultation !== undefined
+									? `${selectedConsultation.typeName} - ${selectedConsultation.repository.displayName}`
+									: undefined,
+						}),
+						responseEditor &&
+							createElement(
+								"box",
+								{
+									border: true,
+									borderColor: COLORS.borderFocused,
+									title: "Response",
+									padding: 1,
+									style: { height: 4, flexDirection: "column" },
+								},
+								createElement(
+									"text",
+									{ fg: COLORS.textBright },
+									truncateToWidth(responseDraft || "(empty)", consultationWidth),
+								),
+								createElement(
+									"text",
+									{ fg: COLORS.dim },
+									truncateToWidth(
+										"enter submit  shift+enter newline  esc keep draft",
+										consultationWidth,
+									),
+								),
+							),
+					),
 		),
 		healthLine !== "" &&
 			createElement(
@@ -1022,11 +1960,41 @@ export function App({
 				{ style: { width: "100%", fg: COLORS.dim } },
 				truncateToWidth(modeLine, terminalWidth),
 			),
+		attentionLine !== "" &&
+			createElement(
+				"text",
+				{
+					style: {
+						width: "100%",
+						fg: consultationCounts.awaitingResponse > 0 ? COLORS.textBright : COLORS.dim,
+					},
+				},
+				truncateToWidth(attentionLine, terminalWidth),
+			),
+		launcher &&
+			createElement(ConsultationLauncher, {
+				types: config.consultationTypes,
+				repositories: repositoryOptions,
+				initialType: launcherInitialType,
+				initialRepository:
+					replacementConsultation?.repository.identity ?? selectedTicket?.repositoryRef.identity,
+				initialInput: launcherInitialInput,
+				title:
+					replacementConsultation === undefined
+						? "Consultation launcher"
+						: "Replacement Consultation",
+				onLaunch: startConsultation,
+				onCancel: () => {
+					setLauncher(false);
+					setReplacementConsultationId(null);
+				},
+			}),
+		state !== undefined && actionBarElement(actionContext),
 		status !== null &&
 			createElement(
 				"text",
 				{ style: { width: "100%", fg: statusColor } },
-				truncateToWidth(status.text, terminalWidth),
+				truncateToWidth(`${status.kind}: ${status.text}`, terminalWidth),
 			),
 		override !== null &&
 			createElement(OverridePanel, {
@@ -1066,7 +2034,141 @@ export function App({
 						onAction: (key) => runMissingAction(panelTicket, key),
 						onCancel: () => setPanel(null),
 					})),
+		panel !== null &&
+			panel.kind === "consultation-safety" &&
+			panelConsultation !== undefined &&
+			consultationSafety?.consultationId === panelConsultation.id &&
+			createElement(ActionPanel, {
+				title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
+				bodyLines: [
+					...(consultationSafety.safety.warning === undefined
+						? []
+						: [consultationSafety.safety.warning]),
+					...consultationSafety.safety.conflicts.map((conflict) => `Conflict: ${conflict.label}`),
+					"Confirm once to share this live checkout, or cancel and recover later.",
+				],
+				actions: [
+					{ key: "confirm", label: "Confirm", detail: "allow this Consultation once" },
+					{ key: "cancel", label: "Cancel", detail: "do not start the Agent" },
+				],
+				onAction: (key) => {
+					setPanel(null);
+					setConsultationSafety(null);
+					if (key === "confirm") {
+						state?.setConsultationLiveConflictOverride(panelConsultation.id);
+						const current = state?.consultation(panelConsultation.id);
+						if (current !== undefined) {
+							setStatus({
+								kind: "info",
+								text: `opening Consultation ${current.id.slice(0, 8)}...`,
+							});
+							launchConsultation(current);
+						}
+					}
+				},
+				onCancel: () => {
+					setPanel(null);
+					setConsultationSafety(null);
+					setStatus({
+						kind: "warning",
+						text: "Consultation launch cancelled; recover or close it explicitly",
+					});
+				},
+			}),
+		panel !== null &&
+			panelConsultation !== undefined &&
+			panel.kind === "consultation-close" &&
+			createElement(ActionPanel, {
+				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}`,
+				bodyLines: [
+					panelConsultation.environment === "worktree"
+						? "The Agent may still be working. Close keeps the worktree and branch."
+						: "The Agent may still be working. Close only on an explicit operator decision.",
+					...(panelConsultation.state === "closing"
+						? ["Cleanup is already in progress. Force-close records remaining resources."]
+						: []),
+				],
+				actions: [
+					...(panelConsultation.state === "closing"
+						? [
+								{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
+								{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
+							]
+						: [{ key: "close", label: "Close", detail: "stop the Agent and retain the checkout" }]),
+					{ key: "cancel", label: "Cancel", detail: "keep the Consultation running" },
+				],
+				onAction: (key) => {
+					setPanel(null);
+					if (key === "close" || key === "retry") closeConsultation(panelConsultation);
+					if (key === "force") forceCloseConsultation(panelConsultation);
+				},
+				onCancel: () => setPanel(null),
+			}),
+		panel !== null &&
+			panelConsultation !== undefined &&
+			panel.kind === "consultation-delete" &&
+			createElement(ActionPanel, {
+				title: `Delete Consultation ${panelConsultation.id.slice(0, 8)}`,
+				bodyLines: [
+					"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",
+				],
+				actions: [
+					{ key: "delete", label: "Delete", detail: "remove local history" },
+					{ key: "cancel", label: "Cancel" },
+				],
+				onAction: (key) => {
+					setPanel(null);
+					if (key === "delete") deleteConsultation(panelConsultation);
+				},
+				onCancel: () => setPanel(null),
+			}),
+		utility !== null &&
+			createElement(ActionGuide, {
+				context: actionContext,
+				utility,
+				onClose: () => setUtility(null),
+				onMessage: () => setUtility("message"),
+			}),
 	);
+}
+
+async function workspaceTopology(
+	runner: CommandRunner,
+	workspaceId: string,
+	ownedPaneId: string | null,
+	ownedTabId: string | null,
+): Promise<{ known: boolean; exclusive: boolean }> {
+	const [tabs, panes] = await Promise.all([
+		runner.run("herdr", ["tab", "list", "--workspace", workspaceId]),
+		runner.run("herdr", ["pane", "list", "--workspace", workspaceId]),
+	]);
+	if (tabs.code !== 0 || panes.code !== 0) return { known: false, exclusive: false };
+	try {
+		const tabData = JSON.parse(tabs.stdout) as { result?: { tabs?: unknown } };
+		const paneData = JSON.parse(panes.stdout) as { result?: { panes?: unknown } };
+		if (!Array.isArray(tabData.result?.tabs) || !Array.isArray(paneData.result?.panes))
+			return { known: false, exclusive: false };
+		if (
+			!tabData.result.tabs.every((tab) => isRecordValue(tab) && typeof tab.tab_id === "string") ||
+			!paneData.result.panes.every(
+				(pane) => isRecordValue(pane) && typeof pane.pane_id === "string",
+			)
+		)
+			return { known: false, exclusive: false };
+		const otherTabs = tabData.result.tabs.filter(
+			(tab) => (tab as { tab_id: string }).tab_id !== ownedTabId,
+		);
+		const otherPanes = paneData.result.panes.filter(
+			(pane) => (pane as { pane_id: string }).pane_id !== ownedPaneId,
+		);
+		return { known: true, exclusive: otherTabs.length === 0 && otherPanes.length === 0 };
+	} catch {
+		return { known: false, exclusive: false };
+	}
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -6,7 +6,7 @@
  * one-process lease.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -25,7 +25,7 @@ import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -81,6 +81,110 @@ interface HandoffDetails {
 	paneId?: string | null;
 	tabId?: string | null;
 	workspaceId?: string | null;
+}
+
+export const CONSULTATION_STATES = [
+	"opening",
+	"working",
+	"awaiting-response",
+	"missing",
+	"failed",
+	"closing",
+	"closed",
+] as const;
+export type ConsultationState = (typeof CONSULTATION_STATES)[number];
+
+export interface ConsultationRepository {
+	identity: string;
+	displayName: string;
+	cloneUrl: string;
+	path: string;
+}
+
+/** The durable identity and current projection of one Consultation. */
+export interface Consultation {
+	id: string;
+	typeName: string;
+	agentType: string;
+	environment: EnvironmentKind;
+	model: string;
+	thinking: string;
+	template: string;
+	initialInput: string;
+	renderedOpeningPrompt: string;
+	repository: ConsultationRepository;
+	state: ConsultationState;
+	createdAt: string;
+	updatedAt: string;
+	agentName: string;
+	paneId: string | null;
+	tabId: string | null;
+	workspaceId: string | null;
+	sessionId: string | null;
+	latestSequence: number | null;
+	draft: string;
+	draftUpdatedAt: string | null;
+	draftOld: boolean;
+	failure: string | null;
+	warning: string | null;
+	replacementOf: string | null;
+	closeResult: string | null;
+	liveConflictOverride: boolean;
+	attentionAt: string | null;
+	resources: ConsultationResource[];
+}
+
+export interface ConsultationResource {
+	kind: string;
+	resourceId: string;
+	owned: boolean;
+	confirmedClosed: boolean;
+	details: string;
+}
+
+export interface ConsultationTurn {
+	id: string;
+	consultationId: string;
+	input: string;
+	acceptedAt: string;
+	sequenceBaseline: number | null;
+	settledAt: string | null;
+	settledStatus: string | null;
+	snapshotId: string | null;
+}
+
+export interface ConsultationSnapshot {
+	id: string;
+	consultationId: string;
+	turnId: string | null;
+	text: string;
+	capturedAt: string;
+	partial: boolean;
+	truncated: boolean;
+}
+
+export interface CreateConsultationInput {
+	id?: string;
+	typeName: string;
+	agentType: string;
+	environment: EnvironmentKind;
+	model?: string;
+	thinking?: string;
+	template: string;
+	initialInput: string;
+	renderedOpeningPrompt: string;
+	repository: ConsultationRepository;
+	agentName: string;
+	replacementOf?: string | null;
+	liveConflictOverride?: boolean;
+	createdAt?: string;
+}
+
+export interface ConsultationAgentDetails {
+	paneId: string;
+	tabId?: string | null;
+	workspaceId?: string | null;
+	sessionId?: string | null;
 }
 
 interface StoredMembership extends SourceMembership {
@@ -236,10 +340,57 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Durable Consultation state. This migration is additive and composes with v3. */
+const MIGRATION_V3_TO_V4 = `
+	CREATE TABLE consultations (
+		id TEXT PRIMARY KEY, type_name TEXT NOT NULL, agent_type TEXT NOT NULL,
+		environment TEXT NOT NULL, model TEXT NOT NULL, thinking TEXT NOT NULL,
+		template TEXT NOT NULL, initial_input TEXT NOT NULL, rendered_opening_prompt TEXT NOT NULL,
+		repository_identity TEXT NOT NULL, repository_display_name TEXT NOT NULL,
+		repository_clone_url TEXT NOT NULL, repository_path TEXT NOT NULL,
+		state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+		agent_name TEXT NOT NULL, pane_id TEXT, tab_id TEXT, workspace_id TEXT, session_id TEXT,
+		latest_sequence INTEGER, draft TEXT NOT NULL DEFAULT '', draft_updated_at TEXT,
+		draft_old INTEGER NOT NULL DEFAULT 0, failure TEXT, warning TEXT,
+		replacement_of TEXT, close_result TEXT, live_conflict_override INTEGER NOT NULL DEFAULT 0,
+		attention_at TEXT
+	);
+	CREATE TABLE consultation_turns (
+		id TEXT PRIMARY KEY, consultation_id TEXT NOT NULL, input TEXT NOT NULL,
+		accepted_at TEXT NOT NULL, sequence_baseline INTEGER, settled_at TEXT,
+		settled_status TEXT, snapshot_id TEXT,
+		FOREIGN KEY (consultation_id) REFERENCES consultations(id) ON DELETE CASCADE
+	);
+	CREATE TABLE consultation_snapshots (
+		id TEXT PRIMARY KEY, consultation_id TEXT NOT NULL, turn_id TEXT,
+		text TEXT NOT NULL, captured_at TEXT NOT NULL, partial INTEGER NOT NULL DEFAULT 0,
+		truncated INTEGER NOT NULL DEFAULT 0,
+		FOREIGN KEY (consultation_id) REFERENCES consultations(id) ON DELETE CASCADE,
+		FOREIGN KEY (turn_id) REFERENCES consultation_turns(id) ON DELETE SET NULL
+	);
+	CREATE UNIQUE INDEX consultation_turn_snapshot ON consultation_snapshots(turn_id) WHERE turn_id IS NOT NULL AND partial = 0;
+	CREATE TABLE consultation_resources (
+		consultation_id TEXT NOT NULL, kind TEXT NOT NULL, resource_id TEXT NOT NULL,
+		owned INTEGER NOT NULL, confirmed_closed INTEGER NOT NULL DEFAULT 0, details TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (consultation_id, kind, resource_id),
+		FOREIGN KEY (consultation_id) REFERENCES consultations(id) ON DELETE CASCADE
+	);
+	CREATE TABLE consultation_remaining_resources (
+		consultation_id TEXT NOT NULL, kind TEXT NOT NULL, resource_id TEXT NOT NULL,
+		details TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (consultation_id, kind, resource_id),
+		FOREIGN KEY (consultation_id) REFERENCES consultations(id) ON DELETE CASCADE
+	);
+	CREATE INDEX consultations_state_attention ON consultations(state, attention_at, updated_at);
+	CREATE INDEX consultation_turns_consultation ON consultation_turns(consultation_id, accepted_at);
+	CREATE INDEX consultation_snapshots_consultation ON consultation_snapshots(consultation_id, captured_at);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
-		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+		if (path !== ":memory:") chmodSync(dirname(path), 0o700);
 		return new FactoryState(path, now);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -260,8 +411,19 @@ export class FactoryState {
 		this.db = new DatabaseSync(path);
 		try {
 			this.db.exec("PRAGMA foreign_keys = ON");
+			this.db.exec("PRAGMA secure_delete = ON");
 			this.db.exec("PRAGMA journal_mode = WAL");
+			if (path !== ":memory:") chmodSync(path, 0o600);
 			this.migrate();
+			if (path !== ":memory:") {
+				// SQLite creates these sidecar files lazily. Keep every state file
+				// owner-readable when they exist.
+				for (const sidecar of [`${path}-wal`, `${path}-shm`]) {
+					try {
+						chmodSync(sidecar, 0o600);
+					} catch {}
+				}
+			}
 			const integrity = this.db.prepare("PRAGMA integrity_check").get() as
 				| { integrity_check?: string }
 				| undefined;
@@ -278,6 +440,14 @@ export class FactoryState {
 		}
 	}
 
+	private hasTable(name: string): boolean {
+		return (
+			this.db
+				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+				.get(name) !== undefined
+		);
+	}
+
 	private migrate(): void {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
@@ -288,16 +458,22 @@ export class FactoryState {
 			const version = row?.version ?? 0;
 			if (version > SCHEMA_VERSION)
 				throw new StateError(`database ${this.path} uses newer schema version ${version}`);
+			// A database which claims a known version but lacks that version's
+			// core aggregate is not a valid state database. Treat it as newer.
+			const coreTable = version >= 4 ? "consultations" : "tickets";
+			if (version > 0 && !this.hasTable(coreTable))
+				throw new StateError(`database ${this.path} uses newer schema version ${version}`);
 			if (version < 1) this.db.exec(SCHEMA_V1);
 			if (version < 2) {
 				this.db.exec(MIGRATION_V1_TO_V2);
-				// A resting done ticket's cycle has already ended: it returns
-				// to open without a work-cycle bump.
-				this.db.exec("UPDATE tickets SET state = 'open' WHERE state = 'done'");
+				// Legacy `done` means that the Agent settled. Preserve its work
+				// cycle and expose the missing Completion decision.
+				this.db.exec("UPDATE tickets SET state = 'awaiting' WHERE state = 'done'");
 				// The absent flag only served the old done-cycle bump.
 				this.db.exec("ALTER TABLE tickets DROP COLUMN absent");
 			}
 			if (version < 3) this.db.exec(MIGRATION_V2_TO_V3);
+			if (version < 4) this.db.exec(MIGRATION_V3_TO_V4);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1025,6 +1201,668 @@ export class FactoryState {
 		});
 	}
 
+	/** Create the Consultation record before any Herdr or git command runs. */
+	createConsultation(input: CreateConsultationInput): Consultation {
+		const id = input.id ?? randomUUID();
+		const createdAt = input.createdAt ?? new Date().toISOString();
+		this.transaction(() => {
+			this.db
+				.prepare(
+					`INSERT INTO consultations(
+						id, type_name, agent_type, environment, model, thinking, template,
+						initial_input, rendered_opening_prompt, repository_identity,
+						repository_display_name, repository_clone_url, repository_path,
+						state, created_at, updated_at, agent_name, draft, replacement_of,
+						live_conflict_override, attention_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, ?, NULL)`,
+				)
+				.run(
+					id,
+					input.typeName,
+					input.agentType,
+					input.environment,
+					input.model ?? "",
+					input.thinking ?? "",
+					input.template,
+					input.initialInput,
+					input.renderedOpeningPrompt,
+					input.repository.identity,
+					input.repository.displayName,
+					input.repository.cloneUrl,
+					input.repository.path,
+					createdAt,
+					createdAt,
+					input.agentName,
+					input.replacementOf ?? null,
+					input.liveConflictOverride === true ? 1 : 0,
+				);
+			this.db
+				.prepare(
+					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, NULL)",
+				)
+				.run(randomUUID(), id, input.initialInput, createdAt);
+		});
+		const consultation = this.consultation(id);
+		if (consultation === undefined) throw new StateError(`consultation ${id} was not created`);
+		return consultation;
+	}
+
+	/** Return one Consultation, including its current resource ownership. */
+	consultation(id: string): Consultation | undefined {
+		const row = this.db.prepare("SELECT * FROM consultations WHERE id = ?").get(id) as
+			| ConsultationRow
+			| undefined;
+		return row === undefined ? undefined : this.consultationFromRow(row);
+	}
+
+	/** List Consultations by operator priority. Closed records are opt-in. */
+	consultations(filter: "open" | "closed" | "all" = "open"): Consultation[] {
+		const where =
+			filter === "open"
+				? "WHERE state <> 'closed'"
+				: filter === "closed"
+					? "WHERE state = 'closed'"
+					: "";
+		const rows = this.db
+			.prepare(`SELECT * FROM consultations ${where}`)
+			.all() as unknown as ConsultationRow[];
+		return rows.map((row) => this.consultationFromRow(row)).sort(compareConsultations);
+	}
+
+	consultationCounts(): { awaitingResponse: number; recovery: number } {
+		const rows = this.db
+			.prepare(
+				"SELECT state, COUNT(*) AS count FROM consultations WHERE state <> 'closed' GROUP BY state",
+			)
+			.all() as Array<{ state: ConsultationState; count: number }>;
+		return {
+			awaitingResponse: rows.find((row) => row.state === "awaiting-response")?.count ?? 0,
+			recovery: rows
+				.filter(
+					(row) =>
+						row.state === "missing" ||
+						row.state === "failed" ||
+						row.state === "closing" ||
+						row.state === "opening",
+				)
+				.reduce((sum, row) => sum + row.count, 0),
+		};
+	}
+
+	/** Persist the validated checkout selected during repository resolution. */
+	setConsultationRepositoryPath(id: string, path: string): void {
+		this.db
+			.prepare("UPDATE consultations SET repository_path = ?, updated_at = ? WHERE id = ?")
+			.run(path, new Date().toISOString(), id);
+	}
+
+	/** Record the one-shot operator approval for a live checkout conflict. */
+	setConsultationLiveConflictOverride(id: string): void {
+		this.db
+			.prepare(
+				"UPDATE consultations SET live_conflict_override = 1, updated_at = ? WHERE id = ? AND state = 'opening'",
+			)
+			.run(new Date().toISOString(), id);
+	}
+
+	/** Update the Herdr identity after the Agent has started. */
+	setConsultationAgent(id: string, details: ConsultationAgentDetails): void {
+		this.db
+			.prepare(
+				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, state = 'working', updated_at = ?, failure = NULL WHERE id = ? AND state = 'opening'",
+			)
+			.run(
+				details.paneId,
+				details.tabId ?? null,
+				details.workspaceId ?? null,
+				details.sessionId ?? null,
+				new Date().toISOString(),
+				id,
+			);
+	}
+
+	/** Reopen a failed pre-Agent Consultation when no owned resource remains. */
+	retryConsultationOpening(id: string): boolean {
+		const result = this.db
+			.prepare(
+				"UPDATE consultations SET state = 'opening', failure = NULL, warning = NULL, updated_at = ? WHERE id = ? AND state = 'failed' AND pane_id IS NULL AND NOT EXISTS (SELECT 1 FROM consultation_resources WHERE consultation_id = ? AND owned = 1 AND confirmed_closed = 0)",
+			)
+			.run(new Date().toISOString(), id, id);
+		return Number(result.changes) > 0;
+	}
+
+	/** Record an opening outcome. A pre-Agent failure is immutable. */
+	failConsultationOpening(id: string, reason: string, agentStarted = false): void {
+		this.db
+			.prepare(
+				agentStarted
+					? "UPDATE consultations SET state = 'working', failure = ?, updated_at = ? WHERE id = ? AND state = 'opening'"
+					: "UPDATE consultations SET state = 'failed', failure = ?, updated_at = ? WHERE id = ? AND state = 'opening'",
+			)
+			.run(reason, new Date().toISOString(), id);
+	}
+
+	/** Set a durable warning without changing the Consultation lifecycle. */
+	setConsultationWarning(id: string, warning: string | null): void {
+		this.db
+			.prepare("UPDATE consultations SET warning = ?, updated_at = ? WHERE id = ?")
+			.run(warning, new Date().toISOString(), id);
+	}
+
+	/** Save Agent handles before prompt delivery completes, for crash recovery. */
+	recordConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
+		this.db
+			.prepare(
+				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, updated_at = ? WHERE id = ? AND state = 'opening'",
+			)
+			.run(
+				details.paneId,
+				details.tabId ?? null,
+				details.workspaceId ?? null,
+				details.sessionId ?? null,
+				new Date().toISOString(),
+				id,
+			);
+	}
+
+	/** Record a turn that began outside the control plane and mark a draft old. */
+	recordExternalConsultationTurn(
+		id: string,
+		sequence: number,
+		acceptedAt = new Date().toISOString(),
+	): boolean {
+		return this.transaction(() => {
+			const row = this.db
+				.prepare("SELECT state, latest_sequence, draft FROM consultations WHERE id = ?")
+				.get(id) as
+				| { state: ConsultationState; latest_sequence: number | null; draft: string }
+				| undefined;
+			if (row?.state !== "awaiting-response") return false;
+			if (row.latest_sequence !== null && sequence <= row.latest_sequence) return false;
+			this.db
+				.prepare(
+					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(
+					randomUUID(),
+					id,
+					"[external Agent input not captured]",
+					acceptedAt,
+					row.latest_sequence,
+				);
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'working', latest_sequence = ?, draft_old = CASE WHEN draft <> '' THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?",
+				)
+				.run(sequence, acceptedAt, id);
+			return true;
+		});
+	}
+
+	/** Change a Consultation state, except that failed records cannot resume. */
+	setConsultationState(id: string, next: ConsultationState, detail?: string | null): boolean {
+		const result = this.db
+			.prepare(
+				"UPDATE consultations SET state = ?, updated_at = ?, failure = CASE WHEN ? IS NULL THEN failure ELSE ? END, close_result = CASE WHEN ? IS NULL THEN close_result ELSE ? END WHERE id = ? AND (state <> 'failed' OR ? IN ('closing', 'closed'))",
+			)
+			.run(
+				next,
+				new Date().toISOString(),
+				next === "failed" ? (detail ?? null) : null,
+				next === "failed" ? (detail ?? null) : null,
+				next === "closed" ? (detail ?? null) : null,
+				next === "closed" ? (detail ?? null) : null,
+				id,
+				next,
+			);
+		return Number(result.changes) > 0;
+	}
+
+	/** Save an unsent Response draft. It remains when the Agent rejects input. */
+	setConsultationDraft(id: string, draft: string, old = false): void {
+		this.db
+			.prepare(
+				"UPDATE consultations SET draft = ?, draft_updated_at = ?, draft_old = ?, updated_at = ? WHERE id = ?",
+			)
+			.run(draft, new Date().toISOString(), old ? 1 : 0, new Date().toISOString(), id);
+	}
+
+	/** Begin sending a Response and create exactly one durable turn. */
+	beginConsultationResponse(
+		id: string,
+		input: string,
+		sequenceBaseline: number | null = null,
+	): ConsultationTurn | undefined {
+		return this.transaction(() => {
+			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+				| { state: ConsultationState }
+				| undefined;
+			if (row?.state !== "awaiting-response") return undefined;
+			const turnId = randomUUID();
+			const acceptedAt = new Date().toISOString();
+			this.db
+				.prepare(
+					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(turnId, id, input, acceptedAt, sequenceBaseline);
+			this.db
+				.prepare("UPDATE consultations SET state = 'working', updated_at = ? WHERE id = ?")
+				.run(acceptedAt, id);
+			return this.consultationTurn(turnId);
+		});
+	}
+
+	/** Confirm that a durable Response was sent and clear its draft. */
+	completeConsultationResponse(id: string, turnId: string): boolean {
+		const result = this.db
+			.prepare(
+				"UPDATE consultations SET draft = '', draft_updated_at = NULL, draft_old = 0, updated_at = ? WHERE id = ? AND state IN ('working', 'awaiting-response') AND EXISTS (SELECT 1 FROM consultation_turns WHERE id = ? AND consultation_id = ?)",
+			)
+			.run(new Date().toISOString(), id, turnId, id);
+		return Number(result.changes) > 0;
+	}
+
+	/** Cancel a failed unsent Response while preserving its draft. */
+	cancelConsultationResponse(id: string, turnId: string): boolean {
+		return this.transaction(() => {
+			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+				| { state: ConsultationState }
+				| undefined;
+			if (row?.state !== "working") return false;
+			const turn = this.db
+				.prepare("SELECT settled_at FROM consultation_turns WHERE id = ? AND consultation_id = ?")
+				.get(turnId, id) as { settled_at: string | null } | undefined;
+			if (turn === undefined || turn.settled_at !== null) return false;
+			this.db.prepare("DELETE FROM consultation_turns WHERE id = ?").run(turnId);
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'awaiting-response', updated_at = ? WHERE id = ?",
+				)
+				.run(new Date().toISOString(), id);
+			return true;
+		});
+	}
+
+	/** Accept a Response and create exactly one durable turn. */
+	acceptConsultationResponse(
+		id: string,
+		input: string,
+		sequenceBaseline: number | null = null,
+	): ConsultationTurn | undefined {
+		return this.transaction(() => {
+			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+				| { state: ConsultationState }
+				| undefined;
+			if (row?.state !== "awaiting-response") return undefined;
+			const turnId = randomUUID();
+			const acceptedAt = new Date().toISOString();
+			this.db
+				.prepare(
+					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(turnId, id, input, acceptedAt, sequenceBaseline);
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'working', draft = '', draft_updated_at = NULL, draft_old = 0, updated_at = ? WHERE id = ?",
+				)
+				.run(acceptedAt, id);
+			return this.consultationTurn(turnId);
+		});
+	}
+
+	/** Mark the first newer settled Agent observation and store its snapshot. */
+	settleConsultationTurn(
+		id: string,
+		sequence: number | null,
+		output: string | null,
+		settledStatus = "idle",
+		capturedAt = new Date().toISOString(),
+	): boolean {
+		return this.transaction(() => {
+			const consultation = this.db
+				.prepare("SELECT state FROM consultations WHERE id = ?")
+				.get(id) as { state: ConsultationState } | undefined;
+			if (
+				consultation === undefined ||
+				(consultation.state !== "working" && consultation.state !== "opening")
+			)
+				return false;
+			const turn = this.db
+				.prepare(
+					"SELECT * FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NULL ORDER BY accepted_at DESC LIMIT 1",
+				)
+				.get(id) as ConsultationTurnRow | undefined;
+			if (turn === undefined) return false;
+			// A null sequence is accepted for older Herdr versions. A known
+			// sequence must be newer than the turn baseline.
+			if (
+				sequence !== null &&
+				turn.sequence_baseline !== null &&
+				sequence <= turn.sequence_baseline
+			)
+				return false;
+			this.db
+				.prepare(
+					"UPDATE consultation_turns SET settled_at = ?, settled_status = ? WHERE id = ? AND settled_at IS NULL",
+				)
+				.run(capturedAt, settledStatus, turn.id);
+			if (output !== null) {
+				const bounded = boundedSnapshot(output);
+				const snapshotId = randomUUID();
+				this.db
+					.prepare(
+						"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, ?, ?, ?, 0, ?)",
+					)
+					.run(snapshotId, id, turn.id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
+				this.db
+					.prepare("UPDATE consultation_turns SET snapshot_id = ? WHERE id = ?")
+					.run(snapshotId, turn.id);
+			}
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = CASE WHEN ? IS NULL THEN 'Agent output is stale' WHEN warning = 'Agent output is stale' THEN NULL ELSE warning END WHERE id = ?",
+				)
+				.run(sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, output, id);
+			return true;
+		});
+	}
+
+	/** Add one best-effort partial output snapshot before close. */
+	captureConsultationPartial(
+		id: string,
+		output: string | null,
+		capturedAt = new Date().toISOString(),
+	): void {
+		if (output === null) return;
+		const bounded = boundedSnapshot(output);
+		this.db
+			.prepare(
+				"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, NULL, ?, ?, 1, ?)",
+			)
+			.run(randomUUID(), id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
+	}
+
+	consultationTurn(id: string): ConsultationTurn | undefined {
+		const row = this.db.prepare("SELECT * FROM consultation_turns WHERE id = ?").get(id) as
+			| ConsultationTurnRow
+			| undefined;
+		return row === undefined ? undefined : turnFromRow(row);
+	}
+
+	consultationTurns(id: string): ConsultationTurn[] {
+		return (
+			this.db
+				.prepare(
+					"SELECT * FROM consultation_turns WHERE consultation_id = ? ORDER BY accepted_at, rowid",
+				)
+				.all(id) as unknown as ConsultationTurnRow[]
+		).map(turnFromRow);
+	}
+
+	consultationSnapshots(id: string): ConsultationSnapshot[] {
+		return (
+			this.db
+				.prepare(
+					"SELECT * FROM consultation_snapshots WHERE consultation_id = ? ORDER BY captured_at, rowid",
+				)
+				.all(id) as unknown as ConsultationSnapshotRow[]
+		).map(snapshotFromRow);
+	}
+
+	/** Store every Herdr resource created by the Consultation before continuing. */
+	recordConsultationResource(
+		id: string,
+		resource: Omit<ConsultationResource, "confirmedClosed"> & { confirmedClosed?: boolean },
+	): void {
+		this.db
+			.prepare(
+				"INSERT OR REPLACE INTO consultation_resources(consultation_id, kind, resource_id, owned, confirmed_closed, details) VALUES (?, ?, ?, ?, ?, ?)",
+			)
+			.run(
+				id,
+				resource.kind,
+				resource.resourceId,
+				resource.owned ? 1 : 0,
+				resource.confirmedClosed === true ? 1 : 0,
+				resource.details,
+			);
+	}
+
+	markConsultationResourceShared(id: string, kind: string, resourceId: string): void {
+		this.db
+			.prepare(
+				"UPDATE consultation_resources SET owned = 0, details = ? WHERE consultation_id = ? AND kind = ? AND resource_id = ?",
+			)
+			.run("retained because the workspace is shared", id, kind, resourceId);
+	}
+
+	markConsultationResourceClosed(id: string, kind: string, resourceId: string): void {
+		this.db
+			.prepare(
+				"UPDATE consultation_resources SET confirmed_closed = 1 WHERE consultation_id = ? AND kind = ? AND resource_id = ?",
+			)
+			.run(id, kind, resourceId);
+	}
+
+	recordRemainingConsultationResource(
+		id: string,
+		kind: string,
+		resourceId: string,
+		details = "",
+	): void {
+		this.db
+			.prepare(
+				"INSERT OR REPLACE INTO consultation_remaining_resources(consultation_id, kind, resource_id, details) VALUES (?, ?, ?, ?)",
+			)
+			.run(id, kind, resourceId, details);
+	}
+
+	consultationRemainingResources(id: string): ConsultationResource[] {
+		return (
+			this.db
+				.prepare(
+					"SELECT kind, resource_id, 1 AS owned, 0 AS confirmed_closed, details FROM consultation_remaining_resources WHERE consultation_id = ?",
+				)
+				.all(id) as Array<{
+				kind: string;
+				resource_id: string;
+				owned: number;
+				confirmed_closed: number;
+				details: string;
+			}>
+		).map((row) => ({
+			kind: row.kind,
+			resourceId: row.resource_id,
+			owned: true,
+			confirmedClosed: false,
+			details: row.details,
+		}));
+	}
+
+	/** Mark cleanup as started before issuing the first external close command. */
+	beginConsultationClose(id: string): boolean {
+		return this.setConsultationState(id, "closing");
+	}
+
+	/** Persist a cleanup failure while leaving the aggregate recoverable. */
+	recordConsultationCloseFailure(id: string, reason: string): void {
+		this.db
+			.prepare(
+				"UPDATE consultations SET warning = ?, close_result = ?, updated_at = ? WHERE id = ? AND state = 'closing'",
+			)
+			.run(`cleanup failed: ${reason}`, `cleanup failed: ${reason}`, new Date().toISOString(), id);
+	}
+
+	/** Finish cleanup, retaining a precise result for Force-close recovery. */
+	finishConsultationClose(id: string, result?: string, forced = false): void {
+		this.transaction(() => {
+			if (forced) {
+				for (const resource of this.consultationResources(id).filter(
+					(item) => item.owned && !item.confirmedClosed,
+				))
+					this.recordRemainingConsultationResource(
+						id,
+						resource.kind,
+						resource.resourceId,
+						resource.details,
+					);
+			}
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'closed', warning = CASE WHEN warning LIKE 'cleanup failed:%' THEN NULL ELSE warning END, close_result = ?, updated_at = ? WHERE id = ? AND state = 'closing'",
+				)
+				.run(result ?? null, new Date().toISOString(), id);
+		});
+	}
+
+	consultationResources(id: string): ConsultationResource[] {
+		return (
+			this.db
+				.prepare(
+					"SELECT kind, resource_id, owned, confirmed_closed, details FROM consultation_resources WHERE consultation_id = ?",
+				)
+				.all(id) as Array<{
+				kind: string;
+				resource_id: string;
+				owned: number;
+				confirmed_closed: number;
+				details: string;
+			}>
+		).map((row) => ({
+			kind: row.kind,
+			resourceId: row.resource_id,
+			owned: row.owned === 1,
+			confirmedClosed: row.confirmed_closed === 1,
+			details: row.details,
+		}));
+	}
+
+	/** Recovery input is deterministic and never launched automatically. */
+	replacementInput(id: string, limit = 64 * 1024): string {
+		const consultation = this.consultation(id);
+		if (consultation === undefined) return "";
+		const parts = [`Original input:\n${consultation.initialInput}`];
+		const turns = this.consultationTurns(id);
+		const snapshots = this.consultationSnapshots(id);
+		// The first turn is the opening input already included above.
+		for (let index = turns.length - 1; index >= 1; index -= 1) {
+			const turn = turns[index];
+			const snapshot = snapshots.find((item) => item.turnId === turn.id);
+			parts.push(
+				`\nOperator response:\n${turn.input}${snapshot === undefined ? "" : `\nAgent output:\n${snapshot.text}`}`,
+			);
+		}
+		return boundedInput(parts, limit);
+	}
+
+	/** Delete only closed local history, then reduce WAL remnants. */
+	deleteConsultation(id: string): boolean {
+		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+			| { state: ConsultationState }
+			| undefined;
+		if (row?.state !== "closed") return false;
+		this.transaction(() => {
+			this.db.prepare("DELETE FROM consultations WHERE id = ?").run(id);
+		});
+		try {
+			this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+		} catch {}
+		return true;
+	}
+
+	/** Consultations the shared Agent monitor can reconcile. */
+	consultationsByState(states: readonly ConsultationState[]): Consultation[] {
+		const placeholders = states.map(() => "?").join(", ");
+		return (
+			this.db
+				.prepare(`SELECT * FROM consultations WHERE state IN (${placeholders})`)
+				.all(...states) as unknown as ConsultationRow[]
+		).map((row) => this.consultationFromRow(row));
+	}
+
+	/** Update a moved Agent only after its session identity matches uniquely. */
+	updateConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
+		this.db
+			.prepare(
+				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, updated_at = ? WHERE id = ?",
+			)
+			.run(
+				details.paneId,
+				details.tabId ?? null,
+				details.workspaceId ?? null,
+				new Date().toISOString(),
+				id,
+			);
+	}
+
+	/** Mark a settled turn's snapshot when the first read was unavailable. */
+	fillConsultationSnapshot(
+		id: string,
+		output: string,
+		capturedAt = new Date().toISOString(),
+	): boolean {
+		const turn = this.db
+			.prepare(
+				"SELECT id FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL ORDER BY settled_at DESC LIMIT 1",
+			)
+			.get(id) as { id: string } | undefined;
+		if (turn === undefined) return false;
+		const bounded = boundedSnapshot(output);
+		const snapshotId = randomUUID();
+		this.transaction(() => {
+			this.db
+				.prepare(
+					"INSERT INTO consultation_snapshots(id, consultation_id, turn_id, text, captured_at, partial, truncated) VALUES (?, ?, ?, ?, ?, 0, ?)",
+				)
+				.run(snapshotId, id, turn.id, bounded.text, capturedAt, bounded.truncated ? 1 : 0);
+			this.db
+				.prepare(
+					"UPDATE consultation_turns SET snapshot_id = ? WHERE id = ? AND snapshot_id IS NULL",
+				)
+				.run(snapshotId, turn.id);
+		});
+		return true;
+	}
+
+	private consultationFromRow(row: ConsultationRow): Consultation {
+		return {
+			id: row.id,
+			typeName: row.type_name,
+			agentType: row.agent_type,
+			environment: row.environment as EnvironmentKind,
+			model: row.model,
+			thinking: row.thinking,
+			template: row.template,
+			initialInput: row.initial_input,
+			renderedOpeningPrompt: row.rendered_opening_prompt,
+			repository: {
+				identity: row.repository_identity,
+				displayName: row.repository_display_name,
+				cloneUrl: row.repository_clone_url,
+				path: row.repository_path,
+			},
+			state: row.state as ConsultationState,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+			agentName: row.agent_name,
+			paneId: row.pane_id,
+			tabId: row.tab_id,
+			workspaceId: row.workspace_id,
+			sessionId: row.session_id,
+			latestSequence: row.latest_sequence,
+			draft: row.draft,
+			draftUpdatedAt: row.draft_updated_at,
+			draftOld: row.draft_old === 1,
+			failure: row.failure,
+			warning: row.warning,
+			replacementOf: row.replacement_of,
+			closeResult: row.close_result,
+			liveConflictOverride: row.live_conflict_override === 1,
+			attentionAt: row.attention_at,
+			resources: this.consultationResources(row.id),
+		};
+	}
+
 	acquireLease(): void {
 		const owner = randomUUID();
 		const host = os.hostname();
@@ -1090,6 +1928,157 @@ export class FactoryState {
 			throw error;
 		}
 	}
+}
+
+interface ConsultationRow {
+	id: string;
+	type_name: string;
+	agent_type: string;
+	environment: string;
+	model: string;
+	thinking: string;
+	template: string;
+	initial_input: string;
+	rendered_opening_prompt: string;
+	repository_identity: string;
+	repository_display_name: string;
+	repository_clone_url: string;
+	repository_path: string;
+	state: string;
+	created_at: string;
+	updated_at: string;
+	agent_name: string;
+	pane_id: string | null;
+	tab_id: string | null;
+	workspace_id: string | null;
+	session_id: string | null;
+	latest_sequence: number | null;
+	draft: string;
+	draft_updated_at: string | null;
+	draft_old: number;
+	failure: string | null;
+	warning: string | null;
+	replacement_of: string | null;
+	close_result: string | null;
+	live_conflict_override: number;
+	attention_at: string | null;
+}
+
+interface ConsultationTurnRow {
+	id: string;
+	consultation_id: string;
+	input: string;
+	accepted_at: string;
+	sequence_baseline: number | null;
+	settled_at: string | null;
+	settled_status: string | null;
+	snapshot_id: string | null;
+}
+
+interface ConsultationSnapshotRow {
+	id: string;
+	consultation_id: string;
+	turn_id: string | null;
+	text: string;
+	captured_at: string;
+	partial: number;
+	truncated: number;
+}
+
+function turnFromRow(row: ConsultationTurnRow): ConsultationTurn {
+	return {
+		id: row.id,
+		consultationId: row.consultation_id,
+		input: row.input,
+		acceptedAt: row.accepted_at,
+		sequenceBaseline: row.sequence_baseline,
+		settledAt: row.settled_at,
+		settledStatus: row.settled_status,
+		snapshotId: row.snapshot_id,
+	};
+}
+
+function snapshotFromRow(row: ConsultationSnapshotRow): ConsultationSnapshot {
+	return {
+		id: row.id,
+		consultationId: row.consultation_id,
+		turnId: row.turn_id,
+		text: row.text,
+		capturedAt: row.captured_at,
+		partial: row.partial === 1,
+		truncated: row.truncated === 1,
+	};
+}
+
+function compareConsultations(left: Consultation, right: Consultation): number {
+	const group = (state: ConsultationState): number => {
+		switch (state) {
+			case "awaiting-response":
+				return 0;
+			case "missing":
+				return 1;
+			case "failed":
+				return 2;
+			case "working":
+				return 3;
+			case "opening":
+				return 4;
+			case "closing":
+				return 5;
+			case "closed":
+				return 6;
+		}
+	};
+	const leftGroup = group(left.state);
+	const rightGroup = group(right.state);
+	return (
+		leftGroup - rightGroup ||
+		(leftGroup === 0
+			? (left.attentionAt ?? left.updatedAt).localeCompare(right.attentionAt ?? right.updatedAt)
+			: right.updatedAt.localeCompare(left.updatedAt)) ||
+		left.id.localeCompare(right.id)
+	);
+}
+
+const SNAPSHOT_LIMIT = 1024 * 1024;
+const SNAPSHOT_MARKER = "\n[…captured history truncated…]\n";
+
+function boundedSnapshot(value: string): { text: string; truncated: boolean } {
+	if (Buffer.byteLength(value, "utf8") <= SNAPSHOT_LIMIT) return { text: value, truncated: false };
+	const markerBytes = Buffer.byteLength(SNAPSHOT_MARKER, "utf8");
+	return {
+		text:
+			markerBytes >= SNAPSHOT_LIMIT
+				? utf8Prefix(SNAPSHOT_MARKER, SNAPSHOT_LIMIT)
+				: `${SNAPSHOT_MARKER}${utf8Suffix(value, SNAPSHOT_LIMIT - markerBytes)}`,
+		truncated: true,
+	};
+}
+
+function boundedInput(parts: readonly string[], limit: number): string {
+	const full = parts.join("\n");
+	if (Buffer.byteLength(full, "utf8") <= limit) return full;
+	const marker = "\n[recovery context omitted]\n";
+	if (limit <= Buffer.byteLength(marker, "utf8")) return utf8Prefix(marker, limit);
+	return `${utf8Prefix(full, limit - Buffer.byteLength(marker, "utf8"))}${marker}`;
+}
+
+function utf8Prefix(value: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const bytes = Buffer.from(value, "utf8");
+	if (bytes.byteLength <= maxBytes) return value;
+	let prefix = bytes.subarray(0, maxBytes).toString("utf8");
+	while (Buffer.byteLength(prefix, "utf8") > maxBytes) prefix = prefix.slice(0, -1);
+	return prefix;
+}
+
+function utf8Suffix(value: string, maxBytes: number): string {
+	if (maxBytes <= 0) return "";
+	const bytes = Buffer.from(value, "utf8");
+	if (bytes.byteLength <= maxBytes) return value;
+	let suffix = bytes.subarray(bytes.byteLength - maxBytes).toString("utf8");
+	while (Buffer.byteLength(suffix, "utf8") > maxBytes) suffix = suffix.slice(1);
+	return suffix;
 }
 
 function attentionGroup(ticket: Ticket): number {

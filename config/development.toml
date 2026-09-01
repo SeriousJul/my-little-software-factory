@@ -25,6 +25,11 @@ kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
 
+[consultation-types.grill-with-docs]
+agent = "pi"
+environment = "live-worktree"
+template = "/skill:grill-with-docs {input}"
+
 [task-types.implement]
 template = '''
 Implement the following {source-kind}. 
