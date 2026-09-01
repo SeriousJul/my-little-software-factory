@@ -35,7 +35,7 @@ const choice = {
 const config: FactoryConfig = {
 	...DEFAULT_CONFIG,
 	taskTypes: {
-		implement: { template: "implement", autoClose: false },
+		implement: { template: "implement", autoClose: false, thinking: "high" },
 		review: { template: "review", autoClose: true },
 		route: { template: "route", autoClose: true },
 		split: { template: "split", autoClose: true },
@@ -649,11 +649,14 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
-	test("a route keeps the model and thinking the previous handoff ran with", async () => {
+	test("a route starts fresh: the workflow handoff never inherits the previous model or thinking", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		const claim = state.claimHandoff(
 			"github:github.com:I_5",
-			{ ...choice, taskType: "route", model: "opus-4", thinking: "high" },
+			// The previous handoff ran on a model and a thinking that differ
+			// from the target's own default, so the fresh choice cannot be the
+			// inherited one.
+			{ ...choice, taskType: "route", model: "opus-4", thinking: "low" },
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
@@ -680,7 +683,8 @@ describe("the awaiting rule", () => {
 					agentType: "pi",
 					environment: "live-worktree",
 					taskType: "implement",
-					model: "opus-4",
+					model: "",
+					// The target task type's own default, not the inherited one.
 					thinking: "high",
 				},
 			}),

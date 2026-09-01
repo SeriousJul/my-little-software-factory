@@ -583,8 +583,9 @@ export class ObservationCoordinator {
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
-		// The same choices the previous handoff ran with: the auto route
-		// matches the operator's model and thinking, not the defaults.
+		// A Workflow Handoff never inherits the previous Handoff's Model or
+		// Thinking: the model starts empty, and the thinking starts on the
+		// target task type's own default.
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
@@ -592,8 +593,8 @@ export class ObservationCoordinator {
 				edge.agent ?? config.defaultAgent,
 				edge.environment ?? config.defaultEnvironment,
 				edge.to[0],
-				ticket.model,
-				ticket.thinking,
+				"",
+				config.taskTypes[edge.to[0]]?.thinking ?? "",
 			),
 			previousMessage,
 		});
