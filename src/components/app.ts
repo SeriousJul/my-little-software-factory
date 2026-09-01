@@ -49,11 +49,11 @@ import { type CommandRunner, createChildProcessRunner, errorMessage } from "../r
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import { ActionPanel, type ActionRow } from "./action-panel.ts";
-import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
+import { usePaneGeometry } from "./geometry.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-import { detailLines, TicketDetail } from "./ticket-detail.ts";
+import { TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 
 type Pane = "list" | "detail";
@@ -76,7 +76,11 @@ export type AppKey =
 	| "up"
 	| "down"
 	| "left"
-	| "right";
+	| "right"
+	| "pageup"
+	| "pagedown"
+	| "home"
+	| "end";
 
 export interface AppProps {
 	config?: FactoryConfig;
@@ -137,7 +141,7 @@ export function App({
 	const configRef = useRef(config);
 	configRef.current = config;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
-	const [detailScroll, setDetailScroll] = useState(0);
+	const detailRef = useRef<TicketDetailHandle | null>(null);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
@@ -197,11 +201,8 @@ export function App({
 				}`;
 	const reservedRows =
 		(status === null ? 0 : 1) + (healthLine === "" ? 0 : 1) + (modeLine === "" ? 0 : 1);
-	const detailGeometry = usePaneGeometry("detail", reservedRows);
+	const listGeometry = usePaneGeometry("list", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
-	const lines = detailLines(selectedTicket, detailGeometry.usableCols, config.maxHandoffsPerTicket);
-	const maxScroll = maxScrollOf(lines.length, detailGeometry.visibleRows);
-	const scroll = Math.min(detailScroll, maxScroll);
 
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
@@ -218,8 +219,6 @@ export function App({
 		setTickets(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
-		if (selectedId === undefined || !next.some((ticket) => ticket.identity === selectedId))
-			setDetailScroll(0);
 	}, [state]);
 
 	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
@@ -762,6 +761,18 @@ export function App({
 			case "up":
 				moveVertical(-1);
 				break;
+			case "pagedown":
+				movePage(1);
+				break;
+			case "pageup":
+				movePage(-1);
+				break;
+			case "home":
+				moveEdge("start");
+				break;
+			case "end":
+				moveEdge("end");
+				break;
 			case "return": {
 				const ticket = ticketsRef.current[selectedIndexRef.current];
 				if (ticket === undefined) break;
@@ -876,16 +887,33 @@ export function App({
 		};
 	}, [state, initialTickets, pollIntervalMs, replaceTickets, commandRunner, onReady]);
 
+	function selectTicket(index: number) {
+		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
+		if (next === selectedIndexRef.current) return;
+		selectedIndexRef.current = next;
+		setSelectedIndex(next);
+	}
+
+	function moveList(delta: number) {
+		selectTicket(selectedIndexRef.current + delta);
+	}
+
 	function moveVertical(delta: number) {
-		if (focusedPane === "detail")
-			setDetailScroll((current) => clamp(current + delta, 0, maxScroll));
-		else {
-			setSelectedIndex((index) => {
-				const next = clamp(index + delta, 0, ticketsRef.current.length - 1);
-				selectedIndexRef.current = next;
-				return next;
-			});
-			setDetailScroll(0);
+		if (focusedPane === "detail") detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
+		else moveList(delta);
+	}
+
+	function movePage(direction: 1 | -1) {
+		if (focusedPane === "detail") detailRef.current?.movePage(direction === 1 ? "down" : "up");
+		else moveList(direction * listGeometry.visibleRows);
+	}
+
+	function moveEdge(edge: "start" | "end") {
+		if (focusedPane === "detail") {
+			if (edge === "start") detailRef.current?.toStart();
+			else detailRef.current?.toEnd();
+		} else {
+			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 		}
 	}
 
@@ -925,12 +953,20 @@ export function App({
 				emptyMessage,
 				markerOf,
 				limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+				active: override === null && panel === null,
+				onFocus: () => setFocusedPane("list"),
+				onSelect: selectTicket,
+				onMove: moveList,
 			}),
 			createElement(TicketDetail, {
-				lines,
-				visibleRows: detailGeometry.visibleRows,
-				scroll,
+				ref: detailRef,
+				ticket: selectedTicket,
 				focused: focusedPane === "detail",
+				active: override === null && panel === null,
+				reservedRows,
+				handoffLimit: config.maxHandoffsPerTicket,
+				scroll: config.scroll,
+				onFocus: () => setFocusedPane("detail"),
 			}),
 		),
 		healthLine !== "" &&

@@ -98,6 +98,7 @@ describe("loadConfigFile", () => {
 		expect(DEFAULT_CONFIG.agentPollIntervalSeconds).toBe(5);
 		expect(DEFAULT_CONFIG.completionMessageLines).toBe(200);
 		expect(DEFAULT_CONFIG.maxHandoffsPerTicket).toBe(10);
+		expect(DEFAULT_CONFIG.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
 		expect(DEFAULT_CONFIG.workflows).toEqual([]);
 		for (const task of Object.values(DEFAULT_CONFIG.taskTypes)) {
 			expect(task.autoClose).toBe(false);
@@ -311,6 +312,7 @@ describe("validateConfig", () => {
 			// Separate development state, resolved relative to the config file
 			// and ignored by git.
 			expect(config.stateFile).toBe(".factory-development.sqlite");
+			expect(config.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
 			expect(config.sources).toEqual([
 				{
 					name: "factory-issues",
@@ -781,6 +783,7 @@ describe("auto-handoff config keys", () => {
 		expect(config.agentPollIntervalSeconds).toBe(5);
 		expect(config.completionMessageLines).toBe(200);
 		expect(config.maxHandoffsPerTicket).toBe(10);
+		expect(config.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
 		expect(config.workflows).toEqual([]);
 		expect(config.taskTypes.implement.autoClose).toBe(false);
 	});
@@ -893,6 +896,43 @@ describe("auto-handoff config keys", () => {
 		data["task-types"].implement.template = "then: {previous-message}";
 		const config = validateConfig(data);
 		expect(config.taskTypes.implement.template).toContain("{previous-message}");
+	});
+});
+
+describe("detail scroll configuration", () => {
+	const base = () => ({
+		"default-agent": "pi",
+		"default-environment": "live-worktree",
+		"default-task-type": "implement",
+		agents: { pi: { kind: "pi" } },
+		"task-types": { implement: { template: "x" } },
+	});
+
+	test("uses shipped defaults for an absent or partial scroll table", () => {
+		expect(validateConfig(base()).scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
+		expect(validateConfig({ ...base(), scroll: { speed: 3 } }).scroll).toEqual({
+			speed: 3,
+			acceleration: 0.8,
+			maximumSpeed: 6,
+		});
+	});
+
+	test("validates strict scroll settings and keeps them through TOML", () => {
+		const config = validateConfig({
+			...base(),
+			scroll: { speed: 2, acceleration: 1.5, "maximum-speed": 9 },
+		});
+		expect(config.scroll).toEqual({ speed: 2, acceleration: 1.5, maximumSpeed: 9 });
+		expect(validateConfig(parseToml(configToToml(config))).scroll).toEqual(config.scroll);
+		expectConfigError({ ...base(), scroll: { speed: 0 } }, "scroll.speed");
+		expectConfigError({ ...base(), scroll: { speed: 1.5 } }, "scroll.speed");
+		expectConfigError({ ...base(), scroll: { acceleration: -1 } }, "scroll.acceleration");
+		expectConfigError(
+			{ ...base(), scroll: { acceleration: Number.POSITIVE_INFINITY } },
+			"scroll.acceleration",
+		);
+		expectConfigError({ ...base(), scroll: { speed: 4, "maximum-speed": 3 } }, "at least");
+		expectConfigError({ ...base(), scroll: { typo: 1 } }, 'scroll: unknown key "typo"');
 	});
 });
 

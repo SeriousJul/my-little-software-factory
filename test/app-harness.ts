@@ -237,7 +237,20 @@ export async function press(
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<string> {
-	setup.mockInput.pressKey(key);
+	// Mock keys accept named Home and End codes, but Page keys use their
+	// standard terminal escape sequences. Sending their words would type
+	// letters into the app instead of exercising the production parser.
+	const input: string =
+		key === "pageup"
+			? "\u001b[5~"
+			: key === "pagedown"
+				? "\u001b[6~"
+				: key === "home"
+					? "HOME"
+					: key === "end"
+						? "END"
+						: key;
+	setup.mockInput.pressKey(input);
 	return awaitFrame(setup, predicate, what);
 }
 
@@ -250,6 +263,31 @@ export async function pressArrow(
 ): Promise<string> {
 	setup.mockInput.pressArrow(direction);
 	return awaitFrame(setup, predicate, what);
+}
+
+/** Send production-format mouse input through OpenTUI parsing and hit testing. */
+export async function mouseClick(setup: Setup, x: number, y: number): Promise<void> {
+	await setup.mockMouse.click(x, y);
+}
+
+/** Send one terminal wheel or trackpad event through real hit testing. */
+export async function mouseWheel(
+	setup: Setup,
+	x: number,
+	y: number,
+	direction: "up" | "down" | "left" | "right",
+	shift = false,
+): Promise<void> {
+	await setup.mockMouse.scroll(x, y, direction, { modifiers: shift ? { shift: true } : {} });
+}
+
+/** Drag through parsed mouse input, including the native scrollbar hit path. */
+export async function mouseDrag(
+	setup: Setup,
+	from: readonly [x: number, y: number],
+	to: readonly [x: number, y: number],
+): Promise<void> {
+	await setup.mockMouse.drag(from[0], from[1], to[0], to[1]);
 }
 
 /** Press `l` and wait for the detail pane to take focus. */

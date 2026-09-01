@@ -45,8 +45,10 @@ ends at close, ADR 0006: the control plane polls herdr).
 
 | Key              | What it does                                                            |
 | ---------------- | ----------------------------------------------------------------------- |
-| `j` / `k`        | Move the selection, or scroll the detail, depending on the focused pane |
-| `Up` / `Down`    | Move the selection, or scroll the detail, depending on the focused pane |
+| `j` / `k`        | Move the selection, or move the detail by its configured row speed      |
+| `Up` / `Down`    | Move the selection, or move the detail by its configured row speed      |
+| `PageUp` / `PageDown` | Select one list page, or move the detail one viewport with one shared row |
+| `Home` / `End`   | Select the first or last Ticket, or move the detail to its start or end |
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
 | `Enter`          | Hand the selected open ticket off, or open the decision panel on an awaiting ticket, or the missing panel on a ticket whose agent is gone, or focus the agent of a blocked ticket |
@@ -162,9 +164,22 @@ The panes share one focus.
 Switching focus never moves the selection.
 
 The vertical keys act on the focused pane.
-With the list focused, they move the selection.
-With the detail focused, they scroll the detail, and a new selection starts
+With the list focused, they move the selection. Page keys move by one visible
+list page, and Home and End select the list edges. With the detail focused,
+the row keys move at the configured speed, PageUp and PageDown retain one row
+of context, and Home and End move to the detail edges. A new selection starts
 the detail at the top.
+
+The detail is a native OpenTUI viewport. Its complete content stays mounted,
+so wheel bursts translate one stable surface instead of rebuilding visible
+rows. When the content overflows, its right inner column has a proportional
+scrollbar. The gutter is always reserved when width permits, so wrapped text
+does not reflow as the bar appears. Click or drag the scrollbar, or use the
+wheel or trackpad over any part of the detail. Fast vertical wheel events
+accelerate to the configured limit. Horizontal and Shift-wheel input is
+ignored. A click or wheel action focuses its pane. Clicking a visible Ticket
+selects it, and a list wheel event selects one adjacent Ticket.
+
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.
 The repository drops before the title does, and the task type badge is
@@ -308,8 +323,14 @@ The config carries the defaults a handoff starts from (`default-agent`,
 (`max-parallel-agents`, default `2`), the herdr poll interval
 (`agent-poll-interval-seconds`, default `5`), the completion message line
 cap (`completion-message-lines`, default `200`), the per-ticket handoff limit
-(`max-handoffs-per-ticket`, default `10`), the workflow edges (`workflows`),
-agent types, task types, repository mappings, ticket sources, ordered task
+(`max-handoffs-per-ticket`, default `10`), and detail scroll settings. The
+optional `[scroll]` table has `speed` (positive whole number, default `1`),
+`acceleration` (finite number of 0 or more, default `0.8`), and
+`maximum-speed` (positive whole number, default `6`). `maximum-speed` must be
+at least `speed`. Missing scroll values use these defaults. Set acceleration
+to `0`, or maximum speed equal to speed, for linear wheel movement. The file
+also carries the workflow edges (`workflows`), agent types, task types,
+repository mappings, ticket sources, ordered task
 rules, and an optional `state-file`. A source has a unique name, a GitHub adapter kind
 (`github-issues` or `github-pull-requests`), repositories, and a positive
 `refresh-interval-seconds`. Sources can use normal `gh` authentication, a
