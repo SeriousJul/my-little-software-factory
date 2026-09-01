@@ -3,9 +3,8 @@
  *
  * A control is not only a key. It is an action, its aliases, its scope, its
  * Action bar priority, and the reason it is unavailable in the current
- * state. The shell and the utility overlays use this catalogue for both
- * dispatch and display so the operator never sees a binding the app does
- * not accept.
+ * state. The shell and overlays use this catalogue for dispatch and display,
+ * so the operator never sees a binding the app does not accept.
  */
 import type { Ticket } from "../domain/ticket.ts";
 
@@ -14,6 +13,7 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "override-list"
 	| "override-text"
+	| "action-panel"
 	| "key-guide"
 	| "message-view";
 
@@ -23,6 +23,7 @@ export type ControlScope =
 	| "ticket-list"
 	| "ticket-detail"
 	| "override"
+	| "action-panel"
 	| "utility";
 export type ControlKey =
 	| "up"
@@ -62,8 +63,6 @@ export interface ControlContext {
 	refreshingSourceCount: number;
 	handoffActive: boolean;
 	messageTruncated: boolean;
-	/** A text override row owns printable aliases such as `?` and `m`. */
-	textEntry: boolean;
 }
 
 export interface ControlDefinition {
@@ -84,22 +83,8 @@ export interface ControlDefinition {
 const available = (): ControlAvailability => ({ available: true });
 const unavailable = (reason: string): ControlAvailability => ({ available: false, reason });
 
-const canHandoff = (context: ControlContext): ControlAvailability => {
-	if (context.handoffActive) return unavailable("a Handoff is active");
-	// Reaching an override panel already proves that its source Ticket passed
-	// the base eligibility check. The panel's Enter confirms its edited choice.
-	if (context.mode === "override-list" || context.mode === "override-text") return available();
-	const ticket = context.selectedTicket;
-	if (ticket === undefined) return unavailable("no Ticket is selected");
-	if (ticket.state !== "open") return unavailable("only an open Ticket can be handed off");
-	if (ticket.handoffRecoveryRequired)
-		return unavailable("Handoff recovery is required before another handoff");
-	if (!ticket.actionable)
-		return unavailable("Ticket is not actionable because source data is stale, removed, or absent");
-	return available();
-};
-
-const canOverride = (context: ControlContext): ControlAvailability => {
+/** The Handoff and Override eligibility rules, with one source for each reason. */
+const handoffEligibility = (context: ControlContext): ControlAvailability => {
 	if (context.handoffActive) return unavailable("a Handoff is active");
 	const ticket = context.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
@@ -132,6 +117,15 @@ const message = (context: ControlContext): ControlAvailability =>
 
 const baseModes = ["ticket-list", "ticket-detail"] as const;
 const overrideModes = ["override-list", "override-text"] as const;
+const allModes: readonly InteractionMode[] = [
+	"ticket-list",
+	"ticket-detail",
+	"override-list",
+	"override-text",
+	"action-panel",
+	"key-guide",
+	"message-view",
+];
 
 /** The exhaustive fixed control definitions. */
 export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
@@ -221,7 +215,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 70,
 		modes: [...baseModes, ...overrideModes],
-		availability: canHandoff,
+		availability: handoffEligibility,
 	},
 	{
 		id: "override",
@@ -232,7 +226,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 55,
 		modes: [...baseModes],
-		availability: canOverride,
+		availability: handoffEligibility,
 	},
 	{
 		id: "refresh",
@@ -259,12 +253,12 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "help",
 		label: "Help",
-		keys: ["?", "f1"],
-		keyLabel: "?/F1",
+		keys: ["f1", "?"],
+		keyLabel: "F1/?",
 		scope: "global",
 		actionBar: true,
 		priority: 1000,
-		modes: [...baseModes, "override-list", "override-text"],
+		modes: [...baseModes, ...overrideModes, "action-panel", "key-guide", "message-view"],
 		availability: available,
 	},
 	{
@@ -275,7 +269,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "global",
 		actionBar: true,
 		priority: 900,
-		modes: [...baseModes, ...overrideModes],
+		modes: [...baseModes, ...overrideModes, "action-panel", "key-guide", "message-view"],
 		availability: message,
 	},
 	{
@@ -308,14 +302,51 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "global",
 		actionBar: false,
 		priority: 1,
-		modes: [
-			"ticket-list",
-			"ticket-detail",
-			"override-list",
-			"override-text",
-			"key-guide",
-			"message-view",
-		],
+		modes: allModes,
+		availability: available,
+	},
+	{
+		id: "select-action",
+		label: "Select action",
+		keys: ["up", "down"],
+		keyLabel: "↑↓",
+		scope: "action-panel",
+		actionBar: false,
+		priority: 1,
+		modes: ["action-panel"],
+		availability: available,
+	},
+	{
+		id: "scroll-action-message",
+		label: "Scroll message",
+		keys: ["j", "k"],
+		keyLabel: "j/k",
+		scope: "action-panel",
+		actionBar: false,
+		priority: 1,
+		modes: ["action-panel"],
+		availability: available,
+	},
+	{
+		id: "confirm-action",
+		label: "Confirm action",
+		keys: ["return"],
+		keyLabel: "Enter",
+		scope: "action-panel",
+		actionBar: false,
+		priority: 1,
+		modes: ["action-panel"],
+		availability: available,
+	},
+	{
+		id: "cancel-action",
+		label: "Cancel",
+		keys: ["escape"],
+		keyLabel: "Esc",
+		scope: "action-panel",
+		actionBar: false,
+		priority: 1,
+		modes: ["action-panel"],
 		availability: available,
 	},
 	{
@@ -368,6 +399,12 @@ export function controlsForMode(mode: InteractionMode): ControlDefinition[] {
 	return CONTROL_DEFINITIONS.filter((control) => control.modes.includes(mode));
 }
 
+export function controlById(id: string): ControlDefinition {
+	const control = CONTROL_DEFINITIONS.find((candidate) => candidate.id === id);
+	if (control === undefined) throw new Error(`unknown control: ${id}`);
+	return control;
+}
+
 export function actionBarControls(
 	mode: InteractionMode,
 	context: ControlContext,
@@ -376,18 +413,51 @@ export function actionBarControls(
 		(control) =>
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
+			isReachableInMode(mode, control) &&
 			(control.id !== "message" ? true : control.availability(context).available),
 	);
+}
+
+/**
+ * Whether any alias of the control still resolves to it in this mode.
+ *
+ * Derived from the same dispatch the shell uses, so the bar never shows a
+ * hint whose keys do something else: in the Key guide, F1 and ? close the
+ * guide, and in the Message view F2 closes the view.
+ */
+function isReachableInMode(mode: InteractionMode, control: ControlDefinition): boolean {
+	if (control.keys.length === 0) return true;
+	return control.keys.some((key) => {
+		const event = key === "ctrl+c" ? { name: "c", ctrl: true } : { name: key };
+		return controlForKey(mode, event)?.id === control.id;
+	});
 }
 
 /** Find a control accepted by this mode for one OpenTUI key event. */
 export function controlForKey(
 	mode: InteractionMode,
 	key: { name: string; ctrl?: boolean; meta?: boolean },
-	_context: ControlContext,
 ): ControlDefinition | undefined {
 	const name = key.ctrl && key.name === "c" ? "ctrl+c" : key.name;
-	return controlsForMode(mode).find((control) => control.keys.includes(name as ControlKey));
+	// Utility close controls take precedence over global aliases that share
+	// their keys. The catalogue still owns both meanings.
+	if (mode === "key-guide" && (name === "escape" || name === "f1" || name === "?"))
+		return controlById("guide-close");
+	if (mode === "message-view" && (name === "escape" || name === "f2"))
+		return controlById("message-close");
+	return controlsForMode(mode).find(
+		(control) =>
+			control.keys.includes(name as ControlKey) &&
+			// `m` opens Message view only from base panes. F2 is the alias in
+			// every interaction mode, so text input keeps its printable `m`.
+			!(
+				(control.id === "message" &&
+					name === "m" &&
+					mode !== "ticket-list" &&
+					mode !== "ticket-detail") ||
+				(control.id === "help" && name === "?" && mode === "override-text")
+			),
+	);
 }
 
 export function availabilityFor(
@@ -401,34 +471,27 @@ export function availabilityFor(
 export function guideControls(
 	mode: InteractionMode,
 ): Array<{ group: string; control: ControlDefinition }> {
-	// "Current" means the contextual controls shown by the Action bar. Less
-	// common controls such as Quit and auto-handoff remain in their scope
-	// sections even though they are accepted in a base mode.
+	// The current section shows the controls this mode actually dispatches.
+	// A shadowed alias (F1 and ? in the guide close it) belongs to the
+	// control that owns the key in this mode, not the one it hides.
 	const current = controlsForMode(mode).filter(
-		(control) => control.actionBar && control.id !== "emergency-exit",
+		(control) =>
+			control.actionBar && control.id !== "emergency-exit" && isReachableInMode(mode, control),
 	);
 	const seen = new Set(current.map((control) => control.id));
-	const result = current.map((control) => ({ group: "Current interaction mode", control }));
-	for (const control of CONTROL_DEFINITIONS) {
-		if (seen.has(control.id)) continue;
-		if (control.scope === "global") {
-			result.push({ group: "Global controls", control });
-			seen.add(control.id);
-		}
-	}
-	for (const control of CONTROL_DEFINITIONS) {
-		if (seen.has(control.id)) continue;
-		if (control.scope === "control-plane") {
-			result.push({ group: "Control plane controls", control });
-			seen.add(control.id);
-		}
-	}
-	for (const control of CONTROL_DEFINITIONS) {
-		if (seen.has(control.id)) continue;
-		result.push({ group: "Other interaction modes", control });
-		seen.add(control.id);
-	}
-	return result;
+	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
+		CONTROL_DEFINITIONS.filter((control) => !seen.has(control.id) && predicate(control)).map(
+			(control) => {
+				seen.add(control.id);
+				return { group, control };
+			},
+		);
+	return [
+		...current.map((control) => ({ group: "Current interaction mode", control })),
+		...append("Global controls", (control) => control.scope === "global"),
+		...append("Control plane controls", (control) => control.scope === "control-plane"),
+		...append("Other interaction modes", () => true),
+	];
 }
 
 export function modeTitle(mode: InteractionMode): string {
@@ -441,6 +504,8 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Override list row";
 		case "override-text":
 			return "Override text row";
+		case "action-panel":
+			return "Action panel";
 		case "key-guide":
 			return "Key guide";
 		case "message-view":
@@ -448,25 +513,31 @@ export function modeTitle(mode: InteractionMode): string {
 	}
 }
 
-export function keyLabelFor(mode: InteractionMode, control: ControlDefinition): string {
+function displayKeyLabel(
+	mode: InteractionMode,
+	control: ControlDefinition,
+	includeAllAliases: boolean,
+): string {
 	if (control.id === "move-list" && mode === "override-text") return "↑↓";
-	if (control.id === "help" && (mode === "ticket-list" || mode === "ticket-detail")) return "?";
-	if (control.id === "help" && mode === "override-list") return "F1/?";
-	if (control.id === "help" && mode === "override-text") return "F1";
-	if (control.id === "message" && mode === "ticket-list") return "m";
-	if (control.id === "message" && mode === "ticket-detail") return "m";
-	if (control.id === "message" && (mode === "override-list" || mode === "override-text"))
+	if (control.id === "help") {
+		if (mode === "override-text") return "F1";
+		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
+		if (mode === "ticket-list" || mode === "ticket-detail") return includeAllAliases ? "F1/?" : "?";
+	}
+	if (control.id === "message") {
+		if (mode === "ticket-list" || mode === "ticket-detail") return includeAllAliases ? "m/F2" : "m";
 		return "F2";
+	}
 	return control.keyLabel;
 }
 
-/** The key's printable text can be handled by an override text row. */
+export function keyLabelFor(mode: InteractionMode, control: ControlDefinition): string {
+	return displayKeyLabel(mode, control, false);
+}
+
+/** The Key guide shows all aliases which are valid in its source mode. */
 export function guideKeyLabel(mode: InteractionMode, control: ControlDefinition): string {
-	if (control.id === "move-list" && mode === "override-text") return "↑↓";
-	if (control.id === "help" && mode === "override-text") return "F1";
-	if (control.id === "message" && (mode === "override-list" || mode === "override-text"))
-		return "F2";
-	return control.keyLabel;
+	return displayKeyLabel(mode, control, true);
 }
 
 export function isPrintableKey(name: string): boolean {

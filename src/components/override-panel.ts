@@ -30,7 +30,13 @@ import { type ReactElement, useRef, useState } from "react";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { ActionBar } from "./action-bar.ts";
-import { contextFor, isPrintableKey } from "./controls.ts";
+import {
+	availabilityFor,
+	type ControlContext,
+	contextFor,
+	controlForKey,
+	isPrintableKey,
+} from "./controls.ts";
 import { padToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -52,11 +58,13 @@ interface OverridePanelProps {
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
+	/** The base control facts, preserved when this overlay owns input. */
+	context: ControlContext;
+	/** False while a Key guide or Message view is above this panel. */
+	inputActive?: boolean;
 	onHelp?: (mode: "override-list" | "override-text") => void;
 	onMessage?: (mode: "override-list" | "override-text") => void;
-	/** Whether a full Message is available through F2. */
-	messageTruncated?: boolean;
-	handoffActive?: boolean;
+	onEmergencyExit: () => void;
 }
 
 type ListKey = "agentType" | "environment" | "taskType";
@@ -85,9 +93,10 @@ const CHROME = 4;
  * The panel geometry sized to the terminal.
  *
  * The modal takes what the terminal holds. The value column shrinks first,
- * then the label column, then the marker. The hint row drops when its text
- * no longer fits the inner width, and the rows drop from the last when the
- * height cannot hold them all. The row never wraps.
+ * then the label column, then the marker. The rows drop from the last when
+ * the height cannot hold them all. The row never wraps. The shared Action
+ * bar sits outside the modal at the terminal bottom, so it never alters
+ * these columns.
  */
 interface PanelGeometry {
 	markerWidth: number;
@@ -127,10 +136,11 @@ export function OverridePanel({
 	initial,
 	onConfirm,
 	onCancel,
+	context,
+	inputActive = true,
 	onHelp,
 	onMessage,
-	messageTruncated = false,
-	handoffActive = false,
+	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const geometry = panelGeometry(terminalWidth, terminalHeight);
@@ -224,28 +234,16 @@ export function OverridePanel({
 	};
 
 	useKeyboard((key) => {
-		if (key.ctrl || key.meta) {
-			return;
-		}
+		if (!inputActive || key.meta) return;
 		const target = cursorRow();
 		const interactionMode = target.kind === "text" ? "override-text" : "override-list";
-		// Quit is a base-pane control only. It must not become text in an
-		// override editor, either.
-		if (key.name === "q") return;
-		if (key.name === "f1") {
-			onHelp?.(interactionMode);
+		const control = controlForKey(interactionMode, key);
+		if (control?.id === "emergency-exit") {
+			onEmergencyExit();
 			return;
 		}
-		if (key.name === "f2" && messageTruncated) {
-			onMessage?.(interactionMode);
-			return;
-		}
-		if (key.name === "?" && target.kind !== "text") {
-			onHelp?.(interactionMode);
-			return;
-		}
-		// A selected text row owns j, k, h, and l: they type into it. The
-		// arrows keep their movement, so the row can always be left.
+		// A selected text row owns j, k, h, and l. The arrows still move,
+		// so a text row can always be left.
 		if (
 			target.kind === "text" &&
 			(key.name === "j" || key.name === "k" || key.name === "h" || key.name === "l")
@@ -253,30 +251,33 @@ export function OverridePanel({
 			typeText(key.name);
 			return;
 		}
-		switch (key.name) {
-			case "escape":
+		if (control === undefined) {
+			// A printable character goes into the selected free-text row. Any
+			// script is valid text; named and control keys are not.
+			if (isPrintableKey(key.name)) typeText(key.name);
+			return;
+		}
+		if (!availabilityFor(control, contextFor(interactionMode, context)).available) return;
+		switch (control.id) {
+			case "help":
+				onHelp?.(interactionMode);
+				return;
+			case "message":
+				onMessage?.(interactionMode);
+				return;
+			case "cancel":
 				onCancel();
-				break;
-			case "return":
+				return;
+			case "handoff":
 				onConfirm(choiceRef.current);
-				break;
-			case "j":
-			case "down":
-				move(1);
-				break;
-			case "k":
-			case "up":
-				move(-1);
-				break;
-			case "h":
-			case "left":
-				cycle(-1);
-				break;
-			case "l":
-			case "right":
-				cycle(1);
-				break;
-			case "backspace":
+				return;
+			case "move-list":
+				move(key.name === "up" || key.name === "k" ? -1 : 1);
+				return;
+			case "change-override":
+				cycle(key.name === "left" || key.name === "h" ? -1 : 1);
+				return;
+			case "delete-override":
 				if (target.kind === "text" && target.key === "thinking") {
 					thinkingTouchedRef.current = true;
 				}
@@ -285,15 +286,9 @@ export function OverridePanel({
 						? { ...current, [target.key]: current[target.key].slice(0, -1) }
 						: current,
 				);
-				break;
+				return;
 			default:
-				// A printable character goes into the selected free-text row.
-				// Any script is accepted, not only the ASCII range: a model
-				// name in another script is still a model name. Named keys
-				// carry a name of several characters, and a control character
-				// is never printable.
-				if (isPrintableKey(key.name)) typeText(key.name);
-				break;
+				return;
 		}
 	});
 
@@ -332,18 +327,7 @@ export function OverridePanel({
 		),
 		createElement(ActionBar, {
 			mode: row.kind === "text" ? "override-text" : "override-list",
-			context: contextFor(row.kind === "text" ? "override-text" : "override-list", {
-				tickets: [],
-				selectedTicket: undefined,
-				selectedIndex: cursor,
-				listCanMove: true,
-				detailCanScroll: false,
-				sourceCount: 0,
-				refreshingSourceCount: 0,
-				handoffActive,
-				messageTruncated,
-				textEntry: row.kind === "text",
-			}),
+			context: contextFor(row.kind === "text" ? "override-text" : "override-list", context),
 			overlay: true,
 		}),
 	);

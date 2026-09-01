@@ -171,14 +171,15 @@ describe("the control plane", () => {
 			// l moves the focus to the detail pane.
 			frame = await focusDetail(setup);
 
-			// j with the detail focused scrolls the detail, it does not
-			// move the selection. At this size the detail does not
-			// overflow, so the frame does not change and the marker stays
-			// on the first ticket.
-			const before = setup.captureCharFrame();
+			// j with the detail focused cannot scroll at this size. The
+			// catalogue reports its unavailable reason on the Message line;
+			// it does not move the selected Ticket.
 			setup.mockInput.pressKey("j");
-			const after = await settle(setup);
-			expect(after).toBe(before);
+			const after = await awaitFrame(
+				setup,
+				(frame) => frame.includes("the Ticket detail has nowhere to scroll"),
+				"the unavailable Scroll reason",
+			);
 			expect(markerRowOf(after)).toBe(2);
 
 			// h moves the focus back to the list pane; the selection is
@@ -249,7 +250,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(back)).toBe(2);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -287,7 +288,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(atBottom)).toBe(2);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -346,7 +347,7 @@ describe("the control plane", () => {
 				expect(rows3.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
 			},
 			WIDTH,
-			6,
+			8,
 		);
 	});
 
@@ -466,7 +467,7 @@ describe("the control plane", () => {
 				// box on 37-74. At an odd width a "50%" list would take 38
 				// columns, and the shared geometry would then lay text one
 				// cell off the rendered box.
-				for (const row of rows.slice(1, -1)) {
+				for (const row of rows.slice(1, -3)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -738,7 +739,7 @@ describe("the control plane", () => {
 				expect(detailPaneText(frame, 60)).toContain("Handoff task type: implement");
 			},
 			60,
-			12,
+			14,
 		);
 	});
 

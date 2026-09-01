@@ -55,9 +55,7 @@ export function packActionBar(
 			keyLabel: keyLabelFor(context.mode, control),
 			availability: availabilityFor(control, context),
 		}));
-	const help = entries.find(
-		(entry) => entry.control.scope === "global" && entry.control.label === "Help",
-	);
+	const help = entries.find((entry) => entry.control.id === "help");
 	const candidates = entries.filter((entry) => entry !== help);
 	let range = rangeIndicator;
 	const helpText = help === undefined ? "" : `${help.keyLabel} ${help.control.label}`;
@@ -84,11 +82,14 @@ export function packActionBar(
 	// At a very narrow width keep the key of Help even when its full hint does
 	// not fit. This is the last discoverable control on a broken-size frame.
 	if (help !== undefined && helpWidth > width) {
-		return {
-			left: selected,
-			help: { ...help, keyLabel: truncateToWidth(help.keyLabel, Math.max(1, width)) },
-			range,
-		};
+		// Never show part of a multi-cell binding. A partial `F1` as `F` is
+		// ambiguous. Where `?` is a valid Help alias, it is the one-cell form.
+		const keyLabel = help.keyLabel.includes("?")
+			? "?"
+			: width >= widthOf(help.keyLabel)
+				? help.keyLabel
+				: "";
+		return { left: selected, help: keyLabel === "" ? undefined : { ...help, keyLabel }, range };
 	}
 	return { left: selected, help, range };
 }
@@ -97,25 +98,20 @@ export function ActionBar({ mode, context, rangeIndicator, overlay, compactHelp 
 	const { width } = useTerminalDimensions();
 	const controls = actionBarControls(mode, context);
 	const packed = compactHelp
-		? {
-				left: [],
-				help: controls.find((control) => control.label === "Help")
-					? {
-							control: controls.find((control) => control.label === "Help") as ControlDefinition,
-							keyLabel: keyLabelFor(
-								mode,
-								controls.find((control) => control.label === "Help") as ControlDefinition,
-							),
-							availability: availableResult(),
-						}
-					: undefined,
-				range: undefined,
-			}
+		? compactHelpBar(mode, controls)
 		: packActionBar(controls, context, width, rangeIndicator);
 	const help = packed.help;
 	if (compactHelp) {
-		const compactText = `${help?.keyLabel ?? "?"} Help`;
-		const text = widthOf(compactText) <= width ? compactText : (help?.keyLabel ?? "?");
+		const compactKey = help?.keyLabel ?? "?";
+		const compactText = `${compactKey} Help`;
+		const text =
+			widthOf(compactText) <= width
+				? compactText
+				: widthOf(compactKey) <= width
+					? compactKey
+					: compactKey.includes("?")
+						? "?"
+						: "";
 		return createElement(
 			"text",
 			{
@@ -143,7 +139,10 @@ export function ActionBar({ mode, context, rangeIndicator, overlay, compactHelp 
 	for (let i = 0; i < packed.left.length; i += 1) {
 		if (i > 0) children.push(createElement("span", { key: `gap-${i}` }, " ".repeat(GAP)));
 		children.push(...hintSpans(packed.left[i], `hint-${i}`));
-		if (packed.range !== undefined && packed.left[i].control.label === "Scroll") {
+		if (
+			packed.range !== undefined &&
+			["scroll-detail", "guide-scroll", "message-scroll"].includes(packed.left[i].control.id)
+		) {
 			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
 			children.push(createElement("span", { key: "range", fg: COLORS.dim }, packed.range));
 			rangePlaced = true;
@@ -171,6 +170,18 @@ export function ActionBar({ mode, context, rangeIndicator, overlay, compactHelp 
 		},
 		...children,
 	);
+}
+
+function compactHelpBar(mode: InteractionMode, controls: readonly ControlDefinition[]): PackedBar {
+	const control = controls.find((candidate) => candidate.id === "help");
+	return {
+		left: [],
+		help:
+			control === undefined
+				? undefined
+				: { control, keyLabel: keyLabelFor(mode, control), availability: availableResult() },
+		range: undefined,
+	};
 }
 
 function hintSpans(entry: PackedControl, key: string): ReactElement[] {

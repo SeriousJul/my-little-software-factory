@@ -16,6 +16,7 @@ import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/reac
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
+import { availabilityFor, type ControlContext, contextFor, controlForKey } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import { padToWidth, truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -36,7 +37,11 @@ interface ActionPanelProps {
 	onCancel: () => void;
 	onHelp?: () => void;
 	onMessage?: () => void;
-	messageTruncated?: boolean;
+	/** The base control facts, preserved when this panel owns input. */
+	context: ControlContext;
+	/** False while a Key guide or Message view is above this panel. */
+	inputActive?: boolean;
+	onEmergencyExit: () => void;
 }
 
 /** The modal chrome: one border and one padding cell on each side. */
@@ -59,7 +64,9 @@ export function ActionPanel({
 	onCancel,
 	onHelp,
 	onMessage,
-	messageTruncated = false,
+	context,
+	inputActive = true,
+	onEmergencyExit,
 }: ActionPanelProps) {
 	const { width: terminalWidth } = useTerminalDimensions();
 	// The body wraps to the content width; the wide terminals cap it there
@@ -81,37 +88,39 @@ export function ActionPanel({
 	};
 
 	useKeyboard((key) => {
-		if (key.ctrl || key.meta) {
+		if (!inputActive || key.meta) return;
+		const control = controlForKey("action-panel", key);
+		if (
+			control === undefined ||
+			!availabilityFor(control, contextFor("action-panel", context)).available
+		)
 			return;
-		}
-		switch (key.name) {
-			case "f1":
-			case "?":
+		switch (control.id) {
+			case "emergency-exit":
+				onEmergencyExit();
+				return;
+			case "help":
 				onHelp?.();
-				break;
-			case "f2":
-				if (messageTruncated) onMessage?.();
-				break;
-			case "escape":
+				return;
+			case "message":
+				onMessage?.();
+				return;
+			case "cancel-action":
 				onCancel();
-				break;
-			case "return":
+				return;
+			case "confirm-action":
 				onAction(actions[Math.min(selectedRef.current, actions.length - 1)].key);
-				break;
-			case "down":
-				move(1);
-				break;
-			case "up":
-				move(-1);
-				break;
-			case "j":
-				setBodyScroll((current) => Math.min(current + 1, Math.max(0, wrapped.length - bodyRows)));
-				break;
-			case "k":
-				setBodyScroll((current) => Math.max(0, current - 1));
-				break;
+				return;
+			case "select-action":
+				move(key.name === "up" ? -1 : 1);
+				return;
+			case "scroll-action-message":
+				if (key.name === "j")
+					setBodyScroll((current) => Math.min(current + 1, Math.max(0, wrapped.length - bodyRows)));
+				else setBodyScroll((current) => Math.max(0, current - 1));
+				return;
 			default:
-				break;
+				return;
 		}
 	});
 

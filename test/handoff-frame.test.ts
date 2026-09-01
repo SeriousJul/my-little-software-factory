@@ -27,6 +27,7 @@ import {
 	HEIGHT,
 	listHalfOf,
 	markerRowOf,
+	messageRowOf,
 	openPanel,
 	press,
 	pressArrow,
@@ -185,10 +186,11 @@ describe("the Enter handoff", () => {
 				// The detail line says the value is the handoff's, not a
 				// suggestion.
 				expect(detail).toContain("Handoff task type: implement");
-				// A clean handoff clears the status line: no message and the
-				// panes take back the last row.
+				// A clean handoff clears the Message line. The pane bottom edge
+				// stays fixed above the permanent two-row bottom layout.
 				expect(frame).not.toContain("handing off");
-				expect(rowsOf(frame)[HEIGHT - 1].startsWith("└")).toBe(true);
+				expect(messageRowOf(frame).trim()).toBe("");
+				expect(rowsOf(frame)[HEIGHT - 3].startsWith("└")).toBe(true);
 
 				expect(runner.commands()).toEqual([
 					`git -C ${checkout()} rev-parse --git-dir`,
@@ -223,8 +225,8 @@ describe("the Enter handoff", () => {
 					"error: herdr is not running",
 				);
 
-				// The reason sits on the status line, the last row of the terminal.
-				expect(rowsOf(frame)[HEIGHT - 1]).toContain("error: herdr is not running");
+				// The reason sits on the permanent Message line.
+				expect(messageRowOf(frame)).toContain("error: herdr is not running");
 				// The selected ticket never left the open state, and a failed
 				// attempt is not a handoff: the row still wears the suggestion,
 				// and the detail says so.
@@ -253,8 +255,8 @@ describe("the Enter handoff", () => {
 					"readable workspace list",
 				);
 
-				// The reason sits on the status line, the ticket stays open...
-				expect(rowsOf(frame)[HEIGHT - 1]).toContain("readable workspace list");
+				// The reason sits on the permanent Message line; the Ticket stays open...
+				expect(messageRowOf(frame)).toContain("readable workspace list");
 				expect(selectedRow(frame)).toContain("[open]");
 				// ...and no second workspace is created for the checkout:
 				// unreadable is not "no workspace".
@@ -279,20 +281,22 @@ describe("the Enter handoff", () => {
 				setup.mockInput.pressEnter();
 				const frame = await awaitFrame(
 					setup,
-					(f) => rowsOf(f)[HEIGHT - 1].includes("only open tickets can be handed off"),
+					(f) => messageRowOf(f).includes("only an open Ticket can be handed off"),
 					"the non-open hint",
 				);
 
-				// The hint sits on the status line, the ticket stays where it is.
+				// The hint sits on the Message line, the ticket stays where it is.
 				expect(selectedRow(frame)).toContain("[handed-off]");
 				// No command ever ran.
 				expect(runner.calls).toHaveLength(0);
 
 				// The panel is refused the same way: e shows the hint, no panel.
+				// The shared Action bar keeps showing its dimmed Override hint,
+				// so the refusal is read from the panel's row, not the word.
 				setup.mockInput.pressKey("e");
 				const refused = await settle(setup);
-				expect(refused).not.toContain("Override");
-				expect(rowsOf(refused)[HEIGHT - 1]).toContain("only open tickets can be handed off");
+				expect(refused).not.toContain("❯ Agent");
+				expect(messageRowOf(refused)).toContain("only an open Ticket can be handed off");
 			},
 			WIDTH,
 			HEIGHT,
@@ -312,7 +316,7 @@ describe("the Enter handoff", () => {
 				setup.mockInput.pressEnter();
 				const frame = await awaitFrame(
 					setup,
-					(f) => rowsOf(f)[HEIGHT - 1].includes("cannot create"),
+					(f) => messageRowOf(f).includes("cannot create"),
 					"the clone failure reason",
 				);
 
@@ -938,12 +942,12 @@ describe("the override panel", () => {
 				setup.mockInput.pressEscape();
 				const closed = await awaitFrame(
 					setup,
-					(f) => !f.includes("Override"),
+					(f) => !f.includes("❯ Agent"),
 					"the override panel to close",
 				);
 
 				expect(closed).toContain("[open]");
-				expect(closed).not.toContain("Override");
+				expect(closed).toContain("e Override");
 				// No command ever ran.
 				expect(runner.calls).toHaveLength(0);
 			},
@@ -1093,8 +1097,8 @@ describe("the override panel", () => {
 			async (setup) => {
 				const frame = await pressEnterToHandoff(setup);
 
-				// The warning sits on the status line.
-				expect(rowsOf(frame)[HEIGHT - 1]).toContain("cloned acme/billing to a sibling");
+				// The warning sits on the permanent Message line.
+				expect(messageRowOf(frame)).toContain("cloned acme/billing to a sibling");
 				// The mapping was written back to the config file.
 				const written = readFileSync(configPath, "utf8");
 				expect(written).toContain(`[repos]`);
@@ -1108,7 +1112,7 @@ describe("the override panel", () => {
 		);
 	});
 
-	test("e while a handoff is in flight is refused on the status line", async () => {
+	test("e while a handoff is in flight is refused on the Message line", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
@@ -1124,10 +1128,12 @@ describe("the override panel", () => {
 				setup.mockInput.pressKey("e");
 				const refused = await awaitFrame(
 					setup,
-					(f) => rowsOf(f)[HEIGHT - 1].includes("handoff in flight"),
-					"the refusal on the status line",
+					(f) => messageRowOf(f).includes("a Handoff is active"),
+					"the refusal on the Message line",
 				);
-				expect(refused).not.toContain("Override");
+				// The panel never opens: the Action bar's dimmed Override hint is
+				// permanent, so the refusal is read from the panel's row.
+				expect(refused).not.toContain("❯ Agent");
 
 				// The first handoff still settles.
 				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
@@ -1167,9 +1173,9 @@ describe("the override panel", () => {
 				);
 
 				// The handoff itself succeeded: the ticket is handed off... and
-				// the warning sits on the status line.
+				// the warning sits on the permanent Message line.
 				expect(selectedRow(frame)).toContain("[handed-off]");
-				expect(rowsOf(frame)[HEIGHT - 1]).toContain("could not persist");
+				expect(messageRowOf(frame)).toContain("could not persist");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1227,17 +1233,18 @@ describe("the override panel", () => {
 		);
 	});
 
-	test("the hint row documents the movement, cycle, and typing keys", async () => {
+	test("the shared Action bar documents the list-row controls", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
 
 		await withApp(
 			async (setup) => {
 				const frame = await openPanel(setup);
-				// Every key group the panel owns is on the hint row: the
-				// movement keys, the list cycle keys, and the typed text of
-				// the free-text rows. The hint fits the modal untruncated.
-				expect(frameText(frame)).toContain("j/k move h/l cycle type text enter esc");
+				// The panel has no local hint row. Its shared Action bar shows
+				// the keys the shared control catalogue dispatches.
+				expect(frameText(frame)).toContain(
+					"↑↓/jk Move ←→/hl Change Enter Hand off Esc Cancel F1 Help",
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -1313,7 +1320,7 @@ describe("the override panel", () => {
 				);
 				// The value column shows the new kind; "live-worktree" still
 				// carries "worktree", so the full row is the predicate.
-				await press(setup, "right", "the environment to cycle to worktree", (f) =>
+				await pressArrow(setup, "right", "the environment to cycle to worktree", (f) =>
 					frameText(f).includes("Environment worktree"),
 				);
 				const frame = await pressEnter(
@@ -1322,8 +1329,8 @@ describe("the override panel", () => {
 					"agent name is already used",
 				);
 
-				// The reason sits on the status line, the ticket stays open.
-				expect(rowsOf(frame)[HEIGHT - 1]).toContain("agent name is already used");
+				// The reason sits on the permanent Message line; the Ticket stays open.
+				expect(messageRowOf(frame)).toContain("agent name is already used");
 				expect(selectedRow(frame)).toContain("[open]");
 
 				// The residue is removed: the worktree and the branch, so a

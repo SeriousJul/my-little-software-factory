@@ -392,8 +392,14 @@ describe("the failure markers", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("blocked"), "the blocked badge");
-				// Enter on the blocked ticket runs the Goto: it focuses the stored pane.
-				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
+				// Enter on the blocked Ticket runs Goto. A clean focus clears the
+				// Message line, so the rendered-frame wait reads the command effect.
+				setup.mockInput.pressEnter();
+				await awaitFrame(
+					setup,
+					() => app.runner.commands().includes("herdr agent focus pane-1"),
+					"the focus",
+				);
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				// The focus does not settle the turn: the ticket stays in flight,
 				// and the blocked badge stands until the next poll.
@@ -657,7 +663,12 @@ describe("the decision panel", () => {
 				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
 				// Goto is the second row: one down, confirm.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
+				setup.mockInput.pressEnter();
+				await awaitFrame(
+					setup,
+					() => app.runner.commands().includes("herdr agent focus pane-1"),
+					"the focus",
+				);
 				// The focus went to the stored pane, and the handoff stayed
 				// open: the ticket is running, and the row wears the missing
 				// badge only because the faked agent list is empty.
@@ -1097,11 +1108,11 @@ describe("the handoff queue", () => {
 				// initial selection, so the move down lands the marker on
 				// line three - a line it was not on, so the key is applied
 				// before the next key is pressed.
-				await pressQuiet("j", "select the open ticket", (f) => markerRowOf(f) === 3);
+				await pressQuiet("j", "select the open ticket", (f) => markerRowOf(f) === 4);
 				await pressReturnQuiet("the handoff to start", (f) => f.includes("handing off"));
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuiet("k", "select the missing ticket", (f) => markerRowOf(f) === 2);
+				await pressQuiet("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
 				await pressReturnQuiet("the missing panel", (f) => f.includes("Missing:"));
 				await pressReturnQuiet("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
@@ -1143,8 +1154,10 @@ describe("the handoff queue", () => {
 				expect(inFlight?.handoffRecoveryRequired).toBe(false);
 
 				// The claim settled, so the ticket is not dead: it hands off
-				// again on demand.
-				await pressQuiet("j", "select the open ticket", (f) => markerRowOf(f) === 3);
+				// again on demand. It is the second row (row four: the mode
+				// line and the border sit above the list), and the selection
+				// already holds it, so the move is the boundary no-op.
+				await pressQuiet("j", "the boundary no-op on the open ticket", (f) => markerRowOf(f) === 4);
 				await pressReturnQuiet("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(
 					setup,

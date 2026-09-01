@@ -11,7 +11,7 @@ import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
-import { App, type AppKey, type AppProps } from "../src/components/app.ts";
+import { App, type AppProps } from "../src/components/app.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -34,6 +34,10 @@ export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve
 // back into the source string at their word-boundary breaks.
 export const frameText = (frame: string) => frame.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ");
 export const rowsOf = (frame: string) => frame.replace(/\n$/, "").split("\n");
+/** The permanent Message line is immediately above the Action bar. */
+export const messageRowOf = (frame: string) => rowsOf(frame).at(-2) ?? "";
+/** The permanent Action bar is the last terminal row. */
+export const actionBarRowOf = (frame: string) => rowsOf(frame).at(-1) ?? "";
 /**
  * The list pane's half of a terminal row, with its right border.
  *
@@ -230,16 +234,54 @@ export async function awaitFrame(
 	}
 }
 
-/** Press a key the shell handles, and wait for the effect it should produce. */
+/**
+ * The keys `press` can send: one pressable character or named key.
+ * Arrow keys, F1, F2, and Ctrl+C have their own helpers: the mock input
+ * types a bare `"f1"` string as two characters, and arrows need their
+ * escape sequences. Any single character is typable, which the override
+ * text rows accept.
+ */
+export type PressKey =
+	| (string & {})
+	| "return"
+	| "escape"
+	| "backspace";
+
+/**
+ * Press a key the shell handles, and wait for the effect it should produce.
+ *
+ * `return`, `escape`, and `backspace` dispatch their real key events: the
+ * mock's `pressKey` only resolves exact `KeyCodes` names, so a lowercase
+ * name would be typed as literal text. Every other key goes through the
+ * mock's `pressKey` as a single character.
+ */
 export async function press(
 	setup: Setup,
-	key: AppKey,
+	key: PressKey,
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<string> {
-	setup.mockInput.pressKey(key);
+	if (key === "return") setup.mockInput.pressEnter();
+	else if (key === "escape") setup.mockInput.pressEscape();
+	else if (key === "backspace") setup.mockInput.pressBackspace();
+	else setup.mockInput.pressKey(key);
 	return awaitFrame(setup, predicate, what);
 }
+
+/** Press the F1 key. The mock input takes the KeyCodes name, not `"f1"`. */
+export const pressF1 = (setup: Setup): void => {
+	setup.mockInput.pressKey("F1");
+};
+
+/** Press the F2 key. The mock input takes the KeyCodes name, not `"f2"`. */
+export const pressF2 = (setup: Setup): void => {
+	setup.mockInput.pressKey("F2");
+};
+
+/** Press Ctrl+C: the emergency exit control in every interaction mode. */
+export const pressCtrlC = (setup: Setup): void => {
+	setup.mockInput.pressCtrlC();
+};
 
 /** Press an arrow key and wait for the effect it should produce. */
 export async function pressArrow(
@@ -273,7 +315,9 @@ export async function focusList(setup: Setup): Promise<string> {
  * and the next key is safe.
  */
 export async function openPanel(setup: Setup): Promise<string> {
-	await press(setup, "e", "the override panel to open", (f) => f.includes("Override"));
+	// The Action bar always shows the e Override hint, so the panel's own
+	// first row is the real open signal.
+	await press(setup, "e", "the override panel to open", (f) => f.includes("❯ Agent"));
 	return await settle(setup);
 }
 
@@ -303,4 +347,44 @@ export async function settle(setup: Setup, maxMs = 300): Promise<string> {
 			return current;
 		}
 	}
+}
+
+/** One captured span with its foreground resolved to rgb. */
+export interface SpanInfo {
+	text: string;
+	fg: [number, number, number] | null;
+	bg: [number, number, number] | null;
+}
+
+function resolveColor(value: unknown): [number, number, number] | null {
+	const color = value as { toInts?: () => readonly number[] } | null | undefined;
+	if (typeof color?.toInts !== "function") return null;
+	const [r, g, b] = color.toInts();
+	return [r, g, b];
+}
+
+/** The spans of one captured row, with their colors resolved. */
+export function rowSpans(setup: Setup, row: number): SpanInfo[] {
+	const line = setup.captureSpans().lines[row];
+	return (line?.spans ?? []).map((span) => ({
+		text: span.text,
+		fg: resolveColor(span.fg),
+		bg: resolveColor(span.bg),
+	}));
+}
+
+/**
+ * The foreground of the first span containing `needle` on the row.
+ * Query the key part ("→/l ") and the label part ("Detail") separately:
+ * the renderer merges only spans of equal color, so a full hint spans two.
+ */
+export function spanColorAt(
+	setup: Setup,
+	row: number,
+	needle: string,
+): [number, number, number] | null {
+	for (const span of rowSpans(setup, row)) {
+		if (span.text.includes(needle)) return span.fg;
+	}
+	return null;
 }

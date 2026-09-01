@@ -50,9 +50,16 @@ import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, type ActionRow } from "./action-panel.ts";
-import { availabilityFor, contextFor, controlForKey, type InteractionMode } from "./controls.ts";
+import {
+	availabilityFor,
+	contextFor,
+	controlById,
+	controlForKey,
+	type InteractionMode,
+} from "./controls.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
-import { formatMessage, type MessageFact, type MessageFacts, selectMessage } from "./messages.ts";
+import { useMessageFacts } from "./message-facts.ts";
+import { formatMessage, type MessageFact } from "./messages.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -68,26 +75,6 @@ type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
-
-export type AppKey =
-	| "j"
-	| "k"
-	| "h"
-	| "l"
-	| "q"
-	| "e"
-	| "r"
-	| "a"
-	| "up"
-	| "down"
-	| "left"
-	| "right"
-	| "f1"
-	| "f2"
-	| "F1"
-	| "F2"
-	| "?"
-	| "return";
 
 export interface AppProps {
 	config?: FactoryConfig;
@@ -149,8 +136,6 @@ export function App({
 	configRef.current = config;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	const [detailScroll, setDetailScroll] = useState(0);
-	const [messageFacts, setMessageFacts] = useState<MessageFacts>({});
-	const workingMessageKindRef = useRef<"refresh" | "other" | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
 	const [utility, setUtility] = useState<Utility>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
@@ -189,41 +174,16 @@ export function App({
 				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
 		)
 		.join("; ");
-	const visibleMessage = selectMessage({
-		...messageFacts,
-		sourceHealth: sourceHealthMessage === "" ? undefined : sourceHealthMessage,
-	});
+	const {
+		message: visibleMessage,
+		working: setWorkingMessage,
+		warning: setWarningMessage,
+		error: setErrorMessage,
+		clearOperation: clearOperationMessage,
+		clearRefreshWorking,
+	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-
-	const setWorkingMessage = useCallback((text: string, kind: "refresh" | "other" = "other") => {
-		workingMessageKindRef.current = kind;
-		setMessageFacts({ working: text });
-	}, []);
-	const setWarningMessage = useCallback((text: string) => {
-		workingMessageKindRef.current = null;
-		setMessageFacts((current) => ({
-			...current,
-			working: undefined,
-			operation: { severity: "warning", text },
-		}));
-	}, []);
-	const setErrorMessage = useCallback((text: string) => {
-		workingMessageKindRef.current = null;
-		setMessageFacts((current) => ({
-			...current,
-			working: undefined,
-			operation: { severity: "error", text },
-		}));
-	}, []);
-	const clearOperationMessage = useCallback(() => {
-		workingMessageKindRef.current = null;
-		setMessageFacts((current) => ({ ...current, working: undefined, operation: undefined }));
-	}, []);
-	const clearWorkingMessage = useCallback(() => {
-		workingMessageKindRef.current = null;
-		setMessageFacts((current) => ({ ...current, working: undefined }));
-	}, []);
 
 	// The mode line carries the auto-handoff state and the live agent count:
 	// the in-flight tickets whose agent was alive in the latest poll, against
@@ -498,23 +458,16 @@ export function App({
 	runIntentRef.current = runIntent;
 
 	const startHandoff = (choice: HandoffChoice) => {
+		const availability = availabilityFor(
+			controlById("handoff"),
+			controlContextFor(currentBaseMode()),
+		);
+		if (!availability.available) {
+			setWarningMessage(availability.reason ?? "control is unavailable");
+			return;
+		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) {
-			setWarningMessage("no Ticket is selected");
-			return;
-		}
-		if (ticket.state !== "open") {
-			setWarningMessage("only an open Ticket can be handed off");
-			return;
-		}
-		if (ticket.actionable === false) {
-			setWarningMessage(
-				ticket.handoffRecoveryRequired
-					? "Handoff recovery is required before another handoff"
-					: "Ticket is not actionable because source data is stale, removed, or absent",
-			);
-			return;
-		}
+		if (ticket === undefined) return;
 		if (state !== undefined) {
 			const claim = state.claimHandoff(ticket.identity, choice, "open");
 			if (!claim.ok) {
@@ -527,10 +480,6 @@ export function App({
 		// The no-state test projection: no claim, and the settle patches the
 		// ticket list by hand instead of reading it back from SQLite. It has no
 		// queue, so it refuses to run behind a handoff already in flight.
-		if (inFlightRef.current) {
-			setWarningMessage("a Handoff is active");
-			return;
-		}
 		inFlightRef.current = true;
 		setWorkingMessage(`handing off "${ticket.title}"...`);
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
@@ -567,28 +516,16 @@ export function App({
 	};
 
 	const openOverride = () => {
-		if (inFlightRef.current) {
-			setWarningMessage("a Handoff is active");
+		const availability = availabilityFor(
+			controlById("override"),
+			controlContextFor(currentBaseMode()),
+		);
+		if (!availability.available) {
+			setWarningMessage(availability.reason ?? "control is unavailable");
 			return;
 		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) {
-			setWarningMessage("no Ticket is selected");
-			return;
-		}
-		if (ticket.state !== "open") {
-			setWarningMessage("only an open Ticket can be handed off");
-			return;
-		}
-		if (ticket.actionable === false) {
-			setWarningMessage(
-				ticket.handoffRecoveryRequired
-					? "Handoff recovery is required before another handoff"
-					: "Ticket is not actionable because source data is stale, removed, or absent",
-			);
-			return;
-		}
-		setOverride(choiceFor(ticket));
+		if (ticket !== undefined) setOverride(choiceFor(ticket));
 	};
 
 	/**
@@ -804,7 +741,6 @@ export function App({
 			).length,
 			handoffActive: inFlightRef.current,
 			messageTruncated,
-			textEntry: false,
 		});
 
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
@@ -819,32 +755,27 @@ export function App({
 
 	const manualRefreshPending = useRef(new Set<string>());
 	const refreshNow = () => {
+		const availability = availabilityFor(
+			controlById("refresh"),
+			controlContextFor(currentBaseMode()),
+		);
+		if (!availability.available) {
+			setWarningMessage(availability.reason ?? "control is unavailable");
+			return;
+		}
 		const coordinator = coordinatorRef.current;
-		if (sources.length === 0 || coordinator === undefined) {
-			setWarningMessage("no Ticket sources exist");
-			return;
-		}
+		if (coordinator === undefined) return;
 		const idle = coordinator.idleSourceNames();
-		if (idle.length === 0) {
-			setWarningMessage("every Ticket source is already refreshing");
-			return;
-		}
 		manualRefreshPending.current = new Set(idle);
 		coordinator.refreshAll();
 		setWorkingMessage(`refreshing ${idle.length} sources`, "refresh");
 	};
 
 	useKeyboard((key) => {
-		// Ctrl+C is deliberately handled by the same control catalogue in every
-		// layer. The production renderer disables its automatic Ctrl+C exit.
-		if (key.ctrl && key.name === "c") {
-			renderer.destroy();
-			return;
-		}
 		if (utility !== null || override !== null || panel !== null) return;
 		const mode = currentBaseMode();
 		const context = controlContextFor(mode);
-		const control = controlForKey(mode, key, context);
+		const control = controlForKey(mode, key);
 		if (control === undefined) return;
 
 		// Enter has a second documented meaning for a settled or observed
@@ -861,7 +792,10 @@ export function App({
 				} else setPanel({ kind: "decision", identity: ticket.identity });
 				return;
 			}
-			if ((ticket.state === "handed-off" || ticket.state === "running") && !context.handoffActive) {
+			if (ticket.state === "handed-off" || ticket.state === "running") {
+				// A missing or blocked agent has its own recovery action. It can
+				// queue behind another Handoff, so this route stays available even
+				// while the normal Hand off control is unavailable.
 				if (markerOf(ticket) === "blocked") runGoto(ticket);
 				else if (markerOf(ticket) === "missing")
 					setPanel({ kind: "missing", identity: ticket.identity });
@@ -876,6 +810,7 @@ export function App({
 			return;
 		}
 		switch (control.id) {
+			case "emergency-exit":
 			case "quit":
 				renderer.destroy();
 				break;
@@ -939,11 +874,7 @@ export function App({
 				settled: (sourceName) => {
 					if (!manualRefreshPending.current.has(sourceName)) return;
 					manualRefreshPending.current.delete(sourceName);
-					if (
-						manualRefreshPending.current.size === 0 &&
-						workingMessageKindRef.current === "refresh"
-					)
-						clearWorkingMessage();
+					if (manualRefreshPending.current.size === 0) clearRefreshWorking();
 				},
 			},
 		);
@@ -953,7 +884,7 @@ export function App({
 			coordinator.stop();
 			coordinatorRef.current = undefined;
 		};
-	}, [state, sources, replaceTickets, clearWorkingMessage]);
+	}, [state, sources, replaceTickets, clearRefreshWorking]);
 
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test
@@ -1131,10 +1062,11 @@ export function App({
 				agentSettings,
 				thinkingDefaults,
 				initial: override,
-				messageTruncated,
-				handoffActive: inFlightRef.current,
+				context: actionContext,
+				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
+				onEmergencyExit: () => renderer.destroy(),
 				onConfirm: (choice) => {
 					setOverride(null);
 					startHandoff(choice);
@@ -1150,15 +1082,11 @@ export function App({
 						actions: decision.actions,
 						onAction: (key) => runDecisionAction(panelTicket, key),
 						onCancel: () => setPanel(null),
-						onHelp: () => {
-							setPanel(null);
-							openGuide(currentBaseMode());
-						},
-						onMessage: () => {
-							setPanel(null);
-							openMessage(currentBaseMode());
-						},
-						messageTruncated,
+						context: actionContext,
+						inputActive: utility === null,
+						onHelp: () => openGuide("action-panel"),
+						onMessage: () => openMessage("action-panel"),
+						onEmergencyExit: () => renderer.destroy(),
 					})
 				: createElement(ActionPanel, {
 						title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
@@ -1172,15 +1100,11 @@ export function App({
 						],
 						onAction: (key) => runMissingAction(panelTicket, key),
 						onCancel: () => setPanel(null),
-						onHelp: () => {
-							setPanel(null);
-							openGuide(currentBaseMode());
-						},
-						onMessage: () => {
-							setPanel(null);
-							openMessage(currentBaseMode());
-						},
-						messageTruncated,
+						context: actionContext,
+						inputActive: utility === null,
+						onHelp: () => openGuide("action-panel"),
+						onMessage: () => openMessage("action-panel"),
+						onEmergencyExit: () => renderer.destroy(),
 					})),
 		utility?.kind === "guide" &&
 			createElement(KeyGuide, {
@@ -1188,6 +1112,7 @@ export function App({
 				onClose: () => setUtility(null),
 				onHelp: () => setUtility(null),
 				onMessage: () => openMessage(utilityContext.mode),
+				onEmergencyExit: () => renderer.destroy(),
 			}),
 		utility?.kind === "message" &&
 			createElement(MessageView, {
@@ -1195,6 +1120,7 @@ export function App({
 				context: utilityContext,
 				onClose: () => setUtility(null),
 				onHelp: () => openGuide(utilityContext.mode),
+				onEmergencyExit: () => renderer.destroy(),
 			}),
 	);
 }
