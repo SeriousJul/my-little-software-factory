@@ -126,6 +126,27 @@ export const rgb = (hex: string): [number, number, number] => [
 	Number.parseInt(hex.slice(5, 7), 16),
 ];
 
+/** The rendered foreground and background colors at one terminal cell. */
+export function cellColors(
+	setup: Setup,
+	x: number,
+	y: number,
+): { fg: [number, number, number]; bg: [number, number, number] } {
+	const line = setup.captureSpans().lines[y];
+	if (line === undefined) throw new Error(`frame has no row ${y}`);
+	let start = 0;
+	for (const span of line.spans) {
+		const end = start + span.width;
+		if (x >= start && x < end) {
+			const [fgRed, fgGreen, fgBlue] = span.fg.toInts();
+			const [bgRed, bgGreen, bgBlue] = span.bg.toInts();
+			return { fg: [fgRed, fgGreen, fgBlue], bg: [bgRed, bgGreen, bgBlue] };
+		}
+		start = end;
+	}
+	throw new Error(`frame row ${y} has no column ${x}`);
+}
+
 /** Frame predicate: the detail pane holds the focus. */
 export const detailFocused = (frame: string) =>
 	frame.includes("❯ Detail") && !frame.includes("❯ Tickets");
@@ -287,7 +308,13 @@ export async function mouseDrag(
 	from: readonly [x: number, y: number],
 	to: readonly [x: number, y: number],
 ): Promise<void> {
-	await setup.mockMouse.drag(from[0], from[1], to[0], to[1]);
+	// OpenTUI captures a drag target on its first drag event, not its mouse
+	// down event. Send one drag at the source before moving: the slider then
+	// receives all later positions even when the pointer leaves its thumb.
+	await setup.mockMouse.pressDown(from[0], from[1]);
+	await setup.mockMouse.moveTo(from[0], from[1]);
+	await setup.mockMouse.moveTo(to[0], to[1]);
+	await setup.mockMouse.release(to[0], to[1]);
 }
 
 /** Press `l` and wait for the detail pane to take focus. */

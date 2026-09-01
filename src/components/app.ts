@@ -130,7 +130,7 @@ export function App({
 	onReady,
 }: AppProps) {
 	const renderer = useRenderer();
-	const { width: terminalWidth } = useTerminalDimensions();
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [config, setConfig] = useState<FactoryConfig>(() => configProp ?? DEFAULT_CONFIG);
 	// Only test callers supply deterministic tickets. Production starts with
 	// the empty SQLite projection while configured sources refresh.
@@ -141,6 +141,10 @@ export function App({
 	const configRef = useRef(config);
 	configRef.current = config;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
+	// Focus keys can arrive before React publishes the next render. The ref
+	// records that immediate intent, so the next navigation key stays with
+	// the pane the operator just focused.
+	const focusedPaneRef = useRef<Pane>("list");
 	const detailRef = useRef<TicketDetailHandle | null>(null);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
@@ -747,11 +751,11 @@ export function App({
 				break;
 			case "h":
 			case "left":
-				setFocusedPane("list");
+				focusPane("list");
 				break;
 			case "l":
 			case "right":
-				setFocusedPane("detail");
+				focusPane("detail");
 				break;
 			case "j":
 			case "down":
@@ -887,6 +891,11 @@ export function App({
 		};
 	}, [state, initialTickets, pollIntervalMs, replaceTickets, commandRunner, onReady]);
 
+	function focusPane(pane: Pane) {
+		focusedPaneRef.current = pane;
+		setFocusedPane(pane);
+	}
+
 	function selectTicket(index: number) {
 		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
 		if (next === selectedIndexRef.current) return;
@@ -899,17 +908,19 @@ export function App({
 	}
 
 	function moveVertical(delta: number) {
-		if (focusedPane === "detail") detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
+		if (focusedPaneRef.current === "detail")
+			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
 		else moveList(delta);
 	}
 
 	function movePage(direction: 1 | -1) {
-		if (focusedPane === "detail") detailRef.current?.movePage(direction === 1 ? "down" : "up");
+		if (focusedPaneRef.current === "detail")
+			detailRef.current?.movePage(direction === 1 ? "down" : "up");
 		else moveList(direction * listGeometry.visibleRows);
 	}
 
 	function moveEdge(edge: "start" | "end") {
-		if (focusedPane === "detail") {
+		if (focusedPaneRef.current === "detail") {
 			if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
 		} else {
@@ -944,7 +955,19 @@ export function App({
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
 		createElement(
 			"box",
-			{ style: { width: "100%", flexGrow: 1, flexDirection: "row" } },
+			// The mode, health, and status lines reserve terminal rows below this
+			// flex child. Allow it to shrink on a resize so it cannot paint its
+			// bottom borders through one of those lines.
+			{
+				style: {
+					width: "100%",
+					height: Math.max(0, terminalHeight - reservedRows),
+					flexGrow: 0,
+					flexShrink: 1,
+					flexDirection: "row",
+					overflow: "hidden",
+				},
+			},
 			createElement(TicketList, {
 				tickets,
 				selectedIndex,
@@ -954,7 +977,7 @@ export function App({
 				markerOf,
 				limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
 				active: override === null && panel === null,
-				onFocus: () => setFocusedPane("list"),
+				onFocus: () => focusPane("list"),
 				onSelect: selectTicket,
 				onMove: moveList,
 			}),
@@ -966,7 +989,7 @@ export function App({
 				reservedRows,
 				handoffLimit: config.maxHandoffsPerTicket,
 				scroll: config.scroll,
-				onFocus: () => setFocusedPane("detail"),
+				onFocus: () => focusPane("detail"),
 			}),
 		),
 		healthLine !== "" &&
