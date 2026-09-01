@@ -34,6 +34,9 @@ interface ActionPanelProps {
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	onCancel: () => void;
+	onHelp?: () => void;
+	onMessage?: () => void;
+	messageTruncated?: boolean;
 }
 
 /** The modal chrome: one border and one padding cell on each side. */
@@ -48,7 +51,16 @@ const CONTENT_WIDTH = 60;
 const MAX_BODY_ROWS = 8;
 const HINT = "up/down select  j/k message  enter  esc";
 
-export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
+export function ActionPanel({
+	title,
+	bodyLines,
+	actions,
+	onAction,
+	onCancel,
+	onHelp,
+	onMessage,
+	messageTruncated = false,
+}: ActionPanelProps) {
 	const { width: terminalWidth } = useTerminalDimensions();
 	// The body wraps to the content width; the wide terminals cap it there
 	// and the narrow ones keep what they hold.
@@ -73,6 +85,13 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 			return;
 		}
 		switch (key.name) {
+			case "f1":
+			case "?":
+				onHelp?.();
+				break;
+			case "f2":
+				if (messageTruncated) onMessage?.();
+				break;
 			case "escape":
 				onCancel();
 				break;

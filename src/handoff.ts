@@ -87,10 +87,10 @@ export interface StartedAgent {
  * The outcome of one handoff attempt, as one of three facts.
  *
  * - `failed`: the agent never started. The ticket stays where the claim
- *   left it, and the reason goes to the status line.
+ *   left it, and the reason goes to the Message line.
  * - `prompt-failed`: the agent started but the prompt did not get through.
  *   The agent is running and can be prompted manually in herdr, so the
- *   ticket moves to handed-off, and the reason goes to the status line.
+ *   ticket moves to handed-off, and the reason goes to the Message line.
  * - `ok`: the agent started and received the prompt.
  *
  * An agent-started outcome carries the handles it started, so the state
@@ -771,7 +771,7 @@ async function closePreviousTab(
  *   stays.
  *
  * Returns a readable reason when a cleanup command fails; the caller
- * keeps the state transition and warns on the status line.
+ * keeps the state transition and warns on the Message line.
  */
 export async function closeHandoffEnvironment(
 	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },

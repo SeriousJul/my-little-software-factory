@@ -231,7 +231,7 @@ interface ObservationOptions {
 	 * changes, so a failure marker can appear without any state change.
 	 */
 	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
-	/** A message for the status line. */
+	/** An operational message fact for the Message line. */
 	onStatus: (kind: "info" | "warning" | "error", text: string) => void;
 	/**
 	 * The scheduling clock, the same injectable interface the refresh

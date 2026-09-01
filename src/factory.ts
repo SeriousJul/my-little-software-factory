@@ -64,5 +64,7 @@ process.on("exit", () => state.close());
 
 const runner = createChildProcessRunner();
 const sources = config.sources.map((source) => createTicketSource(source, runner));
-const renderer = await createCliRenderer({ exitOnCtrlC: true });
+// Ctrl+C is a documented emergency control. Keep it in the shared control
+// catalogue instead of letting OpenTUI bypass the application.
+const renderer = await createCliRenderer({ exitOnCtrlC: false });
 createRoot(renderer).render(createElement(App, { config, runner, configPath, state, sources }));

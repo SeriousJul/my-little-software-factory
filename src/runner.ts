@@ -121,7 +121,7 @@ function commandFailure(
 	return { code: 1, stdout: "", stderr: String(err.message ?? error) };
 }
 
-/** One readable line for a thrown error, for a status line. */
+/** One readable line for a thrown error, for the Message line. */
 export function errorMessage(error: unknown): string {
 	if (error instanceof Error) {
 		return error.message;

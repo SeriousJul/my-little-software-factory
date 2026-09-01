@@ -41,37 +41,29 @@ ends at close, ADR 0006: the control plane polls herdr).
 | `npm run fmt`   | Lint, format, and fix with Biome          |
 | `npm run typecheck` | Typecheck with TypeScript             |
 
-## Keys
+## Controls
 
-| Key              | What it does                                                            |
-| ---------------- | ----------------------------------------------------------------------- |
-| `j` / `k`        | Move the selection, or scroll the detail, depending on the focused pane |
-| `Up` / `Down`    | Move the selection, or scroll the detail, depending on the focused pane |
-| `h` / `l`        | Switch focus between the list and detail                                |
-| `Left` / `Right` | Switch focus between the list and detail                                |
-| `Enter`          | Hand the selected open ticket off, or open the decision panel on an awaiting ticket, or the missing panel on a ticket whose agent is gone, or focus the agent of a blocked ticket |
-| `e`              | Open the override panel for the selected open ticket                    |
-| `a`              | Toggle auto-handoff mode for this session                              |
-| `r`              | Refresh every ticket source now                                        |
-| `q`              | Quit                                                                    |
+The control plane keeps a contextual Action bar at the bottom of the
+terminal. It shows the common controls for the current Interaction mode.
+Press `?` or `F1` to open the in-app Key guide. The guide is the complete
+control catalogue, including controls for other modes, Quit, and the
+`Ctrl+C` emergency exit. Press `Esc`, `F1`, or `?` to close it.
 
-### Override panel keys
+When the Message line is truncated, press `m` in a base pane or `F2` in any
+mode to read the captured message in the Message view. The Message line and
+Action bar always reserve the two bottom rows.
 
-The panel is a modal. While it is open, the keys of the app below are inert.
+### Entry controls
 
-| Key             | What it does                                                        |
-| --------------- | ------------------------------------------------------------------- |
-| `j` / `k`      | Move between the setting rows, or type into the selected free-text row |
-| `Up` / `Down`  | Move between the setting rows                                     |
-| `h` / `l`      | Cycle a list value, or type into the selected free-text row        |
-| `Left` / `Right` | Cycle a list value (agent type, environment, task type, thinking) |
-| typed text      | Edit the selected free-text row (model, or thinking without a list) |
-| `Backspace`     | Delete in the selected free-text row                                |
-| `Enter`         | Confirm: the handoff starts with these settings                     |
-| `Esc`           | Cancel: nothing runs, nothing changes                               |
+The basic entry controls are `?` or `F1` for the Key guide, `F2` for a
+truncated Message view, and `Ctrl+C` for emergency exit. Use the in-app guide
+and the contextual Action bar for the complete fixed control set.
 
-A free-text row owns `j`, `k`, `h`, and `l`, so `Up` and `Down` move the
-selection past it.
+The override panel is a modal. While it is open, the keys of the app below are
+inert. Its Action bar changes between list-row and text-row modes. A free-text
+row owns printable `j`, `k`, `h`, `l`, `?`, and `m`; `F1` still opens Help.
+Arrow keys can always move past a text row. Backspace deletes, Enter confirms,
+and Esc cancels.
 A row shows `(empty)` for an unset free-text value and `(unset)` for a list
 value that is not one of its options. The thinking row starts on the
 suggested task type's `thinking` level when the task type sets one. The
@@ -82,23 +74,16 @@ always shows what the handoff will run on. The container environment is a
 future kind and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
-column shrinks first, then the label column, then the marker. When the
-terminal is too small, the hint row and the last rows drop. A row never
-wraps: it carries less, not broken text.
+column shrinks first, then the label column, then the marker. The shared
+Action bar replaces the panel's old local hint row. When the terminal is too
+small, the last rows drop. A row never wraps: it carries less, not broken
+text.
 
-### Completion decision panel keys
+### Completion decision panel
 
 Enter on an `awaiting` ticket shows the last completion: the agent's last
-message. The panel offers the choices the state allows.
-
-| Key             | What it does                                                        |
-| --------------- | ------------------------------------------------------------------- |
-| `Up` / `Down`  | Move between the choice rows                                      |
-| `j` / `k`      | Scroll the completion message                                     |
-| `Enter`         | Choose the selected row                                            |
-| `Esc`           | Close the panel: nothing runs, the ticket stays awaiting           |
-
-The first row, "Close", ends the work cycle: the ticket returns to open
+message. The panel offers the choices the state allows, and its Action bar
+shows the available interaction controls. The first row, "Close", ends the work cycle: the ticket returns to open
 with its cycle number incremented, and the handoff's environment is closed
 without touching the git branch, so pushed work and pull requests survive:
 a worktree handoff loses its worktree checkout and its herdr workspace,
@@ -119,18 +104,11 @@ trace only when the routed handoff settles with the agent started; a
 failed route leaves the trace pending, so Close and Goto keep working
 on the awaiting ticket.
 
-### Missing agent panel keys
+### Missing agent panel
 
-Enter on a ticket whose agent is missing shows the missing panel.
-
-| Key             | What it does                                                        |
-| --------------- | ------------------------------------------------------------------- |
-| `Up` / `Down`  | Move between the choice rows                                      |
-| `j` / `k`      | Scroll the panel message                                          |
-| `Enter`         | Choose the selected row                                            |
-| `Esc`           | Close the panel: nothing runs, the badge stays                     |
-
-"Restart" hands the ticket off again with the same choices, in the
+Enter on a ticket whose agent is missing shows the missing panel. Its Action
+bar shows the available interaction controls. "Restart" hands the ticket off
+again with the same choices, in the
 workspace the handoff recorded, and the last completion's message as the
 previous message. "Abandon" ends the work cycle: the ticket returns to open
 with its cycle number incremented, the handoff's environment is closed,
@@ -171,11 +149,11 @@ or the badge drops and the title takes the cells. A partial badge could
 read as another task type, so it never truncates; the full value stays in
 the detail pane.
 
-Under the panes sits a status line. It carries the progress and the outcome
-of the last handoff: `handing off "..."...` while one is in flight, the
-warning a sibling clone raises, or the readable reason a handoff failed.
-A clean handoff clears the line. While a handoff is in flight the keys keep
-working, and `e` is refused with a hint on the line. A second handoff claim
+Above the Action bar sits the Message line. It carries the progress and the outcome
+of the last handoff: `Working: handing off "..."...` while one is in flight,
+`Warning:` for a sibling clone or other recoverable issue, and `Error:` for a
+failed handoff. A clean handoff clears the line. While a handoff is in flight
+keys keep working, and `e` is refused with a warning. A second handoff claim
 records its attempt, which blocks a further claim on the same ticket, and
 queues its external work until the in-flight handoff settles; the ticket
 moves to `handed-off` only when the handoff settles and its agent starts,
@@ -220,7 +198,7 @@ The override panel changes them for that one handoff only.
   later fails. The agent is running and can be prompted by hand. A failure
   before the start (a missing herdr, a missing checkout, a clone target the
   filesystem refuses) leaves the ticket open and shows the reason on the
-  status line. The app never crashes on a handoff failure.
+  Message line. The app never crashes on a handoff failure.
 
 ### Repository resolution
 
@@ -236,7 +214,7 @@ The control plane finds the ticket's repository in this order:
 
 When the convention path holds a different repository, the control plane
 clones the ticket's repository to a sibling path (for example
-`~/src/billing_1`), hands off there, warns on the status line, and hands the
+`~/src/billing_1`), hands off there, warns on the Message line, and hands the
 mapping back to be written to the config file, so the next handoff resolves
 it explicitly. The mapping is handed back even when a later step of the
 handoff fails, so the clone is not lost.
@@ -370,9 +348,11 @@ the first write-back: the data round-trips, the comments do not.
   inject a fake that records the calls.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
-  pane, the override panel, the shared action panel (the completion decision
+  pane, the override panel, the shared Action bar and control catalogue, the
+  Key guide and Message view, the shared action panel (the completion decision
   and the missing agent panel both render through it), the shared pane
-  geometry, the shared palette, and the display-width-aware text helpers.
+  geometry, the shared palette, message facts, and display-width-aware text
+  helpers.
 - `test/`: the test suite.
   The seam is the rendered terminal frame and the recorded command sequence.
   No test touches a real herdr session or a real git repository.

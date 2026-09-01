@@ -48,21 +48,26 @@ import { commandFailureText, type RepositoryMapping } from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
+import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, type ActionRow } from "./action-panel.ts";
+import { availabilityFor, contextFor, controlForKey, type InteractionMode } from "./controls.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
+import { formatMessage, type MessageFact, type MessageFacts, selectMessage } from "./messages.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
-import { truncateToWidth } from "./text.ts";
+import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import { detailLines, TicketDetail } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
+import { KeyGuide, MessageView } from "./utility.ts";
 
 type Pane = "list" | "detail";
-interface StatusMessage {
-	kind: "info" | "warning" | "error";
-	text: string;
-}
 /** The action modal open above the panes, if any. */
 type Panel = null | { kind: "decision"; identity: string } | { kind: "missing"; identity: string };
+/** Utility overlays replace one another and retain the exact source mode. */
+type Utility =
+	| null
+	| { kind: "guide"; mode: InteractionMode }
+	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
 
 export type AppKey =
 	| "j"
@@ -76,7 +81,13 @@ export type AppKey =
 	| "up"
 	| "down"
 	| "left"
-	| "right";
+	| "right"
+	| "f1"
+	| "f2"
+	| "F1"
+	| "F2"
+	| "?"
+	| "return";
 
 export interface AppProps {
 	config?: FactoryConfig;
@@ -126,7 +137,7 @@ export function App({
 	onReady,
 }: AppProps) {
 	const renderer = useRenderer();
-	const { width: terminalWidth } = useTerminalDimensions();
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [config, setConfig] = useState<FactoryConfig>(() => configProp ?? DEFAULT_CONFIG);
 	// Only test callers supply deterministic tickets. Production starts with
 	// the empty SQLite projection while configured sources refresh.
@@ -138,8 +149,10 @@ export function App({
 	configRef.current = config;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	const [detailScroll, setDetailScroll] = useState(0);
-	const [status, setStatus] = useState<StatusMessage | null>(null);
+	const [messageFacts, setMessageFacts] = useState<MessageFacts>({});
+	const workingMessageKindRef = useRef<"refresh" | "other" | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
+	const [utility, setUtility] = useState<Utility>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
 	const [autoMode, setAutoMode] = useState<boolean>(
@@ -169,13 +182,49 @@ export function App({
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
-	const healthLine = healths
+	const sourceHealthMessage = healths
 		.filter((health) => health.health === "stale" || health.health === "removed")
 		.map(
 			(health) =>
 				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
 		)
 		.join("; ");
+	const visibleMessage = selectMessage({
+		...messageFacts,
+		sourceHealth: sourceHealthMessage === "" ? undefined : sourceHealthMessage,
+	});
+	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
+	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
+
+	const setWorkingMessage = useCallback((text: string, kind: "refresh" | "other" = "other") => {
+		workingMessageKindRef.current = kind;
+		setMessageFacts({ working: text });
+	}, []);
+	const setWarningMessage = useCallback((text: string) => {
+		workingMessageKindRef.current = null;
+		setMessageFacts((current) => ({
+			...current,
+			working: undefined,
+			operation: { severity: "warning", text },
+		}));
+	}, []);
+	const setErrorMessage = useCallback((text: string) => {
+		workingMessageKindRef.current = null;
+		setMessageFacts((current) => ({
+			...current,
+			working: undefined,
+			operation: { severity: "error", text },
+		}));
+	}, []);
+	const clearOperationMessage = useCallback(() => {
+		workingMessageKindRef.current = null;
+		setMessageFacts((current) => ({ ...current, working: undefined, operation: undefined }));
+	}, []);
+	const clearWorkingMessage = useCallback(() => {
+		workingMessageKindRef.current = null;
+		setMessageFacts((current) => ({ ...current, working: undefined }));
+	}, []);
+
 	// The mode line carries the auto-handoff state and the live agent count:
 	// the in-flight tickets whose agent was alive in the latest poll, against
 	// the parallel limit. It exists only when the control plane has state to
@@ -195,8 +244,13 @@ export function App({
 			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
 				}`;
-	const reservedRows =
-		(status === null ? 0 : 1) + (healthLine === "" ? 0 : 1) + (modeLine === "" ? 0 : 1);
+	const tooSmall = terminalWidth < 40 || terminalHeight < 7;
+	// The Message line and Action bar are permanent. The mode line is above
+	// the panes, so it also occupies one reserved row when state observation
+	// is active. Keep the compact size frame focused on its size and Help
+	// controls when it cannot show the normal layout.
+	const showModeLine = modeLine !== "" && !tooSmall && terminalHeight >= 8;
+	const reservedRows = 2 + (showModeLine ? 1 : 0);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
 	const lines = detailLines(selectedTicket, detailGeometry.usableCols, config.maxHandoffsPerTicket);
@@ -273,22 +327,19 @@ export function App({
 		}
 	};
 
-	/** The status line after a handoff outcome, mapping warnings included. */
+	/** Resolve a handoff operation into the durable Message facts. */
 	const finishOutcome = async (outcome: HandoffOutcome): Promise<void> => {
 		const persistWarning =
 			outcome.notes?.mappingToWrite === undefined
 				? undefined
 				: await persistMapping(outcome.notes.mappingToWrite);
 		if (outcome.status !== "ok")
-			setStatus({
-				kind: "error",
-				text:
-					persistWarning === undefined ? outcome.reason : `${outcome.reason}; ${persistWarning}`,
-			});
-		else if (persistWarning !== undefined) setStatus({ kind: "warning", text: persistWarning });
-		else if (outcome.notes?.warning !== undefined)
-			setStatus({ kind: "warning", text: outcome.notes.warning });
-		else setStatus(null);
+			setErrorMessage(
+				persistWarning === undefined ? outcome.reason : `${outcome.reason}; ${persistWarning}`,
+			);
+		else if (persistWarning !== undefined) setWarningMessage(persistWarning);
+		else if (outcome.notes?.warning !== undefined) setWarningMessage(outcome.notes.warning);
+		else clearOperationMessage();
 	};
 
 	/**
@@ -314,7 +365,7 @@ export function App({
 			return;
 		}
 		inFlightRef.current = true;
-		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
+		setWorkingMessage(`handing off "${ticket.title}"...`);
 		const onStage = (stage: string) => state.advanceHandoffAttempt(claim.attemptId, stage);
 		const run =
 			origin === "open"
@@ -374,7 +425,7 @@ export function App({
 			.catch((error) => {
 				state.settleHandoff(claim.attemptId, false, errorMessage(error));
 				replaceTickets();
-				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
+				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				inFlightRef.current = false;
 				drainQueue();
 			});
@@ -405,13 +456,11 @@ export function App({
 						: `the ticket is now ${currentState}`,
 				);
 				replaceTickets();
-				setStatus({
-					kind: "warning",
-					text:
-						currentState === undefined
-							? `queued handoff for "${next.ticket.title}" was not run: the ticket no longer exists`
-							: `queued handoff for "${next.ticket.title}" was not run: the ticket is now ${currentState}`,
-				});
+				setWarningMessage(
+					currentState === undefined
+						? `queued handoff for "${next.ticket.title}" was not run: the ticket no longer exists`
+						: `queued handoff for "${next.ticket.title}" was not run: the ticket is now ${currentState}`,
+				);
 				continue;
 			}
 			// The fresh projection when the ticket is visible, else the claim's
@@ -451,26 +500,25 @@ export function App({
 	const startHandoff = (choice: HandoffChoice) => {
 		const ticket = ticketsRef.current[selectedIndexRef.current];
 		if (ticket === undefined) {
-			setStatus({ kind: "warning", text: "no ticket is selected" });
+			setWarningMessage("no Ticket is selected");
 			return;
 		}
 		if (ticket.state !== "open") {
-			setStatus({ kind: "warning", text: "only open tickets can be handed off" });
+			setWarningMessage("only an open Ticket can be handed off");
 			return;
 		}
 		if (ticket.actionable === false) {
-			setStatus({
-				kind: "warning",
-				text: ticket.handoffRecoveryRequired
-					? "handoff recovery is required before another handoff"
-					: "ticket is not actionable because its sources are stale, removed, or absent",
-			});
+			setWarningMessage(
+				ticket.handoffRecoveryRequired
+					? "Handoff recovery is required before another handoff"
+					: "Ticket is not actionable because source data is stale, removed, or absent",
+			);
 			return;
 		}
 		if (state !== undefined) {
 			const claim = state.claimHandoff(ticket.identity, choice, "open");
 			if (!claim.ok) {
-				setStatus({ kind: "warning", text: claim.reason });
+				setWarningMessage(claim.reason);
 				return;
 			}
 			runClaimedHandoff(ticket, choice, "open", claim.claim, "");
@@ -480,11 +528,11 @@ export function App({
 		// ticket list by hand instead of reading it back from SQLite. It has no
 		// queue, so it refuses to run behind a handoff already in flight.
 		if (inFlightRef.current) {
-			setStatus({ kind: "warning", text: "handoff in flight" });
+			setWarningMessage("a Handoff is active");
 			return;
 		}
 		inFlightRef.current = true;
-		setStatus({ kind: "info", text: `handing off "${ticket.title}"...` });
+		setWorkingMessage(`handing off "${ticket.title}"...`);
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
 				if (outcome.status !== "failed") {
@@ -513,28 +561,31 @@ export function App({
 				inFlightRef.current = false;
 			})
 			.catch((error) => {
-				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
+				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				inFlightRef.current = false;
 			});
 	};
 
 	const openOverride = () => {
 		if (inFlightRef.current) {
-			setStatus({ kind: "warning", text: "handoff in flight" });
+			setWarningMessage("a Handoff is active");
 			return;
 		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined || ticket.state !== "open") {
-			setStatus({ kind: "warning", text: "only open tickets can be handed off" });
+		if (ticket === undefined) {
+			setWarningMessage("no Ticket is selected");
+			return;
+		}
+		if (ticket.state !== "open") {
+			setWarningMessage("only an open Ticket can be handed off");
 			return;
 		}
 		if (ticket.actionable === false) {
-			setStatus({
-				kind: "warning",
-				text: ticket.handoffRecoveryRequired
-					? "handoff recovery is required before another handoff"
-					: "ticket is not actionable because its sources are stale, removed, or absent",
-			});
+			setWarningMessage(
+				ticket.handoffRecoveryRequired
+					? "Handoff recovery is required before another handoff"
+					: "Ticket is not actionable because source data is stale, removed, or absent",
+			);
 			return;
 		}
 		setOverride(choiceFor(ticket));
@@ -548,7 +599,7 @@ export function App({
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
-		setStatus({ kind: "info", text: `auto-handoff ${next ? "on" : "off"}` });
+		clearOperationMessage();
 	};
 
 	// The decision panel's rows: Close first, selected by default, then a Goto,
@@ -595,12 +646,12 @@ export function App({
 		if (state === undefined) return;
 		const paneId = ticket.handoff?.paneId ?? null;
 		if (paneId === null) {
-			setStatus({ kind: "warning", text: "no agent pane is recorded for this ticket" });
+			setWarningMessage("no agent pane is recorded for this ticket");
 			return;
 		}
 		void commandRunner.run("herdr", ["agent", "focus", paneId]).then((result) => {
 			if (result.code !== 0) {
-				setStatus({ kind: "error", text: `agent focus failed: ${commandFailureText(result)}` });
+				setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
 				return;
 			}
 			state.applyCompletionDecision({
@@ -610,7 +661,7 @@ export function App({
 				decidedAt: new Date().toISOString(),
 			});
 			replaceTickets();
-			setStatus({ kind: "info", text: `focused the agent of ticket ${ticket.identity}` });
+			clearOperationMessage();
 		});
 	};
 
@@ -629,7 +680,7 @@ export function App({
 			});
 			replaceTickets();
 			if (!applied) {
-				setStatus({ kind: "warning", text: `ticket ${ticket.identity} already decided` });
+				setWarningMessage(`ticket ${ticket.identity} already decided`);
 				return;
 			}
 			// The Close cleanup: the environment of the handoff the decision ends.
@@ -637,14 +688,13 @@ export function App({
 			if (stored !== null) {
 				void closeHandoffEnvironment(stored, commandRunner).then((failure) => {
 					if (failure !== undefined) {
-						setStatus({
-							kind: "error",
-							text: `ticket ${ticket.identity} closed; the close cleanup failed: ${failure}`,
-						});
+						setErrorMessage(
+							`ticket ${ticket.identity} closed; the close cleanup failed: ${failure}`,
+						);
 					}
 				});
 			}
-			setStatus({ kind: "info", text: `ticket ${ticket.identity} closed` });
+			clearOperationMessage();
 			return;
 		}
 		if (key === "goto") {
@@ -661,7 +711,7 @@ export function App({
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
 		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
-			setStatus({ kind: "warning", text: `no workflow edge from ${taskType} to ${target}` });
+			setWarningMessage(`no workflow edge from ${taskType} to ${target}`);
 			return;
 		}
 		const stored = ticket.handoff;
@@ -679,7 +729,7 @@ export function App({
 		);
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
-			setStatus({ kind: "warning", text: claim.reason });
+			setWarningMessage(claim.reason);
 			return;
 		}
 		runClaimedHandoff(
@@ -703,21 +753,20 @@ export function App({
 			});
 			replaceTickets();
 			if (!applied) {
-				setStatus({ kind: "warning", text: `ticket ${ticket.identity} already decided` });
+				setWarningMessage(`ticket ${ticket.identity} already decided`);
 				return;
 			}
 			const stored = state.latestHandoff(ticket.identity);
 			if (stored !== null) {
 				void closeHandoffEnvironment(stored, commandRunner).then((failure) => {
 					if (failure !== undefined) {
-						setStatus({
-							kind: "error",
-							text: `ticket ${ticket.identity} abandoned; the close cleanup failed: ${failure}`,
-						});
+						setErrorMessage(
+							`ticket ${ticket.identity} abandoned; the close cleanup failed: ${failure}`,
+						);
 					}
 				});
 			}
-			setStatus({ kind: "warning", text: `ticket ${ticket.identity} abandoned` });
+			setWarningMessage(`ticket ${ticket.identity} abandoned`);
 			return;
 		}
 		// Restart: the same choices, in the workspace the handoff recorded.
@@ -734,75 +783,131 @@ export function App({
 					);
 		const claim = state.claimHandoff(ticket.identity, choice, "restart");
 		if (!claim.ok) {
-			setStatus({ kind: "warning", text: claim.reason });
+			setWarningMessage(claim.reason);
 			return;
 		}
 		runClaimedHandoff(ticket, choice, "restart", claim.claim, ticket.lastCompletion?.message ?? "");
 	};
 
+	const currentBaseMode = (): InteractionMode =>
+		focusedPane === "list" ? "ticket-list" : "ticket-detail";
+	const controlContextFor = (mode: InteractionMode) =>
+		contextFor(mode, {
+			tickets: ticketsRef.current,
+			selectedTicket: ticketsRef.current[selectedIndexRef.current],
+			selectedIndex: selectedIndexRef.current,
+			listCanMove: ticketsRef.current.length > 1,
+			detailCanScroll: maxScroll > 0,
+			sourceCount: sources.length,
+			refreshingSourceCount: sources.filter(
+				(source) => coordinatorRef.current?.isFetching(source.name) === true,
+			).length,
+			handoffActive: inFlightRef.current,
+			messageTruncated,
+			textEntry: false,
+		});
+
+	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
+		setUtility({ kind: "guide", mode });
+	};
+	const openMessage = (mode: InteractionMode = currentBaseMode()) => {
+		if (visibleMessage === null || !messageTruncated) return;
+		// The object is captured in the Utility value. Later source or operation
+		// changes cannot replace the text in a Message view already open.
+		setUtility({ kind: "message", mode, fact: { ...visibleMessage } });
+	};
+
+	const manualRefreshPending = useRef(new Set<string>());
+	const refreshNow = () => {
+		const coordinator = coordinatorRef.current;
+		if (sources.length === 0 || coordinator === undefined) {
+			setWarningMessage("no Ticket sources exist");
+			return;
+		}
+		const idle = coordinator.idleSourceNames();
+		if (idle.length === 0) {
+			setWarningMessage("every Ticket source is already refreshing");
+			return;
+		}
+		manualRefreshPending.current = new Set(idle);
+		coordinator.refreshAll();
+		setWorkingMessage(`refreshing ${idle.length} sources`, "refresh");
+	};
+
 	useKeyboard((key) => {
-		if (override !== null || panel !== null) return;
-		switch (key.name) {
-			case "q":
+		// Ctrl+C is deliberately handled by the same control catalogue in every
+		// layer. The production renderer disables its automatic Ctrl+C exit.
+		if (key.ctrl && key.name === "c") {
+			renderer.destroy();
+			return;
+		}
+		if (utility !== null || override !== null || panel !== null) return;
+		const mode = currentBaseMode();
+		const context = controlContextFor(mode);
+		const control = controlForKey(mode, key, context);
+		if (control === undefined) return;
+
+		// Enter has a second documented meaning for a settled or observed
+		// ticket. It opens the existing decision or missing-agent utility; a
+		// normal open-ticket Enter remains the Hand off control.
+		if (control.id === "handoff" && context.selectedTicket !== undefined) {
+			const ticket = context.selectedTicket;
+			if (ticket.state === "awaiting" && !context.handoffActive) {
+				const taskType =
+					ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+				if (configRef.current.taskTypes[taskType]?.autoClose === true) {
+					setWorkingMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
+					observationRef.current?.tick();
+				} else setPanel({ kind: "decision", identity: ticket.identity });
+				return;
+			}
+			if ((ticket.state === "handed-off" || ticket.state === "running") && !context.handoffActive) {
+				if (markerOf(ticket) === "blocked") runGoto(ticket);
+				else if (markerOf(ticket) === "missing")
+					setPanel({ kind: "missing", identity: ticket.identity });
+				else setWarningMessage("only an open Ticket can be handed off");
+				return;
+			}
+		}
+
+		const availability = availabilityFor(control, context);
+		if (!availability.available) {
+			setWarningMessage(availability.reason ?? "control is unavailable");
+			return;
+		}
+		switch (control.id) {
+			case "quit":
 				renderer.destroy();
 				break;
-			case "h":
-			case "left":
-				setFocusedPane("list");
-				break;
-			case "l":
-			case "right":
+			case "detail":
 				setFocusedPane("detail");
 				break;
-			case "j":
-			case "down":
-				moveVertical(1);
+			case "tickets":
+				setFocusedPane("list");
 				break;
-			case "k":
-			case "up":
-				moveVertical(-1);
+			case "move-list":
+			case "scroll-detail":
+				moveVertical(key.name === "up" || key.name === "k" ? -1 : 1);
 				break;
-			case "return": {
+			case "handoff": {
 				const ticket = ticketsRef.current[selectedIndexRef.current];
-				if (ticket === undefined) break;
-				if (ticket.state === "open") {
-					startHandoff(choiceFor(ticket));
-					break;
-				}
-				if (ticket.state === "awaiting") {
-					// An auto-close type decides by itself: the operator has no panel for
-					// it.
-					const taskType =
-						ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
-					if (configRef.current.taskTypes[taskType]?.autoClose === true) {
-						setStatus({
-							kind: "info",
-							text: `task type ${taskType} is auto-close: the factory decides this ticket`,
-						});
-						break;
-					}
-					setPanel({ kind: "decision", identity: ticket.identity });
-					break;
-				}
-				if (markerOf(ticket) === "blocked") {
-					runGoto(ticket);
-					break;
-				}
-				if (markerOf(ticket) === "missing") {
-					setPanel({ kind: "missing", identity: ticket.identity });
-					break;
-				}
-				setStatus({ kind: "warning", text: "only open tickets can be handed off" });
+				if (ticket !== undefined) startHandoff(choiceFor(ticket));
 				break;
 			}
-			case "e":
+			case "override":
 				openOverride();
 				break;
-			case "a":
+			case "refresh":
+				refreshNow();
+				break;
+			case "auto-handoff":
 				toggleAutoHandoff();
 				break;
-			case "r":
-				coordinatorRef.current?.refreshAll();
+			case "help":
+				openGuide(mode);
+				break;
+			case "message":
+				openMessage(mode);
 				break;
 			default:
 				break;
@@ -820,19 +925,35 @@ export function App({
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
 		if (state === undefined) return;
-		const coordinator = new RefreshCoordinator(sources, state, () => {
-			replaceTickets();
-			// A fetch may have made a ticket actionable: let the observation
-			// loop act on it now instead of on the next poll.
-			observationRef.current?.tick();
-		});
+		const coordinator = new RefreshCoordinator(
+			sources,
+			state,
+			() => {
+				replaceTickets();
+				// A fetch may have made a ticket actionable: let the observation
+				// loop act on it now instead of on the next poll.
+				observationRef.current?.tick();
+			},
+			undefined,
+			{
+				settled: (sourceName) => {
+					if (!manualRefreshPending.current.has(sourceName)) return;
+					manualRefreshPending.current.delete(sourceName);
+					if (
+						manualRefreshPending.current.size === 0 &&
+						workingMessageKindRef.current === "refresh"
+					)
+						clearWorkingMessage();
+				},
+			},
+		);
 		coordinatorRef.current = coordinator;
 		coordinator.start();
 		return () => {
 			coordinator.stop();
 			coordinatorRef.current = undefined;
 		};
-	}, [state, sources, replaceTickets]);
+	}, [state, sources, replaceTickets, clearWorkingMessage]);
 
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test
@@ -860,7 +981,13 @@ export function App({
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
 			onChanged: replaceTickets,
 			onAgents: (agents) => setAgents(agents),
-			onStatus: (kind, text) => setStatus({ kind, text }),
+			onStatus: (kind, text) => {
+				if (kind === "error") setErrorMessage(text);
+				else if (kind === "warning") setWarningMessage(text);
+				else if (text.includes("herdr is reachable again")) clearOperationMessage();
+				// Other informational observation events are intentionally quiet.
+				// The Message line is for active work and operational facts, not a log.
+			},
 		});
 		observationRef.current = coordinator;
 		coordinator.start();
@@ -874,7 +1001,17 @@ export function App({
 			coordinator.stop();
 			observationRef.current = undefined;
 		};
-	}, [state, initialTickets, pollIntervalMs, replaceTickets, commandRunner, onReady]);
+	}, [
+		state,
+		initialTickets,
+		pollIntervalMs,
+		replaceTickets,
+		commandRunner,
+		onReady,
+		setErrorMessage,
+		setWarningMessage,
+		clearOperationMessage,
+	]);
 
 	function moveVertical(delta: number) {
 		if (focusedPane === "detail")
@@ -905,52 +1042,87 @@ export function App({
 				: healths.length === 0 || healths.some((health) => health.health === "loading")
 					? "loading tickets..."
 					: "no tickets match the configured sources";
-	const statusColor =
-		status?.kind === "error"
+	const actionMode = currentBaseMode();
+	const actionContext = controlContextFor(actionMode);
+	const messageLine = visibleMessage === null ? "" : visibleMessageText;
+	const messageColor =
+		visibleMessage?.severity === "error"
 			? COLORS.statusError
-			: status?.kind === "warning"
+			: visibleMessage?.severity === "warning"
 				? COLORS.statusWarning
-				: COLORS.text;
+				: COLORS.statusWorking;
+	const importantSmallMessage =
+		visibleMessage !== null &&
+		(visibleMessage.severity === "error" || visibleMessage.severity === "working")
+			? visibleMessageText
+			: undefined;
+	const utilityContext =
+		utility?.kind === "guide" || utility?.kind === "message"
+			? controlContextFor(utility.mode)
+			: actionContext;
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
+		showModeLine &&
+			createElement(
+				"text",
+				{ style: { width: "100%", height: 1, fg: COLORS.dim } },
+				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
+			),
+		tooSmall
+			? createElement(
+					"box",
+					{ style: { width: "100%", flexGrow: 1, flexDirection: "column", padding: 1 } },
+					createElement(
+						"text",
+						{ fg: COLORS.statusWarning },
+						padToWidth(
+							truncateToWidth(
+								"Terminal too small: minimum 40 columns by 7 rows",
+								Math.max(1, terminalWidth - 2),
+							),
+							Math.max(1, terminalWidth - 2),
+						),
+					),
+					importantSmallMessage !== undefined &&
+						createElement(
+							"text",
+							{ fg: messageColor },
+							padToWidth(
+								truncateToWidth(importantSmallMessage, Math.max(1, terminalWidth - 2)),
+								Math.max(1, terminalWidth - 2),
+							),
+						),
+				)
+			: createElement(
+					"box",
+					{ style: { width: "100%", flexGrow: 1, flexDirection: "row" } },
+					createElement(TicketList, {
+						tickets,
+						selectedIndex,
+						focused: focusedPane === "list",
+						reservedRows,
+						emptyMessage,
+						markerOf,
+						limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+					}),
+					createElement(TicketDetail, {
+						lines,
+						visibleRows: detailGeometry.visibleRows,
+						scroll,
+						focused: focusedPane === "detail",
+					}),
+				),
 		createElement(
-			"box",
-			{ style: { width: "100%", flexGrow: 1, flexDirection: "row" } },
-			createElement(TicketList, {
-				tickets,
-				selectedIndex,
-				focused: focusedPane === "list",
-				reservedRows,
-				emptyMessage,
-				markerOf,
-				limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
-			}),
-			createElement(TicketDetail, {
-				lines,
-				visibleRows: detailGeometry.visibleRows,
-				scroll,
-				focused: focusedPane === "detail",
-			}),
+			"text",
+			{ style: { width: "100%", height: 1, fg: messageColor } },
+			padToWidth(truncateToWidth(messageLine, terminalWidth), terminalWidth),
 		),
-		healthLine !== "" &&
-			createElement(
-				"text",
-				{ style: { width: "100%", fg: COLORS.statusWarning } },
-				truncateToWidth(healthLine, terminalWidth),
-			),
-		modeLine !== "" &&
-			createElement(
-				"text",
-				{ style: { width: "100%", fg: COLORS.dim } },
-				truncateToWidth(modeLine, terminalWidth),
-			),
-		status !== null &&
-			createElement(
-				"text",
-				{ style: { width: "100%", fg: statusColor } },
-				truncateToWidth(status.text, terminalWidth),
-			),
+		createElement(ActionBar, {
+			mode: actionMode,
+			context: actionContext,
+			compactHelp: tooSmall,
+		}),
 		override !== null &&
 			createElement(OverridePanel, {
 				agents: Object.keys(config.agents),
@@ -959,6 +1131,10 @@ export function App({
 				agentSettings,
 				thinkingDefaults,
 				initial: override,
+				messageTruncated,
+				handoffActive: inFlightRef.current,
+				onHelp: (mode) => openGuide(mode),
+				onMessage: (mode) => openMessage(mode),
 				onConfirm: (choice) => {
 					setOverride(null);
 					startHandoff(choice);
@@ -974,6 +1150,15 @@ export function App({
 						actions: decision.actions,
 						onAction: (key) => runDecisionAction(panelTicket, key),
 						onCancel: () => setPanel(null),
+						onHelp: () => {
+							setPanel(null);
+							openGuide(currentBaseMode());
+						},
+						onMessage: () => {
+							setPanel(null);
+							openMessage(currentBaseMode());
+						},
+						messageTruncated,
 					})
 				: createElement(ActionPanel, {
 						title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
@@ -987,7 +1172,30 @@ export function App({
 						],
 						onAction: (key) => runMissingAction(panelTicket, key),
 						onCancel: () => setPanel(null),
+						onHelp: () => {
+							setPanel(null);
+							openGuide(currentBaseMode());
+						},
+						onMessage: () => {
+							setPanel(null);
+							openMessage(currentBaseMode());
+						},
+						messageTruncated,
 					})),
+		utility?.kind === "guide" &&
+			createElement(KeyGuide, {
+				context: utilityContext,
+				onClose: () => setUtility(null),
+				onHelp: () => setUtility(null),
+				onMessage: () => openMessage(utilityContext.mode),
+			}),
+		utility?.kind === "message" &&
+			createElement(MessageView, {
+				fact: utility.fact,
+				context: utilityContext,
+				onClose: () => setUtility(null),
+				onHelp: () => openGuide(utilityContext.mode),
+			}),
 	);
 }
 

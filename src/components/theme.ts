@@ -11,16 +11,21 @@ export const COLORS = {
 	textBright: "#e6edf3",
 	dim: "#8b949e",
 	/**
-	 * The surface the override panel's overlay fills with.
+	 * The established dark surface for utility and work overlays.
 	 *
-	 * A fixed dark surface by decision: a modal carries its own background,
-	 * so it stays readable on any terminal background, dark or light. The
-	 * panes below paint no background and follow the terminal's own.
+	 * A fixed dark surface by decision: an overlay carries its own background,
+	 * so it stays readable on any terminal background, dark or light. The base
+	 * panes and Action bar paint no background and follow the terminal's own.
 	 */
 	overlay: "#0d1117",
 	statusError: "#f85149",
 	statusWarning: "#d29922",
+	statusWorking: "#58a6ff",
 } as const;
+
+export function prefixForSeverity(severity: "working" | "warning" | "error"): string {
+	return severity === "working" ? "Working:" : severity === "warning" ? "Warning:" : "Error:";
+}
 
 export const STATE_COLORS: Record<TicketState, string> = {
 	open: "#58a6ff",

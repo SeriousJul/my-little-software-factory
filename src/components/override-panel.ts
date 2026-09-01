@@ -20,16 +20,18 @@
  * open, the keys of the app below are disabled.
  *
  * The panel sizes itself to the terminal: the value column shrinks first,
- * then the label column, then the marker. The hint row and the last rows
- * drop when the terminal cannot hold them. A row never wraps or interleaves:
- * it carries less, not broken text.
+ * then the label column, then the marker. The shared Action bar stays at the
+ * terminal bottom. The last rows drop when the terminal cannot hold them. A
+ * row never wraps or interleaves: it carries less, not broken text.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, useRef, useState } from "react";
 
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import { ActionBar } from "./action-bar.ts";
+import { contextFor, isPrintableKey } from "./controls.ts";
+import { padToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** Which settings an agent type maps, for hiding rows it does not support. */
@@ -50,6 +52,11 @@ interface OverridePanelProps {
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
+	onHelp?: (mode: "override-list" | "override-text") => void;
+	onMessage?: (mode: "override-list" | "override-text") => void;
+	/** Whether a full Message is available through F2. */
+	messageTruncated?: boolean;
+	handoffActive?: boolean;
 }
 
 type ListKey = "agentType" | "environment" | "taskType";
@@ -68,10 +75,6 @@ const LABEL_WIDTH = 12;
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 const MARKER_WIDTH = 2;
-// The hint row documents every key group the panel owns: the movement
-// keys, the list cycle keys, and the typed text of the free-text rows. It
-// must fit the modal's column width at the default geometry, or it drops.
-const HINT = "j/k move  h/l cycle  type text  enter esc";
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
 
@@ -90,7 +93,6 @@ interface PanelGeometry {
 	markerWidth: number;
 	labelWidth: number;
 	valueWidth: number;
-	showHint: boolean;
 	maxRows: number;
 }
 
@@ -110,14 +112,10 @@ function panelGeometry(width: number, height: number): PanelGeometry {
 		markerWidth = inner;
 		labelWidth = 0;
 	}
-	// The hint renders inside the modal, so it must fit the width the rows
-	// use, not the terminal: a hint wider than the box would render
-	// truncated, and a row never carries broken text.
-	const columns = markerWidth + labelWidth + valueWidth;
-	const showHint = columns >= widthOf(HINT) && height - CHROME >= 2;
-	// The hint takes a row of its own; the rows need at least one.
-	const maxRows = Math.max(1, height - CHROME - (showHint ? 1 : 0));
-	return { markerWidth, labelWidth, valueWidth, showHint, maxRows };
+	// The Action bar is outside the modal and does not alter its row columns.
+	// Rows still drop from the end when a short terminal cannot hold them.
+	const maxRows = Math.max(1, height - CHROME);
+	return { markerWidth, labelWidth, valueWidth, maxRows };
 }
 
 export function OverridePanel({
@@ -129,6 +127,10 @@ export function OverridePanel({
 	initial,
 	onConfirm,
 	onCancel,
+	onHelp,
+	onMessage,
+	messageTruncated = false,
+	handoffActive = false,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const geometry = panelGeometry(terminalWidth, terminalHeight);
@@ -226,6 +228,22 @@ export function OverridePanel({
 			return;
 		}
 		const target = cursorRow();
+		const interactionMode = target.kind === "text" ? "override-text" : "override-list";
+		// Quit is a base-pane control only. It must not become text in an
+		// override editor, either.
+		if (key.name === "q") return;
+		if (key.name === "f1") {
+			onHelp?.(interactionMode);
+			return;
+		}
+		if (key.name === "f2" && messageTruncated) {
+			onMessage?.(interactionMode);
+			return;
+		}
+		if (key.name === "?" && target.kind !== "text") {
+			onHelp?.(interactionMode);
+			return;
+		}
 		// A selected text row owns j, k, h, and l: they type into it. The
 		// arrows keep their movement, so the row can always be left.
 		if (
@@ -274,9 +292,7 @@ export function OverridePanel({
 				// name in another script is still a model name. Named keys
 				// carry a name of several characters, and a control character
 				// is never printable.
-				if ([...key.name].length === 1 && !/\p{Cc}/u.test(key.name)) {
-					typeText(key.name);
-				}
+				if (isPrintableKey(key.name)) typeText(key.name);
 				break;
 		}
 	});
@@ -313,15 +329,24 @@ export function OverridePanel({
 					...rowSpans(r, choice[r.key], r.key === row.key, geometry),
 				),
 			),
-			geometry.showHint &&
-				createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, innerWidthOf(geometry))),
 		),
+		createElement(ActionBar, {
+			mode: row.kind === "text" ? "override-text" : "override-list",
+			context: contextFor(row.kind === "text" ? "override-text" : "override-list", {
+				tickets: [],
+				selectedTicket: undefined,
+				selectedIndex: cursor,
+				listCanMove: true,
+				detailCanScroll: false,
+				sourceCount: 0,
+				refreshingSourceCount: 0,
+				handoffActive,
+				messageTruncated,
+				textEntry: row.kind === "text",
+			}),
+			overlay: true,
+		}),
 	);
-}
-
-/** The inner width of the modal in cells, for the hint row. */
-function innerWidthOf(geometry: PanelGeometry): number {
-	return geometry.markerWidth + geometry.labelWidth + geometry.valueWidth;
 }
 
 /** The rows the panel offers for the current choice, in order. */
