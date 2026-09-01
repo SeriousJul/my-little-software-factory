@@ -105,6 +105,8 @@ interface MembershipRow {
 /** A ticket with its latest handoff's choices and herdr handles. */
 export interface HandoffTicket {
 	ticketIdentity: string;
+	/** The ticket's state. */
+	state: TicketState;
 	workCycle: number;
 	taskType: string;
 	agentType: string;
@@ -118,6 +120,8 @@ export interface HandoffTicket {
 	workspaceId: string | null;
 	/** The attempt id of the latest handoff. */
 	handoffAttemptId: string;
+	/** When the handoff's agent started, in ISO time. */
+	startedAt: string;
 }
 
 /** The version 1 schema, kept verbatim for the v1 to v2 migration test. */
@@ -185,10 +189,10 @@ const MIGRATION_V1_TO_V2 = `
 `;
 
 /** Open state synchronously after creating its parent directory. */
-export function openFactoryState(path: string): FactoryState {
+export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
 		if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-		return new FactoryState(path);
+		return new FactoryState(path, now);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new StateError(`cannot open factory state at ${path}: ${message}`);
@@ -199,9 +203,12 @@ export class FactoryState {
 	private readonly db: DatabaseSync;
 	private leaseToken: string | undefined;
 	readonly path: string;
+	/** The clock for internal timestamps. Tests pin it. */
+	private readonly now: () => number;
 
-	constructor(path: string) {
+	constructor(path: string, now: () => number = () => Date.now()) {
 		this.path = path;
+		this.now = now;
 		this.db = new DatabaseSync(path);
 		try {
 			this.db.exec("PRAGMA foreign_keys = ON");
@@ -628,7 +635,7 @@ export class FactoryState {
 		const clauses = states.map(() => "?").join(", ");
 		const rows = this.db
 			.prepare(
-				`SELECT t.identity AS ticket_identity, t.work_cycle, h.attempt_id, h.choice_json, h.pane_id, h.tab_id, h.workspace_id
+				`SELECT t.identity AS ticket_identity, t.state, t.work_cycle, h.attempt_id, h.choice_json, h.started_at, h.pane_id, h.tab_id, h.workspace_id
 				FROM tickets t JOIN handoffs h ON h.attempt_id = (
 					SELECT attempt_id FROM handoffs WHERE ticket_identity = t.identity
 					ORDER BY started_at DESC, rowid DESC LIMIT 1
@@ -636,7 +643,9 @@ export class FactoryState {
 			)
 			.all(...states) as Array<{
 			ticket_identity: string;
+			state: TicketState;
 			work_cycle: number;
+			started_at: string;
 			attempt_id: string;
 			choice_json: string;
 			pane_id: string | null;
@@ -649,6 +658,7 @@ export class FactoryState {
 			if (choice === undefined) continue;
 			out.push({
 				ticketIdentity: row.ticket_identity,
+				state: row.state,
 				workCycle: row.work_cycle,
 				taskType: choice.taskType,
 				agentType: choice.agentType,
@@ -659,6 +669,7 @@ export class FactoryState {
 				tabId: row.tab_id,
 				workspaceId: row.workspace_id,
 				handoffAttemptId: row.attempt_id,
+				startedAt: row.started_at,
 			});
 		}
 		return out;
@@ -679,6 +690,30 @@ export class FactoryState {
 			.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'handed-off'")
 			.run(identity);
 		return Number(result.changes) > 0;
+	}
+
+	/**
+	 * The observation's correction for a turn that settled too early.
+	 *
+	 * An awaiting ticket whose herdr pane is working again goes back to
+	 * running when its settled turn is still pending: the settle was
+	 * premature (the agent was still starting) or the operator re-prompted
+	 * the agent by hand, and the next settle refreshes the pending trace
+	 * in place. A decided or missing trace keeps the ticket awaiting: the
+	 * turn is over, and whatever the agent does now is not this turn.
+	 * Returns whether the state changed.
+	 */
+	reopenTurn(identity: string, handoffId: string): boolean {
+		return this.transaction(() => {
+			const pending = this.db
+				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
+				.get(handoffId) as { id: string } | undefined;
+			if (pending === undefined) return false;
+			const moved = this.db
+				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
+				.run(identity);
+			return Number(moved.changes) > 0;
+		});
 	}
 
 	/**
@@ -865,7 +900,7 @@ export class FactoryState {
 						ticketIdentity,
 						ticket.work_cycle,
 						JSON.stringify(choice),
-						new Date().toISOString(),
+						new Date(this.now()).toISOString(),
 					);
 				return { ok: true, claim: { attemptId } };
 			});
@@ -917,7 +952,7 @@ export class FactoryState {
 						attempt.ticket_identity,
 						attempt.work_cycle,
 						attempt.choice_json,
-						new Date().toISOString(),
+						new Date(this.now()).toISOString(),
 						details?.paneId ?? null,
 						details?.tabId ?? null,
 						details?.workspaceId ?? null,
@@ -929,7 +964,7 @@ export class FactoryState {
 				)
 				.run(
 					agentStarted ? "agent-started" : "failed",
-					new Date().toISOString(),
+					new Date(this.now()).toISOString(),
 					failureReason ?? null,
 					attemptId,
 				);

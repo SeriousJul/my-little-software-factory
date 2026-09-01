@@ -17,11 +17,24 @@ export interface RecordedCommand {
 export class FakeRunner implements CommandRunner {
 	readonly calls: RecordedCommand[] = [];
 	private responses = new Map<string, CommandResult>();
+	private sequences = new Map<string, CommandResult[]>();
 	private fallback: CommandResult = { code: 0, stdout: "", stderr: "" };
 
 	/** Answer `command args` with a result; exact args match, in order. */
 	set(command: string, args: readonly string[], result: Partial<CommandResult>): void {
 		this.responses.set(this.key(command, args), { code: 0, stdout: "", stderr: "", ...result });
+	}
+
+	/** Answers one command with a sequence of results, in call order. */
+	setSequence(
+		command: string,
+		args: readonly string[],
+		results: readonly Partial<CommandResult>[],
+	): void {
+		this.sequences.set(
+			this.key(command, args),
+			results.map((result) => ({ code: 0, stdout: "", stderr: "", ...result })),
+		);
 	}
 
 	/** The answer for any command without a specific response. */
@@ -43,7 +56,10 @@ export class FakeRunner implements CommandRunner {
 		// options.
 		void options;
 		this.calls.push({ command, args });
-		return this.responses.get(this.key(command, args)) ?? this.fallback;
+		const key = this.key(command, args);
+		const sequence = this.sequences.get(key);
+		if (sequence !== undefined && sequence.length > 0) return sequence.shift() as CommandResult;
+		return this.responses.get(key) ?? this.fallback;
 	}
 
 	private key(command: string, args: readonly string[]): string {

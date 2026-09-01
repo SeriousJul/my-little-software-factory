@@ -25,6 +25,7 @@ import {
 	detailPaneText,
 	frameText,
 	HEIGHT,
+	listHalfOf,
 	markerRowOf,
 	openPanel,
 	press,
@@ -181,7 +182,9 @@ describe("the Enter handoff", () => {
 				const detail = detailPaneText(frame);
 				expect(detail).toContain("Agent: pi");
 				expect(detail).toContain("Environment: live-worktree");
-				expect(detail).toContain("Task type: implement");
+				// The detail line says the value is the handoff's, not a
+				// suggestion.
+				expect(detail).toContain("Handoff task type: implement");
 				// A clean handoff clears the status line: no message and the
 				// panes take back the last row.
 				expect(frame).not.toContain("handing off");
@@ -222,8 +225,13 @@ describe("the Enter handoff", () => {
 
 				// The reason sits on the status line, the last row of the terminal.
 				expect(rowsOf(frame)[HEIGHT - 1]).toContain("error: herdr is not running");
-				// The selected ticket never left the open state.
-				expect(selectedRow(frame)).toContain("[open]");
+				// The selected ticket never left the open state, and a failed
+				// attempt is not a handoff: the row still wears the suggestion,
+				// and the detail says so.
+				const row = listHalfOf(selectedRow(frame));
+				expect(row).toContain("[open]");
+				expect(row).toContain("[implement]");
+				expect(detailPaneText(frame)).toContain("Suggested task type: implement");
 			},
 			WIDTH,
 			HEIGHT,
@@ -500,6 +508,117 @@ describe("the override panel", () => {
 				expect(runner.commands()).toContain(
 					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
 				);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("an override that differs from the suggestion rides on the handoff", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// The delay holds the pipeline before agent start, so the in-flight
+		// handoff is visible while it is not yet recorded.
+		const props = {
+			config: DEFAULT_CONFIG,
+			runner: new DelayedRunner(runner, 800),
+			home,
+			configPath,
+		};
+
+		await withApp(
+			async (setup) => {
+				// The open ticket wears its suggestion, and the detail says so.
+				expect(listHalfOf(selectedRow(setup.captureCharFrame()))).toContain("[implement]");
+				expect(detailPaneText(setup.captureCharFrame())).toContain(
+					"Suggested task type: implement",
+				);
+
+				// Override the task type to fix.
+				await openPanel(setup);
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await pressArrow(setup, "right", "the task type to become fix", (f) =>
+					frameText(f).includes("Task type fix"),
+				);
+
+				// Confirm. The handoff is in flight, but the agent has not
+				// started: the override stays provisional, and the list keeps
+				// showing the suggestion.
+				setup.mockInput.pressEnter();
+				const inFlight = await awaitFrame(
+					setup,
+					(frame) => frame.includes("handing off"),
+					"the in-flight handoff",
+				);
+				const row = listHalfOf(selectedRow(inFlight));
+				expect(row).toContain("[open]");
+				expect(row).toContain("[implement]");
+				expect(detailPaneText(inFlight)).toContain("Suggested task type: implement");
+
+				// Once the handoff settles, the row and the detail wear the
+				// overridden task type, not the suggestion.
+				const settled = await awaitFrame(
+					setup,
+					(frame) => selectedIs(frame, "[handed-off]"),
+					"the handoff to settle",
+				);
+				const settledRow = listHalfOf(selectedRow(settled));
+				expect(settledRow).toContain("[fix]");
+				expect(settledRow).not.toContain("[implement]");
+				expect(detailPaneText(settled)).toContain("Handoff task type: fix");
+
+				// The override drove the prompt too.
+				const fixPrompt = renderPrompt(DEFAULT_CONFIG.taskTypes.fix.template, first);
+				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a failure after agent start keeps the actual task type on the row", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const fixPrompt = renderPrompt(DEFAULT_CONFIG.taskTypes.fix.template, first);
+		runner.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
+			code: 1,
+			stderr: "error: the agent is not accepting prompts\n",
+		});
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				// Override the task type to fix, then hand off.
+				await openPanel(setup);
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await pressArrow(setup, "right", "the task type to become fix", (f) =>
+					frameText(f).includes("Task type fix"),
+				);
+				const frame = await pressEnterToHandoff(setup);
+
+				// The agent started, so the handoff is recorded even though
+				// the prompt did not get through: the row and the detail keep
+				// the actual overridden task type.
+				const row = listHalfOf(selectedRow(frame));
+				expect(row).toContain("[handed-off]");
+				expect(row).toContain("[fix]");
+				expect(detailPaneText(frame)).toContain("Handoff task type: fix");
+				// The prompt failure still shows its reason.
+				expect(frame).toContain("the prompt failed");
 			},
 			WIDTH,
 			HEIGHT,

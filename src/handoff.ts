@@ -39,6 +39,10 @@ import { agentNameFor, branchNameFor } from "./naming.ts";
 import { commandFailureText, type ResolutionNotes, realPathOf, resolveRepository } from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
 
+/** A fresh pane can need a short time to reach its shell prompt. */
+const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
+const AGENT_PANE_BUSY_RETRY_WINDOW_MS = 2_000;
+
 /** One handoff's choices: the defaults plus whatever an override changed. */
 export interface HandoffChoice {
 	agentType: string;
@@ -691,7 +695,7 @@ async function startAgentAndPrompt(
 	if (args.length > 0) {
 		startArgs.push("--", ...args);
 	}
-	const started = await ctx.runner.run("herdr", startArgs);
+	const started = await startAgentWhenPaneIsReady(startArgs, ctx.runner);
 	if (started.code !== 0) {
 		return failedCommand(started, ctx);
 	}
@@ -715,6 +719,31 @@ async function startAgentAndPrompt(
 	}
 	await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
 	return { status: "ok", agent: startedAgent, notes: ctx.notes };
+}
+
+/**
+ * Start an agent after a freshly created pane reaches its shell prompt.
+ *
+ * Herdr creates the terminal asynchronously but rejects `agent start` while
+ * that terminal is not an available shell. That rejection is transient for
+ * the fresh panes this module targets, so retry only that exact error for a
+ * bounded window. Other failures remain immediate and keep their original
+ * cleanup path.
+ */
+async function startAgentWhenPaneIsReady(
+	args: readonly string[],
+	runner: CommandRunner,
+): Promise<CommandResult> {
+	const deadline = Date.now() + AGENT_PANE_BUSY_RETRY_WINDOW_MS;
+	while (true) {
+		const result = await runner.run("herdr", args);
+		if (result.code === 0 || herdrErrorCode(result) !== "agent_pane_busy") return result;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return result;
+		await new Promise<void>((resolve) =>
+			setTimeout(resolve, Math.min(AGENT_PANE_BUSY_RETRY_DELAY_MS, remaining)),
+		);
+	}
 }
 
 /** Close the previous handoff's tab, best effort, when it differs. */

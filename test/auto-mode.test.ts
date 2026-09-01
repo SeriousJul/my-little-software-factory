@@ -527,7 +527,9 @@ describe("the decision panel", () => {
 				await pressArrow(setup, "down", "the handoff row", (f) =>
 					frameText(f).includes("❯ Handoff: review"),
 				);
-				await pressReturn(setup, "the routed handoff", (f) => f.includes("Task type: review"));
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
 
 				// The prompt carried the last captured message, and the
 				// settled agent's tab was closed once the new agent started.
@@ -583,7 +585,9 @@ describe("the decision panel", () => {
 				await pressArrow(setup, "down", "the pinned edge", (f) =>
 					frameText(f).includes("❯ Handoff: review agent codex"),
 				);
-				await pressReturn(setup, "the routed handoff", (f) => f.includes("Task type: review"));
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
 
 				// The handoff ran with the edge's pinned agent, and the
 				// route's decision landed on the settled turn's trace when the

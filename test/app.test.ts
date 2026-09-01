@@ -27,7 +27,11 @@
  * own cleanup.
  */
 import { CliRenderEvents } from "@opentui/core";
+import stringWidth from "string-width";
 import { describe, expect, test } from "vitest";
+import { COLORS, STATE_COLORS } from "../src/components/theme.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
 	agentRowOf,
@@ -39,13 +43,16 @@ import {
 	focusDetail,
 	frameText,
 	listFocused,
+	listHalfOf,
 	markerRowOf,
 	press,
 	pressArrow,
+	rgb,
 	rowsOf,
 	settle,
 	showsTicket,
 	sleep,
+	spanColors,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -73,11 +80,10 @@ describe("the control plane", () => {
 		}
 	});
 
-	test("list pane shows every sample ticket with title, repository, and state badge", async () => {
+	test("list pane shows every sample ticket with its state badge and repository", async () => {
 		await withApp(async (setup) => {
 			const frame = frameText(setup.captureCharFrame());
 			for (const ticket of SAMPLE_TICKETS) {
-				expect(frame).toContain(ticket.title);
 				expect(frame).toContain(ticket.repository);
 			}
 			expectStateBadges(frame);
@@ -92,6 +98,9 @@ describe("the control plane", () => {
 			expect(detail).toContain(first.description);
 			expect(detail).toContain("Agent: unassigned");
 			expect(detail).toContain("Source state: open");
+			// The open ticket's task type line says which fact it is.
+			expect(detail).toContain("Suggested task type: implement");
+			expect(detail).not.toContain("Handoff task type:");
 		});
 	});
 
@@ -298,36 +307,43 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				// The pane shows two rows at this height: the first two tickets
-				// only.
-				const frame = frameText(setup.captureCharFrame());
-				expect(frame).toContain(SAMPLE_TICKETS[0].title);
-				expect(frame).toContain(SAMPLE_TICKETS[1].title);
-				expect(frame).not.toContain(SAMPLE_TICKETS[2].title);
-				expect(frame).not.toContain(SAMPLE_TICKETS[3].title);
+				// only. The rows carry their state and task type badges as
+				// their identity, so a slide is visible in the badges even
+				// where a title wraps or truncates.
+				let frame = frameText(setup.captureCharFrame());
+				expect(frame).toContain("[handed-off]");
+				expect(frame).not.toContain("[running]");
+				expect(frame).not.toContain("[awaiting]");
 
-				// Moving the selection slides the window.
+				// Moving the selection slides the window: each slide brings the
+				// next state badge in and drops the oldest row out.
 				await press(
 					setup,
 					"j",
 					"the selection to move to the second ticket",
 					(f) => markerRowOf(f) === 3,
 				);
-				await press(
+				frame = await press(
 					setup,
 					"j",
 					"the window to keep the third ticket in view",
-					(f) =>
-						frameText(f).includes(SAMPLE_TICKETS[2].title) &&
-						!frameText(f).includes(SAMPLE_TICKETS[0].title),
+					(f) => frameText(f).includes("[running]") && frameText(f).includes("[handed-off]"),
 				);
-				await press(
+				expect(frame).not.toContain("[awaiting]");
+				// The rows that slid in carry their task type badges.
+				const rows = rowsOf(frame);
+				expect(rows.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
+				expect(rows.find((r) => r.includes("[handed-off]"))?.includes("[implement]")).toBe(true);
+
+				frame = await press(
 					setup,
 					"j",
 					"the window to slide to the last tickets",
-					(f) =>
-						frameText(f).includes(SAMPLE_TICKETS[3].title) &&
-						!frameText(f).includes(SAMPLE_TICKETS[1].title),
+					(f) => frameText(f).includes("[awaiting]") && !frameText(f).includes("[handed-off]"),
 				);
+				const rows3 = rowsOf(frame);
+				expect(rows3.find((r) => r.includes("[awaiting]"))?.includes("[review]")).toBe(true);
+				expect(rows3.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
 			},
 			WIDTH,
 			6,
@@ -343,24 +359,54 @@ describe("the control plane", () => {
 				"the selection to move to the second ticket",
 				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 3,
 			);
+			// The badge rides on the selected row at this width.
+			expect(setup.captureCharFrame()).toContain("[implement]");
 
-			// Shrink the terminal mid-session.
+			// Shrink the terminal mid-session, across a width where the badge
+			// no longer fits. The new size lands in two renders: the outer
+			// grid first, the panes' row geometry second. Wait on the row
+			// geometry itself: in the 60-wide layout the [implement] badge
+			// and the repository have dropped from the list rows, and the
+			// short [fix] badge still rides.
 			setup.resize(60, 12);
 			const small = await awaitFrame(
 				setup,
-				(f) =>
-					rowsOf(f).length === 12 &&
-					rowsOf(f).every((row) => row.length === 60) &&
-					f.includes("Tickets") &&
-					f.includes("Detail"),
+				(f) => {
+					const rows = rowsOf(f);
+					return (
+						rows.length === 12 &&
+						rows.every((row) => row.length === 60) &&
+						f.includes("Tickets") &&
+						f.includes("Detail") &&
+						f.includes("[fix] Migrat") &&
+						rows.every((row) => !listHalfOf(row).includes("[implement]")) &&
+						rows.every((row) => !listHalfOf(row).includes("acme/"))
+					);
+				},
 				"the frame to take the new size",
 			);
 			// Both panes and the selection survive the resize.
 			expect(small).toContain("Tickets");
 			expect(small).toContain("Detail");
 			expect(markerRowOf(small)).toBe(3);
+			// The badge drops at this width; the repository already did.
+			expect(small).not.toContain("[implement]");
 
-			// Grow it back.
+			// The detail pane keeps its focus, and its scroll survives.
+			await press(setup, "l", "the focus to move to the detail pane", detailFocused);
+			await press(
+				setup,
+				"j",
+				"the detail to drop the title by one row",
+				(f) => !detailPaneText(f, 60).includes(SAMPLE_TICKETS[1].title),
+			);
+			const scrolled = await settle(setup);
+			expect(detailFocused(scrolled)).toBe(true);
+			expect(detailPaneText(scrolled, 60)).not.toContain(SAMPLE_TICKETS[1].title);
+
+			// Grow it back, waiting on the settled row geometry: the 120-wide
+			// layout rides the badge and the repository in the open ticket's
+			// row.
 			setup.resize(120, 30);
 			const large = await awaitFrame(
 				setup,
@@ -368,13 +414,19 @@ describe("the control plane", () => {
 					rowsOf(f).length === 30 &&
 					rowsOf(f).every((row) => row.length === 120) &&
 					f.includes("Tickets") &&
-					f.includes("Detail"),
+					f.includes("Detail") &&
+					f.includes("[implement] Retry policy for  acme/billing"),
 				"the frame to take the original size",
 			);
 			expect(large).toContain("Tickets");
 			expect(large).toContain("Detail");
 			expect(markerRowOf(large)).toBe(3);
 			expect(showsTicket(large, SAMPLE_TICKETS[1])).toBe(true);
+			// The badge comes back, the focus stays, and the detail scroll
+			// clamps to the window that now fits the whole ticket.
+			expect(large).toContain("[implement]");
+			expect(detailFocused(large)).toBe(true);
+			expect(detailPaneText(large)).toContain(SAMPLE_TICKETS[1].title);
 		});
 	});
 
@@ -489,6 +541,282 @@ describe("the control plane", () => {
 			40,
 			12,
 		);
+	});
+
+	test("each list row carries the task type badge between the state badge and the title", async () => {
+		await withApp(async (setup) => {
+			const frame = setup.captureCharFrame();
+			const rows = rowsOf(frame);
+			const row = (ticket: Ticket) =>
+				listHalfOf(rows.find((r) => listHalfOf(r).includes(ticket.title.slice(0, 8))) as string);
+
+			// The selected open ticket wears its suggested type, and every
+			// field rides in the row's fixed order.
+			const first = SAMPLE_TICKETS[0];
+			expect(row(first).slice(2, 16)).toBe("❯ [open]      ");
+			expect(row(first).slice(16, 27)).toBe("[implement]");
+			expect(row(first).slice(27, 45)).toBe(" Retry policy for ");
+			expect(row(first).slice(45, 58)).toBe(" acme/billing");
+
+			// The non-open tickets wear the task type their handoff recorded.
+			expect(row(SAMPLE_TICKETS[1]).slice(16, 27)).toBe("[implement]");
+			expect(row(SAMPLE_TICKETS[2]).slice(16, 21)).toBe("[fix]");
+			expect(row(SAMPLE_TICKETS[3]).slice(16, 24)).toBe("[review]");
+		});
+	});
+
+	test("an open ticket wears its suggestion, not a stale handoff value", async () => {
+		// A ticket that was handed off, returned, and opened again: the row
+		// must describe the next handoff, not the closed one.
+		const stale: Ticket = {
+			...SAMPLE_TICKETS[1],
+			state: "open",
+			suggestedTaskType: "rework",
+			handoff: {
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "review",
+				model: "",
+				thinking: "",
+				attemptId: "attempt-1",
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "w-1",
+			},
+			handoffCount: 1,
+		};
+		await withApp(
+			async (setup) => {
+				const rows = rowsOf(setup.captureCharFrame());
+				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[open]")) as string);
+				expect(line).toBe("│ ❯ [open]      [rework] Fix pan drift in spli acme/portal │");
+				const detail = detailPaneText(setup.captureCharFrame());
+				expect(detail).toContain("Suggested task type: rework");
+				expect(detail).not.toContain("Handoff task type:");
+			},
+			WIDTH,
+			30,
+			{ initialTickets: [stale] },
+		);
+	});
+
+	test("a non-open ticket keeps its handoff value when the suggestion differs", async () => {
+		const drifted: Ticket = { ...SAMPLE_TICKETS[3], suggestedTaskType: "implement" };
+		await withApp(
+			async (setup) => {
+				const rows = rowsOf(setup.captureCharFrame());
+				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[awaiting]")) as string);
+				expect(line).toBe("│ ❯ [awaiting]  [review] Drop the legacy auth  acme/portal │");
+				const detail = detailPaneText(setup.captureCharFrame());
+				expect(detail).toContain("Handoff task type: review");
+				expect(detail).not.toContain("Suggested task type:");
+			},
+			WIDTH,
+			30,
+			{ initialTickets: [drifted] },
+		);
+	});
+
+	test("non-actionable and recovery-required open tickets keep their suggestion", async () => {
+		const blocked: Ticket = {
+			...SAMPLE_TICKETS[0],
+			actionable: false,
+			suggestedTaskType: "review",
+		};
+		const recovery: Ticket = {
+			...SAMPLE_TICKETS[0],
+			identity: "I_recovery",
+			handoffRecoveryRequired: true,
+			suggestedTaskType: "review",
+		};
+		await withApp(
+			async (setup) => {
+				const frame = setup.captureCharFrame();
+				const rows = rowsOf(frame);
+				// Both rows wear the suggestion... and the badges are intact.
+				expect(rows.filter((r) => listHalfOf(r).includes("[review]")).length).toBe(2);
+				// ...and the detail says so for the selected ticket.
+				expect(detailPaneText(frame)).toContain("Suggested task type: review");
+
+				await press(setup, "j", "the selection to move to the recovery ticket", (f) =>
+					detailPaneText(f).includes("Handoff: recovery required"),
+				);
+				const detail = detailPaneText(setup.captureCharFrame());
+				expect(detail).toContain("Handoff: recovery required");
+				expect(detail).toContain("Suggested task type: review");
+			},
+			WIDTH,
+			30,
+			{ initialTickets: [blocked, recovery] },
+		);
+	});
+
+	test("a non-open ticket without a handoff wears the warning [unknown]", async () => {
+		const orphan: Ticket = { ...SAMPLE_TICKETS[2], handoff: null };
+		await withApp(
+			async (setup) => {
+				const frame = setup.captureCharFrame();
+				const rows = rowsOf(frame);
+				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[unknown]")) as string);
+				expect(line).toBe("│ ❯ [running]   [unknown] Migrate scheduler to acme/ingest │");
+				// The missing-data badge is the only warning-colored text in
+				// the row; the configured types keep the neutral style.
+				expect(spanColors(setup, "[unknown]")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "[running]")).toEqual([rgb(STATE_COLORS.running)]);
+				// The detail carries the explicit line for the missing data.
+				const detail = detailPaneText(frame);
+				expect(detail).toContain("Handoff task type: unknown");
+				expect(detail).not.toContain("Suggested task type:");
+			},
+			WIDTH,
+			30,
+			{ initialTickets: [orphan] },
+		);
+	});
+
+	test("configured task types share one neutral badge style", async () => {
+		await withApp(async (setup) => {
+			const neutral = rgb(COLORS.text);
+			expect(spanColors(setup, "[implement]")).toEqual([neutral]);
+			expect(spanColors(setup, "[fix]")).toEqual([neutral]);
+			expect(spanColors(setup, "[review]")).toEqual([neutral]);
+		});
+	});
+
+	test("the badge is complete or absent as the width changes, never truncated", async () => {
+		const selectedRowAt = async (width: number, height: number): Promise<string> => {
+			let row = "";
+			await withApp(
+				async (setup) => {
+					const frame = setup.captureCharFrame();
+					const rows = rowsOf(frame);
+					expect(rows).toHaveLength(height);
+					// Every terminal row is exactly as wide as the terminal:
+					// nothing wrapped or overflowed.
+					for (const r of rows) {
+						expect(stringWidth(r)).toBe(width);
+					}
+					row = listHalfOf(rows[markerRowOf(frame)]);
+				},
+				width,
+				height,
+			);
+			return row;
+		};
+
+		// 120: marker, state, badge, title, and repository all ride.
+		expect(await selectedRowAt(120, 30)).toBe(
+			"│ ❯ [open]      [implement] Retry policy for  acme/billing │",
+		);
+		// 80: the badge keeps its place; the repository drops before the
+		// title does.
+		expect(await selectedRowAt(80, 24)).toBe("│ ❯ [open]      [implement] Retry poli │");
+		// 60: the badge no longer fits beside the title minimum, so it
+		// drops complete. A short type on another row still fits.
+		const narrow = await selectedRowAt(60, 12);
+		expect(narrow).toBe("│ ❯ [open]       Retry polic │");
+		// 40: nothing but the marker and the state badge fits.
+		expect(await selectedRowAt(40, 12)).toBe("│ ❯ [open]       R │");
+	});
+
+	test("the badge drops when its complete text cannot fit, and the detail keeps the value", async () => {
+		await withApp(
+			async (setup) => {
+				// Select the handed-off ticket: its row is where the
+				// [implement] badge and the title minimum do not share the 12
+				// cells the row has left, so the badge drops and the title
+				// keeps the cells.
+				await press(setup, "j", "the selection to move to the second ticket", (f) =>
+					listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string).includes("[handed-off]"),
+				);
+				const frame = setup.captureCharFrame();
+				const rows = rowsOf(frame);
+				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[handed-off]")) as string);
+				expect(line).toBe("│ ❯ [handed-off] Fix pan dri │");
+				expect(line).not.toContain("[implem");
+				// The detail carries the full value the row dropped.
+				expect(detailPaneText(frame, 60)).toContain("Handoff task type: implement");
+			},
+			60,
+			12,
+		);
+	});
+
+	test("a long task type and wide Unicode titles keep every row exact", async () => {
+		const longConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				consultation: { template: "Consult the record.", autoClose: false },
+			},
+		};
+		const wide: Ticket = {
+			...SAMPLE_TICKETS[0],
+			identity: "I_wide",
+			title: "中文 webhook 重试策略",
+			suggestedTaskType: "consultation",
+		};
+		const props = { initialTickets: [wide], config: longConfig };
+
+		await withApp(
+			async (setup) => {
+				// At the normal width the long badge rides complete, and the
+				// wide title truncates on cell boundaries without splitting a
+				// character.
+				const rows = rowsOf(setup.captureCharFrame());
+				for (const r of rows) {
+					expect(stringWidth(r)).toBe(120);
+				}
+				expect(listHalfOf(rows[markerRowOf(setup.captureCharFrame())])).toBe(
+					"│ ❯ [open]      [consultation] 中文 webhook   acme/billing │",
+				);
+				// The full value still lives in the detail pane.
+				expect(detailPaneText(setup.captureCharFrame())).toContain(
+					"Suggested task type: consultation",
+				);
+			},
+			120,
+			30,
+			props,
+		);
+
+		await withApp(
+			async (setup) => {
+				// At the narrow width the long badge cannot fit complete, so
+				// it drops, and the row still keeps its exact width.
+				const rows = rowsOf(setup.captureCharFrame());
+				for (const r of rows) {
+					expect(stringWidth(r)).toBe(60);
+				}
+				expect(listHalfOf(rows[markerRowOf(setup.captureCharFrame())])).toBe(
+					"│ ❯ [open]       中文 webhoo │",
+				);
+				// The detail keeps the full value the row dropped.
+				expect(detailPaneText(setup.captureCharFrame(), 60)).toContain(
+					"Suggested task type: consultation",
+				);
+			},
+			60,
+			12,
+			props,
+		);
+	});
+
+	test("the detail pane carries one explicit task type line for every ticket", async () => {
+		await withApp(async (setup) => {
+			// The open ticket: the suggestion, labeled as a suggestion.
+			let detail = detailPaneText(setup.captureCharFrame());
+			expect(detail).toContain("Suggested task type: implement");
+			expect(detail).not.toContain("Handoff task type:");
+
+			// The handed-off ticket: the recorded value, labeled as a handoff.
+			await press(setup, "j", "the selection to move to the second ticket", (f) =>
+				showsTicket(f, SAMPLE_TICKETS[1]),
+			);
+			detail = detailPaneText(setup.captureCharFrame());
+			expect(detail).toContain("Handoff task type: implement");
+			expect(detail).not.toContain("Suggested task type:");
+		});
 	});
 
 	test("tiny terminals stay intact", async () => {

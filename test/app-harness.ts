@@ -34,6 +34,14 @@ export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve
 // back into the source string at their word-boundary breaks.
 export const frameText = (frame: string) => frame.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ");
 export const rowsOf = (frame: string) => frame.replace(/\n$/, "").split("\n");
+/**
+ * The list pane's half of a terminal row, with its right border.
+ *
+ * A terminal row interleaves the two panes row by row, so an exact check
+ * on a list row must run on the left half alone. The split runs on the
+ * pane-divider substring, so it holds for wide-character rows too.
+ */
+export const listHalfOf = (row: string): string => `${row.split("││")[0]}│`;
 /** The terminal row of the selected ticket in the list pane. */
 export const markerRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
@@ -72,6 +80,52 @@ export function expectStateBadges(frame: string): void {
 		expect(frame).toContain(badge);
 	}
 }
+
+/**
+ * The distinct foreground colors the renderer used to paint the exact text
+ * `text`, as `[r, g, b]` triplets, scanning every occurrence in the frame.
+ *
+ * Styled-span capture reads what the renderer painted, not the source's
+ * props, so a check through it verifies the terminal output. The colors
+ * come back in first-paint order.
+ */
+export function spanColors(setup: Setup, text: string): [number, number, number][] {
+	const frame = setup.captureSpans();
+	const order: [number, number, number][] = [];
+	const seen = new Set<string>();
+	for (const line of frame.lines) {
+		const full = line.spans.map((span) => span.text).join("");
+		let from = 0;
+		for (;;) {
+			const at = full.indexOf(text, from);
+			if (at < 0) break;
+			let spanStart = 0;
+			for (const span of line.spans) {
+				const spanEnd = spanStart + span.text.length;
+				const overlaps = spanEnd > at && spanStart < at + text.length;
+				if (overlaps) {
+					const [r, g, b] = span.fg.toInts();
+					const key = `${r},${g},${b}`;
+					if (!seen.has(key)) {
+						seen.add(key);
+						order.push([r, g, b]);
+					}
+				}
+				spanStart = spanEnd;
+			}
+			from = at + text.length;
+		}
+	}
+	return order;
+}
+
+/** A `#rrggbb` color as the `[r, g, b]` triplet `spanColors` reports. */
+export const rgb = (hex: string): [number, number, number] => [
+	Number.parseInt(hex.slice(1, 3), 16),
+	Number.parseInt(hex.slice(3, 5), 16),
+	Number.parseInt(hex.slice(5, 7), 16),
+];
+
 /** Frame predicate: the detail pane holds the focus. */
 export const detailFocused = (frame: string) =>
 	frame.includes("❯ Detail") && !frame.includes("❯ Tickets");

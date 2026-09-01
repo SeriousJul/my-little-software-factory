@@ -160,6 +160,11 @@ The condition where the latest Agent poll failed or was unreadable.
 The last known Consultation states stay visible and cannot become `missing` from that poll.
 _Avoid_: missing Agent, Herdr offline
 
+**Startup grace**:
+The window from a handoff during which the agent's idle report is its boot, not a turn end.
+A ticket that has never shown working waits the window out before an idle agent settles it.
+_Avoid_: boot delay, settle delay
+
 **Restart**:
 A recovery Handoff after a Missing agent.
 It repeats the interrupted Handoff's choices and counts toward the Handoff limit.

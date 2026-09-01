@@ -4,7 +4,7 @@ import { createElement } from "@opentui/react";
 import type { Ticket } from "../domain/ticket.ts";
 import { windowOf } from "./geometry.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
-import { COLORS, STATE_COLORS, stateBadge } from "./theme.ts";
+import { COLORS, STATE_COLORS, stateBadge, taskTypeColor, ticketTaskType } from "./theme.ts";
 
 export interface DetailLine {
 	text: string;
@@ -27,8 +27,15 @@ export function detailLines(
 	pushWrapped(`Agent: ${ticket.handoff?.agentType ?? "unassigned"}`, COLORS.text);
 	if (ticket.handoff !== null) {
 		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
-		pushWrapped(`Task type: ${ticket.handoff.taskType}`, COLORS.text);
 	}
+	// One explicit task type line for every ticket: the open ticket's
+	// suggestion, or the recorded handoff's task type. The label says which
+	// fact it is, so routing never reads as history.
+	const presentation = ticketTaskType(ticket);
+	pushWrapped(
+		`${ticket.state === "open" ? "Suggested" : "Handoff"} task type: ${presentation.value}`,
+		taskTypeColor(presentation),
+	);
 	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, COLORS.text);
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;
