@@ -219,6 +219,95 @@ describe("handOffTicket: the live worktree sequence", () => {
 		]);
 	});
 
+	test("retries a busy fresh pane until its shell is available", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-1") },
+		);
+		runner.setSequence(
+			"herdr",
+			["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-1"],
+			[
+				{
+					code: 1,
+					stderr:
+						'{"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"},"id":"cli:agent:start"}',
+				},
+				{},
+			],
+		);
+
+		const outcome = await handOffTicket(ticket, defaultChoice, {
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			"herdr workspace list",
+			`herdr workspace create --cwd ${CHECKOUT} --no-focus`,
+			`herdr tab create --workspace ws-new --cwd ${CHECKOUT} --no-focus`,
+			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
+			`herdr agent prompt ${AGENT} ${PROMPT}`,
+		]);
+	});
+
+	test("stops retrying a pane that never reaches a shell", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-wt"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"agent_pane_busy","message":"agent target pane pane-wt is not an available shell"},"id":"cli:agent:start"}',
+		});
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: DEFAULT_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("agent_pane_busy");
+		const starts = runner.commands().filter((command) => command.startsWith("herdr agent start"));
+		expect(starts.length).toBeGreaterThan(1);
+		// The bounded failure still uses the normal worktree cleanup.
+		expect(runner.commands()).toContain("herdr worktree remove --workspace ws-wt");
+		expect(runner.commands()).toContain(
+			`git -C ${CHECKOUT} branch -D factory/7-retry-policy-for-webhooks`,
+		);
+	});
+
 	test("reuses the workspace that already holds the checkout", async () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);
@@ -580,6 +669,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		// The fresh tab is removed; the workspace and the branch pre-date the
 		// handoff and stay.
 		const commands = runner.commands();
+		expect(commands.filter((command) => command.startsWith("herdr agent start"))).toHaveLength(1);
 		expect(commands).toContain("herdr tab close tab-1");
 		expect(commands.indexOf("herdr tab close tab-1")).toBeGreaterThan(
 			commands.indexOf(`herdr agent start ${AGENT} --kind pi --pane pane-tab`),
