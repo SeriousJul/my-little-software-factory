@@ -1,12 +1,13 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 import { renderAnsiScreen } from "../src/components/ansi-screen.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	boundedReplacementInput,
+	CONSULTATION_INPUT_LIMIT,
 	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
@@ -72,6 +73,22 @@ describe("Consultation input and interaction rules", () => {
 		expect(validateResponseInput("   ")).toBe("response cannot be empty");
 		expect(isLiteralText("é😀\n\t")).toBe(true);
 		expect(isLiteralText("safe\u001b[31m")).toBe(false);
+	});
+
+	test("refuses input over the 64 KiB default limit by UTF-8 bytes", () => {
+		const atLimit = "a".repeat(64 * 1024);
+		const overLimit = "a".repeat(64 * 1024 + 1);
+		expect(CONSULTATION_INPUT_LIMIT).toBe(64 * 1024);
+		expect(validateConsultationInput(atLimit)).toBeUndefined();
+		expect(validateConsultationInput(overLimit)).toBe(
+			`initial input is ${64 * 1024 + 1} UTF-8 bytes; the limit is ${64 * 1024}`,
+		);
+		// A multi-byte character straddling the limit is counted by bytes.
+		expect(validateConsultationInput(`${"a".repeat(64 * 1024 - 4)}😀`)).toBeUndefined();
+		expect(validateConsultationInput(`${"a".repeat(64 * 1024 - 3)}😀`)).toContain(
+			"UTF-8 bytes; the limit",
+		);
+		expect(validateResponseInput(overLimit)).toContain("UTF-8 bytes; the limit");
 	});
 
 	test("maps semantic keys and lets AltGr text pass through", () => {
@@ -494,6 +511,71 @@ describe("durable Consultation lifecycle", () => {
 		expect(state.consultation(other.id)?.state).toBe("closed");
 		expect(state.consultationRemainingResources(other.id)).toEqual([]);
 		state.close();
+	});
+});
+
+describe("durable Consultation privacy", () => {
+	test("stores settled output beyond the snapshot limit as a bounded tail", () => {
+		const state = makeState();
+		const consultation = createConsultation(state, "consultation-1");
+		const id = consultation.id;
+		state.setConsultationAgent(id, { paneId: "pane-11111111" });
+		state.setConsultationState(id, "working");
+		state.settleConsultationTurn(id, 1, "a".repeat(2 * 1024 * 1024), "idle");
+		const [snapshot] = state.consultationSnapshots(id);
+		expect(snapshot).toBeDefined();
+		expect(snapshot.truncated).toBe(true);
+		expect(Buffer.byteLength(snapshot.text, "utf8")).toBeLessThanOrEqual(1024 * 1024);
+		expect(snapshot.text).toContain("…captured history truncated…");
+		expect(snapshot.text.endsWith("a".repeat(1000))).toBe(true);
+	});
+
+	test("keeps the state file and its sidecars owner-only", () => {
+		const { state, path } = makeStateFile();
+		createConsultation(state);
+		const mode = (file: string) => statSync(file).mode & 0o777;
+		expect(mode(path)).toBe(0o600);
+		expect(mode(dirname(path))).toBe(0o700);
+		expect(mode(`${path}-wal`)).toBe(0o600);
+		expect(mode(`${path}-shm`)).toBe(0o600);
+	});
+
+	test("deletion removes the history, truncates the WAL, and leaves no plaintext", () => {
+		const { state, path } = makeStateFile();
+		const marker = "UNIQUE-PLAINTEXT-MARKER-4f9c21";
+		const id = "consultation-1";
+		state.createConsultation({
+			id,
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: `Review ${marker}`,
+			renderedOpeningPrompt: `/skill:grill-with-docs Review ${marker}`,
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+			agentName: "consultation-11111111",
+			createdAt: "2026-09-01T00:00:00.000Z",
+		});
+		state.setConsultationAgent(id, { paneId: "pane-11111111" });
+		state.setConsultationState(id, "working");
+		state.settleConsultationTurn(id, 1, `settled ${marker}`, "idle");
+		state.setConsultationState(id, "closing");
+		state.finishConsultationClose(id);
+		expect(state.consultation(id)).toBeDefined();
+		state.deleteConsultation(id);
+		expect(state.consultation(id)).toBeUndefined();
+		// The checkpoint truncates the WAL: nothing of the history stays in it.
+		expect(statSync(`${path}-wal`).size).toBe(0);
+		// secure_delete zero-fills the released pages: no plaintext in the file.
+		expect(readFileSync(path, "latin1")).not.toContain(marker);
+		expect(readFileSync(`${path}-shm`, "latin1")).not.toContain(marker);
 	});
 });
 

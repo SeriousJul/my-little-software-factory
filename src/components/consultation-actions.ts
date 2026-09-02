@@ -20,6 +20,8 @@ export interface ActionContext {
 	responseEditor: boolean;
 	interaction: boolean;
 	interactionExitKey: string;
+	/** The observation's last report for the selected Agent pane, if any. */
+	agentStatus: string | null;
 }
 
 interface ActionHint {
@@ -165,9 +167,20 @@ function actionHints(context: ActionContext): ActionHint[] {
 		{ key: "?", label: "help", priority: 30 },
 		{ key: "q", label: "quit", priority: 20 },
 	];
-	if (selected?.state === "awaiting-response")
-		hints.splice(1, 0, { key: "Enter", label: "respond", priority: 80 });
-	else if (selected?.state === "working" && selected.paneId !== null)
+	if (selected?.state === "awaiting-response") {
+		if (context.agentStatus === "blocked" && selected.paneId !== null) {
+			// The Agent holds the keys: Enter opens interaction mode, and the
+			// exit key is visible before any input is forwarded.
+			hints.splice(1, 0, { key: "Enter", label: "interact", priority: 80 });
+			hints.splice(2, 0, {
+				key: exitKeyLabel(context.interactionExitKey),
+				label: "interact exit",
+				priority: 75,
+			});
+		} else {
+			hints.splice(1, 0, { key: "Enter", label: "respond", priority: 80 });
+		}
+	} else if (selected?.state === "working" && selected.paneId !== null)
 		hints.splice(1, 0, { key: "Enter", label: "interact", priority: 80 });
 	if (
 		selected?.state === "opening" ||

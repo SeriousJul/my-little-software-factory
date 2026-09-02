@@ -257,6 +257,9 @@ export function App({
 	const openingLaunches = useRef(new Set<string>());
 	const interactionInputQueue = useRef<ConsultationInputQueue | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
+	// The selected Agent pane's refresh, callable the moment a forwarded
+	// input lands: the operator should not wait out the refresh interval.
+	const outputRefreshRef = useRef<(() => void) | null>(null);
 
 	const commandRunner = runner ?? realRunner();
 	if (interactionInputQueue.current === undefined)
@@ -308,6 +311,14 @@ export function App({
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
 	const selectedConsultation = consultations[consultationIndex];
+	// The status the observation last reported for the selected Consultation's
+	// Agent pane: it gates the response editor and the interaction mode.
+	const selectedConsultationAgentStatus =
+		selectedConsultation === undefined || selectedConsultation.paneId === null || agents === null
+			? null
+			: normalizeAgentStatus(
+					agents.find((agent) => agent.paneId === selectedConsultation.paneId)?.status ?? "unknown",
+				);
 	const actionContext: ActionContext = {
 		view,
 		focusedPane,
@@ -318,13 +329,8 @@ export function App({
 		responseEditor,
 		interaction,
 		interactionExitKey: config.interactionExitKey,
+		agentStatus: selectedConsultationAgentStatus,
 	};
-	const selectedConsultationAgentStatus =
-		selectedConsultation === undefined || selectedConsultation.paneId === null || agents === null
-			? null
-			: normalizeAgentStatus(
-					agents.find((agent) => agent.paneId === selectedConsultation.paneId)?.status ?? "unknown",
-				);
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
@@ -1213,16 +1219,25 @@ export function App({
 	const openAttention = () => {
 		if (state === undefined) return false;
 		const current = state.consultations("open");
-		const target =
-			current.find((item) => item.state === "awaiting-response") ??
-			current.find(
+		// The list is newest-first, but attention goes to the oldest
+		// unresolved recovery item: it has waited the longest for the
+		// operator. Ties break on creation time.
+		const recovery = current
+			.filter(
 				(item) =>
 					item.state === "missing" ||
 					item.state === "failed" ||
 					item.state === "opening" ||
 					item.state === "closing",
-			);
-		if (target === undefined) return false;
+			)
+			.reduce<Consultation | null>((oldest, item) => {
+				if (oldest === null) return item;
+				if (item.updatedAt < oldest.updatedAt) return item;
+				if (item.updatedAt === oldest.updatedAt && item.createdAt < oldest.createdAt) return item;
+				return oldest;
+			}, null);
+		const target = current.find((item) => item.state === "awaiting-response") ?? recovery;
+		if (target === undefined || target === null) return false;
 		historyFilterRef.current = "open";
 		setHistoryFilter("open");
 		replaceConsultations();
@@ -1455,8 +1470,12 @@ export function App({
 			if (selected !== undefined && selected.paneId !== null && event !== null) {
 				void inputQueue.enqueue(selected.paneId, event).then(
 					(result) => {
-						if (result.code === 0) setNewOutput(true);
-						else
+						if (result.code === 0) {
+							setNewOutput(true);
+							// The key may have produced output already: re-read
+							// the pane now, not on the next interval tick.
+							outputRefreshRef.current?.();
+						} else
 							setStatus({
 								kind: "error",
 								text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
@@ -1589,8 +1608,13 @@ export function App({
 				if (viewRef.current === "consultations") {
 					if (selectedConsultation === undefined) break;
 					if (selectedConsultation.state === "awaiting-response") {
-						const latestTurn = consultationTurns[consultationTurns.length - 1];
-						if (latestTurn?.settledStatus === "blocked" && selectedConsultation.paneId !== null)
+						// The editor opens on the Agent's observed status, not on
+						// the last settled turn: a blocked Agent takes the keys
+						// until it stops blocking.
+						if (
+							selectedConsultationAgentStatus === "blocked" &&
+							selectedConsultation.paneId !== null
+						)
 							setInteraction(true);
 						else beginResponse(selectedConsultation);
 					} else if (
@@ -1735,10 +1759,12 @@ export function App({
 				return output;
 			});
 		};
+		outputRefreshRef.current = () => void refresh();
 		void refresh();
 		const timer = setInterval(() => void refresh(), interaction ? 250 : 1000);
 		return () => {
 			active = false;
+			outputRefreshRef.current = null;
 			clearInterval(timer);
 		};
 	}, [commandRunner, interaction, replaceConsultations, selectedConsultation, state, view]);
