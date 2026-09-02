@@ -30,7 +30,7 @@ import { availabilityFor, type ControlContext, contextFor, controlForKey } from 
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import { type MdLine, renderMarkdown } from "./markdown.ts";
 import type { ActionRow } from "./missing-modal.ts";
-import { padToWidth, truncateToWidth } from "./text.ts";
+import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 interface DecisionModalProps {
@@ -76,28 +76,40 @@ const LOG_COLORS = {
 };
 
 /**
- * Fit the log window within the near-fullscreen modal.
+ * The modal's final box size: the terminal minus one cell of margin on
+ * every side.
+ */
+export function decisionBoxSize(
+	terminalWidth: number,
+	terminalHeight: number,
+): { width: number; height: number } {
+	return {
+		width: Math.max(1, terminalWidth - MARGIN * 2),
+		height: Math.max(1, terminalHeight - MARGIN * 2),
+	};
+}
+
+/**
+ * Fit the log window within a modal of a given box size.
  *
  * The context row and the action rows are always kept. The shared Action
  * bar sits in the modal's bottom margin row, so it never takes a row from
  * the log.
+ *
+ * The layout derives from the box, not the terminal, so the pop-in stays
+ * honest: while the box is still growing, lines wrap at its current width
+ * and the body window has its current row count. A line that is wider than
+ * the frame being drawn is what a terminal shows as a smudge.
  */
-function decisionGeometry(
-	terminalWidth: number,
-	terminalHeight: number,
+export function decisionLayout(
+	boxWidth: number,
+	boxHeight: number,
 	actionRows: number,
-): {
-	modalWidth: number;
-	modalHeight: number;
-	contentWidth: number;
-	bodyRows: number;
-} {
-	const modalWidth = Math.max(1, terminalWidth - MARGIN * 2);
-	const modalHeight = Math.max(1, terminalHeight - MARGIN * 2);
-	const contentWidth = Math.max(1, modalWidth - CHROME);
-	const innerRows = Math.max(0, modalHeight - CHROME);
+): { contentWidth: number; bodyRows: number } {
+	const contentWidth = Math.max(1, boxWidth - CHROME);
+	const innerRows = Math.max(0, boxHeight - CHROME);
 	const bodyRows = Math.max(0, innerRows - actionRows - 1);
-	return { modalWidth, modalHeight, contentWidth, bodyRows };
+	return { contentWidth, bodyRows };
 }
 
 /**
@@ -145,28 +157,15 @@ export function DecisionModal({
 	onEmergencyExit,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const geometry = decisionGeometry(terminalWidth, terminalHeight, actions.length);
-	// Reserve a column for the scrollbar only when the log needs one. A
-	// scrollbar can add wrap rows, so determine overflow once at full width,
-	// then make the final window from the narrower text width.
-	const fullWidthBody = useMemo(
-		() => buildBody(entries, geometry.contentWidth),
-		[entries, geometry.contentWidth],
+	// The box size the pop-in grows into, decided at the terminal's size. The
+	// content layout follows the box while it grows; the hint and the
+	// scrollbar are decided at the final size, so neither flickers in and
+	// out during the pop.
+	const finalBox = decisionBoxSize(terminalWidth, terminalHeight);
+	const finalLayout = useMemo(
+		() => decisionLayout(finalBox.width, finalBox.height, actions.length),
+		[finalBox.width, finalBox.height, actions.length],
 	);
-	const hasScrollbar = fullWidthBody.length > geometry.bodyRows;
-	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
-	const body = useMemo(
-		() => (hasScrollbar ? buildBody(entries, bodyWidth) : fullWidthBody),
-		[hasScrollbar, entries, bodyWidth, fullWidthBody],
-	);
-	const bodyRows = Math.min(body.length, geometry.bodyRows);
-	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
-	// A settled turn ends with its conclusion: open at the bottom, with the
-	// newest line in view.
-	const [bodyScroll, setBodyScroll] = useState(() => maxBodyScroll);
-	const [selected, setSelected] = useState(0);
-	const selectedRef = useRef(0);
-
 	// The pop-in: a short fade with the box growing to its final size. A
 	// self-driven progress keeps it deterministic in the test renderer,
 	// where the animation engine never ticks.
@@ -180,6 +179,30 @@ export function DecisionModal({
 		}, POP_TICK_MS);
 		return () => clearInterval(id);
 	}, []);
+	const popFactor = POP_START + (1 - POP_START) * pop;
+	const boxWidth = Math.max(1, Math.round(finalBox.width * popFactor));
+	const boxHeight = Math.max(1, Math.round(finalBox.height * popFactor));
+	const geometry = decisionLayout(boxWidth, boxHeight, actions.length);
+	// Reserve a column for the scrollbar only when the log needs one. A
+	// scrollbar can add wrap rows, so determine overflow once at the final
+	// width, then make the final window from the narrower text width.
+	const fullWidthBody = useMemo(
+		() => buildBody(entries, finalLayout.contentWidth),
+		[entries, finalLayout.contentWidth],
+	);
+	const hasScrollbar = fullWidthBody.length > finalLayout.bodyRows;
+	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
+	// Wrap at the width the box has right now, so a line is never wider
+	// than the frame being drawn while the pop-in grows the box.
+	const body = useMemo(() => buildBody(entries, bodyWidth), [entries, bodyWidth]);
+	const bodyRows = Math.min(body.length, geometry.bodyRows);
+	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
+	// A settled turn ends with its conclusion: open at the bottom, with the
+	// newest line in view. `null` pins the view to the bottom until the
+	// operator scrolls: the bottom's index moves while the box grows in.
+	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
+	const [selected, setSelected] = useState(0);
+	const selectedRef = useRef(0);
 
 	const move = (delta: number) => {
 		if (actions.length === 0) return;
@@ -222,20 +245,25 @@ export function DecisionModal({
 				return;
 			case "scroll-turn-log":
 				if (key.name === "pageup")
-					setBodyScroll((current) => Math.max(0, current - Math.max(1, bodyRows)));
+					setBodyScroll((current) =>
+						Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)),
+					);
 				else if (key.name === "pagedown")
-					setBodyScroll((current) => Math.min(maxBodyScroll, current + Math.max(1, bodyRows)));
+					setBodyScroll((current) =>
+						Math.min(maxBodyScroll, (current ?? maxBodyScroll) + Math.max(1, bodyRows)),
+					);
 				else if (key.name === "home") setBodyScroll(0);
 				else if (key.name === "end") setBodyScroll(maxBodyScroll);
-				else if (key.name === "j") setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
-				else setBodyScroll((current) => Math.max(0, current - 1));
+				else if (key.name === "j")
+					setBodyScroll((current) => Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll));
+				else setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
 				return;
 			default:
 				return;
 		}
 	});
 
-	const scroll = Math.min(bodyScroll, maxBodyScroll);
+	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
 	const visibleBody = windowOf(body, scroll, bodyRows);
 	const thumbRows = hasScrollbar ? scrollbarRows(body.length, bodyRows, scroll) : null;
 
@@ -265,11 +293,8 @@ export function DecisionModal({
 				padding: 1,
 				style: {
 					flexDirection: "column",
-					width: Math.max(1, Math.round(geometry.modalWidth * (POP_START + (1 - POP_START) * pop))),
-					height: Math.max(
-						1,
-						Math.round(geometry.modalHeight * (POP_START + (1 - POP_START) * pop)),
-					),
+					width: boxWidth,
+					height: boxHeight,
 					opacity: pop,
 				},
 			},
@@ -323,6 +348,13 @@ function bodySpans(line: MdLine, width: number, thumb: boolean | undefined): Rea
 					createElement("span", { fg: span.fg }, truncateToWidth(span.text, width)),
 				);
 	if (thumb !== undefined) {
+		// Pin the scrollbar to the body's last column. Without the pad, the
+		// thumb and track float behind short lines: a block in the middle of
+		// the row reads as an artifact.
+		let used = 0;
+		for (const span of line) used += widthOf(span.text);
+		const pad = Math.max(0, width - used);
+		if (pad > 0) spans.push(createElement("span", {}, " ".repeat(pad)));
 		spans.push(
 			createElement("span", { fg: thumb ? COLORS.textBright : COLORS.dim }, thumb ? "█" : "│"),
 		);
