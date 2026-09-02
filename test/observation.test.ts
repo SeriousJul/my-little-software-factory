@@ -121,6 +121,8 @@ interface Rig {
 
 function rig(options: {
 	autoOn?: boolean;
+	/** Override a config knob the awaiting and dispatch rules read. */
+	config?: Partial<FactoryConfig>;
 	agents?: HerdrAgent[];
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
 	/** The turn log the fake session reader returns. Null: no session log. */
@@ -142,7 +144,7 @@ function rig(options: {
 		turnLogs: {
 			read: options.turnLogs ?? (async () => null),
 		},
-		config: () => config,
+		config: () => ({ ...config, ...options.config }),
 		dispatch: async (intent) => {
 			intents.push(intent);
 			return { ok: true };
@@ -1610,5 +1612,196 @@ describe("Consultation observation identity", () => {
 		} finally {
 			state.close();
 		}
+	});
+});
+
+/**
+ * An agent can outlive the work cycle that started it: the Close cleanup
+ * cannot remove a dirty checkout, and the operator can re-prompt a settled
+ * agent in its herdr pane. The cycle is closed, so the loop stops looking at
+ * that pane, and the list reads `open` while the agent works. The poll
+ * re-claims the agent it started: the same state correction on read it makes
+ * for a ticket still in flight.
+ */
+describe("an agent that outlives its work cycle", () => {
+	const identity = "github:github.com:I_5";
+	const PANE = "pane-research";
+
+	/** Hand a ticket out, settle its turn, and close its cycle. */
+	function closedCycle(rig_: Pick<Rig, "state" | "advance" | "setAgents">): string {
+		const attempt = handOut(rig_.state, identity, "research");
+		// Age the cycle so its trace is older than anything the loop settles.
+		rig_.advance(90_000);
+		rig_.state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: attempt,
+			taskType: "research",
+			agentType: "pi",
+			message: "the turn is over",
+			turnLog: [{ kind: "text", text: "the turn is over" }],
+			completedAt: "2026-08-31T11:01:30Z",
+		});
+		rig_.advance(30_000);
+		rig_.state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:02:00Z",
+		});
+		return attempt;
+	}
+
+	function ticketOf(state: FactoryState, of = identity) {
+		return state.visibleTickets([], "implement").find((ticket) => ticket.identity === of);
+	}
+
+	test("a working agent in a closed cycle's pane runs its ticket again", async () => {
+		const r = rig({ agents: [] });
+		const { state, coordinator, statuses, setAgents } = r;
+		closedCycle(r);
+		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
+		// The operator re-prompts the agent in its herdr pane.
+		setAgents([agent(PANE, "working")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({
+				ticketIdentity: identity,
+				workCycle: 2,
+				paneId: PANE,
+				taskType: "research",
+				agentType: "pi",
+			}),
+		]);
+		expect(ticketOf(state)).toEqual(
+			expect.objectContaining({
+				state: "running",
+				handoffCount: 2,
+				handoff: expect.objectContaining({
+					environment: "worktree",
+					taskType: "research",
+					paneId: PANE,
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+				}),
+				// The closed cycle keeps its own decided trace.
+				lastCompletion: expect.objectContaining({ decision: "closed" }),
+			}),
+		);
+		expect(statuses.map((status) => status.text)).toEqual([expect.stringContaining(identity)]);
+		// The same working agent on the next poll records no second handoff.
+		await coordinator.tick();
+		expect(ticketOf(state)?.handoffCount).toBe(2);
+		state.close();
+	});
+
+	test("a reclaimed ticket settles into awaiting on its own next idle report", async () => {
+		const r = rig({ agents: [] });
+		const { state, coordinator, setAgents } = r;
+		closedCycle(r);
+		setAgents([agent(PANE, "working")]);
+		await coordinator.tick();
+		setAgents([agent(PANE, "idle")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity, workCycle: 2, taskType: "research" }),
+		]);
+		expect(state.lastCompletion(identity)).toEqual(
+			expect.objectContaining({ decision: null, taskType: "research" }),
+		);
+		state.close();
+	});
+
+	test("an agent that only reports settled or unknown does not restart a closed cycle", async () => {
+		for (const status of ["idle", "done", "meditating"]) {
+			const rig_ = rig({ agents: [] });
+			const { state, coordinator, setAgents } = rig_;
+			closedCycle(rig_);
+			setAgents([agent(PANE, status)]);
+			await coordinator.tick();
+			expect(state.ticketsByState(["handed-off", "running", "awaiting"])).toEqual([]);
+			expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
+			state.close();
+		}
+	});
+
+	test("a blocked agent in a closed cycle's pane is reclaimed too", async () => {
+		const r = rig({ agents: [] });
+		const { state, coordinator, setAgents } = r;
+		closedCycle(r);
+		setAgents([agent(PANE, "blocked")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity }),
+		]);
+		state.close();
+	});
+
+	test("a pane another ticket holds is never reclaimed", async () => {
+		const r = rig({ agents: [] });
+		const { state, coordinator, setAgents } = r;
+		closedCycle(r);
+		// A second ticket is in flight in the very same pane: it owns the agent.
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		const other = state.claimHandoff(
+			"github:github.com:I_6",
+			{ ...choice, taskType: "research" },
+			"open",
+		);
+		if (!other.ok) throw new Error(other.reason);
+		state.settleHandoff(other.claim.attemptId, true, undefined, {
+			paneId: PANE,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		setAgents([agent(PANE, "working")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_6" }),
+		]);
+		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
+		state.close();
+	});
+
+	test("a reclaimed agent holds a parallel slot against the auto-handoff dispatch", async () => {
+		const r = rig({ autoOn: true, agents: [], config: { maxParallelAgents: 1 } });
+		const { state, intents, coordinator, setAgents } = r;
+		closedCycle(r);
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		setAgents([agent(PANE, "working")]);
+		await coordinator.tick();
+		// The reclaimed agent is live, so the one parallel slot is taken and
+		// no new handoff starts for the other ticket.
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity }),
+		]);
+		expect(intents).toEqual([]);
+		state.close();
+	});
+
+	test("an unreachable herdr reclaims nothing", async () => {
+		const r = rig({ agents: [] });
+		const { state, setAgents, statuses } = r;
+		closedCycle(r);
+		setAgents([agent(PANE, "working")]);
+		const holding = new ObservationCoordinator({
+			state,
+			herdr: {
+				listAgents: async () => ({ kind: "error", reason: "herdr is down" }),
+				readPane: async () => null,
+			},
+			config: () => config,
+			dispatch: async () => ({ ok: true }),
+			cleanup: async () => undefined,
+			now: () => Date.parse("2026-08-31T11:05:00Z"),
+			mode: () => false,
+			intervalMs: 60_000,
+			onChanged: () => {},
+			onStatus: (kind, text) => {
+				statuses.push({ kind, text });
+			},
+		});
+		await holding.tick();
+		expect(state.ticketsByState(["running"])).toEqual([]);
+		state.close();
 	});
 });

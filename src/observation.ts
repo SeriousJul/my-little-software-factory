@@ -9,7 +9,14 @@
  *
  * Each cycle:
  *
- * 1. An in-flight ticket whose agent reports working runs. One whose agent
+ * 1. An open ticket whose last closed handoff still holds a working or
+ *    blocked agent is reclaimed (ADR 0011): the loop records a handoff in the
+ *    ticket's current cycle with that handoff's choices and the same herdr
+ *    handles, and the ticket runs again. A close ends a cycle, but the agent
+ *    it started can outlive it: the Close cleanup cannot remove a dirty
+ *    checkout, and the operator can re-prompt a settled agent in herdr. The
+ *    list never reads `open` over an agent that works.
+ * 2. An in-flight ticket whose agent reports working runs. One whose agent
  *    reports done or idle settles: the turn's log is read from the agent's
  *    session record (ADR 0008), falling back to the pane's recent output
  *    when herdr reports no session, and stored in a completion trace with
@@ -20,24 +27,24 @@
  *    booted agent reports idle before it picks up the prompt. An awaiting
  *    ticket whose agent is working again reopens: its still-pending turn
  *    did not end, and the next settle refreshes the trace in place.
- * 2. A pane herdr no longer lists is missing. With auto-handoff on the
+ * 3. A pane herdr no longer lists is missing. With auto-handoff on the
  *    loop restarts the agent once per episode, or abandons the cycle when
  *    the ticket has used up its handoffs.
- * 3. Automatic completion decisions resolve the awaiting tickets: every
+ * 4. Automatic completion decisions resolve the awaiting tickets: every
  *    one with auto-handoff on, the auto-close types alone without it.
  *    Exactly one outgoing edge routes (while the parallel limit has room),
  *    any other edge count closes, and a route at the handoff limit
  *    degrades to close. A full parallel limit leaves a route awaiting
  *    until a slot frees, and the rest wait for the operator.
- * 4. With auto-handoff on, each eligible open ticket - actionable, under
+ * 5. With auto-handoff on, each eligible open ticket - actionable, under
  *    both limits - is handed off with the configured defaults. The
  *    parallel count is the in-flight tickets whose agent was alive in the
  *    latest poll: a blocked agent holds a slot, a missing one does not.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
- * recovery: a cycle that cannot see its agents does not settle or restart
- * anything.
+ * recovery: a cycle that cannot see its agents does not settle, reclaim, or
+ * restart anything.
  */
 
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
@@ -479,6 +486,11 @@ export class ObservationCoordinator {
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of probe.agents) byPane.set(agent.paneId, agent);
 
+		// An agent can outlive the cycle that started it. Re-claim the live ones
+		// before the parallel count is taken: a reclaimed agent is real work.
+		const reclaimed = this.reclaimLiveAgents(byPane);
+		if (this.stopped) return;
+
 		// The parallel count is the in-flight tickets whose agent was alive
 		// in this poll: a blocked agent still holds a slot, a missing one
 		// does not.
@@ -494,7 +506,7 @@ export class ObservationCoordinator {
 				this.restarted.delete(identity);
 		}
 
-		let changed = false;
+		let changed = reclaimed;
 		for (const ticket of inFlight) {
 			if (ticket.paneId === null) continue;
 			const agent = byPane.get(ticket.paneId);
@@ -555,6 +567,53 @@ export class ObservationCoordinator {
 	private turnSettles(ticket: HandoffTicket): boolean {
 		if (ticket.state === "running") return true;
 		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
+	}
+
+	/**
+	 * Re-claim every live agent whose work cycle has closed.
+	 *
+	 * A close ends a cycle and returns the ticket to open (ADR 0005). The
+	 * agent that cycle started can keep working in the same pane: the Close
+	 * cleanup leaves the workspace open when it cannot remove the checkout,
+	 * and the operator can re-prompt a settled agent in herdr. The loop would
+	 * stop looking at that pane, so the list would read `open` while the
+	 * agent works, and the next handoff of that ticket would fail on the
+	 * herdr agent name the live agent still holds. Herdr owns the fact that
+	 * the agent works, so the poll records it as a Reclaimed handoff, exactly
+	 * as it corrects a ticket still in flight to `running`.
+	 *
+	 * Only a working or blocked agent is reclaimed: an idle, done, or unknown
+	 * report says nothing about live work. A pane another ticket already
+	 * holds is left alone, and a closed cycle keeps its own decided trace.
+	 * Returns whether the factory state changed.
+	 */
+	private reclaimLiveAgents(byPane: ReadonlyMap<string, HerdrAgent>): boolean {
+		const held = new Set<string>();
+		for (const ticket of this.state.ticketsByState(["handed-off", "running", "awaiting"])) {
+			if (ticket.paneId !== null) held.add(ticket.paneId);
+		}
+		let changed = false;
+		for (const ticket of this.state.ticketsByState(["open"])) {
+			if (this.stopped) return changed;
+			if (ticket.paneId === null || held.has(ticket.paneId)) continue;
+			const agent = byPane.get(ticket.paneId);
+			if (agent === undefined) continue;
+			const status = normalizeAgentStatus(agent.status);
+			if (status !== "working" && status !== "blocked") continue;
+			const claimed = this.state.reclaimHandoff(ticket.ticketIdentity, {
+				paneId: agent.paneId,
+				tabId: agent.tabId,
+				workspaceId: agent.workspaceId,
+			});
+			if (claimed === null) continue;
+			held.add(agent.paneId);
+			changed = true;
+			this.onStatus(
+				"warning",
+				`agent still works on ticket ${ticket.ticketIdentity} after its cycle closed; the ticket runs again`,
+			);
+		}
+		return changed;
 	}
 
 	/** Reconcile durable Consultations from the same Agent list as Tickets. */
