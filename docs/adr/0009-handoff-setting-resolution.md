@@ -34,9 +34,11 @@ operator changes it or clears it, and a cleared setting is left to the
 agent. A context window is a whole count of tokens written in plain digits,
 because the value becomes one argv element: a model cannot parse `272 000`,
 `272k`, or `0x42000`. The panel takes a count the same way, so a character
-that is not a digit never enters the field, typed or pasted, and a draft that
-is digits but no count, `0` among them, is refused by the handoff rule below:
-one rule covers the typed path and the file path.
+that is not a digit never reaches the value, typed or pasted, and a draft
+that is digits but no count, `0` among them, is refused by the handoff rule
+below: one rule covers the typed path and the file path. One count also keeps
+one spelling: both paths fold a leading zero, so `007` and `7` are the same
+room and reach the agent as `7`.
 
 The panel edits an operator override on any handoff, including one a
 workflow edge resolved: the operator edits the route's settings before it

@@ -5,7 +5,7 @@ import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
-import { isTokenCount, TOKEN_COUNT_RULE } from "./domain/settings.ts";
+import { isTokenCount, TOKEN_COUNT_RULE, tokenCountDigits } from "./domain/settings.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
@@ -871,10 +871,9 @@ function tokenCountField(
 	const digits = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
 	if (!isTokenCount(digits))
 		throw new ConfigError(`config: ${where}.${key}: must be ${TOKEN_COUNT_RULE}`);
-	const count = Number(digits);
-	// The digits are the value: the control plane never reformats a count, and
-	// a leading zero is the only spelling that can change.
-	return String(count);
+	// The digits are the value: a file's count keeps one spelling, the same one
+	// the panel folds a typed count to.
+	return tokenCountDigits(digits);
 }
 
 function settingTemplate(template: string, where: string): string {

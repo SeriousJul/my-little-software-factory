@@ -174,6 +174,24 @@ async function selectRow(setup: Setup, direction: "up" | "down", label: string):
 	);
 }
 
+/**
+ * Walk the panel's arrows down to the Context row, and return a settled frame.
+ *
+ * A free-text row owns j and k, so the walk uses the arrows, which always move.
+ */
+async function selectContextRow(setup: Setup): Promise<string> {
+	await selectRow(setup, "down", "Environment");
+	await selectRow(setup, "down", "Task type");
+	await selectRow(setup, "down", "Model");
+	await selectRow(setup, "down", "Thinking");
+	await selectRow(setup, "down", "Context");
+	return settle(setup);
+}
+
+/** The digits the Context row holds, or an empty string when it holds none. */
+const contextDigitsOf = (frame: string): string =>
+	rowWith(frame, "Context").match(/Context\s+([0-9]+)/u)?.[1] ?? "";
+
 /** Type into the row the panel holds focused. */
 async function typeText(setup: Setup, text: string): Promise<void> {
 	await setup.mockInput.typeText(text);
@@ -1463,12 +1481,7 @@ describe("the override panel", () => {
 
 				// A free-text row owns j and k, so the walk to the last row uses
 				// the arrows, which always move.
-				await selectRow(setup, "down", "Environment");
-				await selectRow(setup, "down", "Task type");
-				await selectRow(setup, "down", "Model");
-				await selectRow(setup, "down", "Thinking");
-				const selected = await selectRow(setup, "down", "Context");
-				await settle(setup);
+				const selected = await selectContextRow(setup);
 				// The selected row's guide names the characters the row takes.
 				expect(frameText(selected)).toContain("0-9");
 
@@ -1484,6 +1497,21 @@ describe("the override panel", () => {
 				);
 				expect(rowWith(typed, "Context")).toContain("2720005");
 				expect(typed).not.toContain("5x");
+
+				// A refused character also has to leave the caret where the
+				// operator left it: the row is edited from its front here, so a
+				// caret that jumped to the end would land every later keystroke
+				// after the digits instead of between them.
+				setup.mockInput.pressKey("HOME");
+				for (const key of ["1", "2", " ", "3"]) {
+					setup.mockInput.pressKey(key);
+				}
+				const inserted = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("1232720005"),
+					"the typed digits to build the count at the caret",
+				);
+				expect(rowWith(inserted, "Context")).toContain("1232720005");
 
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find(
@@ -1501,8 +1529,51 @@ describe("the override panel", () => {
 					"-m",
 					"gpt-5.6-codex",
 					"-c",
-					"model_context_window=2720005",
+					"model_context_window=1232720005",
 				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the Context row folds a typed count to one spelling, the way the config does", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: contextProfileConfig, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await selectContextRow(setup);
+				// The profile's own count goes first, so the digits below are the
+				// only ones the row can hold: a frame that still carried them could
+				// never pass this test by accident.
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "272000") setup.mockInput.pressKey("DELETE");
+				await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("(empty)"),
+					"the Context row to empty",
+				);
+				// A count is its value, not its spelling: the row folds the leading
+				// zeros the way the config parser folds `007`, so the row shows the
+				// one spelling the agent gets.
+				await typeText(setup, "007");
+				const folded = await awaitFrame(
+					setup,
+					(f) => contextDigitsOf(f) === "7",
+					"the row to hold one spelling of the count",
+				);
+				expect(frameText(folded)).toContain("Context 7");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toContain("model_context_window=7");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1519,12 +1590,7 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
-				await selectRow(setup, "down", "Environment");
-				await selectRow(setup, "down", "Task type");
-				await selectRow(setup, "down", "Model");
-				await selectRow(setup, "down", "Thinking");
-				await selectRow(setup, "down", "Context");
-				await settle(setup);
+				await selectContextRow(setup);
 				// The caret sits at the row's end, where the last key landed, so the
 				// deletes have to start at its other end. The empty row below is
 				// what proves HOME moved the caret there.

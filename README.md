@@ -126,9 +126,11 @@ Thinking list row, hands that setting back to the agent.
 
 The Context row holds a count of tokens, so it takes digits and nothing
 else: a comma, a space, or a letter typed or pasted into it never reaches
-the value. Digits alone are not yet a count: a row that holds none, `0` for
-example, warns and fails its handoff, the way a config file that sets one
-fails at startup.
+the value, and the caret stays where the operator left it. A count also keeps
+one spelling: the row folds a leading zero the way a config file's count is
+folded, so `007` and `7` reach the agent as `7`. Digits alone are not yet a
+count: a row that holds none, `0` for example, warns and fails its handoff,
+the way a config file that sets one fails at startup.
 
 A setting the chosen agent type does not map has no row, so an agent without
 a `model` template shows no Model row. One exception keeps a value in reach:

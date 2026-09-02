@@ -18,13 +18,23 @@ export const TOKEN_COUNT_RULE = "a positive whole number of tokens in digits";
  * separator, a suffix (`200k`), or a hex spelling can never reach an agent.
  * Zero and an all-zero count are refused because they ask for no context at
  * all, and a count past the safe integer range is refused because the control
- * plane cannot state it without rounding it. A leading zero stays a valid
- * spelling of a count (`007` is seven): the config parser folds it to the
- * plain digits, and a handoff passes the operator's own typing through
- * unchanged.
+ * plane cannot state it without rounding it.
  */
 export function isTokenCount(value: string): boolean {
 	if (!/^[0-9]+$/.test(value)) return false;
 	const count = Number(value);
 	return Number.isSafeInteger(count) && count > 0;
+}
+
+/**
+ * The one spelling of a count: the plain digits of `value`, or `value` as it
+ * is when it is no count at all.
+ *
+ * `007` and `7` are the same count, and the config parser and the panel both
+ * fold a count to its plain digits, so one count never reaches an agent in two
+ * spellings. A value that is no count keeps what the operator typed: the row
+ * shows it, warns on it, and the handoff refuses it.
+ */
+export function tokenCountDigits(value: string): string {
+	return isTokenCount(value) ? String(Number(value)) : value;
 }

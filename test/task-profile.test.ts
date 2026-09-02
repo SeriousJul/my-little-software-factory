@@ -101,6 +101,22 @@ describe("task profile configuration", () => {
 		expect(validateConfig(parseToml(configToToml(parsed)))).toEqual(parsed);
 	});
 
+	test("folds a context count to its plain digits", () => {
+		// A quoted count and a bare one read the same, and a leading zero is a
+		// spelling, not a different count: the file's `007` is the panel's `7`.
+		const parsed = validateConfig({
+			...base(),
+			agents: {
+				...base().agents,
+				codex: { kind: "codex", "context-window": "--context {value}" },
+			},
+			"task-types": {
+				implement: { template: "x", agent: "codex", "context-window": "007" },
+			},
+		});
+		expect(parsed.taskTypes.implement.contextWindow).toBe("7");
+	});
+
 	test("rejects a context value that is not a positive whole token count", () => {
 		const agents = {
 			...base().agents,

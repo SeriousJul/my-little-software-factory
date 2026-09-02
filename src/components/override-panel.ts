@@ -21,8 +21,11 @@
  * inserted: ANSI escape sequences and line breaks are stripped, so a pasted
  * model name is plain text. The Context row goes one step further and keeps
  * digits only, typed or pasted, because its value is a token count that
- * reaches the agent as one argv element. An input scrolls horizontally within
- * its column and never wraps, so it can never corrupt the rows around it.
+ * reaches the agent as one argv element, and it folds a leading zero, so the
+ * row shows one spelling of the count it sends. A character that row refuses
+ * leaves the caret where the operator left it, so the next keystroke lands
+ * where they put it. An input scrolls horizontally within its column and
+ * never wraps, so it can never corrupt the rows around it.
  *
  * A list row (agent, environment, task type, and the thinking value when the
  * agent has a value list) cycles its value with left/right and h/l.
@@ -49,7 +52,7 @@ import type { InputRenderable } from "@opentui/core";
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, type RefObject, useRef, useState } from "react";
 
-import { isTokenCount } from "../domain/settings.ts";
+import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
@@ -300,16 +303,26 @@ export function OverridePanel({
 	const handleInput = (key: TextKey) => (text: string) => {
 		// A token row takes digits and nothing else, typed or pasted: one
 		// value must never become two argv elements, and a count cannot carry
-		// a stray character. The field owns its text, so a rejected character
-		// goes back out of it: the setter echoes an input event of its own,
-		// which the guard below absorbs.
-		const value = key === "contextWindow" ? text.replace(/[^0-9]/gu, "") : text;
+		// a stray character. A count also keeps one spelling: the row folds a
+		// leading zero the same way the config parser does, so what the panel
+		// shows is the count the agent gets. The field owns its text, so a
+		// rejected character goes back out of it: the setter echoes an input
+		// event of its own, which the guard below absorbs.
+		const value = key === "contextWindow" ? tokenCountDigits(text.replace(/[^0-9]/gu, "")) : text;
 		if (value !== text) {
 			// The row's own buffer holds a character the row refuses, so push
 			// the refused text back out of it. The ref is live whenever a key
 			// reached this callback, and a missing one only costs the write-back.
 			const input = inputRefs[key].current;
-			if (input !== null) input.value = value;
+			if (input !== null) {
+				// The refused characters all stood inside the run the field just
+				// inserted, so they were all before the caret. The write-back's
+				// setter lands the caret at the row's end, which would move every
+				// later keystroke there, so the caret goes back by their count.
+				const kept = Math.max(0, input.cursorOffset - (text.length - value.length));
+				input.value = value;
+				input.cursorOffset = Math.min(value.length, kept);
+			}
 		}
 		if (choiceRef.current[key] === value) {
 			return;
