@@ -28,7 +28,7 @@
  */
 import { CliRenderEvents } from "@opentui/core";
 import stringWidth from "string-width";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { COLORS, STATE_COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
@@ -45,6 +45,10 @@ import {
 	listFocused,
 	listHalfOf,
 	markerRowOf,
+	mouseClick,
+	mouseDrag,
+	mouseWheel,
+	openPanel,
 	press,
 	pressArrow,
 	rgb,
@@ -230,12 +234,13 @@ describe("the control plane", () => {
 				expect(agentRow).toBeGreaterThan(0);
 				expect(markerRowOf(setup.captureCharFrame())).toBe(2);
 
-				// j scrolls the detail down one row. The title scrolls out.
+				// j translates the native surface one terminal row. The top padding
+				// scrolls away first, and every mounted content row moves together.
 				const scrolled = await press(
 					setup,
 					"j",
 					"the detail to scroll down one row",
-					(f) => agentRowOf(f) === agentRow - 1 && !f.includes("Retry policy for webhooks"),
+					(f) => agentRowOf(f) === agentRow - 1 && f.includes("Retry policy for webhooks"),
 				);
 				// The selection did not move.
 				expect(markerRowOf(scrolled)).toBe(2);
@@ -395,15 +400,18 @@ describe("the control plane", () => {
 
 			// The detail pane keeps its focus, and its scroll survives.
 			await press(setup, "l", "the focus to move to the detail pane", detailFocused);
+			const selectedAgentRow = (frame: string) =>
+				rowsOf(frame).findIndex((row) => row.includes("Agent: codex"));
+			const agentBeforeScroll = selectedAgentRow(setup.captureCharFrame());
 			await press(
 				setup,
 				"j",
-				"the detail to drop the title by one row",
-				(f) => !detailPaneText(f, 60).includes(SAMPLE_TICKETS[1].title),
+				"the detail surface to translate by one row",
+				(f) => selectedAgentRow(f) === agentBeforeScroll - 1,
 			);
 			const scrolled = await settle(setup);
 			expect(detailFocused(scrolled)).toBe(true);
-			expect(detailPaneText(scrolled, 60)).not.toContain(SAMPLE_TICKETS[1].title);
+			expect(selectedAgentRow(scrolled)).toBe(agentBeforeScroll - 1);
 
 			// Grow it back, waiting on the settled row geometry: the 120-wide
 			// layout rides the badge and the repository in the open ticket's
@@ -477,7 +485,9 @@ describe("the control plane", () => {
 					expect(row[1]).toBe(" ");
 					expect(row[35]).toBe(" ");
 					expect(row[38]).toBe(" ");
-					expect(row[73]).toBe(" ");
+					// The detail's right padding cell is the native scrollbar
+					// gutter: blank, track, or thumb.
+					expect(row[73]).toMatch(/[ ▀▄█]/);
 				}
 				// The detail pane carries its content at this size.
 				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
@@ -818,6 +828,259 @@ describe("the control plane", () => {
 			expect(detail).toContain("Handoff task type: implement");
 			expect(detail).not.toContain("Suggested task type:");
 		});
+	});
+
+	test("detail keyboard paging and direct edges use the native viewport", async () => {
+		await withApp(
+			async (setup) => {
+				await focusDetail(setup);
+				const top = setup.captureCharFrame();
+				const page = await press(
+					setup,
+					"pagedown",
+					"the detail to move one viewport with context",
+					(frame) => !frame.includes("Retry policy for webhooks"),
+				);
+				expect(page).toContain("❯ [open]");
+				const end = await press(setup, "end", "the detail to reach its end", (frame) =>
+					frameText(frame).includes("their retries."),
+				);
+				expect(end).toContain("❯ [open]");
+				const home = await press(setup, "home", "the detail to return to its start", (frame) =>
+					frame.includes("Retry policy for webhooks"),
+				);
+				setup.mockInput.pressKey("HOME");
+				expect(await settle(setup)).toBe(home);
+				expect(top).not.toBe(page);
+			},
+			60,
+			12,
+		);
+	});
+
+	test("list page and edge controls select tickets without a separate list scroll", async () => {
+		await withApp(
+			async (setup) => {
+				const selectedState = (frame: string) =>
+					rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "";
+				await press(setup, "pagedown", "the list to move one visible page", (frame) =>
+					selectedState(frame).includes("[running]"),
+				);
+				await press(setup, "end", "the list to select its last ticket", (frame) =>
+					selectedState(frame).includes("Ticket id i"),
+				);
+				await press(setup, "home", "the list to select its first ticket", (frame) =>
+					selectedState(frame).includes("Retry polic"),
+				);
+			},
+			60,
+			8,
+		);
+	});
+
+	test("mouse input focuses and moves its Ticket surface through OpenTUI hit testing", async () => {
+		await withApp(
+			async (setup) => {
+				// A visible list row is a direct selection target.
+				await mouseClick(setup, 4, 3);
+				await awaitFrame(
+					setup,
+					(frame) =>
+						listFocused(frame) &&
+						(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "").includes("[handed-off]"),
+					"the clicked Ticket to become selected",
+				);
+				// List wheels select exactly one adjacent Ticket. They have no
+				// detail speed profile or acceleration.
+				await mouseWheel(setup, 4, 3, "down");
+				await awaitFrame(
+					setup,
+					(frame) =>
+						listFocused(frame) &&
+						(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "").includes("[running]"),
+					"one list wheel event to select one Ticket",
+				);
+
+				// Detail content receives a normal wheel event and takes focus.
+				const before = setup.captureCharFrame();
+				await mouseWheel(setup, 45, 3, "down");
+				const scrolled = await awaitFrame(
+					setup,
+					(frame) => detailFocused(frame) && frame !== before,
+					"the detail wheel event to move its surface",
+				);
+				expect(markerRowOf(scrolled)).toBe(4);
+
+				// Horizontal and Shift-wheel gestures are inert for wrapped detail text.
+				const stable = setup.captureCharFrame();
+				await mouseWheel(setup, 45, 3, "left");
+				await mouseWheel(setup, 45, 3, "down", true);
+				expect(await settle(setup)).toBe(stable);
+			},
+			60,
+			10,
+		);
+	});
+
+	test("a fitting detail reserves an empty gutter instead of a false scrollbar", async () => {
+		await withApp(async (setup) => {
+			const frame = setup.captureCharFrame();
+			expect(frame).not.toMatch(/[▀▄█]/);
+			// The final inner detail column remains blank: text uses the same
+			// width before a later overflow makes the control visible.
+			expect(rowsOf(frame)[2].at(-2)).toBe(" ");
+		});
+	});
+
+	test("the overflowing detail has an interactive native scrollbar", async () => {
+		await withApp(
+			async (setup) => {
+				// At this size the rightmost inner column is OpenTUI's thumb and
+				// track. It is not present on a fitting detail.
+				const initial = setup.captureCharFrame();
+				expect(initial).toMatch(/[▀▄█]/);
+				// The panes sit above the Message line and Action bar, so the
+				// track spans the pane's inner rows one to four.
+				await mouseClick(setup, 58, 4);
+				const trackJump = await awaitFrame(
+					setup,
+					(frame) => detailFocused(frame) && frame !== initial,
+					"a scrollbar track click to jump to a proportional detail position",
+				);
+				expect(markerRowOf(trackJump)).toBe(2);
+				const thumbRow = rowsOf(trackJump).findIndex((row) => /[▀▄█]/.test(row.slice(58, 59)));
+				await mouseDrag(setup, [58, thumbRow], [58, 1]);
+				await awaitFrame(
+					setup,
+					(frame) => frame.includes("Retry policy for webhooks"),
+					"a scrollbar thumb drag to move toward the start",
+				);
+			},
+			60,
+			8,
+		);
+	});
+
+	test("a custom Config controls fixed detail key movement", async () => {
+		const config = {
+			...DEFAULT_CONFIG,
+			scroll: { speed: 2, acceleration: 0, maximumSpeed: 2 },
+		};
+		await withApp(
+			async (setup) => {
+				await focusDetail(setup);
+				const before = agentRowOf(setup.captureCharFrame());
+				await press(
+					setup,
+					"j",
+					"the detail to move by the configured two rows",
+					(frame) => agentRowOf(frame) === before - 2,
+				);
+			},
+			60,
+			10,
+			{ config },
+		);
+	});
+
+	test("a custom Config controls the first detail wheel step", async () => {
+		const config = {
+			...DEFAULT_CONFIG,
+			scroll: { speed: 2, acceleration: 0, maximumSpeed: 2 },
+		};
+		await withApp(
+			async (setup) => {
+				const before = agentRowOf(setup.captureCharFrame());
+				await mouseWheel(setup, 45, 3, "down");
+				await awaitFrame(
+					setup,
+					(frame) => detailFocused(frame) && agentRowOf(frame) === before - 2,
+					"the configured linear wheel step to move two rows",
+				);
+			},
+			60,
+			10,
+			{ config },
+		);
+	});
+
+	test("a timed wheel burst accelerates the visible native detail surface", async () => {
+		await withApp(
+			async (setup) => {
+				const wheelAt = async (now: number) => {
+					const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+					try {
+						await mouseWheel(setup, 45, 3, "down");
+					} finally {
+						clock.mockRestore();
+					}
+				};
+				const start = agentRowOf(setup.captureCharFrame());
+				await wheelAt(1_000);
+				await awaitFrame(
+					setup,
+					(frame) => detailFocused(frame) && agentRowOf(frame) === start - 1,
+					"the precise first wheel step",
+				);
+				await wheelAt(1_050);
+				await awaitFrame(
+					setup,
+					(frame) => agentRowOf(frame) === start - 3,
+					"the accelerated second wheel step",
+				);
+			},
+			60,
+			10,
+		);
+	});
+
+	test("rapid detail input records only complete native terminal frames", async () => {
+		const config = {
+			...DEFAULT_CONFIG,
+			scroll: { speed: 1, acceleration: 0, maximumSpeed: 1 },
+		};
+		await withApp(
+			async (setup) => {
+				const frames: string[] = [];
+				const record = () => frames.push(setup.captureCharFrame());
+				setup.renderer.on(CliRenderEvents.FRAME, record);
+				try {
+					for (let event = 0; event < 10; event += 1) {
+						await mouseWheel(setup, 45, 3, "down");
+					}
+					await sleep(80);
+				} finally {
+					setup.renderer.off(CliRenderEvents.FRAME, record);
+				}
+				expect(frames.length).toBeGreaterThan(0);
+				for (const frame of frames) {
+					const rows = rowsOf(frame);
+					expect(rows).toHaveLength(10);
+					expect(rows.every((row) => row.length === 60)).toBe(true);
+					expect(rows[0]).toContain("┌");
+					// The panes sit above the Message line and Action bar.
+					expect(rows.at(-3)).toContain("└");
+					expect(detailPaneText(frame, 60).trim()).not.toBe("");
+				}
+			},
+			60,
+			10,
+			{ config },
+		);
+	});
+
+	test("mouse input below an open modal leaves both Ticket surfaces inert", async () => {
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				const before = setup.captureCharFrame();
+				await mouseWheel(setup, 45, 3, "down");
+				await mouseClick(setup, 4, 3);
+				expect(await settle(setup)).toBe(before);
+			},
+			60,
+			8,
+		);
 	});
 
 	test("tiny terminals stay intact", async () => {

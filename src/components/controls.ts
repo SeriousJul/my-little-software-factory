@@ -3,8 +3,16 @@
  *
  * A control is not only a key. It is an action, its aliases, its scope, its
  * Action bar priority, and the reason it is unavailable in the current
- * state. The shell and overlays use this catalogue for dispatch and display,
- * so the operator never sees a binding the app does not accept.
+ * state. The shell, the modals, and the overlays use this catalogue for
+ * dispatch and display, so the operator never sees a binding the app does
+ * not accept.
+ *
+ * A control's accepted keys are its own per mode: the same Move control is
+ * `↑↓/jk` plus the page and jump keys in the Ticket list, `↑↓/jk` plus
+ * `Tab` on the override panel's list rows, and plain `↑↓` on its text rows,
+ * where `j` and `k` are printable text. The aliases a mode accepts are the
+ * only aliases that mode dispatches, and they are what its hints and guide
+ * rows may name.
  */
 import type { Ticket } from "../domain/ticket.ts";
 
@@ -13,7 +21,8 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "override-list"
 	| "override-text"
-	| "action-panel"
+	| "decision-modal"
+	| "missing-modal"
 	| "key-guide"
 	| "message-view";
 
@@ -23,13 +32,18 @@ export type ControlScope =
 	| "ticket-list"
 	| "ticket-detail"
 	| "override"
-	| "action-panel"
+	| "modal"
 	| "utility";
 export type ControlKey =
 	| "up"
 	| "down"
 	| "left"
 	| "right"
+	| "pageup"
+	| "pagedown"
+	| "home"
+	| "end"
+	| "tab"
 	| "j"
 	| "k"
 	| "h"
@@ -68,8 +82,9 @@ export interface ControlContext {
 export interface ControlDefinition {
 	id: string;
 	label: string;
+	/** The keys the control accepts in each interaction mode. */
+	keys: (mode: InteractionMode) => readonly ControlKey[];
 	/** Displayed in familiar arrow order, then Vim aliases. */
-	keys: readonly ControlKey[];
 	keyLabel: string;
 	scope: ControlScope;
 	/** Controls with this flag are candidates for the contextual Action bar. */
@@ -103,7 +118,6 @@ const completionEligibility = (context: ControlContext): ControlAvailability => 
 		? available()
 		: unavailable("the selected Ticket has no completion to decide");
 };
-
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" || context.mode === "override-text" || context.listCanMove
 		? available()
@@ -125,12 +139,11 @@ const message = (context: ControlContext): ControlAvailability =>
 
 const baseModes = ["ticket-list", "ticket-detail"] as const;
 const overrideModes = ["override-list", "override-text"] as const;
+const modalModes = ["decision-modal", "missing-modal"] as const;
 const allModes: readonly InteractionMode[] = [
-	"ticket-list",
-	"ticket-detail",
-	"override-list",
-	"override-text",
-	"action-panel",
+	...baseModes,
+	...overrideModes,
+	...modalModes,
 	"key-guide",
 	"message-view",
 ];
@@ -140,7 +153,12 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "move-list",
 		label: "Move",
-		keys: ["up", "down", "j", "k"],
+		keys: (mode) =>
+			mode === "ticket-list"
+				? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
+				: mode === "override-list"
+					? ["up", "down", "j", "k", "tab"]
+					: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",
 		actionBar: true,
@@ -151,7 +169,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "detail",
 		label: "Detail",
-		keys: ["right", "l"],
+		keys: () => ["right", "l"],
 		keyLabel: "→/l",
 		scope: "ticket-list",
 		actionBar: true,
@@ -162,7 +180,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "scroll-detail",
 		label: "Scroll",
-		keys: ["up", "down", "j", "k"],
+		keys: () => ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"],
 		keyLabel: "↑↓/jk",
 		scope: "ticket-detail",
 		actionBar: true,
@@ -173,7 +191,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "tickets",
 		label: "Tickets",
-		keys: ["left", "h"],
+		keys: () => ["left", "h"],
 		keyLabel: "←/h",
 		scope: "ticket-detail",
 		actionBar: true,
@@ -184,7 +202,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "change-override",
 		label: "Change",
-		keys: ["left", "right", "h", "l"],
+		keys: () => ["left", "right", "h", "l"],
 		keyLabel: "←→/hl",
 		scope: "override",
 		actionBar: true,
@@ -195,7 +213,9 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "edit-override",
 		label: "Edit",
-		keys: [],
+		// Display-only: the selected free-text row is a standard input that
+		// owns its typing.
+		keys: () => [],
 		keyLabel: "Type",
 		scope: "override",
 		actionBar: true,
@@ -206,7 +226,9 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "delete-override",
 		label: "Delete",
-		keys: ["backspace"],
+		// Display-only: the standard input owns Backspace and its caret-aware
+		// deletion, so the panel must not intercept it.
+		keys: () => [],
 		keyLabel: "Backspace",
 		scope: "override",
 		actionBar: true,
@@ -217,7 +239,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "handoff",
 		label: "Hand off",
-		keys: ["return"],
+		keys: () => ["return"],
 		keyLabel: "Enter",
 		scope: "control-plane",
 		actionBar: true,
@@ -228,7 +250,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "decide-completion",
 		label: "Decide",
-		keys: ["return"],
+		keys: () => ["return"],
 		keyLabel: "Enter",
 		scope: "control-plane",
 		actionBar: true,
@@ -239,7 +261,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "override",
 		label: "Override",
-		keys: ["e"],
+		keys: () => ["e"],
 		keyLabel: "e",
 		scope: "control-plane",
 		actionBar: true,
@@ -250,7 +272,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "refresh",
 		label: "Refresh",
-		keys: ["r"],
+		keys: () => ["r"],
 		keyLabel: "r",
 		scope: "control-plane",
 		actionBar: true,
@@ -261,7 +283,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "cancel",
 		label: "Cancel",
-		keys: ["escape"],
+		keys: () => ["escape"],
 		keyLabel: "Esc",
 		scope: "override",
 		actionBar: true,
@@ -272,29 +294,33 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "help",
 		label: "Help",
-		keys: ["f1", "?"],
+		// `?` opens Help wherever the mode does not own printable text. In
+		// the override text row it stays text, and only F1 reaches Help.
+		keys: (mode) => (mode === "override-text" ? ["f1"] : ["f1", "?"]),
 		keyLabel: "F1/?",
 		scope: "global",
 		actionBar: true,
 		priority: 1000,
-		modes: [...baseModes, ...overrideModes, "action-panel", "key-guide", "message-view"],
+		modes: [...allModes],
 		availability: available,
 	},
 	{
 		id: "message",
 		label: "Message",
-		keys: ["m", "f2"],
+		// `m` opens the Message view only from the base panes. F2 is the
+		// alias in every interaction mode, so text input keeps its `m`.
+		keys: (mode) => (mode === "ticket-list" || mode === "ticket-detail" ? ["m", "f2"] : ["f2"]),
 		keyLabel: "m/F2",
 		scope: "global",
 		actionBar: true,
 		priority: 900,
-		modes: [...baseModes, ...overrideModes, "action-panel", "key-guide", "message-view"],
+		modes: [...allModes],
 		availability: message,
 	},
 	{
 		id: "auto-handoff",
 		label: "Toggle auto-handoff",
-		keys: ["a"],
+		keys: () => ["a"],
 		keyLabel: "a",
 		scope: "control-plane",
 		actionBar: false,
@@ -305,7 +331,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "quit",
 		label: "Quit",
-		keys: ["q"],
+		keys: () => ["q"],
 		keyLabel: "q",
 		scope: "global",
 		actionBar: false,
@@ -316,62 +342,75 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "emergency-exit",
 		label: "Emergency exit",
-		keys: ["ctrl+c"],
+		keys: () => ["ctrl+c"],
 		keyLabel: "Ctrl+C",
 		scope: "global",
 		actionBar: false,
 		priority: 1,
-		modes: allModes,
+		modes: [...allModes],
 		availability: available,
 	},
 	{
 		id: "select-action",
 		label: "Select action",
-		keys: ["up", "down"],
+		keys: () => ["up", "down"],
 		keyLabel: "↑↓",
-		scope: "action-panel",
+		scope: "modal",
 		actionBar: true,
 		priority: 80,
-		modes: ["action-panel"],
+		modes: [...modalModes],
 		availability: available,
 	},
 	{
-		id: "scroll-action-message",
-		label: "Scroll message",
-		keys: ["j", "k"],
+		id: "scroll-turn-log",
+		label: "Scroll log",
+		// The page and jump keys are aliases of the same scroll: they are
+		// accepted, and the j/k hint is the one the bar and guide show.
+		keys: () => ["j", "k", "pageup", "pagedown", "home", "end"],
 		keyLabel: "j/k",
-		scope: "action-panel",
+		scope: "modal",
 		actionBar: true,
 		priority: 75,
-		modes: ["action-panel"],
+		modes: ["decision-modal"],
+		availability: available,
+	},
+	{
+		id: "scroll-message",
+		label: "Scroll message",
+		keys: () => ["j", "k"],
+		keyLabel: "j/k",
+		scope: "modal",
+		actionBar: true,
+		priority: 75,
+		modes: ["missing-modal"],
 		availability: available,
 	},
 	{
 		id: "confirm-action",
 		label: "Confirm action",
-		keys: ["return"],
+		keys: () => ["return"],
 		keyLabel: "Enter",
-		scope: "action-panel",
+		scope: "modal",
 		actionBar: true,
 		priority: 70,
-		modes: ["action-panel"],
+		modes: [...modalModes],
 		availability: available,
 	},
 	{
 		id: "cancel-action",
 		label: "Cancel",
-		keys: ["escape"],
+		keys: () => ["escape"],
 		keyLabel: "Esc",
-		scope: "action-panel",
+		scope: "modal",
 		actionBar: true,
 		priority: 90,
-		modes: ["action-panel"],
+		modes: [...modalModes],
 		availability: available,
 	},
 	{
 		id: "guide-scroll",
 		label: "Scroll",
-		keys: ["up", "down", "j", "k"],
+		keys: () => ["up", "down", "j", "k"],
 		keyLabel: "↑↓/jk",
 		scope: "utility",
 		actionBar: true,
@@ -382,7 +421,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "guide-close",
 		label: "Close",
-		keys: ["escape", "f1", "?"],
+		keys: () => ["escape", "f1", "?"],
 		keyLabel: "Esc/F1/?",
 		scope: "utility",
 		actionBar: true,
@@ -393,7 +432,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "message-scroll",
 		label: "Scroll",
-		keys: ["up", "down", "j", "k"],
+		keys: () => ["up", "down", "j", "k"],
 		keyLabel: "↑↓/jk",
 		scope: "utility",
 		actionBar: true,
@@ -404,7 +443,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "message-close",
 		label: "Close",
-		keys: ["escape", "f2"],
+		keys: () => ["escape", "f2"],
 		keyLabel: "Esc/F2",
 		scope: "utility",
 		actionBar: true,
@@ -449,8 +488,9 @@ function isReachableInMode(
 	control: ControlDefinition,
 	context: ControlContext,
 ): boolean {
-	if (control.keys.length === 0) return true;
-	return control.keys.some((key) => {
+	const keys = control.keys(mode);
+	if (keys.length === 0) return true;
+	return keys.some((key) => {
 		const event = key === "ctrl+c" ? { name: "c", ctrl: true } : { name: key };
 		return controlForKey(mode, event, context)?.id === control.id;
 	});
@@ -469,18 +509,8 @@ export function controlForKey(
 		return controlById("guide-close");
 	if (mode === "message-view" && (name === "escape" || name === "f2"))
 		return controlById("message-close");
-	const matches = controlsForMode(mode).filter(
-		(control) =>
-			control.keys.includes(name as ControlKey) &&
-			// `m` opens Message view only from base panes. F2 is the alias in
-			// every interaction mode, so text input keeps its printable `m`.
-			!(
-				(control.id === "message" &&
-					name === "m" &&
-					mode !== "ticket-list" &&
-					mode !== "ticket-detail") ||
-				(control.id === "help" && name === "?" && mode === "override-text")
-			),
+	const matches = controlsForMode(mode).filter((control) =>
+		control.keys(mode).includes(name as ControlKey),
 	);
 	// Enter has a state-specific completion action as well as Hand off. An
 	// available meaning wins. If none is available, the first definition owns
@@ -540,8 +570,10 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Override list row";
 		case "override-text":
 			return "Override text row";
-		case "action-panel":
-			return "Action panel";
+		case "decision-modal":
+			return "Decision modal";
+		case "missing-modal":
+			return "Missing modal";
 		case "key-guide":
 			return "Key guide";
 		case "message-view":

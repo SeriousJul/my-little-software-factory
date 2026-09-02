@@ -1,7 +1,7 @@
 /**
  * The unattended mode through the real UI: the mode line, the session-only
  * `a` toggle, the blocked and missing markers, the missing
- * panel (restart / abandon), the decision panel on an awaiting ticket, and
+ * panel (restart / abandon), the decision modal on an awaiting ticket, and
  * the auto dispatch of open tickets.
  *
  * Every test boots the real app with a real SQLite state seeded through the
@@ -15,11 +15,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AppProps } from "../src/components/app.ts";
+import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
+import type { TurnLogEntry } from "../src/turn-log.ts";
 import {
 	type AppSetup,
 	awaitFrame,
@@ -29,9 +31,12 @@ import {
 	markerRowOf,
 	press,
 	pressArrow,
+	pressScrollKey,
+	rgb,
 	rowsOf,
 	settle,
 	sleep,
+	spanColors,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -114,6 +119,9 @@ function seed(
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
 	message = "The turn is done.",
+	model = "",
+	thinking = "",
+	turnLog: TurnLogEntry[] | undefined = undefined,
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
@@ -127,8 +135,8 @@ function seed(
 				agentType: "pi",
 				environment,
 				taskType: "implement",
-				model: "",
-				thinking: "",
+				model,
+				thinking,
 			},
 			"open",
 		);
@@ -145,6 +153,7 @@ function seed(
 				taskType: "implement",
 				agentType: "pi",
 				message,
+				turnLog: turnLog ?? [{ kind: "text", text: message }],
 				completedAt: "2026-08-31T11:00:00Z",
 			});
 		}
@@ -167,8 +176,11 @@ function seededApp(
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
 	message = "The turn is done.",
+	model = "",
+	thinking = "",
+	turnLog: TurnLogEntry[] | undefined = undefined,
 ): SeededApp {
-	const state = seed(shape, outcome, environment, message);
+	const state = seed(shape, outcome, environment, message, model, thinking, turnLog);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -335,7 +347,7 @@ describe("the failure markers", () => {
 		app.state.close();
 	});
 
-	test("a missing agent gets the missing marker and the missing panel", async () => {
+	test("a missing agent gets the missing marker and the missing modal", async () => {
 		const app = seededApp("in-flight");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -353,8 +365,8 @@ describe("the failure markers", () => {
 				expect(frame).toContain("auto: off 0/2");
 				expect(ticketRow(frame)).toContain("missing");
 
-				// Enter on the in-flight missing ticket opens the missing panel.
-				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				// Enter on the in-flight missing ticket opens the missing modal.
+				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("Restart");
 				expect(panel).toContain("Abandon");
@@ -413,7 +425,7 @@ describe("the failure markers", () => {
 		app.state.close();
 	});
 
-	test("esc on the missing panel closes it and leaves the ticket in flight", async () => {
+	test("esc on the missing modal closes it and leaves the ticket in flight", async () => {
 		const app = seededApp("in-flight");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
@@ -421,7 +433,7 @@ describe("the failure markers", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
 				// The panel key handler subscribes in an effect that flushes after
 				// the commit; a settled frame proves the panel is open and ready.
 				await settle(setup);
@@ -499,7 +511,7 @@ describe("the detail pane", () => {
 	});
 });
 
-describe("the decision panel", () => {
+describe("the decision modal", () => {
 	test("enter on an awaiting ticket shows the completion and routes on confirm", async () => {
 		const review = { ...DEFAULT_CONFIG.taskTypes.review };
 		review.template += "\n\nPrevious work message:\n{previous-message}";
@@ -521,7 +533,7 @@ describe("the decision panel", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("The turn is done.");
 				expect(panel).toContain("Handoff: review");
@@ -554,6 +566,56 @@ describe("the decision panel", () => {
 		app.state.close();
 	});
 
+	test("a manual workflow route starts with fresh model and target thinking", async () => {
+		const app = seededApp(
+			"awaiting",
+			{
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					review: { ...DEFAULT_CONFIG.taskTypes.review, thinking: "low" },
+				},
+			},
+			success,
+			"live-worktree",
+			"The turn is done.",
+			"opus-4",
+			"high",
+		);
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
+
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain("--kind pi --pane pane-9 -- --thinking low");
+				expect(start).not.toContain("--model");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("each outgoing edge offers its own row, and the pinning shows on the row", async () => {
 		const app = seededApp("awaiting", {
 			workflows: [
@@ -574,7 +636,7 @@ describe("the decision panel", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const panel = frameText(await settle(setup));
 				// Two edges to the same target keep both rows, so every edge
 				// stays reachable. The second row's detail shows the pinning
@@ -628,7 +690,7 @@ describe("the decision panel", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				await pressArrow(setup, "down", "the handoff row", (f) =>
 					frameText(f).includes("❯ Handoff: review"),
@@ -636,11 +698,11 @@ describe("the decision panel", () => {
 				await pressReturn(setup, "the failed route", (f) => f.includes("the workspace is gone"));
 
 				// The handoff never started: the ticket still awaits, and the
-				// turn's trace is still pending, so the decision panel keeps
+				// turn's trace is still pending, so the decision modal keeps
 				// working on it.
 				expect(app.state.ticketState(identity)).toBe("awaiting");
 				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
-				await pressReturn(setup, "the decision panel again", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal again", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				expect(app.state.ticketState(identity)).toBe("open");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
@@ -660,7 +722,7 @@ describe("the decision panel", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				// Goto is the second row: one down, confirm.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				setup.mockInput.pressEnter();
@@ -684,34 +746,55 @@ describe("the decision panel", () => {
 		app.state.close();
 	});
 
-	test("up and down select the rows, j and k scroll the message", async () => {
-		const lines = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+	test("shows the log at its bottom, with a proportional scrollbar", async () => {
+		// Zero-padded labels: a bare "log 1" is a substring of "log 10".
+		const lines = Array.from(
+			{ length: 40 },
+			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
+		).join("\n");
 		const app = seededApp("awaiting", {}, success, "live-worktree", lines);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const thumbRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.includes("█"));
 
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
-				const panel = frameText(await settle(setup));
-				// The body holds eight lines: the first window is one to eight.
-				expect(panel).toContain("line 1");
-				expect(panel).not.toContain("line 9");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = await settle(setup);
+				const text = frameText(panel);
+				// The near-fullscreen modal holds 20 of the 40 lines. It opens at
+				// the bottom, where the agent's conclusion is, and the scrollbar
+				// thumb rests there.
+				expect(text).toContain("log 021");
+				expect(text).toContain("log 040");
+				expect(text).toContain("█");
+				const bottomThumbRow = thumbRowOf(panel);
+				expect(bottomThumbRow).toBeGreaterThan(-1);
 
-				// j scrolls the message down, and k scrolls it back.
-				await press(
-					setup,
-					"j",
-					"scroll the message",
-					(f) => f.includes("line 9") && !f.includes("line 1"),
-				);
+				// k scrolls up through the log, one row per press. Each press
+				// drops the newest row; two presses move the thumb with the log.
 				await press(
 					setup,
 					"k",
-					"scroll the message back",
-					(f) => f.includes("line 1") && !f.includes("line 9"),
+					"one row up",
+					(f) => f.includes("log 021") && !f.includes("log 040"),
 				);
+				const higher = await press(
+					setup,
+					"k",
+					"one more row up",
+					(f) => f.includes("log 019") && !f.includes("log 039"),
+				);
+				expect(thumbRowOf(higher)).toBeLessThan(bottomThumbRow);
+				// j scrolls back down and brings the thumb with it.
+				const backDown = await press(
+					setup,
+					"j",
+					"one row down",
+					(f) => f.includes("log 039") && !f.includes("log 019"),
+				);
+				expect(thumbRowOf(backDown)).toBe(bottomThumbRow);
 
 				// up and down move the action row.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -732,7 +815,7 @@ describe("the decision panel", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				// The panel key handler subscribes in an effect that flushes after
 				// the commit; a settled frame proves the panel is open and ready.
 				await settle(setup);
@@ -742,6 +825,101 @@ describe("the decision panel", () => {
 				expect(app.state.ticketState(identity)).toBe("awaiting");
 				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
 				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the modal shows the border title, the context line, and the log's notes", async () => {
+		const conclusion = "## Result\n\n**All 142 tests pass.**";
+		const app = seededApp("awaiting", {}, success, "live-worktree", conclusion, "", "", [
+			{ kind: "text", text: "I will run the tests." },
+			{ kind: "tool", name: "bash", target: "npm test", failed: false },
+			{ kind: "tool", name: "bash", target: "npm run lint", failed: true },
+			{ kind: "text", text: conclusion },
+		]);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const modal = frameText(await settle(setup));
+				// The border names the ticket, and the context line names the
+				// repository, the task type, the agent, and the completion time.
+				expect(modal).toContain("Decision: Persist source facts");
+				expect(modal).toContain("acme/factory · implement · pi · 2026-08-31 11:00");
+				// The log renders in order: the opening text, the tool notes,
+				// and the markdown-dressed conclusion. The heading's hash and
+				// the bold's asterisks do not show.
+				expect(modal).toContain("I will run the tests.");
+				expect(modal).toContain("▸ bash: npm test");
+				expect(modal).toContain("▸ bash: npm run lint");
+				expect(modal).toContain("All 142 tests pass.");
+				expect(modal).not.toContain("**");
+				expect(modal).not.toContain("##");
+				// The shared Action bar offers the log's scroll key.
+				expect(modal).toContain("j/k Scroll log");
+
+				// The failed tool call wears the warning color, the passing one
+				// the dim one. Both are painted, so the notes are on screen. The
+				// pop-in fades in for a little while, so wait it out before
+				// reading the painted colors: mid-fade they are blended.
+				await sleep(250);
+				expect(spanColors(setup, "npm run lint")).toContainEqual(rgb(COLORS.statusWarning));
+				expect(spanColors(setup, "npm test")).toContainEqual(rgb(COLORS.dim));
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("home and end jump the log's ends, and pageup and pagedown page it", async () => {
+		// Zero-padded labels: a bare "line 1" is a substring of "line 10".
+		const lines = Array.from(
+			{ length: 40 },
+			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
+		).join("\n");
+		const app = seededApp("awaiting", {}, success, "live-worktree", lines);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await settle(setup);
+
+				// The modal opens at the bottom, where the agent's conclusion is.
+				// home takes the opening, without the conclusion.
+				await pressScrollKey(
+					setup,
+					"home",
+					"the log at its top",
+					(f) => f.includes("log 001") && !f.includes("log 040"),
+				);
+				// end returns to the conclusion, without the opening.
+				await pressScrollKey(
+					setup,
+					"end",
+					"the log at its bottom",
+					(f) => f.includes("log 040") && !f.includes("log 001"),
+				);
+				// pageup pages back up, out of the conclusion.
+				await pressScrollKey(setup, "pageup", "a page up", (f) => !f.includes("log 040"));
+				// pagedown pages back down to the bottom.
+				await pressScrollKey(
+					setup,
+					"pagedown",
+					"a page down",
+					(f) => f.includes("log 040") && !f.includes("log 001"),
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -787,7 +965,7 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				// Close is the default row: confirm.
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
@@ -816,7 +994,7 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				const commands = app.runner.commands();
 				expect(commands).toContain("herdr tab close tab-1");
@@ -839,7 +1017,7 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
 				await pressArrow(setup, "down", "select abandon", (f) =>
 					frameText(f).includes("❯ Abandon"),
 				);
@@ -869,7 +1047,7 @@ describe("the Close cleanup", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
-				await pressReturn(setup, "the missing panel", (f) => f.includes("Missing:"));
+				await pressReturn(setup, "the missing modal", (f) => f.includes("Missing:"));
 				await pressArrow(setup, "down", "select abandon", (f) =>
 					frameText(f).includes("❯ Abandon"),
 				);
@@ -1113,11 +1291,11 @@ describe("the handoff queue", () => {
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
 				await pressQuiet("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
-				await pressReturnQuiet("the missing panel", (f) => f.includes("Missing:"));
+				await pressReturnQuiet("the missing modal", (f) => f.includes("Missing:"));
 				await pressReturnQuiet("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
 				// abandon it.
-				await pressReturnQuiet("the missing panel again", (f) => f.includes("Missing:"));
+				await pressReturnQuiet("the missing modal again", (f) => f.includes("Missing:"));
 				await pressArrow(setup, "down", "select abandon", (f) =>
 					frameText(f).includes("❯ Abandon"),
 				);

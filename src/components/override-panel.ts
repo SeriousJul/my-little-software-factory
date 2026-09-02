@@ -6,23 +6,36 @@
  * It is a centered modal with one row per setting: the agent type, the
  * environment kind, the task type, and the settings the chosen agent type
  * maps. A setting the agent does not map is hidden, so the panel shows only
- * what the chosen agent supports. The model row accepts free text; the
- * thinking row takes the agent's value list when it has one and free text
- * otherwise. The thinking row starts on the suggested task type's thinking
- * default, and switching the task type re-derives it while the operator has
- * not set the row, so the panel always shows what the handoff will run on.
- * Clearing a free-text row leaves the setting to the agent.
+ * what the chosen agent supports.
  *
- * The keys: j/k and up/down move the rows. left/right and h/l cycle a list
- * value. A selected free-text row owns j, k, h, and l: they type into it.
- * The arrow keys keep their movement, so a text row can always be left.
- * Backspace deletes. Enter confirms and hands off. Esc cancels. While it is
- * open, the keys of the app below are disabled.
+ * The Model row and the free-text Thinking row are standard single-line
+ * inputs. They show a caret, and take typing, caret movement with the
+ * arrows, Home and End, selection, backspace and delete, undo and redo, and
+ * bracketed terminal paste. A paste is sanitized by the input before it is
+ * inserted: ANSI escape sequences and line breaks are stripped, so a pasted
+ * model name is plain text. An input scrolls horizontally within its column
+ * and never wraps, so it can never corrupt the rows around it.
+ *
+ * A list row (agent, environment, task type, and the thinking value when the
+ * agent has a value list) cycles its value with left/right and h/l.
+ *
+ * The keys: up/down and tab/shift+tab move the row selection. j and k move
+ * it too, except on a selected text row, where they type. left/right move
+ * the caret on a text row and cycle a list row's value; h and l type on a
+ * text row and cycle a list row's value. The input owns everything else:
+ * typing, backspace, delete, Home, End, undo, redo, and paste. The thinking
+ * row starts on the suggested task type's thinking default, and switching
+ * the task type re-derives it while the operator has not set the row, so
+ * the panel always shows what the handoff will run on. Clearing a free-text
+ * row leaves the setting to the agent. Enter confirms and hands off. Esc
+ * cancels. While it is open, the keys of the app below are disabled.
  *
  * The panel sizes itself to the terminal: the value column shrinks first,
- * then the label column, then the marker. The shared Action bar stays at the
- * terminal bottom. The last rows drop when the terminal cannot hold them. A
- * row never wraps or interleaves: it carries less, not broken text.
+ * then the label column, then the marker. The rows scroll within the
+ * viewport when the height cannot hold them all: the selected row always
+ * stays on screen. A row never wraps or interleaves. The shared Action bar
+ * sits at the terminal bottom and names the controls this panel dispatches
+ * through the shared control catalogue.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, useRef, useState } from "react";
@@ -30,13 +43,7 @@ import { type ReactElement, useRef, useState } from "react";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { ActionBar } from "./action-bar.ts";
-import {
-	availabilityFor,
-	type ControlContext,
-	contextFor,
-	controlForKey,
-	isPrintableKey,
-} from "./controls.ts";
+import { availabilityFor, type ControlContext, contextFor, controlForKey } from "./controls.ts";
 import { padToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -87,6 +94,19 @@ const VALUE_WIDTH = 30;
 const MARKER_WIDTH = 2;
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
+/**
+ * The field's undo and redo keys, as a module constant so the input does not
+ * rebuild its binding map on every render.
+ *
+ * OpenTUI's default bindings map undo and redo to the macOS super (Cmd) keys,
+ * so on Linux and Windows the field would offer no usual undo or redo. Adding
+ * the standard Ctrl+Z and Ctrl+Y makes the editing standard everywhere. These
+ * bind to the input's own undo and redo actions.
+ */
+const INPUT_KEY_BINDINGS = [
+	{ name: "z", ctrl: true, action: "undo" },
+	{ name: "y", ctrl: true, action: "redo" },
+];
 
 /** The modal chrome: one border and one padding cell on each side. */
 const CHROME = 4;
@@ -95,10 +115,10 @@ const CHROME = 4;
  * The panel geometry sized to the terminal.
  *
  * The modal takes what the terminal holds. The value column shrinks first,
- * then the label column, then the marker. The rows drop from the last when
- * the height cannot hold them all. The row never wraps. The shared Action
- * bar sits outside the modal at the terminal bottom, so it never alters
- * these columns.
+ * then the label column, then the marker. The rows scroll within `maxRows`
+ * when the height cannot hold them all; the viewport keeps the selected row
+ * on screen. The shared Action bar sits outside the modal at the terminal
+ * bottom, so it never alters these columns.
  */
 interface PanelGeometry {
 	markerWidth: number;
@@ -109,22 +129,22 @@ interface PanelGeometry {
 
 function panelGeometry(width: number, height: number): PanelGeometry {
 	const inner = Math.max(0, width - CHROME);
-	let markerWidth = MARKER_WIDTH;
-	let labelWidth = LABEL_WIDTH;
-	let valueWidth = VALUE_WIDTH;
-	if (markerWidth + labelWidth + valueWidth > inner) {
-		valueWidth = Math.max(0, inner - markerWidth - labelWidth);
-	}
-	if (markerWidth + labelWidth > inner) {
-		labelWidth = Math.max(0, inner - markerWidth);
-		valueWidth = 0;
-	}
-	if (markerWidth > inner) {
-		markerWidth = inner;
-		labelWidth = 0;
+	// Reserve one cell for the value before shrinking the marker at the
+	// smallest renderable widths.
+	const markerWidth = Math.min(MARKER_WIDTH, Math.max(0, inner - 1));
+	let labelWidth = 0;
+	let valueWidth = 0;
+	if (inner > markerWidth) {
+		const contentWidth = inner - markerWidth;
+		// Keep one value cell whenever the panel has room beyond its marker.
+		// The value shrinks first, then the label, while all three columns
+		// continue to add up to the modal's inner width.
+		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, contentWidth - LABEL_WIDTH));
+		labelWidth = Math.min(LABEL_WIDTH, contentWidth - valueWidth);
 	}
 	// The Action bar is outside the modal and does not alter its row columns.
-	// Rows still drop from the end when a short terminal cannot hold them.
+	// The rows scroll within the viewport when a short terminal cannot hold
+	// them all; a row never wraps.
 	const maxRows = Math.max(1, height - CHROME);
 	return { markerWidth, labelWidth, valueWidth, maxRows };
 }
@@ -148,6 +168,8 @@ export function OverridePanel({
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const geometry = panelGeometry(terminalWidth, terminalHeight);
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
+	// The selection indexes the full row list, not the visible viewport. The
+	// viewport scrolls to keep this row on screen.
 	const [selected, setSelected] = useState(0);
 
 	// The key parser can deliver several key events in one tick. React batches
@@ -164,36 +186,33 @@ export function OverridePanel({
 	// run on.
 	const thinkingTouchedRef = useRef(false);
 
-	const allRows = rowsFor(choice, agents, environments, taskTypes, agentSettings);
-	// The terminal too short for every row drops the last one, the settings
-	// before the core choices.
-	const rows = allRows.slice(0, geometry.maxRows);
-	// Switching the agent can hide the rows below it; the selection clamps.
-	const cursor = Math.min(selected, rows.length - 1);
-	const row = rows[cursor];
+	const allRowsFor = (value: HandoffChoice): PanelRow[] =>
+		rowsFor(value, agents, environments, taskTypes, agentSettings);
+
+	const allRows = allRowsFor(choice);
+	// Switching the agent can hide the rows below the selection; clamp it.
+	const safeSelected = Math.min(selected, allRows.length - 1);
+	// The rows the terminal height holds, scrolled to keep the selected row
+	// on screen. A short terminal scrolls the viewport; a row never wraps.
+	const visibleCount = Math.max(1, Math.min(allRows.length, geometry.maxRows));
+	let start = safeSelected >= visibleCount ? safeSelected - visibleCount + 1 : 0;
+	start = Math.max(0, Math.min(start, allRows.length - visibleCount));
+	const rows = allRows.slice(start, start + visibleCount);
+	const row = rows[Math.max(0, safeSelected - start)];
 
 	const commit = (update: (current: HandoffChoice) => HandoffChoice) => {
 		choiceRef.current = update(choiceRef.current);
 		setChoice(choiceRef.current);
 	};
 
-	// The rows as the keys see them, from the mirrored choice: a key of the
-	// current tick must act on the rows the previous key of the same tick
-	// left behind, and the render closure would still hold the old ones.
-	const visibleRows = (): PanelRow[] =>
-		rowsFor(choiceRef.current, agents, environments, taskTypes, agentSettings).slice(
-			0,
-			geometry.maxRows,
-		);
-
 	// The row under the cursor, clamped the way the render clamps it.
 	const cursorRow = (): PanelRow => {
-		const visible = visibleRows();
-		return visible[Math.min(selectedRef.current, visible.length - 1)];
+		const all = allRowsFor(choiceRef.current);
+		return all[Math.min(selectedRef.current, all.length - 1)];
 	};
 
 	const move = (delta: number) => {
-		const count = visibleRows().length;
+		const count = allRowsFor(choiceRef.current).length;
 		const at = Math.min(selectedRef.current, count - 1);
 		selectedRef.current = (at + delta + count) % count;
 		setSelected(selectedRef.current);
@@ -225,75 +244,62 @@ export function OverridePanel({
 		});
 	};
 
-	const typeText = (text: string) => {
-		const target = cursorRow();
-		if (target.kind !== "text") {
+	// One text field's input callback. The input owns its own caret and text,
+	// so this only mirrors the value into the choice. The guard skips the
+	// no-op echo the value setter emits, so a re-render never re-commits.
+	const handleInput = (key: TextKey) => (value: string) => {
+		if (choiceRef.current[key] === value) {
 			return;
 		}
-		if (target.key === "thinking") {
+		if (key === "thinking") {
 			thinkingTouchedRef.current = true;
 		}
-		commit((current) => ({ ...current, [target.key]: current[target.key] + text }));
+		commit((current) => ({ ...current, [key]: value }));
 	};
 
 	useKeyboard((key) => {
 		if (!inputActive || key.meta) return;
+		// The Ctrl combos the catalogue does not name (undo, redo, word
+		// delete) belong to the focused input. Ctrl+C is the emergency exit.
+		if (key.ctrl) {
+			if (key.name === "c") onEmergencyExit();
+			return;
+		}
 		const target = cursorRow();
 		const interactionMode = target.kind === "text" ? "override-text" : "override-list";
 		const interactionContext = contextFor(interactionMode, context);
 		const control = controlForKey(interactionMode, key, interactionContext);
-		if (control?.id === "emergency-exit") {
-			onEmergencyExit();
-			return;
-		}
-		// A selected text row owns j, k, h, and l. The arrows still move,
-		// so a text row can always be left.
-		if (
-			target.kind === "text" &&
-			(key.name === "j" || key.name === "k" || key.name === "h" || key.name === "l")
-		) {
-			typeText(key.name);
-			return;
-		}
-		if (control === undefined) {
-			// A printable character goes into the selected free-text row. Any
-			// script is valid text; named and control keys are not.
-			if (isPrintableKey(key.name)) typeText(key.name);
-			return;
-		}
+		if (control === undefined) return;
 		const availability = availabilityFor(control, interactionContext);
 		if (!availability.available) {
 			onUnavailable?.(availability.reason ?? "control is unavailable");
+			key.preventDefault();
 			return;
 		}
 		switch (control.id) {
+			case "move-list":
+				// Tab moves from a list row and a text row alike; Shift+Tab
+				// is the previous row.
+				move(key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1);
+				key.preventDefault();
+				return;
+			case "change-override":
+				cycle(key.name === "left" || key.name === "h" ? -1 : 1);
+				key.preventDefault();
+				return;
+			case "handoff":
+				onConfirm(choiceRef.current);
+				key.preventDefault();
+				return;
+			case "cancel":
+				onCancel();
+				key.preventDefault();
+				return;
 			case "help":
 				onHelp?.(interactionMode);
 				return;
 			case "message":
 				onMessage?.(interactionMode);
-				return;
-			case "cancel":
-				onCancel();
-				return;
-			case "handoff":
-				onConfirm(choiceRef.current);
-				return;
-			case "move-list":
-				move(key.name === "up" || key.name === "k" ? -1 : 1);
-				return;
-			case "change-override":
-				cycle(key.name === "left" || key.name === "h" ? -1 : 1);
-				return;
-			case "delete-override":
-				if (target.kind === "text" && target.key === "thinking") {
-					thinkingTouchedRef.current = true;
-				}
-				commit((current) =>
-					target.kind === "text"
-						? { ...current, [target.key]: current[target.key].slice(0, -1) }
-						: current,
-				);
 				return;
 			default:
 				return;
@@ -326,11 +332,7 @@ export function OverridePanel({
 				style: { flexDirection: "column" },
 			},
 			...rows.map((r) =>
-				createElement(
-					"text",
-					{ key: r.label },
-					...rowSpans(r, choice[r.key], r.key === row.key, geometry),
-				),
+				rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputActive),
 			),
 		),
 		createElement(ActionBar, {
@@ -369,23 +371,24 @@ function rowsFor(
 	return rows;
 }
 
-/** One panel row as spans on the columns the terminal width allows. */
-function rowSpans(
+/** One panel row as a marker, a label, and a value or an input. */
+function rowElement(
 	r: PanelRow,
 	value: string,
 	selected: boolean,
 	geometry: PanelGeometry,
-): ReactElement[] {
-	const labelFg = selected ? COLORS.textBright : COLORS.dim;
-	const spans: ReactElement[] = [
+	handleInput: (key: TextKey) => (value: string) => void,
+	inputActive: boolean,
+): ReactElement {
+	const children: ReactElement[] = [
 		createElement(
-			"span",
+			"text",
 			{ fg: selected ? COLORS.textBright : COLORS.dim },
 			truncateToWidth(selected ? "❯ " : "  ", geometry.markerWidth),
 		),
 		createElement(
-			"span",
-			{ fg: labelFg },
+			"text",
+			{ fg: selected ? COLORS.textBright : COLORS.dim },
 			truncateToWidth(padToWidth(`${r.label} `, geometry.labelWidth), geometry.labelWidth),
 		),
 	];
@@ -393,22 +396,43 @@ function rowSpans(
 		// A list row whose value is not an option (the config default "")
 		// shows a dim hint instead of a blank.
 		const inList = r.options?.includes(value) ?? false;
-		spans.push(
+		children.push(
 			createElement(
-				"span",
-				{ fg: !inList ? COLORS.dim : selected ? COLORS.textBright : COLORS.text },
+				"text",
+				{
+					width: geometry.valueWidth,
+					fg: !inList ? COLORS.dim : selected ? COLORS.textBright : COLORS.text,
+				},
 				truncateToWidth(inList ? value : UNSET_HINT, geometry.valueWidth),
 			),
 		);
 	} else {
-		const shown = value === "" ? EMPTY_HINT : value;
-		spans.push(
-			createElement(
-				"span",
-				{ fg: value === "" ? COLORS.dim : selected ? COLORS.textBright : COLORS.text },
-				truncateToWidth(shown, geometry.valueWidth),
-			),
+		// A text row: a standard single-line input. It owns the caret, the
+		// editing keys, and paste, and scrolls horizontally within the value
+		// column. The empty field shows the dim placeholder, like the old
+		// (empty) hint.
+		children.push(
+			createElement("input", {
+				key: r.key,
+				width: geometry.valueWidth,
+				value,
+				// A Key guide or Message view above the panel takes the keys:
+				// the field blurs so their keys cannot type into it.
+				focused: selected && inputActive,
+				placeholder: EMPTY_HINT,
+				placeholderColor: COLORS.dim,
+				textColor: COLORS.text,
+				focusedTextColor: COLORS.textBright,
+				backgroundColor: "transparent",
+				focusedBackgroundColor: COLORS.focusedBackground,
+				keyBindings: INPUT_KEY_BINDINGS,
+				onInput: handleInput(r.key as TextKey),
+			}),
 		);
 	}
-	return spans;
+	return createElement(
+		"box",
+		{ key: r.key, style: { flexDirection: "row", height: 1 } },
+		...children,
+	);
 }

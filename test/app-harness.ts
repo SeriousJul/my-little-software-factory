@@ -130,6 +130,27 @@ export const rgb = (hex: string): [number, number, number] => [
 	Number.parseInt(hex.slice(5, 7), 16),
 ];
 
+/** The rendered foreground and background colors at one terminal cell. */
+export function cellColors(
+	setup: Setup,
+	x: number,
+	y: number,
+): { fg: [number, number, number]; bg: [number, number, number] } {
+	const line = setup.captureSpans().lines[y];
+	if (line === undefined) throw new Error(`frame has no row ${y}`);
+	let start = 0;
+	for (const span of line.spans) {
+		const end = start + span.width;
+		if (x >= start && x < end) {
+			const [fgRed, fgGreen, fgBlue] = span.fg.toInts();
+			const [bgRed, bgGreen, bgBlue] = span.bg.toInts();
+			return { fg: [fgRed, fgGreen, fgBlue], bg: [bgRed, bgGreen, bgBlue] };
+		}
+		start = end;
+	}
+	throw new Error(`frame row ${y} has no column ${x}`);
+}
+
 /** Frame predicate: the detail pane holds the focus. */
 export const detailFocused = (frame: string) =>
 	frame.includes("❯ Detail") && !frame.includes("❯ Tickets");
@@ -260,7 +281,46 @@ export async function press(
 	if (key === "return") setup.mockInput.pressEnter();
 	else if (key === "escape") setup.mockInput.pressEscape();
 	else if (key === "backspace") setup.mockInput.pressBackspace();
-	else setup.mockInput.pressKey(key);
+	else setup.mockInput.pressKey(scrollKeyInput(key));
+	return awaitFrame(setup, predicate, what);
+}
+
+/**
+ * The raw input of the scroll keys.
+ *
+ * The mock input accepts named Home and End codes, but the page keys use
+ * their standard terminal escape sequences: sending their words would type
+ * letters into the app instead of exercising the production parser.
+ */
+function scrollKeyInput(key: string): string {
+	if (key === "pageup") return "\u001b[5~";
+	if (key === "pagedown") return "\u001b[6~";
+	if (key === "home") return "HOME";
+	if (key === "end") return "END";
+	return key;
+}
+
+/**
+ * The raw input bytes of the scroll keys the mock input cannot name.
+ *
+ * The mock input sends a plain string as typed characters, so the page and
+ * jump keys must go out as their terminal sequences.
+ */
+const SCROLL_KEY_BYTES: Record<"pageup" | "pagedown" | "home" | "end", string> = {
+	pageup: "\u001B[5~",
+	pagedown: "\u001B[6~",
+	home: "\u001B[H",
+	end: "\u001B[F",
+};
+
+/** Press a page or jump key by name, and wait for the effect it produces. */
+export async function pressScrollKey(
+	setup: Setup,
+	key: "pageup" | "pagedown" | "home" | "end",
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressKey(SCROLL_KEY_BYTES[key]);
 	return awaitFrame(setup, predicate, what);
 }
 
@@ -288,6 +348,37 @@ export async function pressArrow(
 ): Promise<string> {
 	setup.mockInput.pressArrow(direction);
 	return awaitFrame(setup, predicate, what);
+}
+
+/** Send production-format mouse input through OpenTUI parsing and hit testing. */
+export async function mouseClick(setup: Setup, x: number, y: number): Promise<void> {
+	await setup.mockMouse.click(x, y);
+}
+
+/** Send one terminal wheel or trackpad event through real hit testing. */
+export async function mouseWheel(
+	setup: Setup,
+	x: number,
+	y: number,
+	direction: "up" | "down" | "left" | "right",
+	shift = false,
+): Promise<void> {
+	await setup.mockMouse.scroll(x, y, direction, { modifiers: shift ? { shift: true } : {} });
+}
+
+/** Drag through parsed mouse input, including the native scrollbar hit path. */
+export async function mouseDrag(
+	setup: Setup,
+	from: readonly [x: number, y: number],
+	to: readonly [x: number, y: number],
+): Promise<void> {
+	// OpenTUI captures a drag target on its first drag event, not its mouse
+	// down event. Send one drag at the source before moving: the slider then
+	// receives all later positions even when the pointer leaves its thumb.
+	await setup.mockMouse.pressDown(from[0], from[1]);
+	await setup.mockMouse.moveTo(from[0], from[1]);
+	await setup.mockMouse.moveTo(to[0], to[1]);
+	await setup.mockMouse.release(to[0], to[1]);
 }
 
 /** Press `l` and wait for the detail pane to take focus. */

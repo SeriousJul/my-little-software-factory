@@ -10,15 +10,16 @@
  * Each cycle:
  *
  * 1. An in-flight ticket whose agent reports working runs. One whose agent
- *    reports done or idle settles: the pane's last output is captured into
- *    a completion trace, capped at the configured line count, and the
- *    ticket rests in awaiting. A settle is trusted only when the turn
- *    demonstrably started: a running ticket settles at once, but a
- *    handed-off ticket that never showed working waits out its startup
- *    grace, the window in which a booted agent reports idle before it
- *    picks up the prompt. An awaiting ticket whose agent is working again
- *    reopens: its still-pending turn did not end, and the next settle
- *    refreshes the trace in place.
+ *    reports done or idle settles: the turn's log is read from the agent's
+ *    session record (ADR 0008), falling back to the pane's recent output
+ *    when herdr reports no session, and stored in a completion trace with
+ *    the agent's final text as its last message. The ticket rests in
+ *    awaiting. A settle is trusted only when the turn demonstrably started:
+ *    a running ticket settles at once, but a handed-off ticket that never
+ *    showed working waits out its startup grace, the window in which a
+ *    booted agent reports idle before it picks up the prompt. An awaiting
+ *    ticket whose agent is working again reopens: its still-pending turn
+ *    did not end, and the next settle refreshes the trace in place.
  * 2. A pane herdr no longer lists is missing. With auto-handoff on the
  *    loop restarts the agent once per episode, or abandons the cycle when
  *    the ticket has used up its handoffs.
@@ -44,6 +45,12 @@ import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { commandFailureText } from "./repo.ts";
 import type { CommandRunner } from "./runner.ts";
 import type { FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
+import {
+	lastMessageFromLog,
+	readSessionTurnLog,
+	type TurnLogEntry,
+	turnLogFromCapture,
+} from "./turn-log.ts";
 
 /** One agent herdr reports for a pane. */
 export interface HerdrAgent {
@@ -53,6 +60,11 @@ export interface HerdrAgent {
 	/** The agent kind herdr detected in the pane. */
 	agent: string;
 	status: string;
+	/**
+	 * The agent's session record path herdr reports, empty when herdr has
+	 * none. The turn log is read from it on settle (ADR 0008).
+	 */
+	sessionId: string;
 }
 
 /** The normalized states the factory reasons about. */
@@ -76,8 +88,29 @@ export type HerdrProbe = { kind: "ok"; agents: HerdrAgent[] } | { kind: "error";
 /** The read-side of herdr the loop uses. Tests inject a fake here. */
 export interface AgentReader {
 	listAgents(): Promise<HerdrProbe>;
-	/** The pane's last output in text format, capped and ANSI stripped. Null when it cannot be read. */
+	/** The pane's recent output in text format, unwrapped, capped and ANSI stripped. Null when it cannot be read. */
 	readPane(paneId: string, lines: number): Promise<string | null>;
+}
+
+/**
+ * The settled turn's log, read from the agent's session record.
+ *
+ * The kind is the agent type's kind from the config, the sessionId the path
+ * herdr reported. Null yields the terminal capture fallback. The real
+ * source reads the file (ADR 0008); tests inject a fake.
+ */
+export interface TurnLogSource {
+	read(kind: string, sessionId: string): Promise<TurnLogEntry[] | null>;
+}
+
+/** The real turn log source: the per-agent-type session record readers. */
+export const SESSION_TURN_LOGS: TurnLogSource = {
+	read: (kind, sessionId) => Promise.resolve(readSessionTurnLog(kind, sessionId)),
+};
+
+/** A record guard for the herdr agent list items. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** A reader that runs the pinned herdr commands through the command runner. */
@@ -106,12 +139,17 @@ export class HerdrAgentReader implements AgentReader {
 			const record = item as Record<string, unknown>;
 			if (typeof record.pane_id !== "string" || record.pane_id === "") continue;
 			if (typeof record.agent !== "string" || record.agent === "") continue;
+			const session = isRecord(record.agent_session) ? record.agent_session : undefined;
 			agents.push({
 				paneId: record.pane_id,
 				tabId: typeof record.tab_id === "string" ? record.tab_id : "",
 				workspaceId: typeof record.workspace_id === "string" ? record.workspace_id : "",
 				agent: record.agent,
 				status: typeof record.agent_status === "string" ? record.agent_status : "unknown",
+				sessionId:
+					session !== undefined && session.kind === "path" && typeof session.value === "string"
+						? session.value
+						: "",
 			});
 		}
 		return { kind: "ok", agents };
@@ -124,6 +162,8 @@ export class HerdrAgentReader implements AgentReader {
 			paneId,
 			"--lines",
 			String(lines),
+			"--source",
+			"recent-unwrapped",
 			"--format",
 			"text",
 		]);
@@ -238,6 +278,11 @@ interface ObservationOptions {
 	 * coordinator takes. Defaults to the system clock.
 	 */
 	clock?: RefreshClock;
+	/**
+	 * The settled turn's log, from the agent's session record. Defaults to
+	 * the real reader.
+	 */
+	turnLogs?: TurnLogSource;
 }
 
 export class ObservationCoordinator {
@@ -254,6 +299,7 @@ export class ObservationCoordinator {
 	private readonly onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	private readonly onStatus: (kind: "info" | "warning" | "error", text: string) => void;
 	private readonly clock: RefreshClock;
+	private readonly turnLogs: TurnLogSource;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
 	private cycleInFlight = false;
@@ -289,6 +335,7 @@ export class ObservationCoordinator {
 		this.onAgents = options.onAgents;
 		this.onStatus = options.onStatus;
 		this.clock = options.clock ?? SYSTEM_CLOCK;
+		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
 	}
 
 	/** Begin polling. The first cycle runs immediately. */
@@ -458,7 +505,7 @@ export class ObservationCoordinator {
 		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
 	}
 
-	/** A settled turn: capture the message, rest the ticket in awaiting. */
+	/** A settled turn: read the log, rest the ticket in awaiting. */
 	private async settle(
 		ticket: {
 			ticketIdentity: string;
@@ -468,8 +515,26 @@ export class ObservationCoordinator {
 		},
 		agent: HerdrAgent,
 	): Promise<boolean> {
-		const message =
-			(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
+		// The log comes from the session record first (ADR 0008). The
+		// terminal capture is the fallback: no session reported, the reader
+		// knows no such kind, or the record is missing or unreadable.
+		const kind = this.config().agents[ticket.agentType]?.kind;
+		let turnLog: TurnLogEntry[] | null =
+			kind !== undefined && agent.sessionId !== ""
+				? await this.turnLogs.read(kind, agent.sessionId)
+				: null;
+		let message = turnLog !== null ? lastMessageFromLog(turnLog) : "";
+		if (turnLog === null || turnLog.length === 0) {
+			const capture =
+				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
+			turnLog = turnLogFromCapture(capture);
+			message = capture;
+		} else if (message === "") {
+			// The log holds no final text: the capture stands in for the
+			// message, the session log stays.
+			message =
+				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
+		}
 		if (this.stopped) return true;
 		this.state.settleTurn({
 			ticketIdentity: ticket.ticketIdentity,
@@ -477,6 +542,7 @@ export class ObservationCoordinator {
 			taskType: ticket.taskType,
 			agentType: ticket.agentType,
 			message,
+			turnLog,
 			completedAt: new Date(this.now()).toISOString(),
 		});
 		this.onStatus("info", `agent settled a turn on ticket ${ticket.ticketIdentity}`);
@@ -583,8 +649,9 @@ export class ObservationCoordinator {
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
-		// The same choices the previous handoff ran with: the auto route
-		// matches the operator's model and thinking, not the defaults.
+		// A Workflow Handoff never inherits the previous Handoff's Model or
+		// Thinking: the model starts empty, and the thinking starts on the
+		// target task type's own default.
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
@@ -592,8 +659,8 @@ export class ObservationCoordinator {
 				edge.agent ?? config.defaultAgent,
 				edge.environment ?? config.defaultEnvironment,
 				edge.to[0],
-				ticket.model,
-				ticket.thinking,
+				"",
+				config.taskTypes[edge.to[0]]?.thinking ?? "",
 			),
 			previousMessage,
 		});

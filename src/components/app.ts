@@ -4,10 +4,10 @@
  *
  * The mode line carries the auto-handoff state and the live agent count
  * against the parallel limit. Enter on an open ticket hands it off; Enter
- * on an awaiting ticket opens the decision panel (close, Goto, or a
+ * on an awaiting ticket opens the decision modal (close, Goto, or a
  * workflow handoff), unless the task type is auto-close and decides alone;
  * Enter on a blocked ticket Gotos the agent; Enter on an in-flight ticket
- * whose pane herdr no longer lists opens the missing panel (restart or
+ * whose pane herdr no longer lists opens the missing modal (restart or
  * abandon). `a` toggles auto-handoff.
  */
 import os from "node:os";
@@ -48,8 +48,8 @@ import { commandFailureText, type RepositoryMapping } from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
+import type { TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
-import { ActionPanel, type ActionRow } from "./action-panel.ts";
 import {
 	availabilityFor,
 	contextFor,
@@ -57,13 +57,15 @@ import {
 	controlForKey,
 	type InteractionMode,
 } from "./controls.ts";
+import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { useMessageFacts } from "./message-facts.ts";
 import { formatMessage, type MessageFact } from "./messages.ts";
+import { type ActionRow, MissingModal } from "./missing-modal.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
-import { detailLines, TicketDetail } from "./ticket-detail.ts";
+import { detailLines, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
 
@@ -135,7 +137,11 @@ export function App({
 	const configRef = useRef(config);
 	configRef.current = config;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
-	const [detailScroll, setDetailScroll] = useState(0);
+	// Focus keys can arrive before React publishes the next render. The ref
+	// records that immediate intent, so the next navigation key stays with
+	// the pane the operator just focused.
+	const focusedPaneRef = useRef<Pane>("list");
+	const detailRef = useRef<TicketDetailHandle | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
 	const [utility, setUtility] = useState<Utility>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
@@ -211,11 +217,19 @@ export function App({
 	// controls when it cannot show the normal layout.
 	const showModeLine = modeLine !== "" && !tooSmall && terminalHeight >= 8;
 	const reservedRows = 2 + (showModeLine ? 1 : 0);
+	const listGeometry = usePaneGeometry("list", reservedRows);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
+	// The Scroll control's availability must agree with the native detail's
+	// own overflow: the same lines, at the same gutter-aware text width.
+	const detailTextCols = Math.max(
+		1,
+		detailGeometry.usableCols - (detailGeometry.usableCols >= 2 ? 1 : 0),
+	);
+	const detailMaxScroll = maxScrollOf(
+		detailLines(tickets[selectedIndex], detailTextCols, config.maxHandoffsPerTicket).length,
+		detailGeometry.visibleRows,
+	);
 	const selectedTicket = tickets[selectedIndex];
-	const lines = detailLines(selectedTicket, detailGeometry.usableCols, config.maxHandoffsPerTicket);
-	const maxScroll = maxScrollOf(lines.length, detailGeometry.visibleRows);
-	const scroll = Math.min(detailScroll, maxScroll);
 
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
@@ -232,8 +246,6 @@ export function App({
 		setTickets(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
-		if (selectedId === undefined || !next.some((ticket) => ticket.identity === selectedId))
-			setDetailScroll(0);
 	}, [state]);
 
 	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
@@ -538,15 +550,28 @@ export function App({
 		setAutoMode(next);
 	};
 
-	// The decision panel's rows: Close first, selected by default, then a Goto,
-	// then one handoff row per outgoing workflow edge the completed task type
-	// has, in config order: every edge stays reachable, and an edge naming
-	// several targets offers one row per target. Two edges to the same target
-	// offer two rows, and the row's detail shows the edge's pinning so the
-	// operator can tell them apart.
-	const decisionFor = (ticket: Ticket): { actions: ActionRow[]; body: string[] } => {
+	// The decision modal's rows: Close first, selected by default, then a
+	// Goto, then one handoff row per outgoing workflow edge the completed
+	// task type has, in config order: every edge stays reachable, and an
+	// edge naming several targets offers one row per target. Two edges to
+	// the same target offer two rows, and the row's detail shows the edge's
+	// pinning so the operator can tell them apart. The modal's context row
+	// names the repository, the task type, the agent, and the completion
+	// time, so the operator knows what the log is about.
+	const decisionFor = (
+		ticket: Ticket,
+	): {
+		actions: ActionRow[];
+		entries: readonly TurnLogEntry[];
+		contextLine: string;
+	} => {
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const completion = ticket.lastCompletion;
+		const time = completion === null ? "" : completion.completedAt.slice(0, 16).replace("T", " ");
+		const contextLine = [ticket.repository, taskType, completion?.agentType ?? "?", time]
+			.filter((part) => part !== "")
+			.join(" · ");
 		const actions: ActionRow[] = [
 			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
 			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
@@ -563,7 +588,8 @@ export function App({
 		});
 		return {
 			actions,
-			body: ticket.lastCompletion === null ? [] : ticket.lastCompletion.message.split("\n"),
+			entries: completion?.turnLog ?? [],
+			contextLine,
 		};
 	};
 
@@ -602,7 +628,7 @@ export function App({
 	};
 
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
-	// workflow handoff, or (from the missing panel) restart and abandon.
+	// workflow handoff, or (from the missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
 		setPanel(null);
 		if (state === undefined) return;
@@ -650,18 +676,20 @@ export function App({
 			setWarningMessage(`no workflow edge from ${taskType} to ${target}`);
 			return;
 		}
-		const stored = ticket.handoff;
 		// Claim first: a refused claim leaves the ticket where it was. The
 		// turn's decision is not recorded here: it lands on the settled
 		// turn's trace in the handoff's settle path, and only when the
 		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working.
+		// pending, so Close and Goto keep working. A Workflow Handoff never
+		// inherits the previous Handoff's Model or Thinking: the model
+		// starts empty, and the thinking starts on the target task type's
+		// own default.
 		const choice = baseChoice(
 			edge.agent ?? configRef.current.defaultAgent,
 			edge.environment ?? configRef.current.defaultEnvironment,
 			target,
-			stored?.model ?? "",
-			stored?.thinking ?? "",
+			"",
+			configRef.current.taskTypes[target]?.thinking ?? "",
 		);
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
@@ -733,7 +761,7 @@ export function App({
 			selectedTicket: ticketsRef.current[selectedIndexRef.current],
 			selectedIndex: selectedIndexRef.current,
 			listCanMove: ticketsRef.current.length > 1,
-			detailCanScroll: maxScroll > 0,
+			detailCanScroll: detailMaxScroll > 0,
 			sourceCount: sources.length,
 			refreshingSourceCount: sources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
@@ -815,14 +843,18 @@ export function App({
 				renderer.destroy();
 				break;
 			case "detail":
-				setFocusedPane("detail");
+				focusPane("detail");
 				break;
 			case "tickets":
-				setFocusedPane("list");
+				focusPane("list");
 				break;
 			case "move-list":
 			case "scroll-detail":
-				moveVertical(key.name === "up" || key.name === "k" ? -1 : 1);
+				if (key.name === "pageup") movePage(-1);
+				else if (key.name === "pagedown") movePage(1);
+				else if (key.name === "home") moveEdge("start");
+				else if (key.name === "end") moveEdge("end");
+				else moveVertical(key.name === "up" || key.name === "k" ? -1 : 1);
 				break;
 			case "handoff": {
 				const ticket = ticketsRef.current[selectedIndexRef.current];
@@ -944,16 +976,40 @@ export function App({
 		clearOperationMessage,
 	]);
 
+	function focusPane(pane: Pane) {
+		focusedPaneRef.current = pane;
+		setFocusedPane(pane);
+	}
+
+	function selectTicket(index: number) {
+		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
+		if (next === selectedIndexRef.current) return;
+		selectedIndexRef.current = next;
+		setSelectedIndex(next);
+	}
+
+	function moveList(delta: number) {
+		selectTicket(selectedIndexRef.current + delta);
+	}
+
 	function moveVertical(delta: number) {
-		if (focusedPane === "detail")
-			setDetailScroll((current) => clamp(current + delta, 0, maxScroll));
-		else {
-			setSelectedIndex((index) => {
-				const next = clamp(index + delta, 0, ticketsRef.current.length - 1);
-				selectedIndexRef.current = next;
-				return next;
-			});
-			setDetailScroll(0);
+		if (focusedPaneRef.current === "detail")
+			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
+		else moveList(delta);
+	}
+
+	function movePage(direction: 1 | -1) {
+		if (focusedPaneRef.current === "detail")
+			detailRef.current?.movePage(direction === 1 ? "down" : "up");
+		else moveList(direction * listGeometry.visibleRows);
+	}
+
+	function moveEdge(edge: "start" | "end") {
+		if (focusedPaneRef.current === "detail") {
+			if (edge === "start") detailRef.current?.toStart();
+			else detailRef.current?.toEnd();
+		} else {
+			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 		}
 	}
 
@@ -1027,7 +1083,19 @@ export function App({
 				)
 			: createElement(
 					"box",
-					{ style: { width: "100%", flexGrow: 1, flexDirection: "row" } },
+					// The Message line and Action bar reserve terminal rows below this
+					// flex child. Allow it to shrink on a resize so it cannot paint its
+					// bottom borders through the Message line.
+					{
+						style: {
+							width: "100%",
+							height: Math.max(0, terminalHeight - reservedRows),
+							flexGrow: 0,
+							flexShrink: 1,
+							flexDirection: "row",
+							overflow: "hidden",
+						},
+					},
 					createElement(TicketList, {
 						tickets,
 						selectedIndex,
@@ -1036,12 +1104,20 @@ export function App({
 						emptyMessage,
 						markerOf,
 						limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+						active: override === null && panel === null && utility === null,
+						onFocus: () => focusPane("list"),
+						onSelect: selectTicket,
+						onMove: moveList,
 					}),
 					createElement(TicketDetail, {
-						lines,
-						visibleRows: detailGeometry.visibleRows,
-						scroll,
+						ref: detailRef,
+						ticket: selectedTicket,
 						focused: focusedPane === "detail",
+						active: override === null && panel === null && utility === null,
+						reservedRows,
+						handoffLimit: config.maxHandoffsPerTicket,
+						scroll: config.scroll,
+						onFocus: () => focusPane("detail"),
 					}),
 				),
 		createElement(
@@ -1077,20 +1153,21 @@ export function App({
 		panel !== null &&
 			panelTicket !== undefined &&
 			(panel.kind === "decision" && decision !== undefined
-				? createElement(ActionPanel, {
-						title: truncateToWidth(`Decision: ${panelTicket.title}`, 40),
-						bodyLines: decision.body,
+				? createElement(DecisionModal, {
+						title: panelTicket.title,
+						contextLine: decision.contextLine,
+						entries: decision.entries,
 						actions: decision.actions,
 						onAction: (key) => runDecisionAction(panelTicket, key),
 						onCancel: () => setPanel(null),
 						context: actionContext,
 						inputActive: utility === null,
-						onHelp: () => openGuide("action-panel"),
-						onMessage: () => openMessage("action-panel"),
+						onHelp: () => openGuide("decision-modal"),
+						onMessage: () => openMessage("decision-modal"),
 						onUnavailable: setWarningMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})
-				: createElement(ActionPanel, {
+				: createElement(MissingModal, {
 						title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
 						bodyLines: [
 							"The agent's pane is not in herdr's agent list.",
@@ -1104,8 +1181,8 @@ export function App({
 						onCancel: () => setPanel(null),
 						context: actionContext,
 						inputActive: utility === null,
-						onHelp: () => openGuide("action-panel"),
-						onMessage: () => openMessage("action-panel"),
+						onHelp: () => openGuide("decision-modal"),
+						onMessage: () => openMessage("decision-modal"),
 						onUnavailable: setWarningMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})),

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
+import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -28,6 +29,11 @@ const choice = {
 	model: "",
 	thinking: "",
 };
+
+/** A plain-text turn log for a settle fixture, one entry per line. */
+function textLog(message: string): TurnLogEntry[] {
+	return message.split("\n").map((text) => ({ kind: "text", text }));
+}
 
 function fetched(identity = "github:github.com:I_5"): FetchedTicket {
 	return {
@@ -164,7 +170,7 @@ describe("factory SQLite state", () => {
 		const path = statePath();
 		const db = new DatabaseSync(path);
 		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
-		db.prepare("INSERT INTO schema_version(version) VALUES (3)").run();
+		db.prepare("INSERT INTO schema_version(version) VALUES (4)").run();
 		db.close();
 
 		let error: unknown;
@@ -174,7 +180,7 @@ describe("factory SQLite state", () => {
 			error = caught;
 		}
 		expect(error).toBeInstanceOf(StateError);
-		expect(String(error)).toContain("newer schema version 3");
+		expect(String(error)).toContain("newer schema version 4");
 		expect(String(error)).toContain(path);
 	});
 
@@ -225,6 +231,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "The work is done. Tests pass.",
+			turnLog: textLog("The work is done. Tests pass."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 
@@ -267,6 +274,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "First capture.",
+			turnLog: textLog("First capture."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		state.settleTurn({
@@ -275,6 +283,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Last capture.",
+			turnLog: textLog("Last capture."),
 			completedAt: "2026-08-31T11:05:00Z",
 		});
 
@@ -302,6 +311,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Done.",
+			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
@@ -343,6 +353,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Lost.",
+			turnLog: textLog("Lost."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		state.applyCompletionDecision({
@@ -371,6 +382,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Done.",
+			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
@@ -449,6 +461,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Done.",
+			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		const [rested] = state.visibleTickets([], "implement");
@@ -470,6 +483,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Done.",
+			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 
@@ -528,6 +542,92 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("a v2 database migrates to v3: the trace degrades its log from the last message", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "line one\nline two",
+			turnLog: textLog("line one\nline two"),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.close();
+
+		// Downgrade the database to v2: a trace without the turn log column.
+		const db = new DatabaseSync(path);
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
+		db.prepare("UPDATE schema_version SET version = 2").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		const [restored] = reopened.visibleTickets([], "implement");
+		// The legacy trace reads a null log cell and degrades: its last
+		// message, one line per entry, stands in for the log.
+		expect(restored.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "line one\nline two",
+				turnLog: [
+					{ kind: "text", text: "line one" },
+					{ kind: "text", text: "line two" },
+				],
+				decision: null,
+			}),
+		);
+		reopened.close();
+	});
+
+	test("a settled turn stores its log and a re-settle refreshes it in place", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "first capture",
+			turnLog: [{ kind: "text", text: "first capture" }],
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		// The agent works again and settles the same turn: the log refreshes.
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "final text",
+			turnLog: [
+				{ kind: "tool", name: "bash", target: "npm test", failed: false },
+				{ kind: "text", text: "final text" },
+			],
+			completedAt: "2026-08-31T11:05:00Z",
+		});
+		expect(state.lastCompletion(ticket.identity)).toEqual(
+			expect.objectContaining({
+				message: "final text",
+				turnLog: [
+					{ kind: "tool", name: "bash", target: "npm test", failed: false },
+					{ kind: "text", text: "final text" },
+				],
+				decision: null,
+			}),
+		);
+		state.close();
+	});
+
 	test("keeps an awaiting ticket visible while every source is gone", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
@@ -542,6 +642,7 @@ describe("factory SQLite state", () => {
 			taskType: "implement",
 			agentType: "pi",
 			message: "Done.",
+			turnLog: textLog("Done."),
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 

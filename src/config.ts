@@ -71,6 +71,15 @@ export interface TaskRule {
 	when: TaskRuleWhen;
 }
 
+export interface ScrollConfig {
+	/** Rows moved by one detail key step or one slow wheel event. */
+	speed: number;
+	/** Wheel-burst acceleration strength. Zero keeps wheel movement linear. */
+	acceleration: number;
+	/** The upper bound in rows for one accelerated wheel event. */
+	maximumSpeed: number;
+}
+
 export interface FactoryConfig {
 	defaultAgent: string;
 	defaultEnvironment: EnvironmentKind;
@@ -87,6 +96,8 @@ export interface FactoryConfig {
 	completionMessageLines: number;
 	/** Handoffs per ticket after which the control plane stops dispatching it. */
 	maxHandoffsPerTicket: number;
+	/** Detail-pane keyboard and wheel scroll behavior. */
+	scroll: ScrollConfig;
 	/** Workflows a settled turn can hand off to. */
 	workflows: WorkflowEdge[];
 	/** Repository identity to checkout path. */
@@ -154,6 +165,7 @@ export const DEFAULT_CONFIG: FactoryConfig = {
 	agentPollIntervalSeconds: 5,
 	completionMessageLines: 200,
 	maxHandoffsPerTicket: 10,
+	scroll: { speed: 1, acceleration: 0.8, maximumSpeed: 6 },
 	workflows: [],
 	repos: {},
 	sources: [],
@@ -234,6 +246,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 		"agent-poll-interval-seconds",
 		"completion-message-lines",
 		"max-handoffs-per-ticket",
+		"scroll",
 		"workflows",
 	]);
 	for (const key of Object.keys(data)) {
@@ -263,6 +276,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 	const agentPollIntervalSeconds = positiveNumberField(data, "agent-poll-interval-seconds", 5);
 	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
 	const maxHandoffsPerTicket = positiveIntField(data, "max-handoffs-per-ticket", 10);
+	const scroll = validateScroll(data.scroll);
 	if (!(defaultAgent in agents)) {
 		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
 	}
@@ -282,12 +296,39 @@ export function validateConfig(data: unknown): FactoryConfig {
 		agentPollIntervalSeconds,
 		completionMessageLines,
 		maxHandoffsPerTicket,
+		scroll,
 		workflows,
 		repos,
 		sources,
 		taskRules,
 		...(stateFile === undefined ? {} : { stateFile }),
 	};
+}
+
+function validateScroll(value: unknown): ScrollConfig {
+	if (value === undefined) return { ...DEFAULT_CONFIG.scroll };
+	if (!isRecord(value)) throw new ConfigError("config: scroll: must be a table");
+	const known = new Set(["speed", "acceleration", "maximum-speed"]);
+	for (const key of Object.keys(value)) {
+		if (!known.has(key)) throw new ConfigError(`config: scroll: unknown key "${key}"`);
+	}
+	const speed = positiveIntField(value, "speed", DEFAULT_CONFIG.scroll.speed, "scroll");
+	const acceleration = nonNegativeFiniteNumberField(
+		value,
+		"acceleration",
+		DEFAULT_CONFIG.scroll.acceleration,
+		"scroll",
+	);
+	const maximumSpeed = positiveIntField(
+		value,
+		"maximum-speed",
+		DEFAULT_CONFIG.scroll.maximumSpeed,
+		"scroll",
+	);
+	if (maximumSpeed < speed) {
+		throw new ConfigError("config: scroll.maximum-speed: must be at least scroll.speed");
+	}
+	return { speed, acceleration, maximumSpeed };
 }
 
 function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
@@ -659,11 +700,34 @@ function nonNegativeIntField(record: Record<string, unknown>, key: string, def: 
 }
 
 /** A positive whole-number top-level key; absent takes the default. */
-function positiveIntField(record: Record<string, unknown>, key: string, def: number): number {
+function positiveIntField(
+	record: Record<string, unknown>,
+	key: string,
+	def: number,
+	where?: string,
+): number {
 	const value = record[key];
 	if (value === undefined) return def;
 	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0)
-		throw new ConfigError(`config: ${key}: must be a whole number greater than 0`);
+		throw new ConfigError(
+			`config: ${where === undefined ? key : `${where}.${key}`}: must be a whole number greater than 0`,
+		);
+	return value;
+}
+
+function nonNegativeFiniteNumberField(
+	record: Record<string, unknown>,
+	key: string,
+	def: number,
+	where?: string,
+): number {
+	const value = record[key];
+	if (value === undefined) return def;
+	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+		throw new ConfigError(
+			`config: ${where === undefined ? key : `${where}.${key}`}: must be a finite number of 0 or more`,
+		);
+	}
 	return value;
 }
 
@@ -724,6 +788,11 @@ export function configToToml(config: FactoryConfig): string {
 		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
 		"completion-message-lines": config.completionMessageLines,
 		"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
+		scroll: {
+			speed: config.scroll.speed,
+			acceleration: config.scroll.acceleration,
+			"maximum-speed": config.scroll.maximumSpeed,
+		},
 		workflows: config.workflows.map((edge) => ({
 			from: edge.from,
 			to: edge.to,

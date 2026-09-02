@@ -10,8 +10,8 @@ cycle. Enter hands an actionable open ticket off through herdr. The `e` key
 opens the override panel for a one-shot change of the handoff settings.
 
 The control plane polls herdr for the agents it started. It marks a blocked
-agent and a missing agent on the ticket, captures the agent's last message
-when a turn settles, and records a completion trace. In auto-handoff mode it
+agent and a missing agent on the ticket, reads the agent's turn log when a
+turn settles, and records a completion trace. In auto-handoff mode it
 hands eligible open tickets off by itself within the configured limits, and
 routes or closes completed turns along the configured workflows.
 
@@ -44,10 +44,20 @@ ends at close, ADR 0006: the control plane polls herdr).
 ## Controls
 
 The control plane keeps a contextual Action bar at the bottom of the
-terminal. It shows the common controls for the current Interaction mode.
-Press `?` or `F1` to open the in-app Key guide. The guide is the complete
-control catalogue, including controls for other modes, Quit, and the
-`Ctrl+C` emergency exit. Press `Esc`, `F1`, or `?` to close it.
+terminal. It shows the common controls for the current interaction mode,
+and it dims a control the app will not run in that state. Press `?` or
+`F1` to open the in-app Key guide. The guide is the complete control
+catalogue, including controls for other modes, Quit, and the `Ctrl+C`
+emergency exit. Press `Esc`, `F1`, or `?` to close it.
+
+In the Ticket list, `j`/`k` and `Up`/`Down` move the selection, `l`/`Right`
+focuses the detail, `Enter` hands an open ticket off, opens the decision
+modal on an awaiting one, opens the missing modal on a ticket whose agent
+is gone, or focuses the agent of a blocked one, and `e` opens the override
+panel. In the detail, the row keys scroll at the configured speed and
+`h`/`Left` returns to the list. The page and jump keys work in both panes:
+they move one visible page, or the pane edges. `a` toggles auto-handoff,
+`r` refreshes the sources, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -56,14 +66,20 @@ Action bar always reserve the two bottom rows.
 ### Entry controls
 
 The basic entry controls are `?` or `F1` for the Key guide, `F2` for a
-truncated Message view, and `Ctrl+C` for emergency exit. Use the in-app guide
-and the contextual Action bar for the complete fixed control set.
+truncated Message view, and `Ctrl+C` for emergency exit. Use the in-app
+guide and the contextual Action bar for the complete fixed control set.
 
-The override panel is a modal. While it is open, the keys of the app below are
-inert. Its Action bar changes between list-row and text-row modes. A free-text
-row owns printable `j`, `k`, `h`, `l`, `?`, and `m`; `F1` still opens Help.
-Arrow keys can always move past a text row. Backspace deletes, Enter confirms,
-and Esc cancels.
+The override panel is a modal. While it is open, the keys of the app below
+are inert, and the shared Action bar at the terminal bottom changes between
+list-row and text-row modes. `Up` and `Down` move the setting rows, and
+`Tab` and `Shift` + `Tab` move the next or previous row from either row
+kind. On a list row, `j` and `k` also move the rows, and `h`/`l` and
+`Left`/`Right` cycle the value. A free-text row is a standard single-line
+input: typed text, the caret keys, `Home` and `End`, `Backspace` and
+`Delete`, word deletes, undo and redo, and sanitized bracketed paste all
+work in it. It owns printable `j`, `k`, `h`, `l`, `?`, and `m`; `F1` still
+opens Help and `F2` the Message view. Enter confirms the handoff; Esc
+cancels.
 A row shows `(empty)` for an unset free-text value and `(unset)` for a list
 value that is not one of its options. The thinking row starts on the
 suggested task type's `thinking` level when the task type sets one. The
@@ -74,16 +90,36 @@ always shows what the handoff will run on. The container environment is a
 future kind and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
-column shrinks first, then the label column, then the marker. The shared
-Action bar replaces the panel's old local hint row. When the terminal is too
-small, the last rows drop. A row never wraps: it carries less, not broken
-text.
+column shrinks first, then the label column, then the marker. The rows
+scroll within the viewport when the height cannot hold them all, and the
+selected row stays visible. A row never wraps: it carries less, not broken
+text. The shared Action bar sits at the terminal bottom and names the
+controls the panel dispatches.
 
-### Completion decision panel
+### Decision modal
 
-Enter on an `awaiting` ticket shows the last completion: the agent's last
-message. The panel offers the choices the state allows. Its shared Action
-bar shows Select action, Scroll message, Confirm action, Cancel, and Help.
+Enter on an `awaiting` ticket opens the decision modal: a near-fullscreen
+modal that pops in over the app with a short fade and grow, one cell of
+margin on every side. Its border reads `Decision: <ticket title>`, and the
+first row under the border names the context: repository, task type,
+agent, completion time.
+
+The body is the turn log of the settled turn, in order. The agent's text
+blocks carry light markdown dressing: headings render bright without their
+hashes, bold renders bright, code renders dim, lists keep their markers
+and indent per level, links keep their label. Each tool call is one dim
+note, `▸ name: target`; a failed call wears the warning color. The agent's
+thinking text is not shown. The log comes from the agent's session record
+(ADR 0008); when no session is known, the terminal capture stands in. The
+modal opens at the bottom, where the agent's conclusion is, and a
+proportional scrollbar shows the position when the log is longer than the
+window.
+
+The modal offers the choices the state allows. `Up` and `Down` move between
+the choice rows; `j` and `k` scroll the turn log one row, with the page and
+jump keys as aliases. `Enter` chooses the selected row, and `Esc` closes
+the modal: nothing runs, and the ticket stays awaiting. The shared Action
+bar at the terminal bottom names these controls.
 The first row, "Close", ends the work cycle: the ticket returns to open
 with its cycle number incremented, and the handoff's environment is closed
 without touching the git branch, so pushed work and pull requests survive:
@@ -105,11 +141,15 @@ trace only when the routed handoff settles with the agent started; a
 failed route leaves the trace pending, so Close and Goto keep working
 on the awaiting ticket.
 
-### Missing agent panel
+### Missing modal
 
-Enter on a ticket whose agent is missing shows the missing panel. Its shared
-Action bar shows Select action, Scroll message, Confirm action, Cancel, and
-Help. "Restart" hands the ticket off again with the same choices, in the
+Enter on a ticket whose agent is missing opens the missing modal. It shows
+the badge fact and the handoff count, and it offers "Restart" and
+"Abandon". `Up` and `Down` move between the choice rows, `j` and `k` scroll
+its message, `Enter` chooses the selected row, and `Esc` closes the modal:
+nothing runs, and the badge stays. The shared Action bar at the terminal
+bottom names these controls. "Restart" hands the ticket off again with the
+same choices, in the
 workspace the handoff recorded, and the last completion's message as the
 previous message. "Abandon" ends the work cycle: the ticket returns to open
 with its cycle number incremented, the handoff's environment is closed,
@@ -139,9 +179,22 @@ The panes share one focus.
 Switching focus never moves the selection.
 
 The vertical keys act on the focused pane.
-With the list focused, they move the selection.
-With the detail focused, they scroll the detail, and a new selection starts
+With the list focused, they move the selection. Page keys move by one visible
+list page, and Home and End select the list edges. With the detail focused,
+the row keys move at the configured speed, PageUp and PageDown retain one row
+of context, and Home and End move to the detail edges. A new selection starts
 the detail at the top.
+
+The detail is a native OpenTUI viewport. Its complete content stays mounted,
+so wheel bursts translate one stable surface instead of rebuilding visible
+rows. When the content overflows, its right inner column has a proportional
+scrollbar. The gutter is always reserved when width permits, so wrapped text
+does not reflow as the bar appears. Click or drag the scrollbar, or use the
+wheel or trackpad over any part of the detail. Fast vertical wheel events
+accelerate to the configured limit. Horizontal and Shift-wheel input is
+ignored. A click or wheel action focuses its pane. Clicking a visible Ticket
+selects it, and a list wheel event selects one adjacent Ticket.
+
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.
 The repository drops before the title does, and the task type badge is
@@ -182,7 +235,10 @@ handoff may still pass the limit.
 ## Handoffs
 
 Enter on an open ticket starts a handoff with the config defaults.
-The override panel changes them for that one handoff only.
+The override panel changes them for that one handoff only. A workflow
+handoff starts with an empty Model and the target task type's own thinking
+default; it does not inherit either value from the previous handoff. A
+Restart repeats the interrupted handoff's Model and Thinking.
 
 - The agent runs through herdr (ADR 0002): a live worktree handoff creates a
   herdr workspace at the checkout with a fresh tab, and a worktree handoff
@@ -236,7 +292,7 @@ handoff that follows an awaiting ticket renders its prompt with the
 agent reads what the previous one left behind.
 
 In manual mode, `awaiting` waits for the operator. Enter opens the decision
-panel. The operator routes the ticket to a workflow target or closes the
+modal. The operator routes the ticket to a workflow target or closes the
 work cycle.
 
 Auto-handoff mode decides without the operator, within the configured
@@ -264,7 +320,7 @@ A missing agent in auto mode restarts the handoff once, with the last
 message as the previous message. At the per-ticket handoff limit, the
 cycle is abandoned instead. When the agent is missing again, or the
 parallel limit is full, the control plane stops: the `missing` badge stays
-until the operator restarts or abandons from the missing panel. In manual
+until the operator restarts or abandons from the missing modal. In manual
 mode the control plane never touches a missing agent. Abandon ends the
 work cycle, closes the handoff's environment, and returns the ticket to
 open with its cycle number incremented.
@@ -285,8 +341,14 @@ The config carries the defaults a handoff starts from (`default-agent`,
 (`max-parallel-agents`, default `2`), the herdr poll interval
 (`agent-poll-interval-seconds`, default `5`), the completion message line
 cap (`completion-message-lines`, default `200`), the per-ticket handoff limit
-(`max-handoffs-per-ticket`, default `10`), the workflow edges (`workflows`),
-agent types, task types, repository mappings, ticket sources, ordered task
+(`max-handoffs-per-ticket`, default `10`), and detail scroll settings. The
+optional `[scroll]` table has `speed` (positive whole number, default `1`),
+`acceleration` (finite number of 0 or more, default `0.8`), and
+`maximum-speed` (positive whole number, default `6`). `maximum-speed` must be
+at least `speed`. Missing scroll values use these defaults. Set acceleration
+to `0`, or maximum speed equal to speed, for linear wheel movement. The file
+also carries the workflow edges (`workflows`), agent types, task types,
+repository mappings, ticket sources, ordered task
 rules, and an optional `state-file`. A source has a unique name, a GitHub adapter kind
 (`github-issues` or `github-pull-requests`), repositories, and a positive
 `refresh-interval-seconds`. Sources can use normal `gh` authentication, a
@@ -349,11 +411,11 @@ the first write-back: the data round-trips, the comments do not.
   inject a fake that records the calls.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
-  pane, the override panel, the shared Action bar and control catalogue, the
-  Key guide and Message view, the shared action panel (the completion decision
-  and the missing agent panel both render through it), the shared pane
-  geometry, the shared palette, message facts, and display-width-aware text
-  helpers.
+  pane, the native ticket detail viewport, the override panel, the decision
+  and missing modals, the turn log and markdown rendering, the shared
+  Action bar and control catalogue, the Key guide and Message view, the
+  shared pane geometry, the shared palette, message facts, and
+  display-width-aware text helpers.
 - `test/`: the test suite.
   The seam is the rendered terminal frame and the recorded command sequence.
   No test touches a real herdr session or a real git repository.

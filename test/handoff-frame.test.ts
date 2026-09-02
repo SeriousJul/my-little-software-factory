@@ -15,6 +15,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { COLORS } from "../src/components/theme.ts";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
@@ -31,6 +32,7 @@ import {
 	openPanel,
 	press,
 	pressArrow,
+	rgb,
 	rowsOf,
 	type Setup,
 	settle,
@@ -999,6 +1001,40 @@ describe("the override panel", () => {
 		);
 	});
 
+	test("the selected text field has a focused background and bright text", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the row selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				const frame = await press(setup, "j", "the row selection to reach the model", (f) =>
+					f.includes("❯ Model"),
+				);
+				expect(frameText(frame)).toContain("Model (empty)");
+
+				await setup.mockInput.typeText("gpt");
+				await awaitFrame(setup, (f) => frameText(f).includes("Model gpt"), "the model text");
+				const captured = setup.captureSpans();
+				const modelLine = captured.lines.find((line) =>
+					line.spans.some((span) => span.text.includes("gpt")),
+				);
+				const valueSpan = modelLine?.spans.find((span) => span.text.includes("gpt"));
+				expect(valueSpan?.fg.toInts().slice(0, 3)).toEqual(rgb(COLORS.textBright));
+				expect(valueSpan?.bg.toInts().slice(0, 3)).toEqual(rgb(COLORS.focusedBackground));
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -1068,6 +1104,44 @@ describe("the override panel", () => {
 				expect(frameText(frame)).toContain("Environment worktree");
 				expect(frameText(frame)).not.toContain("Agent codex");
 				expect(frame).toContain("❯ Environment");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("Tab and Shift+Tab move from list and text rows", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+
+				// Both directions work on a list row.
+				setup.mockInput.pressTab();
+				await awaitFrame(setup, (f) => f.includes("❯ Environment"), "Tab to move down");
+				setup.mockInput.pressTab({ shift: true });
+				await awaitFrame(setup, (f) => f.includes("❯ Agent"), "Shift+Tab to move up");
+
+				// Both directions also work when the selected row is a text input.
+				await press(setup, "j", "the row selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the row selection to reach the model", (f) =>
+					f.includes("❯ Model"),
+				);
+				setup.mockInput.pressTab({ shift: true });
+				await awaitFrame(setup, (f) => f.includes("❯ Task type"), "Shift+Tab from a text row");
+				await press(setup, "j", "the row selection to return to the model", (f) =>
+					f.includes("❯ Model"),
+				);
+				setup.mockInput.pressTab();
+				await awaitFrame(setup, (f) => f.includes("❯ Thinking"), "Tab from a text row");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1229,6 +1303,666 @@ describe("the override panel", () => {
 			},
 			WIDTH,
 			HEIGHT,
+			props,
+		);
+	});
+
+	test("the free-text row moves the caret and inserts at it", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				// A left arrow moves the caret one cell in, so the next typed
+				// character lands before the last one, not after it.
+				await setup.mockInput.typeText("abcd");
+				await setup.mockInput.pressArrow("left");
+				await setup.mockInput.typeText("X");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model abcXd"),
+					"the insert at the moved caret",
+				);
+				expect(frameText(frame)).toContain("Model abcXd");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"abcXd",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the free-text row jumps to the ends with Home and End", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				await setup.mockInput.typeText("abcd");
+				// Home puts the caret at the start, so the next character lands
+				// before the rest. End puts it back at the tail.
+				await setup.mockInput.pressKey("HOME");
+				await setup.mockInput.typeText("Y");
+				await setup.mockInput.pressKey("END");
+				await setup.mockInput.typeText("Z");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model YabcdZ"),
+					"the Home and End inserts",
+				);
+				expect(frameText(frame)).toContain("Model YabcdZ");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"YabcdZ",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the free-text row deletes with backspace and forward delete", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				await setup.mockInput.typeText("abcd");
+				// Backspace removes the character before the caret.
+				await setup.mockInput.pressBackspace();
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model abc "),
+					"the backspace to shorten the value",
+				);
+				// Home, then forward delete, removes the first character.
+				await setup.mockInput.pressKey("HOME");
+				await setup.mockInput.pressKey("DELETE");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model bc "),
+					"the forward delete to remove the first character",
+				);
+				expect(frameText(frame)).toContain("Model bc ");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"bc",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the free-text row deletes a caret selection", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				await setup.mockInput.typeText("hello");
+				// Shift+left twice selects the last two characters, then
+				// backspace removes the whole selection at once.
+				await setup.mockInput.pressArrow("left", { shift: true });
+				await setup.mockInput.pressArrow("left", { shift: true });
+				await setup.mockInput.pressBackspace();
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model hel "),
+					"the selection to delete the two characters",
+				);
+				expect(frameText(frame)).toContain("Model hel ");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"hel",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				const isShort = (f: string) =>
+					frameText(f).includes("Model hell ") && !frameText(f).includes("Model hello");
+
+				await setup.mockInput.typeText("hello");
+				// Backspace drops the final o; Ctrl+Z restores it.
+				await setup.mockInput.pressBackspace();
+				await awaitFrame(setup, isShort, "the backspace to shorten the value");
+				await setup.mockInput.pressKey("z", { ctrl: true });
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model hello"),
+					"the undo to restore the value",
+				);
+				// A second undo takes the value back, and Ctrl+Y puts it forward.
+				await setup.mockInput.pressKey("z", { ctrl: true });
+				await awaitFrame(setup, isShort, "the second undo to shorten the value");
+				await setup.mockInput.pressKey("y", { ctrl: true });
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model hello"),
+					"the redo to restore the value",
+				);
+				expect(frameText(frame)).toContain("Model hello");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"hello",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("bracketed paste works in a free-text Thinking row", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				// codex exposes Thinking as a free-text field rather than a list.
+				await pressArrow(setup, "right", "the agent to become codex", (f) =>
+					frameText(f).includes("Agent codex"),
+				);
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the row selection to move to the model", (f) =>
+					f.includes("❯ Model"),
+				);
+				const thinking = await pressArrow(
+					setup,
+					"down",
+					"the row selection to move to free-text Thinking",
+					(f) => f.includes("❯ Thinking"),
+				);
+				expect(frameText(thinking)).toContain("Thinking (empty)");
+
+				await setup.mockInput.pasteBracketedText("med\u001b[31mium\r\n");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Thinking medium"),
+					"the sanitized Thinking paste",
+				);
+				expect(frameText(frame)).toContain("Thinking medium");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("model_reasoning_effort=medium");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				// The paste carries an ANSI color and a line break. The field
+				// keeps only the plain text: the color and the break are gone.
+				await setup.mockInput.pasteBracketedText("\x1b[31mhello\r\nworld\x1b[0m");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model helloworld"),
+					"the sanitized paste to land in the row",
+				);
+				expect(frameText(frame)).toContain("Model helloworld");
+				expect(frameText(frame)).not.toContain("\x1b");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"helloworld",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				await setup.mockInput.typeText("ab");
+				await setup.mockInput.pressKey("HOME");
+				await setup.mockInput.pasteBracketedText("S");
+				await awaitFrame(setup, (f) => frameText(f).includes("Model Sab"), "the start paste");
+
+				await setup.mockInput.pressKey("END");
+				await setup.mockInput.pasteBracketedText("E");
+				await awaitFrame(setup, (f) => frameText(f).includes("Model SabE"), "the end paste");
+
+				await setup.mockInput.pressKey("HOME");
+				await setup.mockInput.pressArrow("right");
+				await setup.mockInput.pasteBracketedText("M");
+				await awaitFrame(setup, (f) => frameText(f).includes("Model SMabE"), "the middle paste");
+
+				await setup.mockInput.pressKey("HOME");
+				await setup.mockInput.pressArrow("right", { shift: true });
+				await setup.mockInput.pasteBracketedText("X");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model XabE"),
+					"the paste over a selection",
+				);
+				expect(frameText(frame)).toContain("Model XabE");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a long free-text value scrolls in its column and hands off whole", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const longValue = "abcdefghijklmnopqrstuv9876543210";
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				// The value is wider than the column. The row keeps one line and
+				// scrolls the caret into view, showing the tail of the value.
+				await setup.mockInput.typeText(longValue);
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("9876543210"),
+					"the value to scroll its tail into view",
+				);
+				// The head has scrolled out: only the tail is on screen.
+				expect(frameText(frame)).not.toContain("abcdefghijklm");
+				// The row still fits one terminal line: no wrap, no corruption.
+				expect(rowsOf(frame)).toHaveLength(HEIGHT);
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					longValue,
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("word deletion removes a word in either direction", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				await setup.mockInput.typeText("hello world");
+				await setup.mockInput.pressBackspace({ ctrl: true });
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model hello "),
+					"the backward word deletion",
+				);
+				await setup.mockInput.pressKey("HOME");
+				await setup.mockInput.pressKey("DELETE", { ctrl: true });
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model (empty)"),
+					"the forward word deletion",
+				);
+				expect(frameText(frame)).toContain("Model (empty)");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("question mark and m type into a selected free-text row", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+				await setup.mockInput.typeText("?m");
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model ?m"),
+					"the typed punctuation",
+				);
+				expect(frameText(frame)).toContain("Model ?m");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("typing and confirming in one tick hands off the complete value", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+
+				await setup.mockInput.typeText("gpt");
+				setup.mockInput.pressEnter();
+				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("gpt");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a text draft survives an agent change and terminal resize", async () => {
+		const runner = new FakeRunner();
+		const config = {
+			...DEFAULT_CONFIG,
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+				await setup.mockInput.typeText("draft");
+				await awaitFrame(setup, (f) => frameText(f).includes("Model draft"), "the draft text");
+
+				// The cursor agent hides Model. The choice remains the draft, not
+				// the transient set of rows currently visible.
+				await pressArrow(setup, "up", "the task type row", (f) => f.includes("❯ Task type"));
+				await pressArrow(setup, "up", "the environment row", (f) => f.includes("❯ Environment"));
+				await pressArrow(setup, "up", "the agent row", (f) => f.includes("❯ Agent"));
+				await pressArrow(setup, "right", "the agent to become codex", (f) =>
+					frameText(f).includes("Agent codex"),
+				);
+				await pressArrow(setup, "right", "the agent to become claude", (f) =>
+					frameText(f).includes("Agent claude"),
+				);
+				await pressArrow(setup, "right", "the agent to become cursor", (f) =>
+					frameText(f).includes("Agent cursor"),
+				);
+				expect(frameText(setup.captureCharFrame())).not.toContain("Model");
+
+				await pressArrow(setup, "right", "the agent to return to pi", (f) =>
+					frameText(f).includes("Agent pi"),
+				);
+				await press(setup, "j", "the row selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the row selection to reach the restored model", (f) =>
+					frameText(f).includes("Model draft"),
+				);
+
+				setup.resize(24, 8);
+				await awaitFrame(setup, (f) => frameText(f).includes("Model"), "the resized panel");
+				setup.resize(WIDTH, HEIGHT);
+				const restored = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model draft"),
+					"the draft after resizing back",
+				);
+				expect(frameText(restored)).toContain("Model draft");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
+		const runner = new FakeRunner();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				// An eight-row terminal holds four of the five panel rows, so the
+				// last row is off screen while the first is selected...
+				const open = await openPanel(setup);
+				expect(frameText(open)).not.toContain("Thinking");
+
+				// ...and pressing down to the last row scrolls the viewport to it.
+				await press(setup, "j", "the selection to reach the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to reach the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
+				const frame = await pressArrow(
+					setup,
+					"down",
+					"the viewport to reach the thinking row",
+					(f) => f.includes("❯ Thinking"),
+				);
+				// The selected row is on screen, and the first row has scrolled off.
+				expect(frameText(frame)).toContain("❯ Thinking");
+				expect(frameText(frame)).not.toContain("Agent");
+			},
+			24,
+			8,
 			props,
 		);
 	});

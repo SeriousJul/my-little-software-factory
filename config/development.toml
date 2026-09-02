@@ -4,6 +4,11 @@ default-agent = "pi"
 default-environment = "worktree"
 default-task-type = "implement"
 
+[scroll]
+speed = 1
+acceleration = 0.8
+maximum-speed = 6
+
 [agents.pi]
 kind = "pi"
 model = "--model {value}"
@@ -32,6 +37,7 @@ Implement the following {source-kind}.
 
 2. **Create Pull Request**
    - Open a new Pull Request.
+   - Link the pull request to the ticket.
    - List any technical choices made when specifications were not clear.
    - Add the **`ready-for-review`** label.
    - Add the **`ready-for-agent`** label.

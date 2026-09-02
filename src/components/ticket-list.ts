@@ -12,8 +12,9 @@
  * stays readable. The window slides so the selected ticket stays visible
  * when the tickets overflow the pane.
  */
+import type { BoxRenderable, MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
-import type { ReactElement } from "react";
+import { type ReactElement, useRef } from "react";
 
 import type { Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry, windowOf } from "./geometry.ts";
@@ -49,6 +50,11 @@ interface TicketListProps {
 	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
 	/** Whether the ticket has used up its handoffs: the limit marker. */
 	limitReached: (ticket: Ticket) => boolean;
+	/** False while an overlay owns input above the panes. */
+	active: boolean;
+	onFocus: () => void;
+	onSelect: (index: number) => void;
+	onMove: (delta: number) => void;
 }
 
 export function TicketList({
@@ -59,22 +65,54 @@ export function TicketList({
 	emptyMessage,
 	markerOf,
 	limitReached,
+	active,
+	onFocus,
+	onSelect,
+	onMove,
 }: TicketListProps) {
 	const geometry = usePaneGeometry("list", reservedRows);
+	const rootRef = useRef<BoxRenderable | null>(null);
 
 	// The window starts where the selection sits on the window's last row.
 	// `windowOf` clamps that start, so the window slides only when the
 	// selection would run off the bottom of the pane.
-	const start = selectedIndex - geometry.visibleRows + 1;
+	const start = Math.max(
+		0,
+		Math.min(
+			selectedIndex - geometry.visibleRows + 1,
+			Math.max(0, tickets.length - geometry.visibleRows),
+		),
+	);
 	const visible = windowOf(tickets, start, geometry.visibleRows);
+	const handleMouse = (event: MouseEvent) => {
+		if (!active) return;
+		if (event.type === "scroll") {
+			if (event.modifiers.shift) return;
+			if (event.scroll?.direction !== "up" && event.scroll?.direction !== "down") return;
+			onFocus();
+			onMove(event.scroll.direction === "up" ? -1 : 1);
+			return;
+		}
+		if (event.type !== "down" || event.button !== 0) return;
+		onFocus();
+		// One border and one padding row precede the list's first row.
+		// Use the actual OpenTUI box origin so hit testing stays correct after
+		// a terminal resize or a status line changes pane height.
+		const root = (event.currentTarget as BoxRenderable | null) ?? rootRef.current;
+		const row = event.y - (root?.y ?? event.y) - 2;
+		const index = start + row;
+		if (row >= 0 && row < visible.length && index >= 0 && index < tickets.length) onSelect(index);
+	};
 
 	return createElement(
 		"box",
 		{
+			ref: rootRef,
 			title: focused ? "❯ Tickets" : "  Tickets",
 			border: true,
 			borderColor: focused ? COLORS.borderFocused : COLORS.border,
 			padding: 1,
+			onMouse: handleMouse,
 			style: {
 				// An exact cell count from the shared geometry, not "50%":
 				// OpenTUI rounds a percentage up on odd terminal widths, and
