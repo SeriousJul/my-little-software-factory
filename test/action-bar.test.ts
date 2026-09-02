@@ -18,8 +18,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
+import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
+import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
@@ -617,6 +618,228 @@ describe("the contextual Action bar", () => {
 			HEIGHT,
 			{ ...props, runner: failing },
 		);
+	});
+
+	test("Ctrl+C is the emergency exit from the legacy Consultations input paths", async () => {
+		const repository = {
+			identity: "github.com/acme/factory",
+			displayName: "acme/factory",
+			cloneUrl: "https://github.com/acme/factory.git",
+			path: join(home, "src", "factory"),
+		};
+		mkdirSync(repository.path, { recursive: true });
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			repos: { [repository.identity]: repository.path },
+			consultationTypes: {
+				grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
+			},
+		};
+		const destroyed = (setup: AppSetup) =>
+			awaitFrame(setup, (f) => f.trim() === "", "the renderer to destroy");
+		// Seed a Consultation with a deterministic id so its recorded Agent
+		// handles match the pinned `agent list` entries.
+		const seed = (state: FactoryState, id: string, withAgent: boolean): void => {
+			state.createConsultation({
+				id,
+				typeName: "grill",
+				agentType: "pi",
+				environment: "worktree",
+				template: "/grill {input}",
+				initialInput: "review auth",
+				renderedOpeningPrompt: "/grill review auth",
+				repository,
+				agentName: `consultation-${id.slice(0, 8)}`,
+			});
+			if (withAgent)
+				state.setConsultationAgent(id, {
+					paneId: `pane-${id.slice(0, 8)}`,
+					tabId: `tab-${id.slice(0, 8)}`,
+					workspaceId: `ws-${id.slice(0, 8)}`,
+					sessionId: `sess-${id.slice(0, 8)}`,
+				});
+		};
+		const listJson = (id: string, status: string): string =>
+			JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: `pane-${id.slice(0, 8)}`,
+							tab_id: `tab-${id.slice(0, 8)}`,
+							workspace_id: `ws-${id.slice(0, 8)}`,
+							agent: `consultation-${id.slice(0, 8)}`,
+							agent_status: status,
+							session_id: `sess-${id.slice(0, 8)}`,
+						},
+					],
+				},
+			});
+		const bootProps = (state: FactoryState, runner: FakeRunner) => ({
+			state,
+			runner,
+			config,
+			home,
+			pollIntervalMs: 50,
+		});
+
+		// The Consultations view, with types configured so a plain `c` would
+		// open the launcher: Ctrl+C is the emergency exit, not the launcher.
+		await withApp(
+			async (setup) => {
+				await press(setup, "v", "the consultations view", (f) =>
+					f.includes("Consultations require SQLite state"),
+				);
+				pressCtrlC(setup);
+				await destroyed(setup);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config, runner: new FakeRunner(), home },
+		);
+
+		// The Consultation launcher open: Ctrl+C destroys, Esc would cancel.
+		await withApp(
+			async (setup) => {
+				await press(setup, "v", "the consultations view", (f) =>
+					f.includes("Consultations require SQLite state"),
+				);
+				await press(setup, "c", "the launcher to open", (f) => f.includes("Consultation launcher"));
+				pressCtrlC(setup);
+				await destroyed(setup);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config, runner: new FakeRunner(), home },
+		);
+
+		// The legacy Key guide open over the Consultations view.
+		await withApp(
+			async (setup) => {
+				await press(setup, "v", "the consultations view", (f) =>
+					f.includes("Consultations require SQLite state"),
+				);
+				await press(setup, "?", "the legacy guide to open", (f) => f.includes("Key guide"));
+				pressCtrlC(setup);
+				await destroyed(setup);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config, runner: new FakeRunner(), home },
+		);
+
+		// The response editor open on an awaiting-response Consultation.
+		{
+			const state = freshState();
+			const id = "bbbbbbbb-1111-4111-8111-111111111111";
+			seed(state, id, true);
+			state.settleConsultationTurn(id, null, "first answer", "idle");
+			const runner = new FakeRunner();
+			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "idle") });
+			runner.set(
+				"herdr",
+				[
+					"agent",
+					"read",
+					`pane-${id.slice(0, 8)}`,
+					"--lines",
+					"200",
+					"--source",
+					"recent-unwrapped",
+					"--format",
+					"text",
+				],
+				{ stdout: "Agent: waiting" },
+			);
+			try {
+				await withApp(
+					async (setup) => {
+						await press(setup, "v", "the consultations view", (f) =>
+							f.includes("State: awaiting-response"),
+						);
+						await press(setup, "return", "the response editor", (f) => f.includes("enter submit"));
+						pressCtrlC(setup);
+						await destroyed(setup);
+					},
+					WIDTH,
+					30,
+					bootProps(state, runner),
+				);
+			} finally {
+				state.close();
+			}
+		}
+
+		// Agent interaction mode, entered on a blocked Consultation.
+		{
+			const state = freshState();
+			const id = "55555555-1111-4111-8111-111111111111";
+			seed(state, id, true);
+			state.settleConsultationTurn(id, null, "first answer", "blocked");
+			const paneId = `pane-${id.slice(0, 8)}`;
+			const runner = new FakeRunner();
+			runner.set("herdr", ["agent", "list"], { stdout: listJson(id, "blocked") });
+			runner.set(
+				"herdr",
+				[
+					"agent",
+					"read",
+					paneId,
+					"--lines",
+					"200",
+					"--source",
+					"recent-unwrapped",
+					"--format",
+					"text",
+				],
+				{ stdout: "Agent: blocked on approval" },
+			);
+			runner.set(
+				"herdr",
+				["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "ansi"],
+				{ stdout: JSON.stringify({ result: { output: "agent: waiting for input" } }) },
+			);
+			try {
+				await withApp(
+					async (setup) => {
+						await press(setup, "v", "the consultations view", (f) =>
+							f.includes("State: awaiting-response"),
+						);
+						await press(setup, "return", "interaction mode", (f) => f.includes("F12 exit"));
+						pressCtrlC(setup);
+						await destroyed(setup);
+					},
+					WIDTH,
+					30,
+					bootProps(state, runner),
+				);
+			} finally {
+				state.close();
+			}
+		}
+
+		// The legacy ActionPanel open (a close panel over an opening Consultation).
+		{
+			const state = freshState();
+			const id = "66666666-1111-4111-8111-111111111111";
+			seed(state, id, false);
+			const runner = new FakeRunner();
+			runner.set("herdr", ["agent", "list"], { stdout: "{}" });
+			try {
+				await withApp(
+					async (setup) => {
+						await press(setup, "v", "the consultations view", (f) => f.includes("State: opening"));
+						await press(setup, "x", "the close panel", (f) => f.includes("Close Consultation"));
+						pressCtrlC(setup);
+						await destroyed(setup);
+					},
+					WIDTH,
+					30,
+					bootProps(state, runner),
+				);
+			} finally {
+				state.close();
+			}
+		}
 	});
 
 	test("unavailable controls are dimmed, and pressing one explains why", async () => {

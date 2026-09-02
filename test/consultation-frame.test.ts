@@ -17,6 +17,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { widthOf } from "../src/components/text.ts";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
@@ -28,6 +29,7 @@ import {
 	press,
 	pressArrow,
 	rgb,
+	rowsOf,
 	type Setup,
 	settle,
 	sleep,
@@ -1180,6 +1182,44 @@ describe("Consultation attention through the UI", () => {
 						f.includes("State: awaiting-response"),
 					);
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
+				},
+				WIDTH,
+				30,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a Consultation that needs the operator adds no row to the compact frame", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, AWAITING_ID, true);
+		state.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+		const paneId = `pane-${AWAITING_ID.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubPaneReadText(inner, paneId, "Agent: waiting");
+		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
+		try {
+			await withApp(
+				async (setup) => {
+					// Normal size, tickets view: the attention line is reserved
+					// and rendered.
+					const normal = await awaitFrame(
+						setup,
+						(f) => f.includes("awaiting response: 1"),
+						"the attention line in the tickets view",
+					);
+					expect(normal).toContain("recovery: 0");
+
+					// Below the minimum size the compact frame keeps exactly its
+					// reserved rows: the attention line adds none of them.
+					setup.resize(25, 10);
+					const rows = rowsOf(await settle(setup));
+					expect(rows.length).toBe(10);
+					for (const row of rows) expect(widthOf(row)).toBe(25);
+					expect(rows[1]).toContain("Terminal too small");
+					expect(rows.join("\n")).not.toContain("awaiting response");
 				},
 				WIDTH,
 				30,

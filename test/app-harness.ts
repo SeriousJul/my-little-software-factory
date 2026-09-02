@@ -201,7 +201,14 @@ export async function bootApp(
 	let stopApp: (() => void) | null = null;
 	const wired: AppProps =
 		"onReady" in appProps ? appProps : { ...appProps, onReady: (ready) => (stopApp = ready.stop) };
-	const setup = await testRender(createElement(App, wired), { width, height });
+	// Match src/factory.ts: the renderer does not own Ctrl+C. The app's
+	// emergency-exit dispatch is what destroys the renderer under test, so
+	// the frame tests verify the catalogue's control, not OpenTUI's built-in.
+	const setup = await testRender(createElement(App, wired), {
+		width,
+		height,
+		exitOnCtrlC: false,
+	});
 	await setup.flush();
 	return { ...setup, stopApp: () => stopApp?.() };
 }

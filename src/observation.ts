@@ -291,6 +291,13 @@ export interface HandoffIntent {
  */
 export type DispatchResult = { ok: true } | { ok: false; reason: string };
 
+/**
+ * A structured topic for an onStatus event. The UI reacts to the topic, never
+ * to the human-facing text: the text may be reworded without breaking the
+ * behavior that listens for it.
+ */
+export type ObservationStatusTopic = "herdr-recovered";
+
 interface ObservationOptions {
 	state: FactoryState;
 	herdr: AgentReader;
@@ -318,7 +325,11 @@ interface ObservationOptions {
 	 */
 	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	/** An operational message fact for the Message line. */
-	onStatus: (kind: "info" | "warning" | "error", text: string) => void;
+	onStatus: (
+		kind: "info" | "warning" | "error",
+		text: string,
+		topic?: ObservationStatusTopic,
+	) => void;
 	/** Optional Consultation side of the shared monitor. */
 	onConsultationAttention?: (consultationId: string) => void;
 	onConsultationsChanged?: () => void;
@@ -353,7 +364,11 @@ export class ObservationCoordinator {
 	private readonly reconcileOnly: boolean;
 	private startupReconciliation = true;
 	private suppressConsultationAttention = false;
-	private readonly onStatus: (kind: "info" | "warning" | "error", text: string) => void;
+	private readonly onStatus: (
+		kind: "info" | "warning" | "error",
+		text: string,
+		topic?: ObservationStatusTopic,
+	) => void;
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
 	private timer: ReturnType<typeof setTimeout> | null = null;
@@ -471,7 +486,7 @@ export class ObservationCoordinator {
 		this.startupReconciliation = false;
 		if (this.holdingHerdrError) {
 			this.holdingHerdrError = false;
-			this.onStatus("info", "herdr is reachable again; the observation resumed");
+			this.onStatus("info", "herdr is reachable again; the observation resumed", "herdr-recovered");
 			this.onChanged();
 		}
 

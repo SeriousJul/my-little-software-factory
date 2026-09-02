@@ -223,6 +223,10 @@ export function App({
 	// the pane the operator just focused.
 	const focusedPaneRef = useRef<Pane>("list");
 	const detailRef = useRef<TicketDetailHandle | null>(null);
+	// The ticket detail's native scroll offset survives a below-minimum
+	// unmount through this slot: the pane saves its offset out, and a remount
+	// of the same ticket resumes from it.
+	const detailScrollSlot = useRef<{ identity: string; top: number } | null>(null);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
 	const [utility, setUtility] = useState<Utility>(null);
@@ -1499,7 +1503,29 @@ export function App({
 		// Overlays own their keys: the launcher, the utility views, the
 		// override panel, and the action modals all handle input in their
 		// own keyboard hooks.
-		if (utility !== null || override !== null || panel !== null || launcher) return;
+		if (utility !== null || override !== null || panel !== null || launcher) {
+			// The legacy Consultations surfaces keep their pre-catalogue key
+			// switches, and none of them may claim the emergency exit. The
+			// catalogue-driven surfaces destroy through that same control
+			// anyway; the shell owns the exit for the rest.
+			if (key.ctrl === true && key.name === "c") renderer.destroy();
+			return;
+		}
+
+		// The legacy Consultations input paths (the view's key switch, the
+		// response editor, the Agent interaction mode) match keys by name.
+		// The shell owns the emergency exit before any of those matches, so
+		// Ctrl+C cannot open the launcher or reach an Agent. The base tickets
+		// panes dispatch Ctrl+C through the control catalogue below.
+		if (
+			(interaction || responseEditor || viewRef.current === "consultations") &&
+			key.ctrl === true &&
+			key.name === "c"
+		) {
+			renderer.destroy();
+			return;
+		}
+
 		if (interaction) {
 			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
 			const keyName = key.name.toLowerCase();
@@ -1958,7 +1984,7 @@ export function App({
 				}
 			},
 			reconcileOnly: true,
-			onStatus: (kind, text) => {
+			onStatus: (kind, text, topic) => {
 				// Both views read observation events: the consultations view keeps
 				// its status line, and the tickets view keeps the durable Message
 				// facts. Other informational events stay out of the Message line:
@@ -1966,7 +1992,9 @@ export function App({
 				setStatus({ kind, text });
 				if (kind === "error") setErrorMessage(text);
 				else if (kind === "warning") setWarningMessage(text);
-				else if (text.includes("herdr is reachable again")) clearOperationMessage();
+				// The recovery topic is the structured signal that a stale
+				// operation fact can clear; the text stays human-facing.
+				else if (topic === "herdr-recovered") clearOperationMessage();
 			},
 		});
 		observationRef.current = coordinator;
@@ -2197,6 +2225,7 @@ export function App({
 								handoffLimit: config.maxHandoffsPerTicket,
 								scroll: config.scroll,
 								onFocus: () => focusPane("detail"),
+								scrollSlot: detailScrollSlot,
 							})
 						: createElement(
 								"box",
@@ -2290,8 +2319,12 @@ export function App({
 				{ style: { width: "100%", fg: statusColor } },
 				truncateToWidth(`${status.kind}: ${status.text}`, terminalWidth),
 			),
+		// showAttentionLine, not attentionLine !== "": below the minimum size
+		// the compact frame keeps exactly its reserved rows, and a
+		// Consultation that needs the operator still shows in the
+		// consultations view and in the launcher's ring.
 		view === "tickets" &&
-			attentionLine !== "" &&
+			showAttentionLine &&
 			createElement(
 				"text",
 				{

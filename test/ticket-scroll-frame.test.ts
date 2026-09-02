@@ -659,15 +659,62 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(tinyEnd).not.toMatch(/[▀▄█]/);
 
-				// The panes restart their detail viewport at the top.
+				// The compact frame unmounted the panes. The remounted detail
+				// resumes from the offset the unmount saved, clamped to the
+				// wider viewport, instead of restarting at the top.
 				setup.resize(80, 12);
 				await awaitFrame(
 					setup,
 					(frame) =>
 						rowsOf(frame).every((row) => row.length === 80) &&
-						frame.includes("Retry policy for webhooks") &&
+						frame.includes("their retries.") &&
 						frame.match(/[▀▄█]/) !== null,
-					"the normal width and scrollbar to return",
+					"the normal width with the restored detail offset",
+				);
+			},
+			80,
+			12,
+		);
+	});
+
+	test("restores the detail offset across a round-trip resize below the minimum size", async () => {
+		await withApp(
+			async (setup) => {
+				await focusDetail(setup);
+				// Scroll to a middle offset: the detail title leaves the viewport.
+				let frame = setup.captureCharFrame();
+				for (let step = 0; step < 20 && frame.includes("Retry policy for webhooks"); step += 1) {
+					setup.mockInput.pressKey("j");
+					frame = await settle(setup);
+				}
+				const middle = await awaitFrame(
+					setup,
+					(f) => f.includes("Detail") && !f.includes("Retry policy for webhooks"),
+					"a middle detail offset with the title out of view",
+				);
+				expect(middle).toMatch(/[▀▄█]/);
+
+				// Below the minimum size the compact frame unmounts the panes.
+				setup.resize(39, 12);
+				const compact = await awaitFrame(
+					setup,
+					(f) => f.includes("Terminal too small"),
+					"the compact frame",
+				);
+				expect(compact).not.toMatch(/[▀▄█]/);
+
+				// Back at normal size, the remounted detail resumes from the
+				// offset the unmount saved: the title stays out of view instead
+				// of the viewport restarting at the top.
+				setup.resize(80, 12);
+				await awaitFrame(
+					setup,
+					(f) =>
+						rowsOf(f).every((row) => row.length === 80) &&
+						f.includes("Detail") &&
+						f.match(/[▀▄█]/) !== null &&
+						!f.includes("Retry policy for webhooks"),
+					"the detail offset to resume below the title",
 				);
 			},
 			80,

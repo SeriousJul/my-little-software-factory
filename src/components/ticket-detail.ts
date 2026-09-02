@@ -1,7 +1,14 @@
 /** The native, scrollable source and factory detail for the selected ticket. */
 import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from "react";
+import {
+	forwardRef,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useImperativeHandle,
+	useRef,
+} from "react";
 
 import type { ScrollConfig } from "../config.ts";
 import type { Ticket } from "../domain/ticket.ts";
@@ -161,6 +168,12 @@ interface TicketDetailProps {
 	handoffLimit: number;
 	scroll: ScrollConfig;
 	onFocus: () => void;
+	/**
+	 * The native offset a remount of the same ticket resumes from. The app
+	 * unmounts this pane below the minimum size; the slot survives that round
+	 * trip, and ScrollBox clamps a stale offset to the new viewport.
+	 */
+	scrollSlot: RefObject<{ identity: string; top: number } | null>;
 }
 
 /**
@@ -169,7 +182,7 @@ interface TicketDetailProps {
  * replaces a React-owned visible-row window.
  */
 export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(function TicketDetail(
-	{ ticket, focused, active, reservedRows, handoffLimit, scroll, onFocus },
+	{ ticket, focused, active, reservedRows, handoffLimit, scroll, onFocus, scrollSlot },
 	ref,
 ) {
 	const geometry = usePaneGeometry("detail", reservedRows);
@@ -182,6 +195,10 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	const hasOverflow = lines.length > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);
+	// Always the identity the pane currently shows; the unmount cleanup reads
+	// it so it never saves an offset under a switched identity.
+	const identityRef = useRef(ticket?.identity);
+	identityRef.current = ticket?.identity;
 	const activeRef = useRef(active);
 	const scrollRef = useRef(scroll);
 	const burstRef = useRef<WheelBurst>(newWheelBurst());
@@ -239,6 +256,45 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			toStart();
 		}
 	}, [ticket?.identity, toStart]);
+
+	// A below-minimum resize unmounts the pane. On the next mount of the same
+	// ticket, resume from the offset the unmount saved. The first layout pass
+	// may not have measured the viewport yet, and an offset set before it
+	// clamps to zero, so the restore retries until the box is measured. ScrollBox
+	// then clamps the offset to the new viewport, so a wider remount that
+	// wraps less lands at its own end instead of a stale scroll. This runs on
+	// mount only: a plain ticket switch keeps its own start-at-top behavior.
+	useEffect(() => {
+		const box = scrollboxRef.current;
+		const slot = scrollSlot.current;
+		const identity = identityRef.current;
+		if (box === null || slot === null || identity === undefined) return;
+		if (slot.identity !== identity || slot.top === 0) return;
+		let tries = 0;
+		const timer = setInterval(() => {
+			tries += 1;
+			if (identityRef.current !== identity) {
+				clearInterval(timer);
+				return;
+			}
+			if ((box.scrollHeight > 0 && box.viewport.height > 0) || tries >= 60) {
+				box.scrollTop = slot.top;
+				clearInterval(timer);
+			}
+		}, 16);
+		return () => clearInterval(timer);
+	}, [scrollSlot]);
+
+	// Save the native offset when the pane unmounts, keyed by the identity it
+	// showed, so a remount of another ticket starts at its own position.
+	useEffect(() => {
+		const box = scrollboxRef.current;
+		return () => {
+			const identity = identityRef.current;
+			if (box === null || identity === undefined) return;
+			scrollSlot.current = { identity, top: box.scrollTop };
+		};
+	}, [scrollSlot]);
 
 	// Slider track clicks stop propagation inside OpenTUI so they can start a
 	// drag. Listen on the slider itself as well, which keeps pane focus in
