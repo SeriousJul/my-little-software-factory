@@ -81,14 +81,23 @@ because removing it would end that work. The git branch is never touched.
 stable name is still the one it asks for; when herdr says the name is taken and
 the pane or workspace that holds it is one the control plane recorded for this
 ticket, or the ticket already carries the fact, the handoff starts under the
-same slug with its work cycle (`<slug>-c<cycle>`, and the handoff's ordinal when
-two handoffs of one cycle collide the same way). The suffix always survives the
-cut to herdr's 32-character limit, so a cycle name never equals a stable name.
-The handoff reports the name it got, the started name is stored with the
-handoff, and the completion trace of that turn names the agent that actually
-ran. A name held by an agent the ticket never recorded is not this handoff's to
-take: the attempt fails, and the reason names the holder's pane and workspace
-and says it is no agent of this ticket.
+same slug with its work cycle (`<slug>-c<cycle>`), and under that name with its
+ordinal in the ticket (`<slug>-c<cycle>-<ordinal>`) when two handoffs meet the
+collision. That ordinal is the ticket's handoff count plus one, across every
+cycle: it only grows, so no two handoffs of one ticket share it. The suffix
+always survives the cut to herdr's 32-character limit, so a cut name still says
+which cycle and which handoff it belongs to. The cut alone does not keep two
+names of one ticket apart: a slug whose own tail spells `-c<cycle>` rebuilds the
+stable name under it. So the candidates are built together, and a candidate
+that would repeat an earlier one is dropped (see `ticketAgentNames`); a handoff
+always keeps two names to ask for, because a cycle name and its ordinal name
+never meet. The handoff reports the name it got, the started name is stored with
+the handoff, and the completion trace of that turn names the agent that actually
+ran. When a later candidate fails herdr for another reason, the failure reports
+that reason rather than the collision an earlier name met, and the leftover the
+handoff did meet stays recorded. A name held by an agent the ticket never
+recorded is not this handoff's to take: the attempt fails, and the reason names
+the holder's pane and workspace and says it is no agent of this ticket.
 
 ## Consequences
 

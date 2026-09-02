@@ -58,6 +58,14 @@ const source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const secondIdentity = "github:github.com:I_6";
 const repoIdentity = "github.com/acme/factory";
+/**
+ * A terminal wide enough to hold a whole status line at once.
+ *
+ * The status row is one line, truncated to the terminal width, so a test
+ * that reads two facts off it (a failure and the warning that came with it)
+ * needs the room for both.
+ */
+const WIDE_STATUS = 240;
 
 /** A fetched ticket of the issues source; the index is the issue number. */
 function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
@@ -1099,6 +1107,42 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
+	test("a cleanup that cannot run at all is still the ticket's fact", async () => {
+		const app = seededApp("awaiting", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// herdr is unreachable: the command throws instead of answering, and
+		// the environment the ticket cannot close is a fact either way.
+		const brokenRunner: CommandRunner = {
+			run: (command, args, options) =>
+				command === "herdr" && args[0] === "worktree"
+					? Promise.reject(new Error("herdr is not reachable"))
+					: app.runner.run(command, args, options),
+		};
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.leftoverEnvironment(identity)).toEqual(
+					expect.objectContaining({
+						workspaceId: "ws-1",
+						reason: "the close cleanup did not run: herdr is not reachable",
+					}),
+				);
+				expect(frameText(setup.captureCharFrame())).toContain(
+					"the close cleanup failed: the close cleanup did not run",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), runner: brokenRunner },
+		);
+		app.state.close();
+	});
+
 	test("one action clears a leftover environment, with force as its own choice", async () => {
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1249,7 +1293,14 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
-	test("a handoff beside its own leftover agent starts anyway and says so", async () => {
+	/**
+	 * A ticket whose closed cycle left a dirty workspace in herdr, whose
+	 * leftover agent still holds the name the ticket's next handoff wants.
+	 *
+	 * The Close cleanup fails on the dirty checkout, the cycle closes anyway,
+	 * and the handoff the operator starts then meets its own leftover name.
+	 */
+	function leftoverNameApp(): SeededApp {
 		const app = seededApp("awaiting", { defaultEnvironment: "worktree" }, success, "worktree");
 		// The leftover agent reports idle: herdr sees no live work in it, so
 		// nothing reclaims it, and it is exactly the agent that holds the name.
@@ -1260,7 +1311,7 @@ describe("the leftover environment", () => {
 					tabId: "tab-2",
 					workspaceId: "ws-1",
 					agent: "pi",
-					status: "working",
+					status: "idle",
 				},
 			]),
 		});
@@ -1309,15 +1360,28 @@ describe("the leftover environment", () => {
 					'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n',
 			},
 		);
+		return app;
+	}
+
+	/**
+	 * Close the cycle the seeded agent settled, then hand the open ticket off
+	 * again: the key path that meets the leftover name.
+	 */
+	async function closeAndHandOffAgain(setup: AppSetup): Promise<void> {
+		await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+		await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+		await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+		// Enter on the open ticket: the leftover does not stop it.
+		await pressReturn(setup, "the handoff", (f) => ticketRow(f).includes("[handed-off]"));
+	}
+
+	test("a handoff beside its own leftover agent starts anyway and says so", async () => {
+		const app = leftoverNameApp();
 
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
-				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
-				// Enter on the open ticket: the leftover does not stop it.
-				await pressReturn(setup, "the handoff", (f) => ticketRow(f).includes("[handed-off]"));
+				await closeAndHandOffAgain(setup);
 				const commands = app.runner.commands();
 				expect(commands).toContain(
 					"herdr agent start persist-source-facts-c2 --kind pi --pane pane-2",
@@ -1337,6 +1401,47 @@ describe("the leftover environment", () => {
 			WIDTH,
 			HEIGHT,
 			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a prompt that fails beside the leftover keeps its own reason", async () => {
+		const app = leftoverNameApp();
+		// The handoff's own failure: the agent started under its cycle name,
+		// and the prompt never reached it. The name warning explains that name,
+		// but it must not swallow the reason the operator has to act on.
+		const promptRunner: CommandRunner = {
+			run: (command, args, options) =>
+				command === "herdr" && args[0] === "agent" && args[1] === "prompt"
+					? Promise.resolve({
+							code: 1,
+							stdout: "",
+							stderr:
+								'{"error":{"code":"agent_gone","message":"agent has no pane"},"id":"cli:agent:prompt"}\n',
+						})
+					: app.runner.run(command, args, options),
+		};
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await closeAndHandOffAgain(setup);
+				// One status line carries both facts: the failure first, the name
+				// warning after it. The line is truncated to the terminal width,
+				// so the test renders wide enough to hold the whole of it.
+				const shown = frameText(setup.captureCharFrame());
+				expect(shown).toContain(
+					"agent persist-source-facts-c2 started, but the prompt failed: agent has no pane (agent_gone)",
+				);
+				expect(shown).toContain(
+					"a leftover agent still holds the herdr name persist-source-facts; this agent started as persist-source-facts-c2",
+				);
+				// The agent runs, so the cycle stands: the ticket is handed off.
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+			},
+			WIDE_STATUS,
+			HEIGHT,
+			{ ...propsOf(app), runner: promptRunner },
 		);
 		app.state.close();
 	});

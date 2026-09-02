@@ -41,11 +41,10 @@
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
 import {
-	agentNameFor,
 	branchNameFor,
 	consultationAgentName,
 	consultationBranchName,
-	cycleAgentName,
+	ticketAgentNames,
 } from "./naming.ts";
 import {
 	commandFailureText,
@@ -183,17 +182,16 @@ const NO_NAME_KNOWLEDGE: OwnNameKnowledge = {
 
 /**
  * The name plan of a ticket's handoff: the stable name first, then the names
- * that carry the ticket's work cycle, so a leftover agent of an earlier
- * cycle can never be the reason a handoff does not start.
+ * that carry the ticket's work cycle and its handoff ordinal, so a leftover
+ * agent of an earlier cycle can never be the reason a handoff does not start.
+ * The names come from the naming module, which drops a candidate that would
+ * repeat an earlier one.
  */
 function ticketNamePlan(ticket: Ticket, known: OwnNameKnowledge | undefined): NamePlan {
-	const cycle = ticket.workCycle;
 	return {
-		candidates: [
-			agentNameFor(ticket.title),
-			cycleAgentName(ticket.title, cycle),
-			cycleAgentName(ticket.title, cycle, ticket.handoffCount + 1),
-		],
+		// The last candidate carries the handoff's ordinal in the ticket: its
+		// handoff count plus one, across every cycle, so it only grows.
+		candidates: ticketAgentNames(ticket.title, ticket.workCycle, ticket.handoffCount + 1),
 		known: known ?? NO_NAME_KNOWLEDGE,
 		owner: "this ticket",
 	};
@@ -1063,7 +1061,7 @@ async function startAgentAndPrompt(
 		await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
 		return {
 			status: "prompt-failed",
-			reason: `agent ${name} started, but the prompt failed: ${commandFailureText(sent)}`,
+			reason: `agent ${name} started, but the prompt failed: ${herdrFailureText(sent)}`,
 			agent: startedAgent,
 			notes: ctx.notes,
 			...(attempt.collision === undefined ? {} : { collision: attempt.collision }),
@@ -1099,6 +1097,8 @@ async function startAgentUnderAvailableName(
 	ctx.onStage?.("starting-agent");
 	let collision: NameCollision | undefined;
 	let result: CommandResult = { code: 0, stdout: "", stderr: "" };
+	/** True while the attempt that ended the search was herdr refusing a name. */
+	let nameHeld = false;
 	for (let index = 0; index < candidates.length; index += 1) {
 		const name = candidates[index];
 		const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
@@ -1110,10 +1110,13 @@ async function startAgentUnderAvailableName(
 			return {
 				name,
 				result,
+				// The last answer herdr gave was an acceptance, not a refusal.
+				nameHeld: false,
 				...(collision === undefined ? {} : { collision: { ...collision, startedAs: name } }),
 			};
 		}
-		if (herdrErrorCode(result) !== "agent_name_taken") break;
+		nameHeld = herdrErrorCode(result) === "agent_name_taken";
+		if (!nameHeld) break;
 		const holders = herdrNameHolders(result);
 		collision = {
 			stableName: candidates[0],
@@ -1126,21 +1129,37 @@ async function startAgentUnderAvailableName(
 		// stands, and no further name is asked for.
 		if (!collision.own || index + 1 === candidates.length) break;
 	}
-	return { name: null, result, ...(collision === undefined ? {} : { collision }) };
+	return {
+		name: null,
+		result,
+		nameHeld,
+		...(collision === undefined ? {} : { collision }),
+	};
 }
 
 /**
- * The reason a handoff cannot start because of the names it met, or the
- * plain command failure when herdr refused for another reason.
+ * The reason a handoff cannot start: the name that blocked it when a name
+ * did, and otherwise herdr's own answer to the last attempt.
  *
  * A collision with the ticket's own leftover names the ticket's own action:
  * clearing the leftover. A collision with a stranger names the stranger:
  * herdr's handles, so the operator can find the pane.
+ *
+ * When a later candidate failed for another reason (a pane that stayed busy
+ * past the retry window, for example), that failure is the fact the operator
+ * needs, and the collision an earlier candidate met must not replace it. The
+ * collision still rides along with the outcome, so the leftover it names
+ * stays a durable fact on the ticket.
  */
 function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOutcome {
 	const collision = attempt.collision;
-	if (collision === undefined) {
-		return { status: "failed", reason: herdrFailureText(attempt.result), notes: ctx.notes };
+	if (collision === undefined || !attempt.nameHeld) {
+		return {
+			status: "failed",
+			reason: herdrFailureText(attempt.result),
+			notes: ctx.notes,
+			...(collision === undefined ? {} : { collision }),
+		};
 	}
 	const holder = holderText(collision.holder);
 	const reason = collision.own
@@ -1210,6 +1229,12 @@ interface AgentStart {
 	name: string | null;
 	/** The command result of the last attempt. */
 	result: CommandResult;
+	/**
+	 * Whether the last answer herdr gave was its `agent_name_taken` refusal.
+	 * A search that ends on another failure reports that failure, not the
+	 * collision an earlier candidate met.
+	 */
+	nameHeld: boolean;
 	/** The last name collision the attempt met, when it met one. */
 	collision?: NameCollision;
 }

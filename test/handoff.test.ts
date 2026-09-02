@@ -1285,9 +1285,14 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 
 describe("a leftover agent that holds the ticket's name", () => {
 	/** The herdr reason that names the holder of a taken agent name. */
-	function nameTaken(paneId: string, workspaceId: string, tabId: string): string {
+	function nameTaken(
+		paneId: string,
+		workspaceId: string,
+		tabId: string,
+		name: string = AGENT,
+	): string {
 		return (
-			`{"error":{"code":"agent_name_taken","message":"agent name ${AGENT} is already used; ` +
+			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
 			`candidates: terminal_id=term_1 pane_id=${paneId} workspace_id=${workspaceId} ` +
 			`tab_id=${tabId} cwd=${WORKTREE_PATH} status=Working"},"id":"cli:agent:start"}\n`
 		);
@@ -1475,6 +1480,85 @@ describe("a leftover agent that holds the ticket's name", () => {
 		expect(
 			runner.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(3);
+	});
+
+	test("asks herdr for each name once, even when its cycle rebuilds the stable one", async () => {
+		const runner = new FakeRunner();
+		// A 32-character slug whose tail already spells the cycle suffix
+		// rebuilds the stable name under the length cut. The handoff drops
+		// that repeat instead of asking herdr for one name twice, and still
+		// has its ordinal name to start under.
+		const stable = `${"a".repeat(29)}-c2`;
+		const ordinal = `${"a".repeat(27)}-c2-2`;
+		const longTicket: Ticket = { ...ticket, title: stable, workCycle: 2, handoffCount: 1 };
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws", checkoutPath: CHECKOUT }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+		runner.set("herdr", ["agent", "start", stable, "--kind", "pi", "--pane", "pane-1"], {
+			code: 1,
+			stderr: nameTaken("pane-old", "ws-old", "ws-old:t1", stable),
+		});
+
+		const outcome = await handOffTicket(longTicket, defaultChoice, {
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe(ordinal);
+		expect(outcome.status === "ok" && outcome.collision?.startedAs).toBe(ordinal);
+		expect(runner.commands().filter((command) => command.startsWith("herdr agent start"))).toEqual([
+			`herdr agent start ${stable} --kind pi --pane pane-1`,
+			`herdr agent start ${ordinal} --kind pi --pane pane-1`,
+		]);
+	});
+
+	test("reports the failure a later name really met, not the earlier collision", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-old", "ws-old");
+		// The stable name is the ticket's own leftover; the cycle name then
+		// fails for a reason of its own. The operator reads that reason, not
+		// the collision an earlier candidate met.
+		runner.set(
+			"herdr",
+			["agent", "start", "retry-policy-for-webhooks-c1", "--kind", "pi", "--pane", "pane-tab"],
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"agent_kind_unknown","message":"herdr does not know the agent kind pi"},"id":"cli:agent:start"}\n',
+			},
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		const reason = reasonOf(outcome);
+		expect(reason).toContain("herdr does not know the agent kind pi");
+		expect(reason).toContain("agent_kind_unknown");
+		expect(reason).not.toContain("agent_name_taken");
+		expect(reason).not.toContain("own leftover agent still holds");
+		// The collision the handoff did meet still rides along with the
+		// failure: the caller makes the leftover it names a durable fact.
+		expect(outcome.status === "failed" && outcome.collision).toEqual(
+			expect.objectContaining({ stableName: AGENT, startedAs: null, own: true }),
+		);
+		// The residue of the attempt goes with the failure.
+		expect(runner.commands()).toContain("herdr tab close tab-1");
 	});
 });
 

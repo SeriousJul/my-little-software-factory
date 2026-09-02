@@ -44,6 +44,7 @@ import {
 } from "../domain/ticket.ts";
 import {
 	baseChoice,
+	type CloseCleanupOptions,
 	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
@@ -485,38 +486,36 @@ export function App({
 		return write;
 	};
 
-	/** The status line after a handoff outcome, mapping warnings included. */
+	/**
+	 * The status line after a handoff outcome: the outcome's own words first,
+	 * then the notes that travelled with it.
+	 *
+	 * A handoff that started beside its own leftover agent says so: the name
+	 * the operator knows from herdr is not the one this agent runs under, and
+	 * the leftover is what to clear to get it back. That warning rides along
+	 * with an outcome that did not finish - an agent that started but could
+	 * not be prompted is the error the operator has to act on - and never
+	 * replaces it.
+	 */
 	const finishOutcome = async (outcome: HandoffOutcome): Promise<void> => {
 		const persistWarning =
 			outcome.notes?.mappingToWrite === undefined
 				? undefined
 				: await persistMapping(outcome.notes.mappingToWrite);
-		// A handoff that started beside its own leftover agent says so: the
-		// name the operator knows from herdr is not the one this agent runs
-		// under, and the leftover is what to clear to get it back.
-		if (
-			outcome.status !== "failed" &&
-			outcome.collision !== undefined &&
-			outcome.collision.startedAs !== null
-		) {
-			setStatus({
-				kind: "warning",
-				text: [
-					`a leftover agent still holds the herdr name ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`,
-					...(persistWarning === undefined ? [] : [persistWarning]),
-				].join("; "),
-			});
-			return;
-		}
-		if (outcome.status !== "ok")
-			setStatus({
-				kind: "error",
-				text:
-					persistWarning === undefined ? outcome.reason : `${outcome.reason}; ${persistWarning}`,
-			});
-		else if (persistWarning !== undefined) setStatus({ kind: "warning", text: persistWarning });
-		else if (outcome.notes?.warning !== undefined)
-			setStatus({ kind: "warning", text: outcome.notes.warning });
+		const nameWarning =
+			outcome.collision !== undefined && outcome.collision.startedAs !== null
+				? `a leftover agent still holds the herdr name ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
+				: undefined;
+		const lines = [
+			...(outcome.status === "ok" ? [] : [outcome.reason]),
+			...(nameWarning === undefined ? [] : [nameWarning]),
+			...(persistWarning === undefined ? [] : [persistWarning]),
+			...(outcome.status === "ok" && outcome.notes?.warning !== undefined
+				? [outcome.notes.warning]
+				: []),
+		];
+		if (outcome.status !== "ok") setStatus({ kind: "error", text: lines.join("; ") });
+		else if (lines.length > 0) setStatus({ kind: "warning", text: lines.join("; ") });
 		else setStatus(null);
 	};
 
@@ -557,13 +556,9 @@ export function App({
 	};
 
 	/**
-	 * The Close cleanup, with its durable outcome.
-	 *
-	 * A cleanup that fails leaves the herdr environment alive: the workspace,
-	 * its pane, and the agent in it. That is a fact on the ticket, not only a
-	 * message line that fades. A cleanup that succeeds clears every leftover
-	 * the removed workspace carried, because herdr closed that environment
-	 * with it.
+	 * The Close cleanup of the handoff a cycle ends, reported on the status
+	 * line. The durable half of it (record the surviving environment, clear
+	 * what the removal ended) is settleCloseCleanup's.
 	 */
 	const runCloseCleanup = (
 		identity: string,
@@ -576,38 +571,29 @@ export function App({
 		end: "closed" | "abandoned",
 	) => {
 		if (state === undefined) return;
-		void closeHandoffEnvironment(
-			{ environment: handoff.environment, tabId: handoff.tabId, workspaceId: handoff.workspaceId },
-			commandRunner,
-		)
-			.then((failure) => {
-				if (failure === undefined) {
-					state?.clearLeftoverEnvironments(identity, handoff.workspaceId);
-					return;
-				}
-				state?.recordLeftoverEnvironment({
-					ticketIdentity: identity,
-					handoffId: handoff.handoffId,
-					reason: failure,
-				});
+		const openState = state;
+		void settleCloseCleanup(openState, commandRunner, {
+			ticketIdentity: identity,
+			...handoff,
+		}).then(
+			(failure) => {
 				replaceTickets();
+				if (failure === undefined) return;
 				setStatus({
 					kind: "error",
 					text: `ticket ${identity} ${end}; the close cleanup failed: ${failure}`,
 				});
-			})
-			.catch((error) => {
-				state?.recordLeftoverEnvironment({
-					ticketIdentity: identity,
-					handoffId: handoff.handoffId,
-					reason: `the close cleanup did not run: ${errorMessage(error)}`,
-				});
-				replaceTickets();
+			},
+			// The helper records the answer and never throws on a cleanup that
+			// broke; only the reporting here can still fail, and a status line
+			// that cannot be written must not go unhandled.
+			(error) => {
 				setStatus({
 					kind: "error",
-					text: `ticket ${identity} ${end}; the close cleanup failed: ${errorMessage(error)}`,
+					text: `ticket ${identity} ${end}; the close cleanup could not be reported: ${errorMessage(error)}`,
 				});
-			});
+			},
+		);
 	};
 
 	/**
@@ -652,28 +638,23 @@ export function App({
 			});
 			return;
 		}
+		const openState = state;
 		void (async () => {
 			const failures: string[] = [];
 			for (const leftover of leftovers) {
-				const failure = await closeHandoffEnvironment(
+				const failure = await settleCloseCleanup(
+					openState,
+					commandRunner,
 					{
+						ticketIdentity: ticket.identity,
+						handoffId: leftover.handoffId,
 						environment: leftover.environment,
 						tabId: leftover.tabId,
 						workspaceId: leftover.workspaceId,
 					},
-					commandRunner,
 					{ force },
 				);
-				if (failure === undefined) {
-					state?.clearLeftoverEnvironments(ticket.identity, leftover.workspaceId);
-					continue;
-				}
-				failures.push(failure);
-				state?.recordLeftoverEnvironment({
-					ticketIdentity: ticket.identity,
-					handoffId: leftover.handoffId,
-					reason: failure,
-				});
+				if (failure !== undefined) failures.push(failure);
 			}
 			replaceTickets();
 			setStatus(
@@ -2054,26 +2035,14 @@ export function App({
 			// handoff the decision ends. A cleanup that cannot remove the
 			// checkout leaves a leftover the ticket carries as a fact, so the
 			// operator sees it and has one action to end it (ADR 0012).
-			cleanup: async (handoff) => {
-				const failure = await closeHandoffEnvironment(
-					{
-						environment: handoff.environment,
-						tabId: handoff.tabId,
-						workspaceId: handoff.workspaceId,
-					},
-					commandRunner,
-				);
-				if (failure === undefined) {
-					state.clearLeftoverEnvironments(handoff.ticketIdentity, handoff.workspaceId);
-					return failure;
-				}
-				state.recordLeftoverEnvironment({
+			cleanup: (handoff) =>
+				settleCloseCleanup(state, commandRunner, {
 					ticketIdentity: handoff.ticketIdentity,
 					handoffId: handoff.handoffAttemptId,
-					reason: failure,
-				});
-				return failure;
-			},
+					environment: handoff.environment,
+					tabId: handoff.tabId,
+					workspaceId: handoff.workspaceId,
+				}),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
@@ -2639,5 +2608,67 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 			return state === "awaiting";
 		case "restart":
 			return state === "handed-off" || state === "running";
+	}
+}
+
+/**
+ * The Close cleanup of one handoff, with its durable outcome.
+ *
+ * A cleanup that fails leaves the herdr environment alive: the workspace, its
+ * pane, and the agent in it. That is a fact on the ticket, not only a message
+ * line that fades. A cleanup that succeeds clears every leftover naming the
+ * removed workspace, because herdr closed that environment with it (ADR 0012).
+ *
+ * Every path that runs the cleanup goes through here: the operator's Close, an
+ * Abandon, the automatic close in the observation loop, and the clear action's
+ * retry, so the record and the clear cannot drift apart. `force` reaches herdr
+ * only when the operator chose that row.
+ *
+ * Returns herdr's readable failure, or undefined when the environment is gone.
+ * A cleanup that could not run at all is a failure to record too, so a caller
+ * that only reports the answer never has to guard a throw of its own.
+ */
+async function settleCloseCleanup(
+	state: FactoryState,
+	runner: CommandRunner,
+	handoff: {
+		ticketIdentity: string;
+		handoffId: string;
+		environment: EnvironmentKind;
+		tabId: string | null;
+		workspaceId: string | null;
+	},
+	options: CloseCleanupOptions = {},
+): Promise<string | undefined> {
+	try {
+		const failure = await closeHandoffEnvironment(
+			{
+				environment: handoff.environment,
+				tabId: handoff.tabId,
+				workspaceId: handoff.workspaceId,
+			},
+			runner,
+			options,
+		);
+		if (failure === undefined) {
+			state.clearLeftoverEnvironments(handoff.ticketIdentity, handoff.workspaceId);
+			return undefined;
+		}
+		state.recordLeftoverEnvironment({
+			ticketIdentity: handoff.ticketIdentity,
+			handoffId: handoff.handoffId,
+			reason: failure,
+		});
+		return failure;
+	} catch (error) {
+		// The cleanup never reached an answer: the environment still stands,
+		// and the ticket still carries the fact of it.
+		const reason = `the close cleanup did not run: ${errorMessage(error)}`;
+		state.recordLeftoverEnvironment({
+			ticketIdentity: handoff.ticketIdentity,
+			handoffId: handoff.handoffId,
+			reason,
+		});
+		return reason;
 	}
 }

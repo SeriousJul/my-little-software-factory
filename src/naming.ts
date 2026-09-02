@@ -6,7 +6,9 @@
  * is recognizable in git and in herdr by the same words. One ticket owns
  * one branch, while its agent name is stable only until a handoff needs it
  * and its own earlier agent still holds it: that handoff takes the same
- * slug with its work cycle, so the name keeps naming the ticket.
+ * slug with its work cycle, so the name keeps naming the ticket. The
+ * candidates one handoff may ask for are built together, and no candidate
+ * repeats an earlier one (see ticketAgentNames).
  */
 
 import type { Ticket } from "./domain/ticket.ts";
@@ -55,8 +57,9 @@ export function agentNameFor(title: string): string {
  * handoff belongs to. The name says which cycle started the agent, and a
  * name the earlier cycle left behind can never block it.
  *
- * When two handoffs of one cycle collide the same way, the handoff's
- * ordinal inside the ticket tells them apart.
+ * When two handoffs of one ticket meet that collision, the handoff's ordinal
+ * in the ticket (its handoff count plus one, across every cycle) tells them
+ * apart: that count only grows, so no two handoffs of one ticket share it.
  */
 export function cycleAgentName(title: string, workCycle: number, ordinal?: number): string {
 	const cycle = `-c${workCycle}`;
@@ -64,11 +67,35 @@ export function cycleAgentName(title: string, workCycle: number, ordinal?: numbe
 }
 
 /**
+ * The herdr agent names one handoff of a ticket asks for, in preference
+ * order: the stable name, then the name of its work cycle, then that name
+ * with the handoff's ordinal in the ticket.
+ *
+ * No candidate repeats an earlier one. The 32-character cut can rebuild the
+ * stable name out of a slug whose tail already spells `-c<cycle>`, and a
+ * handoff that asked herdr twice for one name would only fail twice, so the
+ * repeat is dropped here instead of being left for the caller to notice.
+ * Two names are always left to ask for: a cycle name and its ordinal name
+ * never meet, because one ends in `-c<n>` and the other in `-c<n>-<m>`.
+ */
+export function ticketAgentNames(title: string, workCycle: number, ordinal: number): string[] {
+	const candidates = [
+		agentNameFor(title),
+		cycleAgentName(title, workCycle),
+		cycleAgentName(title, workCycle, ordinal),
+	];
+	return candidates.filter((name, index) => candidates.indexOf(name) === index);
+}
+
+/**
  * A herdr agent name from a slug and a suffix.
  *
  * The suffix always survives: the slug gives up its tail to the 32-character
- * limit first, so two names with different suffixes never meet as one, and
- * a leftover agent cannot block a handoff by holding the stable name.
+ * limit first, so a cut name still says which cycle and which handoff of the
+ * ticket it belongs to. The cut alone does not keep two names of one ticket
+ * apart: a slug that ends in its own suffix rebuilds the name above it. The
+ * candidates of one handoff are checked against each other instead (see
+ * ticketAgentNames).
  */
 function herdrAgentName(slug: string, suffix: string): string {
 	// The maximum length of a herdr agent name: `[a-z][a-z0-9_-]{0,31}`.
