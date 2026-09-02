@@ -198,10 +198,11 @@ describe("the decision modal's scrollbar", () => {
 			async (setup) => {
 				const settled = await openModal(setup);
 				const body = bodyRowsOf(settled);
-				// The modal has no hint row: the log is six rows and the
-				// window holds three. It opens at the bottom, where the
-				// agent's conclusion is.
-				expect(body).toHaveLength(3);
+				// The modal has no hint row: the log is six rows, and the window
+				// holds the two the box keeps after its own Message line and Action
+				// bar take their rows. It opens at the bottom, where the agent's
+				// conclusion is.
+				expect(body).toHaveLength(2);
 				expect(body[body.length - 1]).toContain("All 142 tests pass.");
 				expectPinnedScrollbar(settled);
 				// The thumb rests on the newest rows; the track fills the rest.

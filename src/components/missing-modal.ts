@@ -18,6 +18,7 @@ import { useState } from "react";
 import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
+import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
 	actionRowSpans,
@@ -29,8 +30,6 @@ import {
 } from "./modal-chrome.ts";
 import { wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-export type { ActionRow };
 
 interface MissingModalProps {
 	title: string;
@@ -47,6 +46,8 @@ interface MissingModalProps {
 	onMessage?: () => void;
 	/** Reports the catalogue reason for a refused control on the Message line. */
 	onUnavailable?: (reason: string) => void;
+	/** The Message fact this modal's own Message line shows. */
+	message: MessageFact | null;
 	onEmergencyExit: () => void;
 }
 
@@ -71,16 +72,17 @@ export function MissingModal({
 	onHelp,
 	onMessage,
 	onUnavailable,
+	message,
 	onEmergencyExit,
 }: MissingModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const message = bodyLines ?? [];
+	const body = bodyLines ?? [];
 	// The text column is set by the terminal width alone, so measure it once
 	// and read the message at it. Reserve a column for the scrollbar only when
 	// the message needs one: wrapping can add rows, so the overflow question
 	// is answered at the full width before the narrower window is built.
 	const widthFrame = modalFrame(terminalWidth, terminalHeight, { maxWidth: CONTENT_WIDTH + 4 });
-	const fullWidthBody = wrapBody(message, widthFrame.contentWidth);
+	const fullWidthBody = wrapBody(body, widthFrame.contentWidth);
 	// The box is only as tall as its own content: a two-line message with two
 	// actions does not claim the whole terminal.
 	const frame = modalFrame(terminalWidth, terminalHeight, {
@@ -93,7 +95,7 @@ export function MissingModal({
 	const bodyRows = Math.max(0, frame.contentRows - actions.length);
 	const hasScrollbar = fullWidthBody.length > bodyRows;
 	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
-	const wrapped = hasScrollbar ? wrapBody(message, bodyWidth) : fullWidthBody;
+	const wrapped = hasScrollbar ? wrapBody(body, bodyWidth) : fullWidthBody;
 	const maxBodyScroll = maxScrollOf(wrapped.length, bodyRows);
 	// A completed turn ends with its conclusion, so open the panel at the
 	// newest message row. The current position stays stable while the
@@ -129,6 +131,7 @@ export function MissingModal({
 		// Every action row: without one of them the modal has no way out, so
 		// it holds itself back at that size.
 		minContentRows: actions.length,
+		message,
 		bar: { mode: "missing-modal", context: contextFor("missing-modal", context) },
 		children: [
 			...windowOf(wrapped, scroll, bodyRows).map((line, index) =>

@@ -34,7 +34,7 @@ _Avoid_: key map, binding table
 **Key guide**:
 The on-demand catalog of the controls in the control catalogue, with the current interaction mode and global controls shown first.
 It includes controls that the action bar does not show.
-The Consultation launcher, Consultation view, response editor and Agent terminal still dispatch their own keys, so the guide lists their controls as another mode's, not as controls it can run (issue #9).
+The Consultation launcher, Consultation view, response editor, Agent terminal and Consultation confirmation panel still dispatch their own keys, so no control of theirs is in the catalogue and the guide does not list them (issue #9).
 _Avoid_: help popup, keybinding popin, shortcut window
 
 **Decision modal**:

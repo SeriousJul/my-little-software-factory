@@ -13,12 +13,16 @@
  */
 import { describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
+import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	actionBarRowOf,
+	cellColors,
 	HEIGHT,
 	markerRowOf,
+	messageRowOf,
 	press,
+	rgb,
 	rowsOf,
 	type Setup,
 	settle,
@@ -29,21 +33,31 @@ import { FakeRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /**
- * The glyphs only a border draws. The bar separates its own controls with
- * spaces, so one of these on its row means a box was drawn through it.
+ * The glyphs only a border draws.
+ *
+ * The bar separates its own controls with spaces and states no box line, so
+ * one of these on its row means a box was drawn through it. `─` matters most:
+ * a bottom border is a run of them, and a bar painted over that run keeps its
+ * own text in the cells it names and leaves the rest of the border showing.
  */
-const BORDER_GLYPHS = /[│┌┐└┘├┤]/;
+const BORDER_GLYPHS = /[│┌┐└┘├┤──━┃]/;
+
+/** The background a base frame row carries: none, so the terminal default. */
+const BASE_BG: [number, number, number] = [0, 0, 0];
 
 /**
  * The frame contract at one size: exactly `height` rows, every row exactly
- * `width` cells, and the Action bar whole on the last row.
+ * `width` cells, and the two rows the surface owns whole and to themselves.
+ * The Message line is the row above the Action bar, and neither shares its
+ * cells with a border.
  */
 async function expectReservedRows(setup: Setup, width: number, height: number): Promise<string> {
 	const frame = await settle(setup);
 	const rows = rowsOf(frame);
 	expect(rows).toHaveLength(height);
 	for (const row of rows) expect(widthOf(row)).toBe(width);
-	expect(actionBarRowOf(frame)).not.toMatch(BORDER_GLYPHS);
+	if (height >= 1) expect(actionBarRowOf(frame)).not.toMatch(BORDER_GLYPHS);
+	if (height >= 2) expect(messageRowOf(frame)).not.toMatch(BORDER_GLYPHS);
 	return frame;
 }
 
@@ -55,7 +69,8 @@ async function openDecision(setup: Setup): Promise<void> {
 	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 }
 
-/** Close the open surface, so the next case starts from the base frame. */
+/** Close the open surface at a size where it draws itself, so the next case
+ *  starts from the base frame. */
 async function closeSurface(setup: Setup, what: RegExp): Promise<void> {
 	await press(setup, "escape", "the surface to close", (f) => !what.test(f));
 }
@@ -88,6 +103,31 @@ describe("the reserved bottom rows at every size", () => {
 				frame = await expectReservedRows(setup, 120, 4);
 				expect(frame).toContain("Terminal too small: minimum 40 columns by 7 rows");
 				expect(actionBarRowOf(frame).trim()).toBe("? Help");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	}, 20000);
+
+	test("paints the base rows on the terminal default, and a surface on its own", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				const base = rowsOf(await settle(setup)).length;
+				// User story 68: the base Message line and Action bar own no
+				// background, so the terminal behind them stays the terminal's.
+				expect(cellColors(setup, 0, base - 1).bg).toEqual(BASE_BG);
+				expect(cellColors(setup, 0, base - 2).bg).toEqual(BASE_BG);
+
+				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				const guide = rowsOf(await settle(setup)).length;
+				// User story 69: a surface that owns its last two rows paints them
+				// on its own dark surface, so its Message line and its bar read as
+				// part of the surface and not as the frame behind it.
+				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(COLORS.overlay));
+				expect(cellColors(setup, 0, guide - 2).bg).toEqual(rgb(COLORS.overlay));
+				await closeSurface(setup, /Key guide/);
 			},
 			WIDTH,
 			HEIGHT,
@@ -130,10 +170,19 @@ describe("the reserved bottom rows at every size", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
+				// The panel is the one surface that spans the terminal edge to
+				// edge, so it has no bottom margin to cover its Action bar's row:
+				// its box has to stop above that row by itself, at every height.
 				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
 				for (const [width, height] of [
+					[120, 12],
+					[120, 10],
+					[120, 8],
+					[120, 7],
+					[120, 6],
 					[120, 5],
 					[120, 4],
+					[60, 10],
 					[18, 3],
 					[30, 12],
 				] as const) {
@@ -144,7 +193,31 @@ describe("the reserved bottom rows at every size", () => {
 					// hold a row at all.
 					expect(frame).toMatch(/Override|Terminal too small/);
 				}
-				await closeSurface(setup, /Override:/);
+				await closeSurface(setup, /Override/);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	}, 20000);
+
+	test("a held-back surface keeps the bar's row for its own bar", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				// Every surface that owns the screen also owns its last two rows,
+				// so a surface that has to hold its box back still names its own
+				// controls there, and never the base frame's.
+				await openDecision(setup);
+				for (const height of [6, 5, 4, 3, 2, 1]) {
+					setup.resize(120, height);
+					const frame = await expectReservedRows(setup, 120, height);
+					if (height >= 3) expect(frame).toContain("Terminal too small");
+					// The modal is still open and still says how to leave it.
+					expect(actionBarRowOf(frame)).toContain("Cancel");
+				}
+				setup.resize(WIDTH, HEIGHT);
+				await closeSurface(setup, /Decision:/);
 			},
 			WIDTH,
 			HEIGHT,

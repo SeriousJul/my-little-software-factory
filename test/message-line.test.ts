@@ -43,6 +43,7 @@ import {
 	issuesConfig,
 	issueTicket,
 	RATE_LIMITED,
+	seedAwaitingTurn,
 	success,
 } from "./state-fixture.ts";
 
@@ -322,6 +323,48 @@ describe("the permanent Message line", () => {
 		}
 	}, 30000);
 
+	test("leaves an in-flight refresh's progress to the refresh that owns it", async () => {
+		const state = freshState();
+		// The fixture Ticket ends its turn and awaits its decision, with the
+		// herdr handles the decision's actions read from stored against it.
+		seedAwaitingTurn(state, success([issueTicket()]));
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					// The boot fetch has to land before the test asks for its own.
+					await callsReached(source, 1);
+					source.settle(success([issueTicket()]));
+					await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
+					await settle(setup);
+					// A manual refresh is in flight, and its progress owns the line.
+					await press(setup, "r", "the working", (f) =>
+						messageRowOf(f).includes("refreshing 1 sources"),
+					);
+					// Close ends the decision's outcome. It writes no progress line of
+					// its own, so it clears nothing another operation still runs.
+					await press(setup, "return", "the decision", (f) => f.includes("Decision:"));
+					await press(setup, "return", "the Close to run", (f) => !f.includes("Decision:"));
+					expect(messageRowOf(await settle(setup)).trim()).toBe("Working: refreshing 1 sources");
+					// The refresh settles, and only then does its line clear.
+					source.settle(success([issueTicket()]));
+					await awaitFrame(
+						setup,
+						(f) => !messageRowOf(f).includes("refreshing 1 sources"),
+						"the working to clear",
+					);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: issuesConfig, state, sources: [source], runner },
+			);
+		} finally {
+			state.close();
+		}
+	}, 30000);
+
 	test("truncates to the terminal width, and only then offers the Message view", async () => {
 		await withApp(
 			async (setup) => {
@@ -363,9 +406,15 @@ describe("the permanent Message line", () => {
 				await sleep(4000);
 				const frame = await settle(setup);
 				expect(frame).toContain("Message view - Working");
-				expect(frame).toContain("handing off");
-				expect(frame).not.toContain("the daemon is down");
-				// The base turned to the error behind the view.
+				// The view's own rows keep the fact it captured: the newer one
+				// never rewrites the text the operator asked to read.
+				const boxRows = rowsOf(frame).slice(0, -2).join("\n");
+				expect(boxRows).toContain("handing off");
+				expect(boxRows).not.toContain("the daemon is down");
+				// The Message line the view owns carries the fact that landed
+				// after it opened, so the surface reports it like any other.
+				expect(messageRowOf(frame).trim()).toBe("Error: error: the daemon is down");
+				// And the base frame behind it says the same.
 				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Error: error: the daemon is down");
 			},
@@ -374,6 +423,46 @@ describe("the permanent Message line", () => {
 			{ config: DEFAULT_CONFIG, runner, initialTickets: [WORKING_TICKET] },
 		);
 	}, 20000);
+
+	test("states an operation notice, and lets a refusal take the line back", async () => {
+		await withApp(
+			async (setup) => {
+				for (const row of [3, 4, 5]) {
+					await press(setup, "j", "the next ticket", (f) => markerRowOf(f) === row);
+				}
+				// Enter belongs to the factory in auto mode. The fact says so; it
+				// is not a Working line, because no operation started and a
+				// progress line has no end the operator can point at.
+				await press(setup, "return", "the notice", (f) =>
+					messageRowOf(f).includes("the factory decides this ticket"),
+				);
+				const notice = await settle(setup);
+				expect(messageRowOf(notice).trim()).toBe(
+					"Warning: auto-handoff is on: the factory decides this ticket",
+				);
+				expect(messageRowOf(notice)).not.toContain("Working:");
+				expect(spanColorAt(setup, rowsOf(notice).length - 2, "Warning:")).toEqual(
+					rgb(COLORS.statusWarning),
+				);
+				// The notice must not pin the line: a refused control is the reason
+				// the operator just asked for, and it outranks the notice.
+				pressF2(setup);
+				const refused = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).trim() === "Warning: the current Message fits on the Message line",
+					"the refusal to take the line back",
+				);
+				expect(refused).not.toContain("auto-handoff is on");
+			},
+			WIDTH,
+			HEIGHT,
+			{
+				config: { ...DEFAULT_CONFIG, autoHandoff: true },
+				runner: new FakeRunner(),
+				initialTickets: SAMPLE_TICKETS,
+			},
+		);
+	});
 
 	test("wraps, scrolls with a range, and closes on Esc and F2", async () => {
 		const runner = new FakeRunner();

@@ -95,9 +95,14 @@ import {
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { useMessageFacts } from "./message-facts.ts";
-import { formatMessage, type MessageFact } from "./messages.ts";
-import { type ActionRow, MissingModal } from "./missing-modal.ts";
-import { belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
+import {
+	messageColor as colorOfMessage,
+	formatMessage,
+	type MessageFact,
+	messageRowElement,
+} from "./messages.ts";
+import { MissingModal } from "./missing-modal.ts";
+import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -283,6 +288,7 @@ export function App({
 	const {
 		message: visibleMessage,
 		working: setWorkingMessage,
+		notice: setNoticeMessage,
 		warning: setWarningMessage,
 		error: setErrorMessage,
 		clearOperation: clearOperationMessage,
@@ -543,7 +549,7 @@ export function App({
 			);
 		else if (persistWarning !== undefined) setWarningMessage(persistWarning);
 		else if (outcome.notes?.warning !== undefined) setWarningMessage(outcome.notes.warning);
-		else clearOperationMessage();
+		else clearOperationMessage("handoff");
 	};
 
 	/**
@@ -855,7 +861,9 @@ export function App({
 				decidedAt: new Date().toISOString(),
 			});
 			replaceTickets();
-			clearOperationMessage();
+			// A Goto writes no progress line of its own: it ends the decision's
+			// outcome and leaves any Handoff or refresh still running alone.
+			clearOperationMessage("none");
 		});
 	};
 
@@ -888,7 +896,8 @@ export function App({
 					}
 				});
 			}
-			clearOperationMessage();
+			// The Close action writes no progress line of its own.
+			clearOperationMessage("none");
 			return;
 		}
 		if (key === "goto") {
@@ -1824,12 +1833,13 @@ export function App({
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
 			// notice on the Message line, and the observation makes the
-			// decision in the background.
-			setWorkingMessage("auto-handoff is on: the factory decides this ticket");
+			// decision in the background. A notice is not progress, so it holds
+			// its own slot and the next fact takes the line back.
+			setNoticeMessage("auto-handoff is on: the factory decides this ticket");
 			return;
 		}
 		if (configRef.current.taskTypes[taskType]?.autoClose === true) {
-			setWorkingMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
+			setNoticeMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
 			observationRef.current?.tick();
 		} else setPanel({ kind: "decision", identity: ticket.identity });
 	};
@@ -2002,8 +2012,9 @@ export function App({
 				if (kind === "error") setErrorMessage(text);
 				else if (kind === "warning") setWarningMessage(text);
 				// The recovery topic is the structured signal that a stale
-				// operation fact can clear; the text stays human-facing.
-				else if (topic === "herdr-recovered") clearOperationMessage();
+				// operation fact can clear; the text stays human-facing. The
+				// observation writes no progress line of its own.
+				else if (topic === "herdr-recovered") clearOperationMessage("none");
 			},
 		});
 		observationRef.current = coordinator;
@@ -2122,13 +2133,7 @@ export function App({
 			: state.replacementInput(replacementConsultation.id);
 	const actionMode = currentBaseMode();
 	const ticketContext = controlContextFor(actionMode);
-	const messageLine = visibleMessage === null ? "" : visibleMessageText;
-	const messageColor =
-		visibleMessage?.severity === "error"
-			? COLORS.statusError
-			: visibleMessage?.severity === "warning"
-				? COLORS.statusWarning
-				: COLORS.statusWorking;
+	const messageColor = colorOfMessage(visibleMessage);
 	const statusColor =
 		status?.kind === "error"
 			? COLORS.statusError
@@ -2364,13 +2369,7 @@ export function App({
 				},
 				truncateToWidth(attentionLine, terminalWidth),
 			),
-		view === "tickets" &&
-			terminalHeight >= 2 &&
-			createElement(
-				"text",
-				{ style: { width: "100%", height: 1, fg: messageColor } },
-				padToWidth(truncateToWidth(messageLine, terminalWidth), terminalWidth),
-			),
+		view === "tickets" && terminalHeight >= 2 && messageRowElement(visibleMessage, terminalWidth),
 		view === "tickets" &&
 			createElement(ActionBar, {
 				mode: actionMode,
@@ -2390,6 +2389,7 @@ export function App({
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
 				onUnavailable: setWarningMessage,
+				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 				onConfirm: (choice) => {
 					setOverride(null);
@@ -2412,6 +2412,7 @@ export function App({
 						onHelp: () => openGuide("decision-modal"),
 						onMessage: () => openMessage("decision-modal"),
 						onUnavailable: setWarningMessage,
+						message: visibleMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})
 				: createElement(MissingModal, {
@@ -2431,6 +2432,7 @@ export function App({
 						onHelp: () => openGuide("missing-modal"),
 						onMessage: () => openMessage("missing-modal"),
 						onUnavailable: setWarningMessage,
+						message: visibleMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})),
 		panel !== null &&
@@ -2438,6 +2440,7 @@ export function App({
 			panelConsultation !== undefined &&
 			consultationSafety?.consultationId === panelConsultation.id &&
 			createElement(ActionPanel, {
+				message: visibleMessage,
 				title: `Live checkout conflict ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					...(consultationSafety.safety.warning === undefined
@@ -2478,6 +2481,7 @@ export function App({
 			panelConsultation !== undefined &&
 			panel.kind === "consultation-close" &&
 			createElement(ActionPanel, {
+				message: visibleMessage,
 				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					panelConsultation.environment === "worktree"
@@ -2511,6 +2515,7 @@ export function App({
 			panelConsultation !== undefined &&
 			state !== undefined &&
 			createElement(ActionPanel, {
+				message: visibleMessage,
 				title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
 				bodyLines: [
 					"Force-close stops the cleanup and closes the record. These owned",
@@ -2539,6 +2544,7 @@ export function App({
 			panelConsultation !== undefined &&
 			panel.kind === "consultation-delete" &&
 			createElement(ActionPanel, {
+				message: visibleMessage,
 				title: `Delete Consultation ${panelConsultation.id.slice(0, 8)}`,
 				bodyLines: [
 					"Saved history will be removed. Backups and filesystem snapshots may retain copies. Data is not encrypted.",
@@ -2555,14 +2561,15 @@ export function App({
 			}),
 		utility?.kind === "guide" &&
 			createElement(KeyGuide, {
+				message: visibleMessage,
 				context: utilityContext,
 				onClose: () => setUtility(null),
-				onHelp: () => setUtility(null),
 				onMessage: () => openMessage(utilityContext.mode),
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		utility?.kind === "message" &&
 			createElement(MessageView, {
+				message: visibleMessage,
 				fact: utility.fact,
 				context: utilityContext,
 				onClose: () => setUtility(null),

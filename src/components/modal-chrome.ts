@@ -4,10 +4,12 @@
  *
  * One shape for all of them, because the rules are the same everywhere:
  *
- * - The Action bar owns the surface's last row. A box never paints there.
- * - The box pays for that row by giving up its margin first and its padding
- *   second. An action row is the only way out of a modal, so an action row
- *   is the last thing to go.
+ * - The Message line and the Action bar own the surface's last two rows, at
+ *   every terminal size and in every surface, so the operator reads the same
+ *   Message the base frame shows. A box never paints on either row.
+ * - The box pays for those rows by giving up its margin first and its
+ *   padding second. An action row is the only way out of a modal, so an
+ *   action row is the last thing to go.
  * - A surface that cannot show its own rows shows the size message instead.
  *   A clipped modal is a broken pane, and a broken pane is not an answer to
  *   a small terminal (user story 71).
@@ -22,6 +24,7 @@ import { Fragment, type ReactElement, useRef, useState } from "react";
 import { ActionBar } from "./action-bar.ts";
 import type { ControlContext, InteractionMode } from "./controls.ts";
 import { maxScrollOf } from "./geometry.ts";
+import { type MessageFact, messageRowElement } from "./messages.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -29,7 +32,9 @@ import { COLORS } from "./theme.ts";
 const MIN_TERMINAL_WIDTH = 40;
 /** The smallest terminal height the control plane draws its panes at. */
 const MIN_TERMINAL_HEIGHT = 7;
-/** The row every overlay's Action bar owns. */
+/** The row every surface's Message line owns. */
+const MESSAGE_ROWS = 1;
+/** The row every surface with a bar owns. */
 const BAR_ROWS = 1;
 /** The modal chrome: one border on each side. */
 const BORDERS = 2;
@@ -65,8 +70,12 @@ export interface ModalFrame {
 	contentWidth: number;
 	/** Rows inside the border and padding that the surface's body may take. */
 	contentRows: number;
-	/** The rows the surface's own Action bar owns: 0 for a surface with none. */
+	/** The rows the surface's Action bar owns. */
 	barRows: number;
+	/** The rows its Message line owns: 0 only where there is no room for it. */
+	messageRows: number;
+	/** The rows the box is laid out within: every row but those two. */
+	regionRows: number;
 }
 
 /**
@@ -76,10 +85,12 @@ export interface ModalFrame {
  * `scale` is the pop-in progress, so the layout follows the box the frame is
  * actually drawing rather than the one it is growing into.
  *
- * The Action bar owns the surface's last row, and the box's bottom margin
- * covers it: the box ends one row above the bar, so a bar can never paint
- * through a border. Below that the box gives up its padding, and a box that
- * cannot even hold its borders is not drawn at all.
+ * The surface lays its box out in the rows above its own bottom rows, and
+ * centers it there. The box keeps `margin` rows below what is left over on
+ * its top, so it can sit on the Message line but never on a row the surface
+ * owns: a border and a bar can never share a row, at any size and for any
+ * margin. Below that the box gives up its padding, and a box that cannot
+ * even hold its borders is not drawn at all.
  */
 export function modalFrame(
 	width: number,
@@ -97,16 +108,22 @@ export function modalFrame(
 		 *  gives the padding up instead. Defaults to `rows`. */
 		minRows?: number;
 		scale?: number;
-		/** False for a surface that owns no Action bar and so reserves no row. */
-		bar?: boolean;
 	} = {},
 ): ModalFrame {
 	const margin = options.margin ?? 1;
 	const scale = options.scale ?? 1;
-	const barRows = options.bar === false ? 0 : BAR_ROWS;
-	// The box's bottom limit: its own bottom margin, or the Action bar's row.
-	// The box ends above that line, so a border and a bar can never share it.
-	const room = Math.min(height - margin, height - barRows) - margin;
+	// Every surface owns its last two rows the same way: the Message line and
+	// the Action bar, whether or not that bar has a control to name yet.
+	const barRows = BAR_ROWS;
+	// The Message line gives way before the Action bar does, as it does in the
+	// base frame: the bar is the only control a held-back surface still offers.
+	const messageRows = height > barRows ? MESSAGE_ROWS : 0;
+	const regionRows = Math.max(0, height - barRows - messageRows);
+	// Half the region's leftover rows fall below the box, so the box keeps its
+	// margin from the region's top edge and may close up on its bottom edge,
+	// which is the Message line's row. A border can never reach a row the
+	// surface owns.
+	const room = Math.max(0, regionRows - Math.max(0, 2 * margin - 1));
 	const boxWidth = Math.max(
 		1,
 		Math.round(Math.min(width - margin * 2, options.maxWidth ?? Number.MAX_SAFE_INTEGER) * scale),
@@ -138,6 +155,8 @@ export function modalFrame(
 		contentWidth: Math.max(1, boxWidth - BORDERS - 2 * padding),
 		contentRows: Math.max(0, boxHeight - BORDERS - 2 * padding),
 		barRows,
+		messageRows,
+		regionRows,
 	};
 }
 
@@ -148,6 +167,8 @@ interface ModalSurfaceProps {
 	/** The rows this surface must draw to be itself. */
 	minContentRows: number;
 	children: ReactElement[];
+	/** The Message fact the surface's Message line shows. */
+	message: MessageFact | null;
 	/** The catalogue bar this surface owns, if it owns one. */
 	bar?: { mode: InteractionMode; context: ControlContext; rangeIndicator?: string };
 	opacity?: number;
@@ -155,12 +176,14 @@ interface ModalSurfaceProps {
 }
 
 /**
- * The full-screen surface, the bordered box on it, and the Action bar below
- * the box.
+ * The full-screen surface, the bordered box on it, and the two rows the
+ * surface owns below the box: its Message line and its Action bar.
  *
- * Below the rows the surface needs, the box stands down and the size message
- * takes the surface: the operator reads why nothing is there, and the
- * surface's own keys still close it.
+ * The rows are laid out, not painted over: the box gets the region above
+ * them, so it cannot reach either row at any size. Below the rows the
+ * surface needs, the box stands down and the size message takes the region:
+ * the operator reads why nothing is there, and the surface's own keys still
+ * close it.
  */
 export function ModalSurface({
 	frame,
@@ -168,43 +191,83 @@ export function ModalSurface({
 	borderColor,
 	minContentRows,
 	children,
+	message,
 	bar,
 	opacity,
 	zIndex = 10,
 }: ModalSurfaceProps) {
-	const { width, height } = useTerminalDimensions();
+	const { width } = useTerminalDimensions();
 	const held = frame.contentRows < minContentRows || frame.boxHeight < 2;
 	return createElement(
 		"box",
 		{ style: overlaySurfaceStyle(zIndex) },
-		held
-			? sizeNoticeElement(width, height - frame.barRows)
-			: createElement(
-					"box",
-					{
-						border: true,
-						borderColor,
-						title: truncateToWidth(title, frame.contentWidth),
-						padding: frame.padding,
-						style: {
-							width: frame.boxWidth,
-							height: frame.boxHeight,
-							flexDirection: "column",
-							overflow: "hidden",
-							opacity,
+		createElement(
+			"box",
+			{
+				key: "region",
+				style: {
+					flexGrow: 1,
+					flexShrink: 0,
+					width: "100%",
+					flexDirection: "column",
+					alignItems: "center",
+					justifyContent: "center",
+					overflow: "hidden",
+				},
+			},
+			// Below the rows a surface needs, the box stands down and states its
+			// size: a clipped pane is not an answer to a small terminal. The
+			// notice is handed no more lines than the region holds, so it cannot
+			// reach the Message line or the bar either.
+			held
+				? sizeNoticeElement(width, frame.regionRows)
+				: createElement(
+						"box",
+						{
+							border: true,
+							borderColor,
+							title: truncateToWidth(title, frame.contentWidth),
+							padding: frame.padding,
+							style: {
+								width: frame.boxWidth,
+								height: frame.boxHeight,
+								flexDirection: "column",
+								overflow: "hidden",
+								opacity,
+							},
 						},
-					},
-					...children,
-				),
+						...children,
+					),
+		),
+		messageLineRow(message, width, frame),
 		bar === undefined
-			? null
+			? emptyRowElement()
 			: createElement(ActionBar, {
 					mode: bar.mode,
 					context: bar.context,
 					rangeIndicator: bar.rangeIndicator,
-					overlay: true,
 				}),
 	);
+}
+
+/** The bar's row on a surface that names no control on it yet. */
+function emptyRowElement(): ReactElement {
+	return createElement("text", { style: { width: "100%", height: 1 } }, "");
+}
+
+/**
+ * The surface's own Message line, or nothing when it has no room for it.
+ *
+ * A surface shorter than its bottom rows keeps the bar and drops the Message
+ * line, so the last row stays the bar's at one row of height too.
+ */
+function messageLineRow(
+	message: MessageFact | null,
+	width: number,
+	frame: ModalFrame,
+): ReactElement | null {
+	if (frame.messageRows === 0) return null;
+	return messageRowElement(message, width);
 }
 
 /** The dark full-screen surface every modal and overlay paints on. */
@@ -217,8 +280,7 @@ function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
 		height: "100%",
 		zIndex,
 		backgroundColor: COLORS.overlay,
-		alignItems: "center",
-		justifyContent: "center",
+		flexDirection: "column",
 	};
 }
 

@@ -44,6 +44,7 @@ import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
+import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { padToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -74,6 +75,8 @@ interface OverridePanelProps {
 	onMessage?: (mode: "override-list" | "override-text") => void;
 	/** Reports the catalogue reason for a refused control on the Message line. */
 	onUnavailable?: (reason: string) => void;
+	/** The Message fact this panel's own Message line shows. */
+	message: MessageFact | null;
 	onEmergencyExit: () => void;
 }
 
@@ -154,6 +157,7 @@ export function OverridePanel({
 	onHelp,
 	onMessage,
 	onUnavailable,
+	message,
 	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
@@ -300,6 +304,7 @@ export function OverridePanel({
 		borderColor: COLORS.borderFocused,
 		// One row is enough to be a panel: the rows that do not fit scroll.
 		minContentRows: 1,
+		message,
 		bar: { mode, context: contextFor(mode, context) },
 		children: rows.map((r) =>
 			rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputActive),

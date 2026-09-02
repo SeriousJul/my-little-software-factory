@@ -15,11 +15,10 @@
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useRef, useState } from "react";
 import { windowOf } from "./geometry.ts";
+import type { MessageFact } from "./messages.ts";
 import { type ActionRow, actionRowSpans, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-export type { ActionRow };
 
 interface ActionPanelProps {
 	title: string;
@@ -28,6 +27,8 @@ interface ActionPanelProps {
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	onCancel: () => void;
+	/** The Message fact the panel's own Message line shows. */
+	message: MessageFact | null;
 }
 
 /** The message column stops at 60 cells: a confirmation line is short. */
@@ -42,19 +43,25 @@ function wrapBody(lines: readonly string[], width: number): string[] {
 	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
 }
 
-export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
+export function ActionPanel({
+	title,
+	bodyLines,
+	actions,
+	onAction,
+	onCancel,
+	message,
+}: ActionPanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const message = bodyLines ?? [];
-	// The panel owns no Action bar, so it reserves no bar row. It is still as
-	// tall as its content and no taller, and it clips what cannot fit.
+	const body = bodyLines ?? [];
+	// The panel is as tall as its content and no taller, and it clips what
+	// cannot fit. The shared chrome still owns its last two rows.
 	const frame = modalFrame(terminalWidth, terminalHeight, {
 		maxWidth: CONTENT_WIDTH + 4,
-		bar: false,
 		rows: actions.length + 1 + MAX_BODY_ROWS,
 		// Every action row plus one line of the message.
 		minRows: actions.length + 1,
 	});
-	const wrapped = wrapBody(message, frame.contentWidth);
+	const wrapped = wrapBody(body, frame.contentWidth);
 	const bodyRows = Math.max(0, frame.contentRows - actions.length - 1);
 	const maxBodyScroll = Math.max(0, wrapped.length - bodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
@@ -100,6 +107,7 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 		// Every action row plus the hint: without them the panel states a
 		// problem with no way to answer it.
 		minContentRows: actions.length + 1,
+		message,
 		children: [
 			...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
 				createElement(

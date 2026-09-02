@@ -2035,10 +2035,12 @@ describe("the override panel", () => {
 					expect(row.length).toBe(24);
 				}
 
-				// The height cannot hold every row once the Action bar takes
-				// its own: the box gives up its padding first, and the last
-				// row, Thinking, drops. The rows above it keep their columns.
-				expect(frameText(frame)).toContain("Model");
+				// The height cannot hold every row once the surface owns its
+				// Message line and Action bar: the box gives up its padding first,
+				// then its rows from the bottom, so the last two rows drop. The
+				// rows above them keep their columns.
+				expect(frameText(frame)).toContain("Task type");
+				expect(frameText(frame)).not.toContain("Model");
 				expect(frameText(frame)).not.toContain("Thinking");
 			},
 			24,

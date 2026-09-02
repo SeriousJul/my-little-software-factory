@@ -763,10 +763,13 @@ describe("the decision modal", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const panel = await settle(setup);
 				const text = frameText(panel);
-				// The near-fullscreen modal holds 20 of the 40 lines. It opens at
-				// the bottom, where the agent's conclusion is, and the scrollbar
-				// thumb rests there.
-				expect(text).toContain("log 021");
+				// The near-fullscreen modal gives the terminal's last two rows to
+				// its own Message line and Action bar, and the log window is what
+				// the box has left. It opens at the bottom, where the agent's
+				// conclusion is, and the scrollbar thumb rests there.
+				const shown = rowsOf(panel).filter((row) => /log \d\d\d/.test(row)).length;
+				expect(shown).toBeGreaterThan(2);
+				expect(text).toContain(`log ${String(41 - shown).padStart(3, "0")}`);
 				expect(text).toContain("log 040");
 				expect(text).toContain("█");
 				const bottomThumbRow = thumbRowOf(panel);
@@ -774,17 +777,15 @@ describe("the decision modal", () => {
 
 				// k scrolls up through the log, one row per press. Each press
 				// drops the newest row; two presses move the thumb with the log.
-				await press(
-					setup,
-					"k",
-					"one row up",
-					(f) => f.includes("log 021") && !f.includes("log 040"),
-				);
+				// `first(n)` is the oldest line still on screen after n steps up.
+				const first = (steps: number) => `log ${String(41 - shown - steps).padStart(3, "0")}`;
+				const last = (steps: number) => `log ${String(40 - steps).padStart(3, "0")}`;
+				await press(setup, "k", "one row up", (f) => f.includes(first(1)) && !f.includes(last(0)));
 				const higher = await press(
 					setup,
 					"k",
 					"one more row up",
-					(f) => f.includes("log 019") && !f.includes("log 039"),
+					(f) => f.includes(first(2)) && !f.includes(last(1)),
 				);
 				expect(thumbRowOf(higher)).toBeLessThan(bottomThumbRow);
 				// j scrolls back down and brings the thumb with it.
@@ -792,7 +793,7 @@ describe("the decision modal", () => {
 					setup,
 					"j",
 					"one row down",
-					(f) => f.includes("log 039") && !f.includes("log 019"),
+					(f) => f.includes(last(1)) && !f.includes(first(2)),
 				);
 				expect(thumbRowOf(backDown)).toBe(bottomThumbRow);
 

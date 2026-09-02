@@ -26,8 +26,6 @@ interface ActionBarProps {
 	context: ControlContext;
 	/** Utility bars may show a range between Scroll and Close. */
 	rangeIndicator?: string;
-	/** Draw over the current surface instead of taking normal layout space. */
-	overlay?: boolean;
 	/** A compact Help-only row for terminals below the useful size. */
 	compactHelp?: boolean;
 }
@@ -38,10 +36,15 @@ interface PackedControl {
 	availability: ReturnType<typeof availabilityFor>;
 }
 
+/** The row as it is laid out: the hints, their measured width, and Help. */
 interface PackedBar {
 	left: PackedControl[];
+	/** The cells the left hints and the range indicator take, gaps included. */
+	leftWidth: number;
 	help: PackedControl | undefined;
 	range: string | undefined;
+	/** True for the compact frame's row, where Help is the only hint. */
+	helpOnly: boolean;
 }
 
 const GAP = 2;
@@ -49,12 +52,15 @@ const GAP = 2;
 /**
  * Pack complete hints. A hint is removed as a unit, starting with the lowest
  * priority. The original order of every remaining hint is unchanged.
+ *
+ * Help is never packed away: it keeps its own cells at the right end of the
+ * row, so it costs the other hints width rather than competing with them.
  */
 function packActionBar(
 	controls: readonly ControlDefinition[],
 	context: ControlContext,
 	width: number,
-	rangeIndicator?: string,
+	options: { rangeIndicator?: string; helpOnly?: boolean } = {},
 ): PackedBar {
 	const entries = controls
 		.filter((control) => control.actionBar)
@@ -64,16 +70,16 @@ function packActionBar(
 			availability: availabilityFor(control, context),
 		}));
 	const help = entries.find((entry) => entry.control.id === "help");
-	const candidates = entries.filter((entry) => entry !== help);
-	let range = rangeIndicator;
-	const helpText = help === undefined ? "" : `${help.keyLabel} ${help.control.label}`;
-	const helpWidth = widthOf(helpText);
+	// The compact row states Help alone: on a frame this broken nothing else
+	// is a control the operator can act on.
+	const candidates = options.helpOnly === true ? [] : entries.filter((entry) => entry !== help);
+	let range = options.rangeIndicator;
+	const helpWidth = help === undefined ? 0 : widthOf(`${help.keyLabel} ${help.control.label}`);
 	const availableWidth = Math.max(0, width - (help === undefined ? 0 : helpWidth + GAP));
+	const widthOfHint = (entry: PackedControl): number =>
+		widthOf(`${entry.keyLabel} ${entry.control.label}`);
 	const fits = (items: readonly PackedControl[], includeRange: boolean): boolean => {
-		const itemWidth = items.reduce(
-			(total, entry) => total + widthOf(`${entry.keyLabel} ${entry.control.label}`),
-			0,
-		);
+		const itemWidth = items.reduce((total, entry) => total + widthOfHint(entry), 0);
 		const gaps = Math.max(0, items.length - 1) * GAP + (includeRange ? GAP : 0);
 		const indicatorWidth = includeRange && range !== undefined ? widthOf(range) : 0;
 		return itemWidth + gaps + indicatorWidth <= availableWidth;
@@ -87,59 +93,51 @@ function packActionBar(
 		}
 		selected.splice(removeAt, 1);
 	}
-	// At a very narrow width keep the key of Help even when its full hint does
-	// not fit. This is the last discoverable control on a broken-size frame.
-	if (help !== undefined && helpWidth > width) {
-		// Never show part of a multi-cell binding. A partial `F1` as `F` is
-		// ambiguous. Where `?` is a valid Help alias, it is the one-cell form.
-		const keyLabel = help.keyLabel.includes("?")
-			? "?"
-			: width >= widthOf(help.keyLabel)
-				? help.keyLabel
-				: "";
-		return { left: selected, help: keyLabel === "" ? undefined : { ...help, keyLabel }, range };
-	}
-	return { left: selected, help, range };
+	const leftWidth =
+		selected.reduce((total, entry) => total + widthOfHint(entry), 0) +
+		Math.max(0, selected.length - 1) * GAP +
+		(range === undefined ? 0 : GAP + widthOf(range));
+	return { left: selected, leftWidth, help, range, helpOnly: options.helpOnly === true };
 }
 
-export function ActionBar({ mode, context, rangeIndicator, overlay, compactHelp }: ActionBarProps) {
+/**
+ * The one hint of Help a frame this narrow can state.
+ *
+ * Help is the last discoverable control, so it is the last thing cut: never
+ * part of a multi-cell binding, because a cut `F1` reads as `F`. Where `?` is
+ * a valid Help alias it is the one-cell form, and where even that does not
+ * fit the row states nothing and leaves its width to the frame.
+ */
+function fitHelpHint(help: PackedControl, width: number): string {
+	const full = `${help.keyLabel} ${help.control.label}`;
+	if (widthOf(full) <= width) return full;
+	const key = help.keyLabel.includes("?") ? "?" : help.keyLabel;
+	return widthOf(key) <= width ? key : "";
+}
+
+export function ActionBar({ mode, context, rangeIndicator, compactHelp }: ActionBarProps) {
 	const { width } = useTerminalDimensions();
 	const controls = actionBarControls(mode, context);
-	const packed = compactHelp
-		? compactHelpBar(mode, controls)
-		: packActionBar(controls, context, width, rangeIndicator);
+	const packed = packActionBar(controls, context, width, {
+		rangeIndicator,
+		helpOnly: compactHelp,
+	});
 	const help = packed.help;
-	if (compactHelp) {
-		const compactKey = help?.keyLabel ?? "?";
-		const compactText = `${compactKey} Help`;
-		const text =
-			widthOf(compactText) <= width
-				? compactText
-				: widthOf(compactKey) <= width
-					? compactKey
-					: compactKey.includes("?")
-						? "?"
-						: "";
+	const helpText = help === undefined ? "" : `${help.keyLabel} ${help.control.label}`;
+	// A frame that cannot hold Help's whole hint states as little of it as
+	// still fits, and states nothing else: this is the row a compact frame
+	// shows, and the row no packing may leave Help off.
+	if (help !== undefined && widthOf(helpText) > width)
 		return createElement(
 			"text",
-			{
-				style: overlay
-					? { position: "absolute", left: 0, bottom: 0, width: "100%", height: 1, zIndex: 30 }
-					: { width: "100%", height: 1 },
-			},
-			actionBarText(text, width),
+			{ style: { width: "100%", height: 1 } },
+			padToWidth(truncateToWidth(fitHelpHint(help, width), width), width),
 		);
-	}
-	const leftWidth =
-		packed.left.reduce(
-			(total, entry) => total + widthOf(`${entry.keyLabel} ${entry.control.label}`),
-			0,
-		) +
-		Math.max(0, packed.left.length - 1) * GAP +
-		(packed.range === undefined ? 0 : GAP + widthOf(packed.range));
-	const helpText = help === undefined ? "" : `${help.keyLabel} ${help.control.label}`;
+	// The compact row left-aligns its one hint; a full bar keeps Help in its
+	// own cells at the right end of the row.
+	const leftWidth = packed.leftWidth;
 	const helpStart =
-		help === undefined
+		help === undefined || packed.helpOnly
 			? leftWidth
 			: Math.max(leftWidth + (leftWidth > 0 ? GAP : 0), width - widthOf(helpText));
 	const children: ReactElement[] = [];
@@ -161,35 +159,14 @@ export function ActionBar({ mode, context, rangeIndicator, overlay, compactHelp 
 			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
 		children.push(createElement("span", { key: "range", fg: COLORS.dim }, packed.range));
 	}
-	const usedBeforeHelp = helpStart;
 	if (help !== undefined) {
 		const gap = Math.max(0, helpStart - leftWidth);
 		if (gap > 0) children.push(createElement("span", { key: "help-gap" }, " ".repeat(gap)));
 		children.push(...hintSpans(help, "help"));
 	}
-	const used = usedBeforeHelp + (help === undefined ? 0 : widthOf(helpText));
+	const used = helpStart + (help === undefined ? 0 : widthOf(helpText));
 	if (used < width) children.push(createElement("span", { key: "tail" }, " ".repeat(width - used)));
-	return createElement(
-		"text",
-		{
-			style: overlay
-				? { position: "absolute", left: 0, bottom: 0, width: "100%", height: 1, zIndex: 30 }
-				: { width: "100%", height: 1 },
-		},
-		...children,
-	);
-}
-
-function compactHelpBar(mode: InteractionMode, controls: readonly ControlDefinition[]): PackedBar {
-	const control = controls.find((candidate) => candidate.id === "help");
-	return {
-		left: [],
-		help:
-			control === undefined
-				? undefined
-				: { control, keyLabel: keyLabelFor(mode, control), availability: availableResult() },
-		range: undefined,
-	};
+	return createElement("text", { style: { width: "100%", height: 1 } }, ...children);
 }
 
 function hintSpans(entry: PackedControl, key: string): ReactElement[] {
@@ -206,13 +183,4 @@ function hintSpans(entry: PackedControl, key: string): ReactElement[] {
 			entry.control.label,
 		),
 	];
-}
-
-function availableResult(): { available: true } {
-	return { available: true };
-}
-
-/** Make a row that is exactly the terminal width. */
-function actionBarText(text: string, width: number): string {
-	return padToWidth(truncateToWidth(text, width), width);
 }

@@ -74,12 +74,13 @@ function useUtilityKeys(
 interface KeyGuideProps {
 	context: ControlContext;
 	onClose: () => void;
-	onHelp: () => void;
 	onMessage?: () => void;
+	/** The Message fact the overlay's own Message line shows. */
+	message: MessageFact | null;
 	onEmergencyExit: () => void;
 }
 
-export function KeyGuide({ context, onClose, onMessage, onEmergencyExit }: KeyGuideProps) {
+export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit }: KeyGuideProps) {
 	const { width, height } = useTerminalDimensions();
 	const mode = context.mode;
 	const entries = useMemo(() => guideControls(mode, context), [mode, context]);
@@ -113,6 +114,7 @@ export function KeyGuide({ context, onClose, onMessage, onEmergencyExit }: KeyGu
 		borderColor: COLORS.borderFocused,
 		minContentRows: 1,
 		zIndex: 20,
+		message,
 		bar: {
 			mode: "key-guide",
 			context: contextFor("key-guide", context),
@@ -133,9 +135,18 @@ export function KeyGuide({ context, onClose, onMessage, onEmergencyExit }: KeyGu
 
 interface MessageViewProps extends KeyGuideProps {
 	fact: MessageFact;
+	/** The Message view hands its Help and Message keys to the guide. */
+	onHelp: () => void;
 }
 
-export function MessageView({ fact, context, onClose, onHelp, onEmergencyExit }: MessageViewProps) {
+export function MessageView({
+	fact,
+	context,
+	onClose,
+	onHelp,
+	message,
+	onEmergencyExit,
+}: MessageViewProps) {
 	const { width, height } = useTerminalDimensions();
 	const frame = modalFrame(width, height, {
 		maxWidth: UTILITY_MAX_WIDTH,
@@ -169,6 +180,7 @@ export function MessageView({ fact, context, onClose, onHelp, onEmergencyExit }:
 		borderColor: fact.severity === "error" ? COLORS.statusError : COLORS.borderFocused,
 		minContentRows: 1,
 		zIndex: 20,
+		message,
 		bar: {
 			mode: "message-view",
 			context: contextFor("message-view", context),

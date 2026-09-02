@@ -796,15 +796,16 @@ describe("the in-app Key guide", () => {
 				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
 				expect(actionBarRowOf(await settle(setup))).toContain("1-19/32");
 
-				// A short, wide terminal: five visible rows, the full title
-				// still fitting, and more total rows because the reason
-				// column is narrower and flows onto more lines.
+				// A short, wide terminal: four visible rows, the full title
+				// still fitting, and more total rows because the reason column is
+				// narrower and flows onto more lines. The surface gives its last
+				// two rows to its Message line and Action bar.
 				setup.resize(60, 12);
 				let frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("1-5/40");
+				expect(actionBarRowOf(frame)).toContain("1-4/40");
 
-				await scrollGuide(setup, "j", "2-6/40");
+				await scrollGuide(setup, "j", "2-5/40");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);

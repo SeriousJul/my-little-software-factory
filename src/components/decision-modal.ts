@@ -28,6 +28,7 @@ import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import { type MdLine, renderMarkdown } from "./markdown.ts";
+import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
 	actionRowSpans,
@@ -39,8 +40,6 @@ import {
 } from "./modal-chrome.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-export type { ActionRow };
 
 interface DecisionModalProps {
 	/** The ticket's title, for the border. */
@@ -60,6 +59,8 @@ interface DecisionModalProps {
 	onMessage?: () => void;
 	/** Reports the catalogue reason for a refused control on the Message line. */
 	onUnavailable?: (reason: string) => void;
+	/** The Message fact this modal's own Message line shows. */
+	message: MessageFact | null;
 	onEmergencyExit: () => void;
 }
 
@@ -133,6 +134,7 @@ export function DecisionModal({
 	onHelp,
 	onMessage,
 	onUnavailable,
+	message,
 	onEmergencyExit,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
@@ -225,6 +227,7 @@ export function DecisionModal({
 		// not a decision, so it holds itself back at that size.
 		minContentRows: actions.length + CONTEXT_ROWS,
 		opacity: pop,
+		message,
 		bar: { mode: "decision-modal", context: contextFor("decision-modal", context) },
 		children: [
 			createElement(

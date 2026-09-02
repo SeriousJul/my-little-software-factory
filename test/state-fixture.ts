@@ -81,6 +81,65 @@ export const RATE_LIMITED: FetchOutcome = {
 };
 
 /**
+ * Move the fixture Ticket through a clean Handoff and store its herdr handles.
+ *
+ * The row is in flight with a Pane behind it, which is what the missing modal
+ * answers to once the observation finds no Agent in that Pane. The caller owns
+ * the state and closes it.
+ */
+export function seedInFlightTurn(
+	state: FactoryState,
+	outcome: FetchOutcome,
+	identity = "github:github.com:I_5",
+): string {
+	const source = { name: "issues", kind: "github-issues" };
+	state.initializeSources([source]);
+	state.applyFetch(source, outcome);
+	const claim = state.claimHandoff(
+		identity,
+		{
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+		},
+		"open",
+	);
+	if (!claim.ok) throw new Error(claim.reason);
+	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		paneId: "pane-1",
+		tabId: "tab-1",
+		workspaceId: "ws-1",
+	});
+	return claim.claim.attemptId;
+}
+
+/**
+ * Move the fixture Ticket through a clean Handoff and a settled turn.
+ *
+ * The row ends awaiting its decision with the herdr handles stored, which is
+ * what the decision modal and the observation loop read.
+ */
+export function seedAwaitingTurn(
+	state: FactoryState,
+	outcome: FetchOutcome,
+	identity = "github:github.com:I_5",
+): string {
+	const attemptId = seedInFlightTurn(state, outcome, identity);
+	state.settleTurn({
+		ticketIdentity: identity,
+		handoffId: attemptId,
+		taskType: "implement",
+		agentType: "pi",
+		message: "The turn is done.",
+		turnLog: [{ kind: "text", text: "The turn is done." }],
+		completedAt: "2026-08-31T11:00:00Z",
+	});
+	return attemptId;
+}
+
+/**
  * Wait until the source has started its `calls`-th fetch.
  *
  * A key press is dispatched on the next frame, so a test must not settle

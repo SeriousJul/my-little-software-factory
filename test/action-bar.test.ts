@@ -46,6 +46,7 @@ import {
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import {
+	agentListJson,
 	FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
@@ -60,6 +61,7 @@ import {
 	issuesConfig,
 	issueTicket,
 	RATE_LIMITED,
+	seedInFlightTurn,
 	success,
 } from "./state-fixture.ts";
 
@@ -193,8 +195,52 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				await openPanel(setup);
 				pressF2(setup);
-				await settle(setup);
+				// The panel owns the screen, and its own Message line states the
+				// refusal: the operator reads why the key did nothing while the
+				// surface is still in front of them.
+				const open = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("the current Message fits on the Message line"),
+					"the refusal on the panel's Message line",
+				);
+				expect(rowsOf(open)).toHaveLength(HEIGHT);
+				expect(open).toContain("┌─Override");
 				await press(setup, "escape", "the panel to close", (f) => !f.includes("┌─Override"));
+				expect(messageRowOf(await settle(setup))).toContain(
+					"Warning: the current Message fits on the Message line",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("the decision modal states a refusal on its own Message line", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
+				await settle(setup);
+				// Enter on a modal action that is not the selected row is not a
+				// control the modal will run: F2 refuses for the same reason the
+				// catalogue names, and says it where the operator can read it.
+				pressF2(setup);
+				const open = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("the current Message fits on the Message line"),
+					"the refusal on the modal's Message line",
+				);
+				// The refusal is on the surface, not only under it: the modal's
+				// box still owns its rows and the base frame stays covered.
+				expect(open).toContain("Decision:");
+				expect(messageRowOf(open).trim()).toBe(
+					"Warning: the current Message fits on the Message line",
+				);
+				await press(setup, "escape", "the modal to close", (f) => !f.includes("Decision:"));
 				expect(messageRowOf(await settle(setup))).toContain(
 					"Warning: the current Message fits on the Message line",
 				);
@@ -251,6 +297,47 @@ describe("the contextual Action bar", () => {
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
+
+	test("the missing modal states a refusal on its own Message line", async () => {
+		const state = freshState();
+		// herdr answers with an empty list: the in-flight Ticket's Agent is gone.
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		seedInFlightTurn(state, success([issueTicket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					source.settle(success([issueTicket()]));
+					await awaitFrame(
+						setup,
+						(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
+						"the missing badge",
+					);
+					await press(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
+					pressF2(setup);
+					const open = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("the current Message fits on the Message line"),
+						"the refusal on the modal's Message line",
+					);
+					expect(open).toContain("Missing:");
+					expect(messageRowOf(open).trim()).toBe(
+						"Warning: the current Message fits on the Message line",
+					);
+					await press(setup, "escape", "the modal to close", (f) => !f.includes("Missing:"));
+					expect(messageRowOf(await settle(setup))).toContain(
+						"Warning: the current Message fits on the Message line",
+					);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: issuesConfig, state, sources: [source], runner, pollIntervalMs: 60_000 },
+			);
+		} finally {
+			state.close();
+		}
+	}, 20000);
 
 	test("narrow widths remove complete low-priority hints, and Help is the last kept", async () => {
 		const runner = new FakeRunner();

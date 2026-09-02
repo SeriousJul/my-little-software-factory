@@ -50,11 +50,14 @@ terminal. It shows the controls the current interaction mode can run, dims
 one it will not run in the present state, and names the reason on the Message
 line when the operator presses it anyway.
 
-The in-app Key guide is the complete control list. Press `?` or `F1` to open
-it from anywhere, including the panes and the modals. It carries every mode,
-the controls that are only reachable from another mode, Quit, and the `Ctrl+C`
-emergency exit, each with what it does and, where the app will not run it,
-why. Press `Esc`, `F1`, or `?` to close it.
+The in-app Key guide lists the controls of the modes the app dispatches from
+its catalogue. Press `?` or `F1` to open it from anywhere, including the
+panes and the modals. It carries the Ticket list, the Ticket detail, the
+override panel in both of its row kinds, the decision modal, the missing
+modal, the guide and the Message view, the controls that are only reachable
+from another mode, Quit, and the `Ctrl+C` emergency exit, each with what it
+does and, where the app will not run it, why. Press `Esc`, `F1`, or `?` to
+close it.
 
 This file does not repeat that list. A table of keys here went stale twice:
 the guide and the Action bar are generated from one control catalogue
@@ -62,8 +65,8 @@ the guide and the Action bar are generated from one control catalogue
 
 The controls the Consultation surfaces use are listed below. They are the
 part of the app that does not dispatch from the catalogue yet, so the Key
-guide shows them as the controls of other modes without claiming they are
-reachable from a Consultation surface.
+guide does not list them at all: this file and each surface's own key handling
+are where those keys are stated.
 
 ### Consultation controls
 
@@ -86,13 +89,16 @@ use are these:
   The default exit key is `F12`; configure `interaction-exit-key` with a
   function key or `Ctrl` plus one letter.
 
-Every other surface the app has now dispatches from the catalogue, so the Key
-guide and the Action bar state its controls. The Ticket list and detail move
-with the row, page and jump keys, focus the detail with `l` or `Right` and the
-list with `h` or `Left`, hand an open ticket off with `Enter`, open the
-decision modal on an awaiting one, the missing modal on a ticket whose agent
-is gone, and the override panel with `e`. `a` toggles auto-handoff, `r`
-refreshes the sources, `v` and `t` switch views, and `q` quits.
+Every surface the control plane itself owns now dispatches from the
+catalogue, so the Key guide and the Action bar state its controls. The
+Consultation confirmation panel is the one surface that shares the modal
+chrome without sharing the dispatch: it keeps its own key handling, and its
+keys are not in the guide. The Ticket list and detail move with the row, page
+and jump keys, focus the detail with `l` or `Right` and the list with `h` or
+`Left`, hand an open ticket off with `Enter`, open the decision modal on an
+awaiting one, the missing modal on a ticket whose agent is gone, and the
+override panel with `e`. `a` toggles auto-handoff, `r` refreshes the sources,
+`v` and `t` switch views, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -105,7 +111,7 @@ painting them over its border.
 
 The basic entry controls are `?` or `F1` for the Key guide, `F2` for a
 truncated Message view, and `Ctrl+C` for emergency exit. Use the in-app
-guide and the contextual Action bar for the complete fixed control set.
+guide and the contextual Action bar for the control plane's fixed control set.
 
 The override panel is a modal. While it is open, the keys of the app below
 are inert, and the shared Action bar at the terminal bottom changes between

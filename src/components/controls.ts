@@ -93,6 +93,14 @@ export interface ControlDefinition {
 	scope: ControlScope;
 	/** Controls with this flag are candidates for the contextual Action bar. */
 	actionBar: boolean;
+	/**
+	 * Whether one candidate earns a place on the bar in this context.
+	 *
+	 * A control whose keys work and whose view would show nothing answers for
+	 * itself elsewhere, so the Message control states that here rather than
+	 * making the bar test control ids.
+	 */
+	showInBar?: (context: ControlContext) => boolean;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -369,6 +377,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 900,
 		modes: [...allModes],
 		availability: message,
+		// The bar never offers a Message view with nothing to read: the hint
+		// belongs to a Message the terminal has cut short.
+		showInBar: (context) => context.messageTruncated,
 	},
 	{
 		id: "auto-handoff",
@@ -524,9 +535,8 @@ export function actionBarControls(
 	return controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
-			control.id !== "emergency-exit" &&
 			isReachableInMode(mode, control, context) &&
-			(control.id !== "message" ? true : control.availability(context).available),
+			(control.showInBar?.(context) ?? true),
 	);
 }
 
