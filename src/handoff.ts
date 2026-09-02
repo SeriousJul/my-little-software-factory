@@ -35,9 +35,21 @@
  */
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
-import { agentNameFor, branchNameFor } from "./naming.ts";
-import { commandFailureText, type ResolutionNotes, realPathOf, resolveRepository } from "./repo.ts";
+import {
+	agentNameFor,
+	branchNameFor,
+	consultationAgentName,
+	consultationBranchName,
+} from "./naming.ts";
+import {
+	commandFailureText,
+	type ResolutionNotes,
+	type ResolvedRepository,
+	realPathOf,
+	resolveRepository,
+} from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
+import type { Consultation } from "./state.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
@@ -81,6 +93,8 @@ export interface StartedAgent {
 	paneId: string;
 	tabId: string;
 	workspaceId: string;
+	/** Stable Agent session identity when Herdr exposes one. */
+	sessionId?: string;
 }
 
 /**
@@ -122,6 +136,10 @@ interface HandoffOptions {
 interface HandoffContext {
 	runner: CommandRunner;
 	onStage?: (stage: string) => void;
+	/** Record an external resource before the next external step. */
+	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	/** Record the Agent handles before sending its first prompt. */
+	onAgentStarted?: (agent: StartedAgent) => void;
 	/** The note the repository resolution carried, if it bent. */
 	notes?: ResolutionNotes;
 }
@@ -188,6 +206,221 @@ export async function handOffTicket(
  * the ticket's previous handoff, the tab to close once the new agent has
  * started, and the last captured message the prompt carries.
  */
+/** A durable Consultation uses the same Herdr and repository boundary as a Handoff. */
+export interface ConsultationHandoffOptions extends HandoffOptions {
+	consultation: Consultation;
+	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
+	onAgentStarted?: (agent: StartedAgent) => void;
+	onRepositoryResolved?: (path: string) => void;
+	/** A resolution already made by the serialized live safety operation. */
+	resolvedRepository?: ResolvedRepository;
+}
+
+export type ConsultationHandoffOutcome =
+	| { status: "failed"; reason: string; notes?: ResolutionNotes }
+	| { status: "prompt-failed"; reason: string; agent: StartedAgent; notes?: ResolutionNotes }
+	| { status: "ok"; agent: StartedAgent; notes?: ResolutionNotes };
+
+/** Render a Consultation opening prompt without interpreting operator text. */
+export function renderConsultationPrompt(template: string, input: string): string {
+	return template.replace(/\{input\}/g, () => input);
+}
+
+/** Start a newly created Consultation. The record already exists in SQLite. */
+export async function handOffConsultation({
+	consultation,
+	config,
+	runner,
+	home,
+	onStage,
+	onResource,
+	onAgentStarted,
+	onRepositoryResolved,
+	resolvedRepository,
+}: ConsultationHandoffOptions): Promise<ConsultationHandoffOutcome> {
+	const agent = config.agents[consultation.agentType];
+	if (agent === undefined)
+		return { status: "failed", reason: `unknown agent type: ${consultation.agentType}` };
+	if (consultation.environment === "container")
+		return { status: "failed", reason: "the container environment is reserved and not yet built" };
+	if (resolvedRepository === undefined) onStage?.("resolving-repository");
+	const resolved =
+		resolvedRepository === undefined
+			? await resolveRepository(
+					{
+						identity: consultation.repository.identity,
+						displayName: consultation.repository.displayName,
+						cloneUrl: consultation.repository.cloneUrl,
+					},
+					config,
+					{ runner, home },
+				)
+			: { ok: true as const, repository: resolvedRepository };
+	if (!resolved.ok) return { status: "failed", reason: resolved.reason };
+	onRepositoryResolved?.(resolved.repository.path);
+	const ctx: HandoffContext = {
+		runner,
+		onStage,
+		onResource,
+		onAgentStarted,
+		notes: resolved.repository.notes,
+	};
+	const prompt = renderConsultationPrompt(consultation.template, consultation.initialInput);
+	const args = settingArgs(
+		agent,
+		baseChoice(
+			consultation.agentType,
+			consultation.environment,
+			"",
+			consultation.model,
+			consultation.thinking,
+		),
+	);
+	const name = consultation.agentName || consultationAgentName(consultation.id);
+	if (consultation.environment === "live-worktree") {
+		return startConsultationLive(resolved.repository.path, name, agent, args, prompt, ctx);
+	}
+	return startConsultationWorktree(
+		consultation.id,
+		consultation.typeName,
+		resolved.repository.path,
+		name,
+		agent,
+		args,
+		prompt,
+		ctx,
+	);
+}
+
+/** Consultation live launch: a new checkout workspace uses its root pane. */
+async function startConsultationLive(
+	checkout: string,
+	name: string,
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	prompt: string,
+	ctx: HandoffContext,
+): Promise<ConsultationHandoffOutcome> {
+	ctx.onStage?.("creating-environment");
+	const listed = await ctx.runner.run("herdr", ["workspace", "list"]);
+	if (listed.code !== 0) return failedCommand(listed, ctx) as ConsultationHandoffOutcome;
+	let data: unknown;
+	try {
+		data = JSON.parse(listed.stdout);
+	} catch {
+		return failed(
+			"herdr workspace list did not return a readable workspace list",
+			ctx,
+		) as ConsultationHandoffOutcome;
+	}
+	const workspaces =
+		(
+			data as {
+				result?: {
+					workspaces?: Array<{ workspace_id?: unknown; worktree?: { checkout_path?: unknown } }>;
+				};
+			}
+		).result?.workspaces ?? [];
+	const checkoutReal = await realPathOf(checkout);
+	for (const workspace of workspaces) {
+		if (
+			typeof workspace.workspace_id !== "string" ||
+			typeof workspace.worktree?.checkout_path !== "string"
+		)
+			continue;
+		const recorded = workspace.worktree.checkout_path;
+		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal)
+			return startAgentInNewTab(workspace.workspace_id, checkout, name, agent, args, prompt, ctx);
+	}
+	const created = await ctx.runner.run("herdr", [
+		"workspace",
+		"create",
+		"--cwd",
+		checkout,
+		"--no-focus",
+	]);
+	if (created.code !== 0) return failedCommand(created, ctx) as ConsultationHandoffOutcome;
+	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
+	const paneId = jsonResultField(created, "root_pane", "pane_id");
+	const tabId = jsonResultField(created, "tab", "tab_id");
+	if (workspaceId !== null)
+		ctx.onResource?.("workspace", workspaceId, true, "Consultation workspace");
+	if (tabId !== null) ctx.onResource?.("tab", tabId, true, "Consultation root tab");
+	if (workspaceId === null || paneId === null || tabId === null)
+		return failed(
+			"herdr workspace create returned incomplete pane handles",
+			ctx,
+		) as ConsultationHandoffOutcome;
+	return startAgentAndPrompt(name, agent, args, prompt, ctx, { paneId, tabId, workspaceId });
+}
+
+async function startConsultationWorktree(
+	id: string,
+	typeName: string,
+	checkout: string,
+	name: string,
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	prompt: string,
+	ctx: HandoffContext,
+): Promise<ConsultationHandoffOutcome> {
+	const branch = consultationBranchName(id, typeName);
+	ctx.onStage?.("creating-environment");
+	const listed = await ctx.runner.run("git", ["-C", checkout, "branch", "--list", branch]);
+	if (listed.code !== 0)
+		return failed(
+			`cannot check branch in ${checkout}: ${commandFailureText(listed)}`,
+			ctx,
+		) as ConsultationHandoffOutcome;
+	if (listed.stdout.trim() !== "")
+		return failed(
+			`Consultation branch already exists: ${branch}`,
+			ctx,
+		) as ConsultationHandoffOutcome;
+	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
+	if (head.code !== 0)
+		return failed(
+			`cannot read HEAD in ${checkout}: ${commandFailureText(head)}`,
+			ctx,
+		) as ConsultationHandoffOutcome;
+	const created = await ctx.runner.run("herdr", [
+		"worktree",
+		"create",
+		"--cwd",
+		checkout,
+		"--branch",
+		branch,
+		"--base",
+		head.stdout.trim(),
+		"--no-focus",
+	]);
+	if (created.code !== 0) return failedCommand(created, ctx) as ConsultationHandoffOutcome;
+	const workspaceId = jsonResultField(created, "workspace", "workspace_id");
+	const paneId = jsonResultField(created, "root_pane", "pane_id");
+	const tabId = jsonResultField(created, "tab", "tab_id");
+	if (workspaceId !== null) {
+		ctx.onResource?.("workspace", workspaceId, true, "Consultation worktree workspace");
+		ctx.onResource?.("worktree", workspaceId, true, `Consultation worktree checkout for ${branch}`);
+	}
+	if (tabId !== null) ctx.onResource?.("tab", tabId, true, "Consultation worktree tab");
+	if (workspaceId === null || paneId === null || tabId === null)
+		return failed(
+			`herdr worktree create returned incomplete handles for branch ${branch}`,
+			ctx,
+		) as ConsultationHandoffOutcome;
+	return startAgentOrCleanUp(
+		name,
+		agent,
+		args,
+		prompt,
+		ctx,
+		{ paneId, tabId, workspaceId },
+		async () => {
+			await removeWorktree(checkout, branch, workspaceId, ctx);
+		},
+	) as Promise<ConsultationHandoffOutcome>;
+}
+
 export interface StoredWorkspaceHandoffOptions extends HandoffOptions {
 	ticket: Ticket;
 	choice: HandoffChoice;
@@ -361,6 +594,7 @@ async function startAgentInNewTab(
 	}
 	const paneId = jsonResultField(tab, "root_pane", "pane_id");
 	const tabId = jsonResultField(tab, "tab", "tab_id");
+	if (tabId !== null) ctx.onResource?.("tab", tabId, true, "Consultation tab");
 	if (paneId === null || tabId === null) {
 		return failed("herdr tab create returned no pane id", ctx);
 	}
@@ -699,15 +933,20 @@ async function startAgentAndPrompt(
 	if (started.code !== 0) {
 		return failedCommand(started, ctx);
 	}
-	// The agent is running: from here the ticket is handed-off even if the
-	// prompt fails. The operator can prompt the agent manually in herdr.
-	ctx.onStage?.("sending-prompt");
-	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
+	// The agent is running: record its handles before the next external
+	// command. From here the ticket is handed-off even if the prompt fails.
+	const sessionId =
+		jsonResultField(started, "agent", "session_id") ??
+		jsonResultField(started, "session", "session_id");
 	const startedAgent: StartedAgent = {
 		paneId: handles.paneId,
 		tabId: handles.tabId,
 		workspaceId: handles.workspaceId,
+		...(sessionId === null ? {} : { sessionId }),
 	};
+	ctx.onAgentStarted?.(startedAgent);
+	ctx.onStage?.("sending-prompt");
+	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
 	if (sent.code !== 0) {
 		await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
 		return {

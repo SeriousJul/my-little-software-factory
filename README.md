@@ -50,6 +50,43 @@ and it dims a control the app will not run in that state. Press `?` or
 catalogue, including controls for other modes, Quit, and the `Ctrl+C`
 emergency exit. Press `Esc`, `F1`, or `?` to close it.
 
+| Key              | What it does                                                            |
+| ---------------- | ----------------------------------------------------------------------- |
+| `j` / `k`        | Move the selection, or move the detail by its configured row speed      |
+| `Up` / `Down`    | Move the selection, or move the detail by its configured row speed      |
+| `PageUp` / `PageDown` | Select one list page, or move the detail one viewport with one shared row |
+| `Home` / `End`   | Select the first or last Ticket, or move the detail to its start or end |
+| `h` / `l`        | Switch focus between the list and detail                                |
+| `Left` / `Right` | Switch focus between the list and detail                                |
+| `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
+| `e`              | Open the override panel for the selected open ticket                    |
+| `a`              | Toggle auto-handoff mode for this session                              |
+| `r`              | Refresh ticket sources, or retry a failed Consultation                 |
+| `q`              | Quit                                                                    |
+| `v` / `t`        | Open Consultations / return to Tickets                                 |
+| `c`              | Open the Consultation launcher                                          |
+| `f`              | Cycle open, closed, and all Consultations                              |
+| `x`              | Close the selected Consultation                                         |
+| `d`              | Delete a selected closed Consultation                                   |
+| `?`              | Open the contextual key guide                                           |
+| `m`              | Open the full current Message view                                     |
+
+### Consultation controls
+
+The Consultation view keeps an independent list and Agent view. In the
+launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
+launches, `Shift+Enter` inserts a newline, and `Esc` cancels. `Enter` on an
+awaiting response opens the response editor. The editor stores its draft in
+SQLite, `Enter` submits it, `Shift+Enter` inserts a newline, and `Esc` leaves
+the draft in place. `End` follows the latest Agent output after scrolling.
+Closed history shows cleanup results and retained resources, including resources
+left by a Force-close.
+
+A blocked Agent uses Agent interaction mode instead of the response editor.
+The default exit key is `F12`; configure `interaction-exit-key` with a
+function key or `Ctrl` plus one letter. All other controls are shown in the
+in-app guide when the contextual Action bar is available.
+
 In the Ticket list, `j`/`k` and `Up`/`Down` move the selection, `l`/`Right`
 focuses the detail, `Enter` hands an open ticket off, opens the decision
 modal on an awaiting one, opens the missing modal on a ticket whose agent
@@ -100,7 +137,9 @@ controls the panel dispatches.
 
 Enter on an `awaiting` ticket opens the decision modal: a near-fullscreen
 modal that pops in over the app with a short fade and grow, one cell of
-margin on every side. Its border reads `Decision: <ticket title>`, and the
+margin on every side. In auto mode, and on an auto-close task type, the
+factory decides the ticket itself: Enter only reports that, and the modal
+stays closed. Its border reads `Decision: <ticket title>`, and the
 first row under the border names the context: repository, task type,
 agent, completion time.
 
@@ -298,14 +337,15 @@ work cycle.
 Auto-handoff mode decides without the operator, within the configured
 limits:
 
-- Automatic decisions apply to auto-close task types only, and they apply
-  in both modes. A settled turn of an auto-close type routes when its task
-  type has exactly one outgoing workflow edge with exactly one target, and
-  the parallel limit has room. At the per-ticket handoff limit the route
-  degrades to close. Zero or multiple edges close the cycle. A full
-  parallel limit leaves the ticket awaiting until a slot frees.
-- A task type that is not auto-close always leaves its settled turn
-  awaiting for the operator, in both modes.
+- With auto-handoff on, the control plane decides every settled turn
+  without the operator: it routes when the task type has exactly one
+  outgoing workflow edge with exactly one target, and the parallel limit
+  has room. At the per-ticket handoff limit the route degrades to close.
+  Zero or multiple edges close the cycle. A full parallel limit leaves the
+  ticket awaiting until a slot frees.
+- With auto-handoff off, the same decisions apply to auto-close task
+  types only. A task type that is not auto-close leaves its settled turn
+  awaiting for the operator.
 - Every eligible open ticket is handed off with the config defaults when the
   parallel limit allows it. The limit counts the live agents: the in-flight
   tickets in `handed-off` or `running` whose agent was alive in the latest
@@ -341,15 +381,19 @@ The config carries the defaults a handoff starts from (`default-agent`,
 (`max-parallel-agents`, default `2`), the herdr poll interval
 (`agent-poll-interval-seconds`, default `5`), the completion message line
 cap (`completion-message-lines`, default `200`), the per-ticket handoff limit
-(`max-handoffs-per-ticket`, default `10`), and detail scroll settings. The
-optional `[scroll]` table has `speed` (positive whole number, default `1`),
+(`max-handoffs-per-ticket`, default `10`), detail scroll settings,
+Consultation types, `attention-bell`, and `interaction-exit-key`. The optional
+`[scroll]` table has `speed` (positive whole number, default `1`),
 `acceleration` (finite number of 0 or more, default `0.8`), and
 `maximum-speed` (positive whole number, default `6`). `maximum-speed` must be
 at least `speed`. Missing scroll values use these defaults. Set acceleration
-to `0`, or maximum speed equal to speed, for linear wheel movement. The file
-also carries the workflow edges (`workflows`), agent types, task types,
-repository mappings, ticket sources, ordered task
-rules, and an optional `state-file`. A source has a unique name, a GitHub adapter kind
+to `0`, or maximum speed equal to speed, for linear wheel movement.
+Consultation types define an Agent, Environment, and one `{input}` template
+placeholder. The shipped defaults have no Consultation types; the local
+development config contains `grill-with-docs`. The file also carries the
+workflow edges (`workflows`), agent types, task types, repository mappings,
+ticket sources, ordered task rules, and an optional `state-file`. A source has
+a unique name, a GitHub adapter kind
 (`github-issues` or `github-pull-requests`), repositories, and a positive
 `refresh-interval-seconds`. Sources can use normal `gh` authentication, a
 literal token, a token environment variable, or a named authenticated account.
@@ -365,7 +409,7 @@ of the thinking row. Any other brace pair is a startup error, so a `{ticket-id}`
 cannot stay literal in the prompt an agent receives.
 
 A task type can set `auto-close = true`. For its completions the control
-plane decides without the operator, in both modes: exactly one outgoing
+plane decides without the operator even in manual mode: exactly one outgoing
 workflow edge hands off with that task while the parallel limit has room,
 any other edge count closes the cycle, and a route at the per-ticket
 handoff limit degrades to close.

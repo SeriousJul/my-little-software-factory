@@ -203,7 +203,7 @@ An unresolved attempt prevents another handoff of the same ticket after a crash.
 _Avoid_: pending ticket, handoff state
 
 **Auto-handoff mode**:
-The session-level mode in which the control plane hands off eligible open tickets by itself.
+The session-level mode in which the control plane hands off eligible open tickets by itself and decides their settled turns without the operator, within the configured limits.
 The config file carries the startup default; the UI toggle is session-only.
 _Avoid_: auto dispatch, dispatch mode
 
@@ -237,7 +237,7 @@ An edge can pin the agent type and environment of the next handoff.
 _Avoid_: pipeline, state machine
 
 **Auto-close**:
-A property of a task type. For its completions the control plane decides without the operator, in both modes: exactly one outgoing edge and a free parallel slot hand off with that task, a full parallel slot leaves the ticket awaiting, any other edge count closes the cycle, and a route at the ticket's handoff limit degrades to close.
+A property of a task type. For its completions the control plane decides without the operator even in manual mode: exactly one outgoing edge and a free parallel slot hand off with that task, a full parallel slot leaves the ticket awaiting, any other edge count closes the cycle, and a route at the ticket's handoff limit degrades to close.
 _Avoid_: auto complete, auto done
 
 **Completion decision**:

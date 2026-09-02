@@ -509,7 +509,7 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("a v1 database migrates to v2: done becomes open and the traces table appears", () => {
+	test("a v1 database migrates to v2: done becomes awaiting and the traces table appears", () => {
 		const path = statePath();
 		const db = new DatabaseSync(path);
 		db.exec("PRAGMA foreign_keys = ON");
@@ -534,7 +534,7 @@ describe("factory SQLite state", () => {
 
 		const state = openFactoryState(path);
 		const [ticket] = state.visibleTickets([], "implement");
-		expect(ticket).toEqual(expect.objectContaining({ state: "open" }));
+		expect(ticket).toEqual(expect.objectContaining({ state: "awaiting" }));
 		const tables = new DatabaseSync(path)
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
 			.all() as Array<{ name: string }>;
@@ -562,8 +562,17 @@ describe("factory SQLite state", () => {
 		});
 		state.close();
 
-		// Downgrade the database to v2: a trace without the turn log column.
+		// Downgrade the database to v2: a trace without the turn log column
+		// and no later Consultation tables.
 		const db = new DatabaseSync(path);
+		db.exec(`
+			DROP TABLE consultation_pending_responses;
+			DROP TABLE consultation_remaining_resources;
+			DROP TABLE consultation_resources;
+			DROP TABLE consultation_snapshots;
+			DROP TABLE consultation_turns;
+			DROP TABLE consultations;
+		`);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();

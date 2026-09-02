@@ -53,6 +53,8 @@ export type ControlKey =
 	| "r"
 	| "a"
 	| "m"
+	| "c"
+	| "v"
 	| "f1"
 	| "f2"
 	| "?"
@@ -77,6 +79,8 @@ export interface ControlContext {
 	refreshingSourceCount: number;
 	handoffActive: boolean;
 	messageTruncated: boolean;
+	/** Whether the config defines any [consultation-types.<name>] block. */
+	consultationTypesConfigured: boolean;
 }
 
 export interface ControlDefinition {
@@ -257,6 +261,33 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 70,
 		modes: [...baseModes],
 		availability: completionEligibility,
+	},
+	{
+		id: "consultations",
+		label: "Consultations",
+		keys: () => ["v"],
+		keyLabel: "v",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 60,
+		modes: [...baseModes],
+		availability: available,
+	},
+	{
+		id: "launch",
+		label: "Launch consultation",
+		keys: () => ["c"],
+		keyLabel: "c",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 50,
+		modes: [...baseModes],
+		availability: (context) =>
+			context.consultationTypesConfigured
+				? available()
+				: unavailable(
+						"no Consultation types configured; add [consultation-types.<name>] to the config file",
+					),
 	},
 	{
 		id: "override",

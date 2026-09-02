@@ -109,6 +109,8 @@ describe("the contextual Action bar", () => {
 					"↑↓/jk Move",
 					"→/l Detail",
 					"Enter Hand off",
+					"v Consultations",
+					"c Launch consultation",
 					"e Override",
 					"r Refresh",
 				]) {
@@ -120,8 +122,11 @@ describe("the contextual Action bar", () => {
 				// Available: the key wears the focus color, the label the text color.
 				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(COLORS.borderFocused));
 				expect(spanColorAt(setup, barRow, "Detail")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, barRow, "v ")).toEqual(rgb(COLORS.borderFocused));
+				expect(spanColorAt(setup, barRow, "Consultations")).toEqual(rgb(COLORS.text));
 				// Unavailable: the whole hint is dim.
 				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "c Launch consultation")).toEqual(rgb(COLORS.dim));
 			},
 			WIDTH,
 			HEIGHT,
@@ -251,13 +256,23 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Refresh, Override, Hand off, Detail, Move, and Help last.
+				// Refresh, Launch, Override, Consultations, Hand off, Detail,
+				// Move, and Help last.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
-						["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"],
+						[
+							"↑↓/jk Move",
+							"→/l Detail",
+							"Enter Hand off",
+							"v Consultations",
+							"c Launch consultation",
+							"e Override",
+							"r Refresh",
+							"? Help",
+						],
 					],
-					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "? Help"]],
+					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "v Consultations", "? Help"]],
 					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "? Help"]],
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 					[40, ["↑↓/jk Move", "→/l Detail", "? Help"]],
@@ -269,7 +284,14 @@ describe("the contextual Action bar", () => {
 					const bar = rows.at(-1) ?? "";
 					for (const hint of kept) expect(bar).toContain(hint);
 					expect(bar.trimEnd().endsWith("? Help")).toBe(true);
-					for (const gone of ["Detail", "Hand off", "Override", "Refresh"]) {
+					for (const gone of [
+						"Detail",
+						"Hand off",
+						"Consultations",
+						"Launch",
+						"Override",
+						"Refresh",
+					]) {
 						if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
 					}
 				}
@@ -289,6 +311,45 @@ describe("the contextual Action bar", () => {
 			120,
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("v opens the Consultations view, and c opens the launcher or names the missing types", async () => {
+		const runner = new FakeRunner();
+		// No Consultation types: c refuses on the Message line, and the
+		// launcher never opens.
+		await withApp(
+			async (setup) => {
+				await press(setup, "v", "the Consultations view", (f) => f.includes("❯ Consultations"));
+				await press(setup, "t", "the Ticket view", (f) => f.includes("[open]"));
+				await press(setup, "c", "the refusal", (f) =>
+					messageRowOf(f).includes(
+						"no Consultation types configured; add [consultation-types.<name>] to the config file",
+					),
+				);
+				expect(await settle(setup)).not.toContain("Consultation launcher");
+			},
+			120,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+		// With a type configured: c opens the launcher from the Ticket view.
+		await withApp(
+			async (setup) => {
+				await press(setup, "c", "the launcher", (f) => f.includes("Consultation launcher"));
+			},
+			120,
+			HEIGHT,
+			{
+				config: {
+					...DEFAULT_CONFIG,
+					consultationTypes: {
+						grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
+					},
+				},
+				runner,
+				initialTickets: SAMPLE_TICKETS,
+			},
 		);
 	});
 

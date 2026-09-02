@@ -936,6 +936,195 @@ describe("detail scroll configuration", () => {
 	});
 });
 
+describe("consultation configuration", () => {
+	const base = () => ({
+		"default-agent": "pi",
+		"default-environment": "live-worktree",
+		"default-task-type": "implement",
+		agents: {
+			pi: {
+				kind: "pi",
+				model: "--model {value}",
+				thinking: "--thinking {value}",
+				"thinking-values": ["low", "high"],
+			},
+		},
+		"task-types": { implement: { template: "x" } },
+	});
+
+	test("the defaults are zero types, the bell on, and f12 the exit key", () => {
+		const config = validateConfig(base());
+		expect(config.consultationTypes).toEqual({});
+		expect(config.attentionBell).toBe(true);
+		expect(config.interactionExitKey).toBe("f12");
+	});
+
+	test("a type references an agent, an environment, and optional settings", () => {
+		const config = validateConfig({
+			...base(),
+			"consultation-types": {
+				"grill-with-docs": {
+					agent: "pi",
+					environment: "live-worktree",
+					template: "/skill:grill-with-docs {input}",
+					model: "--model sonnet",
+					thinking: "high",
+				},
+			},
+		});
+		expect(config.consultationTypes["grill-with-docs"]).toEqual({
+			agent: "pi",
+			environment: "live-worktree",
+			template: "/skill:grill-with-docs {input}",
+			model: "--model sonnet",
+			thinking: "high",
+		});
+	});
+
+	test("an unknown agent reference is rejected", () => {
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": {
+						agent: "cursor",
+						environment: "worktree",
+						template: "{input}",
+					},
+				},
+			},
+			'consultation-types.grill-with-docs.agent: unknown agent "cursor"',
+		);
+	});
+
+	test("an unknown environment reference is rejected", () => {
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": {
+						agent: "pi",
+						environment: "container",
+						template: "{input}",
+					},
+				},
+			},
+			"consultation-types.grill-with-docs.environment: must be one of",
+		);
+	});
+
+	test("the template must hold {input} exactly once", () => {
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": { agent: "pi", environment: "worktree", template: "hello" },
+				},
+			},
+			"consultation-types.grill-with-docs.template: template must contain the {input} placeholder exactly once",
+		);
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": {
+						agent: "pi",
+						environment: "worktree",
+						template: "{input} again {input}",
+					},
+				},
+			},
+			"consultation-types.grill-with-docs.template: template must contain the {input} placeholder exactly once",
+		);
+	});
+
+	test("an unknown placeholder and an unmatched brace are rejected", () => {
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": {
+						agent: "pi",
+						environment: "worktree",
+						template: "{input} and {title}",
+					},
+				},
+			},
+			"consultation-types.grill-with-docs.template: unknown placeholder {title}",
+		);
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": {
+						agent: "pi",
+						environment: "worktree",
+						template: "{input} left open {",
+					},
+				},
+			},
+			"consultation-types.grill-with-docs.template: contains an unmatched brace",
+		);
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					"grill-with-docs": {
+						agent: "pi",
+						environment: "worktree",
+						template: "{input} and a stray }",
+					},
+				},
+			},
+			"consultation-types.grill-with-docs.template: contains an unmatched brace",
+		);
+	});
+
+	test("the exit key accepts function keys and ctrl plus one letter", () => {
+		for (const raw of ["f12", "F12", "f24", "ctrl-q", "Ctrl-Q"]) {
+			const config = validateConfig({ ...base(), "interaction-exit-key": raw });
+			expect(config.interactionExitKey).toBe(raw.toLowerCase().replace(/^ctrl-/, "ctrl+"));
+		}
+	});
+
+	test("the exit key rejects plain letters, punctuation, and out-of-range keys", () => {
+		for (const raw of ["q", "ctrl+.", "f0", "f25", "ctrl-x-y", "shift-f12"]) {
+			expectConfigError(
+				{ ...base(), "interaction-exit-key": raw },
+				"interaction-exit-key must be a function key",
+			);
+		}
+	});
+
+	test("attention-bell defaults on and keeps an explicit false", () => {
+		expect(validateConfig({ ...base(), "attention-bell": false }).attentionBell).toBe(false);
+		expect(validateConfig(base()).attentionBell).toBe(true);
+		expectConfigError({ ...base(), "attention-bell": "yes" }, "attention-bell: must be a boolean");
+	});
+
+	test("a Consultation config survives a TOML round-trip", () => {
+		const config = validateConfig({
+			...base(),
+			"consultation-types": {
+				"grill-with-docs": {
+					agent: "pi",
+					environment: "worktree",
+					template: "/skill:grill-with-docs {input}",
+					model: "--model sonnet",
+					thinking: "high",
+				},
+				grill: { agent: "pi", environment: "live-worktree", template: "{input}" },
+			},
+			"attention-bell": false,
+			"interaction-exit-key": "ctrl-q",
+		});
+		const roundTripped = validateConfig(parseToml(configToToml(config)));
+		expect(roundTripped.consultationTypes).toEqual(config.consultationTypes);
+		expect(roundTripped.attentionBell).toBe(false);
+		expect(roundTripped.interactionExitKey).toBe("ctrl+q");
+	});
+});
+
 describe("configToToml and persistConfig", () => {
 	test("the shipped defaults round-trip through TOML", () => {
 		const config = validateConfig(parseToml(configToToml(DEFAULT_CONFIG)));

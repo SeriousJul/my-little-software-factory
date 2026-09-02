@@ -278,12 +278,14 @@ function alignGuideRows(rows: GuideLine[], width: number): GuideLine[] {
 				keys: padToWidth(row.keys, keyWidth),
 				label: padToWidth(row.label, labelWidth),
 			};
+		// Truncate the raw reason: the row element adds the " - " prefix at
+		// render time, so a prefixed string here would render a double dash.
 		const room = Math.max(1, width - keyWidth - labelWidth - 4);
 		return {
 			...row,
 			keys: padToWidth(truncateToWidth(row.keys, keyWidth), keyWidth),
 			label: padToWidth(truncateToWidth(row.label, labelWidth), labelWidth),
-			reason: truncateToWidth(reason, room),
+			reason: row.reason === undefined ? undefined : truncateToWidth(row.reason, room),
 		};
 	});
 }

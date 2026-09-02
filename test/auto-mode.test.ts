@@ -1162,9 +1162,167 @@ describe("the auto dispatch", () => {
 				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
 				expect(ticketRow(frame)).toContain("[open]");
 				// No herdr handoff commands: only the agent list polls.
+				// No herdr handoff commands: only agent list polls plus the
+				// one-time repository validation for the launcher.
 				const commands = app.runner.commands();
 				expect(commands.length).toBeGreaterThan(0);
-				expect(commands.every((c) => c === "herdr agent list")).toBe(true);
+				expect(
+					commands.every(
+						(c) =>
+							c === "herdr agent list" ||
+							c.endsWith(" rev-parse --git-dir") ||
+							c.endsWith(" remote get-url origin"),
+					),
+				).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
+describe("the auto decision", () => {
+	test("auto mode routes a settled turn to the workflow target without the operator", async () => {
+		const review = { ...DEFAULT_CONFIG.taskTypes.review };
+		review.template += "\n\nPrevious work message:\n{previous-message}";
+		const app = seededApp("awaiting", {
+			autoHandoff: true,
+			taskTypes: { ...DEFAULT_CONFIG.taskTypes, review },
+		});
+		stubCheckout(app);
+		// The routed agent's pane is live from the first list: a later tick
+		// must not read it as missing and restart it.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-9",
+					tabId: "tab-9",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		// The stored workspace still holds: the route reuses it in a new tab.
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			// A fresh tab, distinct from the settled agent's tab-1.
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// No operator key: the loop routed the settled turn, and the
+				// trace carries the automatic decision.
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("auto-handed-off"),
+					"the automatic route",
+				);
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				// The row wears the workflow task's badge.
+				expect(ticketRow(frame)).toContain("[review]");
+				// The prompt carried the settled turn's last message, and the
+				// settled agent's tab was closed once the new agent started.
+				const commands = app.runner.commands();
+				const prompt = commands.find((c) => c.startsWith("herdr agent prompt"));
+				expect(prompt?.includes("The turn is done.")).toBe(true);
+				expect(commands).toContain("herdr tab close tab-1");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("auto mode closes a settled turn with no workflow route", async () => {
+		// The handoff limit equals the ticket's one handoff: the close is the
+		// limit degrade, and it keeps the open ticket from being re-handed.
+		const app = seededApp("awaiting", {
+			autoHandoff: true,
+			workflows: [],
+			maxHandoffsPerTicket: 1,
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[open]") && ticketRow(f).includes("handoff limit"),
+					"the auto close",
+				);
+				// The settled turn is auto-closed: the cycle ended, the trace
+				// carries the automatic decision, and the live tab was closed.
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				const commands = app.runner.commands();
+				expect(commands).toContain("herdr tab close tab-1");
+				// At the handoff limit, auto-handoff leaves the open ticket
+				// alone: no agent start ran.
+				expect(commands.filter((c) => c.startsWith("herdr agent start"))).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("enter on an awaiting ticket in auto mode reports the factory's decision", async () => {
+		const app = seededApp("awaiting", { autoHandoff: true, maxParallelAgents: 1 }, pairSuccess);
+		// The second ticket holds the single parallel seat with a live agent,
+		// so the route waits and the ticket stays awaiting.
+		const claim = app.state.claimHandoff(
+			secondIdentity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+			},
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		app.state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-6",
+			tabId: "tab-6",
+			workspaceId: "ws-6",
+		});
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-6",
+					tabId: "tab-6",
+					workspaceId: "ws-6",
+					agent: "watch-agent-turns",
+					status: "working",
+				},
+			]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				// The route waits for the free seat: the ticket stays awaiting.
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				// Enter does not open the decision modal: the factory decides.
+				await pressReturn(setup, "the factory's notice", (f) =>
+					f.includes("the factory decides this ticket"),
+				);
+				const frame = await settle(setup);
+				expect(frame).not.toContain("Decision:");
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
 			},
 			WIDTH,
 			HEIGHT,

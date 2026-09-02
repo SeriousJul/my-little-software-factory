@@ -31,7 +31,9 @@ const choice = {
  * - route auto-closes with one and only one edge: it routes while there is
  *   parallel room, and degrades to close at the handoff limit.
  * - split auto-closes with two edges: it is ambiguous, so it closes.
- * - implement and research never auto-close: they always wait for a human.
+ * - implement and research never auto-close. In auto mode the factory
+ *   still decides them: implement's one edge routes, and research, with
+ *   no route, closes. In manual mode both wait for a human.
  */
 const config: FactoryConfig = {
 	...DEFAULT_CONFIG,
@@ -88,7 +90,12 @@ function reader(
 	};
 }
 
-function agent(paneId: string, status = "working", sessionId = ""): HerdrAgent {
+function agent(
+	paneId: string,
+	status = "working",
+	sessionId = "",
+	stableSessionId?: string,
+): HerdrAgent {
 	return {
 		paneId,
 		tabId: "tab-1",
@@ -96,6 +103,7 @@ function agent(paneId: string, status = "working", sessionId = ""): HerdrAgent {
 		agent: "factory-implement-I_5",
 		status,
 		sessionId,
+		...(stableSessionId === undefined ? {} : { stableSessionId }),
 	};
 }
 
@@ -744,14 +752,14 @@ describe("the awaiting rule", () => {
 			}),
 		);
 		expect(intents).toHaveLength(0);
-		expect(coordinator.decideAwaiting("review", 0, 0)).toBe("close");
+		expect(coordinator.decideAwaiting("review", 0, 0, false)).toBe("close");
 		state.close();
 	});
 
 	test("an auto-close type with multiple routes closes: the route is ambiguous", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
 		settleFor(state, "github:github.com:I_5", "split");
-		expect(coordinator.decideAwaiting("split", 0, 0)).toBe("close");
+		expect(coordinator.decideAwaiting("split", 0, 0, false)).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -857,7 +865,9 @@ describe("the awaiting rule", () => {
 			turnLog: [{ kind: "text", text: "again settled" }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		expect(coordinator.decideAwaiting("route", 0, 2)).toBe("close");
+		expect(coordinator.decideAwaiting("route", 0, 2, true)).toBe("close");
+		// The degrade applies to the non-auto-close types in auto mode too.
+		expect(coordinator.decideAwaiting("implement", 0, 2, true)).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -894,7 +904,7 @@ describe("the awaiting rule", () => {
 		}
 		settleFor(state, "github:github.com:I_5", "route");
 		// Both slots are held by live agents: the route waits, it does not close.
-		expect(coordinator.decideAwaiting("route", 2, 0)).toBe("wait");
+		expect(coordinator.decideAwaiting("route", 2, 0, true)).toBe("wait");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -907,17 +917,56 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
-	test("a type that never auto-closes waits for the operator, in both modes", async () => {
-		for (const autoOn of [true, false]) {
-			const { state, intents, coordinator } = rig({ autoOn, agents: [] });
-			settleFor(state, "github:github.com:I_5", "research");
-			expect(coordinator.decideAwaiting("research", 0, 0)).toBe("wait");
+	test("a non-auto-close type waits for the operator in manual mode", async () => {
+		for (const taskType of ["research", "implement"]) {
+			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+			settleFor(state, "github:github.com:I_5", taskType);
+			expect(coordinator.decideAwaiting(taskType, 0, 0, false)).toBe("wait");
 			await coordinator.tick();
 			const [resting] = state.visibleTickets([], "implement");
 			expect(resting).toEqual(expect.objectContaining({ state: "awaiting" }));
 			expect(intents).toHaveLength(0);
 			state.close();
 		}
+	});
+
+	test("auto mode routes a non-auto-close type along its one and only edge", async () => {
+		const { state, intents, statuses, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "implement");
+		expect(coordinator.decideAwaiting("implement", 0, 0, true)).toBe("route");
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				ticketIdentity: "github:github.com:I_5",
+				previousMessage: "settled the turn",
+				choice: expect.objectContaining({ taskType: "polish" }),
+			}),
+		]);
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket.lastCompletion?.decision).toBe("auto-handed-off");
+		expect(
+			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to polish"),
+		).toBe(true);
+		state.close();
+	});
+
+	test("auto mode closes a non-auto-close type with no route", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "research");
+		expect(coordinator.decideAwaiting("research", 0, 0, true)).toBe("close");
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "open",
+				lastCompletion: expect.objectContaining({ decision: "auto-closed" }),
+			}),
+		);
+		// Under the handoff limit, the just-closed ticket is re-handed in the
+		// same cycle: the close-and-rehandoff loop the limit bounds.
+		expect(intents).toEqual([expect.objectContaining({ origin: "open" })]);
+		state.close();
 	});
 });
 
@@ -1094,5 +1143,115 @@ describe("the injectable clock", () => {
 		coordinator.stop();
 		expect(clock.pending).toBe(0);
 		state.close();
+	});
+});
+
+describe("Consultation observation identity", () => {
+	function openingConsultation(
+		state: FactoryState,
+		id: string,
+		paneId = "pane-1",
+		sessionId = "session-1",
+	) {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: `consultation-${id}`,
+		});
+		state.recordConsultationAgentHandles(id, {
+			paneId,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			sessionId,
+		});
+	}
+
+	test("keeps a restart-interrupted opening until explicit recovery", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-1", "idle", "", "session-1")],
+		});
+		try {
+			openingConsultation(state, "consultation-opening");
+			await coordinator.tick();
+			expect(state.consultation("consultation-opening")).toMatchObject({
+				state: "opening",
+				paneId: "pane-1",
+				warning: "Opening Agent verified; explicit recovery is required",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("rejects a reused pane whose stable session differs", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-1", "working", "", "replacement-session")],
+		});
+		try {
+			openingConsultation(state, "consultation-mismatch");
+			state.setConsultationAgent("consultation-mismatch", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "expected-session",
+			});
+			await coordinator.tick();
+			expect(state.consultation("consultation-mismatch")).toMatchObject({
+				state: "missing",
+				warning: "Agent session match is ambiguous",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("follows a uniquely matched moved session and retargets cleanup resources", async () => {
+		const moved = {
+			...agent("pane-new", "working", "", "session-1"),
+			tabId: "tab-new",
+			workspaceId: "ws-new",
+		};
+		const { state, coordinator } = rig({ agents: [moved] });
+		try {
+			openingConsultation(state, "consultation-moved");
+			state.setConsultationAgent("consultation-moved", {
+				paneId: "pane-old",
+				tabId: "tab-old",
+				workspaceId: "ws-old",
+				sessionId: "session-1",
+			});
+			for (const [kind, resourceId] of [
+				["pane", "pane-old"],
+				["tab", "tab-old"],
+				["workspace", "ws-old"],
+			] as const)
+				state.recordConsultationResource("consultation-moved", {
+					kind,
+					resourceId,
+					owned: true,
+					details: `owned ${kind} ${resourceId}`,
+				});
+			await coordinator.tick();
+			expect(state.consultation("consultation-moved")).toMatchObject({
+				paneId: "pane-new",
+				tabId: "tab-new",
+				workspaceId: "ws-new",
+			});
+			expect(state.consultationResources("consultation-moved")).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "pane", resourceId: "pane-new" }),
+					expect.objectContaining({ kind: "tab", resourceId: "tab-new" }),
+					expect.objectContaining({ kind: "workspace", resourceId: "ws-new" }),
+				]),
+			);
+		} finally {
+			state.close();
+		}
 	});
 });
