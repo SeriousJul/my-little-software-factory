@@ -66,8 +66,18 @@ describe("the Model list of an agent kind (ADR 0010)", () => {
 		].join("\n");
 	}
 
-	test("the pi kind queries pi's own CLI", () => {
-		expect(MODEL_LIST_COMMANDS.pi).toEqual(["pi", "--list-models"]);
+	test("the pi kind queries pi's own CLI and reads its own table", () => {
+		expect(MODEL_LIST_COMMANDS.pi?.argv).toEqual(["pi", "--list-models"]);
+		// The reader travels with the command: a kind's entry answers for both
+		// halves, so a second kind cannot be read by pi's parser by accident.
+		expect(
+			MODEL_LIST_COMMANDS.pi?.parse(
+				piTable("anthropic  claude-sonnet-4-5  200000  16384    true      true"),
+			),
+		).toEqual({
+			ok: true,
+			models: ["anthropic/claude-sonnet-4-5"],
+		});
 		expect(supportsModelList("pi")).toBe(true);
 		// A kind with no list command keeps the free-text Model row: no agent CLI
 		// runs for it.

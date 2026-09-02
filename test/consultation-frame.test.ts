@@ -1381,6 +1381,75 @@ describe("Consultation live-worktree launch through the UI", () => {
 		}
 	});
 
+	test("an unfit Model fails the launch before it resolves the Repository", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const inner = new FakeRunner();
+		stubLiveCheckout(inner, false);
+		stubLiveLaunchExisting(inner);
+		// pi reports a list the Consultation type's Model is not in.
+		inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const config: FactoryConfig = {
+			...liveConfigFor(),
+			consultationTypes: {
+				"grill-live": {
+					agent: "pi",
+					environment: "live-worktree",
+					model: "openai/gpt-4o",
+					template: "/grill {input}",
+				},
+			},
+		};
+		// The reads that resolve one Repository: the launcher makes them to verify
+		// its option, and a launch route resolves the Repository the same way, which
+		// clones a checkout that is missing.
+		const resolveReads = () =>
+			runner.commands().filter((command) => command.includes("rev-parse --git-dir")).length;
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "c", "the launcher to open", (f) =>
+						f.includes("Consultation launcher"),
+					);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					const readsBeforeLaunch = resolveReads();
+					setup.mockInput.pressTab();
+					setup.mockInput.pressTab();
+					setup.mockInput.typeText("review auth");
+					const failed = await pressEnter(setup, "the fit check to refuse the launch", (f) =>
+						f.includes("State: failed"),
+					);
+					expect(frameText(failed)).toContain('has no model "openai/gpt-4o"');
+					// The check runs ahead of the route's first external change: a
+					// live launch resolves its Repository, and a resolve clones a
+					// missing checkout, records the path, and then drives Herdr.
+					// None of that happened behind an unfit setting.
+					const joined = runner.commands().join("\n");
+					expect(resolveReads()).toBe(readsBeforeLaunch);
+					expect(joined).not.toContain("git clone");
+					expect(joined).not.toContain("herdr workspace");
+					expect(joined).not.toContain("herdr tab create");
+					expect(joined).not.toContain("agent start");
+					expect(joined).not.toContain("agent prompt");
+					// One Consultation start asks the Agent's CLI once, not once per step.
+					expect(inner.modelListCalls).toEqual(["pi"]);
+					const [consultation] = state.consultations("open");
+					expect(consultation.state).toBe("failed");
+					expect(consultation.paneId).toBeNull();
+				},
+				WIDTH,
+				30,
+				{ state, runner, config, home },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("a dirty live checkout warns but never blocks the launch", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const inner = new FakeRunner();

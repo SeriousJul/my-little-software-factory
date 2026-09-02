@@ -52,8 +52,8 @@ export function truncateToWidth(text: string, width: number): string {
  * The override panel's Model row uses this for a value whose start repeats
  * across the list: a real agent list carries one long provider in front of
  * many models, so a clip that keeps the head shows the same text for two
- * different choices. On the installed pi runtime's 54-model list, a 30-cell
- * head clip leaves 18 distinct values and a tail clip leaves 45. The tail is
+ * different choices. On the installed pi runtime's 53-model list, a 30-cell
+ * head clip leaves 17 distinct values and a tail clip leaves 45. The tail is
  * what tells them apart. A leading ellipsis marks the cut and costs one cell,
  * and the clip stays on grapheme boundaries.
  */

@@ -43,6 +43,7 @@ import {
 } from "../domain/ticket.ts";
 import {
 	baseChoice,
+	checkConsultationStart,
 	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
@@ -70,7 +71,12 @@ import {
 	errorMessage,
 	supportsModelList,
 } from "../runner.ts";
-import { resolveSettings, type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
+import {
+	resolveEnvironment,
+	resolveSettings,
+	type TaskProfileStart,
+	taskProfilesOf,
+} from "../setting-resolution.ts";
 import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
@@ -957,7 +963,9 @@ export function App({
 		});
 		const choice = baseChoice(
 			routed.agentType,
-			edge.environment ?? configRef.current.defaultEnvironment,
+			// The same question the panel asks, through the same helper, so a
+			// route that starts without a panel cannot read the pin differently.
+			resolveEnvironment(configRef.current, edge.environment),
 			target,
 			routed.model,
 			routed.thinking,
@@ -989,6 +997,17 @@ export function App({
 			consultationOperationQueues.current,
 			consultation.repository.identity,
 			async () => {
+				// The setting fit check (ADR 0010) is this route's first step, before
+				// its first external change: a live consultation resolves its
+				// repository here, and a resolve can clone one. The verdict rides
+				// into the start, so the Agent's Model list answers one query per
+				// Consultation.
+				const startCheck = await checkConsultationStart({
+					consultation,
+					config: configRef.current,
+					runner: commandRunner,
+				});
+				if (!startCheck.ok) return { status: "failed" as const, reason: startCheck.reason };
 				let resolvedRepository: ResolvedRepository | undefined;
 				if (consultation.environment === "live-worktree") {
 					onStage("resolving-repository");
@@ -1032,6 +1051,7 @@ export function App({
 					runner: commandRunner,
 					home: homeDir,
 					onStage,
+					startCheck,
 					resolvedRepository,
 					onRepositoryResolved: (path) =>
 						state.setConsultationRepositoryPath(consultation.id, path),

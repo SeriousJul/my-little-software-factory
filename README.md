@@ -116,14 +116,18 @@ so the panel shows what the handoff will run on.
 The Model row offers the selected agent's own Model list (ADR 0010). It is a
 list row that also takes type-ahead: every typed letter extends the typed
 text, and the row's value jumps to the first model whose whole value contains
-that text, case-insensitively. The typed text is never displayed; the jumping
-value is the feedback. Typing accumulates until the operator selects with the
-arrows, clears with `Backspace`, or leaves the row. While the control plane
-fetches the list the row shows `(loading...)` and takes no input. When the
-agent's kind reports no list, or the query fails, the row is the standard
-single-line text field: typing, caret movement, selection, `Home` and `End`,
-word deletion, undo and redo, and bracketed terminal paste. A list the agent
-reports empty shows `(no models available)`.
+that text, case-insensitively. The panel's rule is a plain substring test,
+stricter than the pattern search the `pi --list-models` filter applies, which
+lets the matched letters sit apart from each other. The typed text is never
+displayed; the jumping value is the feedback. Typing accumulates until the
+operator selects with the arrows, clears with `Backspace`, or leaves the row.
+While the control plane fetches the list the row shows `(loading...)` and
+takes no input, and a value the fetch has not judged yet shows in the dim
+tone with the guide naming the wait. When the agent's kind reports no list, or
+the query fails, the row is the standard single-line text field: typing, caret
+movement, selection, `Home` and `End`, word deletion, undo and redo, and
+bracketed terminal paste. A list the agent reports empty shows
+`(no models available)`.
 
 The Thinking row is a list of the levels the selected agent declares, in the
 order it declares them, so the operator can never choose a level that agent
@@ -137,8 +141,10 @@ A row shows `(empty)` for an unset text value, `(unset)` for a list value the
 operator has not chosen, and `(loading...)` while the Model list is being
 fetched. A value that is set but not available for the current agent shows in
 the warning color, so a handoff that would fail is visible before it is
-confirmed. Switching the task type row re-derives the agent, model, and
-thinking rows from the new task type's profile while the operator has not
+confirmed; a waiting Model row is not judged, because its list has not
+arrived to judge it against. Switching the task type row re-derives the
+agent, model, and thinking rows from the new task type's profile while the
+operator has not
 touched each row, so the panel keeps showing what the handoff will run on; a
 touched row keeps its value. Switching the agent never re-derives the model:
 every setting resolves on its own chain. Clearing a Model or Thinking row
@@ -481,9 +487,9 @@ default-environment = "worktree"
 default-task-type = "implement"
 
 # The model a handoff starts on when its Task profile names none. It is
-# passed through the resolved agent's model template, and it reaches an
-# agent that maps no model setting at all. Omitted: the agent's own default.
-# It is checked at startup through every task profile that resolves it.
+# passed through the resolved agent's model template, so it never reaches
+# an agent that maps no model setting at all. Omitted: the agent's own
+# default. It is checked at startup through every task profile that resolves it.
 default-model = "anthropic/claude-sonnet-4-5"
 
 # The SQLite state file. A relative path resolves against the directory

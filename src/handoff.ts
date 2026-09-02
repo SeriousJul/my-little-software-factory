@@ -229,10 +229,48 @@ export async function handOffTicket(
 }
 
 /**
- * The options of a workflow handoff or a restart: the stored workspace of
- * the ticket's previous handoff, the tab to close once the new agent has
- * started, and the last captured message the prompt carries.
+ * What the pre-flight of a Consultation start answers (ADR 0010). A pass
+ * carries the Agent record the start steps need, so the check and the start
+ * read the config once.
  */
+export type ConsultationStartCheck =
+	| { ok: true; agent: FactoryConfig["agents"][string] }
+	| { ok: false; reason: string };
+
+/**
+ * The pre-flight of a Consultation start: the record checks and the setting fit
+ * check.
+ *
+ * A launch route resolves its repository, and a resolve can clone a repository,
+ * before it reaches `handOffConsultation`, so the route runs this first: an
+ * unfit model or thinking level must leave no checkout behind. The verdict
+ * rides into the start, so the Agent's Model list answers one query per
+ * Consultation rather than one per step.
+ */
+export async function checkConsultationStart({
+	consultation,
+	config,
+	runner,
+}: {
+	consultation: Consultation;
+	config: FactoryConfig;
+	runner: CommandRunner;
+}): Promise<ConsultationStartCheck> {
+	const agent = config.agents[consultation.agentType];
+	if (agent === undefined)
+		return { ok: false, reason: `unknown agent type: ${consultation.agentType}` };
+	if (consultation.environment === "container")
+		return { ok: false, reason: "the container environment is reserved and not yet built" };
+	const fit = await checkSettingFit({
+		agentType: consultation.agentType,
+		agent,
+		model: consultation.model,
+		thinking: consultation.thinking,
+		runner,
+	});
+	return fit.ok ? { ok: true, agent } : { ok: false, reason: fit.reason };
+}
+
 /** A durable Consultation uses the same Herdr and repository boundary as a Handoff. */
 export interface ConsultationHandoffOptions extends HandoffOptions {
 	consultation: Consultation;
@@ -241,6 +279,12 @@ export interface ConsultationHandoffOptions extends HandoffOptions {
 	onRepositoryResolved?: (path: string) => void;
 	/** A resolution already made by the serialized live safety operation. */
 	resolvedRepository?: ResolvedRepository;
+	/**
+	 * The pre-flight the launch route ran before its first external change.
+	 * A start that carries one is not checked again here; a start that carries
+	 * none is, so no path reaches the Agent unchecked.
+	 */
+	startCheck?: ConsultationStartCheck;
 }
 
 export type ConsultationHandoffOutcome =
@@ -264,20 +308,11 @@ export async function handOffConsultation({
 	onAgentStarted,
 	onRepositoryResolved,
 	resolvedRepository,
+	startCheck,
 }: ConsultationHandoffOptions): Promise<ConsultationHandoffOutcome> {
-	const agent = config.agents[consultation.agentType];
-	if (agent === undefined)
-		return { status: "failed", reason: `unknown agent type: ${consultation.agentType}` };
-	if (consultation.environment === "container")
-		return { status: "failed", reason: "the container environment is reserved and not yet built" };
-	const fit = await checkSettingFit({
-		agentType: consultation.agentType,
-		agent,
-		model: consultation.model,
-		thinking: consultation.thinking,
-		runner,
-	});
-	if (!fit.ok) return { status: "failed", reason: fit.reason };
+	const check = startCheck ?? (await checkConsultationStart({ consultation, config, runner }));
+	if (!check.ok) return { status: "failed", reason: check.reason };
+	const agent = check.agent;
 	if (resolvedRepository === undefined) onStage?.("resolving-repository");
 	const resolved =
 		resolvedRepository === undefined
@@ -456,6 +491,11 @@ async function startConsultationWorktree(
 	) as Promise<ConsultationHandoffOutcome>;
 }
 
+/**
+ * The options of a workflow handoff or a restart: the stored workspace of
+ * the ticket's previous handoff, the tab to close once the new agent has
+ * started, and the last captured message the prompt carries.
+ */
 export interface StoredWorkspaceHandoffOptions extends HandoffOptions {
 	ticket: Ticket;
 	choice: HandoffChoice;

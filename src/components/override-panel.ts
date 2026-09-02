@@ -92,8 +92,8 @@ export interface AgentModelList {
 type RowKey = keyof HandoffChoice;
 /** The rows whose value the operator can clear to leave the setting to the agent. */
 type ClearKey = "model" | "thinking";
-/** The rows a task type switch re-derives from its profile. */
-type DerivedKey = "agentType" | "model" | "thinking";
+/** The rows a task type switch re-derives from its profile: the list rows that set a value. */
+type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
 
 interface PanelRow {
 	label: string;
@@ -140,7 +140,13 @@ const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
 const CHOICE_HINT = "↑↓/jk move ←→/hl cycle ⌫ clear ↵/esc";
 /** The Model list row: typing jumps the value, the arrows take a match. */
 const MODEL_HINT = "↑↓/tab move type jumps ←→ cycle ⌫ clear";
-const PENDING_HINT = LIST_HINT;
+/**
+ * The row that waits for its agent's Model list. Only the movement keys and
+ * confirm and cancel reach it, and the guide says why: the loading marker is
+ * how the row tells an operator that a value filling its column is a value the
+ * panel has not judged yet, not a row that works.
+ */
+const PENDING_HINT = "↑↓/jk move (loading...) ↵/esc";
 const HINT_WIDTH = Math.max(
 	widthOf(LIST_HINT),
 	widthOf(TEXT_HINT),
@@ -227,10 +233,13 @@ function typedChar(key: { name: string; sequence?: string }): string | null {
 }
 
 /**
- * The first model whose whole value holds the typed text, case-insensitive:
- * the same matching the pi `--list-models` search applies.
+ * The first model whose whole value holds the typed text, case-insensitive.
+ *
+ * A plain substring test, and so stricter than the pattern search `pi
+ * --list-models` applies, which lets the matched letters sit apart from each
+ * other. A run that finds nothing here leaves the row's value where it is.
  */
-export function typeAheadMatch(options: readonly string[], typed: string): string | undefined {
+function typeAheadMatch(options: readonly string[], typed: string): string | undefined {
 	const needle = typed.toLowerCase();
 	return options.find((option) => option.toLowerCase().includes(needle));
 }
@@ -355,9 +364,9 @@ export function OverridePanel({
 		});
 	};
 
-	const touch = (key: RowKey) => {
-		if (key === "environment" || key === "taskType") return;
-		touchedRef.current[key as DerivedKey] = true;
+	/** Record that the operator set one of the rows a task type switch re-derives. */
+	const touch = (key: DerivedKey) => {
+		touchedRef.current[key] = true;
 	};
 
 	/** Backspace on a Model or Thinking row: leave the setting to the agent. */
@@ -648,22 +657,30 @@ function rowElement(
 	// A list row, or the row that waits for one. An unset value shows a dim
 	// hint, never a blank; a value the current agent cannot run shows the value
 	// itself in the warning color, because the handoff would fail on it.
-	const options = r.options ?? [];
 	const unset = value === "";
-	const unavailable = !unset && !options.includes(value);
+	// The waiting row is decided before the availability check: it holds no
+	// list to compare the value against, so a model the config resolved
+	// correctly must not read as a handoff that would fail. The row shows that
+	// value in the dim tone the panel uses for a setting it cannot yet confirm.
+	const pending = r.kind === "pending";
+	const unavailable = !pending && !unset && !(r.options ?? []).includes(value);
 	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
 	const color = unavailable
 		? COLORS.statusWarning
-		: unset || r.kind === "pending"
+		: unset || pending
 			? COLORS.dim
 			: selected
 				? COLORS.textBright
 				: COLORS.text;
+	// The tail clip marks a cut-off value with "…", so it belongs to a value
+	// alone. A hint that does not fit keeps its front like every other row
+	// text, and never carries a marker that claims it is a truncated name.
+	const clipValue = r.clipTail === true && !unset;
 	children.push(
 		createElement(
 			"text",
 			{ width: geometry.valueWidth, fg: color },
-			r.clipTail === true
+			clipValue
 				? truncateTailToWidth(text, geometry.valueWidth)
 				: truncateToWidth(text, geometry.valueWidth),
 		),

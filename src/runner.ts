@@ -46,24 +46,37 @@ export interface CommandRunner {
 }
 
 /**
- * The agent kinds whose own CLI reports a Model list, and the command that
- * prints it (ADR 0010). A kind outside this map has no list: the override
- * panel keeps its free-text Model row, and the handoff fit check skips the
- * model for it. A declarative per-agent list command is the follow-up this
- * map is built for.
+ * One agent kind's Model list query: the command that prints the list, and
+ * the reader of the table that command prints.
  */
-export const MODEL_LIST_COMMANDS: Readonly<Record<string, readonly string[]>> = {
-	pi: ["pi", "--list-models"],
+export interface ModelListQuery {
+	argv: readonly string[];
+	parse: (stdout: string) => ModelListResult;
+}
+
+/**
+ * The agent kinds whose own CLI reports a Model list (ADR 0010). Each entry
+ * carries both halves of one kind's contract: a second kind brings its own
+ * reader with its own command, so a table format cannot be applied to the
+ * wrong CLI. A kind outside this map has no list: the override panel keeps its
+ * free-text Model row, and the handoff fit check skips the model for it. A
+ * declarative per-agent list command is the follow-up this map is built for.
+ */
+export const MODEL_LIST_COMMANDS: Readonly<Record<string, ModelListQuery>> = {
+	pi: {
+		argv: ["pi", "--list-models"],
+		parse: (stdout) => parsePiModelList(stdout, "pi"),
+	},
 };
 
-/** The argv of one kind's model list command, or undefined when it has none. */
-export function modelListCommand(kind: string): readonly string[] | undefined {
+/** The Model list query of one agent kind, or undefined when it has none. */
+export function modelListQuery(kind: string): ModelListQuery | undefined {
 	return Object.hasOwn(MODEL_LIST_COMMANDS, kind) ? MODEL_LIST_COMMANDS[kind] : undefined;
 }
 
 /** True when the agent kind's CLI can report a Model list. */
 export function supportsModelList(kind: string): boolean {
-	return modelListCommand(kind) !== undefined;
+	return modelListQuery(kind) !== undefined;
 }
 
 /** Give a command ten minutes; handoffs clone repositories. */
@@ -139,11 +152,11 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
  * a reason the caller shows or degrades around.
  */
 async function listModelsFor(runner: CommandRunner, kind: string): Promise<ModelListResult> {
-	const argv = modelListCommand(kind);
-	if (argv === undefined) {
+	const query = modelListQuery(kind);
+	if (query === undefined) {
 		return { ok: false, reason: `the agent kind "${kind}" has no model list command` };
 	}
-	const [command, ...args] = argv;
+	const [command, ...args] = query.argv;
 	const result = await runner.run(command, args);
 	if (result.code !== 0) {
 		return {
@@ -151,7 +164,7 @@ async function listModelsFor(runner: CommandRunner, kind: string): Promise<Model
 			reason: `${command} ${args.join(" ")} failed: ${commandFailureText(result)}`,
 		};
 	}
-	return parsePiModelList(result.stdout, command);
+	return query.parse(result.stdout);
 }
 
 /** The fixed right-hand columns after the model: context, max-out, thinking, images. */
