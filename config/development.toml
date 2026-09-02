@@ -3,6 +3,15 @@ state-file = ".factory-development.sqlite"
 default-agent = "pi"
 default-environment = "worktree"
 default-task-type = "implement"
+attention-bell = true
+interaction-exit-key = "f12"
+auto-handoff = false
+max-parallel-agents = 2
+agent-poll-interval-seconds = 5
+completion-message-lines = 200
+max-handoffs-per-ticket = 10
+workflows = []
+repos = {}
 
 [scroll]
 speed = 1
@@ -60,6 +69,7 @@ Labels: {labels}
 
 Description:
 {description}'''
+auto-close = false
 
 [task-types.review]
 template = '''
@@ -97,6 +107,7 @@ Labels: {labels}
 
 Description:
 {description}'''
+auto-close = false
 
 [task-types.rework]
 template = '''
@@ -125,6 +136,7 @@ Labels: {labels}
 
 Description:
 {description}'''
+auto-close = false
 
 [task-types.merge]
 thinking = "low"
@@ -149,18 +161,21 @@ Labels: {labels}
 
 Description:
 {description}'''
+auto-close = false
 
 [[sources]]
 name = "factory-issues"
 kind = "github-issues"
 refresh-interval-seconds = 60
 repositories = ["SeriousJul/my-little-software-factory"]
+host = "github.com"
 
 [[sources]]
 name = "factory-pull-requests"
 kind = "github-pull-requests"
 refresh-interval-seconds = 60
 repositories = ["SeriousJul/my-little-software-factory"]
+host = "github.com"
 
 [[task-rules]]
 task-type = "rework"

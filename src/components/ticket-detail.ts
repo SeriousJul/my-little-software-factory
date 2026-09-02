@@ -1,5 +1,5 @@
 /** The native, scrollable source and factory detail for the selected ticket. */
-import type { MouseEvent, ScrollBoxRenderable } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import {
 	forwardRef,
@@ -13,6 +13,7 @@ import {
 import type { ScrollConfig } from "../config.ts";
 import type { Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry } from "./geometry.ts";
+import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS, STATE_COLORS, stateBadge, taskTypeColor, ticketTaskType } from "./theme.ts";
 
@@ -310,32 +311,27 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		};
 	}, [onFocus]);
 
-	const handleMouse = (event: MouseEvent) => {
-		if (!activeRef.current) {
+	const handleMouse = paneMouse({
+		active: () => activeRef.current,
+		onFocus,
+		onWheel: (direction, event) => {
+			const box = scrollboxRef.current;
+			if (box === null) return;
+			const maxScroll = Math.max(0, box.scrollHeight - box.viewport.height);
+			const canMove = direction === "up" ? box.scrollTop > 0 : box.scrollTop < maxScroll;
+			const rows = wheelRows(scrollRef.current, burstRef.current, direction, Date.now(), canMove);
+			// OpenTUI supplies the event delta. Convert the desired whole-row
+			// step to its multiplier so terminals that report a larger delta
+			// stay sane.
+			multiplierRef.current = rows / Math.max(1, event.scroll?.delta ?? 1);
+		},
+		onWheelBlocked: () => {
 			// The native handler runs after this listener. A zero multiplier
-			// keeps a wheel event below a modal inert.
+			// keeps a blocked wheel turn inert: shifted, horizontal, or a
+			// modal above the panes.
 			multiplierRef.current = 0;
-			return;
-		}
-		if (event.type !== "scroll") {
-			onFocus();
-			return;
-		}
-		const direction = event.scroll?.direction;
-		if (event.modifiers.shift || (direction !== "up" && direction !== "down")) {
-			multiplierRef.current = 0;
-			return;
-		}
-		onFocus();
-		const box = scrollboxRef.current;
-		if (box === null) return;
-		const maxScroll = Math.max(0, box.scrollHeight - box.viewport.height);
-		const canMove = direction === "up" ? box.scrollTop > 0 : box.scrollTop < maxScroll;
-		const rows = wheelRows(scrollRef.current, burstRef.current, direction, Date.now(), canMove);
-		// OpenTUI supplies the event delta. Convert the desired whole-row step
-		// to its multiplier so terminals that report a larger delta stay sane.
-		multiplierRef.current = rows / Math.max(1, event.scroll?.delta ?? 1);
-	};
+		},
+	});
 
 	const scrollbarOptions = {
 		visible: reserveGutter,
@@ -358,6 +354,12 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			title: focused ? "❯ Detail" : "  Detail",
 			border: true,
 			borderColor: focused ? COLORS.borderFocused : COLORS.border,
+			// A left click gives this scroll box OpenTUI's own focus, and a box
+			// that holds it paints its border with focusedBorderColor instead of
+			// borderColor. That focus outlives the app's pane focus, so the border
+			// would stay blue on a deactivated pane. Pane focus is app state; both
+			// border colors follow it.
+			focusedBorderColor: focused ? COLORS.borderFocused : COLORS.border,
 			// At normal widths the detail keeps one padding cell around text.
 			// At tiny widths, yield right then left padding before the only text
 			// column. The gutter has already yielded there.

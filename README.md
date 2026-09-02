@@ -367,46 +367,364 @@ open with its cycle number incremented.
 
 ## Configuration
 
-The config lives at `~/.config/factory/config.toml`. A missing file yields
+The config lives at `~/.config/factory/config.toml`, or at the path the
+`--config` flag names: `factory [--config <path>]`. A missing file yields
 the shipped defaults, so the control plane starts with no config at all, and
 the start says so before the UI takes over, with the path to put a file at.
 A file that does not parse or does not validate stops the control plane
-with a readable error before the UI starts: every key the control plane
-reads must be present, and every key it does not read is an error, so a
+with a readable error before the UI starts: a present file must carry every
+required key, and a key the control plane does not read is an error, so a
 typo surfaces at startup, not at handoff time.
 
-The config carries the defaults a handoff starts from (`default-agent`,
-`default-environment`, `default-task-type`), the auto-handoff startup value
-(`auto-handoff`, default `false`), the parallel limit
-(`max-parallel-agents`, default `2`), the herdr poll interval
-(`agent-poll-interval-seconds`, default `5`), the completion message line
-cap (`completion-message-lines`, default `200`), the per-ticket handoff limit
-(`max-handoffs-per-ticket`, default `10`), detail scroll settings,
-Consultation types, `attention-bell`, and `interaction-exit-key`. The optional
-`[scroll]` table has `speed` (positive whole number, default `1`),
-`acceleration` (finite number of 0 or more, default `0.8`), and
-`maximum-speed` (positive whole number, default `6`). `maximum-speed` must be
-at least `speed`. Missing scroll values use these defaults. Set acceleration
-to `0`, or maximum speed equal to speed, for linear wheel movement.
-Consultation types define an Agent, Environment, and one `{input}` template
-placeholder. The shipped defaults have no Consultation types; the local
-development config contains `grill-with-docs`. The file also carries the
-workflow edges (`workflows`), agent types, task types, repository mappings,
-ticket sources, ordered task rules, and an optional `state-file`. A source has
-a unique name, a GitHub adapter kind
-(`github-issues` or `github-pull-requests`), repositories, and a positive
-`refresh-interval-seconds`. Sources can use normal `gh` authentication, a
-literal token, a token environment variable, or a named authenticated account.
-The shipped defaults have no sources. `config/development.toml` configures the
-live development path for this repository through `--config`. A template's
-brace pairs are placeholders. Task types know `{repository}`, `{title}`,
-`{description}`, `{source-kind}`, `{external-key}`, `{source-url}`,
-`{labels}`, and `{previous-message}`. The last one is empty on a first
-handoff and carries the previous agent's last message on a workflow handoff.
-A task type can also set a `thinking` level. A handoff then
-starts on that level, and the override panel shows it as the starting value
-of the thinking row. Any other brace pair is a startup error, so a `{ticket-id}`
-cannot stay literal in the prompt an agent receives.
+A present file replaces the shipped defaults wholesale. An optional key the
+file omits takes the per-key default the key reference names, and that
+default is empty for lists and tables. The key reference marks each key
+required or optional.
+
+### Complete example
+
+The example below is one valid config. It sets every key the control plane
+reads, optional keys included, so the example and the key reference agree
+line for line. The values are illustrative.
+
+```toml
+# --- Handoff defaults ----------------------------------------------
+
+# The agent type a handoff starts with when the workflow edge does not
+# pin one. It must name an [agents.*] table.
+default-agent = "pi"
+
+# The environment a handoff starts with when the workflow edge does not
+# pin one. One of "live-worktree" or "worktree".
+default-environment = "worktree"
+
+# The task type of a handoff when no task rule matches.
+# It must name a [task-types.*] table.
+default-task-type = "implement"
+
+# The SQLite state file. A relative path resolves against the directory
+# of this config file. Omitted: $XDG_STATE_HOME/factory/state.sqlite,
+# else ~/.local/state/factory/state.sqlite.
+state-file = "factory.sqlite"
+
+# --- Auto-handoff and limits -----------------------------------------
+
+# Start in auto-handoff mode. The a key toggles it per session.
+auto-handoff = false
+
+# The in-flight agents the control plane keeps. 0 means unlimited.
+max-parallel-agents = 2
+
+# Seconds between herdr polls.
+agent-poll-interval-seconds = 5
+
+# Lines of the agent last message captured when a turn settles.
+completion-message-lines = 200
+
+# Handoffs per ticket after which auto-handoff stops dispatching it.
+max-handoffs-per-ticket = 10
+
+# --- UI ----------------------------------------------------------------
+
+# Ring the terminal bell when a Consultation settles.
+attention-bell = true
+
+# Exit Agent interaction mode. A function key f1 to f24, or ctrl plus
+# one letter, for example "f12" or "ctrl+e".
+interaction-exit-key = "f12"
+
+# The detail-pane scroll.
+[scroll]
+# Rows moved by one key step or one slow wheel event.
+speed = 1
+# Wheel-burst acceleration strength. 0 keeps wheel movement linear.
+acceleration = 0.8
+# Rows moved by one accelerated wheel event. At least speed.
+maximum-speed = 6
+
+# --- Agent types ---------------------------------------------------------
+
+# kind is the herdr agent kind. model and thinking are command-line
+# templates for the agent start and must contain {value}.
+# thinking-values lists the levels the override panel offers for this
+# agent. A Consultation thinking must be one of them when the list is set.
+[agents.pi]
+kind = "pi"
+model = "--model {value}"
+thinking = "--thinking {value}"
+thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+[agents.codex]
+kind = "codex"
+model = "--model {value}"
+thinking = "-c model_reasoning_effort={value}"
+
+[agents.claude]
+kind = "claude"
+model = "--model {value}"
+thinking = "--effort {value}"
+
+# --- Task types -----------------------------------------------------------
+
+# template is required. Placeholders: {repository}, {title},
+# {description}, {source-kind}, {external-key}, {source-url}, {labels},
+# {previous-message}. Any other brace pair is a startup error.
+# thinking is the level the handoff starts on.
+# auto-close lets the control plane decide the completions of this type
+# without the operator even in manual mode.
+[task-types.implement]
+template = '''
+Implement the following {source-kind}.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+thinking = "medium"
+auto-close = false
+
+[task-types.review]
+template = '''
+Review pull request {external-key}: {title}.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+auto-close = false
+
+[task-types.rework]
+template = '''
+Rework pull request {external-key}: {title}.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+auto-close = false
+
+[task-types.merge]
+template = '''
+Merge pull request {external-key}: {title}.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+thinking = "low"
+auto-close = true
+
+# --- Consultation types ----------------------------------------------------
+
+# agent names an [agents.*] table. environment is one of "live-worktree"
+# or "worktree". template contains {input} exactly once and no other
+# placeholder. model and thinking map through the agent's templates.
+[consultation-types.grill-with-docs]
+agent = "pi"
+environment = "live-worktree"
+template = "/skill:grill-with-docs {input}"
+model = "anthropic/claude-opus-4-6"
+thinking = "high"
+
+# --- Workflows ----------------------------------------------------------------
+
+# from and to name [task-types.*] tables. to is a non-empty list.
+# agent and environment pin the handoff the edge triggers.
+[[workflows]]
+from = "implement"
+to = ["review"]
+agent = "pi"
+environment = "worktree"
+
+[[workflows]]
+from = "review"
+to = ["merge", "rework"]
+
+[[workflows]]
+from = "rework"
+to = ["review"]
+
+# --- Repository mappings --------------------------------------------------------
+
+# Repository identity to checkout path. The identity is
+# <host>/<owner>/<name> in lowercase. A mapped path must hold a git
+# checkout of exactly that repository. A sibling clone writes its
+# mapping back here.
+[repos]
+"github.com/seriousjul/my-app" = "/home/seriousjul/src/my-app"
+
+# --- Ticket sources ----------------------------------------------------------------
+
+# name must be unique. kind is "github-issues" or
+# "github-pull-requests". filter is a GitHub search applied to the list.
+# auth takes exactly one of token, token-env, or account.
+# Omitted auth uses gh's current authentication.
+[[sources]]
+name = "my-app-issues"
+kind = "github-issues"
+refresh-interval-seconds = 60
+repositories = ["SeriousJul/my-app"]
+host = "github.com"
+filter = "label:factory"
+[sources.auth]
+# token = "ghp_a-literal-token"
+# account = "my-account"
+token-env = "GITHUB_TOKEN"
+
+[[sources]]
+name = "my-app-pull-requests"
+kind = "github-pull-requests"
+refresh-interval-seconds = 30
+repositories = ["SeriousJul/my-app"]
+host = "github.com"
+filter = "is:open label:factory"
+[sources.auth]
+account = "my-account"
+
+# --- Task rules ----------------------------------------------------------------------
+
+# Ordered. The first rule whose when table matches a ticket wins.
+# The set conditions in one when table must all hold. An empty when
+# table matches every ticket.
+[[task-rules]]
+task-type = "review"
+[task-rules.when]
+source-name = "my-app-pull-requests"
+source-kind = "github-pull-request"
+repository = "github.com/seriousjul/my-app"
+labels-all = ["ready"]
+labels-any = ["ready-for-review", "needs-work"]
+labels-none = ["do-not-process"]
+
+[[task-rules]]
+task-type = "implement"
+[task-rules.when]
+source-kind = "github-issue"
+```
+
+### Key reference
+
+**Top level.**
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `default-agent` | yes | - | The agent type a handoff starts with when the workflow edge does not pin one. It must name an `[agents.*]` table. |
+| `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
+| `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
+| `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
+| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it per session. |
+| `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
+| `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
+| `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
+| `max-handoffs-per-ticket` | no | `10` | Handoffs per ticket after which auto-handoff stops dispatching it. A manual handoff may pass the limit. |
+| `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
+| `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. |
+| `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
+| `agents` | yes | - | The agent types. At least one table. |
+| `task-types` | yes | - | The task types. At least one table. |
+| `consultation-types` | no | none | The Consultation patterns. |
+| `workflows` | no | none | The workflow edges. |
+| `repos` | no | none | The repository identity to checkout path mappings. |
+| `sources` | no | none | The ticket sources. `ticket-sources` is an alias for the same key; use one name, not both. |
+| `task-rules` | no | none | The ordered task rules. |
+
+**`[scroll]`** (optional table).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `speed` | no | `1` | Rows moved by one detail key step or one slow wheel event. A whole number of 1 or more. |
+| `acceleration` | no | `0.8` | Wheel-burst acceleration strength. A finite number of 0 or more. `0` keeps wheel movement linear. |
+| `maximum-speed` | no | `6` | Rows moved by one accelerated wheel event. A whole number of 1 or more, at least `speed`. Equal to `speed` also keeps wheel movement linear. |
+
+**`[agents.<name>]`** (one table per agent type).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `kind` | yes | - | The herdr agent kind, passed to the herdr agent start. |
+| `model` | no | - | The model command-line template. It must contain `{value}`. A Consultation may set a model only when the agent defines one. |
+| `thinking` | no | - | The thinking-level command-line template. It must contain `{value}`. |
+| `thinking-values` | no | - | The levels the override panel offers for this agent. A Consultation `thinking` must be one of them when the list is set. |
+
+**`[task-types.<name>]`** (one table per task type; names are one word).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `template` | yes | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
+| `thinking` | no | - | The level the handoff starts on. The override panel shows it as the starting value of the thinking row. |
+| `auto-close` | no | `false` | The control plane decides the completions of this type without the operator even in manual mode. |
+
+**`[consultation-types.<name>]`** (one table per Consultation type).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `agent` | yes | - | The agent type to start. It must name an `[agents.*]` table. |
+| `environment` | yes | - | The environment the agent runs in. One of `live-worktree` or `worktree`. |
+| `template` | yes | - | The opening prompt. It contains `{input}` exactly once and no other placeholder. |
+| `model` | no | - | The model, passed through the agent's model template. The agent must define one. |
+| `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values` when the list is set. |
+
+**`[[workflows]]`** (one table per workflow edge).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `from` | yes | - | The task type the edge routes from. |
+| `to` | yes | - | The task types the edge may start. A non-empty list. |
+| `agent` | no | - | The agent type the handoff the edge triggers runs on. |
+| `environment` | no | - | The environment the handoff the edge triggers runs in. One of `live-worktree` or `worktree`. |
+
+**`[repos]`** (a table, repository identity to checkout path).
+
+The identity is `<host>/<owner>/<name>` in lowercase, for example
+`"github.com/seriousjul/my-app"`. A mapped path must hold a git checkout of
+exactly that repository. See [Repository resolution](#repository-resolution)
+for the match rules and the sibling clone.
+
+**`[[sources]]`** (one table per ticket source).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `name` | yes | - | The source name. It must be unique, and it is what a rule's `source-name` matches. |
+| `kind` | yes | - | `github-issues` or `github-pull-requests`. |
+| `refresh-interval-seconds` | yes | - | The refresh interval. A positive number. |
+| `repositories` | yes | - | A non-empty list of `owner/name` strings. |
+| `host` | no | `github.com` | The GitHub host. |
+| `filter` | no | - | A GitHub search applied to the list. See the filter note below. |
+| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). |
+
+**`[[task-rules]]`** (one table per rule, in order).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `task-type` | yes | - | The task type the rule selects. It must name a `[task-types.*]` table. |
+| `when` | yes | - | The condition table. The set conditions must all hold. An empty table matches every ticket. |
+
+**`[task-rules.when]`** conditions (all optional; omitted conditions are ignored).
+
+| Key | Required | What it does |
+| --- | --- | --- |
+| `source-name` | no | The source `name`. |
+| `source-kind` | no | `github-issue` or `github-pull-request`. |
+| `repository` | no | The repository identity, for example `github.com/seriousjul/my-app`. |
+| `labels-all` | no | Every listed label must be present. Case-insensitive. |
+| `labels-any` | no | At least one listed label must be present. Case-insensitive. |
+| `labels-none` | no | No listed label may be present. Case-insensitive. |
+
+### Notes
 
 A task type can set `auto-close = true`. For its completions the control
 plane decides without the operator even in manual mode: exactly one outgoing
@@ -414,17 +732,25 @@ workflow edge hands off with that task while the parallel limit has room,
 any other edge count closes the cycle, and a route at the per-ticket
 handoff limit degrades to close.
 
-A `[[workflows]]` edge routes a completed task type to the next one. It
-names the `from` task type, the list of `to` task types it may start, and
-optionally pins the `agent` type and `environment` of the handoff it
-triggers. Repository mappings are
-the one section the control plane writes back: a sibling clone records its
-path there. The write-back is
-atomic: the config goes to a temp file in the same directory and the rename
-over the target is one step, so a crash leaves either the old file or the
-new one, never a truncated file the next start would reject. The write-back
-serializes the whole config, so operator comments in the file are dropped at
-the first write-back: the data round-trips, the comments do not.
+The `filter` is a GitHub search string. GitHub search applies `AND`, `OR`,
+and `NOT` to search text only, and it has no parenthesized grouping.
+Parentheses, and logical operators next to `label:`-style qualifiers, are
+rejected at startup, so a source never degrades to a healthy-but-empty list.
+
+Repository mappings are the one section the control plane writes back: a
+sibling clone records its path there. The write-back is atomic: the config
+goes to a temp file in the same directory and the rename over the target is
+one step, so a crash leaves either the old file or the new one, never a
+truncated file the next start would reject. The write-back serializes the
+whole config, so operator comments in the file are dropped at the first
+write-back: the data round-trips, the comments do not.
+
+The shipped defaults define the three agent types `pi`, `codex`, and
+`claude`, the four task types `implement`, `fix`, `review`, and `rework`,
+and two task rules for `ready-for-review` and `needs-work` pull requests.
+They have no sources and no Consultation types. `config/development.toml`
+in this repository configures the live development path through `--config`;
+it carries the `grill-with-docs` Consultation type.
 
 ## Shape
 

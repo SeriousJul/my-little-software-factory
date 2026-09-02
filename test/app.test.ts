@@ -27,6 +27,7 @@
  * own cleanup.
  */
 import { CliRenderEvents } from "@opentui/core";
+import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
 import { describe, expect, test, vi } from "vitest";
 import { COLORS, STATE_COLORS } from "../src/components/theme.ts";
@@ -37,6 +38,7 @@ import {
 	agentRowOf,
 	awaitFrame,
 	bootApp,
+	cellColors,
 	detailFocused,
 	detailPaneText,
 	expectStateBadges,
@@ -47,6 +49,7 @@ import {
 	markerRowOf,
 	mouseClick,
 	mouseDrag,
+	mousePress,
 	mouseWheel,
 	openPanel,
 	press,
@@ -222,6 +225,41 @@ describe("the control plane", () => {
 			const left = await pressArrow(setup, "left", "the list pane to take focus", listFocused);
 			expect(markerRowOf(left)).toBe(3);
 			expect(showsTicket(left, SAMPLE_TICKETS[1])).toBe(true);
+		});
+	});
+
+	test("a mouse click moves the pane focus and the borders follow", async () => {
+		await withApp(async (setup) => {
+			// The list box ends at half the terminal width; the detail box's
+			// left border sits one cell further right.
+			const detailX = Math.floor(WIDTH / 2);
+
+			// Click the detail pane: it takes the app focus and paints its
+			// border with the focused color; the list border relaxes.
+			await mouseClick(setup, detailX + 10, 5);
+			await awaitFrame(setup, detailFocused, "the detail pane to take click focus");
+			expect(cellColors(setup, detailX, 0).fg).toEqual(rgb(COLORS.borderFocused));
+			expect(cellColors(setup, 0, 0).fg).toEqual(rgb(COLORS.border));
+
+			// Click the list pane: the focus moves and the detail border
+			// follows. The first click also gave the detail's scroll box
+			// OpenTUI's own focus; the deactivated border must not keep the
+			// focused color.
+			await mouseClick(setup, 10, 5);
+			await awaitFrame(setup, listFocused, "the list pane to take click focus");
+			expect(cellColors(setup, 0, 0).fg).toEqual(rgb(COLORS.borderFocused));
+			expect(cellColors(setup, detailX, 0).fg).toEqual(rgb(COLORS.border));
+		});
+	});
+
+	test("a right press activates no pane: both panes share one mouse policy", async () => {
+		await withApp(async (setup) => {
+			// The detail pane once took focus on any mouse event. The shared
+			// policy activates only on a left press or a vertical wheel, so a
+			// right press over the detail changes nothing.
+			const before = setup.captureCharFrame();
+			await mousePress(setup, Math.floor(WIDTH / 2) + 10, 5, MouseButtons.RIGHT);
+			expect(await settle(setup)).toBe(before);
 		});
 	});
 
