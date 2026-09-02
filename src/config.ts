@@ -5,7 +5,12 @@ import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
-import { isThinkingLevel, type ThinkingLevel, thinkingLevelList } from "./domain/agent.ts";
+import {
+	isThinkingLevel,
+	type ThinkingLevel,
+	thinkingLevelList,
+	unsupportedThinkingLevel,
+} from "./domain/agent.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
@@ -604,7 +609,7 @@ function validateThinkingLevel(
 	const supported = agent.thinkingValues ?? [];
 	if (!supported.includes(value))
 		throw new ConfigError(
-			`config: ${where}: agent "${agentName}" does not support "${value}"; it supports: ${supported.join(", ")}`,
+			`config: ${where}: ${unsupportedThinkingLevel(agentName, value, supported)}`,
 		);
 	return value;
 }

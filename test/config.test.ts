@@ -686,7 +686,7 @@ describe("validateConfig", () => {
 		).not.toThrow();
 		expectConfigError(
 			{ ...base, "task-types": { t: { template: "x", thinking: "xhigh" } } },
-			'agent "pi" does not support "xhigh"',
+			'agent "pi" does not support the thinking level "xhigh"',
 		);
 		// The profile's agent owns the set once the profile names one: the
 		// level that pi supports is unfit for cx.
@@ -695,7 +695,7 @@ describe("validateConfig", () => {
 				...base,
 				"task-types": { t: { template: "x", agent: "cx", thinking: "high" } },
 			},
-			'agent "cx" does not support "high"',
+			'agent "cx" does not support the thinking level "high"',
 		);
 	});
 

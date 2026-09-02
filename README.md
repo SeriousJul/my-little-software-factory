@@ -119,14 +119,18 @@ text, and the row's value jumps to the first model whose whole value contains
 that text, case-insensitively. The panel's rule is a plain substring test,
 stricter than the pattern search the `pi --list-models` filter applies, which
 lets the matched letters sit apart from each other. The typed text is never
-displayed; the jumping value is the feedback. Typing accumulates until the
-operator selects with the arrows, clears with `Backspace`, or leaves the row.
+displayed; the jumping value is the feedback. A run that finds nothing is over,
+because a longer run can only match less, so the letter that found nothing
+starts a new run and the row keeps answering every letter. Typing accumulates
+until the operator selects with the arrows, clears with `Backspace` or
+`Delete`, or leaves the row.
 While the control plane fetches the list the row shows `(loading...)` and
 takes no input, and a value the fetch has not judged yet shows in the dim
 tone with the guide naming the wait. When the agent's kind reports no list, or
 the query fails, the row is the standard single-line text field: typing, caret
 movement, selection, `Home` and `End`, word deletion, undo and redo, and
-bracketed terminal paste. A list the agent reports empty shows
+bracketed terminal paste, and its guide ends with `(none)` or `(failed)` to say
+which cause sent it there. A list the agent reports empty shows
 `(no models available)`.
 
 The Thinking row is a list of the levels the selected agent declares, in the
@@ -369,6 +373,18 @@ a provider's auth while the control plane runs, and a stale list would hide a
 model the agent has just gained or offer one it has just lost. A kind whose
 CLI reports no list keeps the free-text Model row, and its model values are
 not checked at startup.
+
+The query carries its own short budget, not the handoff's ten minutes. It runs
+before the first frame at boot, on every override panel open and agent switch,
+and inside the observation cycle ahead of a handoff, so an agent CLI that starts
+and never answers has to fail into the no-list path in seconds. A refused list
+is the designed degrade; a hang is not.
+
+One Model list value is one argument cell. The start command passes the chosen
+model to the agent as a single argument, so the parser refuses a row whose
+value carries whitespace, and the argument builder substitutes a value inside
+its template token instead of splitting the result: a model name can never
+become an argument plus a stray positional the agent reads as its model.
 
 ### Repository resolution
 
@@ -861,8 +877,9 @@ it carries the `grill-with-docs` Consultation type.
 ## Shape
 
 - `src/factory.ts`: the entry module.
-  Checks the node version, loads and validates the config, boots the
-  renderer, and mounts the app.
+  Checks the node version, loads and validates the config, checks the config's
+  model values against what the agent runtimes report, opens the state, boots
+  the renderer, and mounts the app.
 - `src/runtime.ts`: the node version gate.
 - `src/config.ts`: config types, strict startup validation, state path
   resolution, and atomic TOML write-back.
@@ -878,14 +895,24 @@ it carries the `grill-with-docs` Consultation type.
   completion traces, completion decisions, handoff attempts, and the
   process lease.
 - `src/task-selection.ts`: ordered task-rule selection.
-- `src/domain/`: the Ticket type and the ticket state machine.
+- `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
+  profile of each task type, and the agent, model, and thinking one handoff
+  resolves to before an operator override replaces it.
+- `src/model-settings.ts`: the Model list checks (ADR 0010). The startup
+  validation of the config's model values, and the setting fit check every
+  agent start runs before its first external change.
+- `src/domain/`: the Ticket type and its state machine, the agent-side facts
+  every Agent type shares (the standard Thinking level set), and the handoff
+  environment kinds.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
   command sequence through herdr, starts the agent, and sends the prompt.
 - `src/repo.ts`: the repository resolution and the sibling clone.
 - `src/naming.ts`: the branch names and the herdr agent names.
 - `src/runner.ts`: the single egress for commands.
   Every external command goes through one `CommandRunner`, and the tests
-  inject a fake that records the calls.
+  inject a fake that records the calls. The runner also answers the Model list
+  query (ADR 0010): it maps an agent kind to the command that prints its list
+  and the reader of the table that command prints, and it never throws.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
   pane, the override panel, the shared action panel (the completion decision

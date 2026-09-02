@@ -25,6 +25,12 @@ export interface CommandResult {
 export interface CommandOptions {
 	env?: Record<string, string>;
 	secretEnv?: readonly string[];
+	/**
+	 * Kill this one command past this budget instead of the runner's own.
+	 * A read-only query carries a shorter budget than a handoff: see
+	 * `MODEL_LIST_TIMEOUT_MS`.
+	 */
+	timeoutMs?: number;
 }
 
 /**
@@ -79,8 +85,20 @@ export function supportsModelList(kind: string): boolean {
 	return modelListQuery(kind) !== undefined;
 }
 
-/** Give a command ten minutes; handoffs clone repositories. */
+/** Give a handoff command ten minutes; a handoff clones repositories. */
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Give a Model list query fifteen seconds, not the handoff's budget.
+ *
+ * The query is a read-only lookup the installed agent CLI answers in about
+ * half a second, and it runs on paths where a long silence reads as a hung
+ * control plane: before the first frame at boot, on every override panel open
+ * and agent switch, and inside the observation cycle ahead of a handoff. An
+ * agent CLI that starts but never answers must degrade to the no-list path
+ * the callers already handle, and in seconds. A refused list is the designed
+ * degrade; a hang is not.
+ */
+export const MODEL_LIST_TIMEOUT_MS = 15_000;
 /** Command output stays small (herdr JSON, git status lines). */
 const COMMAND_MAX_BUFFER = 10 * 1024 * 1024;
 
@@ -88,6 +106,11 @@ const COMMAND_MAX_BUFFER = 10 * 1024 * 1024;
 export interface ChildProcessRunnerOptions {
 	/** Kill a command that runs past this. Default: ten minutes. */
 	timeoutMs?: number;
+	/**
+	 * Kill a Model list query that runs past this. Default:
+	 * `MODEL_LIST_TIMEOUT_MS`.
+	 */
+	modelListTimeoutMs?: number;
 	/** Fail a command that produces more output than this. Default: 10 MB. */
 	maxBuffer?: number;
 }
@@ -102,9 +125,13 @@ export interface ChildProcessRunnerOptions {
  */
 export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}): CommandRunner {
 	const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+	const modelListTimeoutMs = options.modelListTimeoutMs ?? MODEL_LIST_TIMEOUT_MS;
 	const maxBuffer = options.maxBuffer ?? COMMAND_MAX_BUFFER;
 	const runner: CommandRunner = {
 		async run(command, args, options) {
+			// A per-command budget lets a read-only query fail in its own time
+			// while a handoff keeps its ten minutes.
+			const budget = options?.timeoutMs ?? timeoutMs;
 			try {
 				const result = await new Promise<{ code: number; stdout: string; stderr: string }>(
 					(resolve, reject) => {
@@ -113,7 +140,7 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
 							[...args],
 							{
 								encoding: "utf8",
-								timeout: timeoutMs,
+								timeout: budget,
 								maxBuffer,
 								env: options?.env === undefined ? process.env : { ...process.env, ...options.env },
 							},
@@ -135,11 +162,11 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
 				);
 				return result;
 			} catch (error) {
-				return commandFailure(command, error, timeoutMs, maxBuffer);
+				return commandFailure(command, error, budget, maxBuffer);
 			}
 		},
 		async listModels(kind) {
-			return listModelsFor(runner, kind);
+			return listModelsFor(runner, kind, modelListTimeoutMs);
 		},
 	};
 	return runner;
@@ -149,15 +176,21 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
  * Query one agent kind's own CLI for its Model list (ADR 0010).
  *
  * The never-throw contract of `run` carries over: every failure comes back as
- * a reason the caller shows or degrades around.
+ * a reason the caller shows or degrades around. The query carries its own
+ * short budget, so an agent CLI that never answers cannot hold the boot, the
+ * override panel, or a handoff for the handoff's own ten minutes.
  */
-async function listModelsFor(runner: CommandRunner, kind: string): Promise<ModelListResult> {
+async function listModelsFor(
+	runner: CommandRunner,
+	kind: string,
+	timeoutMs: number,
+): Promise<ModelListResult> {
 	const query = modelListQuery(kind);
 	if (query === undefined) {
 		return { ok: false, reason: `the agent kind "${kind}" has no model list command` };
 	}
 	const [command, ...args] = query.argv;
-	const result = await runner.run(command, args);
+	const result = await runner.run(command, args, { timeoutMs });
 	if (result.code !== 0) {
 		return {
 			ok: false,
@@ -176,10 +209,19 @@ const PI_MODEL_TABLE_MIN_COLUMNS = PI_MODEL_TABLE_TRAILING + 2;
  * The `pi --list-models` table, read from the right edge.
  *
  * The last four columns are fixed, so the model is the fifth column from the
- * end and the provider is everything before it: a provider name that carries
- * spaces still parses. The value form is the `provider/model` the pi
- * `--model` option takes, which is what makes a model id that already carries
- * a slash (a GGUF repo path, for one) resolve to the right provider.
+ * end and the provider is everything before it. The value form is the
+ * `provider/model` the pi `--model` option takes, which is what makes a model
+ * id that already carries a slash (a GGUF repo path, for one) resolve to the
+ * right provider.
+ *
+ * One value is one argument cell, and a table row that cannot honour that is
+ * refused. A start command carries a model as one argv cell, and the panel's
+ * type-ahead can only type letters, so a value with whitespace in it is a
+ * value no handoff can carry and no operator can search for. Because the
+ * parser reads a provider that spans two printed cells by joining them, that
+ * rule is also what keeps a mis-read row from passing as a model: a provider
+ * name never holds whitespace in a real table, so a row whose provider spans
+ * cells is a layout the reader does not know.
  *
  * The table can sit behind a preamble: a tool manager announcing the version
  * it selected, or any other line the spawned program writes first. Every line
@@ -220,7 +262,14 @@ export function parsePiModelList(stdout: string, command = "pi"): ModelListResul
 				`a row holds ${columns.length} columns, not at least ${PI_MODEL_TABLE_MIN_COLUMNS}`,
 			);
 		}
-		models.push(`${provider}/${model}`);
+		const value = `${provider}/${model}`;
+		if (/\s/.test(value)) {
+			// A provider that spans two printed cells, or a model the reader has
+			// mis-cut: the value could never reach the agent as one argument cell,
+			// so the whole table is refused rather than half-offered.
+			return unparseableModelTable(command, `a row's model value holds whitespace (${value})`);
+		}
+		models.push(value);
 	}
 	if (!header) {
 		return unparseableModelTable(command, "it printed no header row");

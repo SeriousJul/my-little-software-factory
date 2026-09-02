@@ -14,6 +14,7 @@
  *   open with a reason instead of dying inside the agent's terminal.
  */
 import type { AgentTypeConfig, FactoryConfig } from "./config.ts";
+import { unsupportedThinkingLevel } from "./domain/agent.ts";
 import type { CommandRunner, ModelListResult } from "./runner.ts";
 import { supportsModelList } from "./runner.ts";
 import { taskProfileOf } from "./setting-resolution.ts";
@@ -73,7 +74,7 @@ export async function validateConfiguredModels(
 		}
 		if (!list.models.includes(check.value)) {
 			errors.push(
-				`config: ${check.key}: agent "${check.agentType}" (${check.kind}) has no model "${check.value}": check the model id and its provider auth`,
+				`config: ${check.key}: ${unavailableModelMessage(check.agentType, check.kind, check.value)}`,
 			);
 		}
 	}
@@ -129,6 +130,18 @@ function configuredModelChecks(config: FactoryConfig): ModelCheck[] {
 export type SettingFit = { ok: true } | { ok: false; reason: string };
 
 /**
+ * The one readable sentence for a Model an Agent does not offer.
+ *
+ * Startup validation and the handoff fit check refuse the same thing, so they
+ * name it with the same words, and one wording change cannot drift them apart.
+ * The sentence carries the hint the ticket asks for: a model the runtime does
+ * not list is usually a wrong id or a provider nobody is authenticated to.
+ */
+export function unavailableModelMessage(agentType: string, kind: string, model: string): string {
+	return `agent "${agentType}" (${kind}) has no model "${model}": check the model id and its provider auth`;
+}
+
+/**
  * Check one handoff's settings against the resolved agent, before the handoff
  * touches anything outside the control plane.
  *
@@ -159,10 +172,7 @@ export async function checkSettingFit({
 	if (thinking !== "" && agent.thinking !== undefined) {
 		const supported: readonly string[] = agent.thinkingValues ?? [];
 		if (!supported.includes(thinking)) {
-			return {
-				ok: false,
-				reason: `agent "${agentType}" does not support the thinking level "${thinking}"; it supports: ${supported.join(", ")}`,
-			};
+			return { ok: false, reason: unsupportedThinkingLevel(agentType, thinking, supported) };
 		}
 	}
 	if (model === "" || agent.model === undefined || !supportsModelList(agent.kind)) {
@@ -171,10 +181,7 @@ export async function checkSettingFit({
 	const list = await runner.listModels(agent.kind);
 	if (!list.ok) return { ok: true };
 	if (!list.models.includes(model)) {
-		return {
-			ok: false,
-			reason: `agent "${agentType}" (${agent.kind}) has no model "${model}": check the model id and its provider auth`,
-		};
+		return { ok: false, reason: unavailableModelMessage(agentType, agent.kind, model) };
 	}
 	return { ok: true };
 }

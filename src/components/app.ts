@@ -464,7 +464,7 @@ export function App({
 			if (agent === undefined || agent.model === undefined || !supportsModelList(agent.kind)) {
 				// The kind reports no list: the row keeps the Text field, and no
 				// agent CLI runs for it.
-				settle({ status: "unavailable", reason: "this agent kind reports no model list" });
+				settle({ status: "unavailable", cause: "no-list" });
 				return;
 			}
 			settle({ status: "loading" });
@@ -474,12 +474,10 @@ export function App({
 					settle(
 						result.ok
 							? { status: "available", models: result.models }
-							: { status: "unavailable", reason: result.reason },
+							: { status: "unavailable", cause: "query-failed" },
 					),
 				)
-				.catch(() =>
-					settle({ status: "unavailable", reason: "the model list query did not answer" }),
-				);
+				.catch(() => settle({ status: "unavailable", cause: "query-failed" }));
 		},
 		[commandRunner],
 	);

@@ -26,3 +26,18 @@ export function thinkingLevelList(): string {
 export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 	return typeof value === "string" && LEVELS.includes(value);
 }
+
+/**
+ * The one readable sentence for a Thinking level an Agent type does not declare.
+ *
+ * Startup config validation and the handoff fit check both refuse the same
+ * thing, so they name it with the same words: one wording change cannot leave
+ * the operator reading two different complaints about one mistake.
+ */
+export function unsupportedThinkingLevel(
+	agentName: string,
+	value: string,
+	supported: readonly string[],
+): string {
+	return `agent "${agentName}" does not support the thinking level "${value}"; it supports: ${supported.join(", ")}`;
+}

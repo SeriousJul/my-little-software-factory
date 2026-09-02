@@ -611,6 +611,64 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	test("a workflow route resolves the target profile's model", async () => {
+		// Story 26, through the pinned herdr sequence: the route's model comes from
+		// the target task profile's chain, not from the handoff that just settled.
+		// A route that started on an empty model would be the bug ADR 0009 exists
+		// to remove.
+		const app = seededApp(
+			"awaiting",
+			{
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					review: {
+						...DEFAULT_CONFIG.taskTypes.review,
+						model: "anthropic/claude-review-4",
+					},
+				},
+			},
+			success,
+			"live-worktree",
+			"The turn is done.",
+			"opus-4",
+			"high",
+		);
+		stubCheckout(app);
+		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
+
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain("--model anthropic/claude-review-4");
+				expect(start).not.toContain("opus-4");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("each outgoing edge offers its own row, and the pinning shows on the row", async () => {
 		const app = seededApp("awaiting", {
 			workflows: [
@@ -1308,6 +1366,64 @@ describe("the auto decision", () => {
 				const prompt = commands.find((c) => c.startsWith("herdr agent prompt"));
 				expect(prompt?.includes("The turn is done.")).toBe(true);
 				expect(commands).toContain("herdr tab close tab-1");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an automatic route resolves the target profile's model, not the settled one", async () => {
+		// Story 25 and story 26 on the unattended path: the loop's route resolves
+		// agent, model, and thinking through the target task profile's chain, and
+		// its fit check reads the same resolved value the start carries.
+		const app = seededApp(
+			"awaiting",
+			{
+				autoHandoff: true,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					review: { ...DEFAULT_CONFIG.taskTypes.review, model: "anthropic/claude-review-4" },
+				},
+			},
+			success,
+			"live-worktree",
+			"The turn is done.",
+			// The model the settled handoff ran on: a route must not inherit it.
+			"opus-4",
+			"high",
+		);
+		stubCheckout(app);
+		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-9",
+					tabId: "tab-9",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("auto-handed-off"), "the automatic route");
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain("--model anthropic/claude-review-4");
+				// The settled handoff's own model never rides on the route.
+				expect(start).not.toContain("opus-4");
 			},
 			WIDTH,
 			HEIGHT,

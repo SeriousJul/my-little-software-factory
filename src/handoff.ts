@@ -1146,9 +1146,14 @@ function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
 
 /**
  * The setting arguments of a handoff: each chosen setting the agent type
- * maps is substituted into its argument template and split on whitespace
- * into argv. A setting left empty is ignored: no template, no arguments,
- * and the setting is left to the agent.
+ * maps is substituted into its argument template and split into argv. A
+ * setting left empty is ignored: no template, no arguments, and the setting
+ * is left to the agent.
+ *
+ * One setting value is one argv cell, whatever the value holds. That is the
+ * invariant the Model list is read against: a value the panel offers, a value
+ * the config names, or a value the operator types must reach the agent as the
+ * single argument it was chosen to be.
  */
 export function settingArgs(
 	agent: FactoryConfig["agents"][string],
@@ -1164,15 +1169,28 @@ export function settingArgs(
 	return args;
 }
 
-/** Substitute {value} in a setting template and split the result on whitespace. */
+/**
+ * Substitute {value} in a setting template, one argv cell per template token.
+ *
+ * The template is split first, and the value is placed inside each token
+ * afterwards, never before the split: a value that carries whitespace (a
+ * pasted model name, or a config value with a space in it) stays one argument
+ * cell instead of becoming an argument plus a stray positional the agent reads
+ * as its model. `execFile` carries argv without a shell, so the cell keeps its
+ * text all the way to the agent. The codex thinking template,
+ * `-c model_reasoning_effort={value}`, splits into two tokens and gains the
+ * level inside the second one, exactly as it did before.
+ */
 export function renderSettingArgs(template: string, value: string): string[] {
 	return (
 		template
+			.split(/\s+/)
+			.filter((token) => token !== "")
 			// The function replacer keeps dollar patterns in the value ($&, $1)
 			// literal: a string replacement would interpret them.
-			.replace(/\{value\}/g, () => value)
-			.split(/\s+/)
-			.filter((part) => part !== "")
+			.map((token) => token.replace(/\{value\}/g, () => value))
+			// A bare {value} token with an empty value leaves no argument behind.
+			.filter((token) => token !== "")
 	);
 }
 

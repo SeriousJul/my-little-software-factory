@@ -7,12 +7,17 @@
  * and the buffer are small, so a sleep of ten seconds proves the timeout and
  * one hundred kilobytes prove the buffer without waiting ten minutes.
  */
-import { describe, expect, test } from "vitest";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
+import { renderSettingArgs } from "../src/handoff.ts";
 import {
 	createChildProcessRunner,
 	errorMessage,
 	MODEL_LIST_COMMANDS,
+	MODEL_LIST_TIMEOUT_MS,
 	parsePiModelList,
 	supportsModelList,
 } from "../src/runner.ts";
@@ -113,11 +118,38 @@ describe("the Model list of an agent kind (ADR 0010)", () => {
 		expect(list.ok && list.models).toEqual(["zed/a", "alpha/b"]);
 	});
 
-	test("a provider name that carries spaces still parses", () => {
+	test("a row whose value carries whitespace fails the whole table", () => {
+		// A provider printed across two cells is a layout this reader does not
+		// know, and its value could never reach the agent as one argument cell.
+		// The list is refused rather than half-offered: ADR 0010 rules out a
+		// partial list, and a value with a space in it is a value the panel's
+		// type-ahead cannot type either.
 		const list = parsePiModelList(
 			"provider  model  context  max-out  thinking  images\nmy  corp  model-x  1  1  true  true",
 		);
-		expect(list).toEqual({ ok: true, models: ["my  corp/model-x"] });
+		expect(list.ok).toBe(false);
+		if (list.ok) throw new Error("expected a failure");
+		expect(list.reason).toContain("whitespace");
+		expect(list.reason).toContain("my  corp/model-x");
+	});
+
+	test("every value the parser offers is one argument cell", () => {
+		// The offer contract, end to end: the panel puts a parsed value on the
+		// Model row, the fit check compares that same string, and the start
+		// command carries it to the agent. A value that splits into two cells is
+		// a model nobody chose.
+		const list = parsePiModelList(
+			piTable(
+				"anthropic  claude-sonnet-4-5  200000  16384  true  true",
+				"llama.cpp  Qwen2.5-Coder/qwen3-tts-1.7b-base-GGUF  131.1K  131.1K  yes  no",
+				"llama-server=http://127.0.0.1:8080  AtomicChat/DeepSeek-V4:IQ1_M_XL  131.1K  131.1K  yes  no",
+			),
+		);
+		if (!list.ok) throw new Error(`expected a list, got: ${list.reason}`);
+		expect(list.models).toHaveLength(3);
+		for (const model of list.models) {
+			expect(renderSettingArgs("--model {value}", model)).toEqual(["--model", model]);
+		}
 	});
 
 	test("a header-only table is an empty list, not a failure", () => {
@@ -180,6 +212,98 @@ describe("the Model list of an agent kind (ADR 0010)", () => {
 			ok: false,
 			reason: 'the agent kind "no-such-kind" has no model list command',
 		});
+	});
+});
+
+/**
+ * The real query path, against a stand-in agent CLI on PATH.
+ *
+ * Every other test hands the flow a fake runner, so the fake answers the query
+ * and the real path runs nothing. This is the one place where a wrong argv, a
+ * table read from the wrong stream, an ignored exit code, or a budget that
+ * never expires could ship silently, so these tests spawn a real program that
+ * prints a pinned table and pin what the runner does with it.
+ */
+describe("the real runner's Model list query", () => {
+	let dir = "";
+	let savedPath = "";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "factory-runner-pi-"));
+		savedPath = process.env.PATH ?? "";
+		// libuv resolves a bare program name through this process's PATH, so
+		// putting the stub first is what makes `pi` resolve to it.
+		process.env.PATH = `${dir}:${savedPath}`;
+	});
+
+	afterEach(() => {
+		process.env.PATH = savedPath;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** Write the stand-in `pi` the query spawns. */
+	function stubPi(script: string): void {
+		const path = join(dir, "pi");
+		writeFileSync(path, `#!/bin/sh\n${script}\n`);
+		chmodSync(path, 0o755);
+	}
+
+	test("the query runs the kind's own command and reads the table it prints", async () => {
+		// The stub prints its own argv into the model column, so the value the
+		// parser returns is the proof of the command that ran.
+		stubPi(
+			[
+				"printf 'provider  model  context  max-out  thinking  images\\n'",
+				"printf 'pinned  %s  1  1  true  true\\n' \"$*\"",
+			].join("\n"),
+		);
+
+		expect(await createChildProcessRunner().listModels("pi")).toEqual({
+			ok: true,
+			models: ["pinned/--list-models"],
+		});
+	});
+
+	test("the query reads the table from stdout, not stderr", async () => {
+		stubPi(
+			[
+				"printf 'provider  model  context  max-out  thinking  images\\n'",
+				"echo 'noise  row  1  1  true  true' >&2",
+				"printf 'anthropic  claude-sonnet-4-5  1  1  true  true\\n'",
+			].join("\n"),
+		);
+
+		expect(await createChildProcessRunner().listModels("pi")).toEqual({
+			ok: true,
+			models: ["anthropic/claude-sonnet-4-5"],
+		});
+	});
+
+	test("a non-zero exit is a failure that carries the command's own reason", async () => {
+		stubPi("echo 'pi: no provider is configured' >&2\nexit 3");
+
+		const list = await createChildProcessRunner().listModels("pi");
+		expect(list.ok).toBe(false);
+		if (list.ok) throw new Error("expected a failure");
+		expect(list.reason).toContain("pi --list-models failed");
+		expect(list.reason).toContain("pi: no provider is configured");
+	});
+
+	test("a query that passes its budget fails instead of holding the caller", async () => {
+		stubPi("sleep 30");
+
+		const list = await createChildProcessRunner({ modelListTimeoutMs: 500 }).listModels("pi");
+		expect(list.ok).toBe(false);
+		if (list.ok) throw new Error("expected a failure");
+		expect(list.reason).toContain("pi --list-models failed");
+		expect(list.reason).toContain("timed out after 0.5s");
+	});
+
+	test("the query budget is a query budget, not the handoff's", () => {
+		// The query now sits on boot, before any output, and on every handoff.
+		// Ten minutes is the clone budget; a lookup the agent answers in half a
+		// second must fail in seconds when it does not answer at all.
+		expect(MODEL_LIST_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
 	});
 });
 

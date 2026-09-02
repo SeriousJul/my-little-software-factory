@@ -14,27 +14,32 @@
  * list row that also takes type-ahead: each typed letter extends the typed
  * text, and the row jumps to the first model whose whole value contains that
  * text, case-insensitive. The typed text is never displayed; the jumping
- * value is the feedback. Typing accumulates until the operator selects with
- * the arrows, clears with backspace, or leaves the row. While the control
- * plane fetches the list the row shows a dim loading marker and takes no
- * input; when the agent's kind reports no list, or the fetch failed, the row
- * is the standard single-line Text field: typing, caret movement with the
- * arrows, Home and End, selection, backspace and delete, undo and redo, and
- * bracketed terminal paste. A paste is sanitized by the input before it is
+ * value is the feedback. A run that finds nothing is over, because a longer
+ * run can only match less, so the letter that found nothing starts a new run
+ * and every letter the operator types is answered. Typing accumulates until
+ * the operator selects with the arrows, clears with backspace, or leaves the
+ * row. While the control plane fetches the list the row shows a dim loading
+ * marker and takes no input; when the agent's kind reports no list, or the
+ * fetch failed, the row is the standard single-line Text field: typing, caret
+ * movement with the arrows, Home and End, selection, backspace and delete,
+ * undo and redo, and bracketed terminal paste, and its guide line names the
+ * reason the list is gone. A paste is sanitized by the input before it is
  * inserted, so a pasted model name is plain text. An input scrolls horizontally
  * within its column and never wraps, so it can never corrupt the rows around
  * it.
  *
  * A list row (the agent, the environment, the task type, the Model list, and
  * the thinking level) cycles its value with left/right, and h and l where
- * those keys do not type. Backspace clears a Model or Thinking row, which
- * leaves that setting to the agent. The agent, environment, task type, and
- * thinking rows are pure cycling; only the Model list row takes typed letters.
- * A value that is set but not available for the current agent renders in the
- * warning color, so a handoff that would fail is visible before it is
- * confirmed. A model value wider than the column shows its end, where a real
- * agent list tells its models apart, with a leading marker for the cut; the
- * whole value still rides on the handoff.
+ * those keys do not type. Backspace or Delete clears a Model or Thinking row,
+ * which leaves that setting to the agent. The agent, environment, task type,
+ * and thinking rows are pure cycling; only the Model list row takes typed
+ * letters. A value that is set but not available for the current agent renders
+ * in the warning color, so a handoff that would fail is visible before it is
+ * confirmed. A row whose list has not arrived is not judged at all: it holds
+ * its value in the dim tone the panel uses for a setting it cannot confirm,
+ * and its guide names the wait. A model value wider than the column shows its
+ * end, where a real agent list tells its models apart, with a leading marker
+ * for the cut; the whole value still rides on the handoff.
  *
  * The keys: up/down and tab/shift+tab move the row selection. j and k move it
  * too, except on a row that takes typing (a Text field, or the Model list),
@@ -73,14 +78,30 @@ export interface AgentSettings {
 }
 
 /**
+ * Why a Model row is a Text field instead of the selected agent's list.
+ *
+ * The two causes read alike on the row itself, so the guide line names which
+ * one applies: a kind that reports no list is normal for that agent, while a
+ * query that failed says a list should be there and is not. The long reason a
+ * query came back with is reported once at boot, on stderr, where a whole
+ * command failure fits; a guide line holds 41 cells and a cut-off failure
+ * explains nothing.
+ */
+export type ModelListCause =
+	/** The agent kind's own CLI has no list command, so no query ran. */
+	| "no-list"
+	/** The query ran and did not answer: a failed command or an unreadable table. */
+	| "query-failed";
+
+/**
  * One agent's Model list, as the control plane fetched it (ADR 0010).
  * `unavailable` covers both an agent kind that reports no list and a fetch
- * that failed: either way the row is a Text field.
+ * that failed: either way the row is a Text field, and it says which.
  */
 export type ModelListStatus =
 	| { status: "loading" }
 	| { status: "available"; models: readonly string[] }
-	| { status: "unavailable"; reason: string };
+	| { status: "unavailable"; cause: ModelListCause };
 
 /** The list of the agent the panel is on, tagged so a stale answer cannot show. */
 export interface AgentModelList {
@@ -107,6 +128,11 @@ interface PanelRow {
 	clipTail?: boolean;
 	/** The dim marker a row holds while it has no value to show. */
 	placeholder?: string;
+	/**
+	 * The cause a Model row has no list to offer, for its guide line. Only a
+	 * free-text Model row carries one.
+	 */
+	fallbackCause?: ModelListCause;
 }
 
 interface OverridePanelProps {
@@ -135,11 +161,28 @@ const MARKER_WIDTH = 2;
 // The hint rows follow the selected row. Keep every variant no wider than the
 // text-row hint, or the guide drops on the default terminal.
 const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
-const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
+/**
+ * The guide of a free-text Model row: the text keys, and why the list is gone.
+ *
+ * A Model row is a Text field only because its agent's list is missing, so the
+ * guide spends one cell group on the fact the row cannot show by itself. Keep
+ * both inside HINT_WIDTH: a guide wider than the threshold drops the whole
+ * guide line on a normal terminal, because the modal is only as wide as the
+ * three columns its rows use.
+ */
+const NO_LIST_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (none)";
+const LIST_FAILED_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (failed)";
 /** A list row the operator can also clear, leaving the setting to the agent. */
 const CHOICE_HINT = "↑↓/jk move ←→/hl cycle ⌫ clear ↵/esc";
-/** The Model list row: typing jumps the value, the arrows take a match. */
-const MODEL_HINT = "↑↓/tab move type jumps ←→ cycle ⌫ clear";
+/**
+ * The Model list row: typing jumps the value, the arrows take a match.
+ *
+ * It names confirm and cancel like every other guide, and it stays inside the
+ * 41 cells the guides are sized to: a longer one raises HINT_WIDTH and drops
+ * the guide line on a normal terminal. Tab moves rows too, but the arrows are
+ * the keys the row is steered with.
+ */
+const MODEL_HINT = "↑↓ move type jumps ←→ cycle ⌫ clear ↵/esc";
 /**
  * The row that waits for its agent's Model list. Only the movement keys and
  * confirm and cancel reach it, and the guide says why: the loading marker is
@@ -149,7 +192,8 @@ const MODEL_HINT = "↑↓/tab move type jumps ←→ cycle ⌫ clear";
 const PENDING_HINT = "↑↓/jk move (loading...) ↵/esc";
 const HINT_WIDTH = Math.max(
 	widthOf(LIST_HINT),
-	widthOf(TEXT_HINT),
+	widthOf(NO_LIST_HINT),
+	widthOf(LIST_FAILED_HINT),
 	widthOf(CHOICE_HINT),
 	widthOf(MODEL_HINT),
 	widthOf(PENDING_HINT),
@@ -217,6 +261,16 @@ function panelGeometry(width: number, height: number): PanelGeometry {
 }
 
 /**
+ * The cells one terminal size gives a row's value.
+ *
+ * The panel owns its geometry, so a test that checks a clipped value asks the
+ * panel how wide the column is instead of mirroring the number by hand.
+ */
+export function panelValueCells(width: number, height: number): number {
+	return panelGeometry(width, height).valueWidth;
+}
+
+/**
  * The one character a key types, or null when it types nothing.
  *
  * Named keys arrive as their word ("up", "return"), and the arrows and the
@@ -237,7 +291,11 @@ function typedChar(key: { name: string; sequence?: string }): string | null {
  *
  * A plain substring test, and so stricter than the pattern search `pi
  * --list-models` applies, which lets the matched letters sit apart from each
- * other. A run that finds nothing here leaves the row's value where it is.
+ * other: `pi --list-models snnet` answers with models that do not hold the
+ * substring. The panel keeps the stricter rule because a jump is the only
+ * feedback it gives, and a jump must always name a model the typed letters
+ * really hold. A run that finds nothing here ends: `typeLetter` starts a new
+ * one at the letter that failed.
  */
 function typeAheadMatch(options: readonly string[], typed: string): string | undefined {
 	const needle = typed.toLowerCase();
@@ -369,10 +427,9 @@ export function OverridePanel({
 		touchedRef.current[key] = true;
 	};
 
-	/** Backspace on a Model or Thinking row: leave the setting to the agent. */
+	/** Backspace or Delete on a Model or Thinking row: leave the setting to the agent. */
 	const clearRow = () => {
 		const target = cursorRow();
-		if (target.kind === "pending") return;
 		if (target.key !== "model" && target.key !== "thinking") return;
 		const key: ClearKey = target.key;
 		typedRef.current = "";
@@ -384,11 +441,17 @@ export function OverridePanel({
 	const typeLetter = (char: string) => {
 		const target = cursorRow();
 		const options = target.options ?? [];
-		typedRef.current += char;
+		const extended = typedRef.current + char;
+		// Containment only gets harder as a run grows, so a run that has found
+		// nothing can never find something again. The letter that ended it
+		// starts a new run instead: every letter is answered, one mistyped one
+		// cannot freeze the row, and the value jumping is the signal that the
+		// run restarted.
+		const match = typeAheadMatch(options, extended) ?? typeAheadMatch(options, char);
+		typedRef.current = match === undefined ? char : extended;
 		touch("model");
-		const match = typeAheadMatch(options, typedRef.current);
-		// A no-match leaves the value where it is. The typed text still holds
-		// the whole run, so the next letter can find a model that matches it.
+		// A letter no model holds, on its own or in a run, leaves the value where
+		// it is.
 		if (match === undefined) return;
 		commit((current) => (current.model === match ? current : { ...current, model: match }));
 	};
@@ -475,7 +538,9 @@ export function OverridePanel({
 				key.preventDefault();
 				return;
 			}
-			if (key.name === "backspace") {
+			if (key.name === "backspace" || key.name === "delete") {
+				// A list row has no caret, so forward delete and backspace are the
+				// same decision: clear the setting, and leave it to the agent.
 				clearRow();
 				key.preventDefault();
 				return;
@@ -526,9 +591,11 @@ export function OverridePanel({
 /**
  * The Model list status that belongs to the agent the panel is on.
  *
- * A list the control plane is still fetching, or one it fetched for another
+ * A list the control plane is still fetching, or one it tagged for another
  * agent, reads as loading: the row never offers agent A's models while agent B
- * is selected.
+ * is selected. The control plane drops a stale answer before it reaches here,
+ * and the panel checks the tag too, because the row's contract is its own: an
+ * answer for the wrong agent is not an answer.
  */
 function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListStatus {
 	return modelList.agentType === choice.agentType ? modelList.status : { status: "loading" };
@@ -538,7 +605,10 @@ function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListSta
 function hintForRow(row: PanelRow): string {
 	switch (row.kind) {
 		case "text":
-			return TEXT_HINT;
+			// A Model row reaches a Text field only through a missing list, so the
+			// row always carries which cause sent it there; a text row without one
+			// has no list to lose.
+			return row.fallbackCause === "query-failed" ? LIST_FAILED_HINT : NO_LIST_HINT;
 		case "pending":
 			return PENDING_HINT;
 		default:
@@ -583,7 +653,7 @@ function rowsFor(
  * The Model row for one agent: the agent's own list with type-ahead, a loading
  * marker while the control plane fetches it, the no-models hint when the agent
  * reports none, and the Text field when its kind reports no list or the fetch
- * failed.
+ * failed. The Text field's guide line names the reason the list is gone.
  */
 function modelRow(status: ModelListStatus): PanelRow {
 	if (status.status === "loading") {
@@ -604,7 +674,12 @@ function modelRow(status: ModelListStatus): PanelRow {
 			placeholder: status.models.length === 0 ? NO_MODELS_HINT : undefined,
 		};
 	}
-	return { label: "Model", key: "model", kind: "text" };
+	return {
+		label: "Model",
+		key: "model",
+		kind: "text",
+		fallbackCause: status.cause,
+	};
 }
 
 /** One panel row as a marker, a label, and a value, a field, or a dim marker. */
