@@ -89,23 +89,29 @@ use are these:
   The default exit key is `F12`; configure `interaction-exit-key` with a
   function key or `Ctrl` plus one letter.
 
-Every surface the control plane itself owns now dispatches from the
-catalogue, so the Key guide and the Action bar state its controls. The
-Consultation confirmation panel is the one surface that shares the modal
-chrome without sharing the dispatch: it keeps its own key handling, and its
-keys are not in the guide. The Ticket list and detail move with the row, page
-and jump keys, focus the detail with `l` or `Right` and the list with `h` or
-`Left`, hand an open ticket off with `Enter`, open the decision modal on an
-awaiting one, the missing modal on a ticket whose agent is gone, and the
-override panel with `e`. `a` toggles auto-handoff, `r` refreshes the sources,
-`v` and `t` switch views, and `q` quits.
+Every surface the control plane owns dispatches from the catalogue, so the Key
+guide and the Action bar state its controls: the Ticket list, the Ticket
+detail, the override panel in both of its row kinds, the decision modal, the
+missing modal, and the two utility overlays. The five Consultation surfaces
+named above do not: each keeps its own key handling, and no control of theirs
+is in the catalogue or the guide. The Consultation confirmation panel is the
+one surface of those five that shares the modal chrome and the Message line;
+it shares neither the dispatch nor the catalogue. The Ticket list and detail
+move with the row, page and jump keys, focus the detail with `l` or `Right` and
+the list with `h` or `Left`, hand an open ticket off with `Enter`, open the
+decision modal on an awaiting one, the missing modal on a ticket whose agent
+is gone, and the override panel with `e`. `a` toggles auto-handoff, `r`
+refreshes the sources, `v` and `t` switch views, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
 the Action bar reserve the two bottom rows at every terminal size: below the
 smallest useful frame the panes give way to a size message and a compact Help
 control, and a surface that cannot draw its own rows says so instead of
-painting them over its border.
+painting them over its border. One hint holds the row's end cells: Help on a
+bar that can open the Key guide, and the overlay's own Close on a utility
+overlay. A frame too narrow for that hint states one of its whole keys, so the
+way out of a screen is named at any width and never cut in half.
 
 ### Entry controls
 

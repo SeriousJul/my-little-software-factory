@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { padToWidth, truncateToWidth } from "../src/components/text.ts";
+import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
@@ -206,7 +206,7 @@ describe("the permanent Message line", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 
 	test("lets a manual refresh cover a stale source, and the warning return", async () => {
 		const state = freshState();
@@ -321,7 +321,7 @@ describe("the permanent Message line", () => {
 		} finally {
 			state.close();
 		}
-	}, 30000);
+	});
 
 	test("leaves an in-flight refresh's progress to the refresh that owns it", async () => {
 		const state = freshState();
@@ -363,7 +363,7 @@ describe("the permanent Message line", () => {
 		} finally {
 			state.close();
 		}
-	}, 30000);
+	});
 
 	test("truncates to the terminal width, and only then offers the Message view", async () => {
 		await withApp(
@@ -422,7 +422,7 @@ describe("the permanent Message line", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: [WORKING_TICKET] },
 		);
-	}, 20000);
+	});
 
 	test("states an operation notice, and lets a refusal take the line back", async () => {
 		await withApp(
@@ -490,6 +490,45 @@ describe("the permanent Message line", () => {
 				pressF2(setup);
 				await awaitFrame(setup, (f) => !f.includes("Message view"), "the view to close");
 				expect(messageRowOf(setup.captureCharFrame())).toContain("the daemon refused");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("its bar names the Close control down to one whole key", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { code: 1, stderr: `${LONG_LINE}\n` });
+		await withApp(
+			async (setup) => {
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
+				pressF2(setup);
+				await awaitFrame(setup, (f) => f.includes("Message view - Error"), "the view");
+				// The view's Close owns the row's end cells, so a frame that
+				// cannot hold the hint states one whole key instead. It never
+				// states part of a key, and only falls silent where no key of
+				// this control fits at all (user stories 66 and 73).
+				for (let width = 20; width >= 1; width -= 1) {
+					setup.resize(width, 8);
+					const rows = rowsOf(await settle(setup));
+					for (const row of rows) expect(widthOf(row)).toBe(width);
+					const bar = (rows.at(-1) ?? "").trim();
+					if (width >= 12) expect(bar).toBe("Esc/F2 Close");
+					else if (width >= 3) expect(bar).toBe("Esc");
+					else if (width === 2) expect(bar).toBe("F2");
+					else expect(bar).toBe("");
+				}
+				// The row is the surface's own again at a usable width.
+				setup.resize(30, 8);
+				await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("Esc/F2 Close"),
+					"the view's full Close hint",
+				);
+				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
+				expect(actionBarRowOf(await settle(setup))).toContain("Help");
 			},
 			WIDTH,
 			HEIGHT,

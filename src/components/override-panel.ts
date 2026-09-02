@@ -300,6 +300,7 @@ export function OverridePanel({
 	const mode = currentMode();
 	return createElement(ModalSurface, {
 		frame,
+		width: terminalWidth,
 		title: "Override",
 		borderColor: COLORS.borderFocused,
 		// One row is enough to be a panel: the rows that do not fit scroll.

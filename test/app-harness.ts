@@ -22,10 +22,19 @@ export type Setup = Awaited<ReturnType<typeof testRender>>;
 export const WIDTH = 120;
 export const HEIGHT = 30;
 const FRAME_POLL_MS = 10;
-// Long enough for a frame on a loaded machine: the whole suite runs its
-// renderers in one process, and a poll can wait on the event loop. A test
-// that never reaches its predicate still fails, only later.
-const FRAME_DEADLINE_MS = 5000;
+/**
+ * How long one frame wait may run before the effect is called missing.
+ *
+ * The suite runs a real renderer, a real state database, and the machine's
+ * other work at the same time, and an effect can cross a process boundary on
+ * the way to the frame: the heaviest waits here launch a Handoff or an Agent
+ * through a command runner. A deadline tuned to a quiet machine fails such a
+ * wait by a few hundred ms under load, and the run reads as a broken app
+ * rather than a busy one. A test whose effect never arrives still fails, only
+ * at this deadline; the runner's own budget (vitest.config.ts) stays above
+ * the sum of a test's waits.
+ */
+const FRAME_DEADLINE_MS = 10000;
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
 /** The state badge the list pane renders for each ticket state. */

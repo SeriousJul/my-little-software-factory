@@ -69,10 +69,15 @@ async function openDecision(setup: Setup): Promise<void> {
 	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 }
 
-/** Close the open surface at a size where it draws itself, so the next case
- *  starts from the base frame. */
+/**
+ * Close the open surface at a size where it draws itself, so the next case
+ * starts from the base frame. The bar's row comes back with it: the base frame
+ * keeps its Help control at every size, so a bar that lost the surface's own
+ * hints and states none of the base's has not come back at all.
+ */
 async function closeSurface(setup: Setup, what: RegExp): Promise<void> {
 	await press(setup, "escape", "the surface to close", (f) => !what.test(f));
+	expect(actionBarRowOf(await settle(setup))).toContain("Help");
 }
 
 describe("the reserved bottom rows at every size", () => {
@@ -108,7 +113,7 @@ describe("the reserved bottom rows at every size", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 
 	test("paints the base rows on the terminal default, and a surface on its own", async () => {
 		const runner = new FakeRunner();
@@ -133,7 +138,7 @@ describe("the reserved bottom rows at every size", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 
 	test("no open surface paints its Action bar over its own border", async () => {
 		const runner = new FakeRunner();
@@ -164,7 +169,7 @@ describe("the reserved bottom rows at every size", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 
 	test("the override panel keeps its rows above its own Action bar", async () => {
 		const runner = new FakeRunner();
@@ -199,7 +204,7 @@ describe("the reserved bottom rows at every size", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 
 	test("a held-back surface keeps the bar's row for its own bar", async () => {
 		const runner = new FakeRunner();
@@ -223,7 +228,7 @@ describe("the reserved bottom rows at every size", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 
 	test("the Key guide keeps its own rows and its Close control", async () => {
 		const runner = new FakeRunner();
@@ -249,5 +254,5 @@ describe("the reserved bottom rows at every size", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
-	}, 20000);
+	});
 });

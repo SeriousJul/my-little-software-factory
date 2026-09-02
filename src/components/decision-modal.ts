@@ -221,6 +221,7 @@ export function DecisionModal({
 	const thumbRows = hasScrollbar ? scrollbarRows(body.length, bodyRows, scroll) : null;
 	return createElement(ModalSurface, {
 		frame,
+		width: terminalWidth,
 		title: `Decision: ${title}`,
 		borderColor: COLORS.borderFocused,
 		// The context row and every action row: without them the modal is

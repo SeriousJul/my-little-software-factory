@@ -126,6 +126,7 @@ export function MissingModal({
 	const thumbRows = hasScrollbar ? scrollbarRows(wrapped.length, bodyRows, scroll) : null;
 	return createElement(ModalSurface, {
 		frame,
+		width: terminalWidth,
 		title,
 		borderColor: COLORS.borderFocused,
 		// Every action row: without one of them the modal has no way out, so

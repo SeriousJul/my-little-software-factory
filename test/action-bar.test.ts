@@ -337,7 +337,7 @@ describe("the contextual Action bar", () => {
 		} finally {
 			state.close();
 		}
-	}, 20000);
+	});
 
 	test("narrow widths remove complete low-priority hints, and Help is the last kept", async () => {
 		const runner = new FakeRunner();
@@ -415,6 +415,35 @@ describe("the contextual Action bar", () => {
 				expect((tinyRows.at(-1) ?? "").trimEnd()).toBe("?");
 			},
 			120,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("a utility bar keeps naming its Close down to one column", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				// The Key guide's own bar holds the row's end cells for Close, so
+				// no width may leave it blank and no width may cut a key: the one
+				// surface whose job is to name keys has to name its own way out
+				// (user stories 65 and 73).
+				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				for (let width = 1; width <= 13; width += 1) {
+					setup.resize(width, 3);
+					const rows = rowsOf(await settle(setup));
+					for (const row of rows) expect(widthOf(row)).toBe(width);
+					const bar = (rows.at(-1) ?? "").trimEnd();
+					// A whole key that closes the guide, never a slice of the hint:
+					// `Esc/` or `F1/? C` names nothing the operator can press.
+					expect(["Esc", "F1", "?", "Esc/F1/?"]).toContain(bar);
+					if (width <= 2) expect(bar).toBe("?");
+					else expect(bar).toBe("Esc");
+				}
+				// And the key the row named is the key that ends the surface.
+				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+			},
+			WIDTH,
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
@@ -634,7 +663,7 @@ describe("the contextual Action bar", () => {
 			HEIGHT,
 			props,
 		);
-	}, 20000);
+	});
 
 	test("Ctrl+C destroys the renderer from every interaction mode", async () => {
 		const props = {
@@ -1089,7 +1118,7 @@ describe("the contextual Action bar", () => {
 			HEIGHT,
 			props,
 		);
-	}, 15000);
+	});
 
 	test("the bar does not change on a boundary move", async () => {
 		const runner = new FakeRunner();

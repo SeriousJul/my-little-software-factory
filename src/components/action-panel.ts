@@ -102,6 +102,7 @@ export function ActionPanel({
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
 	return createElement(ModalSurface, {
 		frame,
+		width: terminalWidth,
 		title,
 		borderColor: COLORS.borderFocused,
 		// Every action row plus the hint: without them the panel states a

@@ -15,6 +15,7 @@
  * rows may name.
  */
 import type { Ticket } from "../domain/ticket.ts";
+import { widthOf } from "./text.ts";
 
 export type InteractionMode =
 	| "ticket-list"
@@ -70,9 +71,8 @@ export interface ControlAvailability {
 
 export interface ControlContext {
 	mode: InteractionMode;
-	tickets: readonly Ticket[];
+	/** The Ticket the base panes point at, if the list holds one. */
 	selectedTicket?: Ticket;
-	selectedIndex: number;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -101,6 +101,16 @@ export interface ControlDefinition {
 	 * making the bar test control ids.
 	 */
 	showInBar?: (context: ControlContext) => boolean;
+	/**
+	 * Whether the control's hint holds the row's right-hand cells.
+	 *
+	 * This is the one hint a narrow frame may not pack away, because it is the
+	 * way out of the surface or the way to find the rest: Help on a bar that
+	 * can open the Key guide, and the overlay's own Close on a utility overlay,
+	 * which outranks Help there. Where a frame cannot hold the whole hint, the
+	 * row states one of the control's whole keys instead, and never a slice.
+	 */
+	barAnchor?: boolean;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -126,6 +136,8 @@ const CONSULTATION_TYPES_MISSING =
 	"no Consultation types configured; add [consultation-types.<name>] to the config file";
 /** Why an emergency exit is not a clean shutdown. */
 const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
+/** What the settled meaning of Enter does, for the guide's current section. */
+const DECIDE_NOTE = "opens the decision on a settled Ticket";
 
 /** The Handoff and Override eligibility rules, with one source for each reason. */
 const handoffEligibility = (context: ControlContext): ControlAvailability => {
@@ -295,6 +307,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 70,
 		modes: [...baseModes],
 		availability: completionEligibility,
+		// Enter means two things in the base modes, and the Key guide names
+		// both whatever the selected Ticket runs, so the guide has to say what
+		// this meaning of Enter is for.
+		guideNote: DECIDE_NOTE,
 	},
 	{
 		id: "consultations",
@@ -361,6 +377,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "F1/?",
 		scope: "global",
 		actionBar: true,
+		barAnchor: true,
 		priority: 1000,
 		modes: [...allModes],
 		availability: available,
@@ -490,7 +507,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "Esc/F1/?",
 		scope: "utility",
 		actionBar: true,
-		priority: 1000,
+		barAnchor: true,
+		priority: 1100,
 		modes: ["key-guide"],
 		availability: available,
 	},
@@ -512,7 +530,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "Esc/F2",
 		scope: "utility",
 		actionBar: true,
-		priority: 1000,
+		barAnchor: true,
+		priority: 1100,
 		modes: ["message-view"],
 		availability: available,
 	},
@@ -560,6 +579,75 @@ function isReachableInMode(
 	});
 }
 
+/**
+ * The control one key resolves to, before the current facts choose between
+ * the controls that accept it.
+ *
+ * `return` is accepted by two base-mode controls whose availability answers
+ * for different Ticket states, while a utility overlay's Close takes its keys
+ * from every other control whatever the state. This is that precedence list:
+ * the guide uses it to name every meaning a mode dispatches, and the bar uses
+ * it with the facts to hide a meaning the state does not run.
+ */
+function candidatesForKey(mode: InteractionMode, key: ControlKey): readonly ControlDefinition[] {
+	// Utility close controls take precedence over global aliases that share
+	// their keys. The catalogue still owns both meanings.
+	if (mode === "key-guide" && (key === "escape" || key === "f1" || key === "?"))
+		return [controlById("guide-close")];
+	if (mode === "message-view" && (key === "escape" || key === "f2"))
+		return [controlById("message-close")];
+	return controlsForMode(mode).filter((control) => control.keys(mode).includes(key));
+}
+
+/** The whole key one accepted binding is called by, as a hint states it. */
+const KEY_NAMES: Record<ControlKey, string> = {
+	up: "↑",
+	down: "↓",
+	left: "←",
+	right: "→",
+	pageup: "PgUp",
+	pagedown: "PgDn",
+	home: "Home",
+	end: "End",
+	tab: "Tab",
+	j: "j",
+	k: "k",
+	h: "h",
+	l: "l",
+	q: "q",
+	e: "e",
+	r: "r",
+	a: "a",
+	m: "m",
+	c: "c",
+	v: "v",
+	f1: "F1",
+	f2: "F2",
+	"?": "?",
+	return: "Enter",
+	escape: "Esc",
+	backspace: "Backspace",
+	"ctrl+c": "Ctrl+C",
+};
+
+/**
+ * The whole keys that still run this control in this mode, best first.
+ *
+ * A frame too narrow for a hint's full text states one key instead, and a key
+ * named here is always whole: `Esc/F1/?` degrades to `Esc`, never to `Esc/F`.
+ * Escape leads, because it is the key an operator reaches for when a screen
+ * will not answer them, and the shortest alias follows so a row of one column
+ * can still name something.
+ */
+export function compactKeyLabels(mode: InteractionMode, control: ControlDefinition): string[] {
+	const ranked = control
+		.keys(mode)
+		.map((key) => KEY_NAMES[key])
+		.map((label) => ({ label, rank: label === KEY_NAMES.escape ? 0 : 1, cells: widthOf(label) }));
+	ranked.sort((a, b) => a.rank - b.rank || a.cells - b.cells);
+	return [...new Set(ranked.map((entry) => entry.label))];
+}
+
 /** Find a control accepted by this mode for one OpenTUI key event. */
 export function controlForKey(
 	mode: InteractionMode,
@@ -567,19 +655,11 @@ export function controlForKey(
 	context: ControlContext,
 ): ControlDefinition | undefined {
 	const name = key.ctrl && key.name === "c" ? "ctrl+c" : key.name;
-	// Utility close controls take precedence over global aliases that share
-	// their keys. The catalogue still owns both meanings.
-	if (mode === "key-guide" && (name === "escape" || name === "f1" || name === "?"))
-		return controlById("guide-close");
-	if (mode === "message-view" && (name === "escape" || name === "f2"))
-		return controlById("message-close");
-	const matches = controlsForMode(mode).filter((control) =>
-		control.keys(mode).includes(name as ControlKey),
-	);
+	const candidates = candidatesForKey(mode, name as ControlKey);
 	// Enter has a state-specific completion action as well as Hand off. An
 	// available meaning wins. If none is available, the first definition owns
 	// the key and supplies its stable unavailable reason.
-	return matches.find((control) => availabilityFor(control, context).available) ?? matches[0];
+	return candidates.find((control) => availabilityFor(control, context).available) ?? candidates[0];
 }
 
 export function availabilityFor(
@@ -589,29 +669,42 @@ export function availabilityFor(
 	return control.availability(context);
 }
 
+/**
+ * Whether the Key guide lists this control among the mode's own.
+ *
+ * The guide is the app's only complete catalog, so it names every meaning of
+ * a key the mode dispatches: Enter is Hand off on an open Ticket and Decide on
+ * a settled one, and an operator on either one has to learn that the other
+ * exists (user stories 12 and 16). A control whose keys the mode hands to
+ * another control outright, as both utility overlays take F1 and ?, is not a
+ * control of this mode, so neither the bar nor the guide may name it.
+ */
+function isCataloguedInMode(mode: InteractionMode, control: ControlDefinition): boolean {
+	// A control of another mode is cataloged on its own terms: the guide
+	// states what it does and claims nothing about this mode's keys.
+	if (!control.modes.includes(mode)) return true;
+	const keys = control.keys(mode);
+	// A display-only hint (the text row's Type and Backspace) claims no key.
+	if (keys.length === 0) return true;
+	return keys.some((key) =>
+		candidatesForKey(mode, key).some((candidate) => candidate.id === control.id),
+	);
+}
+
 /** Current-mode controls, then global and control-plane controls, then other modes. */
 export function guideControls(
 	mode: InteractionMode,
-	context: ControlContext,
 ): Array<{ group: string; control: ControlDefinition }> {
-	// The current section shows the controls this mode actually dispatches.
-	// A shadowed alias (F1 and ? in the guide close it) belongs to the
-	// control that owns the key in this mode, not the one it hides.
+	// The current section is every control this mode dispatches a key for. The
+	// bar shows only the meaning the current state runs; the guide shows both.
 	const current = controlsForMode(mode).filter(
 		(control) =>
-			control.actionBar &&
-			control.id !== "emergency-exit" &&
-			isReachableInMode(mode, control, context),
+			control.actionBar && control.id !== "emergency-exit" && isCataloguedInMode(mode, control),
 	);
 	const seen = new Set(current.map((control) => control.id));
 	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
 		CONTROL_DEFINITIONS.filter(
-			(control) =>
-				!seen.has(control.id) &&
-				predicate(control) &&
-				// A state-specific control belongs in the current section when it
-				// dispatches. Do not repeat an inactive alternate in a later group.
-				(!control.modes.includes(mode) || isReachableInMode(mode, control, context)),
+			(control) => !seen.has(control.id) && predicate(control) && isCataloguedInMode(mode, control),
 		).map((control) => {
 			seen.add(control.id);
 			return { group, control };

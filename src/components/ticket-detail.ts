@@ -1,6 +1,6 @@
 /** The native, scrollable source and factory detail for the selected ticket. */
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { createElement } from "@opentui/react";
+import { createElement, useRenderer } from "@opentui/react";
 import {
 	forwardRef,
 	type RefObject,
@@ -221,6 +221,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	ref,
 ) {
 	const geometry = usePaneGeometry("detail", reservedRows);
+	// The renderer reports the frame it has laid out, which is when the scroll
+	// box first knows its own content height and viewport.
+	const renderer = useRenderer();
 	// The scroll box owns the gutter; see `detailTextCols`.
 	const textCols = detailTextCols(geometry.usableCols);
 	const reserveGutter = textCols < geometry.usableCols;
@@ -291,32 +294,34 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	}, [ticket?.identity, toStart]);
 
 	// A below-minimum resize unmounts the pane. On the next mount of the same
-	// ticket, resume from the offset the unmount saved. The first layout pass
-	// may not have measured the viewport yet, and an offset set before it
-	// clamps to zero, so the restore retries until the box is measured. ScrollBox
-	// then clamps the offset to the new viewport, so a wider remount that
-	// wraps less lands at its own end instead of a stale scroll. This runs on
-	// mount only: a plain ticket switch keeps its own start-at-top behavior.
+	// ticket, resume from the offset the unmount saved. That offset was taken at
+	// another size, where the same body wrapped to a different number of rows,
+	// so the pane compares it with what the new layout allows and takes the
+	// nearer end. The renderer reports a frame once it has laid the tree out,
+	// which is the first moment the box knows its own content height and
+	// viewport, so the restore waits for that one pass instead of asking on a
+	// timer while the operator watches. This runs on mount only: a plain ticket
+	// switch keeps its own start-at-top behavior.
 	useEffect(() => {
 		const box = scrollboxRef.current;
 		const slot = scrollSlot.current;
 		const identity = identityRef.current;
 		if (box === null || slot === null || identity === undefined) return;
 		if (slot.identity !== identity || slot.top === 0) return;
-		let tries = 0;
-		const timer = setInterval(() => {
-			tries += 1;
-			if (identityRef.current !== identity) {
-				clearInterval(timer);
-				return;
-			}
-			if ((box.scrollHeight > 0 && box.viewport.height > 0) || tries >= 60) {
-				box.scrollTop = slot.top;
-				clearInterval(timer);
-			}
-		}, 16);
-		return () => clearInterval(timer);
-	}, [scrollSlot]);
+		const restore = () => {
+			if (identityRef.current !== identity) return;
+			const live = scrollSlot.current;
+			if (live === null || live.identity !== identity) return;
+			box.scrollTop = Math.min(live.top, maxScrollOf(box.scrollHeight, box.viewport.height));
+			// The pass has run: a later frame must not drag the scroll back to
+			// the offset the operator has since moved on from.
+			scrollSlot.current = null;
+		};
+		renderer.once("frame", restore);
+		return () => {
+			renderer.removeListener("frame", restore);
+		};
+	}, [renderer, scrollSlot]);
 
 	// Save the native offset when the pane unmounts, keyed by the identity it
 	// showed, so a remount of another ticket starts at its own position.

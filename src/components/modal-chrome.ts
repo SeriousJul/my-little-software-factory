@@ -18,7 +18,7 @@
  *   body that overflowed would paint through the border and the bar: every
  *   surface counts its rows against `contentRows` and drops the rest.
  */
-import { createElement, useTerminalDimensions } from "@opentui/react";
+import { createElement } from "@opentui/react";
 import { Fragment, type ReactElement, useRef, useState } from "react";
 
 import { ActionBar } from "./action-bar.ts";
@@ -162,6 +162,15 @@ export function modalFrame(
 
 interface ModalSurfaceProps {
 	frame: ModalFrame;
+	/**
+	 * The terminal's columns, handed down by the surface that measured them.
+	 *
+	 * The chrome never asks the renderer: every `useTerminalDimensions` call
+	 * adds a real `resize` listener, and a surface stacked above the base
+	 * frame would otherwise cost three per overlay and cross Node's
+	 * ten-listener limit on an ordinary operator path.
+	 */
+	width: number;
 	title: string;
 	borderColor: string;
 	/** The rows this surface must draw to be itself. */
@@ -187,6 +196,7 @@ interface ModalSurfaceProps {
  */
 export function ModalSurface({
 	frame,
+	width,
 	title,
 	borderColor,
 	minContentRows,
@@ -196,7 +206,6 @@ export function ModalSurface({
 	opacity,
 	zIndex = 10,
 }: ModalSurfaceProps) {
-	const { width } = useTerminalDimensions();
 	const held = frame.contentRows < minContentRows || frame.boxHeight < 2;
 	return createElement(
 		"box",
@@ -245,6 +254,7 @@ export function ModalSurface({
 			: createElement(ActionBar, {
 					mode: bar.mode,
 					context: bar.context,
+					width,
 					rangeIndicator: bar.rangeIndicator,
 				}),
 	);
@@ -290,9 +300,8 @@ const SIZE_NOTICE_LINES: readonly { text: string; fg: string }[] = [
 	{ text: "This surface cannot be drawn here: Esc closes it.", fg: COLORS.dim },
 ];
 
-/** The notice as a column, clipped to the rows above the Action bar. */
 /**
- * The lines a surface that cannot draw itself paints instead: the size it
+ * The notice a surface that cannot draw itself paints instead: the size it
  * needs and the key that closes it.
  *
  * Each line is a row of its own height. The surface centers its children, so

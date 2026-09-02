@@ -16,6 +16,8 @@ _Avoid_: dashboard, UI
 
 **Action bar**:
 The persistent guide to controls that are relevant to the operator's current interaction mode.
+The anchor hint holds the row's end cells: the surface's own Close on a utility overlay, and Help wherever a bar can open the Key guide. A frame too narrow for the anchor states one of its whole keys, and never part of one.
+The bar states one meaning per key: where two controls claim one key, only the meaning the current facts run appears.
 _Avoid_: status bar, shortcut bar, footer
 
 **Message line**:
@@ -33,7 +35,7 @@ _Avoid_: key map, binding table
 
 **Key guide**:
 The on-demand catalog of the controls in the control catalogue, with the current interaction mode and global controls shown first.
-It includes controls that the action bar does not show.
+It includes controls that the action bar does not show, and every meaning of a key the current mode dispatches: Enter is listed as both Hand off and Decide, each with its own reason.
 The Consultation launcher, Consultation view, response editor, Agent terminal and Consultation confirmation panel still dispatch their own keys, so no control of theirs is in the catalogue and the guide does not list them (issue #9).
 _Avoid_: help popup, keybinding popin, shortcut window
 

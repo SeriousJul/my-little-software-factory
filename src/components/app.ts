@@ -1484,9 +1484,7 @@ export function App({
 		focusedPane === "list" ? "ticket-list" : "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
 		contextFor(mode, {
-			tickets: ticketsRef.current,
 			selectedTicket: ticketsRef.current[selectedIndexRef.current],
-			selectedIndex: selectedIndexRef.current,
 			listCanMove: ticketsRef.current.length > 1,
 			detailCanScroll: detailMaxScroll > 0,
 			sourceCount: sources.length,
@@ -2374,7 +2372,8 @@ export function App({
 			createElement(ActionBar, {
 				mode: actionMode,
 				context: ticketContext,
-				compactHelp: tooSmall,
+				width: terminalWidth,
+				compactAnchor: tooSmall,
 			}),
 		override !== null &&
 			createElement(OverridePanel, {

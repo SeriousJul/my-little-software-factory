@@ -12,7 +12,7 @@ import {
 	type InteractionMode,
 	modeTitle,
 } from "./controls.ts";
-import type { MessageFact } from "./messages.ts";
+import { type MessageFact, messageColor } from "./messages.ts";
 import { ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { COLORS, prefixForSeverity } from "./theme.ts";
@@ -83,7 +83,9 @@ interface KeyGuideProps {
 export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit }: KeyGuideProps) {
 	const { width, height } = useTerminalDimensions();
 	const mode = context.mode;
-	const entries = useMemo(() => guideControls(mode, context), [mode, context]);
+	// What the guide lists depends on the mode alone; what each row says about
+	// availability is read from the live context when the row renders.
+	const entries = useMemo(() => guideControls(mode), [mode]);
 	const frame = modalFrame(width, height, {
 		maxWidth: UTILITY_MAX_WIDTH,
 		maxHeight: UTILITY_MAX_HEIGHT,
@@ -110,6 +112,7 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 	const range = rangeIndicator(scroll, visible.length, rows.length);
 	return createElement(ModalSurface, {
 		frame,
+		width,
 		title: modalTitle,
 		borderColor: COLORS.borderFocused,
 		minContentRows: 1,
@@ -176,6 +179,7 @@ export function MessageView({
 	const range = rangeIndicator(scroll, visible.length, wrapped.length);
 	return createElement(ModalSurface, {
 		frame,
+		width,
 		title: modalTitle,
 		borderColor: fact.severity === "error" ? COLORS.statusError : COLORS.borderFocused,
 		minContentRows: 1,
@@ -189,7 +193,7 @@ export function MessageView({
 		children: visible.map((line, index) =>
 			createElement(
 				"text",
-				{ key: `${scroll}-${index}`, fg: colorForSeverity(fact.severity) },
+				{ key: `${scroll}-${index}`, fg: messageColor(fact) },
 				padToWidth(truncateToWidth(line, frame.contentWidth), frame.contentWidth),
 			),
 		),
@@ -208,7 +212,8 @@ type GuideLine =
 			keys: string;
 			label: string;
 			reason?: string;
-			controlId: string;
+			/** Whether this row states a control the app will not run here. */
+			dimmed: boolean;
 			/** The cell this row's reason starts at, once it is flowed. */
 			indent?: number;
 	  }
@@ -235,9 +240,11 @@ function guideRows(
 			label: entry.control.label,
 			// A control that is always available carries its guide note; a
 			// current-mode control carries its live unavailable reason. Other
-			// modes state behavior, never a guessed availability claim.
+			// modes state behavior, never a guessed availability claim. The row
+			// dims on the availability, never on which note it happens to carry:
+			// a guide note is a fact about the control, not a refusal.
 			reason: availability.available ? entry.control.guideNote : availability.reason,
-			controlId: entry.control.id,
+			dimmed: !availability.available,
 		});
 	}
 	return flowGuideRows(rows, width);
@@ -315,7 +322,7 @@ function guideRowElement(row: GuideLine, width: number, key: string): ReactEleme
 				width,
 			),
 		);
-	const unavailable = row.reason !== undefined && row.controlId !== "emergency-exit";
+	const unavailable = row.dimmed;
 	const reason = row.reason === undefined ? "" : ` - ${row.reason}`;
 	return createElement(
 		"text",
@@ -328,12 +335,4 @@ function guideRowElement(row: GuideLine, width: number, key: string): ReactEleme
 			truncateToWidth(reason, Math.max(0, width - widthOf(row.keys) - widthOf(`  ${row.label}`))),
 		),
 	);
-}
-
-function colorForSeverity(severity: MessageFact["severity"]): string {
-	return severity === "error"
-		? COLORS.statusError
-		: severity === "warning"
-			? COLORS.statusWarning
-			: COLORS.statusWorking;
 }
