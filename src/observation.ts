@@ -568,20 +568,46 @@ export class ObservationCoordinator {
 			if (this.stopped) return changed;
 			const match = matchConsultationAgent(consultation, agents);
 			if (match === "ambiguous" || match === undefined) {
-				// An opening is recovery-required after restart. Polling may show its
-				// Agent, but only an explicit recovery decision can advance it.
-				if (consultation.state === "opening") continue;
+				if (consultation.state === "opening") {
+					// A restart can interrupt launch between durable steps. The
+					// operator, not the poll, decides whether recovery continues.
+					const warning =
+						match === "ambiguous"
+							? "Opening Agent match is ambiguous; explicit recovery is required"
+							: "Opening Agent is not visible; explicit recovery is required";
+					if (consultation.warning !== warning) {
+						this.state.setConsultationWarning(consultation.id, warning);
+						changed = true;
+						this.onStatus("warning", `Consultation ${consultation.id.slice(0, 8)} needs recovery`);
+					}
+					continue;
+				}
 				const reason = match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
 				const moved = this.state.setConsultationState(consultation.id, "missing", reason);
 				changed = moved || changed;
 				if (moved)
-					this.onStatus(
-						"warning",
-						`${reason} for Consultation ${consultation.id.slice(0, 8)}`,
-					);
+					this.onStatus("warning", `${reason} for Consultation ${consultation.id.slice(0, 8)}`);
 				continue;
 			}
-			if (consultation.state === "opening") continue;
+			if (consultation.state === "opening") {
+				// A uniquely verified Agent may refresh its durable handles, but
+				// remains opening until the operator chooses recovery.
+				this.state.recordConsultationAgentHandles(consultation.id, {
+					paneId: match.paneId,
+					tabId: match.tabId,
+					workspaceId: match.workspaceId,
+					sessionId: match.stableSessionId ?? consultation.sessionId,
+				});
+				const warning =
+					normalizeAgentStatus(match.status) === "unknown"
+						? "Agent status is unknown"
+						: "Opening Agent verified; explicit recovery is required";
+				if (consultation.warning !== warning) {
+					this.state.setConsultationWarning(consultation.id, warning);
+					changed = true;
+				}
+				continue;
+			}
 			if (
 				consultation.paneId !== match.paneId ||
 				consultation.tabId !== match.tabId ||
@@ -623,7 +649,22 @@ export class ObservationCoordinator {
 						new Date(this.now()).toISOString(),
 					) || changed;
 			const before = this.state.consultation(consultation.id);
-			if (before?.state !== "working" || status === "working") continue;
+			if (
+				before?.state === "awaiting-response" &&
+				this.state.consultationNeedsSnapshot(consultation.id)
+			) {
+				const output = await this.herdr.readPane(
+					match.paneId,
+					this.config().completionMessageLines,
+				);
+				if (this.stopped) return changed;
+				if (output !== null && this.state.fillConsultationSnapshot(consultation.id, output)) {
+					changed = true;
+					this.onConsultationsChanged?.();
+				}
+			}
+			const current = this.state.consultation(consultation.id);
+			if (current?.state !== "working" || status === "working") continue;
 			const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
 			if (this.stopped) return changed;
 			const settled = this.state.settleConsultationTurn(

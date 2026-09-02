@@ -23,6 +23,7 @@ import {
 	type WorkflowEdge,
 } from "../config.ts";
 import {
+	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
 	inspectLiveCheckout,
@@ -30,6 +31,7 @@ import {
 	type LiveCheckoutSafety,
 	serializeRepositoryOperation,
 	translateAgentKey,
+	validateConsultationRepositoryOptions,
 	validateResponseInput,
 } from "../consultation.ts";
 import {
@@ -59,22 +61,12 @@ import {
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import { commandFailureText, expandHome, type RepositoryMapping } from "../repo.ts";
-import {
-	type CommandResult,
-	type CommandRunner,
-	createChildProcessRunner,
-	errorMessage,
-} from "../runner.ts";
-import type {
-	Consultation,
-	ConsultationResource,
-	FactoryState,
-	HandoffClaim,
-	HandoffOrigin,
-} from "../state.ts";
+import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
+import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
 import { ActionPanel } from "./action-panel.ts";
+import { renderAnsiScreen } from "./ansi-screen.ts";
 import {
 	type ActionContext,
 	ActionGuide,
@@ -105,6 +97,7 @@ type Panel =
 	| { kind: "decision"; identity: string }
 	| { kind: "missing"; identity: string }
 	| { kind: "consultation-close"; identity: string }
+	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string };
 
@@ -204,6 +197,7 @@ export function App({
 		consultationId: string;
 		safety: LiveCheckoutSafety;
 	} | null>(null);
+	const [repositoryOptions, setRepositoryOptions] = useState<ConsultationRepositoryOption[]>([]);
 	const [responseEditor, setResponseEditor] = useState(false);
 	const [responseDraft, setResponseDraft] = useState("");
 	const responseDraftRef = useRef("");
@@ -254,9 +248,14 @@ export function App({
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	const consultationOperationQueues = useRef(new Map<string, Promise<void>>());
+	const openingLaunches = useRef(new Set<string>());
+	const interactionInputQueue = useRef<ConsultationInputQueue | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
 
 	const commandRunner = runner ?? realRunner();
+	if (interactionInputQueue.current === undefined)
+		interactionInputQueue.current = new ConsultationInputQueue(commandRunner);
+	const inputQueue = interactionInputQueue.current;
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
 	const healthLine = healths
@@ -309,6 +308,7 @@ export function App({
 		modal: override !== null || panel !== null,
 		responseEditor,
 		interaction,
+		interactionExitKey: config.interactionExitKey,
 	};
 	const selectedConsultationAgentStatus =
 		selectedConsultation === undefined || selectedConsultation.paneId === null || agents === null
@@ -335,16 +335,30 @@ export function App({
 	const consultationWidth = consultationNarrow
 		? Math.max(1, terminalWidth - 4)
 		: detailGeometry.usableCols;
+	const remainingResources =
+		selectedConsultation === undefined ||
+		state === undefined ||
+		selectedConsultation.state !== "closed"
+			? []
+			: state.consultationRemainingResources(selectedConsultation.id);
 	const consultationLines = consultationDetailLines(
 		selectedConsultation,
 		consultationTurns,
 		consultationSnapshots,
 		consultationWidth,
-		liveOutput,
+		interaction ? null : liveOutput,
 		replacementIds,
 		selectedConsultationAgentStatus,
+		remainingResources,
 	);
-	const consultationMaxScroll = maxScrollOf(consultationLines.length, detailGeometry.visibleRows);
+	const ansiLines =
+		interaction && liveOutput !== null
+			? renderAnsiScreen(liveOutput, consultationWidth)
+			: undefined;
+	const consultationMaxScroll = maxScrollOf(
+		ansiLines?.length ?? consultationLines.length,
+		detailGeometry.visibleRows,
+	);
 	const consultationDetailScroll = Math.min(consultationScroll, consultationMaxScroll);
 
 	const replaceTickets = useCallback(() => {
@@ -884,7 +898,12 @@ export function App({
 	};
 
 	const launchConsultation = (consultation: Consultation) => {
-		if (state === undefined) return;
+		if (state === undefined || !state.canRecoverConsultationOpening(consultation.id)) return;
+		if (openingLaunches.current.has(consultation.id)) {
+			setStatus({ kind: "info", text: "Consultation opening is already in progress" });
+			return;
+		}
+		openingLaunches.current.add(consultation.id);
 		const onStage = (stage: string) =>
 			setStatus({ kind: "info", text: `Consultation ${consultation.id.slice(0, 8)}: ${stage}` });
 		void serializeRepositoryOperation(
@@ -899,7 +918,21 @@ export function App({
 					onStage,
 					onRepositoryResolved: (path) =>
 						state.setConsultationRepositoryPath(consultation.id, path),
-					onAgentStarted: (agent) => state.recordConsultationAgentHandles(consultation.id, agent),
+					onAgentStarted: (agent) => {
+						state.recordConsultationAgentHandles(consultation.id, agent);
+						state.recordConsultationResource(consultation.id, {
+							kind: "pane",
+							resourceId: agent.paneId,
+							owned: true,
+							details: "Consultation Agent pane",
+						});
+						state.recordConsultationResource(consultation.id, {
+							kind: "agent",
+							resourceId: consultation.agentName,
+							owned: true,
+							details: `Agent hosted by pane ${agent.paneId}`,
+						});
+					},
 					onResource: (kind, resourceId, owned, details) =>
 						state.recordConsultationResource(consultation.id, {
 							kind,
@@ -950,7 +983,8 @@ export function App({
 					kind: "error",
 					text: `Consultation ${consultation.id.slice(0, 8)} failed: ${errorMessage(error)}`,
 				});
-			});
+			})
+			.finally(() => openingLaunches.current.delete(consultation.id));
 	};
 
 	const beginConsultationLaunch = (consultation: Consultation) => {
@@ -984,7 +1018,6 @@ export function App({
 					ticketsRef.current,
 					state.consultations("open"),
 					probe.agents,
-					consultation.repository.identity,
 				)
 					.then((safety) => {
 						if (safety.warning !== undefined)
@@ -1058,20 +1091,12 @@ export function App({
 		beginConsultationLaunch(consultation);
 	};
 
-	const retryConsultation = (consultation: Consultation) => {
-		if (state === undefined || consultation.state !== "failed") return;
-		if (!state.retryConsultationOpening(consultation.id)) {
-			setStatus({
-				kind: "warning",
-				text: "Consultation retry is blocked until its recorded resources are closed",
-			});
-			return;
-		}
-		const reopened = state.consultation(consultation.id);
-		if (reopened === undefined) return;
-		replaceConsultations();
-		setStatus({ kind: "info", text: `retrying Consultation ${consultation.id.slice(0, 8)}...` });
-		beginConsultationLaunch(reopened);
+	const recoverConsultationOpening = (consultation: Consultation) => {
+		if (state === undefined || consultation.state !== "opening") return;
+		const current = state.consultation(consultation.id);
+		if (current === undefined || !state.canRecoverConsultationOpening(current.id)) return;
+		setStatus({ kind: "info", text: `recovering Consultation ${current.id.slice(0, 8)}...` });
+		beginConsultationLaunch(current);
 	};
 
 	const beginResponse = (consultation: Consultation) => {
@@ -1094,13 +1119,16 @@ export function App({
 			return;
 		}
 		state.setConsultationDraft(consultation.id, draft);
-		const turn = state.beginConsultationResponse(
+		const pending = state.beginConsultationResponse(
 			consultation.id,
 			draft,
 			consultation.latestSequence,
 		);
-		if (turn === undefined) {
-			setStatus({ kind: "warning", text: "the Consultation changed before the response was sent" });
+		if (pending === undefined) {
+			setStatus({
+				kind: "warning",
+				text: "a response delivery is already pending or the Consultation changed; inspect the Agent before retrying",
+			});
 			return;
 		}
 		setResponseEditor(false);
@@ -1112,24 +1140,26 @@ export function App({
 			.run("herdr", ["agent", "prompt", consultation.agentName, draft])
 			.then((result) => {
 				if (result.code !== 0) {
-					state.cancelConsultationResponse(consultation.id, turn.id);
+					state.cancelConsultationResponse(consultation.id, pending.id);
 					replaceConsultations();
 					setResponseEditor(true);
 					setStatus({ kind: "error", text: `response failed: ${commandFailureText(result)}` });
 					return;
 				}
-				const completed = state.completeConsultationResponse(consultation.id, turn.id);
+				const accepted = state.acceptConsultationResponse(consultation.id, pending.id);
 				replaceConsultations();
-				if (!completed) {
+				if (accepted === undefined) {
+					// The turn may already be settled by an observation poll; the
+					// saved draft survives either way for inspection.
 					setResponseEditor(true);
 					setStatus({
 						kind: "warning",
-						text: "response was sent, but the Consultation state changed; review the saved draft",
+						text: "response was delivered; inspect the Agent output and the saved draft",
 					});
 				} else setStatus(null);
 			})
 			.catch((error) => {
-				state.cancelConsultationResponse(consultation.id, turn.id);
+				state.cancelConsultationResponse(consultation.id, pending.id);
 				replaceConsultations();
 				setResponseEditor(true);
 				setStatus({ kind: "error", text: `response failed: ${errorMessage(error)}` });
@@ -1183,129 +1213,99 @@ export function App({
 	const closeConsultation = (consultation: Consultation) => {
 		if (state === undefined) return;
 		const current = state.consultation(consultation.id) ?? consultation;
-		if (current.state === "closed") {
-			setStatus({
-				kind: "warning",
-				text: `Consultation ${current.id.slice(0, 8)} is already closed`,
-			});
-			return;
-		}
-		const wasAlreadyClosing = current.state === "closing";
-		const started = wasAlreadyClosing || state.beginConsultationClose(current.id);
+		if (current.state === "closed") return;
+		const started = current.state === "closing" || state.beginConsultationClose(current.id);
 		if (!started) {
-			setStatus({
-				kind: "warning",
-				text: `Consultation ${consultation.id.slice(0, 8)} is already closing or closed`,
-			});
+			setStatus({ kind: "warning", text: "Consultation is already closing or closed" });
 			return;
 		}
+		if (current.paneId !== null && !current.resources.some((item) => item.kind === "pane"))
+			state.recordConsultationResource(current.id, {
+				kind: "pane",
+				resourceId: current.paneId,
+				owned: true,
+				details: "Recovered Consultation Agent pane",
+			});
 		replaceConsultations();
 		setStatus({ kind: "info", text: `closing Consultation ${current.id.slice(0, 8)}...` });
-		const capture = () =>
-			current.paneId === null
-				? Promise.resolve(null)
-				: new HerdrAgentReader(commandRunner).readPane(
-						current.paneId,
-						configRef.current.completionMessageLines,
-					);
 		void serializeRepositoryOperation(
 			consultationOperationQueues.current,
 			current.repository.identity,
 			async () => {
-				const output = await capture();
-				if (output !== null) state.captureConsultationPartial(consultation.id, output);
-				const commands: Array<{
-					promise: Promise<import("../runner.ts").CommandResult>;
-					closes: ConsultationResource[];
-				}> = [];
-				const resources = current.resources.filter((item) => item.owned && !item.confirmedClosed);
-				let agentStop: Promise<CommandResult> | undefined;
-				if (
-					!wasAlreadyClosing &&
-					current.state !== "missing" &&
-					current.state !== "failed" &&
-					current.agentName !== "" &&
-					current.paneId !== null
-				) {
-					agentStop = commandRunner.run("herdr", ["agent", "stop", current.agentName]);
-					commands.push({ promise: agentStop, closes: [] });
-					const stopped = await agentStop;
-					if (stopped.code !== 0) return { results: [stopped], commands };
-					agentStop = undefined;
-				}
-				let cleanupTail: Promise<CommandResult> | undefined = agentStop;
-				const addCleanup = (args: readonly string[], closes: ConsultationResource[]) => {
-					const run = () => commandRunner.run("herdr", args);
-					const promise =
-						cleanupTail === undefined
-							? run()
-							: cleanupTail.then((result) => (result.code === 0 ? run() : result));
-					cleanupTail = promise;
-					commands.push({ promise, closes });
+				const output =
+					current.paneId === null
+						? null
+						: await new HerdrAgentReader(commandRunner).readPane(
+								current.paneId,
+								configRef.current.completionMessageLines,
+							);
+				if (output !== null) state.captureConsultationPartial(current.id, output);
+				const refreshed = state.consultation(current.id) ?? current;
+				const resources = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
+				const workspace = resources.find((item) => item.kind === "workspace");
+				const tab = resources.find((item) => item.kind === "tab");
+				const pane = resources.find((item) => item.kind === "pane");
+				const agent = resources.find((item) => item.kind === "agent");
+				const worktrees = resources.filter((item) => item.kind === "worktree");
+				const WORKTREE_REMAIN = "retained after close: worktree and branch remain";
+				const markWorktreesRetained = () => {
+					for (const resource of worktrees)
+						state.markConsultationResourceShared(
+							current.id,
+							resource.kind,
+							resource.resourceId,
+							WORKTREE_REMAIN,
+						);
 				};
-				const workspace = resources.find((resource) => resource.kind === "workspace");
-				const worktree = resources.find((resource) => resource.kind === "worktree");
-				const tabs = resources.filter((resource) => resource.kind === "tab");
-				if (workspace !== undefined) {
+				let command: readonly string[] | undefined;
+				let closes: typeof resources = [];
+				const workspaceId = workspace?.resourceId ?? current.workspaceId;
+				if (workspaceId !== null && pane !== undefined) {
 					const topology = await workspaceTopology(
 						commandRunner,
-						workspace.resourceId,
-						current.paneId,
-						tabs[0]?.resourceId ?? current.tabId,
+						workspaceId,
+						pane.resourceId,
+						tab?.resourceId ?? current.tabId,
 					);
-					if (!topology.known) {
-						const failure: CommandResult = {
-							code: 1,
-							stdout: "",
-							stderr: "could not verify whether the workspace is shared",
-						};
-						commands.push({ promise: Promise.resolve(failure), closes: [] });
-					} else if (topology.exclusive) {
-						if (current.environment === "worktree") {
-							addCleanup(
-								["worktree", "remove", "--workspace", (worktree ?? workspace).resourceId],
-								worktree === undefined ? [] : [worktree],
-							);
-						}
-						addCleanup(["workspace", "close", workspace.resourceId], [workspace, ...tabs]);
+					if (!topology.known)
+						throw new Error("could not verify the Consultation workspace topology");
+					if (topology.workspaceExclusive && workspace !== undefined) {
+						// Only an owned workspace may be closed whole: an adopted
+						// workspace belongs to someone else even while empty.
+						command = ["workspace", "close", workspace.resourceId];
+						closes = resources.filter((item) => item.kind !== "worktree");
+						markWorktreesRetained();
+					} else if (topology.ownedTabExclusive && tab !== undefined) {
+						command = ["tab", "close", tab.resourceId];
+						closes = [tab, pane, ...(agent === undefined ? [] : [agent])];
+						if (workspace !== undefined)
+							state.markConsultationResourceShared(current.id, "workspace", workspace.resourceId);
+						markWorktreesRetained();
 					} else {
-						// The workspace became shared. Close only the tab owned by this
-						// Consultation and leave the shared workspace alive.
-						state.markConsultationResourceShared(current.id, "workspace", workspace.resourceId);
-						if (worktree !== undefined)
-							state.markConsultationResourceShared(current.id, "worktree", worktree.resourceId);
-						for (const resource of tabs)
-							addCleanup(["tab", "close", resource.resourceId], [resource]);
+						// A foreign pane shares the owned tab: close the pane alone.
+						command = ["pane", "close", pane.resourceId];
+						closes = [pane, ...(agent === undefined ? [] : [agent])];
+						if (workspace !== undefined)
+							state.markConsultationResourceShared(current.id, "workspace", workspace.resourceId);
+						if (tab !== undefined)
+							state.markConsultationResourceShared(current.id, "tab", tab.resourceId);
+						markWorktreesRetained();
 					}
-				} else {
-					for (const resource of tabs)
-						addCleanup(["tab", "close", resource.resourceId], [resource]);
+				} else if (pane !== undefined) {
+					command = ["pane", "close", pane.resourceId];
+					closes = [pane, ...(agent === undefined ? [] : [agent])];
 				}
-				return Promise.all(commands.map((command) => command.promise)).then((results) => ({
-					results,
-					commands,
-				}));
+				if (command === undefined) return;
+				const result = await commandRunner.run("herdr", command);
+				if (result.code !== 0) throw new Error(commandFailureText(result));
+				for (const resource of closes)
+					state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
 			},
 		)
-			.then(({ results, commands }) => {
-				for (const [index, command] of commands.entries()) {
-					if (results[index]?.code !== 0) continue;
-					for (const resource of command.closes)
-						state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
-				}
-				const failure = results.find((result) => result.code !== 0);
-				if (failure !== undefined) {
-					state.recordConsultationCloseFailure(current.id, commandFailureText(failure));
-					replaceConsultations();
-					setStatus({
-						kind: "error",
-						text: `Consultation close needs recovery: ${commandFailureText(failure)}`,
-					});
-					return;
-				}
-				state.finishConsultationClose(consultation.id);
+			.then(() => {
+				state.finishConsultationClose(current.id);
 				replaceConsultations();
-				setStatus({ kind: "info", text: `Consultation ${consultation.id.slice(0, 8)} closed` });
+				setStatus({ kind: "info", text: `Consultation ${current.id.slice(0, 8)} closed` });
 			})
 			.catch((error) => {
 				state.recordConsultationCloseFailure(current.id, errorMessage(error));
@@ -1398,12 +1398,15 @@ export function App({
 		if (override !== null || panel !== null || launcher || utility !== null) return;
 		if (interaction) {
 			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
-			if (
-				key.name.toLowerCase() === exit ||
-				(key.ctrl && exit === `ctrl+${key.name.toLowerCase()}`)
-			) {
+			const keyName = key.name.toLowerCase();
+			const isExit = keyName === exit || (key.ctrl === true && exit === `ctrl+${keyName}`);
+			if (isExit) {
 				setInteraction(false);
-				setStatus({ kind: "info", text: "left Agent interaction mode" });
+				// Settle the queued input before announcing the exit: the last
+				// key the operator sent still belongs to the Agent.
+				void inputQueue
+					.flush()
+					.then(() => setStatus({ kind: "info", text: "left Agent interaction mode" }));
 				return;
 			}
 			const selected = consultationsRef.current[consultationIndexRef.current];
@@ -1411,19 +1414,22 @@ export function App({
 				selected?.paneId === null || selected?.paneId === undefined
 					? null
 					: translateAgentKey(key, configRef.current.interactionExitKey);
-			if (selected !== undefined && event !== null) {
-				const command =
-					event.kind === "text"
-						? ["pane", "send-text", selected.paneId as string, event.text]
-						: ["pane", "send-keys", selected.paneId as string, event.key];
-				void commandRunner.run("herdr", command).then((result) => {
-					if (result.code === 0) setNewOutput(true);
-					else
+			if (selected !== undefined && selected.paneId !== null && event !== null) {
+				void inputQueue.enqueue(selected.paneId, event).then(
+					(result) => {
+						if (result.code === 0) setNewOutput(true);
+						else
+							setStatus({
+								kind: "error",
+								text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
+							});
+					},
+					(error) =>
 						setStatus({
 							kind: "error",
-							text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
-						});
-				});
+							text: `Agent interaction failed: ${errorMessage(error)}`,
+						}),
+				);
 			}
 			return;
 		}
@@ -1449,7 +1455,7 @@ export function App({
 				return;
 			}
 			if ([...key.name].length > 0 && isLiteralText(key.name)) {
-				responseDraftRef.current += key.name;
+				responseDraftRef.current += key.name === "space" ? " " : key.name;
 				setResponseDraft(responseDraftRef.current);
 				if (state !== undefined && selectedConsultation !== undefined)
 					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
@@ -1602,8 +1608,8 @@ export function App({
 				if (!openAttention()) toggleAutoHandoff();
 				break;
 			case "r":
-				if (viewRef.current === "consultations" && selectedConsultation?.state === "failed")
-					retryConsultation(selectedConsultation);
+				if (viewRef.current === "consultations" && selectedConsultation?.state === "opening")
+					recoverConsultationOpening(selectedConsultation);
 				else coordinatorRef.current?.refreshAll();
 				break;
 			default:
@@ -1618,6 +1624,30 @@ export function App({
 		replaceTickets();
 		replaceConsultations();
 	}, [state, replaceTickets, replaceConsultations]);
+
+	// Repository choices are validated before the launcher presents them. A
+	// stale mapping stays hidden instead of letting an operator start in an
+	// unrelated checkout.
+	const repositoryCatalogKey = consultationRepositoryCatalog(config, tickets)
+		.map((option) => `${option.identity}\u0000${option.path}`)
+		.join("\u0001");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: repositoryCatalogKey is derived from config and tickets and tracks both
+	useEffect(() => {
+		let active = true;
+		void validateConsultationRepositoryOptions(
+			consultationRepositoryCatalog(config, tickets),
+			commandRunner,
+			homeDir,
+		).then((options) => {
+			if (active) setRepositoryOptions(options);
+		});
+		return () => {
+			active = false;
+		};
+		// Re-validate only when the catalog contents change. The tickets array
+		// gets a fresh identity on every poll, and re-validating on each poll
+		// would spawn git calls for every repository per tick.
+	}, [commandRunner, homeDir, repositoryCatalogKey]);
 
 	// The selected Agent output refreshes at one-second cadence. Lifecycle
 	// polling remains owned by the shared observation coordinator.
@@ -1811,6 +1841,7 @@ export function App({
 		panel === null ||
 		panel.kind === "consultation-close" ||
 		panel.kind === "consultation-delete" ||
+		panel.kind === "consultation-force" ||
 		panel.kind === "consultation-safety"
 			? undefined
 			: ticketsRef.current.find((ticket) => ticket.identity === panel.identity);
@@ -1818,6 +1849,7 @@ export function App({
 		panel !== null &&
 		(panel.kind === "consultation-close" ||
 			panel.kind === "consultation-delete" ||
+			panel.kind === "consultation-force" ||
 			panel.kind === "consultation-safety")
 			? consultationsRef.current.find((item) => item.id === panel.identity)
 			: undefined;
@@ -1833,7 +1865,6 @@ export function App({
 				: healths.length === 0 || healths.some((health) => health.health === "loading")
 					? "loading tickets..."
 					: "no tickets match the configured sources";
-	const repositoryOptions = consultationRepositoryCatalog(config, tickets);
 	const replacementConsultation =
 		replacementConsultationId === null
 			? undefined
@@ -1914,7 +1945,8 @@ export function App({
 						{ style: { flexGrow: 1, flexDirection: "column" } },
 						createElement(ConsultationDetail, {
 							lines: consultationLines,
-							visibleRows: Math.max(1, detailGeometry.visibleRows - (responseEditor ? 3 : 0)),
+							ansiLines,
+							visibleRows: Math.max(1, detailGeometry.visibleRows - (responseEditor ? 6 : 0)),
 							scroll: consultationDetailScroll,
 							focused: focusedPane === "detail" && !responseEditor,
 							compactHeading:
@@ -1930,7 +1962,7 @@ export function App({
 									borderColor: COLORS.borderFocused,
 									title: "Response",
 									padding: 1,
-									style: { height: 4, flexDirection: "column" },
+									style: { flexDirection: "column" },
 								},
 								createElement(
 									"text",
@@ -2098,8 +2130,40 @@ export function App({
 					{ key: "cancel", label: "Cancel", detail: "keep the Consultation running" },
 				],
 				onAction: (key) => {
+					if (key === "close" || key === "retry") {
+						setPanel(null);
+						closeConsultation(panelConsultation);
+					}
+					if (key === "force")
+						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
+				},
+				onCancel: () => setPanel(null),
+			}),
+		panel !== null &&
+			panel.kind === "consultation-force" &&
+			panelConsultation !== undefined &&
+			state !== undefined &&
+			createElement(ActionPanel, {
+				title: `Force-close Consultation ${panelConsultation.id.slice(0, 8)}?`,
+				bodyLines: [
+					"Force-close stops the cleanup and closes the record. These owned",
+					"resources remain in herdr and stay recorded for later recovery:",
+					...state
+						.consultationResources(panelConsultation.id)
+						.filter((item) => item.owned && !item.confirmedClosed)
+						.map((item) => `${item.kind} ${item.resourceId} - ${item.details}`),
+					...(state
+						.consultationResources(panelConsultation.id)
+						.filter((item) => item.owned && !item.confirmedClosed).length === 0
+						? ["No owned resources are recorded."]
+						: []),
+				],
+				actions: [
+					{ key: "force", label: "Force-close", detail: "record the remaining resources" },
+					{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
+				],
+				onAction: (key) => {
 					setPanel(null);
-					if (key === "close" || key === "retry") closeConsultation(panelConsultation);
 					if (key === "force") forceCloseConsultation(panelConsultation);
 				},
 				onCancel: () => setPanel(null),
@@ -2132,38 +2196,63 @@ export function App({
 	);
 }
 
+/**
+ * What one close operation may take down, judged per level:
+ *
+ * - workspaceExclusive: no other tab and no other pane anywhere, so the
+ *   workspace close takes down exactly the Consultation's own tab and pane.
+ * - ownedTabExclusive: the Consultation's tab holds no other pane, so the tab
+ *   close takes down exactly the Consultation's own pane, whatever other tabs
+ *   share the workspace.
+ *
+ * Neither holds when a foreign pane sits in the owned tab: then only the
+ *   pane close is safe. A foreign pane in another tab of the same workspace
+ *   never blocks the tab close, because herdr closes tabs and panes, not
+ *   workspaces, at that level.
+ */
 async function workspaceTopology(
 	runner: CommandRunner,
 	workspaceId: string,
 	ownedPaneId: string | null,
 	ownedTabId: string | null,
-): Promise<{ known: boolean; exclusive: boolean }> {
+): Promise<{ known: boolean; workspaceExclusive: boolean; ownedTabExclusive: boolean }> {
 	const [tabs, panes] = await Promise.all([
 		runner.run("herdr", ["tab", "list", "--workspace", workspaceId]),
 		runner.run("herdr", ["pane", "list", "--workspace", workspaceId]),
 	]);
-	if (tabs.code !== 0 || panes.code !== 0) return { known: false, exclusive: false };
+	if (tabs.code !== 0 || panes.code !== 0)
+		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
 	try {
 		const tabData = JSON.parse(tabs.stdout) as { result?: { tabs?: unknown } };
 		const paneData = JSON.parse(panes.stdout) as { result?: { panes?: unknown } };
 		if (!Array.isArray(tabData.result?.tabs) || !Array.isArray(paneData.result?.panes))
-			return { known: false, exclusive: false };
+			return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
 		if (
 			!tabData.result.tabs.every((tab) => isRecordValue(tab) && typeof tab.tab_id === "string") ||
 			!paneData.result.panes.every(
-				(pane) => isRecordValue(pane) && typeof pane.pane_id === "string",
+				(pane) =>
+					isRecordValue(pane) &&
+					typeof pane.pane_id === "string" &&
+					typeof pane.tab_id === "string",
 			)
 		)
-			return { known: false, exclusive: false };
+			return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
 		const otherTabs = tabData.result.tabs.filter(
 			(tab) => (tab as { tab_id: string }).tab_id !== ownedTabId,
 		);
-		const otherPanes = paneData.result.panes.filter(
+		const panesInOwnedTab = paneData.result.panes.filter(
+			(pane) => (pane as { tab_id: string }).tab_id === ownedTabId,
+		);
+		const foreignPanesInOwnedTab = panesInOwnedTab.filter(
 			(pane) => (pane as { pane_id: string }).pane_id !== ownedPaneId,
 		);
-		return { known: true, exclusive: otherTabs.length === 0 && otherPanes.length === 0 };
+		return {
+			known: true,
+			workspaceExclusive: otherTabs.length === 0 && foreignPanesInOwnedTab.length === 0,
+			ownedTabExclusive: foreignPanesInOwnedTab.length === 0,
+		};
 	} catch {
-		return { known: false, exclusive: false };
+		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
 	}
 }
 

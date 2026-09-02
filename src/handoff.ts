@@ -310,15 +310,16 @@ async function startConsultationLive(
 			}
 		).result?.workspaces ?? [];
 	const checkoutReal = await realPathOf(checkout);
-	const found = workspaces.find(
-		(workspace) =>
-			typeof workspace.workspace_id === "string" &&
-			typeof workspace.worktree?.checkout_path === "string" &&
-			(workspace.worktree.checkout_path === checkout ||
-				awaitRealPath(workspace.worktree.checkout_path, checkoutReal)),
-	);
-	if (found !== undefined && typeof found.workspace_id === "string")
-		return startAgentInNewTab(found.workspace_id, checkout, name, agent, args, prompt, ctx);
+	for (const workspace of workspaces) {
+		if (
+			typeof workspace.workspace_id !== "string" ||
+			typeof workspace.worktree?.checkout_path !== "string"
+		)
+			continue;
+		const recorded = workspace.worktree.checkout_path;
+		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal)
+			return startAgentInNewTab(workspace.workspace_id, checkout, name, agent, args, prompt, ctx);
+	}
 	const created = await ctx.runner.run("herdr", [
 		"workspace",
 		"create",
@@ -339,14 +340,6 @@ async function startConsultationLive(
 			ctx,
 		) as ConsultationHandoffOutcome;
 	return startAgentAndPrompt(name, agent, args, prompt, ctx, { paneId, tabId, workspaceId });
-}
-
-/** A small synchronous comparison used while parsing the workspace list. */
-function awaitRealPath(recorded: string, expected: string): boolean {
-	// The list already carries absolute paths in normal Herdr output. The
-	// async realpath comparison is done by resolveRepository before launch;
-	// keeping this check exact avoids a second external operation here.
-	return recorded === expected;
 }
 
 async function startConsultationWorktree(

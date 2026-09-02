@@ -122,7 +122,7 @@ export function ConsultationLauncher({
 			return;
 		}
 		if (fieldRef.current === 2 && [...key.name].length > 0 && isLiteralText(key.name))
-			setInputValue(inputRef.current + key.name);
+			setInputValue(inputRef.current + (key.name === "space" ? " " : key.name));
 	});
 	const innerWidth = Math.max(1, width - 6);
 	const currentType = names[typeIndex];

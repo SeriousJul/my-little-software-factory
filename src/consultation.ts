@@ -3,8 +3,8 @@ import type { FactoryConfig } from "./config.ts";
 import type { RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import type { HerdrAgent } from "./observation.ts";
-import { matchesRepository, realPathOf } from "./repo.ts";
-import type { CommandRunner } from "./runner.ts";
+import { expandHome, matchesRepository, realPathOf } from "./repo.ts";
+import type { CommandResult, CommandRunner } from "./runner.ts";
 import type { Consultation, ConsultationResource } from "./state.ts";
 
 export const CONSULTATION_INPUT_LIMIT = 64 * 1024;
@@ -101,6 +101,30 @@ export function consultationRepositoryCatalog(
 		.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+/**
+ * Verify launcher choices before showing them. This never clones or changes
+ * a checkout: an unverified mapping is not an operator choice.
+ */
+export async function validateConsultationRepositoryOptions(
+	options: readonly ConsultationRepositoryOption[],
+	runner: CommandRunner,
+	home: string,
+): Promise<ConsultationRepositoryOption[]> {
+	const verified = await Promise.all(
+		options.map(async (option) => {
+			const path = expandHome(option.path, home);
+			if (!(await fileExists(path))) return undefined;
+			const git = await runner.run("git", ["-C", path, "rev-parse", "--git-dir"]);
+			if (git.code !== 0) return undefined;
+			const remote = await runner.run("git", ["-C", path, "remote", "get-url", "origin"]);
+			if (remote.code !== 0 || !matchesRepository(remote.stdout.trim() || null, option.identity))
+				return undefined;
+			return { ...option, path: await realPathOf(path) };
+		}),
+	);
+	return verified.filter((option): option is ConsultationRepositoryOption => option !== undefined);
+}
+
 /** A safety fact shown before a live-worktree launch. */
 export interface LiveCheckoutSafety {
 	dirty: boolean;
@@ -124,7 +148,6 @@ export async function inspectLiveCheckout(
 	tickets: readonly Ticket[],
 	consultations: readonly Consultation[],
 	agents: readonly HerdrAgent[],
-	repositoryIdentity = "",
 ): Promise<LiveCheckoutSafety> {
 	if (!(await fileExists(checkout))) return { dirty: false, conflicts: [] };
 	const status = await runner.run("git", [
@@ -141,29 +164,28 @@ export async function inspectLiveCheckout(
 	const dirty = status.stdout.trim() !== "";
 	const conflicts: CheckoutConflict[] = [];
 	const target = await realPathOf(checkout);
-	const normalizedRepository = repositoryIdentity.toLowerCase().startsWith("github.com/")
-		? repositoryIdentity.toLowerCase()
-		: repositoryIdentity === ""
-			? ""
-			: `github.com/${repositoryIdentity.toLowerCase()}`;
+	// Ticket conflicts compare the resolved checkout, not the repository
+	// identity: a worktree handoff of the same repository does not share
+	// this live checkout, and a different mapping of the same repository
+	// does.
 	for (const ticket of tickets) {
-		const ticketRepository = ticket.repositoryRef.identity.toLowerCase().startsWith("github.com/")
-			? ticket.repositoryRef.identity.toLowerCase()
-			: `github.com/${ticket.repositoryRef.identity.toLowerCase()}`;
-		if (normalizedRepository === "" || ticketRepository !== normalizedRepository) continue;
-		if (
-			ticket.handoff === null ||
-			(ticket.state !== "handed-off" && ticket.state !== "running" && ticket.state !== "awaiting")
-		)
+		if (ticket.handoff === null || (ticket.state !== "handed-off" && ticket.state !== "running"))
 			continue;
 		if (ticket.handoff.paneId === null) continue;
 		const agent = agents.find((candidate) => candidate.paneId === ticket.handoff?.paneId);
-		if (agent !== undefined)
-			conflicts.push({
-				kind: "ticket",
-				identity: ticket.identity,
-				label: `Ticket ${ticket.identity}`,
-			});
+		if (agent === undefined) continue;
+		const agentCheckout =
+			agent.checkoutPath === undefined ? null : await realPathOf(agent.checkoutPath);
+		if (agentCheckout !== null) {
+			if (agentCheckout !== target) continue;
+		} else if (ticket.handoff.environment !== "live-worktree") continue;
+		// An unknown checkout of a live-worktree handoff cannot be proven
+		// separate: keep it a conflict instead of sharing a shared checkout.
+		conflicts.push({
+			kind: "ticket",
+			identity: ticket.identity,
+			label: `Ticket ${ticket.identity}`,
+		});
 	}
 	for (const consultation of consultations) {
 		if (
@@ -279,7 +301,7 @@ export function translateAgentKey(
 	// AltGr is reported as Meta by some layouts but still carries literal
 	// Unicode text. Preserve that text instead of turning it into a US key.
 	if (key.meta && !key.ctrl && isLiteralText(key.name) && key.name.length > 0)
-		return { kind: "text", text: key.name };
+		return { kind: "text", text: name === "space" ? " " : key.name };
 	if (key.ctrl || key.meta) {
 		if (name.length === 1 && /[a-z]/.test(name)) return { kind: "key", key: `ctrl+${name}` };
 		return null;
@@ -302,8 +324,111 @@ export function translateAgentKey(
 	if (semantic.has(name))
 		return { kind: "key", key: (name === "return" ? "enter" : name) as AgentKeyName };
 	if (/^f\d+$/.test(name)) return { kind: "key", key: name as AgentKeyName };
-	if ([...key.name].length > 0 && isLiteralText(key.name)) return { kind: "text", text: key.name };
+	if ([...key.name].length > 0 && isLiteralText(key.name))
+		return { kind: "text", text: name === "space" ? " " : key.name };
 	return null;
+}
+
+/**
+ * Queue Agent interaction input in terminal order.
+ *
+ * Literal text is batched up to a fixed UTF-8 bound. A semantic key flushes
+ * all preceding text before it enters the queue, so an Enter or control key
+ * can never overtake pasted Unicode text.
+ */
+export class ConsultationInputQueue {
+	private readonly runner: CommandRunner;
+	private readonly textBatchBytes: number;
+	private tail: Promise<void> = Promise.resolve();
+	private pendingText = "";
+	private pendingPaneId: string | null = null;
+	private pendingResolvers: Array<{
+		resolve: (result: CommandResult) => void;
+		reject: (reason: unknown) => void;
+	}> = [];
+	private flushScheduled = false;
+
+	constructor(runner: CommandRunner, textBatchBytes = 4096) {
+		this.runner = runner;
+		this.textBatchBytes = textBatchBytes;
+	}
+
+	enqueue(paneId: string, event: AgentInputEvent): Promise<CommandResult> {
+		if (event.kind === "key") {
+			this.flushText();
+			return this.enqueueCommand(["pane", "send-keys", paneId, event.key]);
+		}
+		if (event.text === "") return Promise.resolve({ code: 0, stdout: "", stderr: "" });
+		if (this.pendingPaneId !== null && this.pendingPaneId !== paneId) this.flushText();
+		this.pendingPaneId = paneId;
+		const promise = new Promise<CommandResult>((resolve, reject) => {
+			this.pendingResolvers.push({ resolve, reject });
+		});
+		this.pendingText += event.text;
+		if (!this.flushScheduled) {
+			this.flushScheduled = true;
+			queueMicrotask(() => {
+				this.flushScheduled = false;
+				this.flushText();
+			});
+		}
+		return promise;
+	}
+
+	/** Flush buffered text and wait until every queued input settles. */
+	async flush(): Promise<void> {
+		this.flushText();
+		await this.tail;
+	}
+
+	private flushText(): void {
+		if (this.pendingText === "") return;
+		const text = this.pendingText;
+		const paneId = this.pendingPaneId;
+		const resolvers = this.pendingResolvers;
+		this.pendingText = "";
+		this.pendingPaneId = null;
+		this.pendingResolvers = [];
+		if (paneId === null) return;
+		let last: Promise<CommandResult> | undefined;
+		for (const chunk of utf8Chunks(text, this.textBatchBytes))
+			last = this.enqueueCommand(["pane", "send-text", paneId, chunk]);
+		if (last === undefined) return;
+		void last.then(
+			(result) => {
+				resolvers.forEach(({ resolve }) => {
+					resolve(result);
+				});
+			},
+			(error) => {
+				resolvers.forEach(({ reject }) => {
+					reject(error);
+				});
+			},
+		);
+	}
+
+	private enqueueCommand(args: string[]): Promise<CommandResult> {
+		const run = this.tail.then(() => this.runner.run("herdr", args));
+		this.tail = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+}
+
+function utf8Chunks(text: string, limit: number): string[] {
+	const chunks: string[] = [];
+	let current = "";
+	for (const character of text) {
+		if (current !== "" && utf8ByteLength(current) + utf8ByteLength(character) > limit) {
+			chunks.push(current);
+			current = character;
+		} else current += character;
+	}
+	if (current !== "") chunks.push(current);
+	return chunks;
 }
 
 /** A resource fact which belongs to a Consultation and can be retried safely. */

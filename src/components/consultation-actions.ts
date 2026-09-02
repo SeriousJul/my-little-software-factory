@@ -19,6 +19,7 @@ export interface ActionContext {
 	modal: boolean;
 	responseEditor: boolean;
 	interaction: boolean;
+	interactionExitKey: string;
 }
 
 interface ActionHint {
@@ -130,7 +131,10 @@ export function ActionGuide({
 }
 
 function actionHints(context: ActionContext): ActionHint[] {
-	if (context.launcher || context.modal || context.responseEditor || context.interaction) {
+	if (context.interaction) {
+		return [{ key: exitKeyLabel(context.interactionExitKey), label: "exit", priority: 100 }];
+	}
+	if (context.launcher || context.modal || context.responseEditor) {
 		return [{ key: "Esc", label: "close", priority: 100 }];
 	}
 	if (context.view === "tickets") {
@@ -157,7 +161,7 @@ function actionHints(context: ActionContext): ActionHint[] {
 			: [{ key: "m", label: "message", priority: 65 }]),
 		{ key: "f", label: "history", priority: 60 },
 		{ key: "t", label: "Tickets", priority: 40 },
-		{ key: "r", label: selected?.state === "failed" ? "retry" : "refresh", priority: 35 },
+		{ key: "r", label: selected?.state === "opening" ? "recover" : "refresh", priority: 35 },
 		{ key: "?", label: "help", priority: 30 },
 		{ key: "q", label: "quit", priority: 20 },
 	];
@@ -192,10 +196,21 @@ function guideRows(context: ActionContext): string[] {
 			"",
 			"Launcher: Tab fields, arrows choose, Shift+Enter newline",
 			"Response: Enter submit, Shift+Enter newline, Esc keep draft",
-			"Agent view: End follows output; interaction exits with configured key",
+			`Agent view: End follows output; interaction exits with ${exitKeyLabel(context.interactionExitKey)}`,
 		);
 	rows.push("", "Esc closes this guide. F2 or m opens the full Message view.");
 	return rows;
+}
+
+/** The operator-facing label of the configured interaction exit key. */
+function exitKeyLabel(exitKey: string): string {
+	const normalized = exitKey
+		.trim()
+		.toLowerCase()
+		.replace(/^ctrl-/, "ctrl+");
+	return normalized.startsWith("ctrl+")
+		? `Ctrl+${normalized.slice(5).toUpperCase()}`
+		: normalized.toUpperCase();
 }
 
 export function actionBarElement(context: ActionContext): ReactElement {

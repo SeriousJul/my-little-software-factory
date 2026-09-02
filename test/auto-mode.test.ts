@@ -1151,9 +1151,18 @@ describe("the auto dispatch", () => {
 				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
 				expect(ticketRow(frame)).toContain("[open]");
 				// No herdr handoff commands: only the agent list polls.
+				// No herdr handoff commands: only agent list polls plus the
+				// one-time repository validation for the launcher.
 				const commands = app.runner.commands();
 				expect(commands.length).toBeGreaterThan(0);
-				expect(commands.every((c) => c === "herdr agent list")).toBe(true);
+				expect(
+					commands.every(
+						(c) =>
+							c === "herdr agent list" ||
+							c.endsWith(" rev-parse --git-dir") ||
+							c.endsWith(" remote get-url origin"),
+					),
+				).toBe(true);
 			},
 			WIDTH,
 			HEIGHT,

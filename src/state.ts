@@ -25,7 +25,7 @@ import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -131,6 +131,7 @@ export interface Consultation {
 	closeResult: string | null;
 	liveConflictOverride: boolean;
 	attentionAt: string | null;
+	pendingResponse: ConsultationPendingResponse | null;
 	resources: ConsultationResource[];
 }
 
@@ -140,6 +141,15 @@ export interface ConsultationResource {
 	owned: boolean;
 	confirmedClosed: boolean;
 	details: string;
+}
+
+/** A response submitted to Herdr whose acceptance is not yet confirmed. */
+export interface ConsultationPendingResponse {
+	id: string;
+	consultationId: string;
+	input: string;
+	sequenceBaseline: number | null;
+	createdAt: string;
 }
 
 export interface ConsultationTurn {
@@ -386,6 +396,15 @@ const MIGRATION_V3_TO_V4 = `
 	CREATE INDEX consultation_snapshots_consultation ON consultation_snapshots(consultation_id, captured_at);
 `;
 
+/** Pending prompt delivery is durable, but is not a turn until Herdr accepts it. */
+const MIGRATION_V4_TO_V5 = `
+	CREATE TABLE consultation_pending_responses (
+		id TEXT PRIMARY KEY, consultation_id TEXT NOT NULL UNIQUE, input TEXT NOT NULL,
+		sequence_baseline INTEGER, created_at TEXT NOT NULL,
+		FOREIGN KEY (consultation_id) REFERENCES consultations(id) ON DELETE CASCADE
+	);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -412,6 +431,7 @@ export class FactoryState {
 		try {
 			this.db.exec("PRAGMA foreign_keys = ON");
 			this.db.exec("PRAGMA secure_delete = ON");
+			this.verifyIntegrity();
 			this.db.exec("PRAGMA journal_mode = WAL");
 			if (path !== ":memory:") chmodSync(path, 0o600);
 			this.migrate();
@@ -424,18 +444,33 @@ export class FactoryState {
 					} catch {}
 				}
 			}
-			const integrity = this.db.prepare("PRAGMA integrity_check").get() as
-				| { integrity_check?: string }
-				| undefined;
-			if (integrity?.integrity_check !== "ok")
-				throw new StateError(
-					`database integrity check failed: ${integrity?.integrity_check ?? "unknown result"}`,
-				);
 		} catch (error) {
 			this.db.close();
 			if (error instanceof StateError) throw error;
 			throw new StateError(
 				`cannot prepare database ${path}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * Refuse a damaged state file before any write, including the journal mode
+	 * switch. The check runs before migrate because a migration's DDL can touch
+	 * a damaged page and mask the corruption with a generic "malformed" error.
+	 */
+	private verifyIntegrity(): void {
+		try {
+			const integrity = this.db.prepare("PRAGMA integrity_check").get() as
+				| { integrity_check?: string }
+				| undefined;
+			if (integrity?.integrity_check !== "ok")
+				throw new StateError(
+					`database integrity check failed at ${this.path}: ${integrity?.integrity_check ?? "unknown result"}`,
+				);
+		} catch (error) {
+			if (error instanceof StateError) throw error;
+			throw new StateError(
+				`database integrity check failed at ${this.path}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
 	}
@@ -474,6 +509,7 @@ export class FactoryState {
 			}
 			if (version < 3) this.db.exec(MIGRATION_V2_TO_V3);
 			if (version < 4) this.db.exec(MIGRATION_V3_TO_V4);
+			if (version < 5) this.db.exec(MIGRATION_V4_TO_V5);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1321,14 +1357,12 @@ export class FactoryState {
 			);
 	}
 
-	/** Reopen a failed pre-Agent Consultation when no owned resource remains. */
-	retryConsultationOpening(id: string): boolean {
-		const result = this.db
-			.prepare(
-				"UPDATE consultations SET state = 'opening', failure = NULL, warning = NULL, updated_at = ? WHERE id = ? AND state = 'failed' AND pane_id IS NULL AND NOT EXISTS (SELECT 1 FROM consultation_resources WHERE consultation_id = ? AND owned = 1 AND confirmed_closed = 0)",
-			)
-			.run(new Date().toISOString(), id, id);
-		return Number(result.changes) > 0;
+	/** Whether an interrupted opening can be explicitly resumed by the operator. */
+	canRecoverConsultationOpening(id: string): boolean {
+		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+			| { state: ConsultationState }
+			| undefined;
+		return row?.state === "opening";
 	}
 
 	/** Record an opening outcome. A pre-Agent failure is immutable. */
@@ -1379,6 +1413,7 @@ export class FactoryState {
 				| undefined;
 			if (row?.state !== "awaiting-response") return false;
 			if (row.latest_sequence !== null && sequence <= row.latest_sequence) return false;
+			const pending = this.pendingConsultationResponse(id);
 			this.db
 				.prepare(
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
@@ -1386,10 +1421,12 @@ export class FactoryState {
 				.run(
 					randomUUID(),
 					id,
-					"[external Agent input not captured]",
+					pending?.input ?? "[external Agent input not captured]",
 					acceptedAt,
-					row.latest_sequence,
+					pending?.sequenceBaseline ?? row.latest_sequence,
 				);
+			if (pending !== null)
+				this.db.prepare("DELETE FROM consultation_pending_responses WHERE id = ?").run(pending.id);
 			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'working', latest_sequence = ?, draft_old = CASE WHEN draft <> '' THEN 1 ELSE 0 END, updated_at = ? WHERE id = ?",
@@ -1427,80 +1464,50 @@ export class FactoryState {
 			.run(draft, new Date().toISOString(), old ? 1 : 0, new Date().toISOString(), id);
 	}
 
-	/** Begin sending a Response and create exactly one durable turn. */
+	/** Save a response delivery operation before asking Herdr to accept it. */
 	beginConsultationResponse(
 		id: string,
 		input: string,
 		sequenceBaseline: number | null = null,
-	): ConsultationTurn | undefined {
+	): ConsultationPendingResponse | undefined {
 		return this.transaction(() => {
 			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 				| { state: ConsultationState }
 				| undefined;
-			if (row?.state !== "awaiting-response") return undefined;
+			if (row?.state !== "awaiting-response" || this.pendingConsultationResponse(id) !== null)
+				return undefined;
+			const pending: ConsultationPendingResponse = {
+				id: randomUUID(),
+				consultationId: id,
+				input,
+				sequenceBaseline,
+				createdAt: new Date().toISOString(),
+			};
+			this.db
+				.prepare(
+					"INSERT INTO consultation_pending_responses(id, consultation_id, input, sequence_baseline, created_at) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(pending.id, id, input, sequenceBaseline, pending.createdAt);
+			return pending;
+		});
+	}
+
+	/** Commit a turn only after Herdr has accepted the pending prompt. */
+	acceptConsultationResponse(id: string, pendingId: string): ConsultationTurn | undefined {
+		return this.transaction(() => {
+			const pending = this.pendingConsultationResponse(id);
+			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
+				| { state: ConsultationState }
+				| undefined;
+			if (row?.state !== "awaiting-response" || pending?.id !== pendingId) return undefined;
 			const turnId = randomUUID();
 			const acceptedAt = new Date().toISOString();
 			this.db
 				.prepare(
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
 				)
-				.run(turnId, id, input, acceptedAt, sequenceBaseline);
-			this.db
-				.prepare("UPDATE consultations SET state = 'working', updated_at = ? WHERE id = ?")
-				.run(acceptedAt, id);
-			return this.consultationTurn(turnId);
-		});
-	}
-
-	/** Confirm that a durable Response was sent and clear its draft. */
-	completeConsultationResponse(id: string, turnId: string): boolean {
-		const result = this.db
-			.prepare(
-				"UPDATE consultations SET draft = '', draft_updated_at = NULL, draft_old = 0, updated_at = ? WHERE id = ? AND state IN ('working', 'awaiting-response') AND EXISTS (SELECT 1 FROM consultation_turns WHERE id = ? AND consultation_id = ?)",
-			)
-			.run(new Date().toISOString(), id, turnId, id);
-		return Number(result.changes) > 0;
-	}
-
-	/** Cancel a failed unsent Response while preserving its draft. */
-	cancelConsultationResponse(id: string, turnId: string): boolean {
-		return this.transaction(() => {
-			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
-				| { state: ConsultationState }
-				| undefined;
-			if (row?.state !== "working") return false;
-			const turn = this.db
-				.prepare("SELECT settled_at FROM consultation_turns WHERE id = ? AND consultation_id = ?")
-				.get(turnId, id) as { settled_at: string | null } | undefined;
-			if (turn === undefined || turn.settled_at !== null) return false;
-			this.db.prepare("DELETE FROM consultation_turns WHERE id = ?").run(turnId);
-			this.db
-				.prepare(
-					"UPDATE consultations SET state = 'awaiting-response', updated_at = ? WHERE id = ?",
-				)
-				.run(new Date().toISOString(), id);
-			return true;
-		});
-	}
-
-	/** Accept a Response and create exactly one durable turn. */
-	acceptConsultationResponse(
-		id: string,
-		input: string,
-		sequenceBaseline: number | null = null,
-	): ConsultationTurn | undefined {
-		return this.transaction(() => {
-			const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
-				| { state: ConsultationState }
-				| undefined;
-			if (row?.state !== "awaiting-response") return undefined;
-			const turnId = randomUUID();
-			const acceptedAt = new Date().toISOString();
-			this.db
-				.prepare(
-					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, ?)",
-				)
-				.run(turnId, id, input, acceptedAt, sequenceBaseline);
+				.run(turnId, id, pending.input, acceptedAt, pending.sequenceBaseline);
+			this.db.prepare("DELETE FROM consultation_pending_responses WHERE id = ?").run(pendingId);
 			this.db
 				.prepare(
 					"UPDATE consultations SET state = 'working', draft = '', draft_updated_at = NULL, draft_old = 0, updated_at = ? WHERE id = ?",
@@ -1508,6 +1515,39 @@ export class FactoryState {
 				.run(acceptedAt, id);
 			return this.consultationTurn(turnId);
 		});
+	}
+
+	/** Discard a rejected pending delivery while preserving the durable draft. */
+	cancelConsultationResponse(id: string, pendingId: string): boolean {
+		const result = this.db
+			.prepare("DELETE FROM consultation_pending_responses WHERE id = ? AND consultation_id = ?")
+			.run(pendingId, id);
+		return Number(result.changes) > 0;
+	}
+
+	pendingConsultationResponse(id: string): ConsultationPendingResponse | null {
+		const row = this.db
+			.prepare(
+				"SELECT id, consultation_id, input, sequence_baseline, created_at FROM consultation_pending_responses WHERE consultation_id = ?",
+			)
+			.get(id) as
+			| {
+					id: string;
+					consultation_id: string;
+					input: string;
+					sequence_baseline: number | null;
+					created_at: string;
+			  }
+			| undefined;
+		return row === undefined
+			? null
+			: {
+					id: row.id,
+					consultationId: row.consultation_id,
+					input: row.input,
+					sequenceBaseline: row.sequence_baseline,
+					createdAt: row.created_at,
+				};
 	}
 
 	/** Mark the first newer settled Agent observation and store its snapshot. */
@@ -1609,6 +1649,17 @@ export class FactoryState {
 		).map(snapshotFromRow);
 	}
 
+	/** A settled turn that needs a later successful output read. */
+	consultationNeedsSnapshot(id: string): boolean {
+		return (
+			this.db
+				.prepare(
+					"SELECT 1 FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL LIMIT 1",
+				)
+				.get(id) !== undefined
+		);
+	}
+
 	/** Store every Herdr resource created by the Consultation before continuing. */
 	recordConsultationResource(
 		id: string,
@@ -1628,12 +1679,17 @@ export class FactoryState {
 			);
 	}
 
-	markConsultationResourceShared(id: string, kind: string, resourceId: string): void {
+	markConsultationResourceShared(
+		id: string,
+		kind: string,
+		resourceId: string,
+		details = "retained because the workspace is shared",
+	): void {
 		this.db
 			.prepare(
 				"UPDATE consultation_resources SET owned = 0, details = ? WHERE consultation_id = ? AND kind = ? AND resource_id = ?",
 			)
-			.run("retained because the workspace is shared", id, kind, resourceId);
+			.run(details, id, kind, resourceId);
 	}
 
 	markConsultationResourceClosed(id: string, kind: string, resourceId: string): void {
@@ -1859,6 +1915,7 @@ export class FactoryState {
 			closeResult: row.close_result,
 			liveConflictOverride: row.live_conflict_override === 1,
 			attentionAt: row.attention_at,
+			pendingResponse: this.pendingConsultationResponse(row.id),
 			resources: this.consultationResources(row.id),
 		};
 	}

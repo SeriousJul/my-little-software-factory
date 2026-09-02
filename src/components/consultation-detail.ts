@@ -1,6 +1,12 @@
 /** The live Agent view and Captured history for one Consultation. */
 import { createElement } from "@opentui/react";
-import type { Consultation, ConsultationSnapshot, ConsultationTurn } from "../state.ts";
+import type {
+	Consultation,
+	ConsultationResource,
+	ConsultationSnapshot,
+	ConsultationTurn,
+} from "../state.ts";
+import type { AnsiLine } from "./ansi-screen.ts";
 import { windowOf } from "./geometry.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -13,6 +19,7 @@ export function consultationDetailLines(
 	liveOutput: string | null,
 	replacementIds: readonly string[] = [],
 	agentStatus: string | null = null,
+	remainingResources: readonly ConsultationResource[] = [],
 ): Array<{ text: string; fg: string }> {
 	if (consultation === undefined) return [{ text: "no Consultation selected", fg: COLORS.dim }];
 	const lines: Array<{ text: string; fg: string }> = [];
@@ -50,6 +57,11 @@ export function consultationDetailLines(
 		push(`Replacement of: ${consultation.replacementOf.slice(0, 8)}`, COLORS.dim);
 	if (replacementIds.length > 0)
 		push(`Replaced by: ${replacementIds.map((id) => id.slice(0, 8)).join(", ")}`, COLORS.dim);
+	if (remainingResources.length > 0) {
+		push("Remaining resources (recover them in herdr):", COLORS.statusWarning);
+		for (const resource of remainingResources)
+			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, COLORS.statusWarning);
+	}
 	if (consultation.draft !== "")
 		push(
 			`Response draft${consultation.draftOld ? " (old - review before sending)" : ""}: ${consultation.draft}`,
@@ -85,6 +97,8 @@ interface ConsultationDetailProps {
 	scroll: number;
 	focused: boolean;
 	compactHeading?: string;
+	/** Sanitized cell output used only in Agent interaction mode. */
+	ansiLines?: readonly AnsiLine[];
 }
 
 export function ConsultationDetail({
@@ -93,7 +107,31 @@ export function ConsultationDetail({
 	scroll,
 	focused,
 	compactHeading,
+	ansiLines,
 }: ConsultationDetailProps) {
+	const content =
+		ansiLines === undefined
+			? windowOf(lines, scroll, visibleRows).map((line, index) =>
+					createElement("text", { key: index, fg: line.fg }, line.text),
+				)
+			: windowOf(ansiLines, scroll, visibleRows).map((line, index) =>
+					createElement(
+						"text",
+						{ key: index },
+						...line.map((span, spanIndex) =>
+							createElement(
+								"span",
+								{
+									key: spanIndex,
+									fg: span.style.fg,
+									bg: span.style.bg,
+									attributes: span.style.attributes,
+								},
+								span.text,
+							),
+						),
+					),
+				);
 	return createElement(
 		"box",
 		{
@@ -103,8 +141,6 @@ export function ConsultationDetail({
 			padding: 1,
 			style: { flexGrow: 1, flexShrink: 1, flexDirection: "column", overflow: "hidden" },
 		},
-		...windowOf(lines, scroll, visibleRows).map((line, index) =>
-			createElement("text", { key: index, fg: line.fg }, line.text),
-		),
+		...content,
 	);
 }
