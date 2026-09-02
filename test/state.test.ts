@@ -574,6 +574,13 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 		`);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
+		// The leftover columns belong to v6: a v2 record never heard of them.
+		db.exec(
+			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
+				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
+		);
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
 
@@ -836,6 +843,176 @@ describe("factory SQLite state", () => {
 		expect(
 			state.visibleTickets([], "implement").find((ticket) => ticket.identity === identity),
 		).toEqual(expect.objectContaining({ state: "open", handoffCount: 2 }));
+		state.close();
+	});
+
+	test("records a failed Close cleanup as a leftover environment of the handoff", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const handoffId = closedCycle(state, identity);
+
+		expect(
+			state.recordLeftoverEnvironment({
+				ticketIdentity: identity,
+				handoffId,
+				reason:
+					"fatal: the worktree contains modified or untracked files, use --force to delete it",
+			}),
+		).toEqual({
+			handoffId,
+			environment: "worktree",
+			workspaceId: "ws-1",
+			tabId: "tab-1",
+			paneId: "pane-1",
+			reason: "fatal: the worktree contains modified or untracked files, use --force to delete it",
+			at: expect.any(String),
+		});
+		// The fact rides on the ticket, so the detail pane can name it.
+		expect(state.visibleTickets([], "implement")[0]).toEqual(
+			expect.objectContaining({
+				state: "open",
+				workCycle: 2,
+				leftover: expect.objectContaining({ handoffId, workspaceId: "ws-1", paneId: "pane-1" }),
+			}),
+		);
+
+		expect(state.clearLeftoverEnvironments(identity, "ws-1")).toBe(1);
+		expect(state.leftoverEnvironment(identity)).toBe(null);
+		expect(state.visibleTickets([], "implement")[0].leftover).toBe(null);
+		// The handoff row keeps why it was left over: the record survives the clear.
+		expect(
+			state.leftoverEnvironments(identity).every((leftover) => leftover.handoffId !== handoffId),
+		).toBe(true);
+		state.close();
+	});
+
+	test("a leftover named by a herdr collision lands on the handoff that holds the name", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		closedCycle(state, identity);
+		// A second closed cycle: the ticket now holds two environments, and the
+		// collision names the older one by its pane.
+		closedCycle(state, identity);
+
+		const recorded = state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			paneId: "pane-1",
+			reason: "agent name persist-source-facts is already used",
+		});
+		expect(recorded?.paneId).toBe("pane-1");
+		expect(state.leftoverEnvironments(identity)).toHaveLength(1);
+		// A ticket with no handoff to carry the fact records nothing.
+		expect(
+			state.recordLeftoverEnvironment({
+				ticketIdentity: "github:github.com:I_9",
+				reason: "nothing",
+			}),
+		).toBe(null);
+		// With no handle to go on, the ticket's latest handoff is the one whose
+		// cycle closed.
+		const latest = state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			reason: "the close cleanup did not run",
+		});
+		expect(latest?.paneId).toBe("pane-1");
+		expect(state.handoffHandles(identity)).toEqual({
+			paneIds: ["pane-1", "pane-1"],
+			workspaceIds: ["ws-1", "ws-1"],
+		});
+		state.close();
+	});
+
+	test("a clearing names only the workspace it removed", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = closedCycle(state, identity);
+		const second = closedCycle(state, identity);
+		state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: first, reason: "a" });
+		state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: second, reason: "b" });
+		// Both handoffs ran in the same workspace herdr cannot remove, so one
+		// successful removal clears both facts.
+		expect(state.leftoverEnvironments(identity)).toHaveLength(2);
+		expect(state.clearLeftoverEnvironments(identity, "ws-1")).toBe(2);
+		expect(state.leftoverEnvironments(identity)).toEqual([]);
+		state.close();
+	});
+
+	test("a handoff records the herdr name its agent started under", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			// The stable name was still held by the ticket's own leftover agent.
+			agentName: "persist-source-facts-c2",
+		});
+		// The completion trace of this handoff's turn names the agent herdr
+		// actually runs, not the name the ticket would have wanted.
+		expect(state.agentNameForTicket(identity)).toBe("persist-source-facts-c2");
+		state.close();
+	});
+
+	test("a handoff that stored no herdr name reads the ticket's stable one", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" });
+		// A legacy row, and every clean handoff of a free name: the naming
+		// rule gives the same answer herdr took.
+		expect(state.agentNameForTicket(identity)).toBe("persist-source-facts");
+		state.close();
+	});
+
+	test("a failed clear leaves the leftover standing with its new reason", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		const handoffId = claim.claim.attemptId;
+		state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId,
+			reason: "the worktree is dirty",
+			at: "2026-09-02T10:00:00.000Z",
+		});
+		expect(state.clearLeftoverEnvironments(identity, "ws-1")).toBe(1);
+		expect(state.leftoverEnvironment(identity)).toBe(null);
+		// The clear's own cleanup failed: the fact the operator can act on
+		// stands again, with the reason herdr gave this time.
+		state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId,
+			reason: "herdr refused the removal again",
+			at: "2026-09-02T10:05:00.000Z",
+		});
+		expect(state.leftoverEnvironment(identity)).toEqual(
+			expect.objectContaining({
+				handoffId,
+				reason: "herdr refused the removal again",
+				at: "2026-09-02T10:05:00.000Z",
+			}),
+		);
 		state.close();
 	});
 

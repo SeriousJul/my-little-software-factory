@@ -14,6 +14,8 @@ export interface ActionContext {
 	view: ActionView;
 	focusedPane: "list" | "detail";
 	selectedConsultation?: Consultation;
+	/** True when the selected Ticket holds a leftover environment in herdr. */
+	selectedLeftover?: boolean;
 	status?: { kind: "info" | "warning" | "error"; text: string } | null;
 	launcher: boolean;
 	modal: boolean;
@@ -143,6 +145,11 @@ function actionHints(context: ActionContext): ActionHint[] {
 		return [
 			{ key: "↑↓/jk", label: "move", priority: 90 },
 			{ key: "Enter", label: "hand off", priority: 80 },
+			// One action ends a leftover environment of the selected ticket, so
+			// the control only shows while the ticket carries one.
+			...(context.selectedLeftover === true
+				? [{ key: "w", label: "clear leftover", priority: 75 }]
+				: []),
 			{ key: "e", label: "override", priority: 70 },
 			{ key: "v", label: "Consultations", priority: 60 },
 			{ key: "c", label: "launch", priority: 50 },

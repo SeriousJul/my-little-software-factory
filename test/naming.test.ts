@@ -4,7 +4,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { Ticket } from "../src/domain/ticket.ts";
-import { agentNameFor, branchNameFor, titleSlug } from "../src/naming.ts";
+import { agentNameFor, branchNameFor, cycleAgentName, titleSlug } from "../src/naming.ts";
 
 const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	identity: `github:github.com:I_${externalKey.slice(1)}`,
@@ -17,6 +17,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	},
 	state: "open",
 	handoff: null,
+	workCycle: 1,
 	description: "A description.",
 	sourceKind: "github-issue",
 	externalKey,
@@ -30,6 +31,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	handoffRecoveryRequired: false,
 	handoffCount: 0,
 	lastCompletion: null,
+	leftover: null,
 });
 
 describe("titleSlug", () => {
@@ -73,5 +75,39 @@ describe("agentNameFor", () => {
 		expect(name.length).toBeLessThanOrEqual(32);
 		expect(name.endsWith("-")).toBe(false);
 		expect(/^[a-z][a-z0-9_-]*$/.test(name)).toBe(true);
+	});
+});
+
+describe("cycleAgentName", () => {
+	test("keeps the ticket's own words and names the work cycle", () => {
+		expect(cycleAgentName("Retry policy for webhooks", 2)).toBe("retry-policy-for-webhooks-c2");
+	});
+
+	test("the handoff's ordinal tells two handoffs of one cycle apart", () => {
+		expect(cycleAgentName("Retry policy for webhooks", 2, 5)).toBe(
+			"retry-policy-for-webhooks-c2-5",
+		);
+	});
+
+	test("a digit slug keeps its prefix beside its cycle", () => {
+		expect(cycleAgentName("2fa rollout", 1)).toBe("t-2fa-rollout-c1");
+	});
+
+	test("the suffix survives the cut, so no cycle name can meet the stable one", () => {
+		const title = "a-very-long-title-that-goes-on-and-on-past-thirty-two-characters";
+		const stable = agentNameFor(title);
+		const cycle = cycleAgentName(title, 3);
+		expect(stable.length).toBe(32);
+		expect(cycle.length).toBeLessThanOrEqual(32);
+		expect(cycle.endsWith("-c3")).toBe(true);
+		expect(cycle).not.toBe(stable);
+		expect(/^[a-z][a-z0-9_-]{0,31}$/.test(cycle)).toBe(true);
+	});
+
+	test("a cycle name never equals the stable name of the same title", () => {
+		for (const title of ["Retry policy", "2fa rollout", "!!!", "Close the mutation testing gaps"]) {
+			expect(cycleAgentName(title, 1)).not.toBe(agentNameFor(title));
+			expect(cycleAgentName(title, 1).length).toBeLessThanOrEqual(32);
+		}
 	});
 });

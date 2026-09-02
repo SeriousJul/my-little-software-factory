@@ -70,6 +70,7 @@ const ticket: Ticket = {
 	},
 	state: "open",
 	handoff: null,
+	workCycle: 1,
 	description: "Add a retry policy.",
 	sourceKind: "github-issue",
 	externalKey: "#7",
@@ -83,6 +84,7 @@ const ticket: Ticket = {
 	handoffRecoveryRequired: false,
 	handoffCount: 0,
 	lastCompletion: null,
+	leftover: null,
 };
 
 const defaultChoice = {
@@ -206,7 +208,12 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 		expect(outcome).toEqual({
 			status: "ok",
-			agent: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-new" },
+			agent: {
+				name: AGENT,
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-new",
+			},
 		});
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
@@ -1071,6 +1078,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 
 		expect(outcome.status).toBe("ok");
 		expect(outcome.status === "ok" && outcome.agent).toEqual({
+			name: AGENT,
 			paneId: "pane-2",
 			tabId: "tab-1",
 			workspaceId: "ws-stored",
@@ -1275,6 +1283,201 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 	});
 });
 
+describe("a leftover agent that holds the ticket's name", () => {
+	/** The herdr reason that names the holder of a taken agent name. */
+	function nameTaken(paneId: string, workspaceId: string, tabId: string): string {
+		return (
+			`{"error":{"code":"agent_name_taken","message":"agent name ${AGENT} is already used; ` +
+			`candidates: terminal_id=term_1 pane_id=${paneId} workspace_id=${workspaceId} ` +
+			`tab_id=${tabId} cwd=${WORKTREE_PATH} status=Working"},"id":"cli:agent:start"}\n`
+		);
+	}
+
+	/** The open-worktree sequence, up to the fresh tab the agent starts in. */
+	function openedWorktree(runner: FakeRunner, holderPane: string, holderWorkspace: string): void {
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-wt", "--cwd", WORKTREE_PATH, "--no-focus"],
+			{ stdout: tabCreateJson("pane-tab") },
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-tab"], {
+			code: 1,
+			stderr: nameTaken(holderPane, holderWorkspace, "ws-old:t1"),
+		});
+	}
+
+	test("starts under its cycle name beside its own leftover agent", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-old", "ws-old");
+		const cycle = "retry-policy-for-webhooks-c1";
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		// The leftover workspace is the ticket's own, so the handoff does not
+		// stop on its name: it starts beside it under the cycle name.
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe(cycle);
+		expect(outcome.status === "ok" && outcome.collision).toEqual({
+			stableName: AGENT,
+			startedAs: cycle,
+			holder: {
+				terminalId: "term_1",
+				paneId: "pane-old",
+				workspaceId: "ws-old",
+				tabId: "ws-old:t1",
+			},
+			own: true,
+			reason: expect.stringContaining("agent_name_taken"),
+		});
+		const commands = runner.commands();
+		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-tab`);
+		expect(commands).toContain(`herdr agent start ${cycle} --kind pi --pane pane-tab`);
+		// The prompt goes to the name the agent actually started under.
+		expect(commands.filter((command) => command.startsWith("herdr agent prompt "))).toEqual([
+			expect.stringContaining(`herdr agent prompt ${cycle} `),
+		]);
+		// The tab the first attempt created is not closed: the second name started in it.
+		expect(commands).not.toContain("herdr tab close tab-1");
+	});
+
+	test("takes its cycle name on a known leftover even when herdr names no holder", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: false,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-root"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: [], ownWorkspaceIds: [], leftoverKnown: true },
+			},
+		);
+
+		// The ticket already knows what it left alive, so herdr's unreadable
+		// reason is not the last word: the handoff starts anyway.
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe("retry-policy-for-webhooks-c1");
+	});
+
+	test("fails on a name another agent holds, and says where it is held", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-stranger", "ws-stranger");
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("agent_name_taken");
+		expect(reasonOf(outcome)).toContain("pane pane-stranger in workspace ws-stranger");
+		expect(reasonOf(outcome)).toContain("no agent of this ticket");
+		// A stranger's name is not the handoff's to take: one attempt only,
+		// and the residue of the attempt goes with it.
+		expect(
+			runner.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(1);
+		expect(runner.commands()).toContain("herdr tab close tab-1");
+		expect(outcome.status === "failed" && outcome.collision).toEqual(
+			expect.objectContaining({ stableName: AGENT, startedAs: null, own: false }),
+		);
+	});
+
+	test("gives up with its own name spent, and points at the leftover", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-old", "ws-old");
+		// Every name of this ticket is held by one of its own leftover agents.
+		for (const name of ["retry-policy-for-webhooks-c1", "retry-policy-for-webhooks-c1-1"]) {
+			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
+				code: 1,
+				stderr: nameTaken("pane-old", "ws-old", "ws-old:t1"),
+			});
+		}
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: [], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
+		expect(reasonOf(outcome)).toContain("clear its leftover environment");
+		expect(
+			runner.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(3);
+	});
+});
+
 describe("closeHandoffEnvironment: the Close cleanup", () => {
 	test("a worktree handoff removes the checkout; herdr closes the workspace with it", async () => {
 		const runner = new FakeRunner();
@@ -1300,7 +1503,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
 			code: 1,
 			stderr:
-				'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree has uncommitted changes, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+				'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
 		});
 
 		const failure = await closeHandoffEnvironment(
@@ -1308,11 +1511,31 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 			runner,
 		);
 
-		// The reason is the command's stderr: the caller reports it on the
-		// status line with the ticket identity.
-		expect(failure).toContain("dirty_worktree_requires_force");
+		// The reason is herdr's own message with its stable error code: the
+		// caller reports it on the status line, and the ticket carries it as
+		// the durable reason of its leftover environment.
+		expect(failure).toBe(
+			"fatal: the worktree contains modified or untracked files, use --force to delete it (dirty_worktree_requires_force)",
+		);
 		// The workspace stays: the checkout is still there.
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("the operator's force removes the checkout herdr refused", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+			{ force: true },
+		);
+
+		expect(failure).toBeUndefined();
+		// Force is the only difference, and it is never this module's choice:
+		// only a caller the operator asked passes it. The branch still stays.
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1 --force"]);
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("branch -D");
 	});
 
 	test("a worktree handoff whose workspace is already gone is a clean close", async () => {

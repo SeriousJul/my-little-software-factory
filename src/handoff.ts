@@ -31,7 +31,12 @@
  *
  * The Close cleanup of a finished work cycle is a different cut: it removes
  * the worktree checkout but never the branch, so pushed work and pull
- * requests survive. See closeHandoffEnvironment.
+ * requests survive. See closeHandoffEnvironment. It can fail: herdr refuses
+ * a dirty checkout without force. A failed cleanup leaves the workspace, its
+ * pane, and the agent in it alive, and that agent still holds the herdr
+ * agent name the ticket's next handoff wants. The handoff does not stop
+ * there: it starts under its cycle name, and the leftover environment stays
+ * a fact on the ticket for the operator to clear (ADR 0012).
  */
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
@@ -40,6 +45,7 @@ import {
 	branchNameFor,
 	consultationAgentName,
 	consultationBranchName,
+	cycleAgentName,
 } from "./naming.ts";
 import {
 	commandFailureText,
@@ -85,16 +91,119 @@ export function baseChoice(
 }
 
 /**
- * The herdr handles a handoff started: the pane, tab, and workspace of the
- * new agent. The control plane stores them with the handoff, and the
+ * The herdr handles a handoff started: the name, pane, tab, and workspace of
+ * the new agent. The control plane stores them with the handoff, and the
  * observation loop keys its agent lookups on the pane id.
  */
 export interface StartedAgent {
+	/** The herdr agent name the agent started under. */
+	name: string;
 	paneId: string;
 	tabId: string;
 	workspaceId: string;
 	/** Stable Agent session identity when Herdr exposes one. */
 	sessionId?: string;
+}
+
+/**
+ * The herdr pane, tab, and workspace a handoff is about to start its agent
+ * in, and the tab of the handoff it replaces. The name comes later: herdr
+ * gives the agent one of the handoff's candidate names, and the started
+ * agent reports it back.
+ */
+interface AgentHandles {
+	paneId: string;
+	tabId: string;
+	workspaceId: string;
+	previousTabId?: string | null;
+}
+
+/**
+ * One herdr agent that holds a name: the handles herdr names in its
+ * `agent_name_taken` reason.
+ */
+export interface AgentHolder {
+	terminalId: string | null;
+	paneId: string | null;
+	workspaceId: string | null;
+	tabId: string | null;
+}
+
+/**
+ * What the handoff knows about the herdr agent name it asked for.
+ *
+ * The stable name comes from the ticket's title, so the agent a closed
+ * cycle left behind in herdr still holds it. The handoff then starts under
+ * its cycle name, and `own` says this is the ticket's own leftover rather
+ * than another ticket's agent: the control plane met the collision in a
+ * pane or workspace it recorded for this ticket itself, or it already holds
+ * the durable fact of a leftover of this ticket.
+ */
+export interface NameCollision {
+	/** The stable name the handoff asked herdr for first. */
+	stableName: string;
+	/** The name the agent started under, or null when nothing started. */
+	startedAs: string | null;
+	/** The agent that held the stable name, when herdr named one. */
+	holder: AgentHolder | null;
+	/** True when the holder is one of this ticket's own handoffs. */
+	own: boolean;
+	/** herdr's own readable reason. */
+	reason: string;
+}
+
+/**
+ * What the caller knows about the names a ticket's own agents hold.
+ *
+ * The control plane reads it from its state: the handles of every handoff
+ * of the ticket, and whether it already recorded that one of them is left
+ * over in herdr. A caller with no state to read leaves it out, and a taken
+ * name is then reported with herdr's reason.
+ */
+export interface OwnNameKnowledge {
+	ownPaneIds: readonly string[];
+	ownWorkspaceIds: readonly string[];
+	leftoverKnown: boolean;
+}
+
+/** The names a handoff may ask herdr for, and what it knows about them. */
+interface NamePlan {
+	/** The candidate names, in preference order. */
+	candidates: string[];
+	known: OwnNameKnowledge;
+	/** What owns the names, in the words the failure shows. */
+	owner: string;
+}
+
+const NO_NAME_KNOWLEDGE: OwnNameKnowledge = {
+	ownPaneIds: [],
+	ownWorkspaceIds: [],
+	leftoverKnown: false,
+};
+
+/**
+ * The name plan of a ticket's handoff: the stable name first, then the names
+ * that carry the ticket's work cycle, so a leftover agent of an earlier
+ * cycle can never be the reason a handoff does not start.
+ */
+function ticketNamePlan(ticket: Ticket, known: OwnNameKnowledge | undefined): NamePlan {
+	const cycle = ticket.workCycle;
+	return {
+		candidates: [
+			agentNameFor(ticket.title),
+			cycleAgentName(ticket.title, cycle),
+			cycleAgentName(ticket.title, cycle, ticket.handoffCount + 1),
+		],
+		known: known ?? NO_NAME_KNOWLEDGE,
+		owner: "this ticket",
+	};
+}
+
+/** The name plan of a Consultation, which owns one name and shares no cycle. */
+function consultationNamePlan(name: string): NamePlan {
+	// A Consultation owns one name and shares no cycle: herdr refuses a
+	// duplicate, and the refusal is reported, not worked around.
+	return { candidates: [name], known: NO_NAME_KNOWLEDGE, owner: "this consultation" };
 }
 
 /**
@@ -113,11 +222,27 @@ export interface StartedAgent {
  * `notes` carries the warning and the mapping the repository resolution
  * bent with, through every outcome: a failure of a later step still warns
  * and still hands back the mapping to persist.
+ *
+ * `collision` is set on an outcome that met herdr's `agent_name_taken`: it
+ * says whose agent held the name, and the name the handoff started under
+ * when it took a cycle name instead of failing. The caller makes the
+ * leftover it names a durable fact on the ticket (ADR 0012).
  */
 export type HandoffOutcome =
-	| { status: "failed"; reason: string; notes?: ResolutionNotes }
-	| { status: "prompt-failed"; reason: string; agent: StartedAgent; notes?: ResolutionNotes }
-	| { status: "ok"; agent: StartedAgent; notes?: ResolutionNotes };
+	| {
+			status: "failed";
+			reason: string;
+			notes?: ResolutionNotes;
+			collision?: NameCollision;
+	  }
+	| {
+			status: "prompt-failed";
+			reason: string;
+			agent: StartedAgent;
+			notes?: ResolutionNotes;
+			collision?: NameCollision;
+	  }
+	| { status: "ok"; agent: StartedAgent; notes?: ResolutionNotes; collision?: NameCollision };
 
 interface HandoffOptions {
 	config: FactoryConfig;
@@ -125,6 +250,8 @@ interface HandoffOptions {
 	home: string;
 	/** Records durable progress after the claim and before external work. */
 	onStage?: (stage: string) => void;
+	/** What the caller knows about the names this ticket's own agents hold. */
+	names?: OwnNameKnowledge;
 }
 
 /**
@@ -142,6 +269,8 @@ interface HandoffContext {
 	onAgentStarted?: (agent: StartedAgent) => void;
 	/** The note the repository resolution carried, if it bent. */
 	notes?: ResolutionNotes;
+	/** The agent names the handoff may ask herdr for, in preference order. */
+	names: NamePlan;
 }
 
 /**
@@ -172,7 +301,7 @@ function validateChoice(
 export async function handOffTicket(
 	ticket: Ticket,
 	choice: HandoffChoice,
-	{ config, runner, home, onStage }: HandoffOptions,
+	{ config, runner, home, onStage, names }: HandoffOptions,
 ): Promise<HandoffOutcome> {
 	if (ticket.state !== "open") {
 		return {
@@ -189,16 +318,20 @@ export async function handOffTicket(
 		return { status: "failed", reason: resolved.reason };
 	}
 
-	const ctx: HandoffContext = { runner, onStage, notes: resolved.repository.notes };
+	const ctx: HandoffContext = {
+		runner,
+		onStage,
+		notes: resolved.repository.notes,
+		names: ticketNamePlan(ticket, names),
+	};
 	const checkout = resolved.repository.path;
 	const args = settingArgs(checked.agent, choice);
 	const prompt = renderPrompt(checked.taskType.template, ticket);
-	const name = agentNameFor(ticket.title);
 
 	if (choice.environment === "live-worktree") {
-		return startLiveHandoff(checkout, name, checked.agent, args, prompt, ctx);
+		return startLiveHandoff(checkout, checked.agent, args, prompt, ctx);
 	}
-	return startWorktreeHandoff(ticket, checkout, name, checked.agent, args, prompt, ctx);
+	return startWorktreeHandoff(ticket, checkout, checked.agent, args, prompt, ctx);
 }
 
 /**
@@ -258,12 +391,14 @@ export async function handOffConsultation({
 			: { ok: true as const, repository: resolvedRepository };
 	if (!resolved.ok) return { status: "failed", reason: resolved.reason };
 	onRepositoryResolved?.(resolved.repository.path);
+	const name = consultation.agentName || consultationAgentName(consultation.id);
 	const ctx: HandoffContext = {
 		runner,
 		onStage,
 		onResource,
 		onAgentStarted,
 		notes: resolved.repository.notes,
+		names: consultationNamePlan(name),
 	};
 	const prompt = renderConsultationPrompt(consultation.template, consultation.initialInput);
 	const args = settingArgs(
@@ -276,15 +411,13 @@ export async function handOffConsultation({
 			consultation.thinking,
 		),
 	);
-	const name = consultation.agentName || consultationAgentName(consultation.id);
 	if (consultation.environment === "live-worktree") {
-		return startConsultationLive(resolved.repository.path, name, agent, args, prompt, ctx);
+		return startConsultationLive(resolved.repository.path, agent, args, prompt, ctx);
 	}
 	return startConsultationWorktree(
 		consultation.id,
 		consultation.typeName,
 		resolved.repository.path,
-		name,
 		agent,
 		args,
 		prompt,
@@ -295,7 +428,6 @@ export async function handOffConsultation({
 /** Consultation live launch: a new checkout workspace uses its root pane. */
 async function startConsultationLive(
 	checkout: string,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -330,7 +462,7 @@ async function startConsultationLive(
 			continue;
 		const recorded = workspace.worktree.checkout_path;
 		if (recorded === checkout || (await realPathOf(recorded)) === checkoutReal)
-			return startAgentInNewTab(workspace.workspace_id, checkout, name, agent, args, prompt, ctx);
+			return startAgentInNewTab(workspace.workspace_id, checkout, agent, args, prompt, ctx);
 	}
 	const created = await ctx.runner.run("herdr", [
 		"workspace",
@@ -351,14 +483,13 @@ async function startConsultationLive(
 			"herdr workspace create returned incomplete pane handles",
 			ctx,
 		) as ConsultationHandoffOutcome;
-	return startAgentAndPrompt(name, agent, args, prompt, ctx, { paneId, tabId, workspaceId });
+	return startAgentAndPrompt(agent, args, prompt, ctx, { paneId, tabId, workspaceId });
 }
 
 async function startConsultationWorktree(
 	id: string,
 	typeName: string,
 	checkout: string,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -408,20 +539,13 @@ async function startConsultationWorktree(
 			`herdr worktree create returned incomplete handles for branch ${branch}`,
 			ctx,
 		) as ConsultationHandoffOutcome;
-	return startAgentOrCleanUp(
-		name,
-		agent,
-		args,
-		prompt,
-		ctx,
-		{ paneId, tabId, workspaceId },
-		async () => {
-			await removeWorktree(checkout, branch, workspaceId, ctx);
-		},
-	) as Promise<ConsultationHandoffOutcome>;
+	return startAgentOrCleanUp(agent, args, prompt, ctx, { paneId, tabId, workspaceId }, async () => {
+		await removeWorktree(checkout, branch, workspaceId, ctx);
+	}) as Promise<ConsultationHandoffOutcome>;
 }
 
 export interface StoredWorkspaceHandoffOptions extends HandoffOptions {
+	/** The ticket the previous handoff ran on, with its stored handles. */
 	ticket: Ticket;
 	choice: HandoffChoice;
 	/** The workspace the previous handoff recorded, or null when it has none. */
@@ -455,6 +579,7 @@ export async function handOffStoredWorkspace({
 	previousTabId,
 	previousMessage,
 	onStage,
+	names,
 }: StoredWorkspaceHandoffOptions): Promise<HandoffOutcome> {
 	const checked = validateChoice(choice, config);
 	if ("status" in checked) return checked;
@@ -467,11 +592,15 @@ export async function handOffStoredWorkspace({
 		return { status: "failed", reason: resolved.reason };
 	}
 
-	const ctx: HandoffContext = { runner, onStage, notes: resolved.repository.notes };
+	const ctx: HandoffContext = {
+		runner,
+		onStage,
+		notes: resolved.repository.notes,
+		names: ticketNamePlan(ticket, names),
+	};
 	const checkout = resolved.repository.path;
 	const args = settingArgs(agent, choice);
 	const prompt = renderPrompt(taskType.template, ticket, previousMessage);
-	const name = agentNameFor(ticket.title);
 
 	const storedMatches = workspaceId !== null && environment === choice.environment;
 	if (storedMatches) {
@@ -487,7 +616,7 @@ export async function handOffStoredWorkspace({
 		if (found.status === "found") {
 			// The stored workspace still holds: a fresh tab in it, at the
 			// workspace's own cwd.
-			return startAgentInNewTab(workspaceId, null, name, agent, args, prompt, ctx, {
+			return startAgentInNewTab(workspaceId, null, agent, args, prompt, ctx, {
 				previousTabId,
 				closeTabOnFailure: true,
 			});
@@ -496,27 +625,20 @@ export async function handOffStoredWorkspace({
 			// The worktree is gone: reopen it on the branch the naming rule
 			// gives the ticket. The branch is the branch, not herdr's: the
 			// reuse sequence checks it out when no worktree holds it.
-			return startReusedBranchHandoff(
-				checkout,
-				branchNameFor(ticket),
-				name,
-				agent,
-				args,
-				prompt,
-				ctx,
-				{ previousTabId },
-			);
+			return startReusedBranchHandoff(checkout, branchNameFor(ticket), agent, args, prompt, ctx, {
+				previousTabId,
+			});
 		}
 		// A live workspace is gone: the live sequence finds or creates one.
-		return startLiveHandoff(checkout, name, agent, args, prompt, ctx, { previousTabId });
+		return startLiveHandoff(checkout, agent, args, prompt, ctx, { previousTabId });
 	}
 
 	if (choice.environment === "worktree") {
-		return startWorktreeHandoff(ticket, checkout, name, agent, args, prompt, ctx, {
+		return startWorktreeHandoff(ticket, checkout, agent, args, prompt, ctx, {
 			previousTabId,
 		});
 	}
-	return startLiveHandoff(checkout, name, agent, args, prompt, ctx, { previousTabId });
+	return startLiveHandoff(checkout, agent, args, prompt, ctx, { previousTabId });
 }
 
 /**
@@ -527,7 +649,6 @@ export async function handOffStoredWorkspace({
  */
 async function startLiveHandoff(
 	checkout: string,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -547,7 +668,7 @@ async function startLiveHandoff(
 		return failed(found.reason, ctx);
 	}
 	if (found.status === "found") {
-		return startAgentInNewTab(found.id, checkout, name, agent, args, prompt, ctx, extra);
+		return startAgentInNewTab(found.id, checkout, agent, args, prompt, ctx, extra);
 	}
 	// No workspace holds the checkout: create one.
 	const created = await ctx.runner.run("herdr", [
@@ -564,7 +685,7 @@ async function startLiveHandoff(
 	if (id === null) {
 		return failed("herdr workspace create returned no workspace id", ctx);
 	}
-	return startAgentInNewTab(id, checkout, name, agent, args, prompt, ctx, extra);
+	return startAgentInNewTab(id, checkout, agent, args, prompt, ctx, extra);
 }
 
 interface NewTabOptions {
@@ -576,7 +697,6 @@ interface NewTabOptions {
 async function startAgentInNewTab(
 	workspaceId: string,
 	checkout: string | null,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -598,7 +718,7 @@ async function startAgentInNewTab(
 	if (paneId === null || tabId === null) {
 		return failed("herdr tab create returned no pane id", ctx);
 	}
-	const outcome = await startAgentAndPrompt(name, agent, args, prompt, ctx, {
+	const outcome = await startAgentAndPrompt(agent, args, prompt, ctx, {
 		paneId,
 		tabId,
 		workspaceId,
@@ -622,7 +742,6 @@ async function startAgentInNewTab(
 async function startWorktreeHandoff(
 	ticket: Ticket,
 	checkout: string,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -636,7 +755,7 @@ async function startWorktreeHandoff(
 		return failed(`cannot check branch in ${checkout}: ${commandFailureText(listed)}`, ctx);
 	}
 	if (listed.stdout.trim() !== "") {
-		return startReusedBranchHandoff(checkout, branch, name, agent, args, prompt, ctx, extra);
+		return startReusedBranchHandoff(checkout, branch, agent, args, prompt, ctx, extra);
 	}
 	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
 	if (head.code !== 0) {
@@ -674,7 +793,6 @@ async function startWorktreeHandoff(
 		return failed("herdr worktree create returned no pane id", ctx);
 	}
 	return startAgentOrCleanUp(
-		name,
 		agent,
 		args,
 		prompt,
@@ -705,7 +823,6 @@ async function startWorktreeHandoff(
 async function startReusedBranchHandoff(
 	checkout: string,
 	branch: string,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -722,7 +839,7 @@ async function startReusedBranchHandoff(
 		"--no-focus",
 	]);
 	if (opened.code === 0) {
-		return startInOpenedWorktree(opened, name, agent, args, prompt, ctx, extra);
+		return startInOpenedWorktree(opened, agent, args, prompt, ctx, extra);
 	}
 	if (herdrErrorCode(opened) !== "worktree_not_found") {
 		return failedCommand(opened, ctx);
@@ -757,7 +874,6 @@ async function startReusedBranchHandoff(
 		return failed("herdr worktree create returned no pane id", ctx);
 	}
 	return startAgentOrCleanUp(
-		name,
 		agent,
 		args,
 		prompt,
@@ -779,7 +895,6 @@ async function startReusedBranchHandoff(
  */
 async function startInOpenedWorktree(
 	opened: CommandResult,
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
@@ -818,7 +933,6 @@ async function startInOpenedWorktree(
 			return failed("herdr tab create returned no pane id", ctx);
 		}
 		return startAgentOrCleanUp(
-			name,
 			agent,
 			args,
 			prompt,
@@ -840,7 +954,6 @@ async function startInOpenedWorktree(
 		return failed("herdr worktree open returned no pane id", ctx);
 	}
 	return startAgentOrCleanUp(
-		name,
 		agent,
 		args,
 		prompt,
@@ -861,15 +974,14 @@ async function startInOpenedWorktree(
  * back: even a failed prompt settles the ticket as handed off.
  */
 async function startAgentOrCleanUp(
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
 	ctx: HandoffContext,
-	handles: StartedAgent & { previousTabId?: string | null },
+	handles: AgentHandles,
 	cleanup: () => Promise<void>,
 ): Promise<HandoffOutcome> {
-	const outcome = await startAgentAndPrompt(name, agent, args, prompt, ctx, handles);
+	const outcome = await startAgentAndPrompt(agent, args, prompt, ctx, handles);
 	if (outcome.status === "failed") {
 		// The agent never started: remove what the handoff created, so a
 		// retry can run instead of failing on the first attempt's residue.
@@ -911,34 +1023,34 @@ async function closeTab(tabId: string, ctx: HandoffContext): Promise<void> {
 /**
  * Start a fresh agent in the pane and send the prompt as its task.
  *
+ * The agent asks for the handoff's candidate names in order, so a name an
+ * earlier cycle left behind never ends the attempt (see
+ * startAgentUnderAvailableName).
+ *
  * Once the agent has started, the previous handoff's tab is closed when a
  * workflow handoff or a restart carried one: the settled agent's tab is
  * residue, and the new tab is where the work continues. A close failure
  * does not fail the handoff: the agent is running either way.
  */
 async function startAgentAndPrompt(
-	name: string,
 	agent: FactoryConfig["agents"][string],
 	args: string[],
 	prompt: string,
 	ctx: HandoffContext,
-	handles: StartedAgent & { previousTabId?: string | null },
+	handles: AgentHandles,
 ): Promise<HandoffOutcome> {
-	ctx.onStage?.("starting-agent");
-	const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", handles.paneId];
-	if (args.length > 0) {
-		startArgs.push("--", ...args);
+	const attempt = await startAgentUnderAvailableName(agent, args, handles.paneId, ctx);
+	if (attempt.name === null) {
+		return failedNameUnusable(attempt, ctx);
 	}
-	const started = await startAgentWhenPaneIsReady(startArgs, ctx.runner);
-	if (started.code !== 0) {
-		return failedCommand(started, ctx);
-	}
+	const name = attempt.name;
 	// The agent is running: record its handles before the next external
 	// command. From here the ticket is handed-off even if the prompt fails.
 	const sessionId =
-		jsonResultField(started, "agent", "session_id") ??
-		jsonResultField(started, "session", "session_id");
+		jsonResultField(attempt.result, "agent", "session_id") ??
+		jsonResultField(attempt.result, "session", "session_id");
 	const startedAgent: StartedAgent = {
+		name,
 		paneId: handles.paneId,
 		tabId: handles.tabId,
 		workspaceId: handles.workspaceId,
@@ -954,10 +1066,152 @@ async function startAgentAndPrompt(
 			reason: `agent ${name} started, but the prompt failed: ${commandFailureText(sent)}`,
 			agent: startedAgent,
 			notes: ctx.notes,
+			...(attempt.collision === undefined ? {} : { collision: attempt.collision }),
 		};
 	}
 	await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
-	return { status: "ok", agent: startedAgent, notes: ctx.notes };
+	return {
+		status: "ok",
+		agent: startedAgent,
+		notes: ctx.notes,
+		...(attempt.collision === undefined ? {} : { collision: attempt.collision }),
+	};
+}
+
+/**
+ * Ask herdr to start the agent, one candidate name at a time.
+ *
+ * The stable name is the ticket's own, and the agent a closed cycle left in
+ * herdr still holds it. When herdr says so, and the pane or workspace that
+ * holds the name is one this ticket's own handoffs recorded, the handoff
+ * takes its next candidate name rather than failing: the leftover workspace
+ * is the ticket's, so starting beside it is what the operator asked for
+ * (ADR 0012). A name another ticket's agent holds is not this handoff's to
+ * take, and the collision comes back as the failure it is.
+ */
+async function startAgentUnderAvailableName(
+	agent: FactoryConfig["agents"][string],
+	args: string[],
+	paneId: string,
+	ctx: HandoffContext,
+): Promise<AgentStart> {
+	const candidates = ctx.names.candidates;
+	ctx.onStage?.("starting-agent");
+	let collision: NameCollision | undefined;
+	let result: CommandResult = { code: 0, stdout: "", stderr: "" };
+	for (let index = 0; index < candidates.length; index += 1) {
+		const name = candidates[index];
+		const startArgs = ["agent", "start", name, "--kind", agent.kind, "--pane", paneId];
+		if (args.length > 0) {
+			startArgs.push("--", ...args);
+		}
+		result = await startAgentWhenPaneIsReady(startArgs, ctx.runner);
+		if (result.code === 0) {
+			return {
+				name,
+				result,
+				...(collision === undefined ? {} : { collision: { ...collision, startedAs: name } }),
+			};
+		}
+		if (herdrErrorCode(result) !== "agent_name_taken") break;
+		const holders = herdrNameHolders(result);
+		collision = {
+			stableName: candidates[0],
+			startedAs: null,
+			holder: holders.length === 0 ? null : holders[0],
+			own: nameIsOwnLeftover(ctx.names, holders),
+			reason: herdrFailureText(result),
+		};
+		// Another ticket's agent, or the last candidate spent: the collision
+		// stands, and no further name is asked for.
+		if (!collision.own || index + 1 === candidates.length) break;
+	}
+	return { name: null, result, ...(collision === undefined ? {} : { collision }) };
+}
+
+/**
+ * The reason a handoff cannot start because of the names it met, or the
+ * plain command failure when herdr refused for another reason.
+ *
+ * A collision with the ticket's own leftover names the ticket's own action:
+ * clearing the leftover. A collision with a stranger names the stranger:
+ * herdr's handles, so the operator can find the pane.
+ */
+function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOutcome {
+	const collision = attempt.collision;
+	if (collision === undefined) {
+		return { status: "failed", reason: herdrFailureText(attempt.result), notes: ctx.notes };
+	}
+	const holder = holderText(collision.holder);
+	const reason = collision.own
+		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); clear its leftover environment, then hand off again: ${collision.reason}`
+		: `the herdr name ${collision.stableName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
+	return { status: "failed", reason, notes: ctx.notes, collision };
+}
+
+/** Where a name is held, as herdr named it. */
+function holderText(holder: AgentHolder | null): string {
+	if (holder === null) return "a pane herdr did not name";
+	const parts = [
+		...(holder.paneId === null ? [] : [`pane ${holder.paneId}`]),
+		...(holder.workspaceId === null ? [] : [`workspace ${holder.workspaceId}`]),
+	];
+	return parts.length === 0 ? "a pane herdr did not name" : parts.join(" in ");
+}
+
+/**
+ * Whether the agents that hold the name are this ticket's own leftovers.
+ *
+ * A handle the control plane recorded for the ticket settles it. So does the
+ * durable fact of a leftover of this ticket: when herdr's reason names no
+ * holder the control plane can read, the ticket still knows what it left
+ * alive, and its handoff starts under its cycle name rather than repeating
+ * a message the operator cannot act on.
+ */
+function nameIsOwnLeftover(names: NamePlan, holders: readonly AgentHolder[]): boolean {
+	if (names.known.leftoverKnown) return true;
+	const paneIds = new Set(names.known.ownPaneIds);
+	const workspaceIds = new Set(names.known.ownWorkspaceIds);
+	return holders.some(
+		(holder) =>
+			(holder.paneId !== null && paneIds.has(holder.paneId)) ||
+			(holder.workspaceId !== null && workspaceIds.has(holder.workspaceId)),
+	);
+}
+
+/**
+ * The agents herdr names as the holders of a taken agent name.
+ *
+ * herdr 0.8.2 writes each candidate into the error message as
+ * `terminal_id=.. pane_id=.. workspace_id=.. tab_id=.. cwd=.. status=..`.
+ * The identifiers carry no spaces, so the read stops there: a working
+ * directory that does is not this reader's problem. A message that names no
+ * candidate comes back empty, and the collision is reported without one.
+ */
+function herdrNameHolders(result: CommandResult): AgentHolder[] {
+	const text = `${result.stderr}\n${result.stdout}`;
+	const holders: AgentHolder[] = [];
+	for (const match of text.matchAll(
+		/terminal_id=(\S+)\s+pane_id=(\S+)\s+workspace_id=(\S+)\s+tab_id=(\S+)/g,
+	)) {
+		holders.push({
+			terminalId: match[1],
+			paneId: match[2],
+			workspaceId: match[3],
+			tabId: match[4],
+		});
+	}
+	return holders;
+}
+
+/** The outcome of asking herdr for one of a handoff's candidate names. */
+interface AgentStart {
+	/** The name herdr accepted, or null when none of the candidates did. */
+	name: string | null;
+	/** The command result of the last attempt. */
+	result: CommandResult;
+	/** The last name collision the attempt met, when it met one. */
+	collision?: NameCollision;
 }
 
 /**
@@ -1009,24 +1263,35 @@ async function closePreviousTab(
  * - The live worktree environment loses the handoff's tab; the workspace
  *   stays.
  *
- * Returns a readable reason when a cleanup command fails; the caller
- * keeps the state transition and warns on the status line.
+ * Returns a readable reason when a cleanup command fails; the caller keeps
+ * the state transition, warns on the status line, and records the surviving
+ * environment as a leftover of the ticket (ADR 0012).
+ *
+ * `force` asks herdr to remove a dirty checkout. It kills every agent in the
+ * workspace with it, so only the operator's explicit choice reaches for it:
+ * the Clear action offers it as its own row, and no automatic path passes it.
  */
+export interface CloseCleanupOptions {
+	/** Remove the checkout even when herdr says it is dirty. */
+	force?: boolean;
+}
+
 export async function closeHandoffEnvironment(
 	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },
 	runner: CommandRunner,
+	options: CloseCleanupOptions = {},
 ): Promise<string | undefined> {
+	const force = options.force === true;
 	if (handoff.environment === "worktree") {
 		if (handoff.workspaceId === null) return undefined;
 		// The checkout on disk and the herdr workspace behind it: herdr
 		// worktree remove closes the workspace with the checkout and never
 		// deletes the branch, so pushed work and pull requests survive.
-		const removed = await runner.run("herdr", [
-			"worktree",
-			"remove",
-			"--workspace",
-			handoff.workspaceId,
-		]);
+		const removeArgs = ["worktree", "remove", "--workspace", handoff.workspaceId];
+		if (force) {
+			removeArgs.push("--force");
+		}
+		const removed = await runner.run("herdr", removeArgs);
 		if (removed.code === 0) {
 			// The workspace closed with the checkout: the environment is gone.
 			return undefined;
@@ -1043,23 +1308,52 @@ export async function closeHandoffEnvironment(
 			if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
 				return undefined;
 			}
-			return commandFailureText(closed);
+			return herdrFailureText(closed);
 		}
 		// The checkout is still there (for example dirty): leave the
 		// workspace open for the operator and report why the removal failed.
-		return commandFailureText(removed);
+		return herdrFailureText(removed);
 	}
 	if (handoff.environment === "live-worktree") {
 		if (handoff.tabId === null) return undefined;
 		const result = await runner.run("herdr", ["tab", "close", handoff.tabId]);
-		return result.code === 0 ? undefined : commandFailureText(result);
+		return result.code === 0 ? undefined : herdrFailureText(result);
 	}
 	return undefined;
 }
 
 /** A failed herdr call: the ticket stays where the claim left it. */
 function failedCommand(result: CommandResult, ctx: HandoffContext): HandoffOutcome {
-	return failed(commandFailureText(result), ctx);
+	return failed(herdrFailureText(result), ctx);
+}
+
+/**
+ * A failed herdr command as one readable line.
+ *
+ * herdr writes its CLI errors as one JSON object, and its own message says
+ * what the operator can act on. Herdr's error code rides along: it is the
+ * stable part of the answer, and a message can change with the herdr
+ * version. A failure herdr did not write as JSON keeps its raw line.
+ */
+export function herdrFailureText(result: CommandResult): string {
+	const code = herdrErrorCode(result);
+	if (code === null) {
+		return commandFailureText(result);
+	}
+	const message = herdrErrorMessage(result);
+	return message === "" ? code : `${message} (${code})`;
+}
+
+/** The `error.message` of a herdr JSON error, or "" when it carries none. */
+function herdrErrorMessage(result: CommandResult): string {
+	let data: unknown;
+	try {
+		data = JSON.parse(result.stderr);
+	} catch {
+		return "";
+	}
+	const message = (data as { error?: { message?: unknown } }).error?.message;
+	return typeof message === "string" ? message : "";
 }
 
 /** A failed step: the ticket stays where the claim left it. */

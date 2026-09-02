@@ -89,6 +89,7 @@ const selectedTicket: Ticket = {
 	repositoryRef: repository,
 	state: "open",
 	handoff: null,
+	workCycle: 1,
 	handoffCount: 0,
 	lastCompletion: null,
 	description: "Review the authentication design.",
@@ -102,6 +103,7 @@ const selectedTicket: Ticket = {
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	leftover: null,
 };
 
 function configFor(): FactoryConfig {

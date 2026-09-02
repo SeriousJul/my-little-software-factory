@@ -1055,6 +1055,293 @@ describe("the Close cleanup", () => {
 	});
 });
 
+describe("the leftover environment", () => {
+	/** The herdr answer that refuses to remove a dirty checkout. */
+	const DIRTY_REMOVAL = {
+		code: 1,
+		stderr:
+			'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+	};
+
+	test("a Close cleanup that fails leaves the ticket carrying the leftover", async () => {
+		const app = seededApp("awaiting", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				// The state transition stands: the cycle closed. What failed is
+				// now a fact on the ticket, not only a message line that fades.
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.leftoverEnvironment(identity)).toEqual(
+					expect.objectContaining({
+						workspaceId: "ws-1",
+						paneId: "pane-1",
+						reason: expect.stringContaining("dirty_worktree_requires_force"),
+					}),
+				);
+				// The row wears the marker, and the detail pane says what is
+				// still alive for this ticket and how to end it.
+				const shown = setup.captureCharFrame();
+				expect(ticketRow(shown)).toContain("leftover");
+				const detail = detailPaneText(shown);
+				expect(detail).toContain("Leftover: herdr workspace ws-1");
+				expect(detail).toContain("press w to clear it");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("one action clears a leftover environment, with force as its own choice", async () => {
+		const app = seededApp("awaiting", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				const failed = app.runner.commands();
+				expect(failed).toContain("herdr worktree remove --workspace ws-1");
+
+				// The key guide offers the control while the ticket holds the
+				// leftover, and one key opens the action.
+				await press(setup, "?", "the key guide", (f) => f.includes("Key guide"));
+				expect(frameText(setup.captureCharFrame())).toContain("w clear leftover");
+				await pressEscape(setup, "the guide closes", (f) => !f.includes("Key guide"));
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				const panel = setup.captureCharFrame();
+				expect(frameText(panel)).toContain("Retry");
+				// herdr's force is its own row: the operator chooses it, and the
+				// control plane never reaches for it alone.
+				expect(frameText(panel)).toContain("Force");
+				// It is the leftover panel and nothing else: a second modal
+				// behind it would answer the same keys with other work.
+				expect(panel).not.toContain("Restart");
+				expect(panel).not.toContain("Abandon");
+				await pressEscape(setup, "the panel closes", (f) => !f.includes("Leftover environment"));
+				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
+
+				// Retry alone does not ask herdr for force, and the leftover stands.
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await pressReturn(setup, "the retry", (f) =>
+					f.includes("still holds a leftover environment"),
+				);
+				expect(
+					app.runner.commands().filter((c) => c === "herdr worktree remove --workspace ws-1"),
+				).toHaveLength(2);
+				expect(app.runner.commands().join("\n")).not.toContain("--force");
+				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
+
+				// The forced removal is what ends it: the fact clears, and the
+				// marker leaves the row.
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await pressArrow(setup, "down", "select force", (f) => frameText(f).includes("❯ Force"));
+				await pressReturn(setup, "the forced removal", (f) =>
+					f.includes("cleared the leftover environment"),
+				);
+				expect(app.runner.commands()).toContain("herdr worktree remove --workspace ws-1 --force");
+				expect(app.state.leftoverEnvironment(identity)).toBe(null);
+				// The fact is gone, so the marker and its control leave the row.
+				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
+				// The git branch stays: no automatic path deletes it.
+				expect(app.runner.commands().join("\n")).not.toContain("branch -D");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a clear refuses to force the workspace its live agent runs in", async () => {
+		const app = seededApp("in-flight", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
+			]),
+		});
+		const stored = app.state.latestHandoff(identity);
+		if (stored === null) throw new Error("the seeded handoff is missing");
+		// The workspace an earlier cycle left behind is the one the live agent
+		// now works in: removing it would end that work.
+		app.state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId: stored.handoffId,
+			reason: "the worktree is dirty",
+			at: "2026-09-02T10:00:00.000Z",
+		});
+
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await pressArrow(setup, "down", "select force", (f) => frameText(f).includes("❯ Force"));
+				await pressReturn(setup, "the refusal", (f) =>
+					f.includes("close its work cycle before you clear"),
+				);
+				// The control plane never reaches for force on its own, and the
+				// in-flight agent keeps running.
+				expect(app.runner.commands().join("\n")).not.toContain("--force");
+				expect(app.runner.commands().join("\n")).not.toContain("herdr tab close");
+				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
+				// The refusal changes nothing: the agent keeps its cycle running.
+				expect(app.state.ticketState(identity)).toBe("running");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a panel that has nothing left to show lets the keys back", async () => {
+		// The ticket's agent disappears while the panel is open, the
+		// observation ends the cycle at the handoff limit, and its Close
+		// cleanup removes the workspace: the leftover the panel listed is
+		// gone. A panel that can no longer be drawn must not keep swallowing
+		// the keys the ticket panels take.
+		const app = seededApp(
+			"in-flight",
+			{ autoHandoff: true, maxHandoffsPerTicket: 1 },
+			success,
+			"worktree",
+		);
+		// The agent lives while the panel opens, and is gone by the next poll.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
+			]),
+		});
+		const stored = app.state.latestHandoff(identity);
+		if (stored === null) throw new Error("the seeded handoff is missing");
+		app.state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId: stored.handoffId,
+			reason: "the worktree is dirty",
+			at: "2026-09-02T10:00:00.000Z",
+		});
+
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				await awaitFrame(setup, (f) => !f.includes("Leftover environment"), "the panel closing");
+				expect(app.state.leftoverEnvironment(identity)).toBe(null);
+				expect(app.state.ticketState(identity)).toBe("open");
+				// The ticket keys answer again.
+				await press(setup, "?", "the key guide", (f) => f.includes("Key guide"));
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 20 },
+		);
+		app.state.close();
+	});
+
+	test("a handoff beside its own leftover agent starts anyway and says so", async () => {
+		const app = seededApp("awaiting", { defaultEnvironment: "worktree" }, success, "worktree");
+		// The leftover agent reports idle: herdr sees no live work in it, so
+		// nothing reclaims it, and it is exactly the agent that holds the name.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-2",
+					tabId: "tab-2",
+					workspaceId: "ws-1",
+					agent: "pi",
+					status: "working",
+				},
+			]),
+		});
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
+		const path = Object.values(app.config.repos)[0];
+		stubCheckout(app);
+		app.runner.set("git", ["-C", path, "branch", "--list", "factory/5-persist-source-facts"], {
+			stdout: "  factory/5-persist-source-facts\n",
+		});
+		// herdr still holds the workspace of the closed cycle: the worktree
+		// open reuses it, and the leftover agent still holds the ticket's name.
+		app.runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				path,
+				"--branch",
+				"factory/5-persist-source-facts",
+				"--no-focus",
+			],
+			{
+				stdout: JSON.stringify({
+					result: {
+						already_open: true,
+						workspace: { workspace_id: "ws-1" },
+						tab: { tab_id: "tab-1" },
+						root_pane: { pane_id: "pane-1" },
+						worktree: { path: `${path}/wt` },
+					},
+				}),
+			},
+		);
+		app.runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-1", "--cwd", `${path}/wt`, "--no-focus"],
+			{ stdout: tabCreateJson("pane-2", "tab-2") },
+		);
+		app.runner.set(
+			"herdr",
+			["agent", "start", "persist-source-facts", "--kind", "pi", "--pane", "pane-2"],
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n',
+			},
+		);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				// Enter on the open ticket: the leftover does not stop it.
+				await pressReturn(setup, "the handoff", (f) => ticketRow(f).includes("[handed-off]"));
+				const commands = app.runner.commands();
+				expect(commands).toContain(
+					"herdr agent start persist-source-facts-c2 --kind pi --pane pane-2",
+				);
+				expect(commands.filter((command) => command.startsWith("herdr agent prompt "))).toEqual([
+					expect.stringContaining("herdr agent prompt persist-source-facts-c2 "),
+				]);
+				// The operator learns why the name is not the one they know.
+				expect(frameText(setup.captureCharFrame())).toContain(
+					"this agent started as persist-source-facts-c2",
+				);
+				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
+				// The durable handoff knows the name herdr accepted, so its
+				// completion trace will name the agent that actually ran.
+				expect(app.state.agentNameForTicket(identity)).toBe("persist-source-facts-c2");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
 describe("the auto dispatch", () => {
 	test("auto mode hands off the open ticket on the first cycle", async () => {
 		const app = seededApp("open", { autoHandoff: true });

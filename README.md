@@ -20,7 +20,8 @@ See `CONTEXT.md` for the domain language, `docs/labels.md` for source-label
 meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and
 TypeScript, ADR 0002: handoffs run through herdr, ADR 0005: a work cycle
 ends at close, ADR 0006: the control plane polls herdr, ADR 0011: the
-observation reclaims an agent that outlives its work cycle).
+observation reclaims an agent that outlives its work cycle, ADR 0012: a
+leftover environment is a fact the operator can act on).
 
 ## Requirements
 
@@ -55,6 +56,7 @@ observation reclaims an agent that outlives its work cycle).
 | `Left` / `Right` | Switch focus between the list and detail                                |
 | `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
 | `e`              | Open the override panel for the selected open ticket                    |
+| `w`              | Clear a leftover herdr environment of the selected ticket               |
 | `a`              | Toggle auto-handoff mode for this session                              |
 | `r`              | Refresh ticket sources, or retry a failed Consultation                 |
 | `q`              | Quit                                                                    |
@@ -192,6 +194,22 @@ previous message. "Abandon" ends the work cycle: the ticket returns to open
 with its cycle number incremented, the handoff's environment is closed,
 and the missing badge clears.
 
+### Leftover environment action keys
+
+`w` on a ticket wearing the `leftover` marker opens the clear panel.
+
+| Key             | What it does                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| `Up` / `Down`  | Move between the choice rows                                      |
+| `Enter`         | Choose the selected row                                            |
+| `Esc`           | Close the panel: nothing runs, the leftover stays recorded          |
+
+"Retry" runs the Close cleanup again. "Force" is a row only where the
+leftover is a checkout, because a forced removal discards uncommitted work
+and stops the agents in the workspace: the control plane never reaches for
+it by itself. A removal that succeeds clears the leftover; a removal that
+fails records the reason again. The git branch survives either way.
+
 ## Layout
 
 Two panes side by side, flex-sized to the terminal.
@@ -268,6 +286,9 @@ A ticket that has used up its per-ticket handoff limit wears a trailing
 `handoff limit` marker at the end of the row, and the detail pane shows the
 count as `Handoffs: 2/2`. Auto-handoff leaves such a ticket open; a manual
 handoff may still pass the limit.
+A ticket whose previous herdr environment is still alive wears a trailing
+`leftover` marker, and its detail pane names the workspace, tab, and pane that
+remain, the reason the control plane knows, and since when. `w` clears it.
 
 ## Handoffs
 
@@ -287,7 +308,11 @@ Restart repeats the interrupted handoff's Model and Thinking.
 - The agent starts under the title slug as its herdr name, with the settings
   the agent type maps (model, thinking level), and receives the prompt
   rendered from the task type's template with the ticket's repository,
-  title, and description.
+  title, and description. When the ticket's own leftover agent still holds
+  that name, the handoff starts under the same slug with its work cycle, as
+  `persist-source-facts-c2`, and says so on the status line (ADR 0012). A
+  name held by any other agent fails the handoff, with the pane and workspace
+  that hold it in the reason.
 - The ticket moves to `handed-off` when the agent starts, even if the prompt
   later fails. The agent is running and can be prompted by hand. A failure
   before the start (a missing herdr, a missing checkout, a clone target the
@@ -323,12 +348,19 @@ herdr.
 An agent can outlive the work cycle that started it: the Close cleanup cannot
 remove a dirty checkout, and the operator can re-prompt a settled agent in its
 herdr pane. The cycle is closed, so the ticket rests `open`, and the next
-handoff of that ticket fails on the herdr agent name the live agent still
+handoff of that ticket meets the herdr agent name the live agent still
 holds. The poll reclaims it (ADR 0011): a working or blocked agent in the pane
 of a ticket's last closed handoff records a handoff of the current cycle and
 runs the ticket again, with a warning line that names the ticket. An idle, done,
 or unknown report reclaims nothing. The reclaimed agent settles, awaits, and
 closes like any other, and it holds a parallel slot while it works.
+
+What the poll cannot reclaim stays as a fact on the ticket (ADR 0012): a Close
+cleanup that fails, or a handoff that meets its own leftover name, records the
+herdr environment that is still alive, and the ticket wears the `leftover`
+marker until the operator clears it with `w`. That handoff still starts: it
+takes the ticket's cycle name, and it works beside the leftover agent in the
+reused workspace until someone ends it.
 
 When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The

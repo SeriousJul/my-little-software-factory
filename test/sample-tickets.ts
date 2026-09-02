@@ -41,6 +41,7 @@ function sample(
 		},
 		state,
 		handoff,
+		workCycle: handoff === null ? 1 : 2,
 		description,
 		sourceKind: "github-issue",
 		externalKey,
@@ -54,6 +55,7 @@ function sample(
 		handoffRecoveryRequired: false,
 		handoffCount,
 		lastCompletion,
+		leftover: null,
 	};
 }
 
