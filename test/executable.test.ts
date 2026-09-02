@@ -6,7 +6,7 @@
  * Ticket controls need mouse reporting for wheel input, track clicks, and
  * thumb drags. This later control decision supersedes host text selection.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -106,6 +106,131 @@ describe("control plane executable, terminal protocol", () => {
 			} finally {
 				session.dispose();
 				session = null;
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+describe("control plane executable, the startup Model list check", () => {
+	/**
+	 * The config the check reads: one task profile that names a model, against
+	 * one `pi` agent that maps the setting (ADR 0010).
+	 */
+	function modelConfig(statePath: string): string {
+		return [
+			'default-agent = "pi"',
+			'default-environment = "live-worktree"',
+			'default-task-type = "implement"',
+			`state-file = "${statePath}"`,
+			"[agents.pi]",
+			'kind = "pi"',
+			'model = "--model {value}"',
+			"[task-types.implement]",
+			'template = "Implement {title}"',
+			'model = "anthropic/missing-model"',
+			"",
+		].join("\n");
+	}
+
+	/** Put a stand-in `pi` on the PATH the control plane resolves through. */
+	function stubPi(bin: string): void {
+		const path = join(bin, "pi");
+		writeFileSync(
+			path,
+			[
+				"#!/bin/sh",
+				"printf 'provider  model  context  max-out  thinking  images\\n'",
+				"printf 'anthropic  claude-sonnet-4-5  200000  16384  true  true\\n'",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		chmodSync(path, 0o755);
+	}
+
+	async function boot(
+		dir: string,
+		withPi: boolean,
+	): Promise<{ session: PtySession | null; configPath: string; statePath: string }> {
+		const emptyBin = join(dir, "bin");
+		mkdirSync(emptyBin, { recursive: true });
+		if (withPi) stubPi(emptyBin);
+		const statePath = join(dir, "state.sqlite");
+		const configPath = join(dir, "config.toml");
+		writeFileSync(configPath, modelConfig(statePath), "utf8");
+		const session = await openControlPlanePty(["--config", configPath], {
+			HOME: dir,
+			XDG_CONFIG_HOME: join(dir, ".config"),
+			XDG_STATE_HOME: join(dir, ".state"),
+			XDG_DATA_HOME: join(dir, ".data"),
+			XDG_CACHE_HOME: join(dir, ".cache"),
+			PATH: emptyBin,
+		});
+		return { session, configPath, statePath };
+	}
+
+	it(
+		"a config that names an unavailable model stops the control plane before it opens anything",
+		async (ctx) => {
+			const dir = mkdtempSync(join(tmpdir(), "factory-exec-model-"));
+			const { session, statePath } = await boot(dir, true);
+			if (session === null) {
+				rmSync(dir, { recursive: true, force: true });
+				ctx.skip("cannot open a pseudo-terminal on this platform");
+				return;
+			}
+			try {
+				// The error line the operator reads instead of losing a ticket.
+				const out = await session.waitFor(
+					(o) => o.includes('has no model "anthropic/missing-model"'),
+					"the startup model error",
+					STARTUP_TIMEOUT_MS,
+				);
+				expect(out.toString()).toContain("check the model id and its provider auth");
+				// The boot stops there: no window, and no state file opened behind it.
+				const exit = await withTimeout(session.exit(), EXIT_TIMEOUT_MS, "the process to exit");
+				expect(exit.code, `process exit (signal ${String(exit.signal)})`).toBe(1);
+				expect(session.output().includes(ALT_SCREEN)).toBe(false);
+				expect(existsSync(statePath)).toBe(false);
+			} finally {
+				session.dispose();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"a Model list that cannot be fetched warns and lets the control plane start",
+		async (ctx) => {
+			const dir = mkdtempSync(join(tmpdir(), "factory-exec-model-"));
+			// No `pi` on PATH: the query fails, so the value stays unchecked and the
+			// boot continues. One silent agent kind must not block the control plane.
+			const { session, statePath } = await boot(dir, false);
+			if (session === null) {
+				rmSync(dir, { recursive: true, force: true });
+				ctx.skip("cannot open a pseudo-terminal on this platform");
+				return;
+			}
+			try {
+				await session.waitFor(
+					(o) => o.includes("its model list is unavailable"),
+					"the startup warning",
+					STARTUP_TIMEOUT_MS,
+				);
+				// The boot reached the renderer, and the state file exists: a failed
+				// query warns, it does not stop.
+				await session.waitFor(
+					(o) => o.includes(ALT_SCREEN),
+					"the alternate screen",
+					STARTUP_TIMEOUT_MS,
+				);
+				expect(existsSync(statePath)).toBe(true);
+				expect(session.output().toString()).not.toContain('has no model "anthropic/missing-model"');
+			} finally {
+				session.dispose();
+				rmSync(dir, { recursive: true, force: true });
 			}
 		},
 		TEST_TIMEOUT_MS,

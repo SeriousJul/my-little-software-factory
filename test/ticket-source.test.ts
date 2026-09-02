@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 
 import type { TicketSourceConfig } from "../src/config.ts";
-import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
+import type {
+	CommandOptions,
+	CommandResult,
+	CommandRunner,
+	ModelListResult,
+} from "../src/runner.ts";
 import { createTicketSource } from "../src/ticket-source.ts";
 
 interface SafeCall {
@@ -26,6 +31,10 @@ class SourceRunner implements CommandRunner {
 	): Promise<CommandResult> {
 		this.calls.push({ command, args, secretEnvironmentNames: options?.secretEnv ?? [] });
 		return this.responses.shift() ?? { code: 0, stdout: "", stderr: "" };
+	}
+
+	async listModels(kind: string): Promise<ModelListResult> {
+		return { ok: false, reason: `the source runner holds no model list for "${kind}"` };
 	}
 }
 

@@ -32,6 +32,11 @@ observation reclaims an agent that outlives its work cycle).
 - [herdr](https://github.com/seriousjul/herdr) on the `PATH` for handoffs.
   The control plane drives it through its CLI and never starts an agent
   process itself (ADR 0002).
+- The agent CLI of an agent kind whose Model list the control plane can read.
+  For the `pi` kind it runs `pi --list-models` to learn the models that agent
+  actually offers, with its provider auth already applied (ADR 0010). A kind
+  that reports no list keeps a free-text Model row, and its configured models
+  go unchecked until the agent itself refuses one.
 
 ## Commands
 
@@ -85,36 +90,70 @@ in-app guide when the contextual Action bar is available.
 ### Override panel keys
 
 The panel is a modal. While it is open, the keys of the app below are inert.
+Its rows are the agent type, the environment kind, the task type, and the
+settings the chosen agent type maps; a setting it does not map has no row.
+The rows start on the settings the resolved Task profile names (ADR 0009),
+so the panel shows what the handoff will run on.
 
-| Key                              | What it does                                                          |
-| -------------------------------- | --------------------------------------------------------------------- |
-| `j` / `k`                        | Move rows, or type into the selected free-text row                    |
-| `Up` / `Down`                    | Move between setting rows                                             |
-| `Tab`                            | Move to the next setting row                                          |
-| `Shift` + `Tab`                  | Move to the previous setting row                                      |
-| `h` / `l`                        | Cycle a list value, or type into the selected free-text row           |
-| `Left` / `Right`                 | Move the caret in a text row, or cycle a list value                   |
-| `Home` / `End`                   | Move the caret to the start or end of a text row                      |
-| `Shift` + Left/Right, `Home`, `End` | Select text in a text row                                             |
-| typed text                       | Insert text at the caret                                              |
-| `Backspace` / `Delete`           | Delete before or at the caret                                         |
-| `Ctrl` + `Backspace` / `Delete`  | Delete one word before or after the caret                             |
-| `Ctrl` + `Z` / `Y`               | Undo or redo text editing                                             |
-| bracketed terminal paste         | Insert sanitized text at the caret; ANSI and line breaks are removed  |
-| `Enter`                          | Confirm: the handoff starts with these settings                       |
-| `Esc`                            | Cancel: nothing runs, nothing changes                                 |
+| Key                                 | What it does                                                                 |
+| ----------------------------------- | ---------------------------------------------------------------------------- |
+| `j` / `k`                           | Move rows, or type into a row that takes typing                              |
+| `Up` / `Down`                       | Move between setting rows                                                    |
+| `Tab`                               | Move to the next setting row                                                 |
+| `Shift` + `Tab`                     | Move to the previous setting row                                             |
+| `h` / `l`                           | Cycle a list value, or type into the Model list and a text row               |
+| `Left` / `Right`                    | Cycle a list value, jump a type-ahead match, or move the caret in a text row |
+| `Home` / `End`                      | Move the caret to the start or end of a text row                             |
+| `Shift` + Left/Right, `Home`, `End` | Select text in a text row                                                    |
+| typed text                          | Jump a Model list to a match, or insert text at the caret in a text row      |
+| `Backspace` / `Delete`              | Clear a Model or Thinking row, or delete before or at the caret              |
+| `Ctrl` + `Backspace` / `Delete`     | Delete one word before or after the caret                                    |
+| `Ctrl` + `Z` / `Y`                  | Undo or redo text editing                                                    |
+| bracketed terminal paste            | Insert sanitized text at the caret; ANSI and line breaks are removed         |
+| `Enter`                             | Confirm: the handoff starts with these settings                              |
+| `Esc`                               | Cancel: nothing runs, nothing changes                                        |
 
-A free-text row owns `j`, `k`, `h`, and `l`, so `Up`, `Down`, `Tab`, and
-`Shift` + `Tab` move the selection past it. The guide at the bottom follows
+The Model row offers the selected agent's own Model list (ADR 0010). It is a
+list row that also takes type-ahead: every typed letter extends the typed
+text, and the row's value jumps to the first model whose whole value contains
+that text, case-insensitively. The panel's rule is a plain substring test,
+stricter than the pattern search the `pi --list-models` filter applies, which
+lets the matched letters sit apart from each other. The typed text is never
+displayed; the jumping value is the feedback. A run that finds nothing is over,
+because a longer run can only match less, so the letter that found nothing
+starts a new run and the row keeps answering every letter. Typing accumulates
+until the operator selects with the arrows, clears with `Backspace` or
+`Delete`, or leaves the row.
+While the control plane fetches the list the row shows `(loading...)` and
+takes no input, and a value the fetch has not judged yet shows in the dim
+tone with the guide naming the wait. When the agent's kind reports no list, or
+the query fails, the row is the standard single-line text field: typing, caret
+movement, selection, `Home` and `End`, word deletion, undo and redo, and
+bracketed terminal paste, and its guide ends with `(none)` or `(failed)` to say
+which cause sent it there. A list the agent reports empty shows
+`(no models available)`.
+
+The Thinking row is a list of the levels the selected agent declares, in the
+order it declares them, so the operator can never choose a level that agent
+cannot run.
+
+A row owns the keys it needs, so `j`, `k`, `h`, and `l` type into a row that
+takes typing, and move or cycle everywhere else; `Up`, `Down`, `Tab`, and
+`Shift` + `Tab` always move the selection. The guide under the rows follows
 the selected row and shows its available controls.
-A row shows `(empty)` for an unset free-text value and `(unset)` for a list
-value that is not one of its options. The thinking row starts on the
-suggested task type's `thinking` level when the task type sets one. The
-operator picks another level, or clears a free-text row to leave the level
-to the agent. Switching the task type row re-derives the thinking row from
-the new task type's level while the operator has not set it, so the panel
-always shows what the handoff will run on. The container environment is a
-future kind and is not offered by the panel.
+A row shows `(empty)` for an unset text value, `(unset)` for a list value the
+operator has not chosen, and `(loading...)` while the Model list is being
+fetched. A value that is set but not available for the current agent shows in
+the warning color, so a handoff that would fail is visible before it is
+confirmed; a waiting Model row is not judged, because its list has not
+arrived to judge it against. Switching the task type row re-derives the
+agent, model, and thinking rows from the new task type's profile while the
+operator has not
+touched each row, so the panel keeps showing what the handoff will run on; a
+touched row keeps its value. Switching the agent never re-derives the model:
+every setting resolves on its own chain. Clearing a Model or Thinking row
+leaves that setting to the agent. The container environment is a future kind
+and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
 column shrinks first, then the label column, then the marker. The guide drops
@@ -271,11 +310,29 @@ handoff may still pass the limit.
 
 ## Handoffs
 
-Enter on an open ticket starts a handoff with the config defaults.
-The override panel changes them for that one handoff only. A workflow
-handoff starts with an empty Model and the target task type's own thinking
-default; it does not inherit either value from the previous handoff. A
-Restart repeats the interrupted handoff's Model and Thinking.
+Enter on an open ticket starts a handoff on the settings its Task profile
+resolves. The override panel changes them for that one handoff only; it never
+becomes a new default. Each setting resolves on its own chain, and the closer
+a decision is to the handoff in front of the operator, the more weight it
+gets (ADR 0009):
+
+- Agent: operator override, workflow edge pin, task profile `agent`,
+  `default-agent`.
+- Model: operator override, task profile `model`, `default-model`, the agent's
+  own default.
+- Thinking: operator override, task profile `thinking`, the agent's own level.
+
+A workflow handoff resolves those chains for its target task type, so it
+starts fresh: it does not inherit the Model or Thinking of the handoff that
+just settled. A Restart repeats the interrupted handoff's Model and Thinking,
+because that handoff is the decision being resumed.
+
+Before an agent start, the control plane checks that the settings fit the
+resolved agent (ADR 0010): its model must be one the agent's own CLI reports,
+and its level must be one the agent declares. An unfit setting fails the
+handoff with a readable reason before it changes anything outside the control
+plane, and the ticket stays open. A model list that cannot be fetched skips
+the model check, and the agent's own rejection stands.
 
 - The agent runs through herdr (ADR 0002): a live worktree handoff creates a
   herdr workspace at the checkout with a fresh tab, and a worktree handoff
@@ -291,8 +348,43 @@ Restart repeats the interrupted handoff's Model and Thinking.
 - The ticket moves to `handed-off` when the agent starts, even if the prompt
   later fails. The agent is running and can be prompted by hand. A failure
   before the start (a missing herdr, a missing checkout, a clone target the
-  filesystem refuses) leaves the ticket open and shows the reason on the
-  status line. The app never crashes on a handoff failure.
+  filesystem refuses, a model the agent does not offer) leaves the ticket
+  open and shows the reason on the status line. The app never crashes on a
+  handoff failure.
+
+### Model discovery
+
+The agent runtime, not the config file, owns the set of models it can run.
+For an agent kind whose CLI reports one, the control plane runs that command
+(`pi --list-models` for the `pi` kind) and reads the models the runtime
+reports as available, in the `provider/model` form its `--model` option takes
+(ADR 0010). The list serves three places:
+
+- Startup: a config that names a model its agent does not offer stops the
+  boot with a readable error, one line per value. A list that cannot be
+  fetched only warns, so one agent kind that cannot answer does not block the
+  control plane.
+- The override panel: the Model row offers the selected agent's list.
+- The handoff: the setting fit check above, run before the first external
+  change.
+
+Every use queries the agent again. There is no cache: the operator can change
+a provider's auth while the control plane runs, and a stale list would hide a
+model the agent has just gained or offer one it has just lost. A kind whose
+CLI reports no list keeps the free-text Model row, and its model values are
+not checked at startup.
+
+The query carries its own short budget, not the handoff's ten minutes. It runs
+before the first frame at boot, on every override panel open and agent switch,
+and inside the observation cycle ahead of a handoff, so an agent CLI that starts
+and never answers has to fail into the no-list path in seconds. A refused list
+is the designed degrade; a hang is not.
+
+One Model list value is one argument cell. The start command passes the chosen
+model to the agent as a single argument, so the parser refuses a row whose
+value carries whitespace, and the argument builder substitutes a value inside
+its template token instead of splitting the result: a model name can never
+become an argument plus a stray positional the agent reads as its model.
 
 ### Repository resolution
 
@@ -410,6 +502,12 @@ default-environment = "worktree"
 # It must name a [task-types.*] table.
 default-task-type = "implement"
 
+# The model a handoff starts on when its Task profile names none. It is
+# passed through the resolved agent's model template, so it never reaches
+# an agent that maps no model setting at all. Omitted: the agent's own
+# default. It is checked at startup through every task profile that resolves it.
+default-model = "anthropic/claude-sonnet-4-5"
+
 # The SQLite state file. A relative path resolves against the directory
 # of this config file. Omitted: $XDG_STATE_HOME/factory/state.sqlite,
 # else ~/.local/state/factory/state.sqlite.
@@ -454,8 +552,12 @@ maximum-speed = 6
 
 # kind is the herdr agent kind. model and thinking are command-line
 # templates for the agent start and must contain {value}.
-# thinking-values lists the levels the override panel offers for this
-# agent. A Consultation thinking must be one of them when the list is set.
+# thinking-values lists the levels this agent supports, in the order the
+# override panel offers them. An agent that maps thinking must declare a
+# non-empty subset of the standard set: off, minimal, low, medium, high,
+# xhigh, max. Thinking is never free text (ADR 0010).
+# The control plane reads the model list of a kind that can report one from
+# the agent's own CLI; the config declares no models.
 [agents.pi]
 kind = "pi"
 model = "--model {value}"
@@ -466,21 +568,30 @@ thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 kind = "codex"
 model = "--model {value}"
 thinking = "-c model_reasoning_effort={value}"
+thinking-values = ["minimal", "low", "medium", "high"]
 
 [agents.claude]
 kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
+thinking-values = ["low", "medium", "high", "xhigh", "max"]
 
 # --- Task types -----------------------------------------------------------
 
 # template is required. Placeholders: {repository}, {title},
 # {description}, {source-kind}, {external-key}, {source-url}, {labels},
 # {previous-message}. Any other brace pair is a startup error.
-# thinking is the level the handoff starts on.
+# The three settings below are the Task profile: what a handoff of this
+# type starts on. agent names an [agents.*] table, model is a model that
+# agent offers, and thinking must be one of that agent's thinking-values.
+# An omitted agent leaves the agent to default-agent, an omitted model
+# leaves the model to default-model, and an omitted level leaves it to the
+# agent.
 # auto-close lets the control plane decide the completions of this type
 # without the operator even in manual mode.
 [task-types.implement]
+agent = "pi"
+model = "anthropic/claude-sonnet-4-5"
 template = '''
 Implement the following {source-kind}.
 
@@ -634,6 +745,7 @@ source-kind = "github-issue"
 | `default-agent` | yes | - | The agent type a handoff starts with when the workflow edge does not pin one. It must name an `[agents.*]` table. |
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
+| `default-model` | no | - | The model a handoff starts on when its Task profile names none, and the starting value of the Model row. It is passed through the resolved agent's `model` template, so it never reaches an agent that maps no model setting. Omitted: each agent's own default. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
 | `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
 | `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it per session. |
 | `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
@@ -666,14 +778,16 @@ source-kind = "github-issue"
 | `kind` | yes | - | The herdr agent kind, passed to the herdr agent start. |
 | `model` | no | - | The model command-line template. It must contain `{value}`. A Consultation may set a model only when the agent defines one. |
 | `thinking` | no | - | The thinking-level command-line template. It must contain `{value}`. |
-| `thinking-values` | no | - | The levels the override panel offers for this agent. A Consultation `thinking` must be one of them when the list is set. |
+| `thinking-values` | yes, when the agent maps `thinking` | - | The non-empty subset of the standard levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) this agent supports, in the order the override panel offers them. A Consultation `thinking` and a task type `thinking` must be one of them. An agent that maps no `thinking` setting declares no levels. |
 
 **`[task-types.<name>]`** (one table per task type; names are one word).
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `template` | yes | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
-| `thinking` | no | - | The level the handoff starts on. The override panel shows it as the starting value of the thinking row. |
+| `agent` | no | - | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. Omitted: `default-agent`. |
+| `model` | no | - | The Task profile's model: the model a handoff of this type starts on, passed through the profile agent's `model` template, so that agent must define one. Omitted: `default-model`, then the agent's own default. |
+| `thinking` | no | - | The Task profile's level: the level a handoff of this type starts on, and the starting value of the thinking row. It must be one of the profile agent's `thinking-values`. Omitted: the level is left to the agent. |
 | `auto-close` | no | `false` | The control plane decides the completions of this type without the operator even in manual mode. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).
@@ -684,7 +798,7 @@ source-kind = "github-issue"
 | `environment` | yes | - | The environment the agent runs in. One of `live-worktree` or `worktree`. |
 | `template` | yes | - | The opening prompt. It contains `{input}` exactly once and no other placeholder. |
 | `model` | no | - | The model, passed through the agent's model template. The agent must define one. |
-| `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values` when the list is set. |
+| `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values`. |
 
 **`[[workflows]]`** (one table per workflow edge).
 
@@ -763,8 +877,9 @@ it carries the `grill-with-docs` Consultation type.
 ## Shape
 
 - `src/factory.ts`: the entry module.
-  Checks the node version, loads and validates the config, boots the
-  renderer, and mounts the app.
+  Checks the node version, loads and validates the config, checks the config's
+  model values against what the agent runtimes report, opens the state, boots
+  the renderer, and mounts the app.
 - `src/runtime.ts`: the node version gate.
 - `src/config.ts`: config types, strict startup validation, state path
   resolution, and atomic TOML write-back.
@@ -780,14 +895,24 @@ it carries the `grill-with-docs` Consultation type.
   completion traces, completion decisions, handoff attempts, and the
   process lease.
 - `src/task-selection.ts`: ordered task-rule selection.
-- `src/domain/`: the Ticket type and the ticket state machine.
+- `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
+  profile of each task type, and the agent, model, and thinking one handoff
+  resolves to before an operator override replaces it.
+- `src/model-settings.ts`: the Model list checks (ADR 0010). The startup
+  validation of the config's model values, and the setting fit check every
+  agent start runs before its first external change.
+- `src/domain/`: the Ticket type and its state machine, the agent-side facts
+  every Agent type shares (the standard Thinking level set), and the handoff
+  environment kinds.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
   command sequence through herdr, starts the agent, and sends the prompt.
 - `src/repo.ts`: the repository resolution and the sibling clone.
 - `src/naming.ts`: the branch names and the herdr agent names.
 - `src/runner.ts`: the single egress for commands.
   Every external command goes through one `CommandRunner`, and the tests
-  inject a fake that records the calls.
+  inject a fake that records the calls. The runner also answers the Model list
+  query (ADR 0010): it maps an agent kind to the command that prints its list
+  and the reader of the table that command prints, and it never throws.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
   pane, the override panel, the shared action panel (the completion decision

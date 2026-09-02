@@ -1,54 +1,138 @@
 /**
- * The override panel: a one-shot change to the settings of a single
- * handoff, made before the handoff starts. It applies to that handoff only
- * and never becomes a new default.
+ * The override panel: a one-shot change to the settings of a single handoff,
+ * made before the handoff starts. It applies to that handoff only and never
+ * becomes a new default.
  *
  * It is a centered modal with one row per setting: the agent type, the
  * environment kind, the task type, and the settings the chosen agent type
  * maps. A setting the agent does not map is hidden, so the panel shows only
- * what the chosen agent supports.
+ * what the chosen agent supports. The rows start on the settings the resolved
+ * task profile names (ADR 0009), so the panel shows what the handoff will run
+ * on.
  *
- * The Model row and the free-text Thinking row are standard single-line
- * inputs. They show a caret, and take typing, caret movement with the
- * arrows, Home and End, selection, backspace and delete, undo and redo, and
- * bracketed terminal paste. A paste is sanitized by the input before it is
- * inserted: ANSI escape sequences and line breaks are stripped, so a pasted
- * model name is plain text. An input scrolls horizontally within its column
- * and never wraps, so it can never corrupt the rows around it.
+ * The Model row offers the selected agent's Model list (ADR 0010). It is a
+ * list row that also takes type-ahead: each typed letter extends the typed
+ * text, and the row jumps to the first model whose whole value contains that
+ * text, case-insensitive. The typed text is never displayed; the jumping
+ * value is the feedback. A run that finds nothing is over, because a longer
+ * run can only match less, so the letter that found nothing starts a new run
+ * and every letter the operator types is answered. Typing accumulates until
+ * the operator selects with the arrows, clears with backspace, or leaves the
+ * row. While the control plane fetches the list the row shows a dim loading
+ * marker and takes no input; when the agent's kind reports no list, or the
+ * fetch failed, the row is the standard single-line Text field: typing, caret
+ * movement with the arrows, Home and End, selection, backspace and delete,
+ * undo and redo, and bracketed terminal paste, and its guide line names the
+ * reason the list is gone. A paste is sanitized by the input before it is
+ * inserted, so a pasted model name is plain text. An input scrolls horizontally
+ * within its column and never wraps, so it can never corrupt the rows around
+ * it.
  *
- * A list row (agent, environment, task type, and the thinking value when the
- * agent has a value list) cycles its value with left/right and h/l.
+ * A list row (the agent, the environment, the task type, the Model list, and
+ * the thinking level) cycles its value with left/right, and h and l where
+ * those keys do not type. Backspace or Delete clears a Model or Thinking row,
+ * which leaves that setting to the agent. The agent, environment, task type,
+ * and thinking rows are pure cycling; only the Model list row takes typed
+ * letters. A value that is set but not available for the current agent renders
+ * in the warning color, so a handoff that would fail is visible before it is
+ * confirmed. A row whose list has not arrived is not judged at all: it holds
+ * its value in the dim tone the panel uses for a setting it cannot confirm,
+ * and its guide names the wait. A model value wider than the column shows its
+ * end, where a real agent list tells its models apart, with a leading marker
+ * for the cut; the whole value still rides on the handoff.
  *
- * The keys: up/down and tab/shift+tab move the row selection. j and k move
- * it too, except on a selected text row, where they type. left/right move
- * the caret on a text row and cycle a list row's value; h and l type on a
- * text row and cycle a list row's value. The input owns everything else:
- * typing, backspace, delete, Home, End, undo, redo, and paste. The thinking
- * row starts on the suggested task type's thinking default, and switching
- * the task type re-derives it while the operator has not set the row, so
- * the panel always shows what the handoff will run on. Clearing a free-text
- * row leaves the setting to the agent. Enter confirms and hands off. Esc
- * cancels. While it is open, the keys of the app below are disabled.
+ * The keys: up/down and tab/shift+tab move the row selection. j and k move it
+ * too, except on a row that takes typing (a Text field, or the Model list),
+ * where they type. left/right move the caret on a Text field and cycle a list
+ * row's value; h and l type on a Text field and on the Model list, and cycle
+ * every other list row. Switching the task type re-derives the agent, model,
+ * and thinking rows from the new task type's profile while the operator has
+ * not touched each row, so the panel keeps showing the true start values; a
+ * row the operator touched keeps its value. Switching the agent never
+ * re-derives the model: each setting resolves on its own chain. Enter confirms
+ * and hands off. Esc cancels. While the panel is open, the keys of the app
+ * below are disabled.
  *
- * The panel sizes itself to the terminal: the value column shrinks first,
- * then the label column, then the marker. The hint row drops when the
- * terminal cannot hold it, and the rows scroll within the viewport when the
- * height cannot hold them all: the selected row always stays on screen. A
- * row never wraps or interleaves.
+ * The panel sizes itself to the terminal: the value column shrinks first, then
+ * the label column, then the marker. The hint row drops when the terminal
+ * cannot hold it, and the rows scroll within the viewport when the height
+ * cannot hold them all: the selected row always stays on screen. A row never
+ * wraps or interleaves.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, useRef, useState } from "react";
 
+import type { ThinkingLevel } from "../domain/agent.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import type { TaskProfileStart } from "../setting-resolution.ts";
+import { padToWidth, truncateTailToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** Which settings an agent type maps, for hiding rows it does not support. */
 export interface AgentSettings {
 	model: boolean;
 	thinking: boolean;
-	thinkingValues?: readonly string[];
+	/** The levels this Agent type supports, in the order the row offers them. */
+	thinkingValues?: readonly ThinkingLevel[];
+}
+
+/**
+ * Why a Model row is a Text field instead of the selected agent's list.
+ *
+ * The two causes read alike on the row itself, so the guide line names which
+ * one applies: a kind that reports no list is normal for that agent, while a
+ * query that failed says a list should be there and is not. The long reason a
+ * query came back with is reported once at boot, on stderr, where a whole
+ * command failure fits; a guide line holds 41 cells and a cut-off failure
+ * explains nothing.
+ */
+export type ModelListCause =
+	/** The agent kind's own CLI has no list command, so no query ran. */
+	| "no-list"
+	/** The query ran and did not answer: a failed command or an unreadable table. */
+	| "query-failed";
+
+/**
+ * One agent's Model list, as the control plane fetched it (ADR 0010).
+ * `unavailable` covers both an agent kind that reports no list and a fetch
+ * that failed: either way the row is a Text field, and it says which.
+ */
+export type ModelListStatus =
+	| { status: "loading" }
+	| { status: "available"; models: readonly string[] }
+	| { status: "unavailable"; cause: ModelListCause };
+
+/** The list of the agent the panel is on, tagged so a stale answer cannot show. */
+export interface AgentModelList {
+	agentType: string;
+	status: ModelListStatus;
+}
+
+/** The setting one row edits. */
+type RowKey = keyof HandoffChoice;
+/** The rows whose value the operator can clear to leave the setting to the agent. */
+type ClearKey = "model" | "thinking";
+/** The rows a task type switch re-derives from its profile: the list rows that set a value. */
+type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
+
+interface PanelRow {
+	label: string;
+	key: RowKey;
+	/** "list" cycles, "text" edits, "pending" waits for a list and takes nothing. */
+	kind: "list" | "text" | "pending";
+	options?: readonly string[];
+	/** The Model list row: a list row that also takes typed letters. */
+	typeAhead?: boolean;
+	/** Show the end of a value that does not fit, where a model name differs. */
+	clipTail?: boolean;
+	/** The dim marker a row holds while it has no value to show. */
+	placeholder?: string;
+	/**
+	 * The cause a Model row has no list to offer, for its guide line. Only a
+	 * free-text Model row carries one.
+	 */
+	fallbackCause?: ModelListCause;
 }
 
 interface OverridePanelProps {
@@ -56,22 +140,16 @@ interface OverridePanelProps {
 	environments: readonly EnvironmentKind[];
 	taskTypes: readonly string[];
 	agentSettings: Readonly<Record<string, AgentSettings>>;
-	/** The task types' thinking defaults, keyed by task type name. */
-	thinkingDefaults: Readonly<Record<string, string | undefined>>;
-	/** The values the panel starts on: the config defaults. */
+	/** What each task type's profile starts its handoffs on (ADR 0009). */
+	profiles: Readonly<Record<string, TaskProfileStart>>;
+	/** The Model list of the agent the panel is on. */
+	modelList: AgentModelList;
+	/** Tell the control plane the operator selected another agent: it fetches that agent's Model list. */
+	onAgentChange: (agentType: string) => void;
+	/** The values the panel starts on: the resolved task profile. */
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
-}
-
-type ListKey = "agentType" | "environment" | "taskType";
-type TextKey = "model" | "thinking";
-
-interface PanelRow {
-	label: string;
-	key: ListKey | TextKey;
-	kind: "list" | "text";
-	options?: readonly string[];
 }
 
 /** The desired label column: the widest label plus a gap. */
@@ -80,13 +158,50 @@ const LABEL_WIDTH = 12;
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 const MARKER_WIDTH = 2;
-// The hint row follows the selected row. Keep both variants short enough for
-// the default value column, or the guide drops on a narrow terminal.
+// The hint rows follow the selected row. Keep every variant no wider than the
+// text-row hint, or the guide drops on the default terminal.
 const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
-const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
-const HINT_WIDTH = Math.max(widthOf(LIST_HINT), widthOf(TEXT_HINT));
+/**
+ * The guide of a free-text Model row: the text keys, and why the list is gone.
+ *
+ * A Model row is a Text field only because its agent's list is missing, so the
+ * guide spends one cell group on the fact the row cannot show by itself. Keep
+ * both inside HINT_WIDTH: a guide wider than the threshold drops the whole
+ * guide line on a normal terminal, because the modal is only as wide as the
+ * three columns its rows use.
+ */
+const NO_LIST_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (none)";
+const LIST_FAILED_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (failed)";
+/** A list row the operator can also clear, leaving the setting to the agent. */
+const CHOICE_HINT = "↑↓/jk move ←→/hl cycle ⌫ clear ↵/esc";
+/**
+ * The Model list row: typing jumps the value, the arrows take a match.
+ *
+ * It names confirm and cancel like every other guide, and it stays inside the
+ * 41 cells the guides are sized to: a longer one raises HINT_WIDTH and drops
+ * the guide line on a normal terminal. Tab moves rows too, but the arrows are
+ * the keys the row is steered with.
+ */
+const MODEL_HINT = "↑↓ move type jumps ←→ cycle ⌫ clear ↵/esc";
+/**
+ * The row that waits for its agent's Model list. Only the movement keys and
+ * confirm and cancel reach it, and the guide says why: the loading marker is
+ * how the row tells an operator that a value filling its column is a value the
+ * panel has not judged yet, not a row that works.
+ */
+const PENDING_HINT = "↑↓/jk move (loading...) ↵/esc";
+const HINT_WIDTH = Math.max(
+	widthOf(LIST_HINT),
+	widthOf(NO_LIST_HINT),
+	widthOf(LIST_FAILED_HINT),
+	widthOf(CHOICE_HINT),
+	widthOf(MODEL_HINT),
+	widthOf(PENDING_HINT),
+);
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
+const LOADING_HINT = "(loading...)";
+const NO_MODELS_HINT = "(no models available)";
 /**
  * The field's undo and redo keys, as a module constant so the input does not
  * rebuild its binding map on every render.
@@ -145,12 +260,56 @@ function panelGeometry(width: number, height: number): PanelGeometry {
 	return { markerWidth, labelWidth, valueWidth, showHint, maxRows };
 }
 
+/**
+ * The cells one terminal size gives a row's value.
+ *
+ * The panel owns its geometry, so a test that checks a clipped value asks the
+ * panel how wide the column is instead of mirroring the number by hand.
+ */
+export function panelValueCells(width: number, height: number): number {
+	return panelGeometry(width, height).valueWidth;
+}
+
+/**
+ * The one character a key types, or null when it types nothing.
+ *
+ * Named keys arrive as their word ("up", "return"), and the arrows and the
+ * editing keys as a multi-cell escape sequence, so a single printable cell is
+ * the only thing that extends the typed text. The modifier combos belong to
+ * the focused input and never reach here.
+ */
+function typedChar(key: { name: string; sequence?: string }): string | null {
+	const raw = key.sequence === undefined || key.sequence === "" ? key.name : key.sequence;
+	if (raw.length !== 1) return null;
+	const code = raw.charCodeAt(0);
+	// A space or a control character types nothing the operator meant.
+	return code > 0x20 && code < 0x7f ? raw : null;
+}
+
+/**
+ * The first model whose whole value holds the typed text, case-insensitive.
+ *
+ * A plain substring test, and so stricter than the pattern search `pi
+ * --list-models` applies, which lets the matched letters sit apart from each
+ * other: `pi --list-models snnet` answers with models that do not hold the
+ * substring. The panel keeps the stricter rule because a jump is the only
+ * feedback it gives, and a jump must always name a model the typed letters
+ * really hold. A run that finds nothing here ends: `typeLetter` starts a new
+ * one at the letter that failed.
+ */
+function typeAheadMatch(options: readonly string[], typed: string): string | undefined {
+	const needle = typed.toLowerCase();
+	return options.find((option) => option.toLowerCase().includes(needle));
+}
+
 export function OverridePanel({
 	agents,
 	environments,
 	taskTypes,
 	agentSettings,
-	thinkingDefaults,
+	profiles,
+	modelList,
+	onAgentChange,
 	initial,
 	onConfirm,
 	onCancel,
@@ -170,16 +329,22 @@ export function OverridePanel({
 	// previous key left behind.
 	const choiceRef = useRef<HandoffChoice>(choice);
 	const selectedRef = useRef(0);
-	// True once the operator sets the thinking row themselves. While it
-	// stays false, switching the task type re-derives the row from the new
-	// task type's default, so the panel keeps showing what the handoff will
-	// run on.
-	const thinkingTouchedRef = useRef(false);
+	// True once the operator sets a row themselves. While a row stays untouched,
+	// switching the task type re-derives it from the new task type's profile, so
+	// the panel keeps showing what the handoff will run on.
+	const touchedRef = useRef<Record<DerivedKey, boolean>>({
+		agentType: false,
+		model: false,
+		thinking: false,
+	});
+	// The Model row's accumulated type-ahead text. It is never displayed: the
+	// value jumping to a match is the feedback.
+	const typedRef = useRef("");
 
-	const allRowsFor = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(value, agents, environments, taskTypes, agentSettings);
+	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
+		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
 
-	const allRows = allRowsFor(choice);
+	const allRows = rowsForChoice(choice);
 	// Switching the agent can hide the rows below the selection; clamp it.
 	const safeSelected = Math.min(selected, allRows.length - 1);
 	// The rows the terminal height holds, scrolled to keep the selected row
@@ -190,61 +355,116 @@ export function OverridePanel({
 	const rows = allRows.slice(start, start + visibleCount);
 	const row = rows[Math.max(0, safeSelected - start)];
 
+	/** Move to another agent: its Model list is the one the row must offer. */
+	const selectAgent = (next: HandoffChoice, previous: HandoffChoice) => {
+		if (next.agentType !== previous.agentType) onAgentChange(next.agentType);
+	};
+
 	const commit = (update: (current: HandoffChoice) => HandoffChoice) => {
-		choiceRef.current = update(choiceRef.current);
+		const previous = choiceRef.current;
+		choiceRef.current = update(previous);
 		setChoice(choiceRef.current);
+		selectAgent(choiceRef.current, previous);
 	};
 
 	// The row under the cursor, clamped the way the render clamps it.
 	const cursorRow = (): PanelRow => {
-		const all = allRowsFor(choiceRef.current);
+		const all = rowsForChoice(choiceRef.current);
 		return all[Math.min(selectedRef.current, all.length - 1)];
 	};
 
 	const move = (delta: number) => {
-		const count = allRowsFor(choiceRef.current).length;
+		// Leaving a row ends its type-ahead run: the next row starts clean.
+		typedRef.current = "";
+		const count = rowsForChoice(choiceRef.current).length;
 		const at = Math.min(selectedRef.current, count - 1);
 		selectedRef.current = (at + delta + count) % count;
 		setSelected(selectedRef.current);
 	};
 
+	/**
+	 * The rows a task type switch re-derives: every setting the operator has
+	 * not touched, from the new task type's profile (ADR 0009). A touched row
+	 * keeps the operator's value.
+	 */
+	const reDerive = (current: HandoffChoice, taskType: string): HandoffChoice => {
+		const profile = profiles[taskType];
+		if (profile === undefined) return { ...current, taskType };
+		const touched = touchedRef.current;
+		return {
+			...current,
+			taskType,
+			agentType: touched.agentType ? current.agentType : profile.agentType,
+			model: touched.model ? current.model : profile.model,
+			thinking: touched.thinking ? current.thinking : profile.thinking,
+		};
+	};
+
 	const cycle = (delta: number) => {
 		const target = cursorRow();
-		if (target.kind === "list" && target.key === "thinking") {
-			thinkingTouchedRef.current = true;
-		}
+		if (target.kind !== "list") return;
+		const options = target.options;
+		if (options === undefined || options.length === 0) return;
+		// Choosing with the arrows ends the type-ahead run.
+		typedRef.current = "";
+		if (target.key !== "environment" && target.key !== "taskType") touch(target.key);
 		commit((current) => {
-			const options = target.options;
-			if (options === undefined) {
-				return current;
-			}
 			const index = options.indexOf(current[target.key]);
-			// An unset value (the config default "") is not an option. The
-			// first right lands on the first option, the first left on the last.
+			// An unset value (the empty string a cleared row leaves) is not an
+			// option. The first right lands on the first option, the first left
+			// on the last.
 			const next =
 				index === -1
 					? options[(delta > 0 ? 0 : options.length - 1) % options.length]
 					: options[(index + delta + options.length) % options.length];
-			// Switching the task type re-derives an untouched thinking row,
-			// so the row keeps showing what the handoff will run on.
-			if (target.key === "taskType" && !thinkingTouchedRef.current) {
-				return { ...current, taskType: next, thinking: thinkingDefaults[next] ?? "" };
-			}
+			if (target.key === "taskType") return reDerive(current, next);
 			return { ...current, [target.key]: next };
 		});
 	};
 
+	/** Record that the operator set one of the rows a task type switch re-derives. */
+	const touch = (key: DerivedKey) => {
+		touchedRef.current[key] = true;
+	};
+
+	/** Backspace or Delete on a Model or Thinking row: leave the setting to the agent. */
+	const clearRow = () => {
+		const target = cursorRow();
+		if (target.key !== "model" && target.key !== "thinking") return;
+		const key: ClearKey = target.key;
+		typedRef.current = "";
+		touch(key);
+		commit((current) => (current[key] === "" ? current : { ...current, [key]: "" }));
+	};
+
+	/** One type-ahead letter on the Model list row. */
+	const typeLetter = (char: string) => {
+		const target = cursorRow();
+		const options = target.options ?? [];
+		const extended = typedRef.current + char;
+		// Containment only gets harder as a run grows, so a run that has found
+		// nothing can never find something again. The letter that ended it
+		// starts a new run instead: every letter is answered, one mistyped one
+		// cannot freeze the row, and the value jumping is the signal that the
+		// run restarted.
+		const match = typeAheadMatch(options, extended) ?? typeAheadMatch(options, char);
+		typedRef.current = match === undefined ? char : extended;
+		touch("model");
+		// A letter no model holds, on its own or in a run, leaves the value where
+		// it is.
+		if (match === undefined) return;
+		commit((current) => (current.model === match ? current : { ...current, model: match }));
+	};
+
 	// One text field's input callback. The input owns its own caret and text,
 	// so this only mirrors the value into the choice. The guard skips the
-	// no-op echo the value setter emits, so a re-render never re-commits.
-	const handleInput = (key: TextKey) => (value: string) => {
-		if (choiceRef.current[key] === value) {
+	// no-op echo the input emits, so a re-render never re-commits.
+	const handleInput = (value: string) => {
+		if (choiceRef.current.model === value) {
 			return;
 		}
-		if (key === "thinking") {
-			thinkingTouchedRef.current = true;
-		}
-		commit((current) => ({ ...current, [key]: value }));
+		touch("model");
+		commit((current) => ({ ...current, model: value }));
 	};
 
 	useKeyboard((key) => {
@@ -279,27 +499,49 @@ export function OverridePanel({
 				key.preventDefault();
 				return;
 		}
+		if (target.kind === "pending") {
+			// The Model list has not arrived: the row takes no input at all, so
+			// nothing the operator means for it can be lost. Only j and k still
+			// move the selection off the row.
+			if (key.name === "j" || key.name === "k") {
+				move(key.name === "j" ? 1 : -1);
+			}
+			key.preventDefault();
+			return;
+		}
 		if (target.kind === "list") {
-			// A list row: left/right and h/l cycle its value, j/k move the
-			// selection. No input is focused here, so anything else has
-			// nowhere to go and is dropped.
-			if (key.name === "left" || key.name === "h") {
+			// The Model list row takes typed letters before anything else, so h,
+			// j, k, and l type into it instead of cycling or moving.
+			if (target.typeAhead === true) {
+				const char = typedChar(key);
+				if (char !== null) {
+					typeLetter(char);
+					key.preventDefault();
+					return;
+				}
+			} else if (key.name === "j") {
+				move(1);
+				key.preventDefault();
+				return;
+			} else if (key.name === "k") {
+				move(-1);
+				key.preventDefault();
+				return;
+			}
+			if (key.name === "left" || (target.typeAhead !== true && key.name === "h")) {
 				cycle(-1);
 				key.preventDefault();
 				return;
 			}
-			if (key.name === "right" || key.name === "l") {
+			if (key.name === "right" || (target.typeAhead !== true && key.name === "l")) {
 				cycle(1);
 				key.preventDefault();
 				return;
 			}
-			if (key.name === "j") {
-				move(1);
-				key.preventDefault();
-				return;
-			}
-			if (key.name === "k") {
-				move(-1);
+			if (key.name === "backspace" || key.name === "delete") {
+				// A list row has no caret, so forward delete and backspace are the
+				// same decision: clear the setting, and leave it to the agent.
+				clearRow();
 				key.preventDefault();
 				return;
 			}
@@ -346,9 +588,33 @@ export function OverridePanel({
 	);
 }
 
+/**
+ * The Model list status that belongs to the agent the panel is on.
+ *
+ * A list the control plane is still fetching, or one it tagged for another
+ * agent, reads as loading: the row never offers agent A's models while agent B
+ * is selected. The control plane drops a stale answer before it reaches here,
+ * and the panel checks the tag too, because the row's contract is its own: an
+ * answer for the wrong agent is not an answer.
+ */
+function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListStatus {
+	return modelList.agentType === choice.agentType ? modelList.status : { status: "loading" };
+}
+
 /** The short control guide for the selected row. */
 function hintForRow(row: PanelRow): string {
-	return row.kind === "text" ? TEXT_HINT : LIST_HINT;
+	switch (row.kind) {
+		case "text":
+			// A Model row reaches a Text field only through a missing list, so the
+			// row always carries which cause sent it there; a text row without one
+			// has no list to lose.
+			return row.fallbackCause === "query-failed" ? LIST_FAILED_HINT : NO_LIST_HINT;
+		case "pending":
+			return PENDING_HINT;
+		default:
+			if (row.typeAhead === true) return MODEL_HINT;
+			return row.key === "thinking" ? CHOICE_HINT : LIST_HINT;
+	}
 }
 
 /** The inner width of the modal in cells, for the hint row. */
@@ -363,6 +629,7 @@ function rowsFor(
 	environments: readonly string[],
 	taskTypes: readonly string[],
 	agentSettings: Readonly<Record<string, AgentSettings>>,
+	modelStatus: ModelListStatus,
 ): PanelRow[] {
 	const settings = agentSettings[choice.agentType] ?? { model: false, thinking: false };
 	const rows: PanelRow[] = [
@@ -370,27 +637,58 @@ function rowsFor(
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
 		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
 	];
-	if (settings.model) {
-		rows.push({ label: "Model", key: "model", kind: "text" });
-	}
+	if (settings.model) rows.push(modelRow(modelStatus));
 	if (settings.thinking) {
 		rows.push({
 			label: "Thinking",
 			key: "thinking",
-			kind: settings.thinkingValues !== undefined ? "list" : "text",
-			options: settings.thinkingValues,
+			kind: "list",
+			options: settings.thinkingValues ?? [],
 		});
 	}
 	return rows;
 }
 
-/** One panel row as a marker, a label, and a value or an input. */
+/**
+ * The Model row for one agent: the agent's own list with type-ahead, a loading
+ * marker while the control plane fetches it, the no-models hint when the agent
+ * reports none, and the Text field when its kind reports no list or the fetch
+ * failed. The Text field's guide line names the reason the list is gone.
+ */
+function modelRow(status: ModelListStatus): PanelRow {
+	if (status.status === "loading") {
+		return { label: "Model", key: "model", kind: "pending", placeholder: LOADING_HINT };
+	}
+	if (status.status === "available") {
+		return {
+			label: "Model",
+			key: "model",
+			kind: "list",
+			options: status.models,
+			typeAhead: true,
+			// A real list carries one long provider in front of many models, so
+			// the tail is the part that tells two choices apart.
+			clipTail: true,
+			// An agent that reports no model has nothing to offer, and an empty
+			// value stays the valid unset state.
+			placeholder: status.models.length === 0 ? NO_MODELS_HINT : undefined,
+		};
+	}
+	return {
+		label: "Model",
+		key: "model",
+		kind: "text",
+		fallbackCause: status.cause,
+	};
+}
+
+/** One panel row as a marker, a label, and a value, a field, or a dim marker. */
 function rowElement(
 	r: PanelRow,
 	value: string,
 	selected: boolean,
 	geometry: PanelGeometry,
-	handleInput: (key: TextKey) => (value: string) => void,
+	handleInput: (value: string) => void,
 ): ReactElement {
 	const children: ReactElement[] = [
 		createElement(
@@ -404,21 +702,7 @@ function rowElement(
 			truncateToWidth(padToWidth(`${r.label} `, geometry.labelWidth), geometry.labelWidth),
 		),
 	];
-	if (r.kind === "list") {
-		// A list row whose value is not an option (the config default "")
-		// shows a dim hint instead of a blank.
-		const inList = r.options?.includes(value) ?? false;
-		children.push(
-			createElement(
-				"text",
-				{
-					width: geometry.valueWidth,
-					fg: !inList ? COLORS.dim : selected ? COLORS.textBright : COLORS.text,
-				},
-				truncateToWidth(inList ? value : UNSET_HINT, geometry.valueWidth),
-			),
-		);
-	} else {
+	if (r.kind === "text") {
 		// A text row: a standard single-line input. It owns the caret, the
 		// editing keys, and paste, and scrolls horizontally within the value
 		// column. The empty field shows the dim placeholder, like the old
@@ -436,10 +720,46 @@ function rowElement(
 				backgroundColor: "transparent",
 				focusedBackgroundColor: COLORS.focusedBackground,
 				keyBindings: INPUT_KEY_BINDINGS,
-				onInput: handleInput(r.key as TextKey),
+				onInput: r.key === "model" ? handleInput : undefined,
 			}),
 		);
+		return createElement(
+			"box",
+			{ key: r.key, style: { flexDirection: "row", height: 1 } },
+			...children,
+		);
 	}
+	// A list row, or the row that waits for one. An unset value shows a dim
+	// hint, never a blank; a value the current agent cannot run shows the value
+	// itself in the warning color, because the handoff would fail on it.
+	const unset = value === "";
+	// The waiting row is decided before the availability check: it holds no
+	// list to compare the value against, so a model the config resolved
+	// correctly must not read as a handoff that would fail. The row shows that
+	// value in the dim tone the panel uses for a setting it cannot yet confirm.
+	const pending = r.kind === "pending";
+	const unavailable = !pending && !unset && !(r.options ?? []).includes(value);
+	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
+	const color = unavailable
+		? COLORS.statusWarning
+		: unset || pending
+			? COLORS.dim
+			: selected
+				? COLORS.textBright
+				: COLORS.text;
+	// The tail clip marks a cut-off value with "…", so it belongs to a value
+	// alone. A hint that does not fit keeps its front like every other row
+	// text, and never carries a marker that claims it is a truncated name.
+	const clipValue = r.clipTail === true && !unset;
+	children.push(
+		createElement(
+			"text",
+			{ width: geometry.valueWidth, fg: color },
+			clipValue
+				? truncateTailToWidth(text, geometry.valueWidth)
+				: truncateToWidth(text, geometry.valueWidth),
+		),
+	);
 	return createElement(
 		"box",
 		{ key: r.key, style: { flexDirection: "row", height: 1 } },

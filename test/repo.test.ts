@@ -22,13 +22,13 @@ import { afterAll, describe, expect, test } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import {
-	commandFailureText,
 	expandHome,
 	githubCloneUrl,
 	matchesGitHubRepository,
 	matchesRepository,
 	resolveRepository,
 } from "../src/repo.ts";
+import { commandFailureText } from "../src/runner.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const createdDirs: string[] = [];
