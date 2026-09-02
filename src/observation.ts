@@ -365,7 +365,8 @@ export class ObservationCoordinator {
 	private readonly turnLogs: TurnLogSource;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
-	private cycleInFlight = false;
+	/** The cycle running now, so an overlapping one is never started twice. */
+	private running: Promise<void> | null = null;
 	private holdingHerdrError = false;
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
@@ -422,8 +423,17 @@ export class ObservationCoordinator {
 		void this.safeCycle().finally(() => this.scheduleNext());
 	};
 
-	/** Run one cycle when one is not already running. Returns when it is done. */
+	/**
+	 * Run one cycle, and return when it is done.
+	 *
+	 * A cycle that started before this call cannot answer for it: the tick
+	 * waits for it, then runs the cycle the caller asked for. A caller that
+	 * ticks once therefore always sees one full cycle of its own, which is
+	 * what the tests that drive the loop by hand depend on.
+	 */
 	async tick(): Promise<void> {
+		const inFlight = this.running;
+		if (inFlight !== null) await inFlight;
 		await this.safeCycle();
 	}
 
@@ -437,8 +447,18 @@ export class ObservationCoordinator {
 	}
 
 	private async safeCycle(): Promise<void> {
-		if (this.stopped || this.cycleInFlight) return;
-		this.cycleInFlight = true;
+		if (this.stopped || this.running !== null) return;
+		const cycle = this.runCycle();
+		this.running = cycle;
+		try {
+			await cycle;
+		} finally {
+			this.running = null;
+		}
+	}
+
+	/** One cycle, with its failures reported instead of thrown. */
+	private async runCycle(): Promise<void> {
 		try {
 			await this.cycle();
 		} catch (error) {
@@ -450,8 +470,6 @@ export class ObservationCoordinator {
 				`observation cycle failed: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			this.onChanged();
-		} finally {
-			this.cycleInFlight = false;
 		}
 	}
 
@@ -827,7 +845,8 @@ export class ObservationCoordinator {
 		this.restarted.add(ticket.ticketIdentity);
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
 		// The same choices the previous handoff ran with: the operator's
-		// restart keeps the model and thinking, and the auto one matches it.
+		// restart keeps the model, thinking level, and context window, and the
+		// auto one matches it.
 		const result = await this.dispatch({
 			origin: "restart",
 			ticketIdentity: ticket.ticketIdentity,
@@ -837,6 +856,7 @@ export class ObservationCoordinator {
 				ticket.taskType,
 				ticket.model,
 				ticket.thinking,
+				ticket.contextWindow,
 			),
 			previousMessage,
 		});

@@ -5,16 +5,21 @@
  *
  * It is a centered modal with one row per setting: the agent type, the
  * environment kind, the task type, and the settings the chosen agent type
- * maps. A setting the agent does not map is hidden, so the panel shows only
- * what the chosen agent supports.
+ * maps. A setting the agent does not map has no row of its own, so the panel
+ * shows only what the chosen agent supports. One exception keeps a value in
+ * reach: a row the agent cannot map stays on screen, in the warning color,
+ * while it still carries a value another source resolved, because that row
+ * is the only place the operator can clear it.
  *
- * The Model row and the free-text Thinking row are standard single-line
- * inputs. They show a caret, and take typing, caret movement with the
- * arrows, Home and End, selection, backspace and delete, undo and redo, and
- * bracketed terminal paste. A paste is sanitized by the input before it is
+ * The Model row, the free-text Thinking row, and the Context row are standard
+ * single-line inputs. They show a caret, and take typing, caret movement with
+ * the arrows, Home and End, selection, backspace and delete, undo and redo,
+ * and bracketed terminal paste. A paste is sanitized by the input before it is
  * inserted: ANSI escape sequences and line breaks are stripped, so a pasted
- * model name is plain text. An input scrolls horizontally within its column
- * and never wraps, so it can never corrupt the rows around it.
+ * model name is plain text. The Context row goes one step further and keeps
+ * digits only, typed or pasted, because its value is a token count that
+ * reaches the agent as one argv element. An input scrolls horizontally within
+ * its column and never wraps, so it can never corrupt the rows around it.
  *
  * A list row (agent, environment, task type, and the thinking value when the
  * agent has a value list) cycles its value with left/right and h/l.
@@ -24,7 +29,7 @@
  * the caret on a text row and cycle a list row's value; h and l type on a
  * text row and cycle a list row's value. The input owns everything else:
  * typing, backspace, delete, Home, End, undo, redo, and paste. The Agent,
- * Model, and Thinking rows start on the selected Task type's resolved
+ * Model, Thinking, and Context rows start on the selected Task type's resolved
  * profile. Switching task type re-derives each untouched setting, so the
  * panel always shows what the handoff will run on. Clearing a text row, or
  * pressing Backspace or Delete on a Thinking list row, leaves that setting
@@ -37,8 +42,9 @@
  * height cannot hold them all: the selected row always stays on screen. A
  * row never wraps or interleaves.
  */
+import type { InputRenderable } from "@opentui/core";
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, useRef, useState } from "react";
+import { type ReactElement, type RefObject, useRef, useState } from "react";
 
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
@@ -49,6 +55,8 @@ import { COLORS } from "./theme.ts";
 export interface AgentSettings {
 	model: boolean;
 	thinking: boolean;
+	/** Whether a maximum context window can reach this agent type. */
+	contextWindow: boolean;
 	thinkingValues?: readonly string[];
 }
 
@@ -66,13 +74,17 @@ interface OverridePanelProps {
 }
 
 type ListKey = "agentType" | "environment" | "taskType";
-type TextKey = "model" | "thinking";
+type TextKey = "model" | "thinking" | "contextWindow";
 
 interface PanelRow {
 	label: string;
 	key: ListKey | TextKey;
 	kind: "list" | "text";
 	options?: readonly string[];
+	/** True when the value is one the selected Agent cannot map. */
+	unsupported?: boolean;
+	/** True when the row is a text field that takes digits and nothing else. */
+	digits?: boolean;
 }
 
 /** The desired label column: the widest label plus a gap. */
@@ -85,7 +97,18 @@ const MARKER_WIDTH = 2;
 // the default value column, or the guide drops on a narrow terminal.
 const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
 const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
-const HINT_WIDTH = Math.max(widthOf(LIST_HINT), widthOf(TEXT_HINT));
+/** The guide of the token-count row: it takes digits and nothing else. */
+const DIGITS_HINT = "↑↓ tab/⇧tab type 0-9 ↵ esc";
+/** The guide of a row whose value the chosen Agent cannot map. */
+const UNSUPPORTED_HINT = "no such Agent setting: clear it";
+// Every hint shares one width so the guide never truncates another one, and
+// a row that changes its guide does not move the rows beside it.
+const HINT_WIDTH = Math.max(
+	widthOf(LIST_HINT),
+	widthOf(TEXT_HINT),
+	widthOf(DIGITS_HINT),
+	widthOf(UNSUPPORTED_HINT),
+);
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
 /**
@@ -176,6 +199,16 @@ export function OverridePanel({
 	const agentTouchedRef = useRef(false);
 	const modelTouchedRef = useRef(false);
 	const thinkingTouchedRef = useRef(false);
+	// The context window follows the same rule as the model: untouched, it
+	// re-derives from a new Task type; touched, the operator's value stays.
+	const contextTouchedRef = useRef(false);
+	// The live text fields, one ref each, so a character a row rejects can
+	// go back out of the field that holds it.
+	const inputRefs: Record<TextKey, RefObject<InputRenderable | null>> = {
+		model: useRef<InputRenderable | null>(null),
+		thinking: useRef<InputRenderable | null>(null),
+		contextWindow: useRef<InputRenderable | null>(null),
+	};
 
 	const allRowsFor = (value: HandoffChoice): PanelRow[] =>
 		rowsFor(value, agents, environments, taskTypes, agentSettings);
@@ -223,6 +256,9 @@ export function OverridePanel({
 				index === -1
 					? options[(delta > 0 ? 0 : options.length - 1) % options.length]
 					: options[(index + delta + options.length) % options.length];
+			// A setting the chosen Agent cannot map keeps its value and keeps
+			// its row: the draft survives an Agent round trip, and the row stays
+			// the one place the operator can clear it. See rowsFor.
 			if (target.key !== "taskType") return { ...current, [target.key]: next };
 			const profile = taskProfileChoices[next];
 			return {
@@ -235,6 +271,9 @@ export function OverridePanel({
 				...(thinkingTouchedRef.current || profile === undefined
 					? {}
 					: { thinking: profile.thinking }),
+				...(contextTouchedRef.current || profile === undefined
+					? {}
+					: { contextWindow: profile.contextWindow }),
 			};
 		});
 	};
@@ -242,12 +281,26 @@ export function OverridePanel({
 	// One text field's input callback. The input owns its own caret and text,
 	// so this only mirrors the value into the choice. The guard skips the
 	// no-op echo the value setter emits, so a re-render never re-commits.
-	const handleInput = (key: TextKey) => (value: string) => {
+	const handleInput = (key: TextKey) => (text: string) => {
+		// A token row takes digits and nothing else, typed or pasted: one
+		// value must never become two argv elements, and a count cannot carry
+		// a stray character. The field owns its text, so a rejected character
+		// goes back out of it: the setter echoes an input event of its own,
+		// which the guard below absorbs.
+		const value = key === "contextWindow" ? text.replace(/[^0-9]/gu, "") : text;
+		if (value !== text) {
+			// The row's own buffer holds a character the row refuses, so push
+			// the refused text back out of it. The ref is live whenever a key
+			// reached this callback, and a missing one only costs the write-back.
+			const input = inputRefs[key].current;
+			if (input !== null) input.value = value;
+		}
 		if (choiceRef.current[key] === value) {
 			return;
 		}
 		if (key === "model") modelTouchedRef.current = true;
 		if (key === "thinking") thinkingTouchedRef.current = true;
+		if (key === "contextWindow") contextTouchedRef.current = true;
 		commit((current) => ({ ...current, [key]: value }));
 	};
 
@@ -344,7 +397,16 @@ export function OverridePanel({
 				padding: 1,
 				style: { flexDirection: "column" },
 			},
-			...rows.map((r) => rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput)),
+			...rows.map((r) =>
+				rowElement(
+					r,
+					choice[r.key],
+					r.key === row.key,
+					geometry,
+					handleInput,
+					inputRefs[r.key as TextKey],
+				),
+			),
 			geometry.showHint &&
 				createElement(
 					"text",
@@ -357,6 +419,8 @@ export function OverridePanel({
 
 /** The short control guide for the selected row. */
 function hintForRow(row: PanelRow): string {
+	if (row.unsupported === true) return UNSUPPORTED_HINT;
+	if (row.digits === true) return DIGITS_HINT;
 	return row.kind === "text" ? TEXT_HINT : LIST_HINT;
 }
 
@@ -373,21 +437,43 @@ function rowsFor(
 	taskTypes: readonly string[],
 	agentSettings: Readonly<Record<string, AgentSettings>>,
 ): PanelRow[] {
-	const settings = agentSettings[choice.agentType] ?? { model: false, thinking: false };
+	const settings = agentSettings[choice.agentType] ?? {
+		model: false,
+		thinking: false,
+		contextWindow: false,
+	};
 	const rows: PanelRow[] = [
 		{ label: "Agent", key: "agentType", kind: "list", options: agents },
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
 		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
 	];
-	if (settings.model) {
-		rows.push({ label: "Model", key: "model", kind: "text" });
+	// A row shows when its Agent maps the setting. It also shows, marked
+	// unsupported, while it carries a value the Agent cannot map: hiding it
+	// would strand that value where no key can reach it, and the handoff
+	// would fail on it out of sight.
+	if (settings.model || choice.model !== "") {
+		rows.push({ label: "Model", key: "model", kind: "text", unsupported: !settings.model });
 	}
-	if (settings.thinking) {
+	if (settings.thinking || choice.thinking !== "") {
+		const list = settings.thinking !== undefined && settings.thinkingValues !== undefined;
 		rows.push({
 			label: "Thinking",
 			key: "thinking",
-			kind: settings.thinkingValues !== undefined ? "list" : "text",
-			options: settings.thinkingValues,
+			kind: list ? "list" : "text",
+			options: list ? settings.thinkingValues : undefined,
+			unsupported: !settings.thinking,
+		});
+	}
+	// The token row reads the same way as the model row: its Agent's
+	// capability opens it, and a value the Agent cannot map keeps it open so
+	// the operator can clear it.
+	if (settings.contextWindow || choice.contextWindow !== "") {
+		rows.push({
+			label: "Context",
+			key: "contextWindow",
+			kind: "text",
+			digits: true,
+			unsupported: !settings.contextWindow,
 		});
 	}
 	return rows;
@@ -399,7 +485,8 @@ function rowElement(
 	value: string,
 	selected: boolean,
 	geometry: PanelGeometry,
-	handleInput: (key: TextKey) => (value: string) => void,
+	handleInput: (key: TextKey) => (text: string) => void,
+	inputRef: RefObject<InputRenderable | null>,
 ): ReactElement {
 	const children: ReactElement[] = [
 		createElement(
@@ -422,7 +509,13 @@ function rowElement(
 				"text",
 				{
 					width: geometry.valueWidth,
-					fg: !inList ? COLORS.dim : selected ? COLORS.textBright : COLORS.text,
+					fg: !inList
+						? COLORS.dim
+						: r.unsupported === true
+							? COLORS.statusWarning
+							: selected
+								? COLORS.textBright
+								: COLORS.text,
 				},
 				truncateToWidth(inList ? value : UNSET_HINT, geometry.valueWidth),
 			),
@@ -435,16 +528,22 @@ function rowElement(
 		children.push(
 			createElement("input", {
 				key: r.key,
+				ref: inputRef,
 				width: geometry.valueWidth,
 				value,
 				focused: selected,
 				placeholder: EMPTY_HINT,
 				placeholderColor: COLORS.dim,
-				textColor: COLORS.text,
-				focusedTextColor: COLORS.textBright,
+				textColor: r.unsupported === true ? COLORS.statusWarning : COLORS.text,
+				focusedTextColor: r.unsupported === true ? COLORS.statusWarning : COLORS.textBright,
 				backgroundColor: "transparent",
 				focusedBackgroundColor: COLORS.focusedBackground,
 				keyBindings: INPUT_KEY_BINDINGS,
+				// A token row keeps digits out of its buffer, typed or pasted
+				// alike: one value must never become two argv elements, and a
+				// count cannot carry a stray character.
+				onBeforeInput:
+					r.digits === true ? (text: string) => text.replace(/[^0-9]/gu, "") : undefined,
 				onInput: handleInput(r.key as TextKey),
 			}),
 		);

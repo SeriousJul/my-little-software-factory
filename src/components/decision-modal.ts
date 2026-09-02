@@ -15,7 +15,8 @@
  *
  * The keys: up and down move the action rows, j/k scroll the log one row,
  * pgup and pgdn page it, home and end jump to its ends, enter confirms the
- * selected action, esc cancels. While it is open, the keys of the app
+ * selected action, e edits the settings of a selected handoff row before it
+ * starts, and esc cancels. While it is open, the keys of the app
  * below are disabled.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
@@ -38,6 +39,8 @@ interface DecisionModalProps {
 	entries: readonly TurnLogEntry[];
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
+	/** The `e` key on a row flagged editable: change its Handoff's settings. */
+	onEditAction?: (key: string) => void;
 	onCancel: () => void;
 }
 
@@ -54,7 +57,7 @@ const POP_MS = 120;
 const POP_TICK_MS = 16;
 /** The box's size at the pop-in's start, of its final size. */
 const POP_START = 0.94;
-const HINT = "up/down select  j/k scroll  pgup/pgdn page  home/end  enter  esc";
+const HINT = "up/down select  j/k scroll  pgup/pgdn page  home/end  enter  e edit  esc";
 
 /** The log's three voices, in the shared palette. */
 const LOG_COLORS = {
@@ -139,6 +142,7 @@ export function DecisionModal({
 	entries,
 	actions,
 	onAction,
+	onEditAction,
 	onCancel,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
@@ -207,6 +211,14 @@ export function DecisionModal({
 			case "return": {
 				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
 				if (action !== undefined) onAction(action.key);
+				break;
+			}
+			case "e": {
+				// Only a Handoff row carries settings to edit: Close and Goto
+				// decide about the turn that ended, not about a new Agent.
+				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
+				if (action !== undefined && action.editable === true && onEditAction !== undefined)
+					onEditAction(action.key);
 				break;
 			}
 			case "down":

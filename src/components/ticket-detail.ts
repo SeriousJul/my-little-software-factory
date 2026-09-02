@@ -35,10 +35,16 @@ export function detailLines(
 	const choice = ticket.handoff ?? suggestedChoice;
 	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, COLORS.text);
 	if (choice !== undefined) {
-		const model = choice.model === "" ? "left to agent" : choice.model;
-		const thinking = choice.thinking === "" ? "left to agent" : choice.thinking;
-		pushWrapped(`Model: ${model}`, choice.model === "" ? COLORS.dim : COLORS.text);
-		pushWrapped(`Thinking: ${thinking}`, choice.thinking === "" ? COLORS.dim : COLORS.text);
+		const left = (value: string) => (value === "" ? "left to agent" : value);
+		// The three settings a Task profile carries, each dim when the
+		// resolved choice leaves it to the Agent.
+		for (const [label, value] of [
+			["Model", choice.model],
+			["Thinking", choice.thinking],
+			["Context", choice.contextWindow],
+		] as const) {
+			pushWrapped(`${label}: ${left(value)}`, value === "" ? COLORS.dim : COLORS.text);
+		}
 	}
 	if (ticket.handoff !== null) {
 		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);

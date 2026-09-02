@@ -67,12 +67,19 @@ export interface HandoffChoice {
 	 *  the panel shows the level the handoff will run on, and clearing the
 	 *  row in the panel hands the level back to the agent. */
 	thinking: string;
+	/**
+	 * The maximum context window in tokens, as plain digits; empty leaves the
+	 * room to the agent. Like Model, the app prefills the resolved Task
+	 * profile's value, and there is no config-wide default for it: one number
+	 * cannot fit every model (ADR 0009).
+	 */
+	contextWindow: string;
 }
 
 /**
  * The base shape of a handoff's choices: a task type on an agent type in an
- * environment, with the model and thinking left to the agent's defaults.
- * A restart passes the previous handoff's model and thinking through.
+ * environment, with the settings left to the agent's defaults. A restart
+ * passes the previous handoff's model, thinking, and context window through.
  */
 export function baseChoice(
 	agentType: string,
@@ -80,15 +87,21 @@ export function baseChoice(
 	taskType: string,
 	model = "",
 	thinking = "",
+	contextWindow = "",
 ): HandoffChoice {
-	return { agentType, environment, taskType, model, thinking };
+	return { agentType, environment, taskType, model, thinking, contextWindow };
 }
 
 /**
  * Resolve the start values for one handoff. Each setting has its own chain:
  * an edge can replace only the Agent and Environment, while the selected
- * Task profile supplies Model and Thinking independently. An operator
- * override changes this returned choice later, before the handoff starts.
+ * Task profile supplies Model, Thinking, and the context window
+ * independently. An operator override changes this returned choice later,
+ * before the handoff starts.
+ *
+ * A resolved value never disappears here. When the resolved agent cannot map
+ * a Model, Thinking level, or context window, validateChoice fails the
+ * handoff with that reason instead of starting without it (ADR 0009).
  */
 export function resolveHandoffChoice(
 	config: FactoryConfig,
@@ -102,6 +115,7 @@ export function resolveHandoffChoice(
 		taskType,
 		profile?.model ?? config.defaultModel ?? "",
 		profile?.thinking ?? "",
+		profile?.contextWindow ?? "",
 	);
 }
 
@@ -168,6 +182,11 @@ interface HandoffContext {
 /**
  * Validate a handoff's choices. A failure comes back as its own outcome;
  * a pass carries the agent and task type records the steps need.
+ *
+ * A setting the resolved agent cannot map is a failure, not a dropped
+ * argument: starting without it would absorb a config error silently, and
+ * ADR 0009 prefers a loud, readable one. The check runs before any external
+ * step, so the ticket stays where the claim left it.
  */
 function validateChoice(
 	choice: HandoffChoice,
@@ -181,6 +200,42 @@ function validateChoice(
 	const agent = config.agents[choice.agentType];
 	if (agent === undefined) {
 		return { status: "failed", reason: `unknown agent type: ${choice.agentType}` };
+	}
+	if (choice.model !== "" && agent.model === undefined) {
+		return {
+			status: "failed",
+			reason:
+				`agent type "${choice.agentType}" defines no model setting, so model ` +
+				`"${choice.model}" cannot reach it: clear the model in the override panel, ` +
+				`or start an agent type that maps one`,
+		};
+	}
+	if (choice.thinking !== "" && agent.thinking === undefined) {
+		return {
+			status: "failed",
+			reason:
+				`agent type "${choice.agentType}" defines no thinking setting, so thinking ` +
+				`level "${choice.thinking}" cannot reach it: clear the thinking level in the ` +
+				`override panel, or start an agent type that maps one`,
+		};
+	}
+	if (choice.contextWindow !== "" && agent.contextWindow === undefined) {
+		return {
+			status: "failed",
+			reason:
+				`agent type "${choice.agentType}" defines no context window setting, so the ` +
+				`count of ${choice.contextWindow} tokens cannot reach it: clear it in the ` +
+				`override panel, or start an agent type that maps one`,
+		};
+	}
+	if (choice.contextWindow !== "" && agent.contextWindow === undefined) {
+		return {
+			status: "failed",
+			reason:
+				`agent type "${choice.agentType}" defines no context-window setting, so the ` +
+				`context window "${choice.contextWindow}" cannot reach it: clear it in the ` +
+				`override panel, or start an agent type that maps one`,
+		};
 	}
 	const taskType = config.taskTypes[choice.taskType];
 	if (taskType === undefined) {
@@ -295,6 +350,7 @@ export async function handOffConsultation({
 			"",
 			consultation.model,
 			consultation.thinking,
+			consultation.contextWindow,
 		),
 	);
 	const name = consultation.agentName || consultationAgentName(consultation.id);
@@ -1092,7 +1148,8 @@ function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
  * The setting arguments of a handoff: each chosen setting the agent type
  * maps is substituted into its argument template and split on whitespace
  * into argv. A setting left empty is ignored: no template, no arguments,
- * and the setting is left to the agent.
+ * and the setting is left to the agent. validateChoice already refused a
+ * non-empty setting whose template the agent has no mapping for.
  */
 export function settingArgs(
 	agent: FactoryConfig["agents"][string],
@@ -1104,6 +1161,9 @@ export function settingArgs(
 	}
 	if (agent.thinking !== undefined && choice.thinking !== "") {
 		args.push(...renderSettingArgs(agent.thinking, choice.thinking));
+	}
+	if (agent.contextWindow !== undefined && choice.contextWindow !== "") {
+		args.push(...renderSettingArgs(agent.contextWindow, choice.contextWindow));
 	}
 	return args;
 }

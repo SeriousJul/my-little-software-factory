@@ -13,6 +13,8 @@ export interface AgentTypeConfig {
 	kind: string;
 	model?: string;
 	thinking?: string;
+	/** The template that carries a maximum context window to this agent. */
+	contextWindow?: string;
 	thinkingValues?: string[];
 }
 
@@ -24,6 +26,13 @@ export interface TaskTypeConfig {
 	model?: string;
 	/** The thinking level its handoffs start on. Omitted leaves the setting to the agent. */
 	thinking?: string;
+	/**
+	 * The maximum context window, in tokens, its handoffs start on: plain
+	 * digits, the same string the Handoff carries. Omitted leaves the room to
+	 * the agent, and there is no top-level default for it: one number cannot
+	 * fit every model.
+	 */
+	contextWindow?: string;
 	/** Settle turns of this type without an operator decision. */
 	autoClose: boolean;
 }
@@ -40,6 +49,8 @@ export interface ConsultationTypeConfig {
 	model?: string;
 	/** Optional thinking setting passed through the Agent type mapping. */
 	thinking?: string;
+	/** Optional context window setting passed through the Agent type mapping. */
+	contextWindow?: string;
 }
 
 /** A semantic key used to leave Agent interaction mode. */
@@ -387,9 +398,12 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 		const agent: AgentTypeConfig = { kind: stringField(raw, "kind", `agents.${name}`) };
 		const model = optionalStringField(raw, "model", `agents.${name}`);
 		const thinking = optionalStringField(raw, "thinking", `agents.${name}`);
+		const contextWindow = optionalStringField(raw, "context-window", `agents.${name}`);
 		if (model !== undefined) agent.model = settingTemplate(model, `agents.${name}.model`);
 		if (thinking !== undefined)
 			agent.thinking = settingTemplate(thinking, `agents.${name}.thinking`);
+		if (contextWindow !== undefined)
+			agent.contextWindow = settingTemplate(contextWindow, `agents.${name}.context-window`);
 		if ("thinking-values" in raw) {
 			const values = raw["thinking-values"];
 			if (
@@ -401,7 +415,7 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 			agent.thinkingValues = [...values];
 		}
 		for (const key of Object.keys(raw)) {
-			if (!new Set(["kind", "model", "thinking", "thinking-values"]).has(key)) {
+			if (!new Set(["kind", "model", "thinking", "thinking-values", "context-window"]).has(key)) {
 				throw new ConfigError(`config: agents.${name}: unknown key "${key}"`);
 			}
 		}
@@ -493,6 +507,7 @@ function validateTaskTypes(
 			throw new ConfigError(`config: task-types.${name}.agent: unknown agent "${agent}"`);
 		const model = optionalStringField(raw, "model", `task-types.${name}`);
 		const thinking = optionalStringField(raw, "thinking", `task-types.${name}`);
+		const contextWindow = tokenCountField(raw, "context-window", `task-types.${name}`);
 		const profileAgent = agents[agent ?? defaultAgent];
 		if (
 			thinking !== undefined &&
@@ -503,6 +518,13 @@ function validateTaskTypes(
 				`config: task-types.${name}.thinking: must be one of: ${profileAgent.thinkingValues.join(", ")}`,
 			);
 		}
+		// The profile's own agent is the one its context window must reach. An
+		// edge can reroute the handoff onto another agent later; that pair is
+		// caught at handoff time, the same way a model is.
+		if (contextWindow !== undefined && profileAgent?.contextWindow === undefined)
+			throw new ConfigError(
+				`config: task-types.${name}.context-window: agent "${agent ?? defaultAgent}" does not define a context-window setting`,
+			);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
@@ -517,6 +539,7 @@ function validateTaskTypes(
 				key !== "agent" &&
 				key !== "model" &&
 				key !== "thinking" &&
+				key !== "context-window" &&
 				key !== "auto-close"
 			)
 				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
@@ -526,6 +549,7 @@ function validateTaskTypes(
 			...(agent === undefined ? {} : { agent }),
 			...(model === undefined ? {} : { model }),
 			...(thinking === undefined ? {} : { thinking }),
+			...(contextWindow === undefined ? {} : { contextWindow }),
 		};
 	}
 	return out;
@@ -544,7 +568,9 @@ function validateConsultationTypes(
 		if (!isRecord(raw))
 			throw new ConfigError(`config: consultation-types.${name}: must be a table`);
 		for (const key of Object.keys(raw))
-			if (!["agent", "environment", "template", "model", "thinking"].includes(key))
+			if (
+				!["agent", "environment", "template", "model", "thinking", "context-window"].includes(key)
+			)
 				throw new ConfigError(`config: consultation-types.${name}: unknown key "${key}"`);
 		const where = `consultation-types.${name}`;
 		const agent = stringField(raw, "agent", where);
@@ -575,12 +601,18 @@ function validateConsultationTypes(
 					`${where}.thinking: must be one of: ${agentConfig.thinkingValues.join(", ")}`,
 				);
 		}
+		const contextWindow = tokenCountField(raw, "context-window", where);
+		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
+			throw new ConfigError(
+				`${where}.context-window: agent "${agent}" does not define a context-window setting`,
+			);
 		out[name] = {
 			agent,
 			environment: environment as EnvironmentKind,
 			template,
 			...(model === undefined ? {} : { model }),
 			...(thinking === undefined ? {} : { thinking }),
+			...(contextWindow === undefined ? {} : { contextWindow }),
 		};
 	}
 	return out;
@@ -822,6 +854,30 @@ function validateTaskRules(value: unknown, taskTypes: Record<string, TaskTypeCon
 	});
 }
 
+/**
+ * A maximum context window: a positive whole token count, written in plain
+ * digits. A quoted digit string reads like the bare number, so the config
+ * writer's quoting never changes what a file says. There is no suffix
+ * parsing and no unit: `200k`, `272 000`, `0`, and a negative all fail.
+ */
+function tokenCountField(
+	record: Record<string, unknown>,
+	key: string,
+	where: string,
+): string | undefined {
+	const value = record[key];
+	if (value === undefined) return undefined;
+	const digits = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
+	const count = /^[0-9]+$/.test(digits) ? Number(digits) : Number.NaN;
+	if (!Number.isSafeInteger(count) || count <= 0)
+		throw new ConfigError(
+			`config: ${where}.${key}: must be a positive whole number of tokens in digits`,
+		);
+	// The digits are the value: the control plane never reformats a count, and
+	// a leading zero is the only spelling that can change.
+	return String(count);
+}
+
 function settingTemplate(template: string, where: string): string {
 	const placeholders = placeholderNames(template);
 	if (!placeholders.includes("value"))
@@ -928,6 +984,7 @@ export function configToToml(config: FactoryConfig): string {
 					kind: agent.kind,
 					...(agent.model === undefined ? {} : { model: agent.model }),
 					...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
+					...(agent.contextWindow === undefined ? {} : { "context-window": agent.contextWindow }),
 					...(agent.thinkingValues === undefined
 						? {}
 						: { "thinking-values": agent.thinkingValues }),
@@ -942,6 +999,7 @@ export function configToToml(config: FactoryConfig): string {
 					...(task.agent === undefined ? {} : { agent: task.agent }),
 					...(task.model === undefined ? {} : { model: task.model }),
 					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+					...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
 					...(task.autoClose ? { "auto-close": true } : {}),
 				},
 			]),
@@ -955,6 +1013,9 @@ export function configToToml(config: FactoryConfig): string {
 					template: consultation.template,
 					...(consultation.model === undefined ? {} : { model: consultation.model }),
 					...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
+					...(consultation.contextWindow === undefined
+						? {}
+						: { "context-window": consultation.contextWindow }),
 				},
 			]),
 		),

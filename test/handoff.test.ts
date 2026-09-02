@@ -20,6 +20,7 @@ import {
 	handOffTicket,
 	renderPrompt,
 	renderSettingArgs,
+	resolveHandoffChoice,
 	settingArgs,
 } from "../src/handoff.ts";
 import {
@@ -91,6 +92,7 @@ const defaultChoice = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /** The exact prompt the implement task type renders for this ticket. */
@@ -970,6 +972,62 @@ describe("handOffTicket: the guard rails", () => {
 		expect(runner.calls).toHaveLength(0);
 	});
 
+	test("a model the resolved agent cannot map fails before any command", async () => {
+		const runner = new FakeRunner();
+		// The profile names no model: the default one resolves onto an agent
+		// that maps no model, so the value has nowhere to go.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+			},
+		};
+
+		const outcome = await handOffTicket(ticket, resolveHandoffChoice(config, "implement"), {
+			config,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe(
+			'agent type "cursor" defines no model setting, so model "factory-model" cannot ' +
+				"reach it: clear the model in the override panel, or start an agent type that " +
+				"maps one",
+		);
+		// Nothing ran: the handoff failed before it built an environment.
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("a thinking level the resolved agent cannot map fails before any command", async () => {
+		const runner = new FakeRunner();
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor", thinking: "high" },
+			},
+		};
+
+		const outcome = await handOffTicket(ticket, resolveHandoffChoice(config, "implement"), {
+			config,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe(
+			'agent type "cursor" defines no thinking setting, so thinking level "high" cannot ' +
+				"reach it: clear the thinking level in the override panel, or start an agent " +
+				"type that maps one",
+		);
+		expect(runner.calls).toHaveLength(0);
+	});
+
 	test("a failed herdr step after a sibling clone still hands back the mapping", async () => {
 		const runner = new FakeRunner();
 		// The convention path holds a different repository: a sibling clone.
@@ -1272,6 +1330,165 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		expect(commands).toContain("herdr tab close tab-1");
 		// The previous tab belongs to the settled turn: it is not closed here.
 		expect(commands).not.toContain("herdr tab close tab-prev");
+	});
+
+	test("every setting the profile names reaches the agent in its own words", async () => {
+		// ADR 0009: the profile resolves the values and the agent's templates
+		// render them, so one profile says the same three things to three
+		// agents in three different argv shapes.
+		const profileConfig: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				codex: {
+					...DEFAULT_CONFIG.agents.codex,
+					model: "-m {value}",
+					thinking: "-r {value}",
+					contextWindow: "-c model_context_window={value}",
+				},
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "gpt-5.6",
+					thinking: "high",
+					contextWindow: "272000",
+				},
+			},
+		};
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-new"),
+		});
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"],
+			{ stdout: tabCreateJson("pane-1") },
+		);
+
+		const outcome = await handOffTicket(ticket, resolveHandoffChoice(profileConfig, "implement"), {
+			config: profileConfig,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("ok");
+		const start = runner.calls.find((call) => call.args[0] === "agent" && call.args[1] === "start");
+		expect(start?.args).toEqual([
+			"agent",
+			"start",
+			AGENT,
+			"--kind",
+			"codex",
+			"--pane",
+			"pane-1",
+			"--",
+			"-m",
+			"gpt-5.6",
+			"-r",
+			"high",
+			"-c",
+			"model_context_window=272000",
+		]);
+	});
+
+	test("a context window the resolved agent cannot map fails before any command", async () => {
+		const runner = new FakeRunner();
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				// cursor maps nothing: the count the profile names has no argv.
+				cursor: { ...DEFAULT_CONFIG.agents.codex, contextWindow: undefined },
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "cursor",
+					contextWindow: "272000",
+				},
+			},
+		};
+
+		const outcome = await handOffTicket(ticket, resolveHandoffChoice(config, "implement"), {
+			config,
+			runner,
+			home: HOME,
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe(
+			'agent type "cursor" defines no context window setting, so the count of 272000 ' +
+				"tokens cannot reach it: clear it in the override panel, or start an agent " +
+				"type that maps one",
+		);
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("a restart repeats the context window, and fails loudly where the agent cannot map it", async () => {
+		// A restart keeps every setting the interrupted handoff ran with. When
+		// the operator restarts onto an agent that maps no context window, the
+		// kept count fails the handoff the same way a profile's does: a restart
+		// never quietly widens or narrows the room the agent worked in.
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+
+		const outcome = await handOffStoredWorkspace({
+			ticket: { ...ticket, state: "running" },
+			choice: { ...defaultChoice, agentType: "pi", contextWindow: "272000" },
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "",
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain('agent type "pi" defines no context window setting');
+		// Nothing ran: the choice is refused before the environment is touched.
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("an edge reroute onto an agent that cannot map the target model fails", async () => {
+		const runner = new FakeRunner();
+		// ADR 0009: a model written for the target profile's own agent can
+		// fail a handoff an edge routed to another agent, and that failure is
+		// how the config error is seen.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: { ...DEFAULT_CONFIG.taskTypes.review, model: "pi-model" },
+			},
+		};
+		const edge = { from: "implement", to: ["review"], agent: "cursor" };
+
+		const outcome = await handOffStoredWorkspace({
+			ticket: { ...ticket, state: "awaiting" },
+			choice: resolveHandoffChoice(config, "review", edge),
+			config,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain('agent type "cursor" defines no model setting');
+		expect(runner.calls).toHaveLength(0);
 	});
 });
 

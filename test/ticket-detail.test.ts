@@ -22,10 +22,14 @@ describe("Ticket detail task profile", () => {
 			taskType: "implement",
 			model: "task-model",
 			thinking: "",
+			contextWindow: "272000",
 		});
 		expect(lines).toContainEqual({ text: "Agent: codex", fg: COLORS.text });
 		expect(lines).toContainEqual({ text: "Model: task-model", fg: COLORS.text });
 		expect(lines).toContainEqual({ text: "Thinking: left to agent", fg: COLORS.dim });
+		// A count the profile names reads like any other value; the digits are
+		// the value, so the detail never reformats them.
+		expect(lines).toContainEqual({ text: "Context: 272000", fg: COLORS.text });
 	});
 });
 

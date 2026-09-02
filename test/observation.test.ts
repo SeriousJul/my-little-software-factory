@@ -23,6 +23,7 @@ const choice = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /**
@@ -621,11 +622,11 @@ describe("missing agents", () => {
 		state.close();
 	});
 
-	test("a restart keeps the model and thinking the previous handoff ran with", async () => {
+	test("a restart keeps the settings the previous handoff ran with", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		const claim = state.claimHandoff(
 			"github:github.com:I_5",
-			{ ...choice, model: "opus-4", thinking: "high" },
+			{ ...choice, model: "opus-4", thinking: "high", contextWindow: "272000" },
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
@@ -645,6 +646,10 @@ describe("missing agents", () => {
 					taskType: "implement",
 					model: "opus-4",
 					thinking: "high",
+					// Recovery repeats the interrupted handoff: every setting it
+					// ran with comes back, so a restart cannot widen or narrow
+					// the room the agent worked in.
+					contextWindow: "272000",
 				},
 			}),
 		]);
@@ -846,6 +851,7 @@ describe("the awaiting rule", () => {
 					// profile setting of this fresh workflow handoff.
 					model: "profile-model",
 					thinking: "high",
+					contextWindow: "",
 				},
 			}),
 		]);
@@ -1026,6 +1032,7 @@ describe("the open dispatch", () => {
 					agent: "codex",
 					model: "profile-model",
 					thinking: "high",
+					contextWindow: "",
 				},
 			},
 		};
@@ -1044,6 +1051,7 @@ describe("the open dispatch", () => {
 					taskType: "implement",
 					model: "profile-model",
 					thinking: "high",
+					contextWindow: "",
 				},
 			}),
 		]);

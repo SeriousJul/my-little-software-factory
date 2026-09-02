@@ -56,6 +56,7 @@ import {
 	pressArrow,
 	rgb,
 	rowsOf,
+	scrollDetailUntil,
 	settle,
 	showsTicket,
 	sleep,
@@ -106,6 +107,9 @@ describe("the control plane", () => {
 			expect(detail).toContain("Agent: pi");
 			expect(detail).toContain("Model: left to agent");
 			expect(detail).toContain("Thinking: left to agent");
+			// A setting the profile leaves out reads the same way: the agent's own
+			// default is the only one the control plane does not know.
+			expect(detail).toContain("Context: left to agent");
 			expect(detail).toContain("Source state: open");
 			// The open ticket's task type line says which fact it is.
 			expect(detail).toContain("Suggested task type: implement");
@@ -628,6 +632,7 @@ describe("the control plane", () => {
 				taskType: "review",
 				model: "",
 				thinking: "",
+				contextWindow: "",
 				attemptId: "attempt-1",
 				paneId: "pane-1",
 				tabId: "tab-1",
@@ -784,18 +789,12 @@ describe("the control plane", () => {
 				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[handed-off]")) as string);
 				expect(line).toBe("│ ❯ [handed-off] Fix pan dri │");
 				expect(line).not.toContain("[implem");
-				// The detail carries the full value the row dropped. The new
-				// Model and Thinking rows take the short viewport first, so scroll
-				// to the Task type row instead of assuming it is initially visible.
+				// The detail carries the full value the row dropped. Its profile
+				// rows take the short viewport first, so scroll down to the Task
+				// type row instead of assuming it is initially visible.
 				await focusDetail(setup);
-				await press(setup, "j", "the handoff task type label in detail", (candidate) =>
-					detailPaneText(candidate, 60).includes("Handoff task type:"),
-				);
-				const detail = await press(
-					setup,
-					"j",
-					"the handoff task type value in detail",
-					(candidate) => detailPaneText(candidate, 60).includes("Handoff task type: implement"),
+				const detail = await scrollDetailUntil(setup, "the handoff task type line", (candidate) =>
+					detailPaneText(candidate, 60).includes("Handoff task type: implement"),
 				);
 				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
 			},

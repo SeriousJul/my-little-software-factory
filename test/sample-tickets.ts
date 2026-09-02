@@ -11,6 +11,7 @@ function handoff(
 		taskType,
 		model: "",
 		thinking: "",
+		contextWindow: "",
 		attemptId: `attempt-${taskType}`,
 		paneId: `pane-${taskType}`,
 		tabId: `tab-${taskType}`,
@@ -100,6 +101,7 @@ export const SAMPLE_TICKETS: readonly Ticket[] = [
 			agentType: "claude",
 			model: "",
 			thinking: "",
+			contextWindow: "",
 			message:
 				"The auth shim and its flag are removed.\nAll 142 tests pass. I left the migration note in docs/auth.md.",
 			turnLog: [

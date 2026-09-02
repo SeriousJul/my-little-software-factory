@@ -28,6 +28,7 @@ const choice = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /** A plain-text turn log for a settle fixture, one entry per line. */
@@ -259,14 +260,14 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("records the model and thinking level of the settled handoff", () => {
+	test("records the model, thinking level, and context window of the settled handoff", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const [ticket] = state.visibleTickets([], "implement");
 		const claim = state.claimHandoff(
 			ticket.identity,
-			{ ...choice, model: "gpt-5.6", thinking: "high" },
+			{ ...choice, model: "gpt-5.6", thinking: "high", contextWindow: "272000" },
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
@@ -282,7 +283,11 @@ describe("factory SQLite state", () => {
 		});
 
 		expect(state.lastCompletion(ticket.identity)).toEqual(
-			expect.objectContaining({ model: "gpt-5.6", thinking: "high" }),
+			expect.objectContaining({
+				model: "gpt-5.6",
+				thinking: "high",
+				contextWindow: "272000",
+			}),
 		);
 		state.close();
 	});
@@ -604,6 +609,9 @@ describe("factory SQLite state", () => {
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
+		// A v2 trace carries no context window: the v7 column goes with the
+		// v6 ones. The consultations table does not exist at this version.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
 
@@ -621,6 +629,51 @@ describe("factory SQLite state", () => {
 				decision: null,
 			}),
 		);
+		reopened.close();
+	});
+
+	test("a v6 database migrates to v7: the trace and a stored choice gain no context window", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.close();
+
+		// Downgrade the record to the v6 shape: drop the column the v7
+		// migration adds, and rewrite a stored choice without the key, which
+		// is exactly what a v6 handoff row holds.
+		const db = new DatabaseSync(path);
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
+		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
+		db.prepare("UPDATE schema_version SET version = 6").run();
+		db.prepare(
+			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
+		).run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The trace survives, and its context window reads as the empty one
+		// the migration's default gives it: no v6 handoff named a count.
+		expect(reopened.lastCompletion(ticket.identity)).toEqual(
+			expect.objectContaining({ message: "Done.", contextWindow: "" }),
+		);
+		// A choice written before the key existed reads back with it empty, so
+		// a Restart of a v6 handoff never carries a count it never chose.
+		const [restored] = reopened.visibleTickets([], "implement");
+		expect(restored.handoff).toEqual(expect.objectContaining({ contextWindow: "" }));
 		reopened.close();
 	});
 

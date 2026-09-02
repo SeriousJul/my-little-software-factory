@@ -357,9 +357,68 @@ export async function focusDetail(setup: Setup): Promise<string> {
 	return press(setup, "l", "the detail pane to take focus", detailFocused);
 }
 
+/**
+ * Scroll the focused detail pane until one line shows, and return that frame.
+ *
+ * The detail is taller than a short terminal, so a test that needs a row
+ * below the fold has to scroll to it, and the pane's row count is a product
+ * decision that changes with the settings a Ticket carries. The walk presses
+ * `j` until the line shows, so a test states what it looks for instead of
+ * counting rows.
+ */
+export async function scrollDetailUntil(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+	maxSteps = 24,
+): Promise<string> {
+	for (let step = 0; step <= maxSteps; step += 1) {
+		const frame = setup.captureCharFrame();
+		if (predicate(frame)) return frame;
+		setup.mockInput.pressKey("j");
+		await settle(setup, SCROLL_STEP_MS);
+	}
+	throw new Error(`the detail never showed ${what}\nlast frame:\n${setup.captureCharFrame()}`);
+}
+
+/** How long one scroll step of the walk may take to go quiet. */
+const SCROLL_STEP_MS = 150;
+
 /** Press `h` and wait for the list pane to take focus. */
 export async function focusList(setup: Setup): Promise<string> {
 	return press(setup, "h", "the list pane to take focus", listFocused);
+}
+
+/**
+ * Press a key, wait for its effect, then wait for the app to go quiet.
+ *
+ * A key that lands while an update chain is still in flight - an observation
+ * tick, a modal's pop-in, a render pass that subscribes the next handler -
+ * can be dropped or can reach two handlers at once. A press whose effect
+ * depends on what ran before it therefore waits for the frame to stop
+ * changing before the next key goes out.
+ */
+export async function pressQuiet(
+	setup: Setup,
+	key: Parameters<typeof press>[1],
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	const frame = await press(setup, key, what, predicate);
+	await settle(setup);
+	return frame;
+}
+
+/** Press Enter, wait for its effect, then wait for the app to go quiet. */
+export async function pressEnterQuiet(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressEnter();
+	const frame = await awaitFrame(setup, predicate, what);
+	await settle(setup);
+	return frame;
 }
 
 /**

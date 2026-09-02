@@ -24,6 +24,8 @@ export interface ActionRow {
 	key: string;
 	label: string;
 	detail?: string;
+	/** The row starts a Handoff whose settings `e` edits before it starts. */
+	editable?: boolean;
 }
 
 interface MissingModalProps {

@@ -109,6 +109,21 @@ type Panel =
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string };
 
+/**
+ * The handoff waiting behind the override panel.
+ *
+ * The panel edits one Handoff's settings, wherever its choice came from, so
+ * it carries what the confirm step needs to claim the same handoff: the
+ * Ticket, the Origin of its dispatch, and the previous message its prompt
+ * carries.
+ */
+interface PendingOverride {
+	ticketIdentity: string;
+	origin: HandoffOrigin;
+	choice: HandoffChoice;
+	previousMessage: string;
+}
+
 export type AppKey =
 	| "j"
 	| "k"
@@ -229,7 +244,11 @@ export function App({
 	const focusedPaneRef = useRef<Pane>("list");
 	const detailRef = useRef<TicketDetailHandle | null>(null);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
-	const [override, setOverride] = useState<HandoffChoice | null>(null);
+	// The handoff the override panel is editing: its ticket, where it came
+	// from, and the settings it resolves to before the operator changes them.
+	const [override, setOverride] = useState<PendingOverride | null>(null);
+	const overrideRef = useRef<PendingOverride | null>(null);
+	overrideRef.current = override;
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
 	const [autoMode, setAutoMode] = useState<boolean>(
@@ -421,6 +440,7 @@ export function App({
 			{
 				model: agent.model !== undefined,
 				thinking: agent.thinking !== undefined,
+				contextWindow: agent.contextWindow !== undefined,
 				thinkingValues: agent.thinkingValues,
 			},
 		]),
@@ -648,12 +668,7 @@ export function App({
 	const runIntentRef = useRef(runIntent);
 	runIntentRef.current = runIntent;
 
-	const startHandoff = (choice: HandoffChoice) => {
-		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) {
-			setStatus({ kind: "warning", text: "no ticket is selected" });
-			return;
-		}
+	const startHandoff = (ticket: Ticket, choice: HandoffChoice) => {
 		if (ticket.state !== "open") {
 			setStatus({ kind: "warning", text: "only open tickets can be handed off" });
 			return;
@@ -694,14 +709,15 @@ export function App({
 						taskType: choice.taskType,
 						model: choice.model,
 						thinking: choice.thinking,
+						contextWindow: choice.contextWindow,
 						attemptId: "manual",
 						paneId: outcome.agent.paneId,
 						tabId: outcome.agent.tabId,
 						workspaceId: outcome.agent.workspaceId,
 					};
 					setTickets((all) => {
-						const next = all.map((candidate, index) =>
-							index === selectedIndexRef.current
+						const next = all.map((candidate) =>
+							candidate.identity === ticket.identity
 								? { ...candidate, state: "handed-off" as const, handoff }
 								: candidate,
 						);
@@ -725,7 +741,13 @@ export function App({
 		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
 		if (ticket === undefined || ticket.state !== "open") {
-			setStatus({ kind: "warning", text: "only open tickets can be handed off" });
+			setStatus({
+				kind: "warning",
+				text:
+					ticket?.state === "awaiting"
+						? "awaiting ticket: press Enter, then e on a Handoff row to edit its settings"
+						: "only open tickets can be handed off",
+			});
 			return;
 		}
 		if (ticket.actionable === false) {
@@ -737,7 +759,52 @@ export function App({
 			});
 			return;
 		}
-		setOverride(choiceFor(ticket));
+		setOverride({
+			ticketIdentity: ticket.identity,
+			origin: "open",
+			choice: choiceFor(ticket),
+			previousMessage: "",
+		});
+	};
+
+	/**
+	 * Start the handoff the override panel confirmed.
+	 *
+	 * The claim happens here, not when the panel opened: an operator who
+	 * presses Esc leaves the ticket exactly where it was, with no attempt
+	 * recorded.
+	 */
+	const confirmOverride = (choice: HandoffChoice) => {
+		const pending = overrideRef.current;
+		setOverride(null);
+		if (pending === null) return;
+		const ticket = ticketsRef.current.find(
+			(candidate) => candidate.identity === pending.ticketIdentity,
+		);
+		if (ticket === undefined) {
+			setStatus({ kind: "warning", text: "the ticket no longer exists" });
+			return;
+		}
+		if (pending.origin === "workflow") {
+			runRouteHandoff(ticket, choice);
+			return;
+		}
+		startHandoff(ticket, choice);
+	};
+
+	/**
+	 * Leave the override panel with no handoff.
+	 *
+	 * A route edit came out of the decision modal, so Esc returns there: only
+	 * the edit is dropped, the turn is still undecided. An open-ticket edit
+	 * returns to the list, where it started.
+	 */
+	const cancelOverride = () => {
+		const pending = overrideRef.current;
+		setOverride(null);
+		if (pending?.origin === "workflow") {
+			setPanel({ kind: "decision", identity: pending.ticketIdentity });
+		}
 	};
 
 	/**
@@ -784,6 +851,7 @@ export function App({
 					key: `route:${index}:${target}`,
 					label: `Handoff: ${target}`,
 					detail: routeDetail(edge, target),
+					editable: true,
 				});
 			}
 		});
@@ -865,9 +933,19 @@ export function App({
 			runGoto(ticket);
 			return;
 		}
-		// key === `route:<edge index>:<target>`: the row's edge, re-read from
-		// the config, so a runtime config change cannot point the action at a
-		// moved or removed edge.
+		const choice = routeChoiceOf(ticket, key);
+		if (choice === null) return;
+		runRouteHandoff(ticket, choice);
+	};
+
+	/**
+	 * The choice a `route:<edge index>:<target>` row resolves to.
+	 *
+	 * The edge is re-read from the config, so a runtime config change cannot
+	 * point the action at a moved or removed edge. A stale row reports on the
+	 * status line and comes back null.
+	 */
+	const routeChoiceOf = (ticket: Ticket, key: string): HandoffChoice | null => {
 		const rest = key.slice("route:".length);
 		const separator = rest.indexOf(":");
 		const edge = configRef.current.workflows[Number(rest.slice(0, separator))];
@@ -876,15 +954,21 @@ export function App({
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
 		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
 			setStatus({ kind: "warning", text: `no workflow edge from ${taskType} to ${target}` });
-			return;
+			return null;
 		}
+		// A Workflow Handoff resolves a fresh target profile and never
+		// inherits the previous handoff's choice.
+		return resolveHandoffChoice(configRef.current, target, edge);
+	};
+
+	/** Start a workflow handoff with a resolved or overridden choice. */
+	const runRouteHandoff = (ticket: Ticket, choice: HandoffChoice) => {
+		if (state === undefined) return;
 		// Claim first: a refused claim leaves the ticket where it was. The
 		// turn's decision is not recorded here: it lands on the settled
 		// turn's trace in the handoff's settle path, and only when the
 		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working. A Workflow Handoff resolves
-		// a fresh target profile and never inherits the previous choice.
-		const choice = resolveHandoffChoice(configRef.current, target, edge);
+		// pending, so Close and Goto keep working.
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
 			setStatus({ kind: "warning", text: claim.reason });
@@ -897,6 +981,27 @@ export function App({
 			claim.claim,
 			ticket.lastCompletion?.message ?? "",
 		);
+	};
+
+	/**
+	 * The `e` key on a decision row: edit that route's resolved settings
+	 * before it starts, so the operator's override outranks the edge pin,
+	 * the target Task profile, and the config defaults.
+	 */
+	const openRouteOverride = (ticket: Ticket, key: string) => {
+		if (inFlightRef.current) {
+			setStatus({ kind: "warning", text: "handoff in flight" });
+			return;
+		}
+		const choice = routeChoiceOf(ticket, key);
+		if (choice === null) return;
+		setPanel(null);
+		setOverride({
+			ticketIdentity: ticket.identity,
+			origin: "workflow",
+			choice,
+			previousMessage: ticket.lastCompletion?.message ?? "",
+		});
 	};
 
 	const beginConsultationLaunch = (consultation: Consultation) => {
@@ -1050,6 +1155,7 @@ export function App({
 			environment: type.environment,
 			model: type.model,
 			thinking: type.thinking,
+			contextWindow: type.contextWindow,
 			template: type.template,
 			initialInput: input,
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, input),
@@ -1425,6 +1531,7 @@ export function App({
 						stored.taskType,
 						stored.model,
 						stored.thinking,
+						stored.contextWindow,
 					);
 		const claim = state.claimHandoff(ticket.identity, choice, "restart");
 		if (!claim.ok) {
@@ -1621,7 +1728,7 @@ export function App({
 				const ticket = ticketsRef.current[selectedIndexRef.current];
 				if (ticket === undefined) break;
 				if (ticket.state === "open") {
-					startHandoff(choiceFor(ticket));
+					startHandoff(ticket, choiceFor(ticket));
 					break;
 				}
 				if (ticket.state === "awaiting") {
@@ -2096,12 +2203,9 @@ export function App({
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
 				taskProfileChoices,
-				initial: override,
-				onConfirm: (choice) => {
-					setOverride(null);
-					startHandoff(choice);
-				},
-				onCancel: () => setOverride(null),
+				initial: override.choice,
+				onConfirm: confirmOverride,
+				onCancel: cancelOverride,
 			}),
 		panel !== null &&
 			panelTicket !== undefined &&
@@ -2112,6 +2216,7 @@ export function App({
 						entries: decision.entries,
 						actions: decision.actions,
 						onAction: (key) => runDecisionAction(panelTicket, key),
+						onEditAction: (key) => openRouteOverride(panelTicket, key),
 						onCancel: () => setPanel(null),
 					})
 				: createElement(MissingModal, {

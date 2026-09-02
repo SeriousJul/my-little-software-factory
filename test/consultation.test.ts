@@ -51,6 +51,7 @@ function createConsultation(state: FactoryState, id = "consultation-1") {
 		environment: "worktree",
 		model: "",
 		thinking: "",
+		contextWindow: "",
 		template: "/skill:grill-with-docs {input}",
 		initialInput: "Review this repository",
 		renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
@@ -551,6 +552,7 @@ describe("durable Consultation privacy", () => {
 			environment: "worktree",
 			model: "",
 			thinking: "",
+			contextWindow: "",
 			template: "/skill:grill-with-docs {input}",
 			initialInput: `Review ${marker}`,
 			renderedOpeningPrompt: `/skill:grill-with-docs Review ${marker}`,
@@ -614,6 +616,9 @@ describe("pending responses across restart and migration", () => {
 		db.exec("DROP TABLE consultation_pending_responses");
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
+		// The v7 columns go too: a v4 record has no context window anywhere.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
+		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);

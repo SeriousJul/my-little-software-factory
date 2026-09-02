@@ -141,6 +141,7 @@ const HANDOFF_CHOICE = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /**
