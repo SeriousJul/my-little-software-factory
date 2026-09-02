@@ -185,16 +185,7 @@ function seededApp(
 	contextWindow = "",
 	turnLog: TurnLogEntry[] | undefined = undefined,
 ): SeededApp {
-	const state = seed(
-		shape,
-		outcome,
-		environment,
-		message,
-		model,
-		thinking,
-		contextWindow,
-		turnLog,
-	);
+	const state = seed(shape, outcome, environment, message, model, thinking, contextWindow, turnLog);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -1032,7 +1023,6 @@ describe("the decision modal", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressEnterQuiet(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const modal = frameText(await settle(setup));
-				console.log("MYPREFIX>>>" + modal);
 				// The border names the ticket, and the context line names the
 				// repository, the task type, the agent, and the completion time.
 				expect(modal).toContain("Decision: Persist source facts");
