@@ -980,6 +980,68 @@ export class FactoryState {
 	}
 
 	/**
+	 * The observation's correction for an agent that outlived its work cycle.
+	 *
+	 * A close ends a cycle and returns the ticket to open (ADR 0005), yet the
+	 * agent that cycle started can keep working in the same herdr pane: the
+	 * Close cleanup cannot remove a dirty checkout, and the operator can
+	 * re-prompt a settled agent by hand. Herdr owns the fact that the agent
+	 * works, so the poll records it as a Reclaimed handoff: a handoff in the
+	 * ticket's current work cycle with the previous handoff's choices and the
+	 * same herdr handles, and the ticket in `running`. It runs no command, and
+	 * it rewrites nothing: the closed cycle keeps its handoff and its decided
+	 * trace. The reclaim counts as a handoff, so the handoff limit bounds a
+	 * close-and-reclaim loop.
+	 *
+	 * Returns the new attempt id, or null when the ticket is not open, holds no
+	 * earlier handoff, or waits on an unresolved attempt.
+	 */
+	reclaimHandoff(
+		identity: string,
+		details: { paneId: string; tabId: string; workspaceId: string },
+	): { attemptId: string } | null {
+		return this.transaction(() => {
+			const ticket = this.db
+				.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
+				.get(identity) as { state: TicketState; work_cycle: number } | undefined;
+			if (ticket === undefined || ticket.state !== "open") return null;
+			const previous = this.db
+				.prepare(
+					"SELECT choice_json FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+				)
+				.get(identity) as { choice_json: string } | undefined;
+			if (previous === undefined || jsonChoice(previous.choice_json) === undefined) return null;
+			if (this.hasUnresolvedAttempt(identity)) return null;
+			const moved = this.db
+				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'open'")
+				.run(identity);
+			if (Number(moved.changes) === 0) return null;
+			const attemptId = randomUUID();
+			const now = new Date(this.now()).toISOString();
+			this.db
+				.prepare(
+					"INSERT INTO handoff_attempts(attempt_id, ticket_identity, work_cycle, choice_json, stage, created_at, resolved_at) VALUES (?, ?, ?, ?, 'reclaimed', ?, ?)",
+				)
+				.run(attemptId, identity, ticket.work_cycle, previous.choice_json, now, now);
+			this.db
+				.prepare(
+					"INSERT INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					attemptId,
+					identity,
+					ticket.work_cycle,
+					previous.choice_json,
+					now,
+					details.paneId,
+					details.tabId,
+					details.workspaceId,
+				);
+			return { attemptId };
+		});
+	}
+
+	/**
 	 * Settle a turn: the ticket rests in awaiting, and its completion trace
 	 * holds the captured message with a null decision until one is made.
 	 *

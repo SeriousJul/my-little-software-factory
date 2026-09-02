@@ -732,6 +732,113 @@ describe("factory SQLite state", () => {
 		reopened.close();
 	});
 
+	/** A ticket whose one work cycle ran, settled, and closed. */
+	function closedCycle(state: ReturnType<typeof openFactoryState>, identity: string): string {
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the turn is over",
+			turnLog: [{ kind: "text", text: "the turn is over" }],
+			completedAt: "2026-08-31T10:02:00Z",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T10:03:00Z",
+		});
+		return claim.claim.attemptId;
+	}
+
+	test("a reclaim runs the ticket in a new handoff of its current cycle", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		closedCycle(state, identity);
+		const claimed = state.reclaimHandoff(identity, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(claimed).toEqual({ attemptId: expect.any(String) });
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({
+				ticketIdentity: identity,
+				workCycle: 2,
+				taskType: "implement",
+				agentType: "pi",
+				paneId: "pane-1",
+				handoffAttemptId: claimed?.attemptId,
+			}),
+		]);
+		// The reclaimed handoff copies the previous handoff's choices, and the
+		// closed cycle keeps its handoff and its decided trace.
+		expect(state.handoffCount(identity)).toBe(2);
+		expect(state.visibleTickets([], "implement")[0]).toEqual(
+			expect.objectContaining({
+				state: "running",
+				handoff: expect.objectContaining({ attemptId: claimed?.attemptId, taskType: "implement" }),
+				lastCompletion: expect.objectContaining({
+					decision: "closed",
+					completedAt: "2026-08-31T10:02:00Z",
+				}),
+			}),
+		);
+		// The closed cycle's trace stays decided and is not rewritten.
+		expect(state.lastCompletion(identity)).toEqual(
+			expect.objectContaining({ decision: "closed", completedAt: "2026-08-31T10:02:00Z" }),
+		);
+		state.close();
+	});
+
+	test("a reclaim records no command and refuses a ticket that is not open", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched("github:github.com:I_6"), fetched()]));
+		// A ticket with no handoff at all cannot be reclaimed.
+		expect(
+			state.reclaimHandoff("github:github.com:I_6", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			}),
+		).toBe(null);
+		const identity = "github:github.com:I_5";
+		closedCycle(state, identity);
+		const claim = state.claimHandoff("github:github.com:I_6", choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-6" });
+		// A running ticket is already tracked: a late poll must not stack handoffs.
+		expect(
+			state.reclaimHandoff("github:github.com:I_6", {
+				paneId: "pane-6",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			}),
+		).toBe(null);
+		// An unresolved attempt blocks the reclaim, exactly as it blocks a handoff.
+		closedCycle(state, identity);
+		const pending = state.claimHandoff(identity, choice, "open");
+		if (!pending.ok) throw new Error(pending.reason);
+		expect(
+			state.reclaimHandoff(identity, { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" }),
+		).toBe(null);
+		expect(
+			state.visibleTickets([], "implement").find((ticket) => ticket.identity === identity),
+		).toEqual(expect.objectContaining({ state: "open", handoffCount: 2 }));
+		state.close();
+	});
+
 	test("permits only one live lease for a database", () => {
 		const path = statePath();
 		const first = openFactoryState(path);

@@ -10,15 +10,17 @@ cycle. Enter hands an actionable open ticket off through herdr. The `e` key
 opens the override panel for a one-shot change of the handoff settings.
 
 The control plane polls herdr for the agents it started. It marks a blocked
-agent and a missing agent on the ticket, reads the agent's turn log when a
-turn settles, and records a completion trace. In auto-handoff mode it
+agent and a missing agent on the ticket, reclaims an agent that outlived its
+work cycle, reads the agent's turn log when a turn settles, and records a
+completion trace. In auto-handoff mode it
 hands eligible open tickets off by itself within the configured limits, and
 routes or closes completed turns along the configured workflows.
 
 See `CONTEXT.md` for the domain language, `docs/labels.md` for source-label
 meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and
 TypeScript, ADR 0002: handoffs run through herdr, ADR 0005: a work cycle
-ends at close, ADR 0006: the control plane polls herdr).
+ends at close, ADR 0006: the control plane polls herdr, ADR 0011: the
+observation reclaims an agent that outlives its work cycle).
 
 ## Requirements
 
@@ -321,6 +323,16 @@ The control plane polls herdr for its agents every
 `agent-poll-interval-seconds`. The poll reads the agent list, and it reads
 the last message of an agent that has settled its turn. It never writes to
 herdr.
+
+An agent can outlive the work cycle that started it: the Close cleanup cannot
+remove a dirty checkout, and the operator can re-prompt a settled agent in its
+herdr pane. The cycle is closed, so the ticket rests `open`, and the next
+handoff of that ticket fails on the herdr agent name the live agent still
+holds. The poll reclaims it (ADR 0011): a working or blocked agent in the pane
+of a ticket's last closed handoff records a handoff of the current cycle and
+runs the ticket again, with a warning line that names the ticket. An idle, done,
+or unknown report reclaims nothing. The reclaimed agent settles, awaits, and
+closes like any other, and it holds a parallel slot while it works.
 
 When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The
@@ -765,8 +777,9 @@ it carries the `grill-with-docs` Consultation type.
 - `src/refresh.ts`: independent source refresh scheduling.
 - `src/observation.ts`: the herdr observation loop. Polls the agent list,
   reads the settled agent's last message, marks blocked and missing agents,
-  settles turns into `awaiting`, applies the automatic completion rule, and
-  dispatches open tickets in auto-handoff mode.
+  reclaims an agent that outlived its work cycle, settles turns into
+  `awaiting`, applies the automatic completion rule, and dispatches open
+  tickets in auto-handoff mode.
 - `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
   completion traces, completion decisions, handoff attempts, and the
   process lease.
