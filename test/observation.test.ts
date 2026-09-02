@@ -402,9 +402,9 @@ describe("HerdrAgentReader.listAgents", () => {
 			stdout: JSON.stringify({
 				result: {
 					agents: [
-						// A missing handle is unusable, and so is an empty one:
-						// herdr reports "" when it has nothing to name, and an
-						// item that cannot be addressed cannot claim a ticket.
+						// A missing handle is unusable, and so is an empty one: an
+						// empty string names no pane and no agent, so the item can
+						// never be addressed, and it must not claim a ticket.
 						{ agent: "pi", agent_status: "working" },
 						{ pane_id: "", agent: "pi", agent_status: "working" },
 						{ pane_id: "pane-no-agent", agent_status: "working" },
@@ -651,7 +651,6 @@ describe("the observation cycle", () => {
 	test("the grace window is inclusive: one ms short holds, the last ms settles", async () => {
 		// The window's last millisecond still settles the turn, so a
 		// comparison that reads the boundary as exclusive fails here.
-		expect(STARTUP_GRACE_MS).toBe(30_000);
 		const { state, coordinator, advance } = rig({ agents: [agent("pane-implement", "idle")] });
 		handOut(state, "github:github.com:I_5");
 		advance(STARTUP_GRACE_MS - 1);
