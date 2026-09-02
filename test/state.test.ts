@@ -740,14 +740,18 @@ describe("factory SQLite state", () => {
 	});
 
 	/** A ticket whose one work cycle ran, settled, and closed. */
-	function closedCycle(state: ReturnType<typeof openFactoryState>, identity: string): string {
-		const claim = state.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	function closedCycle(
+		state: ReturnType<typeof openFactoryState>,
+		identity: string,
+		handles: { paneId: string; tabId: string; workspaceId: string } = {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
-		});
+		},
+	): string {
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, handles);
 		state.settleTurn({
 			ticketIdentity: identity,
 			handoffId: claim.claim.attemptId,
@@ -878,7 +882,7 @@ describe("factory SQLite state", () => {
 			}),
 		);
 
-		expect(state.clearLeftoverEnvironments(identity, "ws-1")).toBe(1);
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(1);
 		expect(state.leftoverEnvironment(identity)).toBe(null);
 		expect(state.visibleTickets([], "implement")[0].leftover).toBe(null);
 		// The handoff row keeps why it was left over: the record survives the clear.
@@ -926,20 +930,53 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("a clearing names only the workspace it removed", () => {
+	test("a clearing names only the environment it ended", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const identity = "github:github.com:I_5";
 		const first = closedCycle(state, identity);
-		const second = closedCycle(state, identity);
-		state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: first, reason: "a" });
-		state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: second, reason: "b" });
-		// Both handoffs ran in the same workspace herdr cannot remove, so one
-		// successful removal clears both facts.
-		expect(state.leftoverEnvironments(identity)).toHaveLength(2);
-		expect(state.clearLeftoverEnvironments(identity, "ws-1")).toBe(2);
+		// The second cycle lived in the same workspace on another tab: the
+		// shape a reclaimed agent leaves, where one workspace holds the tabs of
+		// several cycles (ADR 0011).
+		const second = closedCycle(state, identity, {
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-1",
+		});
+		const record = () => {
+			state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: first, reason: "a" });
+			state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: second, reason: "b" });
+			expect(state.leftoverEnvironments(identity)).toHaveLength(2);
+		};
+
+		// A worktree removal closes the workspace, so it ends both facts: both
+		// handoffs ran in the one workspace herdr could not remove.
+		record();
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(2);
 		expect(state.leftoverEnvironments(identity)).toEqual([]);
+
+		// A tab close reaches one tab with the panes inside it, not the
+		// workspace around it: the fact of the other tab stands.
+		record();
+		expect(state.clearLeftoverEnvironments(identity, { tabId: "tab-1" })).toBe(1);
+		expect(state.leftoverEnvironments(identity)).toEqual([
+			expect.objectContaining({ handoffId: second }),
+		]);
+
+		// A cleanup that ran no command ends nothing herdr can see, so it
+		// resolves only the fact of its own handoff row.
+		record();
+		expect(state.clearLeftoverEnvironments(identity, { handoffId: first })).toBe(1);
+		expect(state.leftoverEnvironments(identity)).toEqual([
+			expect.objectContaining({ handoffId: second }),
+		]);
+
+		// A handle that names no fact clears nothing, so a stale answer cannot
+		// resolve a leftover the operator still has to end.
+		expect(state.clearLeftoverEnvironments(identity, { tabId: "tab-9" })).toBe(0);
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-9" })).toBe(0);
+		expect(state.leftoverEnvironments(identity)).toHaveLength(1);
 		state.close();
 	});
 
@@ -996,7 +1033,7 @@ describe("factory SQLite state", () => {
 			reason: "the worktree is dirty",
 			at: "2026-09-02T10:00:00.000Z",
 		});
-		expect(state.clearLeftoverEnvironments(identity, "ws-1")).toBe(1);
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(1);
 		expect(state.leftoverEnvironment(identity)).toBe(null);
 		// The clear's own cleanup failed: the fact the operator can act on
 		// stands again, with the reason herdr gave this time.

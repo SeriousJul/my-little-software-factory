@@ -210,6 +210,18 @@ and stops the agents in the workspace: the control plane never reaches for
 it by itself. A removal that succeeds clears the leftover; a removal that
 fails records the reason again. The git branch survives either way.
 
+A clear ends the environments its cleanup reaches: a workspace removal clears
+the leftovers that named that workspace, a tab close the one that named that
+tab, and a cleanup that ran no command only the fact of its own cycle. Facts
+outside that reach stand. Because a cleanup reaches an environment, it refuses
+a leftover naming the ticket's own live agent: the workspace, tab, or pane
+that agent runs on, and the status line names what it refused. Close that work
+cycle first, and its own cleanup ends the leftover with it. A clear refused
+because a handoff or another clear is already at herdr reports that too, and
+the operator presses `w` again. A clear holds the handoff seat while it runs,
+and a handoff the operator starts beside one waits for it, so herdr never
+builds an agent in a workspace it is taking away.
+
 ## Layout
 
 Two panes side by side, flex-sized to the terminal.
@@ -266,7 +278,9 @@ working, and `e` is refused with a hint on the line. A second handoff claim
 records its attempt, which blocks a further claim on the same ticket, and
 queues its external work until the in-flight handoff settles; the ticket
 moves to `handed-off` only when the handoff settles and its agent starts,
-so claims never race each other.
+so claims never race each other. A leftover clear holds that same seat,
+and so does the Close cleanup of any path that runs one: an environment
+change and a handoff never work beside each other.
 
 Above the panes sits a mode line. It shows the auto-handoff state and the
 live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`

@@ -1317,18 +1317,51 @@ export interface CloseCleanupOptions {
 	force?: boolean;
 }
 
+/**
+ * How far the Close cleanup of one handoff reaches into herdr.
+ *
+ * The worktree environment loses its checkout and the workspace behind it, so
+ * the cleanup reaches the whole workspace and every agent running in it. The
+ * live worktree environment loses one tab, and keeps the workspace and the
+ * tabs beside it. A handoff that named no handle has nothing to close, so the
+ * cleanup reaches no environment at all.
+ *
+ * One definition serves both halves of the cleanup: the commands herdr
+ * receives, and which of the ticket's leftover facts a successful cleanup
+ * settles. A fact outside the reach stands: one row's close says nothing
+ * about another row's environment (ADR 0012).
+ */
+export type CleanupReach =
+	| { scope: "workspace"; workspaceId: string }
+	| { scope: "tab"; tabId: string }
+	| { scope: "none" };
+
+export function closeCleanupReach(handoff: {
+	environment: EnvironmentKind;
+	tabId: string | null;
+	workspaceId: string | null;
+}): CleanupReach {
+	if (handoff.environment === "worktree" && handoff.workspaceId !== null) {
+		return { scope: "workspace", workspaceId: handoff.workspaceId };
+	}
+	if (handoff.environment === "live-worktree" && handoff.tabId !== null) {
+		return { scope: "tab", tabId: handoff.tabId };
+	}
+	return { scope: "none" };
+}
+
 export async function closeHandoffEnvironment(
 	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },
 	runner: CommandRunner,
 	options: CloseCleanupOptions = {},
 ): Promise<string | undefined> {
 	const force = options.force === true;
-	if (handoff.environment === "worktree") {
-		if (handoff.workspaceId === null) return undefined;
+	const reach = closeCleanupReach(handoff);
+	if (reach.scope === "workspace") {
 		// The checkout on disk and the herdr workspace behind it: herdr
 		// worktree remove closes the workspace with the checkout and never
 		// deletes the branch, so pushed work and pull requests survive.
-		const removeArgs = ["worktree", "remove", "--workspace", handoff.workspaceId];
+		const removeArgs = ["worktree", "remove", "--workspace", reach.workspaceId];
 		if (force) {
 			removeArgs.push("--force");
 		}
@@ -1345,7 +1378,7 @@ export async function closeHandoffEnvironment(
 		if (code === "worktree_remove_failed") {
 			// The checkout is gone (deleted outside herdr): the workspace is
 			// what remains, so close it.
-			const closed = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
+			const closed = await runner.run("herdr", ["workspace", "close", reach.workspaceId]);
 			if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
 				return undefined;
 			}
@@ -1355,9 +1388,8 @@ export async function closeHandoffEnvironment(
 		// workspace open for the operator and report why the removal failed.
 		return herdrFailureText(removed);
 	}
-	if (handoff.environment === "live-worktree") {
-		if (handoff.tabId === null) return undefined;
-		const result = await runner.run("herdr", ["tab", "close", handoff.tabId]);
+	if (reach.scope === "tab") {
+		const result = await runner.run("herdr", ["tab", "close", reach.tabId]);
 		return result.code === 0 ? undefined : herdrFailureText(result);
 	}
 	return undefined;

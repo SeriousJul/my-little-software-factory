@@ -1042,29 +1042,39 @@ export class FactoryState {
 	}
 
 	/**
-	 * Mark a ticket's leftover environments cleared.
+	 * Mark the leftover environments a successful Close cleanup ended.
 	 *
-	 * A workspace id clears only the facts that name it: removing one
-	 * workspace says nothing about another. A null workspace id answers a
-	 * handoff row that recorded none: there is no workspace to name, so the
-	 * close that ends it ends every environment the ticket could still hold.
-	 * Returns how many facts were cleared.
+	 * The handle says how far that cleanup reached, and only the facts inside
+	 * the reach end with it: a workspace removal closes every environment that
+	 * named that workspace, and a close that reached one tab or ran no command
+	 * at all ends only the environments its own row named. Facts outside the
+	 * reach stand, because one row's close says nothing about another row's
+	 * environment. Returns how many facts were cleared.
 	 */
-	clearLeftoverEnvironments(identity: string, workspaceId: string | null): number {
+	clearLeftoverEnvironments(
+		identity: string,
+		ended: { workspaceId: string } | { tabId: string } | { handoffId: string },
+	): number {
 		const at = new Date(this.now()).toISOString();
-		const result =
-			workspaceId === null
+		const cleared =
+			"workspaceId" in ended
 				? this.db
-						.prepare(
-							"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
-						)
-						.run(at, identity)
-				: this.db
 						.prepare(
 							"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND workspace_id = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
 						)
-						.run(at, identity, workspaceId);
-		return Number(result.changes);
+						.run(at, identity, ended.workspaceId)
+				: "tabId" in ended
+					? this.db
+							.prepare(
+								"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND tab_id = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
+							)
+							.run(at, identity, ended.tabId)
+					: this.db
+							.prepare(
+								"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND attempt_id = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
+							)
+							.run(at, identity, ended.handoffId);
+		return Number(cleared.changes);
 	}
 
 	/**

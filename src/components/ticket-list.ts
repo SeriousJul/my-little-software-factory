@@ -244,7 +244,7 @@ function rowSpans(
 		return spans;
 	}
 
-	// No limit marker on this row: the title takes whatever the repository
+	// No trailing marker on this row: the title takes whatever the repository
 	// leaves, and the repository drops when it would leave the title less
 	// than a gap column and one text cell, so the title drops last.
 	const repoFits = budget >= REPO_GAP + repoWidth + TITLE_MINIMUM;

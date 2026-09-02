@@ -72,10 +72,32 @@ workspace, tab, and pane still live, since when, and what the operator can do.
 the Close cleanup of every leftover environment of that ticket, and herdr's
 `--force` is a separate row the operator chooses: a forced removal discards a
 dirty checkout and stops the agents in the workspace, so no automatic path ever
-passes it. A removal that succeeds clears the facts that named that workspace,
-which covers the several handoffs that lived in one reused workspace. The
-action refuses a leftover whose workspace holds the ticket's own live agent,
-because removing it would end that work. The git branch is never touched.
+passes it. The git branch is never touched.
+
+A cleanup reaches the environment its command names: a worktree removal closes
+a whole workspace, and a tab close closes the tab with every pane in it. So a
+clear refuses any leftover that names a handle the ticket's own live agent
+works on - that workspace, that tab, or that pane - and its answer says which
+of the three it refused. A reclaimed agent leaves the same handles on two
+handoff rows (ADR 0011), which is the shape that makes a tab leftover as
+dangerous as a workspace one. The operator closes the live cycle first, and its
+own cleanup ends the leftover with it.
+
+**The seat.** One handoff runs at a time, and a herdr environment change is
+the same kind of work. A clear holds the seat for all its cleanups, refuses
+while a handoff is in flight, and refuses while another clear runs. The Close
+cleanup of any path takes the seat too when it is free, and never waits for
+it: the cycle it closes has already ended, so a cleanup held behind a handoff
+would only delay the fact the operator sees. A handoff the operator starts
+beside an environment change queues behind it, so no agent is built in a
+workspace herdr is taking away, and no removal of that ticket reaches under a
+new agent.
+
+**The reach.** A cleanup that succeeds clears the facts it ended, and only
+those: the facts that named the workspace it removed, or the one that named the
+tab it closed, or - when herdr gave it no command to run at all - the fact of
+its own handoff row. Facts outside that reach stand, because one row's close
+says nothing about another row's environment.
 
 **The handoff.** A handoff does not fail on the ticket's own leftover name. The
 stable name is still the one it asks for; when herdr says the name is taken and
@@ -121,3 +143,12 @@ the holder's pane and workspace and says it is no agent of this ticket.
 - The herdr name the operator sees in the control plane can say a different
   cycle from the one they expect. The status line and the detail pane both say
   so while a leftover of the ticket stands.
+- The seat makes an environment change wait for a handoff, and a handoff wait
+  for an environment change. A queued handoff runs when the cleanup settles,
+  and the durable state is re-read before it runs, so the wait cannot start a
+  ticket that moved on. A clear that meets a taken seat reports it and does
+  nothing: the operator presses the key again.
+- A stale fact can survive its own environment the other way too: a handoff
+  that recorded no handle can end nothing in herdr, so its close clears only
+  its own row. Facts of other rows stand until a cleanup reaches them, and a
+  clear reports what herdr refused when it will not.
