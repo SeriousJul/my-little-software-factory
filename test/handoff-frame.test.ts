@@ -2825,10 +2825,28 @@ describe("the override panel", () => {
 					);
 					expect(frameText(again)).toContain("anthropic/claude-sonnet-4-5");
 
+					// A letter no model holds at all is the last case: the value stays
+					// where it is, and the row is still answering. "z" starts a run nothing
+					// can extend, and the "x" after it starts the next run on a real model.
+					await setup.mockInput.typeText("z");
+					const held = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
+						"the value to hold on a letter nothing holds",
+					);
+					expect(frameText(held)).toContain("anthropic/claude-sonnet-4-5");
+					await setup.mockInput.typeText("x");
+					const afterDead = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("openai/gpt-5.1-codex"),
+						"the row to answer after a letter nothing holds",
+					);
+					expect(frameText(afterDead)).toContain("openai/gpt-5.1-codex");
+
 					await pressEnterToHandoff(setup);
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 					// The value the run left is the value the handoff carries.
-					expect(start?.args).toContain("anthropic/claude-sonnet-4-5");
+					expect(start?.args).toContain("openai/gpt-5.1-codex");
 				},
 				size.width,
 				size.height,
