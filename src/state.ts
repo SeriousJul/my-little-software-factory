@@ -1440,13 +1440,15 @@ export class FactoryState {
 	setConsultationState(id: string, next: ConsultationState, detail?: string | null): boolean {
 		const result = this.db
 			.prepare(
-				"UPDATE consultations SET state = ?, updated_at = ?, failure = CASE WHEN ? IS NULL THEN failure ELSE ? END, close_result = CASE WHEN ? IS NULL THEN close_result ELSE ? END WHERE id = ? AND (state <> 'failed' OR ? IN ('closing', 'closed'))",
+				"UPDATE consultations SET state = ?, updated_at = ?, failure = CASE WHEN ? IS NULL THEN failure ELSE ? END, warning = CASE WHEN ? IS NULL THEN warning ELSE ? END, close_result = CASE WHEN ? IS NULL THEN close_result ELSE ? END WHERE id = ? AND (state <> 'failed' OR ? IN ('closing', 'closed'))",
 			)
 			.run(
 				next,
 				new Date().toISOString(),
 				next === "failed" ? (detail ?? null) : null,
 				next === "failed" ? (detail ?? null) : null,
+				next === "missing" ? (detail ?? null) : null,
+				next === "missing" ? (detail ?? null) : null,
 				next === "closed" ? (detail ?? null) : null,
 				next === "closed" ? (detail ?? null) : null,
 				id,
@@ -1836,19 +1838,47 @@ export class FactoryState {
 		).map((row) => this.consultationFromRow(row));
 	}
 
-	/** Update a moved Agent only after its session identity matches uniquely. */
+	/**
+	 * Follow a uniquely matched moved Agent and retarget every owned Herdr
+	 * resource. Close then addresses the Agent's current pane and tab, never
+	 * the pane from which it moved.
+	 */
 	updateConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
-		this.db
-			.prepare(
-				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, updated_at = ? WHERE id = ?",
-			)
-			.run(
-				details.paneId,
-				details.tabId ?? null,
-				details.workspaceId ?? null,
-				new Date().toISOString(),
-				id,
-			);
+		this.transaction(() => {
+			const current = this.consultation(id);
+			if (current === undefined) return;
+			const moves: Array<[string, string | null, string | null]> = [
+				["pane", current.paneId, details.paneId],
+				["tab", current.tabId, details.tabId ?? null],
+				["workspace", current.workspaceId, details.workspaceId ?? null],
+			];
+			for (const [kind, from, to] of moves) {
+				if (from === null || to === null || from === to) continue;
+				this.db
+					.prepare(
+						"UPDATE consultation_resources SET resource_id = ?, details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = ? AND resource_id = ? AND owned = 1 AND confirmed_closed = 0",
+					)
+					.run(to, from, to, id, kind, from);
+			}
+			if (current.paneId !== null && current.paneId !== details.paneId)
+				this.db
+					.prepare(
+						"UPDATE consultation_resources SET details = REPLACE(details, ?, ?) WHERE consultation_id = ? AND kind = 'agent' AND owned = 1 AND confirmed_closed = 0",
+					)
+					.run(details.paneId, current.paneId, id);
+			this.db
+				.prepare(
+					"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, updated_at = ? WHERE id = ?",
+				)
+				.run(
+					details.paneId,
+					details.tabId ?? null,
+					details.workspaceId ?? null,
+					details.sessionId ?? current.sessionId,
+					new Date().toISOString(),
+					id,
+				);
+		});
 	}
 
 	/** Mark a settled turn's snapshot when the first read was unavailable. */

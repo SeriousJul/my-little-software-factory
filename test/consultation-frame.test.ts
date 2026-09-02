@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
@@ -35,6 +36,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { FakeRunner, worktreeCreateJson } from "./fake-runner.ts";
+import { FakeSource } from "./fake-source.ts";
 
 /** The canonical ids ConsultationRunner rewrites random launch ids to. */
 const AGENT = "consultation-00000000";
@@ -70,6 +72,28 @@ const repository = {
 	identity: "github.com/acme/factory",
 	displayName: "acme/factory",
 	cloneUrl: "https://github.com/acme/factory.git",
+};
+
+const selectedTicket: Ticket = {
+	identity: "github:github.com:I_1",
+	title: "Review factory authentication",
+	repository: "acme/factory",
+	repositoryRef: repository,
+	state: "open",
+	handoff: null,
+	handoffCount: 0,
+	lastCompletion: null,
+	description: "Review the authentication design.",
+	sourceKind: "github-issue",
+	externalKey: "#1",
+	sourceState: "open",
+	url: "https://github.com/acme/factory/issues/1",
+	labels: [],
+	externalUpdatedAt: "2026-09-01T10:00:00.000Z",
+	memberships: [],
+	suggestedTaskType: "implement",
+	actionable: true,
+	handoffRecoveryRequired: false,
 };
 
 function configFor(): FactoryConfig {
@@ -179,7 +203,7 @@ function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 function stubPaneReadText(runner: FakeRunner, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
-		["agent", "read", paneId, "--source", "recent-unwrapped", "--lines", "200", "--format", "text"],
+		["agent", "read", paneId, "--lines", "200", "--source", "recent-unwrapped", "--format", "text"],
 		{ stdout: output },
 	);
 }
@@ -188,7 +212,7 @@ function stubPaneReadText(runner: FakeRunner, paneId: string, output: string): v
 function stubPaneReadAnsi(runner: FakeRunner, paneId: string, output: string): void {
 	runner.set(
 		"herdr",
-		["agent", "read", paneId, "--source", "visible", "--lines", "200", "--format", "ansi"],
+		["agent", "read", paneId, "--lines", "200", "--source", "visible", "--format", "ansi"],
 		{ stdout: JSON.stringify({ result: { output } }) },
 	);
 }
@@ -268,6 +292,7 @@ const agentListJson = (agents: Array<{ pane: string; status: string }>) =>
 				workspace_id: `ws-${agent.pane.slice(5)}`,
 				agent: AGENT,
 				agent_status: agent.status,
+				session_id: `sess-${agent.pane.slice(5)}`,
 			})),
 		},
 	});
@@ -320,8 +345,31 @@ async function pressF12(
 }
 
 describe("Consultation launch and monitoring through the UI", () => {
-	test("the launcher starts a worktree Consultation with the pinned command sequence", async () => {
+	test("the launcher resolves an unmapped selected Ticket Repository before the pinned launch sequence", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
+		const ticketSource = { name: "tickets", kind: "test" };
+		const ticketOutcome = {
+			status: "success" as const,
+			fetchedAt: "2026-09-01T10:00:00.000Z",
+			tickets: [
+				{
+					identity: selectedTicket.identity,
+					sourceKind: selectedTicket.sourceKind,
+					externalKey: selectedTicket.externalKey,
+					sourceState: selectedTicket.sourceState,
+					url: selectedTicket.url,
+					title: selectedTicket.title,
+					description: selectedTicket.description,
+					labels: selectedTicket.labels,
+					externalUpdatedAt: selectedTicket.externalUpdatedAt,
+					repository: selectedTicket.repositoryRef,
+					attributes: {},
+				},
+			],
+		};
+		state.initializeSources([ticketSource]);
+		state.applyFetch(ticketSource, ticketOutcome);
+		const source = new FakeSource(ticketSource.name, ticketSource.kind, ticketOutcome);
 		const inner = new FakeRunner();
 		stubCheckout(inner);
 		stubWorktreeLaunch(inner);
@@ -370,7 +418,11 @@ describe("Consultation launch and monitoring through the UI", () => {
 				},
 				WIDTH,
 				30,
-				bootProps(state, runner),
+				{
+					...bootProps(state, runner),
+					config: { ...configFor(), repos: {} },
+					sources: [source],
+				},
 			);
 		} finally {
 			state.close();

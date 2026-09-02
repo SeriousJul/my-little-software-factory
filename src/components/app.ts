@@ -56,11 +56,17 @@ import {
 	type HandoffIntent,
 	type HerdrAgent,
 	HerdrAgentReader,
+	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
-import { commandFailureText, expandHome, type RepositoryMapping } from "../repo.ts";
+import {
+	commandFailureText,
+	type RepositoryMapping,
+	type ResolvedRepository,
+	resolveRepository,
+} from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
@@ -286,7 +292,10 @@ export function App({
 				}`;
 	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
 	const attentionLine =
-		state === undefined
+		state === undefined ||
+		(view === "tickets" &&
+			consultationCounts.awaitingResponse === 0 &&
+			consultationCounts.recovery === 0)
 			? ""
 			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${bell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
 	const reservedRows =
@@ -294,7 +303,7 @@ export function App({
 		(healthLine === "" ? 0 : 1) +
 		(modeLine === "" ? 0 : 1) +
 		(attentionLine === "" ? 0 : 1) +
-		(state === undefined ? 0 : 1);
+		(view === "consultations" && state !== undefined ? 1 : 0);
 	const listGeometry = usePaneGeometry("list", reservedRows);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
@@ -897,7 +906,7 @@ export function App({
 		);
 	};
 
-	const launchConsultation = (consultation: Consultation) => {
+	const beginConsultationLaunch = (consultation: Consultation) => {
 		if (state === undefined || !state.canRecoverConsultationOpening(consultation.id)) return;
 		if (openingLaunches.current.has(consultation.id)) {
 			setStatus({ kind: "info", text: "Consultation opening is already in progress" });
@@ -909,13 +918,51 @@ export function App({
 		void serializeRepositoryOperation(
 			consultationOperationQueues.current,
 			consultation.repository.identity,
-			() =>
-				handOffConsultation({
+			async () => {
+				let resolvedRepository: ResolvedRepository | undefined;
+				if (consultation.environment === "live-worktree") {
+					onStage("resolving-repository");
+					const resolution = await resolveRepository(
+						{
+							identity: consultation.repository.identity,
+							displayName: consultation.repository.displayName,
+							cloneUrl: consultation.repository.cloneUrl,
+						},
+						configRef.current,
+						{ runner: commandRunner, home: homeDir },
+					);
+					if (!resolution.ok) return { status: "failed" as const, reason: resolution.reason };
+					resolvedRepository = resolution.repository;
+					state.setConsultationRepositoryPath(consultation.id, resolvedRepository.path);
+					onStage("checking-live-checkout-safety");
+					const probe = await new HerdrAgentReader(commandRunner).listAgents();
+					if (probe.kind === "error")
+						return {
+							status: "failed" as const,
+							reason: `cannot verify live checkout safety: ${probe.reason}`,
+						};
+					const safety = await inspectLiveCheckout(
+						resolvedRepository.path,
+						commandRunner,
+						ticketsRef.current,
+						state.consultations("open"),
+						probe.agents,
+					);
+					if (safety.warning !== undefined)
+						state.setConsultationWarning(consultation.id, safety.warning);
+					if (
+						safety.conflicts.length > 0 &&
+						state.consultation(consultation.id)?.liveConflictOverride !== true
+					)
+						return { status: "conflict" as const, safety };
+				}
+				return handOffConsultation({
 					consultation,
 					config: configRef.current,
 					runner: commandRunner,
 					home: homeDir,
 					onStage,
+					resolvedRepository,
 					onRepositoryResolved: (path) =>
 						state.setConsultationRepositoryPath(consultation.id, path),
 					onAgentStarted: (agent) => {
@@ -940,9 +987,19 @@ export function App({
 							owned,
 							details: details ?? "",
 						}),
-				}),
+				});
+			},
 		)
 			.then(async (outcome) => {
+				if (outcome.status === "conflict") {
+					setConsultationSafety({ consultationId: consultation.id, safety: outcome.safety });
+					setPanel({ kind: "consultation-safety", identity: consultation.id });
+					setStatus({
+						kind: "warning",
+						text: "live checkout conflict: explicit confirmation is required",
+					});
+					return;
+				}
 				if (outcome.status === "failed") {
 					state.failConsultationOpening(consultation.id, outcome.reason);
 					setStatus({
@@ -959,15 +1016,6 @@ export function App({
 					if (outcome.status === "prompt-failed") {
 						state.setConsultationDraft(consultation.id, consultation.renderedOpeningPrompt);
 						setStatus({ kind: "error", text: outcome.reason });
-					} else {
-						const warning = state.consultation(consultation.id)?.warning;
-						setStatus(
-							outcome.notes?.warning === undefined
-								? warning === null || warning === undefined
-									? null
-									: { kind: "warning", text: warning }
-								: { kind: "warning", text: outcome.notes.warning },
-						);
 					}
 				}
 				await finishOutcome(outcome);
@@ -985,71 +1033,6 @@ export function App({
 				});
 			})
 			.finally(() => openingLaunches.current.delete(consultation.id));
-	};
-
-	const beginConsultationLaunch = (consultation: Consultation) => {
-		if (state === undefined) return;
-		if (consultation.environment !== "live-worktree") {
-			launchConsultation(consultation);
-			return;
-		}
-		setStatus({
-			kind: "info",
-			text: `checking live checkout safety for Consultation ${consultation.id.slice(0, 8)}...`,
-		});
-		void new HerdrAgentReader(commandRunner)
-			.listAgents()
-			.then((probe) => {
-				if (probe.kind === "error") {
-					state.failConsultationOpening(
-						consultation.id,
-						`cannot verify live checkout safety: ${probe.reason}`,
-					);
-					replaceConsultations();
-					setStatus({
-						kind: "error",
-						text: `Consultation ${consultation.id.slice(0, 8)} was not opened: Agent list is unavailable`,
-					});
-					return;
-				}
-				void inspectLiveCheckout(
-					expandHome(consultation.repository.path, homeDir),
-					commandRunner,
-					ticketsRef.current,
-					state.consultations("open"),
-					probe.agents,
-				)
-					.then((safety) => {
-						if (safety.warning !== undefined)
-							state.setConsultationWarning(consultation.id, safety.warning);
-						if (safety.conflicts.length > 0) {
-							setConsultationSafety({ consultationId: consultation.id, safety });
-							setPanel({ kind: "consultation-safety", identity: consultation.id });
-							setStatus({
-								kind: "warning",
-								text: "live checkout conflict: explicit confirmation is required",
-							});
-							return;
-						}
-						launchConsultation(consultation);
-					})
-					.catch((error) => {
-						state.failConsultationOpening(consultation.id, errorMessage(error));
-						replaceConsultations();
-						setStatus({
-							kind: "error",
-							text: `Consultation safety check failed: ${errorMessage(error)}`,
-						});
-					});
-			})
-			.catch((error) => {
-				state.failConsultationOpening(consultation.id, errorMessage(error));
-				replaceConsultations();
-				setStatus({
-					kind: "error",
-					text: `Consultation safety check failed: ${errorMessage(error)}`,
-				});
-			});
 	};
 
 	const startConsultation = (
@@ -1095,8 +1078,63 @@ export function App({
 		if (state === undefined || consultation.state !== "opening") return;
 		const current = state.consultation(consultation.id);
 		if (current === undefined || !state.canRecoverConsultationOpening(current.id)) return;
-		setStatus({ kind: "info", text: `recovering Consultation ${current.id.slice(0, 8)}...` });
-		beginConsultationLaunch(current);
+		if (current.paneId === null && current.sessionId === null) {
+			setStatus({ kind: "info", text: `recovering Consultation ${current.id.slice(0, 8)}...` });
+			beginConsultationLaunch(current);
+			return;
+		}
+		setStatus({ kind: "info", text: `verifying Consultation ${current.id.slice(0, 8)} Agent...` });
+		void serializeRepositoryOperation(
+			consultationOperationQueues.current,
+			current.repository.identity,
+			async () => {
+				const probe = await new HerdrAgentReader(commandRunner).listAgents();
+				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
+				const agent = matchConsultationAgent(current, probe.agents);
+				return agent === undefined || agent === "ambiguous"
+					? {
+							kind: "missing" as const,
+							reason:
+								agent === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing",
+						}
+					: { kind: "agent" as const, agent };
+			},
+		)
+			.then((result) => {
+				if (result.kind === "error") {
+					setStatus({ kind: "error", text: `cannot verify Consultation Agent: ${result.reason}` });
+					return;
+				}
+				if (result.kind === "missing") {
+					state.failConsultationOpening(current.id, result.reason);
+					replaceConsultations();
+					setStatus({
+						kind: "error",
+						text: `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`,
+					});
+					return;
+				}
+				state.updateConsultationAgentHandles(current.id, {
+					paneId: result.agent.paneId,
+					tabId: result.agent.tabId,
+					workspaceId: result.agent.workspaceId,
+					sessionId: result.agent.stableSessionId ?? current.sessionId,
+				});
+				state.setConsultationAgent(current.id, {
+					paneId: result.agent.paneId,
+					tabId: result.agent.tabId,
+					workspaceId: result.agent.workspaceId,
+					sessionId: result.agent.stableSessionId ?? current.sessionId,
+				});
+				replaceConsultations();
+				setStatus({ kind: "info", text: `Consultation ${current.id.slice(0, 8)} reconnected` });
+			})
+			.catch((error) => {
+				setStatus({
+					kind: "error",
+					text: `cannot verify Consultation Agent: ${errorMessage(error)}`,
+				});
+			});
 	};
 
 	const beginResponse = (consultation: Consultation) => {
@@ -2021,7 +2059,7 @@ export function App({
 					setReplacementConsultationId(null);
 				},
 			}),
-		state !== undefined && actionBarElement(actionContext),
+		view === "consultations" && state !== undefined && actionBarElement(actionContext),
 		status !== null &&
 			createElement(
 				"text",
@@ -2094,7 +2132,7 @@ export function App({
 								kind: "info",
 								text: `opening Consultation ${current.id.slice(0, 8)}...`,
 							});
-							launchConsultation(current);
+							beginConsultationLaunch(current);
 						}
 					}
 				},

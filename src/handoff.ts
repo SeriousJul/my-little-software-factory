@@ -41,7 +41,13 @@ import {
 	consultationAgentName,
 	consultationBranchName,
 } from "./naming.ts";
-import { commandFailureText, type ResolutionNotes, realPathOf, resolveRepository } from "./repo.ts";
+import {
+	commandFailureText,
+	type ResolutionNotes,
+	type ResolvedRepository,
+	realPathOf,
+	resolveRepository,
+} from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
 import type { Consultation } from "./state.ts";
 
@@ -206,6 +212,8 @@ export interface ConsultationHandoffOptions extends HandoffOptions {
 	onResource?: (kind: string, resourceId: string, owned: boolean, details?: string) => void;
 	onAgentStarted?: (agent: StartedAgent) => void;
 	onRepositoryResolved?: (path: string) => void;
+	/** A resolution already made by the serialized live safety operation. */
+	resolvedRepository?: ResolvedRepository;
 }
 
 export type ConsultationHandoffOutcome =
@@ -228,22 +236,26 @@ export async function handOffConsultation({
 	onResource,
 	onAgentStarted,
 	onRepositoryResolved,
+	resolvedRepository,
 }: ConsultationHandoffOptions): Promise<ConsultationHandoffOutcome> {
 	const agent = config.agents[consultation.agentType];
 	if (agent === undefined)
 		return { status: "failed", reason: `unknown agent type: ${consultation.agentType}` };
 	if (consultation.environment === "container")
 		return { status: "failed", reason: "the container environment is reserved and not yet built" };
-	onStage?.("resolving-repository");
-	const resolved = await resolveRepository(
-		{
-			identity: consultation.repository.identity,
-			displayName: consultation.repository.displayName,
-			cloneUrl: consultation.repository.cloneUrl,
-		},
-		config,
-		{ runner, home },
-	);
+	if (resolvedRepository === undefined) onStage?.("resolving-repository");
+	const resolved =
+		resolvedRepository === undefined
+			? await resolveRepository(
+					{
+						identity: consultation.repository.identity,
+						displayName: consultation.repository.displayName,
+						cloneUrl: consultation.repository.cloneUrl,
+					},
+					config,
+					{ runner, home },
+				)
+			: { ok: true as const, repository: resolvedRepository };
 	if (!resolved.ok) return { status: "failed", reason: resolved.reason };
 	onRepositoryResolved?.(resolved.repository.path);
 	const ctx: HandoffContext = {

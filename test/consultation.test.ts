@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 import { renderAnsiScreen } from "../src/components/ansi-screen.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	boundedReplacementInput,
 	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
+	consultationRepositoryCatalog,
 	isLiteralText,
 	serializeRepositoryOperation,
 	translateAgentKey,
@@ -234,6 +236,23 @@ describe("ANSI screen renderer", () => {
 });
 
 describe("launcher repository validation", () => {
+	test("keeps a visible Ticket Repository without an explicit mapping", async () => {
+		const visible = {
+			repositoryRef: {
+				identity: "github.com/acme/unmapped",
+				displayName: "acme/unmapped",
+				cloneUrl: "https://github.com/acme/unmapped.git",
+			},
+		};
+		const catalog = consultationRepositoryCatalog({ ...DEFAULT_CONFIG, repos: {} }, [visible]);
+		expect(catalog).toEqual([
+			expect.objectContaining({ identity: "github.com/acme/unmapped", path: "" }),
+		]);
+		expect(
+			await validateConsultationRepositoryOptions(catalog, new FakeRunner(), homedir()),
+		).toEqual(catalog);
+	});
+
 	const option: ConsultationRepositoryOption = {
 		identity: "github.com/acme/factory",
 		displayName: "acme/factory",
@@ -502,16 +521,16 @@ describe("pending responses across restart and migration", () => {
 		reopened.close();
 	});
 
-	test("migrates a v3 database to v4 and keeps the Consultation history", () => {
+	test("migrates a v4 database to v5 and keeps the Consultation history", () => {
 		const { state, path } = makeStateFile();
 		const consultation = createConsultation(state);
 		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
 		state.settleConsultationTurn(consultation.id, 1, "first answer", "idle");
 		state.close();
-		// Downgrade the record to the v3 shape.
+		// Downgrade the record to the v4 shape.
 		const db = new DatabaseSync(path);
 		db.exec("DROP TABLE consultation_pending_responses");
-		db.prepare("UPDATE schema_version SET version = 3").run();
+		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);
 		expect(reopened.consultation(consultation.id)?.state).toBe("awaiting-response");
@@ -544,5 +563,24 @@ describe("repository operation serialization", () => {
 		release();
 		await Promise.all([first, second]);
 		expect(events).toEqual(["first-start", "other", "first-end", "second"]);
+	});
+
+	test("holds a second live safety check until the first Agent creation settles", async () => {
+		const queues = new Map<string, Promise<void>>();
+		const events: string[] = [];
+		let release!: () => void;
+		const first = serializeRepositoryOperation(queues, "github.com/acme/factory", async () => {
+			events.push("first safety");
+			await new Promise<void>((resolve) => (release = resolve));
+			events.push("first Agent creation");
+		});
+		const second = serializeRepositoryOperation(queues, "github.com/acme/factory", async () => {
+			events.push("second safety");
+		});
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(events).toEqual(["first safety"]);
+		release();
+		await Promise.all([first, second]);
+		expect(events).toEqual(["first safety", "first Agent creation", "second safety"]);
 	});
 });

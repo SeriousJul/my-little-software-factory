@@ -562,8 +562,17 @@ describe("factory SQLite state", () => {
 		});
 		state.close();
 
-		// Downgrade the database to v2: a trace without the turn log column.
+		// Downgrade the database to v2: a trace without the turn log column
+		// and no later Consultation tables.
 		const db = new DatabaseSync(path);
+		db.exec(`
+			DROP TABLE consultation_pending_responses;
+			DROP TABLE consultation_remaining_resources;
+			DROP TABLE consultation_resources;
+			DROP TABLE consultation_snapshots;
+			DROP TABLE consultation_turns;
+			DROP TABLE consultations;
+		`);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();

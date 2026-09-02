@@ -69,7 +69,7 @@ export interface ConsultationRepositoryOption extends RepositoryRef {
 
 export function consultationRepositoryCatalog(
 	config: FactoryConfig,
-	tickets: readonly Ticket[] = [],
+	tickets: readonly Pick<Ticket, "repositoryRef">[] = [],
 ): ConsultationRepositoryOption[] {
 	const options = new Map<string, ConsultationRepositoryOption>();
 	for (const [identity, path] of Object.entries(config.repos)) {
@@ -96,14 +96,13 @@ export function consultationRepositoryCatalog(
 			});
 		}
 	}
-	return [...options.values()]
-		.filter((option) => option.path !== "")
-		.sort((a, b) => a.displayName.localeCompare(b.displayName));
+	return [...options.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 /**
- * Verify launcher choices before showing them. This never clones or changes
- * a checkout: an unverified mapping is not an operator choice.
+ * Verify explicit launcher mappings before showing them. A visible Ticket
+ * Repository without a mapping remains eligible: launch resolves it through
+ * the normal convention and sibling-clone rules.
  */
 export async function validateConsultationRepositoryOptions(
 	options: readonly ConsultationRepositoryOption[],
@@ -112,6 +111,9 @@ export async function validateConsultationRepositoryOptions(
 ): Promise<ConsultationRepositoryOption[]> {
 	const verified = await Promise.all(
 		options.map(async (option) => {
+			// An empty path means this identity came from a visible Ticket. It is
+			// not an unchecked path. The serialized launch resolves it normally.
+			if (option.path === "") return option;
 			const path = expandHome(option.path, home);
 			if (!(await fileExists(path))) return undefined;
 			const git = await runner.run("git", ["-C", path, "rev-parse", "--git-dir"]);

@@ -165,9 +165,7 @@ export class HerdrAgentReader implements AgentReader {
 					? { stableSessionId: record.session_id }
 					: typeof record.agent_session_id === "string"
 						? { stableSessionId: record.agent_session_id }
-						: isRecord(record.agent_session) && typeof record.agent_session.value === "string"
-							? { stableSessionId: record.agent_session.value }
-							: {}),
+						: {}),
 				status: typeof record.agent_status === "string" ? record.agent_status : "unknown",
 				sessionId:
 					session !== undefined && session.kind === "path" && typeof session.value === "string"
@@ -222,7 +220,7 @@ export class HerdrAgentReader implements AgentReader {
 	}
 }
 
-function matchConsultationAgent(
+export function matchConsultationAgent(
 	consultation: Consultation,
 	agents: readonly HerdrAgent[],
 ): HerdrAgent | "ambiguous" | undefined {
@@ -231,10 +229,7 @@ function matchConsultationAgent(
 			? undefined
 			: agents.find((agent) => agent.paneId === consultation.paneId);
 	if (pane !== undefined) {
-		if (
-			consultation.sessionId === null ||
-			pane.stableSessionId === consultation.sessionId
-		)
+		if (consultation.sessionId === null || pane.stableSessionId === consultation.sessionId)
 			return pane;
 		return "ambiguous";
 	}
@@ -562,7 +557,11 @@ export class ObservationCoordinator {
 
 	/** Reconcile durable Consultations from the same Agent list as Tickets. */
 	private async observeConsultations(agents: readonly HerdrAgent[]): Promise<boolean> {
-		const consultations = this.state.consultationsByState(["opening", "working", "awaiting-response"]);
+		const consultations = this.state.consultationsByState([
+			"opening",
+			"working",
+			"awaiting-response",
+		]);
 		let changed = false;
 		for (const consultation of consultations) {
 			if (this.stopped) return changed;
@@ -582,7 +581,8 @@ export class ObservationCoordinator {
 					}
 					continue;
 				}
-				const reason = match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
+				const reason =
+					match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
 				const moved = this.state.setConsultationState(consultation.id, "missing", reason);
 				changed = moved || changed;
 				if (moved)

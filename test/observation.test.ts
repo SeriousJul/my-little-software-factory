@@ -88,7 +88,12 @@ function reader(
 	};
 }
 
-function agent(paneId: string, status = "working", sessionId = ""): HerdrAgent {
+function agent(
+	paneId: string,
+	status = "working",
+	sessionId = "",
+	stableSessionId?: string,
+): HerdrAgent {
 	return {
 		paneId,
 		tabId: "tab-1",
@@ -96,6 +101,7 @@ function agent(paneId: string, status = "working", sessionId = ""): HerdrAgent {
 		agent: "factory-implement-I_5",
 		status,
 		sessionId,
+		...(stableSessionId === undefined ? {} : { stableSessionId }),
 	};
 }
 
@@ -1094,5 +1100,115 @@ describe("the injectable clock", () => {
 		coordinator.stop();
 		expect(clock.pending).toBe(0);
 		state.close();
+	});
+});
+
+describe("Consultation observation identity", () => {
+	function openingConsultation(
+		state: FactoryState,
+		id: string,
+		paneId = "pane-1",
+		sessionId = "session-1",
+	) {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: `consultation-${id}`,
+		});
+		state.recordConsultationAgentHandles(id, {
+			paneId,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			sessionId,
+		});
+	}
+
+	test("keeps a restart-interrupted opening until explicit recovery", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-1", "idle", "", "session-1")],
+		});
+		try {
+			openingConsultation(state, "consultation-opening");
+			await coordinator.tick();
+			expect(state.consultation("consultation-opening")).toMatchObject({
+				state: "opening",
+				paneId: "pane-1",
+				warning: "Opening Agent verified; explicit recovery is required",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("rejects a reused pane whose stable session differs", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-1", "working", "", "replacement-session")],
+		});
+		try {
+			openingConsultation(state, "consultation-mismatch");
+			state.setConsultationAgent("consultation-mismatch", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "expected-session",
+			});
+			await coordinator.tick();
+			expect(state.consultation("consultation-mismatch")).toMatchObject({
+				state: "missing",
+				warning: "Agent session match is ambiguous",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("follows a uniquely matched moved session and retargets cleanup resources", async () => {
+		const moved = {
+			...agent("pane-new", "working", "", "session-1"),
+			tabId: "tab-new",
+			workspaceId: "ws-new",
+		};
+		const { state, coordinator } = rig({ agents: [moved] });
+		try {
+			openingConsultation(state, "consultation-moved");
+			state.setConsultationAgent("consultation-moved", {
+				paneId: "pane-old",
+				tabId: "tab-old",
+				workspaceId: "ws-old",
+				sessionId: "session-1",
+			});
+			for (const [kind, resourceId] of [
+				["pane", "pane-old"],
+				["tab", "tab-old"],
+				["workspace", "ws-old"],
+			] as const)
+				state.recordConsultationResource("consultation-moved", {
+					kind,
+					resourceId,
+					owned: true,
+					details: `owned ${kind} ${resourceId}`,
+				});
+			await coordinator.tick();
+			expect(state.consultation("consultation-moved")).toMatchObject({
+				paneId: "pane-new",
+				tabId: "tab-new",
+				workspaceId: "ws-new",
+			});
+			expect(state.consultationResources("consultation-moved")).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "pane", resourceId: "pane-new" }),
+					expect.objectContaining({ kind: "tab", resourceId: "tab-new" }),
+					expect.objectContaining({ kind: "workspace", resourceId: "ws-new" }),
+				]),
+			);
+		} finally {
+			state.close();
+		}
 	});
 });
