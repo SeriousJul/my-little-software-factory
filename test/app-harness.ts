@@ -73,8 +73,29 @@ export const detailPaneText = (frame: string, width = WIDTH): string => {
 		.join(" ")
 		.replace(/\s+/g, " ");
 };
-export const agentRowOf = (frame: string) =>
-	rowsOf(frame).findIndex((row) => row.includes("Agent:"));
+
+/**
+ * The terminal row the detail pane holds its `Agent:` line on.
+ *
+ * The probe reads the detail pane's text column alone, at the width the frame
+ * carries, and only where a line starts with the label, so neither the list
+ * pane beside it nor a ticket title that carries the word "Agent:" can move
+ * it: the merged frame interleaves the two panes row by row, so a check on a
+ * whole row would.
+ */
+export const agentRowOf = (frame: string): number => {
+	const rows = rowsOf(frame);
+	// The frame carries its own width, so the probe follows the terminal the
+	// test booted rather than the one this harness defaults to.
+	const width = rows.reduce((widest, row) => Math.max(widest, row.length), 0);
+	const detailFrom = Math.floor(width / 2) + 2;
+	return rows.findIndex((row) =>
+		row
+			.slice(detailFrom, width - 2)
+			.trimStart()
+			.startsWith("Agent: "),
+	);
+};
 /** Assert every ticket state badge is on screen, read off the frame. */
 export function expectStateBadges(frame: string): void {
 	for (const badge of STATE_BADGES) {

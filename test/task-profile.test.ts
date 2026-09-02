@@ -205,7 +205,6 @@ describe("resolveHandoffChoice", () => {
 		// No top-level default context window exists: one number cannot fit
 		// every model, so a profile that names none leaves the room to the
 		// agent even though the default model resolves.
-		// agent even though the default model resolves.
 		const profiled: FactoryConfig = {
 			...config,
 			agents: {

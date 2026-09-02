@@ -113,15 +113,15 @@ type Panel =
  * The handoff waiting behind the override panel.
  *
  * The panel edits one Handoff's settings, wherever its choice came from, so
- * it carries what the confirm step needs to claim the same handoff: the
- * Ticket, the Origin of its dispatch, and the previous message its prompt
- * carries.
+ * it carries what the confirm step needs to claim the same handoff: which
+ * Ticket, and which Origin of its dispatch. The prompt's previous message is
+ * not carried here: the confirm reads it from the Ticket it claims, so an
+ * edit can never send a message another Ticket left behind.
  */
 interface PendingOverride {
 	ticketIdentity: string;
 	origin: HandoffOrigin;
 	choice: HandoffChoice;
-	previousMessage: string;
 }
 
 export type AppKey =
@@ -763,7 +763,6 @@ export function App({
 			ticketIdentity: ticket.identity,
 			origin: "open",
 			choice: choiceFor(ticket),
-			previousMessage: "",
 		});
 	};
 
@@ -1000,7 +999,6 @@ export function App({
 			ticketIdentity: ticket.identity,
 			origin: "workflow",
 			choice,
-			previousMessage: ticket.lastCompletion?.message ?? "",
 		});
 	};
 

@@ -365,8 +365,7 @@ export class ObservationCoordinator {
 	private readonly turnLogs: TurnLogSource;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
-	/** The cycle running now, so an overlapping one is never started twice. */
-	private running: Promise<void> | null = null;
+	private cycleInFlight = false;
 	private holdingHerdrError = false;
 	/**
 	 * The agents of the last successful list, for the UI's markers. Null
@@ -423,17 +422,8 @@ export class ObservationCoordinator {
 		void this.safeCycle().finally(() => this.scheduleNext());
 	};
 
-	/**
-	 * Run one cycle, and return when it is done.
-	 *
-	 * A cycle that started before this call cannot answer for it: the tick
-	 * waits for it, then runs the cycle the caller asked for. A caller that
-	 * ticks once therefore always sees one full cycle of its own, which is
-	 * what the tests that drive the loop by hand depend on.
-	 */
+	/** Run one cycle when one is not already running. Returns when it is done. */
 	async tick(): Promise<void> {
-		const inFlight = this.running;
-		if (inFlight !== null) await inFlight;
 		await this.safeCycle();
 	}
 
@@ -447,18 +437,8 @@ export class ObservationCoordinator {
 	}
 
 	private async safeCycle(): Promise<void> {
-		if (this.stopped || this.running !== null) return;
-		const cycle = this.runCycle();
-		this.running = cycle;
-		try {
-			await cycle;
-		} finally {
-			this.running = null;
-		}
-	}
-
-	/** One cycle, with its failures reported instead of thrown. */
-	private async runCycle(): Promise<void> {
+		if (this.stopped || this.cycleInFlight) return;
+		this.cycleInFlight = true;
 		try {
 			await this.cycle();
 		} catch (error) {
@@ -470,6 +450,8 @@ export class ObservationCoordinator {
 				`observation cycle failed: ${error instanceof Error ? error.message : String(error)}`,
 			);
 			this.onChanged();
+		} finally {
+			this.cycleInFlight = false;
 		}
 	}
 
