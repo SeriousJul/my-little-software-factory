@@ -45,7 +45,7 @@ _Avoid_: context, screen
 
 **Text field**:
 A single-line control in which the operator enters or edits a free-text value.
-Model and Thinking can be Text fields in the override panel, depending on the Agent type.
+In the override panel, the Model is a Text field when the Agent has no Model list.
 _Avoid_: input, free-text row
 
 **Ticket**:
@@ -102,9 +102,19 @@ The control plane is agent-agnostic and assumes no specific agent runtime (pi, c
 _Avoid_: bot, worker
 
 **Agent type**:
-The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level) map to the agent's own parameters, and how to read the settled turn's log.
+The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level) map to the agent's own parameters, its Model list, and how to read the settled turn's log.
 An Agent is a running instance of an Agent type.
 _Avoid_: agent definition, plugin, driver
+
+**Thinking level**:
+A standard level of agent reasoning effort: off, minimal, low, medium, high, xhigh, or max.
+An Agent type declares the levels it supports and maps a chosen level to its own parameter.
+_Avoid_: reasoning effort, effort
+
+**Model list**:
+The models an Agent runtime reports as available.
+The agent runtime, not the config file, owns this set, and a model outside it is not a valid choice for that agent.
+_Avoid_: model catalog, model registry
 
 **Consultation**:
 An operator-started interactive exchange with an Agent in a Repository that is independent of a Ticket and stays open until the operator closes it.
@@ -277,7 +287,7 @@ The settings are: Agent type, Environment kind, Task type, Model, and Thinking l
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/factory/config.toml` that carries the handoff defaults, the auto-handoff default, the limits, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
+The TOML file at `~/.config/factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
 A missing file yields the shipped defaults. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 
@@ -302,6 +312,6 @@ The handoff runs at the sibling, the control plane warns, and the repository map
 _Avoid_: fallback clone, mirror
 
 **Command runner**:
-The single egress for external commands: the control plane runs every herdr, git, and GitHub CLI command through it.
-The automated tests inject a fake runner that records safe command facts, so no test touches a real herdr session, repository, or ticket source.
+The single egress for external commands: the control plane runs every herdr, git, GitHub CLI, and agent model list command through it.
+The automated tests inject a fake runner that records safe command facts, so no test touches a real herdr session, repository, ticket source, or agent runtime.
 _Avoid_: executor, spawner
