@@ -42,6 +42,27 @@ export function branchNameFor(ticket: Ticket): string {
  * with a letter), and the result is cut to 32 characters on a safe boundary
  * so the cut never leaves a trailing hyphen.
  */
+/** The stable short identity used in Herdr names and private branches. */
+export function shortStableIdentity(id: string): string {
+	const clean = id.toLowerCase().replace(/[^a-z0-9]+/g, "");
+	return (clean.slice(0, 8) || "unknown").padEnd(8, "0");
+}
+
+/** A private worktree branch for a Consultation. It never contains input. */
+export function consultationBranchName(id: string, typeName: string): string {
+	const type =
+		typeName
+			.toLowerCase()
+			.replace(/[^a-z0-9_-]+/g, "-")
+			.replace(/^-+|-+$/g, "") || "consultation";
+	return `factory/consultation-${shortStableIdentity(id)}-${type}`.slice(0, 100).replace(/-+$/, "");
+}
+
+/** A short, stable Herdr Agent name for a Consultation. */
+export function consultationAgentName(id: string): string {
+	return `consultation-${shortStableIdentity(id)}`;
+}
+
 export function agentNameFor(title: string): string {
 	let name = titleSlug(title);
 	if (!/^[a-z]/.test(name)) {

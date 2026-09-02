@@ -44,7 +44,7 @@ import { baseChoice, type HandoffChoice } from "./handoff.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { commandFailureText } from "./repo.ts";
 import type { CommandRunner } from "./runner.ts";
-import type { FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
+import type { Consultation, FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
 import {
 	lastMessageFromLog,
 	readSessionTurnLog,
@@ -57,6 +57,12 @@ export interface HerdrAgent {
 	paneId: string;
 	tabId: string;
 	workspaceId: string;
+	/** Stable Agent session identity when this Herdr version exposes one. */
+	stableSessionId?: string;
+	/** The checkout or working directory when this Herdr version reports it. */
+	checkoutPath?: string;
+	/** Herdr's monotonic state-change sequence when available. */
+	sequence?: number;
 	/** The agent kind herdr detected in the pane. */
 	agent: string;
 	status: string;
@@ -73,12 +79,6 @@ export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
 /**
  * The startup grace a handoff's agent gets before an idle or done report
  * settles its turn.
- *
- * herdr reports the agent idle from the moment the handoff records the
- * pane until the agent picks up the prompt and starts working. A probe
- * that lands in that window sees an idle agent whose turn never ran.
- * Thirty seconds is far longer than any agent boot observed so far, and
- * costs at most one extra poll when the agent never worked at all.
  */
 export const STARTUP_GRACE_MS = 30_000;
 
@@ -144,7 +144,28 @@ export class HerdrAgentReader implements AgentReader {
 				paneId: record.pane_id,
 				tabId: typeof record.tab_id === "string" ? record.tab_id : "",
 				workspaceId: typeof record.workspace_id === "string" ? record.workspace_id : "",
+				...(typeof record.sequence === "number"
+					? { sequence: record.sequence }
+					: typeof record.seq === "number"
+						? { sequence: record.seq }
+						: typeof record.state_change_sequence === "number"
+							? { sequence: record.state_change_sequence }
+							: typeof record.state_change_seq === "number"
+								? { sequence: record.state_change_seq }
+								: {}),
 				agent: record.agent,
+				...(typeof record.checkout_path === "string"
+					? { checkoutPath: record.checkout_path }
+					: typeof record.cwd === "string"
+						? { checkoutPath: record.cwd }
+						: typeof record.working_directory === "string"
+							? { checkoutPath: record.working_directory }
+							: {}),
+				...(typeof record.session_id === "string"
+					? { stableSessionId: record.session_id }
+					: typeof record.agent_session_id === "string"
+						? { stableSessionId: record.agent_session_id }
+						: {}),
 				status: typeof record.agent_status === "string" ? record.agent_status : "unknown",
 				sessionId:
 					session !== undefined && session.kind === "path" && typeof session.value === "string"
@@ -156,6 +177,20 @@ export class HerdrAgentReader implements AgentReader {
 	}
 
 	async readPane(paneId: string, lines: number): Promise<string | null> {
+		return this.readPaneFormat(paneId, lines, "recent-unwrapped", "text");
+	}
+
+	/** Read the visible ANSI terminal for Agent interaction mode. */
+	async readPaneAnsi(paneId: string, lines: number): Promise<string | null> {
+		return this.readPaneFormat(paneId, lines, "visible", "ansi");
+	}
+
+	private async readPaneFormat(
+		paneId: string,
+		lines: number,
+		source: "visible" | "recent-unwrapped",
+		format: "text" | "ansi",
+	): Promise<string | null> {
 		const result = await this.runner.run("herdr", [
 			"agent",
 			"read",
@@ -163,9 +198,9 @@ export class HerdrAgentReader implements AgentReader {
 			"--lines",
 			String(lines),
 			"--source",
-			"recent-unwrapped",
+			source,
 			"--format",
-			"text",
+			format,
 		]);
 		if (result.code !== 0) return null;
 		let output: string | null = null;
@@ -177,20 +212,32 @@ export class HerdrAgentReader implements AgentReader {
 			output = result.stdout;
 		}
 		if (output === null) return null;
-		// Cap the capture client-side as well: the stored message must not
-		// exceed the configured line count whatever the CLI returns.
+		// ANSI output is interpreted by the isolated cell renderer. Never strip
+		// it here: cursor movement and SGR state are part of its visible layout.
+		if (format === "ansi") return output;
+		// Cap stored plain-text captures client-side as well.
 		return stripAnsi(output).split("\n").slice(0, lines).join("\n");
 	}
 }
 
-/**
- * Map a herdr agent status onto the factory's vocabulary.
- *
- * The set herdr 0.8.2 reports is closed: working, idle, done, blocked,
- * and unknown. Anything outside it is a herdr the factory has not
- * verified, so it maps to `unknown`, which settles nothing and fails
- * nothing.
- */
+export function matchConsultationAgent(
+	consultation: Consultation,
+	agents: readonly HerdrAgent[],
+): HerdrAgent | "ambiguous" | undefined {
+	const pane =
+		consultation.paneId === null
+			? undefined
+			: agents.find((agent) => agent.paneId === consultation.paneId);
+	if (pane !== undefined) {
+		if (consultation.sessionId === null || pane.stableSessionId === consultation.sessionId)
+			return pane;
+		return "ambiguous";
+	}
+	if (consultation.sessionId === null) return undefined;
+	const matches = agents.filter((agent) => agent.stableSessionId === consultation.sessionId);
+	return matches.length === 1 ? matches[0] : matches.length > 1 ? "ambiguous" : undefined;
+}
+
 export function normalizeAgentStatus(raw: string): AgentStatus {
 	const value = raw.trim().toLowerCase();
 	if (value === "working") return "working";
@@ -258,10 +305,7 @@ interface ObservationOptions {
 	/** The auto-handoff mode, read at the start of each cycle. */
 	mode: () => boolean;
 	intervalMs: number;
-	/**
-	 * The startup grace a fresh handoff's idle agent waits out. Tests
-	 * shrink it. Defaults to STARTUP_GRACE_MS.
-	 */
+	/** The startup grace a fresh handoff's idle agent waits out. */
 	startupGraceMs?: number;
 	/** One UI frame changed. */
 	onChanged: () => void;
@@ -273,6 +317,11 @@ interface ObservationOptions {
 	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
 	/** A message for the status line. */
 	onStatus: (kind: "info" | "warning" | "error", text: string) => void;
+	/** Optional Consultation side of the shared monitor. */
+	onConsultationAttention?: (consultationId: string) => void;
+	onConsultationsChanged?: () => void;
+	/** Suppress attention bells while startup reconciliation is running. */
+	reconcileOnly?: boolean;
 	/**
 	 * The scheduling clock, the same injectable interface the refresh
 	 * coordinator takes. Defaults to the system clock.
@@ -297,6 +346,11 @@ export class ObservationCoordinator {
 	private readonly startupGraceMs: number;
 	private readonly onChanged: () => void;
 	private readonly onAgents?: (agents: readonly HerdrAgent[] | null) => void;
+	private readonly onConsultationAttention?: (consultationId: string) => void;
+	private readonly onConsultationsChanged?: () => void;
+	private readonly reconcileOnly: boolean;
+	private startupReconciliation = true;
+	private suppressConsultationAttention = false;
 	private readonly onStatus: (kind: "info" | "warning" | "error", text: string) => void;
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
@@ -333,6 +387,9 @@ export class ObservationCoordinator {
 		this.startupGraceMs = options.startupGraceMs ?? STARTUP_GRACE_MS;
 		this.onChanged = options.onChanged;
 		this.onAgents = options.onAgents;
+		this.onConsultationAttention = options.onConsultationAttention;
+		this.onConsultationsChanged = options.onConsultationsChanged;
+		this.reconcileOnly = options.reconcileOnly ?? false;
 		this.onStatus = options.onStatus;
 		this.clock = options.clock ?? SYSTEM_CLOCK;
 		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
@@ -408,6 +465,8 @@ export class ObservationCoordinator {
 			return;
 		}
 		this.lastAgentsList = probe.agents;
+		this.suppressConsultationAttention = this.reconcileOnly && this.startupReconciliation;
+		this.startupReconciliation = false;
 		if (this.holdingHerdrError) {
 			this.holdingHerdrError = false;
 			this.onStatus("info", "herdr is reachable again; the observation resumed");
@@ -458,16 +517,12 @@ export class ObservationCoordinator {
 			}
 		}
 
-		// A state correction on read, for a turn that settled too early:
-		// herdr reports the agent of an awaiting ticket working again while
-		// the settled turn is still pending, so the turn did not end. The
-		// ticket goes back to running and holds a seat again, and the next
-		// settle refreshes the pending trace in place.
+		// An awaiting ticket that reports working again resumes its still-pending
+		// turn. It holds a slot and its next settle refreshes the same trace.
 		for (const ticket of this.state.ticketsByState(["awaiting"])) {
 			if (ticket.paneId === null) continue;
 			const agent = byPane.get(ticket.paneId);
-			if (agent === undefined) continue;
-			if (normalizeAgentStatus(agent.status) !== "working") continue;
+			if (agent === undefined || normalizeAgentStatus(agent.status) !== "working") continue;
 			if (this.state.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
 				changed = true;
 				liveCount += 1;
@@ -486,23 +541,146 @@ export class ObservationCoordinator {
 			changed = this.dispatchOpen(liveCount) || changed;
 		}
 
+		// Tickets and Consultations share this one successful Herdr list poll.
+		// A Consultation never enters the Ticket parallel count above.
+		const consultationChanged = await this.observeConsultations(probe.agents);
+		changed = consultationChanged || changed;
 		if (changed) this.onChanged();
 		this.onAgents?.(probe.agents);
 	}
 
-	/**
-	 * Whether a done or idle agent settles the ticket's turn.
-	 *
-	 * A running ticket settles at once: the working observation proved the
-	 * turn started, so an idle or done agent ends it. A handed-off ticket
-	 * never showed working: until the handoff outgrows the startup grace,
-	 * the idle agent is its boot, and settling it would park the ticket in
-	 * awaiting while it works. Past the grace the idle agent is trusted:
-	 * the turn either finished inside one poll gap or never started.
-	 */
+	/** Whether a done or idle agent settles the ticket's turn. */
 	private turnSettles(ticket: HandoffTicket): boolean {
 		if (ticket.state === "running") return true;
 		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
+	}
+
+	/** Reconcile durable Consultations from the same Agent list as Tickets. */
+	private async observeConsultations(agents: readonly HerdrAgent[]): Promise<boolean> {
+		const consultations = this.state.consultationsByState([
+			"opening",
+			"working",
+			"awaiting-response",
+		]);
+		let changed = false;
+		for (const consultation of consultations) {
+			if (this.stopped) return changed;
+			const match = matchConsultationAgent(consultation, agents);
+			if (match === "ambiguous" || match === undefined) {
+				if (consultation.state === "opening") {
+					// A restart can interrupt launch between durable steps. The
+					// operator, not the poll, decides whether recovery continues.
+					const warning =
+						match === "ambiguous"
+							? "Opening Agent match is ambiguous; explicit recovery is required"
+							: "Opening Agent is not visible; explicit recovery is required";
+					if (consultation.warning !== warning) {
+						this.state.setConsultationWarning(consultation.id, warning);
+						changed = true;
+						this.onStatus("warning", `Consultation ${consultation.id.slice(0, 8)} needs recovery`);
+					}
+					continue;
+				}
+				const reason =
+					match === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing";
+				const moved = this.state.setConsultationState(consultation.id, "missing", reason);
+				changed = moved || changed;
+				if (moved)
+					this.onStatus("warning", `${reason} for Consultation ${consultation.id.slice(0, 8)}`);
+				continue;
+			}
+			if (consultation.state === "opening") {
+				// A uniquely verified Agent may refresh its durable handles, but
+				// remains opening until the operator chooses recovery.
+				this.state.recordConsultationAgentHandles(consultation.id, {
+					paneId: match.paneId,
+					tabId: match.tabId,
+					workspaceId: match.workspaceId,
+					sessionId: match.stableSessionId ?? consultation.sessionId,
+				});
+				const warning =
+					normalizeAgentStatus(match.status) === "unknown"
+						? "Agent status is unknown"
+						: "Opening Agent verified; explicit recovery is required";
+				if (consultation.warning !== warning) {
+					this.state.setConsultationWarning(consultation.id, warning);
+					changed = true;
+				}
+				continue;
+			}
+			if (
+				consultation.paneId !== match.paneId ||
+				consultation.tabId !== match.tabId ||
+				consultation.workspaceId !== match.workspaceId
+			) {
+				this.state.updateConsultationAgentHandles(consultation.id, {
+					paneId: match.paneId,
+					tabId: match.tabId,
+					workspaceId: match.workspaceId,
+					sessionId: match.stableSessionId ?? consultation.sessionId,
+				});
+				changed = true;
+			}
+			const status = normalizeAgentStatus(match.status);
+			if (status === "unknown") {
+				if (consultation.warning !== "Agent status is unknown") {
+					this.state.setConsultationWarning(consultation.id, "Agent status is unknown");
+					this.onStatus(
+						"warning",
+						`Agent status is unknown for Consultation ${consultation.id.slice(0, 8)}`,
+					);
+					changed = true;
+				}
+				continue;
+			}
+			if (consultation.warning === "Agent status is unknown") {
+				this.state.setConsultationWarning(consultation.id, null);
+				changed = true;
+			}
+			if (
+				consultation.state === "awaiting-response" &&
+				match.sequence !== undefined &&
+				(consultation.latestSequence === null || match.sequence > consultation.latestSequence)
+			)
+				changed =
+					this.state.recordExternalConsultationTurn(
+						consultation.id,
+						match.sequence,
+						new Date(this.now()).toISOString(),
+					) || changed;
+			const before = this.state.consultation(consultation.id);
+			if (
+				before?.state === "awaiting-response" &&
+				this.state.consultationNeedsSnapshot(consultation.id)
+			) {
+				const output = await this.herdr.readPane(
+					match.paneId,
+					this.config().completionMessageLines,
+				);
+				if (this.stopped) return changed;
+				if (output !== null && this.state.fillConsultationSnapshot(consultation.id, output)) {
+					changed = true;
+					this.onConsultationsChanged?.();
+				}
+			}
+			const current = this.state.consultation(consultation.id);
+			if (current?.state !== "working" || status === "working") continue;
+			const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
+			if (this.stopped) return changed;
+			const settled = this.state.settleConsultationTurn(
+				consultation.id,
+				match.sequence ?? null,
+				output,
+				status,
+				new Date(this.now()).toISOString(),
+			);
+			if (!settled) continue;
+			changed = true;
+			this.onConsultationsChanged?.();
+			if (!this.suppressConsultationAttention) this.onConsultationAttention?.(consultation.id);
+			this.onStatus("info", `Consultation ${consultation.id.slice(0, 8)} awaits a response`);
+		}
+		return changed;
 	}
 
 	/** A settled turn: read the log, rest the ticket in awaiting. */

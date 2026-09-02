@@ -13,4 +13,4 @@ A Consultation is durable, first-class work that is independent of Tickets. It h
 
 ## Consequences
 
-Consultations use a separate TUI view and durable state instead of appearing in the Ticket list. Starting or closing one never changes Ticket state, and manual Consultations do not consume the auto-handoff Parallel limit.
+Consultations use a separate TUI view and durable state instead of appearing in the Ticket list. Starting or closing one never changes Ticket state, and manual Consultations do not consume the auto-handoff Parallel limit. Pane output is read from Herdr and is not continuously persisted; only settled and best-effort close snapshots are stored. Keystrokes sent in Agent interaction mode are not recorded as a transcript.

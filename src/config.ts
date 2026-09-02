@@ -24,6 +24,23 @@ export interface TaskTypeConfig {
 	autoClose: boolean;
 }
 
+/** A repeatable, operator-started interaction pattern. */
+export interface ConsultationTypeConfig {
+	/** The configured Agent type to start. */
+	agent: string;
+	/** The Environment in which the Agent runs. */
+	environment: EnvironmentKind;
+	/** The opening prompt. It contains {input} exactly once. */
+	template: string;
+	/** Optional model setting passed through the Agent type mapping. */
+	model?: string;
+	/** Optional thinking setting passed through the Agent type mapping. */
+	thinking?: string;
+}
+
+/** A semantic key used to leave Agent interaction mode. */
+export type InteractionExitKey = string;
+
 /**
  * One workflow edge: from a task type to the task types a settled turn of
  * it can hand off to. The edge's optional agent and environment override
@@ -86,6 +103,12 @@ export interface FactoryConfig {
 	defaultTaskType: string;
 	agents: Record<string, AgentTypeConfig>;
 	taskTypes: Record<string, TaskTypeConfig>;
+	/** Optional interactive Consultation patterns. Empty is valid. */
+	consultationTypes: Record<string, ConsultationTypeConfig>;
+	/** Whether a newly settled Consultation rings the terminal bell. */
+	attentionBell: boolean;
+	/** The semantic key which exits Agent interaction mode. */
+	interactionExitKey: InteractionExitKey;
 	/** Whether the control plane auto-hands-off open tickets. Off at startup. */
 	autoHandoff: boolean;
 	/** Agents the control plane keeps in flight; 0 means unlimited. */
@@ -134,6 +157,9 @@ export const DEFAULT_CONFIG: FactoryConfig = {
 		},
 		claude: { kind: "claude", model: "--model {value}", thinking: "--effort {value}" },
 	},
+	consultationTypes: {},
+	attentionBell: true,
+	interactionExitKey: "f12",
 	taskTypes: {
 		implement: {
 			template:
@@ -236,6 +262,9 @@ export function validateConfig(data: unknown): FactoryConfig {
 		"default-task-type",
 		"agents",
 		"task-types",
+		"consultation-types",
+		"attention-bell",
+		"interaction-exit-key",
 		"repos",
 		"sources",
 		"ticket-sources",
@@ -266,6 +295,11 @@ export function validateConfig(data: unknown): FactoryConfig {
 	const defaultTaskType = stringField(data, "default-task-type");
 	const agents = validateAgents(data.agents);
 	const taskTypes = validateTaskTypes(data["task-types"]);
+	const consultationTypes = validateConsultationTypes(data["consultation-types"], agents);
+	const attentionBell = booleanField(data, "attention-bell", true);
+	const interactionExitKey = validateInteractionExitKey(
+		data["interaction-exit-key"] === undefined ? "f12" : stringField(data, "interaction-exit-key"),
+	);
 	const repos = validateRepos(data.repos);
 	const sources = validateSources(data.sources ?? data["ticket-sources"]);
 	const taskRules = validateTaskRules(data["task-rules"], taskTypes);
@@ -291,6 +325,9 @@ export function validateConfig(data: unknown): FactoryConfig {
 		defaultTaskType,
 		agents,
 		taskTypes,
+		consultationTypes,
+		attentionBell,
+		interactionExitKey,
 		autoHandoff,
 		maxParallelAgents,
 		agentPollIntervalSeconds,
@@ -454,6 +491,91 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 			thinking === undefined ? { template, autoClose } : { template, thinking, autoClose };
 	}
 	return out;
+}
+
+/** Validate the optional Consultation type table at startup. */
+function validateConsultationTypes(
+	value: unknown,
+	agents: Record<string, AgentTypeConfig>,
+): Record<string, ConsultationTypeConfig> {
+	const types = tableField(value === undefined ? {} : value, "consultation-types");
+	const out: Record<string, ConsultationTypeConfig> = {};
+	for (const [name, raw] of Object.entries(types)) {
+		if (/\s/.test(name) || name === "")
+			throw new ConfigError(`config: consultation-types.${name}: must be a one-word name`);
+		if (!isRecord(raw))
+			throw new ConfigError(`config: consultation-types.${name}: must be a table`);
+		for (const key of Object.keys(raw))
+			if (!["agent", "environment", "template", "model", "thinking"].includes(key))
+				throw new ConfigError(`config: consultation-types.${name}: unknown key "${key}"`);
+		const where = `consultation-types.${name}`;
+		const agent = stringField(raw, "agent", where);
+		const agentConfig = agents[agent];
+		if (agentConfig === undefined)
+			throw new ConfigError(`${where}.agent: unknown agent "${agent}"`);
+		const environment = stringField(raw, "environment", where);
+		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(environment))
+			throw new ConfigError(
+				`${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
+			);
+		const template = stringField(raw, "template", where);
+		validateConsultationTemplate(template, `${where}.template`);
+		const model = optionalStringField(raw, "model", where);
+		if (model !== undefined && agentConfig.model === undefined)
+			throw new ConfigError(`${where}.model: agent "${agent}" does not define a model setting`);
+		const thinking = optionalStringField(raw, "thinking", where);
+		if (thinking !== undefined) {
+			if (agentConfig.thinking === undefined)
+				throw new ConfigError(
+					`${where}.thinking: agent "${agent}" does not define a thinking setting`,
+				);
+			if (
+				agentConfig.thinkingValues !== undefined &&
+				!agentConfig.thinkingValues.includes(thinking)
+			)
+				throw new ConfigError(
+					`${where}.thinking: must be one of: ${agentConfig.thinkingValues.join(", ")}`,
+				);
+		}
+		out[name] = {
+			agent,
+			environment: environment as EnvironmentKind,
+			template,
+			...(model === undefined ? {} : { model }),
+			...(thinking === undefined ? {} : { thinking }),
+		};
+	}
+	return out;
+}
+
+/** Consultation templates have one input slot and no silent placeholders. */
+function validateConsultationTemplate(template: string, where: string): void {
+	const placeholders = placeholderNames(template);
+	if (placeholders.filter((name) => name === "input").length !== 1)
+		throw new ConfigError(`${where}: template must contain the {input} placeholder exactly once`);
+	for (const placeholder of placeholders) {
+		if (placeholder !== "input")
+			throw new ConfigError(`${where}: unknown placeholder {${placeholder}}; use {input}`);
+	}
+	// A brace which is not part of a matched pair would be sent literally and
+	// is almost always a configuration mistake. Reject it like other unknown
+	// placeholders.
+	const withoutPairs = template.replace(/\{[^{}]*\}/g, "");
+	if (withoutPairs.includes("{") || withoutPairs.includes("}"))
+		throw new ConfigError(`${where}: contains an unmatched brace`);
+}
+
+/** Validate and canonicalize the semantic Agent-terminal exit binding. */
+export function validateInteractionExitKey(value: string): InteractionExitKey {
+	const normalized = value
+		.trim()
+		.toLowerCase()
+		.replace(/^ctrl-/, "ctrl+");
+	if (/^f(?:[1-9]|1[0-9]|2[0-4])$/.test(normalized)) return normalized;
+	if (/^ctrl\+[a-z]$/.test(normalized)) return normalized;
+	throw new ConfigError(
+		"config: interaction-exit-key must be a function key (for example f12) or ctrl plus one letter",
+	);
 }
 
 function validateWorkflows(
@@ -783,6 +905,20 @@ export function configToToml(config: FactoryConfig): string {
 				},
 			]),
 		),
+		"consultation-types": Object.fromEntries(
+			Object.entries(config.consultationTypes).map(([name, consultation]) => [
+				name,
+				{
+					agent: consultation.agent,
+					environment: consultation.environment,
+					template: consultation.template,
+					...(consultation.model === undefined ? {} : { model: consultation.model }),
+					...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
+				},
+			]),
+		),
+		"attention-bell": config.attentionBell,
+		"interaction-exit-key": config.interactionExitKey,
 		"auto-handoff": config.autoHandoff,
 		"max-parallel-agents": config.maxParallelAgents,
 		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
