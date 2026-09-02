@@ -23,11 +23,12 @@
  * 2. A pane herdr no longer lists is missing. With auto-handoff on the
  *    loop restarts the agent once per episode, or abandons the cycle when
  *    the ticket has used up its handoffs.
- * 3. Automatic completion decisions apply to awaiting tickets whose task
- *    type is auto-close: exactly one outgoing edge routes (while the
- *    parallel limit has room), any other edge count closes, and a route
- *    at the handoff limit degrades to close. Every other awaiting ticket
- *    waits for the operator.
+ * 3. Automatic completion decisions resolve the awaiting tickets: every
+ *    one with auto-handoff on, the auto-close types alone without it.
+ *    Exactly one outgoing edge routes (while the parallel limit has room),
+ *    any other edge count closes, and a route at the handoff limit
+ *    degrades to close. A full parallel limit leaves a route awaiting
+ *    until a slot frees, and the rest wait for the operator.
  * 4. With auto-handoff on, each eligible open ticket - actionable, under
  *    both limits - is handed off with the configured defaults. The
  *    parallel count is the in-flight tickets whose agent was alive in the
@@ -265,12 +266,13 @@ export function stripAnsi(text: string): string {
 /**
  * The decision an awaiting ticket resolves to on a cycle.
  *
- * - `close`: the factory closes the cycle now (auto-close type with zero
- *   or multiple outgoing edges, or a route degraded at the handoff limit).
- * - `route`: an auto-close type's one-and-only edge hands off, while the
+ * - `close`: the factory closes the cycle now (zero or multiple outgoing
+ *   edges, or a route degraded at the handoff limit).
+ * - `route`: the task type's one-and-only edge hands off, while the
  *   parallel limit has room.
  * - `wait`: the ticket rests in awaiting. A route waits for a free slot;
- *   a non-auto-close type waits for the operator's decision.
+ *   in manual mode a non-auto-close type waits for the operator's
+ *   decision.
  */
 export type AwaitingDecision = "close" | "route" | "wait";
 
@@ -530,7 +532,7 @@ export class ObservationCoordinator {
 		}
 
 		for (const ticket of this.state.ticketsByState(["awaiting"])) {
-			changed = (await this.handleAwaiting(ticket, liveCount)) || changed;
+			changed = (await this.handleAwaiting(ticket, liveCount, autoOn)) || changed;
 			if (this.stopped) return;
 		}
 
@@ -795,14 +797,20 @@ export class ObservationCoordinator {
 	 * Resolve an awaiting ticket by the automatic rule. Returns whether the
 	 * cycle changed factory state.
 	 *
-	 * The decision is recorded only after a successful claim: a route that
-	 * cannot start leaves the pending trace for the next cycle instead of
-	 * holding a decision the handoff never made.
+	 * The rule applies to every ticket with auto-handoff on, and to the
+	 * auto-close types without it. The decision is recorded only after a
+	 * successful claim: a route that cannot start leaves the pending trace
+	 * for the next cycle instead of holding a decision the handoff never
+	 * made.
 	 */
-	private async handleAwaiting(ticket: HandoffTicket, liveCount: number): Promise<boolean> {
+	private async handleAwaiting(
+		ticket: HandoffTicket,
+		liveCount: number,
+		autoOn: boolean,
+	): Promise<boolean> {
 		const config = this.config();
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
-		const decision = this.decideAwaiting(ticket.taskType, liveCount, handoffCount);
+		const decision = this.decideAwaiting(ticket.taskType, liveCount, handoffCount, autoOn);
 		if (decision === "wait") return false;
 		const decidedAt = new Date(this.now()).toISOString();
 		if (decision === "close") {
@@ -861,19 +869,24 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The automatic completion rule: it applies only to auto-close types.
+	 * The automatic completion rule: it applies to every task type with
+	 * auto-handoff on, and to the auto-close types without it.
 	 *
 	 * A route at the handoff limit degrades to close: the ticket returns
 	 * to open wearing the handoff-limit marker, where the operator can
 	 * still hand it off manually. Exactly one outgoing edge routes while
 	 * the parallel limit has room; a full limit waits in awaiting until a
-	 * slot frees. Any other edge count closes. A non-auto-close type
-	 * always waits for the operator.
+	 * slot frees. Any other edge count closes. In manual mode a
+	 * non-auto-close type waits for the operator.
 	 */
-	decideAwaiting(taskType: string, liveCount: number, handoffCount: number): AwaitingDecision {
+	decideAwaiting(
+		taskType: string,
+		liveCount: number,
+		handoffCount: number,
+		autoOn: boolean,
+	): AwaitingDecision {
 		const config = this.config();
-		const task = config.taskTypes[taskType];
-		if (task?.autoClose !== true) return "wait";
+		if (!autoOn && config.taskTypes[taskType]?.autoClose !== true) return "wait";
 		if (handoffCount >= config.maxHandoffsPerTicket) return "close";
 		const edge = this.singleEdge(taskType);
 		if (edge !== undefined && edge.to.length === 1) {

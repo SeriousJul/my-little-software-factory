@@ -5,7 +5,8 @@
  * The mode line carries the auto-handoff state and the live agent count
  * against the parallel limit. Enter on an open ticket hands it off; Enter
  * on an awaiting ticket opens the decision modal (close, Goto, or a
- * workflow handoff), unless the task type is auto-close and decides alone;
+ * workflow handoff), while the factory does not decide the ticket itself
+ * (auto mode, or an auto-close task type);
  * Enter on a blocked ticket Gotos the agent; Enter on an in-flight ticket
  * whose pane herdr no longer lists opens the missing modal (restart or
  * abandon). `a` toggles auto-handoff.
@@ -1638,8 +1639,16 @@ export function App({
 					break;
 				}
 				if (ticket.state === "awaiting") {
-					// An auto-close type decides by itself: the operator has no panel for
-					// it.
+					// The factory decides the ticket itself in auto mode, and an
+					// auto-close type decides in both modes: the operator has no
+					// panel for it.
+					if (autoModeRef.current) {
+						setStatus({
+							kind: "info",
+							text: "auto-handoff is on: the factory decides this ticket",
+						});
+						break;
+					}
 					const taskType =
 						ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
 					if (configRef.current.taskTypes[taskType]?.autoClose === true) {

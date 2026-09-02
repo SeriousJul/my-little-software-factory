@@ -31,7 +31,9 @@ const choice = {
  * - route auto-closes with one and only one edge: it routes while there is
  *   parallel room, and degrades to close at the handoff limit.
  * - split auto-closes with two edges: it is ambiguous, so it closes.
- * - implement and research never auto-close: they always wait for a human.
+ * - implement and research never auto-close. In auto mode the factory
+ *   still decides them: implement's one edge routes, and research, with
+ *   no route, closes. In manual mode both wait for a human.
  */
 const config: FactoryConfig = {
 	...DEFAULT_CONFIG,
@@ -750,14 +752,14 @@ describe("the awaiting rule", () => {
 			}),
 		);
 		expect(intents).toHaveLength(0);
-		expect(coordinator.decideAwaiting("review", 0, 0)).toBe("close");
+		expect(coordinator.decideAwaiting("review", 0, 0, false)).toBe("close");
 		state.close();
 	});
 
 	test("an auto-close type with multiple routes closes: the route is ambiguous", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
 		settleFor(state, "github:github.com:I_5", "split");
-		expect(coordinator.decideAwaiting("split", 0, 0)).toBe("close");
+		expect(coordinator.decideAwaiting("split", 0, 0, false)).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -863,7 +865,9 @@ describe("the awaiting rule", () => {
 			turnLog: [{ kind: "text", text: "again settled" }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
-		expect(coordinator.decideAwaiting("route", 0, 2)).toBe("close");
+		expect(coordinator.decideAwaiting("route", 0, 2, true)).toBe("close");
+		// The degrade applies to the non-auto-close types in auto mode too.
+		expect(coordinator.decideAwaiting("implement", 0, 2, true)).toBe("close");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -900,7 +904,7 @@ describe("the awaiting rule", () => {
 		}
 		settleFor(state, "github:github.com:I_5", "route");
 		// Both slots are held by live agents: the route waits, it does not close.
-		expect(coordinator.decideAwaiting("route", 2, 0)).toBe("wait");
+		expect(coordinator.decideAwaiting("route", 2, 0, true)).toBe("wait");
 		await coordinator.tick();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(
@@ -913,17 +917,56 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
-	test("a type that never auto-closes waits for the operator, in both modes", async () => {
-		for (const autoOn of [true, false]) {
-			const { state, intents, coordinator } = rig({ autoOn, agents: [] });
-			settleFor(state, "github:github.com:I_5", "research");
-			expect(coordinator.decideAwaiting("research", 0, 0)).toBe("wait");
+	test("a non-auto-close type waits for the operator in manual mode", async () => {
+		for (const taskType of ["research", "implement"]) {
+			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+			settleFor(state, "github:github.com:I_5", taskType);
+			expect(coordinator.decideAwaiting(taskType, 0, 0, false)).toBe("wait");
 			await coordinator.tick();
 			const [resting] = state.visibleTickets([], "implement");
 			expect(resting).toEqual(expect.objectContaining({ state: "awaiting" }));
 			expect(intents).toHaveLength(0);
 			state.close();
 		}
+	});
+
+	test("auto mode routes a non-auto-close type along its one and only edge", async () => {
+		const { state, intents, statuses, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "implement");
+		expect(coordinator.decideAwaiting("implement", 0, 0, true)).toBe("route");
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				ticketIdentity: "github:github.com:I_5",
+				previousMessage: "settled the turn",
+				choice: expect.objectContaining({ taskType: "polish" }),
+			}),
+		]);
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket.lastCompletion?.decision).toBe("auto-handed-off");
+		expect(
+			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to polish"),
+		).toBe(true);
+		state.close();
+	});
+
+	test("auto mode closes a non-auto-close type with no route", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "research");
+		expect(coordinator.decideAwaiting("research", 0, 0, true)).toBe("close");
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "open",
+				lastCompletion: expect.objectContaining({ decision: "auto-closed" }),
+			}),
+		);
+		// Under the handoff limit, the just-closed ticket is re-handed in the
+		// same cycle: the close-and-rehandoff loop the limit bounds.
+		expect(intents).toEqual([expect.objectContaining({ origin: "open" })]);
+		state.close();
 	});
 });
 

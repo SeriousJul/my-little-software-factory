@@ -51,7 +51,7 @@ ends at close, ADR 0006: the control plane polls herdr).
 | `Home` / `End`   | Select the first or last Ticket, or move the detail to its start or end |
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
-| `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
+| `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
 | `e`              | Open the override panel for the selected open ticket                    |
 | `a`              | Toggle auto-handoff mode for this session                              |
 | `r`              | Refresh ticket sources, or retry a failed Consultation                 |
@@ -124,7 +124,9 @@ text.
 
 Enter on an `awaiting` ticket opens the decision modal: a near-fullscreen
 modal that pops in over the app with a short fade and grow, one cell of
-margin on every side. Its border reads `Decision: <ticket title>`, and the
+margin on every side. In auto mode, and on an auto-close task type, the
+factory decides the ticket itself: Enter only reports that, and the modal
+stays closed. Its border reads `Decision: <ticket title>`, and the
 first row under the border names the context: repository, task type,
 agent, completion time.
 
@@ -331,14 +333,15 @@ work cycle.
 Auto-handoff mode decides without the operator, within the configured
 limits:
 
-- Automatic decisions apply to auto-close task types only, and they apply
-  in both modes. A settled turn of an auto-close type routes when its task
-  type has exactly one outgoing workflow edge with exactly one target, and
-  the parallel limit has room. At the per-ticket handoff limit the route
-  degrades to close. Zero or multiple edges close the cycle. A full
-  parallel limit leaves the ticket awaiting until a slot frees.
-- A task type that is not auto-close always leaves its settled turn
-  awaiting for the operator, in both modes.
+- With auto-handoff on, the control plane decides every settled turn
+  without the operator: it routes when the task type has exactly one
+  outgoing workflow edge with exactly one target, and the parallel limit
+  has room. At the per-ticket handoff limit the route degrades to close.
+  Zero or multiple edges close the cycle. A full parallel limit leaves the
+  ticket awaiting until a slot frees.
+- With auto-handoff off, the same decisions apply to auto-close task
+  types only. A task type that is not auto-close leaves its settled turn
+  awaiting for the operator.
 - Every eligible open ticket is handed off with the config defaults when the
   parallel limit allows it. The limit counts the live agents: the in-flight
   tickets in `handed-off` or `running` whose agent was alive in the latest
@@ -402,7 +405,7 @@ of the thinking row. Any other brace pair is a startup error, so a `{ticket-id}`
 cannot stay literal in the prompt an agent receives.
 
 A task type can set `auto-close = true`. For its completions the control
-plane decides without the operator, in both modes: exactly one outgoing
+plane decides without the operator even in manual mode: exactly one outgoing
 workflow edge hands off with that task while the parallel limit has room,
 any other edge count closes the cycle, and a route at the per-ticket
 handoff limit degrades to close.
