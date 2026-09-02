@@ -19,7 +19,7 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 		// A new operation replaces the outcome the last one left on the line
 		// with its own Working progress. Source health is not an operation:
 		// it survives so it can return when the progress clears.
-		setFacts((current) => ({ working: text, operation: undefined }));
+		setFacts(() => ({ working: text, operation: undefined }));
 	}, []);
 
 	const warning = useCallback((text: string) => {

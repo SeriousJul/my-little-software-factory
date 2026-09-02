@@ -14,9 +14,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-
-import { COLORS } from "../src/components/theme.ts";
 import { widthOf } from "../src/components/text.ts";
+import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { Setup } from "./app-harness.ts";
 import {
@@ -26,6 +25,7 @@ import {
 	detailPaneText,
 	focusDetail,
 	focusList,
+	HEIGHT,
 	markerRowOf,
 	messageRowOf,
 	openPanel,
@@ -36,7 +36,6 @@ import {
 	rowsOf,
 	settle,
 	spanColorAt,
-	HEIGHT,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -46,8 +45,8 @@ import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
 	cleanupStateFixtures,
 	freshState,
-	issueTicket,
 	issuesConfig,
+	issueTicket,
 	success,
 } from "./state-fixture.ts";
 
@@ -93,7 +92,10 @@ const norm = (row: string): string => row.replace(/\s+/g, " ").trim();
 
 /** A row's content with the modal's box borders stripped, or "" for a blank row. */
 const contentOf = (row: string): string =>
-	row.replace(/[│┌┐└┘─]/g, " ").replace(/\s+/g, " ").trim();
+	row
+		.replace(/[│┌┐└┘─]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 
 describe("the in-app Key guide", () => {
 	test("does not open by itself; ? and F1 open and close it from the Ticket list", async () => {
@@ -131,9 +133,7 @@ describe("the in-app Key guide", () => {
 				// Override list row.
 				await focusList(setup);
 				await openPanel(setup);
-				await press(setup, "?", "the guide", (f) =>
-					f.includes("Key guide - Override list row"),
-				);
+				await press(setup, "?", "the guide", (f) => f.includes("Key guide - Override list row"));
 				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
 				// Override text row.
 				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
@@ -258,14 +258,41 @@ describe("the in-app Key guide", () => {
 		);
 	});
 
+	test("puts action-panel controls in the current interaction mode", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
+				await press(setup, "?", "the key guide", (f) => f.includes("Key guide - Action panel"));
+				const rows = rowsOf(await settle(setup));
+				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
+
+				expect(between(indexOf("Current interaction mode"), indexOf("Global controls"))).toEqual([
+					"F1/? Help",
+					"F2 Message - the current Message fits on the Message line",
+					"↑↓ Select action",
+					"j/k Scroll message",
+					"Enter Confirm action",
+					"Esc Cancel",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
 	test("marks this mode's unavailability on the current rows only, with the recovery note on Emergency exit", async () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
 				const rows = rowsOf(await settle(setup));
-				const rowOf = (needle: string) =>
-					rows.find((row) => norm(row).includes(needle)) ?? "";
+				const rowOf = (needle: string) => rows.find((row) => norm(row).includes(needle)) ?? "";
 
 				// No sources exist, and the Message fits: both current
 				// controls carry their reason, in the catalogue's words.
@@ -279,7 +306,17 @@ describe("the in-app Key guide", () => {
 
 				// Other-mode rows never carry a reason: the guide describes
 				// the state of this mode, not a hypothetical one.
-				for (const other of ["←/h Tickets", "←→/hl Change", "Type Edit", "Backspace Delete", "Esc Cancel", "↑↓ Select action", "j/k Scroll message", "Esc/F1/? Close", "Esc/F2 Close"]) {
+				for (const other of [
+					"←/h Tickets",
+					"←→/hl Change",
+					"Type Edit",
+					"Backspace Delete",
+					"Esc Cancel",
+					"↑↓ Select action",
+					"j/k Scroll message",
+					"Esc/F1/? Close",
+					"Esc/F2 Close",
+				]) {
 					const row = rowOf(other);
 					expect(row).not.toContain(" - ");
 				}
@@ -297,8 +334,7 @@ describe("the in-app Key guide", () => {
 				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
 				await settle(setup);
 				const rows = rowsOf(setup.captureCharFrame());
-				const rowOf = (needle: string) =>
-					rows.findIndex((row) => norm(row).includes(needle));
+				const rowOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 
 				// Available: the key wears the focus color, the label the text
 				// color.
@@ -309,9 +345,7 @@ describe("the in-app Key guide", () => {
 				const refreshRow = rowOf("r Refresh");
 				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(COLORS.dim));
 				expect(spanColorAt(setup, refreshRow, "Refresh")).toEqual(rgb(COLORS.dim));
-				expect(spanColorAt(setup, refreshRow, "no Ticket sources exist")).toEqual(
-					rgb(COLORS.dim),
-				);
+				expect(spanColorAt(setup, refreshRow, "no Ticket sources exist")).toEqual(rgb(COLORS.dim));
 				// Emergency exit is available: the recovery note does not dim
 				// the key.
 				const exitRow = rowOf("Ctrl+C");
@@ -348,10 +382,11 @@ describe("the in-app Key guide", () => {
 					source.settle(success([issueTicket()]));
 					await awaitFrame(
 						setup,
-						(f) => !rowsOf(f)
-							.map(norm)
-							.find((row) => row.includes("r Refresh"))
-						?.includes("already refreshing"),
+						(f) =>
+							!rowsOf(f)
+								.map(norm)
+								.find((row) => row.includes("r Refresh"))
+								?.includes("already refreshing"),
 						"the refresh row to clear",
 					);
 					rows = rowsOf(setup.captureCharFrame());
@@ -359,7 +394,7 @@ describe("the in-app Key guide", () => {
 					expect(rows[refreshRow]).not.toContain(" - ");
 					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(COLORS.borderFocused));
 					// The current section follows the state too: the fetched open
-				// Ticket is selected, so Hand off loses its reason as well.
+					// Ticket is selected, so Hand off loses its reason as well.
 					expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(
 						"no Ticket is selected",
 					);
@@ -388,7 +423,17 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("k");
 				expect(await settle(setup, 500)).toContain("1-19/28");
 				// Walk to the bottom, one step per frame.
-				const ladder = ["2-20/28", "3-21/28", "4-22/28", "5-23/28", "6-24/28", "7-25/28", "8-26/28", "9-27/28", "10-28/28"];
+				const ladder = [
+					"2-20/28",
+					"3-21/28",
+					"4-22/28",
+					"5-23/28",
+					"6-24/28",
+					"7-25/28",
+					"8-26/28",
+					"9-27/28",
+					"10-28/28",
+				];
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
@@ -406,7 +451,9 @@ describe("the in-app Key guide", () => {
 			async (setup) => {
 				// The selection.
 				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 3);
-				const selectedBefore = rowsOf(setup.captureCharFrame())[markerRowOf(setup.captureCharFrame())];
+				const selectedBefore = rowsOf(setup.captureCharFrame())[
+					markerRowOf(setup.captureCharFrame())
+				];
 				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
 				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
 				let frame = await settle(setup);
@@ -479,7 +526,11 @@ describe("the in-app Key guide", () => {
 				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
 				// j scrolls the guide, not the list.
 				setup.mockInput.pressKey("j");
-				await awaitFrame(setup, (f) => actionBarRowOf(f).includes("2-20/28"), "the guide to scroll");
+				await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("2-20/28"),
+					"the guide to scroll",
+				);
 				// e opens no panel, r warns no refresh, q quits nothing,
 				// Enter starts no handoff. The guide stays the owner of the
 				// keys through all of it.
@@ -493,7 +544,7 @@ describe("the in-app Key guide", () => {
 				// The base is exactly where it was. While the guide is open the
 				// base is behind the overlay, so the checks run on close.
 				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
-				let frame = await settle(setup);
+				const frame = await settle(setup);
 				expect(frame).not.toContain("❯ Agent");
 				expect(markerRowOf(frame)).toBe(markerBefore);
 				expect(messageRowOf(frame).trim()).toBe("");

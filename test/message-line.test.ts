@@ -12,13 +12,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-
-import { DEFAULT_CONFIG } from "../src/config.ts";
-import { COLORS } from "../src/components/theme.ts";
 import { padToWidth, truncateToWidth } from "../src/components/text.ts";
+import { COLORS } from "../src/components/theme.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
+	HEIGHT,
 	markerRowOf,
 	messageRowOf,
 	press,
@@ -29,20 +29,19 @@ import {
 	settle,
 	sleep,
 	spanColorAt,
-	HEIGHT,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import { FakeRunner, agentListJson } from "./fake-runner.ts";
+import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
 	callsReached,
 	cleanupStateFixtures,
 	freshState,
-	issueTicket,
 	issuesConfig,
+	issueTicket,
 	RATE_LIMITED,
 	success,
 } from "./state-fixture.ts";
@@ -102,6 +101,10 @@ describe("the permanent Message line", () => {
 				expect(markerRowOf(frame)).toBe(markerRowOf(before));
 				expect(actionBarRowOf(frame)).toBe(actionBarRowOf(before));
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
+				// Changing auto-handoff is not an operation. It must not clear the
+				// durable warning that the rejected refresh produced.
+				setup.mockInput.pressKey("a");
+				expect(messageRowOf(await settle(setup)).trim()).toBe("Warning: no Ticket sources exist");
 			},
 			WIDTH,
 			HEIGHT,
@@ -113,9 +116,7 @@ describe("the permanent Message line", () => {
 		// Warning.
 		await withApp(
 			async (setup) => {
-				await press(setup, "r", "the warning", (f) =>
-					messageRowOf(f).startsWith("Warning: "),
-				);
+				await press(setup, "r", "the warning", (f) => messageRowOf(f).startsWith("Warning: "));
 				const frame = await settle(setup);
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
@@ -171,9 +172,7 @@ describe("the permanent Message line", () => {
 		// Error.
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				const frame = await settle(setup);
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Error: error: the daemon is down");
@@ -197,12 +196,7 @@ describe("the permanent Message line", () => {
 					messageRowOf(f).startsWith("Working: handing off"),
 				);
 				// The failure lands after the delay: the error covers the working.
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).startsWith("Error: "),
-					"the error",
-					8000,
-				);
+				await awaitFrame(setup, (f) => messageRowOf(f).startsWith("Error: "), "the error", 8000);
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
 					"Error: error: the daemon is down",
 				);
@@ -227,8 +221,7 @@ describe("the permanent Message line", () => {
 					source.settle(RATE_LIMITED);
 					await awaitFrame(
 						setup,
-						(f) =>
-							messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
 						"the stale warning",
 					);
 					// A new refresh covers the warning with its working.
@@ -239,8 +232,7 @@ describe("the permanent Message line", () => {
 					source.settle(RATE_LIMITED);
 					await awaitFrame(
 						setup,
-						(f) =>
-							messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
+						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
 						"the warning to return",
 					);
 				},
@@ -323,9 +315,7 @@ describe("the permanent Message line", () => {
 	test("truncates to the terminal width, and only then offers the Message view", async () => {
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				const frame = await settle(setup);
 				const expected = padToWidth(truncateToWidth(`Error: ${LONG_LINE}`, WIDTH), WIDTH);
 				expect(messageRowOf(frame)).toBe(expected);
@@ -358,9 +348,7 @@ describe("the permanent Message line", () => {
 					messageRowOf(f).startsWith("Working: handing off"),
 				);
 				// The truncated working earns the view.
-				await press(setup, "m", "the message view", (f) =>
-					f.includes("Message view - Working"),
-				);
+				await press(setup, "m", "the message view", (f) => f.includes("Message view - Working"));
 				// The failure lands while the view is open.
 				await sleep(4000);
 				const frame = await settle(setup);
@@ -368,12 +356,8 @@ describe("the permanent Message line", () => {
 				expect(frame).toContain("handing off");
 				expect(frame).not.toContain("the daemon is down");
 				// The base turned to the error behind the view.
-				await press(setup, "escape", "the view to close", (f) =>
-					!f.includes("Message view"),
-				);
-				expect(messageRowOf(await settle(setup)).trim()).toBe(
-					"Error: error: the daemon is down",
-				);
+				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
+				expect(messageRowOf(await settle(setup)).trim()).toBe("Error: error: the daemon is down");
 			},
 			WIDTH,
 			HEIGHT,
@@ -388,9 +372,7 @@ describe("the permanent Message line", () => {
 		runner.set("herdr", ["workspace", "list"], { code: 1, stderr: `${line}\n` });
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				pressF2(setup);
 				await awaitFrame(setup, (f) => f.includes("Message view - Error"), "the view");
 				let frame = await settle(setup);
@@ -401,9 +383,7 @@ describe("the permanent Message line", () => {
 				expect(frame).toContain("2-21/22");
 				await press(setup, "k", "the scroll up", (f) => f.includes("1-20/22"));
 				// Esc closes; the error is back on the base line.
-				await press(setup, "escape", "the view to close", (f) =>
-					!f.includes("Message view"),
-				);
+				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
 				expect(messageRowOf(await settle(setup))).toContain("the daemon refused");
 				// F2 closes too.
 				pressF2(setup);
@@ -422,9 +402,7 @@ describe("the permanent Message line", () => {
 		// F1.
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				await press(setup, "m", "the message view", (f) => f.includes("Message view - Error"));
 				pressF1(setup);
 				await awaitFrame(
@@ -446,9 +424,7 @@ describe("the permanent Message line", () => {
 		// Question mark.
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				await press(setup, "m", "the message view", (f) => f.includes("Message view - Error"));
 				await press(setup, "?", "the guide from the view", (f) =>
 					f.includes("Key guide - Ticket list"),
@@ -469,9 +445,7 @@ describe("the permanent Message line", () => {
 		// the box, the full one in the permanent row.
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				setup.resize(25, 10);
 				const rows = rowsOf(await settle(setup));
 				expect(rows[1]).toContain("Terminal too small");
@@ -527,9 +501,7 @@ describe("the permanent Message line", () => {
 		// Error round trip: the truncation and the hint return with the width.
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the error", (f) =>
-					messageRowOf(f).startsWith("Error: "),
-				);
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
 				setup.resize(30, 10);
 				expect(messageRowOf(await settle(setup))).toBe(
 					padToWidth(truncateToWidth(`Error: ${LONG_LINE}`, 30), 30),

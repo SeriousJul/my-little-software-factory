@@ -16,15 +16,16 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-
-import { COLORS } from "../src/components/theme.ts";
 import { widthOf } from "../src/components/text.ts";
+import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
+import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
 	detailFocused,
+	HEIGHT,
 	listFocused,
 	markerRowOf,
 	messageRowOf,
@@ -33,25 +34,29 @@ import {
 	pressArrow,
 	pressCtrlC,
 	pressF1,
+	pressF2,
 	rgb,
 	rowsOf,
 	settle,
 	spanColorAt,
-	HEIGHT,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import { FakeRunner, tabCreateJson, workspaceCreateJson, workspaceListJson } from "./fake-runner.ts";
+import {
+	FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import type { AppSetup } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
-	cleanupStateFixtures,
 	callsReached,
+	cleanupStateFixtures,
 	freshState,
-	issueTicket,
 	issuesConfig,
+	issueTicket,
 	RATE_LIMITED,
 	success,
 } from "./state-fixture.ts";
@@ -175,6 +180,71 @@ describe("the contextual Action bar", () => {
 		);
 	});
 
+	test("the override panel reports refused controls", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				pressF2(setup);
+				await settle(setup);
+				await press(setup, "escape", "the panel to close", (f) => !f.includes("┌─Override"));
+				expect(messageRowOf(await settle(setup))).toContain(
+					"Warning: the current Message fits on the Message line",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("the decision panel uses the shared Action bar and reports refused controls", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				// The awaiting Ticket's Enter action opens a decision. It is not a
+				// dimmed Hand off control with an unrelated effect.
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
+				const awaitingBar = actionBarRowOf(await settle(setup));
+				expect(awaitingBar).toContain("Enter Decide");
+				expect(awaitingBar).not.toContain("Hand off");
+
+				await press(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
+				const panelFrame = await settle(setup);
+				const panelBar = actionBarRowOf(panelFrame);
+				for (const hint of [
+					"↑↓ Select action",
+					"j/k Scroll message",
+					"Enter Confirm action",
+					"Esc Cancel",
+					"F1/? Help",
+				]) {
+					expect(panelBar).toContain(hint);
+				}
+				expect(panelFrame).not.toContain("up/down select");
+
+				// F2 is present in the catalogue but unavailable while the Message
+				// fits. The panel reports its catalogue reason like the base shell.
+				pressF2(setup);
+				await settle(setup);
+				await press(
+					setup,
+					"escape",
+					"the decision panel to close",
+					(f) => !f.includes("Decision:"),
+				);
+				expect(messageRowOf(await settle(setup))).toContain(
+					"Warning: the current Message fits on the Message line",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
 	test("narrow widths remove complete low-priority hints, and Help is the last kept", async () => {
 		const runner = new FakeRunner();
 		await withApp(
@@ -183,7 +253,10 @@ describe("the contextual Action bar", () => {
 				// survive it. The removal order is the catalogue priority:
 				// Refresh, Override, Hand off, Detail, Move, and Help last.
 				const ladder: Array<[number, string[]]> = [
-					[120, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"]],
+					[
+						120,
+						["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"],
+					],
 					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "? Help"]],
 					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "? Help"]],
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
@@ -229,9 +302,7 @@ describe("the contextual Action bar", () => {
 		const cjk: Ticket = { ...SAMPLE_TICKETS[0], title: "仓库重试策略 🔥 webhook" };
 		await withApp(
 			async (setup) => {
-				await press(setup, "return", "the failure reason to appear", (f) =>
-					f.includes("无法连接"),
-				);
+				await press(setup, "return", "the failure reason to appear", (f) => f.includes("无法连接"));
 				// The wide reason wraps the Message line, and the title the panes:
 				// every row still ends exactly at the terminal edge.
 				for (const row of rowsOf(setup.captureCharFrame())) expect(widthOf(row)).toBe(WIDTH);
@@ -292,11 +363,7 @@ describe("the contextual Action bar", () => {
 			await withApp(
 				async (setup) => {
 					source.settle(success([issueTicket()]));
-					await awaitFrame(
-						setup,
-						(f) => f.includes("Add a webhook retry policy"),
-						"the ticket",
-					);
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 					// a toggles auto-handoff on the mode line.
 					await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
 					await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
@@ -309,11 +376,7 @@ describe("the contextual Action bar", () => {
 						"the refresh progress",
 					);
 					source.settle(success([issueTicket()]));
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).trim() === "",
-						"the refresh to clear",
-					);
+					await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the refresh to clear");
 				},
 				WIDTH,
 				HEIGHT,
@@ -568,11 +631,7 @@ describe("the contextual Action bar", () => {
 			await withApp(
 				async (setup) => {
 					source.settle(success([issueTicket()]));
-					await awaitFrame(
-						setup,
-						(f) => f.includes("Add a webhook retry policy"),
-						"the ticket",
-					);
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
 					// A failed refresh makes the stored source stale: the ticket
 					// stays visible, but it is no longer actionable.
 					setup.mockInput.pressKey("r");
@@ -600,9 +659,7 @@ describe("the contextual Action bar", () => {
 		}
 	});
 
-	test(
-		"an in-flight handoff dims its controls and explains the refusal",
-		async () => {
+	test("an in-flight handoff dims its controls and explains the refusal", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
@@ -637,9 +694,7 @@ describe("the contextual Action bar", () => {
 			HEIGHT,
 			props,
 		);
-		},
-		15000,
-	);
+	}, 15000);
 
 	test("the bar does not change on a boundary move", async () => {
 		const runner = new FakeRunner();

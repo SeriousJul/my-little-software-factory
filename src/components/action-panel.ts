@@ -8,14 +8,14 @@
  * in-flight ticket whose pane herdr no longer lists it is the missing
  * panel: restart or abandon.
  *
- * The keys: up and down move the action rows, j/k scroll the message,
- * enter confirms the selected action, esc cancels. While it is open, the
- * keys of the app below are disabled.
+ * The shared Action bar names the action controls. While the panel is open,
+ * the keys of the app below are disabled.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
+import { ActionBar } from "./action-bar.ts";
 import { availabilityFor, type ControlContext, contextFor, controlForKey } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import { padToWidth, truncateToWidth, wrapToWidth } from "./text.ts";
@@ -37,6 +37,8 @@ interface ActionPanelProps {
 	onCancel: () => void;
 	onHelp?: () => void;
 	onMessage?: () => void;
+	/** Reports the catalogue reason for a refused control on the Message line. */
+	onUnavailable?: (reason: string) => void;
 	/** The base control facts, preserved when this panel owns input. */
 	context: ControlContext;
 	/** False while a Key guide or Message view is above this panel. */
@@ -54,7 +56,6 @@ const LABEL_WIDTH = 12;
 const CONTENT_WIDTH = 60;
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
-const HINT = "up/down select  j/k message  enter  esc";
 
 export function ActionPanel({
 	title,
@@ -64,6 +65,7 @@ export function ActionPanel({
 	onCancel,
 	onHelp,
 	onMessage,
+	onUnavailable,
 	context,
 	inputActive = true,
 	onEmergencyExit,
@@ -76,6 +78,7 @@ export function ActionPanel({
 		line === "" ? [""] : wrapToWidth(line, bodyCols),
 	);
 	const bodyRows = Math.min(wrapped.length, MAX_BODY_ROWS);
+	const actionContext = contextFor("action-panel", context);
 	const [bodyScroll, setBodyScroll] = useState(0);
 	const [selected, setSelected] = useState(0);
 	const selectedRef = useRef(0);
@@ -89,12 +92,13 @@ export function ActionPanel({
 
 	useKeyboard((key) => {
 		if (!inputActive || key.meta) return;
-		const control = controlForKey("action-panel", key);
-		if (
-			control === undefined ||
-			!availabilityFor(control, contextFor("action-panel", context)).available
-		)
+		const control = controlForKey("action-panel", key, actionContext);
+		if (control === undefined) return;
+		const availability = availabilityFor(control, actionContext);
+		if (!availability.available) {
+			onUnavailable?.(availability.reason ?? "control is unavailable");
 			return;
+		}
 		switch (control.id) {
 			case "emergency-exit":
 				onEmergencyExit();
@@ -162,8 +166,8 @@ export function ActionPanel({
 			...actions.map((row, index) =>
 				createElement("text", { key: row.key }, ...actionSpans(row, index === selected)),
 			),
-			createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, bodyCols)),
 		),
+		createElement(ActionBar, { mode: "action-panel", context: actionContext, overlay: true }),
 	);
 }
 

@@ -58,7 +58,7 @@ function useUtilityKeys(
 	useKeyboard((key) => {
 		if (key.meta) return;
 		const utilityContext = contextFor(mode, context);
-		const control = controlForKey(mode, key);
+		const control = controlForKey(mode, key, utilityContext);
 		if (control === undefined || !availabilityFor(control, utilityContext).available) return;
 		switch (control.id) {
 			case "emergency-exit":
@@ -135,7 +135,7 @@ interface KeyGuideProps {
 export function KeyGuide({ context, onClose, onMessage, onEmergencyExit }: KeyGuideProps) {
 	const { width, height } = useTerminalDimensions();
 	const mode = context.mode;
-	const entries = useMemo(() => guideControls(mode), [mode]);
+	const entries = useMemo(() => guideControls(mode, context), [mode, context]);
 	const geometry = utilityGeometry(width, height);
 	const { modalHeight, contentWidth } = geometry;
 	const fullTitle = `Key guide - ${modeTitle(mode)}`;

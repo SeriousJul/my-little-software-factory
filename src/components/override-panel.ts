@@ -64,6 +64,8 @@ interface OverridePanelProps {
 	inputActive?: boolean;
 	onHelp?: (mode: "override-list" | "override-text") => void;
 	onMessage?: (mode: "override-list" | "override-text") => void;
+	/** Reports the catalogue reason for a refused control on the Message line. */
+	onUnavailable?: (reason: string) => void;
 	onEmergencyExit: () => void;
 }
 
@@ -140,6 +142,7 @@ export function OverridePanel({
 	inputActive = true,
 	onHelp,
 	onMessage,
+	onUnavailable,
 	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
@@ -237,7 +240,8 @@ export function OverridePanel({
 		if (!inputActive || key.meta) return;
 		const target = cursorRow();
 		const interactionMode = target.kind === "text" ? "override-text" : "override-list";
-		const control = controlForKey(interactionMode, key);
+		const interactionContext = contextFor(interactionMode, context);
+		const control = controlForKey(interactionMode, key, interactionContext);
 		if (control?.id === "emergency-exit") {
 			onEmergencyExit();
 			return;
@@ -257,7 +261,11 @@ export function OverridePanel({
 			if (isPrintableKey(key.name)) typeText(key.name);
 			return;
 		}
-		if (!availabilityFor(control, contextFor(interactionMode, context)).available) return;
+		const availability = availabilityFor(control, interactionContext);
+		if (!availability.available) {
+			onUnavailable?.(availability.reason ?? "control is unavailable");
+			return;
+		}
 		switch (control.id) {
 			case "help":
 				onHelp?.(interactionMode);

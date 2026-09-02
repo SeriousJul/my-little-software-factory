@@ -82,8 +82,9 @@ text.
 ### Completion decision panel
 
 Enter on an `awaiting` ticket shows the last completion: the agent's last
-message. The panel offers the choices the state allows, and its Action bar
-shows the available interaction controls. The first row, "Close", ends the work cycle: the ticket returns to open
+message. The panel offers the choices the state allows. Its shared Action
+bar shows Select action, Scroll message, Confirm action, Cancel, and Help.
+The first row, "Close", ends the work cycle: the ticket returns to open
 with its cycle number incremented, and the handoff's environment is closed
 without touching the git branch, so pushed work and pull requests survive:
 a worktree handoff loses its worktree checkout and its herdr workspace,
@@ -106,9 +107,9 @@ on the awaiting ticket.
 
 ### Missing agent panel
 
-Enter on a ticket whose agent is missing shows the missing panel. Its Action
-bar shows the available interaction controls. "Restart" hands the ticket off
-again with the same choices, in the
+Enter on a ticket whose agent is missing shows the missing panel. Its shared
+Action bar shows Select action, Scroll message, Confirm action, Cancel, and
+Help. "Restart" hands the ticket off again with the same choices, in the
 workspace the handoff recorded, and the last completion's message as the
 previous message. "Abandon" ends the work cycle: the ticket returns to open
 with its cycle number incremented, the handoff's environment is closed,

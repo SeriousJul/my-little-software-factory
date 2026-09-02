@@ -241,11 +241,7 @@ export async function awaitFrame(
  * escape sequences. Any single character is typable, which the override
  * text rows accept.
  */
-export type PressKey =
-	| (string & {})
-	| "return"
-	| "escape"
-	| "backspace";
+export type PressKey = (string & {}) | "return" | "escape" | "backspace";
 
 /**
  * Press a key the shell handles, and wait for the effect it should produce.

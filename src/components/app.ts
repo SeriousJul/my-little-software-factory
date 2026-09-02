@@ -536,7 +536,6 @@ export function App({
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
-		clearOperationMessage();
 	};
 
 	// The decision panel's rows: Close first, selected by default, then a Goto,
@@ -775,27 +774,28 @@ export function App({
 		if (utility !== null || override !== null || panel !== null) return;
 		const mode = currentBaseMode();
 		const context = controlContextFor(mode);
-		const control = controlForKey(mode, key);
+		const control = controlForKey(mode, key, context);
 		if (control === undefined) return;
 
-		// Enter has a second documented meaning for a settled or observed
-		// ticket. It opens the existing decision or missing-agent utility; a
-		// normal open-ticket Enter remains the Hand off control.
+		// A settled Ticket uses the distinct Decide control. It names what Enter
+		// does instead of leaving a dimmed Hand off hint that still opens a panel.
+		if (control.id === "decide-completion" && context.selectedTicket !== undefined) {
+			const ticket = context.selectedTicket;
+			const taskType =
+				ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+			if (configRef.current.taskTypes[taskType]?.autoClose === true) {
+				setWorkingMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
+				observationRef.current?.tick();
+			} else setPanel({ kind: "decision", identity: ticket.identity });
+			return;
+		}
+
+		// A missing or blocked agent has its own recovery action. It can queue
+		// behind another Handoff, so this route stays available even while the
+		// normal Hand off control is unavailable.
 		if (control.id === "handoff" && context.selectedTicket !== undefined) {
 			const ticket = context.selectedTicket;
-			if (ticket.state === "awaiting" && !context.handoffActive) {
-				const taskType =
-					ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
-				if (configRef.current.taskTypes[taskType]?.autoClose === true) {
-					setWorkingMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
-					observationRef.current?.tick();
-				} else setPanel({ kind: "decision", identity: ticket.identity });
-				return;
-			}
 			if (ticket.state === "handed-off" || ticket.state === "running") {
-				// A missing or blocked agent has its own recovery action. It can
-				// queue behind another Handoff, so this route stays available even
-				// while the normal Hand off control is unavailable.
 				if (markerOf(ticket) === "blocked") runGoto(ticket);
 				else if (markerOf(ticket) === "missing")
 					setPanel({ kind: "missing", identity: ticket.identity });
@@ -1066,6 +1066,7 @@ export function App({
 				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
+				onUnavailable: setWarningMessage,
 				onEmergencyExit: () => renderer.destroy(),
 				onConfirm: (choice) => {
 					setOverride(null);
@@ -1086,6 +1087,7 @@ export function App({
 						inputActive: utility === null,
 						onHelp: () => openGuide("action-panel"),
 						onMessage: () => openMessage("action-panel"),
+						onUnavailable: setWarningMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})
 				: createElement(ActionPanel, {
@@ -1104,6 +1106,7 @@ export function App({
 						inputActive: utility === null,
 						onHelp: () => openGuide("action-panel"),
 						onMessage: () => openMessage("action-panel"),
+						onUnavailable: setWarningMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})),
 		utility?.kind === "guide" &&

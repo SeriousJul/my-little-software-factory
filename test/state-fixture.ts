@@ -13,8 +13,8 @@ import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
-import { FakeSource } from "./fake-source.ts";
 import { sleep } from "./app-harness.ts";
+import type { FakeSource } from "./fake-source.ts";
 
 const paths: string[] = [];
 

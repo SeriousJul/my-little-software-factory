@@ -96,6 +96,14 @@ const handoffEligibility = (context: ControlContext): ControlAvailability => {
 	return available();
 };
 
+/** A settled Ticket uses Enter to decide its completed work, not to hand it off. */
+const completionEligibility = (context: ControlContext): ControlAvailability => {
+	if (context.handoffActive) return unavailable("a Handoff is active");
+	return context.selectedTicket?.state === "awaiting"
+		? available()
+		: unavailable("the selected Ticket has no completion to decide");
+};
+
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" || context.mode === "override-text" || context.listCanMove
 		? available()
@@ -218,6 +226,17 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: handoffEligibility,
 	},
 	{
+		id: "decide-completion",
+		label: "Decide",
+		keys: ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: [...baseModes],
+		availability: completionEligibility,
+	},
+	{
 		id: "override",
 		label: "Override",
 		keys: ["e"],
@@ -311,8 +330,8 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keys: ["up", "down"],
 		keyLabel: "↑↓",
 		scope: "action-panel",
-		actionBar: false,
-		priority: 1,
+		actionBar: true,
+		priority: 80,
 		modes: ["action-panel"],
 		availability: available,
 	},
@@ -322,8 +341,8 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keys: ["j", "k"],
 		keyLabel: "j/k",
 		scope: "action-panel",
-		actionBar: false,
-		priority: 1,
+		actionBar: true,
+		priority: 75,
 		modes: ["action-panel"],
 		availability: available,
 	},
@@ -333,8 +352,8 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keys: ["return"],
 		keyLabel: "Enter",
 		scope: "action-panel",
-		actionBar: false,
-		priority: 1,
+		actionBar: true,
+		priority: 70,
 		modes: ["action-panel"],
 		availability: available,
 	},
@@ -344,8 +363,8 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keys: ["escape"],
 		keyLabel: "Esc",
 		scope: "action-panel",
-		actionBar: false,
-		priority: 1,
+		actionBar: true,
+		priority: 90,
 		modes: ["action-panel"],
 		availability: available,
 	},
@@ -413,7 +432,7 @@ export function actionBarControls(
 		(control) =>
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
-			isReachableInMode(mode, control) &&
+			isReachableInMode(mode, control, context) &&
 			(control.id !== "message" ? true : control.availability(context).available),
 	);
 }
@@ -425,11 +444,15 @@ export function actionBarControls(
  * hint whose keys do something else: in the Key guide, F1 and ? close the
  * guide, and in the Message view F2 closes the view.
  */
-function isReachableInMode(mode: InteractionMode, control: ControlDefinition): boolean {
+function isReachableInMode(
+	mode: InteractionMode,
+	control: ControlDefinition,
+	context: ControlContext,
+): boolean {
 	if (control.keys.length === 0) return true;
 	return control.keys.some((key) => {
 		const event = key === "ctrl+c" ? { name: "c", ctrl: true } : { name: key };
-		return controlForKey(mode, event)?.id === control.id;
+		return controlForKey(mode, event, context)?.id === control.id;
 	});
 }
 
@@ -437,6 +460,7 @@ function isReachableInMode(mode: InteractionMode, control: ControlDefinition): b
 export function controlForKey(
 	mode: InteractionMode,
 	key: { name: string; ctrl?: boolean; meta?: boolean },
+	context: ControlContext,
 ): ControlDefinition | undefined {
 	const name = key.ctrl && key.name === "c" ? "ctrl+c" : key.name;
 	// Utility close controls take precedence over global aliases that share
@@ -445,7 +469,7 @@ export function controlForKey(
 		return controlById("guide-close");
 	if (mode === "message-view" && (name === "escape" || name === "f2"))
 		return controlById("message-close");
-	return controlsForMode(mode).find(
+	const matches = controlsForMode(mode).filter(
 		(control) =>
 			control.keys.includes(name as ControlKey) &&
 			// `m` opens Message view only from base panes. F2 is the alias in
@@ -458,6 +482,10 @@ export function controlForKey(
 				(control.id === "help" && name === "?" && mode === "override-text")
 			),
 	);
+	// Enter has a state-specific completion action as well as Hand off. An
+	// available meaning wins. If none is available, the first definition owns
+	// the key and supplies its stable unavailable reason.
+	return matches.find((control) => availabilityFor(control, context).available) ?? matches[0];
 }
 
 export function availabilityFor(
@@ -470,22 +498,30 @@ export function availabilityFor(
 /** Current-mode controls, then global and control-plane controls, then other modes. */
 export function guideControls(
 	mode: InteractionMode,
+	context: ControlContext,
 ): Array<{ group: string; control: ControlDefinition }> {
 	// The current section shows the controls this mode actually dispatches.
 	// A shadowed alias (F1 and ? in the guide close it) belongs to the
 	// control that owns the key in this mode, not the one it hides.
 	const current = controlsForMode(mode).filter(
 		(control) =>
-			control.actionBar && control.id !== "emergency-exit" && isReachableInMode(mode, control),
+			control.actionBar &&
+			control.id !== "emergency-exit" &&
+			isReachableInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
 	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
-		CONTROL_DEFINITIONS.filter((control) => !seen.has(control.id) && predicate(control)).map(
-			(control) => {
-				seen.add(control.id);
-				return { group, control };
-			},
-		);
+		CONTROL_DEFINITIONS.filter(
+			(control) =>
+				!seen.has(control.id) &&
+				predicate(control) &&
+				// A state-specific control belongs in the current section when it
+				// dispatches. Do not repeat an inactive alternate in a later group.
+				(!control.modes.includes(mode) || isReachableInMode(mode, control, context)),
+		).map((control) => {
+			seen.add(control.id);
+			return { group, control };
+		});
 	return [
 		...current.map((control) => ({ group: "Current interaction mode", control })),
 		...append("Global controls", (control) => control.scope === "global"),
