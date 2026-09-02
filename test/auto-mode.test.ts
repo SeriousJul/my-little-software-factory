@@ -1259,7 +1259,7 @@ describe("the handoff queue", () => {
 					"the missing badge",
 				);
 				// Every key here waits for its effect and then for the chained
-				// updates (the observation tick, the status line) to go quiet:
+				// updates (the observation tick, the Message line) to go quiet:
 				// a key that lands while they are in flight stalls the test
 				// renderer.
 				const pressQuiet = async (

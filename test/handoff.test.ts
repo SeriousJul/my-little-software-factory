@@ -1309,7 +1309,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		);
 
 		// The reason is the command's stderr: the caller reports it on the
-		// status line with the ticket identity.
+		// Message line with the ticket identity.
 		expect(failure).toContain("dirty_worktree_requires_force");
 		// The workspace stays: the checkout is still there.
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);

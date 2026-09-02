@@ -794,8 +794,8 @@ export function App({
 		if (coordinator === undefined) return;
 		const idle = coordinator.idleSourceNames();
 		manualRefreshPending.current = new Set(idle);
-		coordinator.refreshAll();
-		setWorkingMessage(`refreshing ${idle.length} sources`, "refresh");
+		const started = coordinator.refreshAll();
+		setWorkingMessage(`refreshing ${started} sources`, "refresh");
 	};
 
 	useKeyboard((key) => {
@@ -827,7 +827,8 @@ export function App({
 				if (markerOf(ticket) === "blocked") runGoto(ticket);
 				else if (markerOf(ticket) === "missing")
 					setPanel({ kind: "missing", identity: ticket.identity });
-				else setWarningMessage("only an open Ticket can be handed off");
+				else
+					setWarningMessage(availabilityFor(control, context).reason ?? "control is unavailable");
 				return;
 			}
 		}
@@ -1181,8 +1182,8 @@ export function App({
 						onCancel: () => setPanel(null),
 						context: actionContext,
 						inputActive: utility === null,
-						onHelp: () => openGuide("decision-modal"),
-						onMessage: () => openMessage("decision-modal"),
+						onHelp: () => openGuide("missing-modal"),
+						onMessage: () => openMessage("missing-modal"),
 						onUnavailable: setWarningMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})),

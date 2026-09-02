@@ -22,6 +22,7 @@ import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import type { CommandResult, CommandRunner } from "../src/runner.ts";
 import {
+	actionBarRowOf,
 	awaitFrame,
 	detailPaneText,
 	frameText,
@@ -322,7 +323,7 @@ describe("the Enter handoff", () => {
 					"the clone failure reason",
 				);
 
-				// The reason sits on the status line, the ticket stays open,
+				// The reason sits on the Message line, the ticket stays open,
 				// and no command ran: the failure is before git clone.
 				expect(selectedRow(frame)).toContain("[open]");
 				expect(runner.calls).toHaveLength(0);
@@ -351,7 +352,7 @@ describe("the Enter handoff", () => {
 				expect(runner.commands()).toContain(
 					`git clone https://github.com/acme/billing.git ${join(home, "src", "billing")}`,
 				);
-				// A clean handoff clears the status line: the failure reason
+				// A clean handoff clears the Message line: the failure reason
 				// is gone.
 				expect(settled).not.toContain("cannot create");
 
@@ -1198,7 +1199,7 @@ describe("the override panel", () => {
 				await pressEnter(setup, "the in-flight status", "handing off");
 
 				// The panel is refused while the handoff is in flight, and the
-				// refusal shows on the status line.
+				// refusal shows on the Message line.
 				setup.mockInput.pressKey("e");
 				const refused = await awaitFrame(
 					setup,
@@ -1218,7 +1219,7 @@ describe("the override panel", () => {
 		);
 	});
 
-	test("a failed mapping write-back warns on the status line", async () => {
+	test("a failed mapping write-back warns on the Message line", async () => {
 		const runner = new FakeRunner();
 		// The convention path holds a different repository: a sibling clone.
 		const path = checkout();
@@ -2007,8 +2008,14 @@ describe("the override panel", () => {
 					expect(frameText(frame)).toContain(label);
 				}
 				expect(frameText(frame)).toContain("Environment live-worktre");
-				// ...and the hint row drops when it does not fit.
-				expect(frame).not.toContain("j/k move");
+				// ...and the shared Action bar packs to the hints that fit:
+				// Cancel and Help survive, the rest drops as whole units.
+				const bar = actionBarRowOf(frame);
+				expect(bar).toContain("Esc Cancel");
+				expect(bar).toContain("F1 Help");
+				expect(bar).not.toContain("Move");
+				expect(bar).not.toContain("Change");
+				expect(bar).not.toContain("Hand off");
 			},
 			30,
 			12,

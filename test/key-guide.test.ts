@@ -39,7 +39,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { FakeRunner } from "./fake-runner.ts";
+import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
@@ -167,6 +167,79 @@ describe("the in-app Key guide", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
+
+		// Missing modal: an in-flight Ticket whose pane herdr no longer
+		// lists. The guide names the missing mode and holds its own
+		// controls in the current section, not the decision modal's.
+		{
+			const state = freshState();
+			try {
+				const missingRunner = new FakeRunner();
+				missingRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+				const sourceDef = { name: "issues", kind: "github-issues" };
+				state.initializeSources([sourceDef]);
+				state.applyFetch(sourceDef, success([issueTicket()]));
+				const claim = state.claimHandoff(
+					"github:github.com:I_5",
+					{
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+					},
+					"open",
+				);
+				if (!claim.ok) throw new Error(claim.reason);
+				state.settleHandoff(claim.claim.attemptId, true, undefined, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+				});
+
+				await withApp(
+					async (setup) => {
+						source.settle(success([issueTicket()]));
+						await awaitFrame(
+							setup,
+							(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
+							"the missing badge",
+						);
+						await press(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
+						await press(setup, "?", "the guide", (f) => f.includes("Key guide - Missing modal"));
+						const rows = rowsOf(await settle(setup));
+						const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+						const between = (top: number, bottom: number) =>
+							rows.slice(top + 1, bottom).map(contentOf);
+						expect(
+							between(indexOf("Current interaction mode"), indexOf("Global controls")),
+						).toEqual([
+							"F1/? Help",
+							"F2 Message - the current Message fits on the Message line",
+							"↑↓ Select action",
+							"j/k Scroll message",
+							"Enter Confirm action",
+							"Esc Cancel",
+						]);
+						await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+						// The panel survived the guide.
+						expect(setup.captureCharFrame()).toContain("Missing:");
+					},
+					WIDTH,
+					HEIGHT,
+					{
+						config: issuesConfig,
+						state,
+						sources: [source],
+						runner: missingRunner,
+						pollIntervalMs: 60_000,
+					},
+				);
+			} finally {
+				state.close();
+			}
+		}
 	});
 
 	test("lists the sections in order, with every control once and all valid aliases", async () => {

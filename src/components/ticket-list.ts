@@ -97,7 +97,7 @@ export function TicketList({
 		onFocus();
 		// One border and one padding row precede the list's first row.
 		// Use the actual OpenTUI box origin so hit testing stays correct after
-		// a terminal resize or a status line changes pane height.
+		// a terminal resize or a Message line change alters the pane height.
 		const root = (event.currentTarget as BoxRenderable | null) ?? rootRef.current;
 		const row = event.y - (root?.y ?? event.y) - 2;
 		const index = start + row;

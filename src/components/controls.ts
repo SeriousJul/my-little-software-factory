@@ -608,10 +608,6 @@ export function guideKeyLabel(mode: InteractionMode, control: ControlDefinition)
 	return displayKeyLabel(mode, control, true);
 }
 
-export function isPrintableKey(name: string): boolean {
-	return [...name].length === 1 && !/\p{Cc}/u.test(name);
-}
-
 export function contextFor(
 	mode: InteractionMode,
 	values: Omit<ControlContext, "mode">,
