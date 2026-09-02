@@ -12,12 +12,13 @@
  * stays readable. The window slides so the selected ticket stays visible
  * when the tickets overflow the pane.
  */
-import type { BoxRenderable, MouseEvent } from "@opentui/core";
+import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { type ReactElement, useRef } from "react";
 
 import type { Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry, windowOf } from "./geometry.ts";
+import { paneMouse } from "./pane-mouse.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
@@ -84,25 +85,20 @@ export function TicketList({
 		),
 	);
 	const visible = windowOf(tickets, start, geometry.visibleRows);
-	const handleMouse = (event: MouseEvent) => {
-		if (!active) return;
-		if (event.type === "scroll") {
-			if (event.modifiers.shift) return;
-			if (event.scroll?.direction !== "up" && event.scroll?.direction !== "down") return;
-			onFocus();
-			onMove(event.scroll.direction === "up" ? -1 : 1);
-			return;
-		}
-		if (event.type !== "down" || event.button !== 0) return;
-		onFocus();
-		// One border and one padding row precede the list's first row.
-		// Use the actual OpenTUI box origin so hit testing stays correct after
-		// a terminal resize or a status line changes pane height.
-		const root = (event.currentTarget as BoxRenderable | null) ?? rootRef.current;
-		const row = event.y - (root?.y ?? event.y) - 2;
-		const index = start + row;
-		if (row >= 0 && row < visible.length && index >= 0 && index < tickets.length) onSelect(index);
-	};
+	const handleMouse = paneMouse({
+		active: () => active,
+		onFocus,
+		onWheel: (direction) => onMove(direction === "up" ? -1 : 1),
+		onPress: (event) => {
+			// One border and one padding row precede the list's first row.
+			// Use the actual OpenTUI box origin so hit testing stays correct
+			// after a terminal resize or a status line changes pane height.
+			const root = (event.currentTarget as BoxRenderable | null) ?? rootRef.current;
+			const row = event.y - (root?.y ?? event.y) - 2;
+			const index = start + row;
+			if (row >= 0 && row < visible.length && index >= 0 && index < tickets.length) onSelect(index);
+		},
+	});
 
 	return createElement(
 		"box",

@@ -218,8 +218,13 @@ It gates auto-handoff only; a manual handoff may pass it.
 _Avoid_: turn counter, dispatch budget
 
 **Task type**:
-A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and, optionally, the thinking level its handoffs start on. The operator picks another level in the override panel, or clears a Text field to leave the level to the agent.
+A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and the Task profile its handoffs start on.
 _Avoid_: prompt, template
+
+**Task profile**:
+The agent type, model, and thinking level a task type starts its handoffs with.
+It is a start value: the override panel prefills it, a workflow edge's agent pin can replace its agent for one handoff, and an operator override beats all of it.
+_Avoid_: run settings, task settings
 
 **Suggested task type**:
 The Task type proposed for a Ticket's next Handoff by the first matching Task rule, or by the configured default when no rule matches.
@@ -250,7 +255,7 @@ The control plane builds it from the agent's session record when herdr reports o
 _Avoid_: agent log, transcript, terminal capture
 
 **Completion trace**:
-The durable record of a settled agent turn: task type, agent, completion time, turn log, last message, and decision.
+The durable record of a settled agent turn: task type, agent, model, thinking level, completion time, turn log, last message, and decision.
 A cycle holds one trace per settled turn.
 _Avoid_: console dump, session file
 

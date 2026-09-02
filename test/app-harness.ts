@@ -7,6 +7,7 @@
  * assertion, because the wait ends only when the effect appears or the
  * deadline dumps the last frame.
  */
+import { MouseButtons, type MouseButton } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -313,6 +314,16 @@ export async function pressArrow(
 /** Send production-format mouse input through OpenTUI parsing and hit testing. */
 export async function mouseClick(setup: Setup, x: number, y: number): Promise<void> {
 	await setup.mockMouse.click(x, y);
+}
+
+/** Send one mouse press with a named button through real hit testing. */
+export async function mousePress(
+	setup: Setup,
+	x: number,
+	y: number,
+	button: MouseButton = MouseButtons.LEFT,
+): Promise<void> {
+	await setup.mockMouse.click(x, y, button);
 }
 
 /** Send one terminal wheel or trackpad event through real hit testing. */

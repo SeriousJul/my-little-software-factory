@@ -27,6 +27,7 @@
  * own cleanup.
  */
 import { CliRenderEvents } from "@opentui/core";
+import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
 import { describe, expect, test, vi } from "vitest";
 import { COLORS, STATE_COLORS } from "../src/components/theme.ts";
@@ -48,6 +49,7 @@ import {
 	markerRowOf,
 	mouseClick,
 	mouseDrag,
+	mousePress,
 	mouseWheel,
 	openPanel,
 	press,
@@ -246,6 +248,17 @@ describe("the control plane", () => {
 			await awaitFrame(setup, listFocused, "the list pane to take click focus");
 			expect(cellColors(setup, 0, 0).fg).toEqual(rgb(COLORS.borderFocused));
 			expect(cellColors(setup, detailX, 0).fg).toEqual(rgb(COLORS.border));
+		});
+	});
+
+	test("a right press activates no pane: both panes share one mouse policy", async () => {
+		await withApp(async (setup) => {
+			// The detail pane once took focus on any mouse event. The shared
+			// policy activates only on a left press or a vertical wheel, so a
+			// right press over the detail changes nothing.
+			const before = setup.captureCharFrame();
+			await mousePress(setup, Math.floor(WIDTH / 2) + 10, 5, MouseButtons.RIGHT);
+			expect(await settle(setup)).toBe(before);
 		});
 	});
 
