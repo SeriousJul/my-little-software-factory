@@ -795,8 +795,20 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
-	test("a route starts fresh: the workflow handoff never inherits the previous model or thinking", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+	test("a route starts fresh from its target task profile", async () => {
+		const targetProfileConfig: FactoryConfig = {
+			...config,
+			defaultModel: "factory-model",
+			taskTypes: {
+				...config.taskTypes,
+				implement: { ...config.taskTypes.implement, agent: "codex", model: "profile-model" },
+			},
+		};
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			config: targetProfileConfig,
+			agents: [],
+		});
 		const claim = state.claimHandoff(
 			"github:github.com:I_5",
 			// The previous handoff ran on a model and a thinking that differ
@@ -827,11 +839,12 @@ describe("the awaiting rule", () => {
 				ticketIdentity: "github:github.com:I_5",
 				previousMessage: "settled the turn",
 				choice: {
-					agentType: "pi",
+					agentType: "codex",
 					environment: "live-worktree",
 					taskType: "implement",
-					model: "",
-					// The target task type's own default, not the inherited one.
+					// The target profile, not the prior handoff, controls every
+					// profile setting of this fresh workflow handoff.
+					model: "profile-model",
 					thinking: "high",
 				},
 			}),
@@ -999,6 +1012,41 @@ describe("the open dispatch", () => {
 				}),
 			);
 		}
+		state.close();
+	});
+
+	test("auto mode resolves the open ticket's task profile", async () => {
+		const profileConfig: FactoryConfig = {
+			...config,
+			defaultModel: "global-model",
+			taskTypes: {
+				...config.taskTypes,
+				implement: {
+					...config.taskTypes.implement,
+					agent: "codex",
+					model: "profile-model",
+					thinking: "high",
+				},
+			},
+		};
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			config: profileConfig,
+			agents: [],
+		});
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "open",
+				choice: {
+					agentType: "codex",
+					environment: "live-worktree",
+					taskType: "implement",
+					model: "profile-model",
+					thinking: "high",
+				},
+			}),
+		]);
 		state.close();
 	});
 

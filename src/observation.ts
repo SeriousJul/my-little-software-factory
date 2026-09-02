@@ -48,7 +48,7 @@
  */
 
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
-import { baseChoice, type HandoffChoice } from "./handoff.ts";
+import { baseChoice, type HandoffChoice, resolveHandoffChoice } from "./handoff.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { commandFailureText } from "./repo.ts";
 import type { CommandRunner } from "./runner.ts";
@@ -894,19 +894,12 @@ export class ObservationCoordinator {
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
-		// A Workflow Handoff never inherits the previous Handoff's Model or
-		// Thinking: the model starts empty, and the thinking starts on the
-		// target task type's own default.
+		// A Workflow Handoff resolves a fresh target profile and never
+		// inherits Model or Thinking from the previous Handoff.
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
-			choice: baseChoice(
-				edge.agent ?? config.defaultAgent,
-				edge.environment ?? config.defaultEnvironment,
-				edge.to[0],
-				"",
-				config.taskTypes[edge.to[0]]?.thinking ?? "",
-			),
+			choice: resolveHandoffChoice(config, edge.to[0], edge),
 			previousMessage,
 		});
 		if (this.stopped) return true;
@@ -975,11 +968,7 @@ export class ObservationCoordinator {
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;
-			const choice = baseChoice(
-				config.defaultAgent,
-				config.defaultEnvironment,
-				ticket.suggestedTaskType,
-			);
+			const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
 			void this.dispatch({
 				origin: "open",
 				ticketIdentity: ticket.identity,

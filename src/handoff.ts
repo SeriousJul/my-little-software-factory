@@ -33,7 +33,7 @@
  * the worktree checkout but never the branch, so pushed work and pull
  * requests survive. See closeHandoffEnvironment.
  */
-import type { FactoryConfig } from "./config.ts";
+import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
 import {
 	agentNameFor,
@@ -63,7 +63,7 @@ export interface HandoffChoice {
 	/** Free-text model; empty means the setting is left to the agent. */
 	model: string;
 	/** Free-text thinking level; empty means the level is left to the agent.
-	 *  The app prefills the suggested task type's thinking default here, so
+	 *  The app prefills the suggested Task profile's resolved value here, so
 	 *  the panel shows the level the handoff will run on, and clearing the
 	 *  row in the panel hands the level back to the agent. */
 	thinking: string;
@@ -82,6 +82,27 @@ export function baseChoice(
 	thinking = "",
 ): HandoffChoice {
 	return { agentType, environment, taskType, model, thinking };
+}
+
+/**
+ * Resolve the start values for one handoff. Each setting has its own chain:
+ * an edge can replace only the Agent and Environment, while the selected
+ * Task profile supplies Model and Thinking independently. An operator
+ * override changes this returned choice later, before the handoff starts.
+ */
+export function resolveHandoffChoice(
+	config: FactoryConfig,
+	taskType: string,
+	edge?: WorkflowEdge,
+): HandoffChoice {
+	const profile = config.taskTypes[taskType];
+	return baseChoice(
+		edge?.agent ?? profile?.agent ?? config.defaultAgent,
+		edge?.environment ?? config.defaultEnvironment,
+		taskType,
+		profile?.model ?? config.defaultModel ?? "",
+		profile?.thinking ?? "",
+	);
 }
 
 /**

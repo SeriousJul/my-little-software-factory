@@ -36,7 +36,7 @@ const LONG_SCROLL_CONFIG: FactoryConfig = {
 };
 
 function agentRow(frame: string): number {
-	return rowsOf(frame).findIndex((row) => row.includes("Agent: unassigned"));
+	return rowsOf(frame).findIndex((row) => row.includes("Agent:"));
 }
 
 function lastDescriptionRow(frame: string): number {
@@ -582,12 +582,21 @@ describe("native Ticket detail viewport", () => {
 					setup.mockInput.pressKey("r");
 					await awaitFrame(setup, () => source.calls >= 2, "the second source refresh to start");
 					source.settle(sourceSuccess([sourceTicket(longDescription, "closed", "#11-refresh")]));
+					// The source field is below this small viewport at the preserved
+					// offset. Grow the terminal only to observe that refresh, then
+					// return to the original viewport to verify the native offset.
+					setup.resize(SCROLL_WIDTH, 18);
 					await awaitFrame(
 						setup,
 						(frame) => frame.includes("External key: #11-refresh"),
 						"the same Ticket refresh",
 					);
-					expect(agentRow(setup.captureCharFrame())).toBe(beforeRefresh);
+					setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT);
+					await awaitFrame(
+						setup,
+						(frame) => agentRow(frame) === beforeRefresh,
+						"the restored viewport to keep its Ticket offset",
+					);
 
 					await press(setup, "end", "the refreshed detail to reach its end", (frame) =>
 						frame.includes("their retries."),

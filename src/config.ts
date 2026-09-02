@@ -18,7 +18,11 @@ export interface AgentTypeConfig {
 
 export interface TaskTypeConfig {
 	template: string;
-	/** The thinking level of its handoffs when no explicit choice is made. Omitted leaves the setting to the agent. */
+	/** The Agent type its handoffs start on. Omitted uses default-agent. */
+	agent?: string;
+	/** The model its handoffs start on. Omitted uses default-model. */
+	model?: string;
+	/** The thinking level its handoffs start on. Omitted leaves the setting to the agent. */
 	thinking?: string;
 	/** Settle turns of this type without an operator decision. */
 	autoClose: boolean;
@@ -99,6 +103,8 @@ export interface ScrollConfig {
 
 export interface FactoryConfig {
 	defaultAgent: string;
+	/** The model handoffs use when their Task profile names none. */
+	defaultModel?: string;
 	defaultEnvironment: EnvironmentKind;
 	defaultTaskType: string;
 	agents: Record<string, AgentTypeConfig>;
@@ -258,6 +264,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 	}
 	const knownTop = new Set([
 		"default-agent",
+		"default-model",
 		"default-environment",
 		"default-task-type",
 		"agents",
@@ -287,6 +294,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 		throw new ConfigError("config: use either sources or ticket-sources, not both");
 	}
 	const defaultAgent = stringField(data, "default-agent");
+	const defaultModel = optionalStringField(data, "default-model", "config");
 	const defaultEnvironment = stringField(data, "default-environment");
 	const handoffKinds = HANDOFF_ENVIRONMENT_KINDS as readonly string[];
 	if (!handoffKinds.includes(defaultEnvironment)) {
@@ -294,7 +302,10 @@ export function validateConfig(data: unknown): FactoryConfig {
 	}
 	const defaultTaskType = stringField(data, "default-task-type");
 	const agents = validateAgents(data.agents);
-	const taskTypes = validateTaskTypes(data["task-types"]);
+	if (!(defaultAgent in agents)) {
+		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
+	}
+	const taskTypes = validateTaskTypes(data["task-types"], agents, defaultAgent);
 	const consultationTypes = validateConsultationTypes(data["consultation-types"], agents);
 	const attentionBell = booleanField(data, "attention-bell", true);
 	const interactionExitKey = validateInteractionExitKey(
@@ -311,9 +322,6 @@ export function validateConfig(data: unknown): FactoryConfig {
 	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
 	const maxHandoffsPerTicket = positiveIntField(data, "max-handoffs-per-ticket", 10);
 	const scroll = validateScroll(data.scroll);
-	if (!(defaultAgent in agents)) {
-		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
-	}
 	if (!(defaultTaskType in taskTypes)) {
 		throw new ConfigError(
 			`config: default-task-type "${defaultTaskType}" does not match any task type`,
@@ -321,6 +329,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 	}
 	return {
 		defaultAgent,
+		...(defaultModel === undefined ? {} : { defaultModel }),
 		defaultEnvironment: defaultEnvironment as EnvironmentKind,
 		defaultTaskType,
 		agents,
@@ -465,7 +474,11 @@ const PROMPT_PLACEHOLDERS = [
 	"labels",
 	"previous-message",
 ];
-function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
+function validateTaskTypes(
+	value: unknown,
+	agents: Record<string, AgentTypeConfig>,
+	defaultAgent: string,
+): Record<string, TaskTypeConfig> {
 	const taskTypes = tableField(value === undefined ? {} : value, "task-types");
 	if (Object.keys(taskTypes).length === 0)
 		throw new ConfigError("config: at least one task type is required under [task-types]");
@@ -475,7 +488,21 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 			throw new ConfigError(`config: task-types.${name}: must be a one-word name`);
 		if (!isRecord(raw)) throw new ConfigError(`config: task-types.${name}: must be a table`);
 		const template = stringField(raw, "template", `task-types.${name}`);
+		const agent = optionalStringField(raw, "agent", `task-types.${name}`);
+		if (agent !== undefined && agents[agent] === undefined)
+			throw new ConfigError(`config: task-types.${name}.agent: unknown agent "${agent}"`);
+		const model = optionalStringField(raw, "model", `task-types.${name}`);
 		const thinking = optionalStringField(raw, "thinking", `task-types.${name}`);
+		const profileAgent = agents[agent ?? defaultAgent];
+		if (
+			thinking !== undefined &&
+			profileAgent?.thinkingValues !== undefined &&
+			!profileAgent.thinkingValues.includes(thinking)
+		) {
+			throw new ConfigError(
+				`config: task-types.${name}.thinking: must be one of: ${profileAgent.thinkingValues.join(", ")}`,
+			);
+		}
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
@@ -485,10 +512,21 @@ function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
 		}
 		const autoClose = booleanField(raw, "auto-close", false);
 		for (const key of Object.keys(raw))
-			if (key !== "template" && key !== "thinking" && key !== "auto-close")
+			if (
+				key !== "template" &&
+				key !== "agent" &&
+				key !== "model" &&
+				key !== "thinking" &&
+				key !== "auto-close"
+			)
 				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
-		out[name] =
-			thinking === undefined ? { template, autoClose } : { template, thinking, autoClose };
+		out[name] = {
+			template,
+			autoClose,
+			...(agent === undefined ? {} : { agent }),
+			...(model === undefined ? {} : { model }),
+			...(thinking === undefined ? {} : { thinking }),
+		};
 	}
 	return out;
 }
@@ -879,6 +917,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function configToToml(config: FactoryConfig): string {
 	return stringify({
 		"default-agent": config.defaultAgent,
+		...(config.defaultModel === undefined ? {} : { "default-model": config.defaultModel }),
 		"default-environment": config.defaultEnvironment,
 		"default-task-type": config.defaultTaskType,
 		...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
@@ -900,6 +939,8 @@ export function configToToml(config: FactoryConfig): string {
 				name,
 				{
 					template: task.template,
+					...(task.agent === undefined ? {} : { agent: task.agent }),
+					...(task.model === undefined ? {} : { model: task.model }),
 					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
 					...(task.autoClose ? { "auto-close": true } : {}),
 				},

@@ -42,6 +42,10 @@ export interface Completion {
 	taskType: string;
 	agentType: string;
 	agentName: string;
+	/** The model the handoff passed to its Agent, empty when left to the Agent. */
+	model: string;
+	/** The thinking level the handoff passed to its Agent, empty when left to the Agent. */
+	thinking: string;
 	completedAt: string;
 	/** The last captured message of the settled agent turn. */
 	message: string;

@@ -74,7 +74,7 @@ export const detailPaneText = (frame: string, width = WIDTH): string => {
 		.replace(/\s+/g, " ");
 };
 export const agentRowOf = (frame: string) =>
-	rowsOf(frame).findIndex((row) => row.includes("Agent: unassigned"));
+	rowsOf(frame).findIndex((row) => row.includes("Agent:"));
 /** Assert every ticket state badge is on screen, read off the frame. */
 export function expectStateBadges(frame: string): void {
 	for (const badge of STATE_BADGES) {

@@ -98,6 +98,8 @@ export const SAMPLE_TICKETS: readonly Ticket[] = [
 			taskType: "review",
 			agentName: "factory-review-I_4",
 			agentType: "claude",
+			model: "",
+			thinking: "",
 			message:
 				"The auth shim and its flag are removed.\nAll 142 tests pass. I left the migration note in docs/auth.md.",
 			turnLog: [

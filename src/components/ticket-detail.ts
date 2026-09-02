@@ -5,6 +5,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 
 
 import type { ScrollConfig } from "../config.ts";
 import type { Ticket } from "../domain/ticket.ts";
+import type { HandoffChoice } from "../handoff.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
@@ -19,6 +20,7 @@ export function detailLines(
 	ticket: Ticket | undefined,
 	usableCols: number,
 	handoffLimit: number,
+	suggestedChoice?: HandoffChoice,
 ): DetailLine[] {
 	if (ticket === undefined) return [{ text: "no ticket selected", fg: COLORS.dim }];
 	const lines: DetailLine[] = [];
@@ -28,7 +30,16 @@ export function detailLines(
 	pushWrapped(ticket.title, COLORS.textBright);
 	pushWrapped(ticket.repository, COLORS.text);
 	lines.push({ text: stateBadge(ticket.state), fg: STATE_COLORS[ticket.state] });
-	pushWrapped(`Agent: ${ticket.handoff?.agentType ?? "unassigned"}`, COLORS.text);
+	// An open Ticket shows its next Handoff's resolved profile. A started
+	// Handoff instead shows the choices stored with that Handoff.
+	const choice = ticket.handoff ?? suggestedChoice;
+	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, COLORS.text);
+	if (choice !== undefined) {
+		const model = choice.model === "" ? "left to agent" : choice.model;
+		const thinking = choice.thinking === "" ? "left to agent" : choice.thinking;
+		pushWrapped(`Model: ${model}`, choice.model === "" ? COLORS.dim : COLORS.text);
+		pushWrapped(`Thinking: ${thinking}`, choice.thinking === "" ? COLORS.dim : COLORS.text);
+	}
 	if (ticket.handoff !== null) {
 		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
 	}
@@ -160,6 +171,8 @@ interface TicketDetailProps {
 	active: boolean;
 	reservedRows: number;
 	handoffLimit: number;
+	/** The resolved choice for an open Ticket's suggested Task type. */
+	suggestedChoice?: HandoffChoice;
 	scroll: ScrollConfig;
 	onFocus: () => void;
 }
@@ -170,7 +183,7 @@ interface TicketDetailProps {
  * replaces a React-owned visible-row window.
  */
 export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(function TicketDetail(
-	{ ticket, focused, active, reservedRows, handoffLimit, scroll, onFocus },
+	{ ticket, focused, active, reservedRows, handoffLimit, suggestedChoice, scroll, onFocus },
 	ref,
 ) {
 	const geometry = usePaneGeometry("detail", reservedRows);
@@ -179,7 +192,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// it so the control never consumes the last readable cell.
 	const reserveGutter = geometry.usableCols >= 2;
 	const textCols = Math.max(1, geometry.usableCols - (reserveGutter ? 1 : 0));
-	const lines = detailLines(ticket, textCols, handoffLimit);
+	const lines = detailLines(ticket, textCols, handoffLimit, suggestedChoice);
 	const hasOverflow = lines.length > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);

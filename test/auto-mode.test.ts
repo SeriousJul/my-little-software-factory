@@ -560,13 +560,18 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
-	test("a manual workflow route starts with fresh model and target thinking", async () => {
+	test("a manual workflow route starts with its target task profile", async () => {
 		const app = seededApp(
 			"awaiting",
 			{
 				taskTypes: {
 					...DEFAULT_CONFIG.taskTypes,
-					review: { ...DEFAULT_CONFIG.taskTypes.review, thinking: "low" },
+					review: {
+						...DEFAULT_CONFIG.taskTypes.review,
+						agent: "codex",
+						model: "review-model",
+						thinking: "high",
+					},
 				},
 			},
 			success,
@@ -600,8 +605,36 @@ describe("the decision modal", () => {
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));
-				expect(start).toContain("--kind pi --pane pane-9 -- --thinking low");
-				expect(start).not.toContain("--model");
+				expect(start).toContain(
+					"--kind codex --pane pane-9 -- --model review-model -c model_reasoning_effort=high",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a workflow row shows the arriving task profile's effective agent", async () => {
+		const app = seededApp("awaiting", {
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: { ...DEFAULT_CONFIG.taskTypes.review, agent: "codex" },
+			},
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(
+					setup,
+					(frame) => ticketRow(frame).includes("[awaiting]"),
+					"the awaiting ticket",
+				);
+				await pressReturn(setup, "the decision modal", (frame) => frame.includes("Decision:"));
+				expect(frameText(await settle(setup))).toContain("Handoff: review agent codex");
 			},
 			WIDTH,
 			HEIGHT,
@@ -613,7 +646,7 @@ describe("the decision modal", () => {
 	test("each outgoing edge offers its own row, and the pinning shows on the row", async () => {
 		const app = seededApp("awaiting", {
 			workflows: [
-				{ from: "implement", to: ["review"] },
+				{ from: "implement", to: ["review"], environment: "worktree" },
 				{ from: "implement", to: ["review"], agent: "codex" },
 			],
 		});
@@ -636,13 +669,14 @@ describe("the decision modal", () => {
 				// stays reachable. The second row's detail shows the pinning
 				// that tells the rows apart.
 				expect(panel.split("Handoff: review").length - 1).toBe(2);
+				expect(panel).toContain("agent pi, environment worktree");
 				expect(panel).toContain("agent codex");
 
 				// The pinned row is the last one: down three (close, goto,
 				// first edge), confirm.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				await pressArrow(setup, "down", "the first edge", (f) =>
-					frameText(f).includes("❯ Handoff: review review"),
+					frameText(f).includes("❯ Handoff: review agent pi"),
 				);
 				await pressArrow(setup, "down", "the pinned edge", (f) =>
 					frameText(f).includes("❯ Handoff: review agent codex"),
@@ -1074,7 +1108,7 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto: on 0/2") && f.includes("Agent: pi"),
+					(f) => f.includes("auto: on 0/2") && ticketRow(f).includes("missing"),
 					"the dispatch",
 				);
 				// The new agent's pane is not in the faked list: the row wears

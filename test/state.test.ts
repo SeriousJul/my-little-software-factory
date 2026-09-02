@@ -259,6 +259,34 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("records the model and thinking level of the settled handoff", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(
+			ticket.identity,
+			{ ...choice, model: "gpt-5.6", thinking: "high" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+
+		expect(state.lastCompletion(ticket.identity)).toEqual(
+			expect.objectContaining({ model: "gpt-5.6", thinking: "high" }),
+		);
+		state.close();
+	});
+
 	test("a second settle of the same turn refreshes the trace instead of adding one", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
@@ -574,6 +602,8 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 		`);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
 

@@ -663,6 +663,192 @@ describe("the override panel", () => {
 		);
 	});
 
+	test("a task profile prefills the detail and panel, then starts its agent with all settings", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			defaultModel: "global-model",
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "task-model",
+					thinking: "high",
+				},
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const before = detailPaneText(setup.captureCharFrame());
+				expect(before).toContain("Agent: codex");
+				expect(before).toContain("Model: task-model");
+				expect(before).toContain("Thinking: high");
+
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Agent codex");
+				expect(frameText(opened)).toContain("Model task-model");
+				expect(frameText(opened)).toContain("Thinking high");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"codex",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"task-model",
+					"-c",
+					"model_reasoning_effort=high",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a model rejected by the profiled agent fails and leaves the ticket open", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.set(
+			"herdr",
+			[
+				"agent",
+				"start",
+				firstAgent,
+				"--kind",
+				"codex",
+				"--pane",
+				"pane-1",
+				"--",
+				"--model",
+				"rejected-model",
+			],
+			{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
+		);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "rejected-model",
+				},
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressEnter();
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes("codex rejected model rejected-model"),
+					"the model rejection",
+				);
+				expect(selectedRow(frame)).toContain("[open]");
+				expect(detailPaneText(frame)).toContain("Agent: codex");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("clearing a profiled Model row leaves it to the agent", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "task-model" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "task-model") setup.mockInput.pressKey("DELETE");
+				const cleared = await awaitFrame(
+					setup,
+					(frame) => frameText(frame).includes("Model (empty)"),
+					"the cleared Model value",
+				);
+				expect(frameText(cleared)).toContain("Model (empty)");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).not.toContain("--model");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("clearing a profiled Thinking list row leaves it to the agent", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, thinking: "low" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
+				await pressArrow(setup, "down", "the Thinking row", (f) => f.includes("❯ Thinking"));
+				setup.mockInput.pressKey("DELETE");
+				const cleared = await awaitFrame(
+					setup,
+					(frame) => frameText(frame).includes("Thinking (unset)"),
+					"the cleared Thinking value",
+				);
+				expect(frameText(cleared)).toContain("Thinking (unset)");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).not.toContain("--thinking");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a task type thinking default shows in the panel and rides on the start", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);

@@ -25,7 +25,7 @@ import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -405,6 +405,12 @@ const MIGRATION_V4_TO_V5 = `
 	);
 `;
 
+/** The v6 trace records the Model and Thinking level that the turn ran on. */
+const MIGRATION_V5_TO_V6 = `
+	ALTER TABLE completion_traces ADD COLUMN model TEXT NOT NULL DEFAULT '';
+	ALTER TABLE completion_traces ADD COLUMN thinking TEXT NOT NULL DEFAULT '';
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -510,6 +516,7 @@ export class FactoryState {
 			if (version < 3) this.db.exec(MIGRATION_V2_TO_V3);
 			if (version < 4) this.db.exec(MIGRATION_V3_TO_V4);
 			if (version < 5) this.db.exec(MIGRATION_V4_TO_V5);
+			if (version < 6) this.db.exec(MIGRATION_V5_TO_V6);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -808,13 +815,15 @@ export class FactoryState {
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db
 			.prepare(
-				"SELECT task_type, agent_type, agent_name, completed_at, last_message, turn_log_json, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				"SELECT task_type, agent_type, agent_name, model, thinking, completed_at, last_message, turn_log_json, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
 					task_type: string;
 					agent_type: string;
 					agent_name: string;
+					model: string;
+					thinking: string;
 					completed_at: string;
 					last_message: string;
 					turn_log_json: string | null;
@@ -826,6 +835,8 @@ export class FactoryState {
 			taskType: row.task_type,
 			agentType: row.agent_type,
 			agentName: row.agent_name,
+			model: row.model,
+			thinking: row.thinking,
 			completedAt: row.completed_at,
 			message: row.last_message,
 			turnLog: turnLogOf(row.turn_log_json, row.last_message),
@@ -1057,12 +1068,13 @@ export class FactoryState {
 				)
 				.run(input.ticketIdentity);
 			const handoff = this.db
-				.prepare("SELECT work_cycle FROM handoffs WHERE attempt_id = ?")
-				.get(input.handoffId) as { work_cycle: number } | undefined;
+				.prepare("SELECT work_cycle, choice_json FROM handoffs WHERE attempt_id = ?")
+				.get(input.handoffId) as { work_cycle: number; choice_json: string } | undefined;
 			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(input.handoffId) as { id: string } | undefined;
 			if (handoff === undefined) return;
+			const choice = jsonChoice(handoff.choice_json);
 			if (pending !== undefined) {
 				this.db
 					.prepare(
@@ -1072,7 +1084,7 @@ export class FactoryState {
 			} else {
 				this.db
 					.prepare(
-						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message, turn_log_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, completed_at, last_message, turn_log_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						randomUUID(),
@@ -1082,6 +1094,8 @@ export class FactoryState {
 						input.taskType,
 						input.agentType,
 						this.agentNameForTicket(input.ticketIdentity),
+						choice?.model ?? "",
+						choice?.thinking ?? "",
 						input.completedAt,
 						input.message,
 						JSON.stringify(input.turnLog),
@@ -1144,7 +1158,7 @@ export class FactoryState {
 			const choice = jsonChoice(handoff.choice_json);
 			this.db
 				.prepare(
-					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					randomUUID(),
@@ -1154,6 +1168,8 @@ export class FactoryState {
 					choice?.taskType ?? "",
 					choice?.agentType ?? "",
 					this.agentNameForTicket(input.ticketIdentity),
+					choice?.model ?? "",
+					choice?.thinking ?? "",
 					input.decidedAt,
 					"",
 					input.decision,

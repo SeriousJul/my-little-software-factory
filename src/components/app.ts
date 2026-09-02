@@ -50,6 +50,7 @@ import {
 	handOffStoredWorkspace,
 	handOffTicket,
 	renderConsultationPrompt,
+	resolveHandoffChoice,
 } from "../handoff.ts";
 import { consultationAgentName } from "../naming.ts";
 import {
@@ -424,23 +425,16 @@ export function App({
 			},
 		]),
 	);
-	// The task types' thinking defaults, keyed by task type name, for the
-	// override panel's thinking row.
-	const thinkingDefaults: Record<string, string | undefined> = Object.fromEntries(
-		Object.entries(config.taskTypes).map(([name, type]) => [name, type.thinking]),
+	// Each Task type gets its resolved start choice. The override panel uses
+	// these when an untouched setting follows a Task type change.
+	const taskProfileChoices: Record<string, HandoffChoice> = Object.fromEntries(
+		Object.keys(config.taskTypes).map((taskType) => [
+			taskType,
+			resolveHandoffChoice(config, taskType),
+		]),
 	);
 	const choiceFor = (ticket: Ticket): HandoffChoice =>
-		baseChoice(
-			config.defaultAgent,
-			config.defaultEnvironment,
-			ticket.suggestedTaskType,
-			"",
-			// The task type's thinking default: the panel shows it as the
-			// starting value of the thinking row, and Enter applies it. The
-			// operator picks another level in the panel, or clears a free-text
-			// row to leave the level to the agent.
-			config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
-		);
+		resolveHandoffChoice(config, ticket.suggestedTaskType);
 
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
@@ -800,12 +794,12 @@ export function App({
 		};
 	};
 
-	/** The handoff row's detail: the edge's pinning, or the target. */
+	/** The workflow row states the Agent that will receive its handoff. */
 	const routeDetail = (edge: WorkflowEdge, target: string): string => {
-		const pin: string[] = [];
-		if (edge.agent !== undefined) pin.push(`agent ${edge.agent}`);
-		if (edge.environment !== undefined) pin.push(`environment ${edge.environment}`);
-		return pin.length > 0 ? pin.join(", ") : target;
+		const choice = resolveHandoffChoice(configRef.current, target, edge);
+		const detail = [`agent ${choice.agentType}`];
+		if (edge.environment !== undefined) detail.push(`environment ${edge.environment}`);
+		return detail.join(", ");
 	};
 
 	// Goto: the operator focuses the agent's pane in herdr and the handoff
@@ -888,17 +882,9 @@ export function App({
 		// turn's decision is not recorded here: it lands on the settled
 		// turn's trace in the handoff's settle path, and only when the
 		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working. A Workflow Handoff never
-		// inherits the previous Handoff's Model or Thinking: the model
-		// starts empty, and the thinking starts on the target task type's
-		// own default.
-		const choice = baseChoice(
-			edge.agent ?? configRef.current.defaultAgent,
-			edge.environment ?? configRef.current.defaultEnvironment,
-			target,
-			"",
-			configRef.current.taskTypes[target]?.thinking ?? "",
-		);
+		// pending, so Close and Goto keep working. A Workflow Handoff resolves
+		// a fresh target profile and never inherits the previous choice.
+		const choice = resolveHandoffChoice(configRef.current, target, edge);
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
 			setStatus({ kind: "warning", text: claim.reason });
@@ -2010,6 +1996,8 @@ export function App({
 						active: override === null && panel === null,
 						reservedRows,
 						handoffLimit: config.maxHandoffsPerTicket,
+						suggestedChoice:
+							selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
 						scroll: config.scroll,
 						onFocus: () => focusPane("detail"),
 					})
@@ -2107,7 +2095,7 @@ export function App({
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
-				thinkingDefaults,
+				taskProfileChoices,
 				initial: override,
 				onConfirm: (choice) => {
 					setOverride(null);

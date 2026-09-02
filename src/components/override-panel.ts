@@ -23,12 +23,13 @@
  * it too, except on a selected text row, where they type. left/right move
  * the caret on a text row and cycle a list row's value; h and l type on a
  * text row and cycle a list row's value. The input owns everything else:
- * typing, backspace, delete, Home, End, undo, redo, and paste. The thinking
- * row starts on the suggested task type's thinking default, and switching
- * the task type re-derives it while the operator has not set the row, so
- * the panel always shows what the handoff will run on. Clearing a free-text
- * row leaves the setting to the agent. Enter confirms and hands off. Esc
- * cancels. While it is open, the keys of the app below are disabled.
+ * typing, backspace, delete, Home, End, undo, redo, and paste. The Agent,
+ * Model, and Thinking rows start on the selected Task type's resolved
+ * profile. Switching task type re-derives each untouched setting, so the
+ * panel always shows what the handoff will run on. Clearing a text row, or
+ * pressing Backspace or Delete on a Thinking list row, leaves that setting
+ * to the Agent. Enter confirms and hands off. Esc cancels. While it is open,
+ * the keys of the app below are disabled.
  *
  * The panel sizes itself to the terminal: the value column shrinks first,
  * then the label column, then the marker. The hint row drops when the
@@ -56,9 +57,9 @@ interface OverridePanelProps {
 	environments: readonly EnvironmentKind[];
 	taskTypes: readonly string[];
 	agentSettings: Readonly<Record<string, AgentSettings>>;
-	/** The task types' thinking defaults, keyed by task type name. */
-	thinkingDefaults: Readonly<Record<string, string | undefined>>;
-	/** The values the panel starts on: the config defaults. */
+	/** The resolved Task profile start values, keyed by Task type name. */
+	taskProfileChoices: Readonly<Record<string, HandoffChoice>>;
+	/** The values the panel starts on: the resolved config choice. */
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
@@ -150,7 +151,7 @@ export function OverridePanel({
 	environments,
 	taskTypes,
 	agentSettings,
-	thinkingDefaults,
+	taskProfileChoices,
 	initial,
 	onConfirm,
 	onCancel,
@@ -170,10 +171,10 @@ export function OverridePanel({
 	// previous key left behind.
 	const choiceRef = useRef<HandoffChoice>(choice);
 	const selectedRef = useRef(0);
-	// True once the operator sets the thinking row themselves. While it
-	// stays false, switching the task type re-derives the row from the new
-	// task type's default, so the panel keeps showing what the handoff will
-	// run on.
+	// An untouched Task-profile setting follows a Task type change. Once an
+	// operator changes or clears it, their one-shot override stays in force.
+	const agentTouchedRef = useRef(false);
+	const modelTouchedRef = useRef(false);
 	const thinkingTouchedRef = useRef(false);
 
 	const allRowsFor = (value: HandoffChoice): PanelRow[] =>
@@ -210,27 +211,31 @@ export function OverridePanel({
 
 	const cycle = (delta: number) => {
 		const target = cursorRow();
-		if (target.kind === "list" && target.key === "thinking") {
-			thinkingTouchedRef.current = true;
-		}
+		if (target.kind === "list" && target.key === "agentType") agentTouchedRef.current = true;
+		if (target.kind === "list" && target.key === "thinking") thinkingTouchedRef.current = true;
 		commit((current) => {
 			const options = target.options;
-			if (options === undefined) {
-				return current;
-			}
+			if (options === undefined) return current;
 			const index = options.indexOf(current[target.key]);
-			// An unset value (the config default "") is not an option. The
-			// first right lands on the first option, the first left on the last.
+			// An unset value is not an option. The first right lands on the
+			// first option, the first left on the last.
 			const next =
 				index === -1
 					? options[(delta > 0 ? 0 : options.length - 1) % options.length]
 					: options[(index + delta + options.length) % options.length];
-			// Switching the task type re-derives an untouched thinking row,
-			// so the row keeps showing what the handoff will run on.
-			if (target.key === "taskType" && !thinkingTouchedRef.current) {
-				return { ...current, taskType: next, thinking: thinkingDefaults[next] ?? "" };
-			}
-			return { ...current, [target.key]: next };
+			if (target.key !== "taskType") return { ...current, [target.key]: next };
+			const profile = taskProfileChoices[next];
+			return {
+				...current,
+				taskType: next,
+				...(agentTouchedRef.current || profile === undefined
+					? {}
+					: { agentType: profile.agentType }),
+				...(modelTouchedRef.current || profile === undefined ? {} : { model: profile.model }),
+				...(thinkingTouchedRef.current || profile === undefined
+					? {}
+					: { thinking: profile.thinking }),
+			};
 		});
 	};
 
@@ -241,9 +246,8 @@ export function OverridePanel({
 		if (choiceRef.current[key] === value) {
 			return;
 		}
-		if (key === "thinking") {
-			thinkingTouchedRef.current = true;
-		}
+		if (key === "model") modelTouchedRef.current = true;
+		if (key === "thinking") thinkingTouchedRef.current = true;
 		commit((current) => ({ ...current, [key]: value }));
 	};
 
@@ -281,8 +285,13 @@ export function OverridePanel({
 		}
 		if (target.kind === "list") {
 			// A list row: left/right and h/l cycle its value, j/k move the
-			// selection. No input is focused here, so anything else has
-			// nowhere to go and is dropped.
+			// selection. Backspace and Delete clear a Thinking list row.
+			if (target.key === "thinking" && (key.name === "backspace" || key.name === "delete")) {
+				thinkingTouchedRef.current = true;
+				commit((current) => ({ ...current, thinking: "" }));
+				key.preventDefault();
+				return;
+			}
 			if (key.name === "left" || key.name === "h") {
 				cycle(-1);
 				key.preventDefault();
