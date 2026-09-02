@@ -509,10 +509,13 @@ function validateTaskTypes(
 		const model = optionalStringField(raw, "model", `task-types.${name}`);
 		const thinking = optionalStringField(raw, "thinking", `task-types.${name}`);
 		const contextWindow = tokenCountField(raw, "context-window", `task-types.${name}`);
+		// The profile agent always resolves: `agent` is checked against the
+		// agents table just above, and `default-agent` before this function
+		// runs, so one of the two names a table that exists.
 		const profileAgent = agents[agent ?? defaultAgent];
 		if (
 			thinking !== undefined &&
-			profileAgent?.thinkingValues !== undefined &&
+			profileAgent.thinkingValues !== undefined &&
 			!profileAgent.thinkingValues.includes(thinking)
 		) {
 			throw new ConfigError(
@@ -522,7 +525,7 @@ function validateTaskTypes(
 		// The profile's own agent is the one its context window must reach. An
 		// edge can reroute the handoff onto another agent later; that pair is
 		// caught at handoff time, the same way a model is.
-		if (contextWindow !== undefined && profileAgent?.contextWindow === undefined)
+		if (contextWindow !== undefined && profileAgent.contextWindow === undefined)
 			throw new ConfigError(
 				`config: task-types.${name}.context-window: agent "${agent ?? defaultAgent}" does not define a context-window setting`,
 			);

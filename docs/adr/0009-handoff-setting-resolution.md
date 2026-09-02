@@ -66,6 +66,13 @@ The considered alternatives:
 
 ## Consequences
 
+- A route's decision belongs to the Handoff that starts it, not to the claim
+  that reserved it. The app runs a claimed Handoff and reports its start to
+  whoever asked for the route: the operator's decision records `handed-off`,
+  the loop's records `auto-handed-off`, and a Handoff that never started
+  records neither. The settled turn therefore keeps its pending trace when a
+  route fails, and the operator's Close and Goto, the loop's reopen, and the
+  next attempt all still work on it.
 - A model, a thinking level, or a count written for the profile's own agent
   can fail a handoff an edge routed to another agent, and a restart repeats
   the settings of the handoff it restarts, so it can fail the same way. That
@@ -90,23 +97,36 @@ The considered alternatives:
   setting its agent cannot take fails the handoff with a readable reason
   instead of being absorbed.
 - Because a resolved value the resolved agent cannot take fails the handoff,
-  the override panel keeps such a value on screen in the warning color. A row
-  hidden behind an agent that maps no model would strand the value where no
-  key can clear it, and a row that hid a value it still sends would tell the
-  operator something false about the handoff they are confirming.
+  the override panel keeps such a value on screen in the warning color, and its
+  guide names the way out: the key that clears the row, or the arrows that
+  cycle a list row onto a value its agent offers. A row hidden behind an agent
+  that maps no model would strand the value where no key can clear it, and a
+  row that hid a value it still sends would tell the operator something false
+  about the handoff they are confirming.
 - Known limitation: a Consultation dispatch does not carry the handoff-time
   rule. A setting its resolved agent cannot map is still dropped there, so a
   Consultation can start without the model, level, or count its type names.
   Its own ticket retires that drop.
-- Known limitation: in auto-handoff mode a profile setting its agent cannot
-  take fails every pass, and each pass records a handoff attempt. Nothing
-  holds the ticket back, because the loud rule is the point: the reason is the
+- Known limitation: in auto-handoff mode a profile setting its Agent cannot
+  take fails every pass, and each pass records a failed handoff attempt: the
+  loop retries the route on every poll, with no backoff and no limit, because
+  the per-ticket handoff limit counts started handoffs only. What the retry
+  does not do is decide the turn: the route's decision waits for its Handoff
+  to start, so the settled turn keeps its pending trace, Close, Goto, and a
+  reopened turn all keep working on the awaiting ticket, and the record never
+  claims a route the factory did not start. Holding a ticket whose failure
+  reason repeats is a rule this record does not set: the loud failure is the
   report, and the fix is the config or the panel.
 - Known limitation: a Model is free text, and the panel cannot yet list what
   an agent offers (ADR 0010), so a value that carries a space reaches the agent
   as two arguments. The Context row was made digits-only to keep one count in
   one argument; the shape rule for a model belongs beside it once the Model
   list lands.
+- Known limitation: a Restart repeats the handoff it interrupted, and the
+  missing modal offers no way to edit that choice. A stored Model, thinking
+  level, or count its Agent no longer takes therefore leaves that cycle by
+  Abandon alone, which ends the work cycle. The loud failure is the report;
+  editing a restart the way a route is edited is a later ticket's rule.
 - Known limitation: the panel still takes a Thinking level as free text when
   its agent maps a template but lists no values, because the shared level set
   is ADR 0010's to ship. A row can therefore hold a level its agent will

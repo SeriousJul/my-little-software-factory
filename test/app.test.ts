@@ -528,8 +528,10 @@ describe("the control plane", () => {
 					expect(row[1]).toBe(" ");
 					expect(row[35]).toBe(" ");
 					expect(row[38]).toBe(" ");
-					// The added profile rows overflow at this size, so the native
-					// scrollbar may occupy the right padding column.
+					// The detail pane holds more lines than this 25-row frame shows, so it
+					// scrolls and its native scrollbar paints the right padding column on
+					// every body row: a thumb cell where the thumb has reached, and the
+					// track's blank where it has not. The probe allows either.
 					expect([" ", "▀", "▄", "█"]).toContain(row[73]);
 				}
 				// The detail pane carries its content at this size.

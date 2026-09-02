@@ -35,7 +35,9 @@
  *    Exactly one outgoing edge routes (while the parallel limit has room),
  *    any other edge count closes, and a route at the handoff limit
  *    degrades to close. A full parallel limit leaves a route awaiting
- *    until a slot frees, and the rest wait for the operator.
+ *    until a slot frees, and the rest wait for the operator. A route's
+ *    decision follows its Handoff's start, which the app reports, so a
+ *    route that cannot start leaves the turn for the next cycle.
  * 5. With auto-handoff on, each eligible open ticket - actionable, under
  *    both limits - is handed off with the configured defaults. The
  *    parallel count is the in-flight tickets whose agent was alive in the
@@ -289,12 +291,21 @@ export interface HandoffIntent {
 	ticketIdentity: string;
 	choice: HandoffChoice;
 	previousMessage: string;
+	/**
+	 * The result of the handoff's own start, reported once when the claimed
+	 * handoff settles: `{ ok: true }` when the agent is live, `{ ok: false,
+	 * reason }` when it never started. The claim says the app took the work;
+	 * only the start says the agent runs, so a route's decision waits for
+	 * this. An intent that records nothing on a start omits it.
+	 */
+	onStarted?: (started: DispatchResult) => void;
 }
 
 /**
  * Whether the app accepted the intent: it claimed the handoff and will run
  * it, now or behind the handoff already in flight. A refused claim leaves
- * the ticket where it was and says why.
+ * the ticket where it was and says why, and no start follows. Whether the
+ * agent actually started arrives later, on the intent's `onStarted`.
  */
 export type DispatchResult = { ok: true } | { ok: false; reason: string };
 
@@ -303,7 +314,11 @@ interface ObservationOptions {
 	herdr: AgentReader;
 	/** The config, read at each cycle: a runtime write-back stays visible. */
 	config: () => FactoryConfig;
-	/** The app's handoff path: claim, external work, settle, refresh. */
+	/**
+	 * The app's handoff path: claim, external work, settle, refresh. The
+	 * returned result answers the claim; the intent's `onStarted` answers the
+	 * start the claim only reserves.
+	 */
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	/**
 	 * The Close cleanup of an auto-ended cycle: the worktree workspace is
@@ -859,10 +874,11 @@ export class ObservationCoordinator {
 	 * cycle changed factory state.
 	 *
 	 * The rule applies to every ticket with auto-handoff on, and to the
-	 * auto-close types without it. The decision is recorded only after a
-	 * successful claim: a route that cannot start leaves the pending trace
-	 * for the next cycle instead of holding a decision the handoff never
-	 * made.
+	 * auto-close types without it. A close decision lands as the cycle ends.
+	 * A route's decision waits for the routed Handoff to start: the claim
+	 * only says the app took the work, so a route that cannot start leaves
+	 * the pending trace for the next cycle instead of holding a decision the
+	 * handoff never made.
 	 */
 	private async handleAwaiting(
 		ticket: HandoffTicket,
@@ -895,14 +911,19 @@ export class ObservationCoordinator {
 		// `route` is only returned with exactly one edge and one target.
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
+		const target = edge.to[0];
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
 		// A Workflow Handoff resolves a fresh target profile and never
 		// inherits Model or Thinking from the previous Handoff.
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
-			choice: resolveHandoffChoice(config, edge.to[0], edge),
+			choice: resolveHandoffChoice(config, target, edge),
 			previousMessage,
+			// The decision belongs to the started Handoff, not to the claim, so
+			// it lands on the app's report and nowhere earlier: a route whose
+			// settings its Agent cannot take must leave the turn undecided.
+			onStarted: (started) => this.recordAutoRoute(ticket, target, decidedAt, started),
 		});
 		if (this.stopped) return true;
 		if (!result.ok) {
@@ -912,14 +933,47 @@ export class ObservationCoordinator {
 			);
 			return false;
 		}
+		// The claim holds the work, so the cycle changed the record: the route's
+		// decision follows the handoff's start.
+		return true;
+	}
+
+	/**
+	 * Decide the settled turn an automatic route came from, once that route
+	 * started.
+	 *
+	 * The app reports the start from its own settle path, so this runs while
+	 * the routed agent is live. A handoff that never started says why on the
+	 * status line and leaves the turn's trace pending: Close and Goto keep
+	 * working on the awaiting ticket, the next cycle can still route it, and
+	 * the record never claims a route the factory did not start.
+	 */
+	private recordAutoRoute(
+		ticket: HandoffTicket,
+		target: string,
+		decidedAt: string,
+		started: DispatchResult,
+	): void {
+		// The handoff can outlive the loop: a stopped loop decides nothing and
+		// reports nothing.
+		if (this.stopped) return;
+		if (!started.ok) {
+			this.onStatus(
+				"warning",
+				`automatic route for ticket ${ticket.ticketIdentity} failed: ${started.reason}`,
+			);
+			return;
+		}
 		const applied = this.state.applyCompletionDecision({
 			ticketIdentity: ticket.ticketIdentity,
 			handoffId: ticket.handoffAttemptId,
 			decision: "auto-handed-off",
 			decidedAt,
 		});
-		if (applied) this.onStatus("info", `ticket ${ticket.ticketIdentity} routed to ${edge.to[0]}`);
-		return applied;
+		if (applied) this.onStatus("info", `ticket ${ticket.ticketIdentity} routed to ${target}`);
+		// The trace the detail pane shows changed after the app's own refresh,
+		// so the decision the loop just recorded reaches the frame too.
+		this.onChanged();
 	}
 
 	/**
@@ -971,18 +1025,23 @@ export class ObservationCoordinator {
 			if (limit > 0 && count >= limit) break;
 			count += 1;
 			const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
+			// One report covers both ways an automatic handoff fails: the claim
+			// refusing it, and the external work never starting the agent. The
+			// second arrives later, from the app's settle path.
+			const reportFailure = (result: DispatchResult): void => {
+				if (this.stopped || result.ok) return;
+				this.onStatus(
+					"warning",
+					`auto-handoff for ticket ${ticket.identity} failed: ${result.reason}`,
+				);
+			};
 			void this.dispatch({
 				origin: "open",
 				ticketIdentity: ticket.identity,
 				choice,
 				previousMessage: "",
-			}).then((result) => {
-				if (!result.ok)
-					this.onStatus(
-						"warning",
-						`auto-handoff for ticket ${ticket.identity} failed: ${result.reason}`,
-					);
-			});
+				onStarted: reportFailure,
+			}).then(reportFailure);
 			this.onStatus("info", `auto-handoff: handing off ticket ${ticket.identity}`);
 			any = true;
 		}

@@ -135,12 +135,14 @@ the way a config file that sets one fails at startup.
 A setting the chosen agent type does not map has no row, so an agent without
 a `model` template shows no Model row. One exception keeps a value in reach:
 when a row carries a value the selected agent cannot take, its row stays on
-screen in the warning color, and the guide under it says so. A value cannot
-be taken when the agent maps no setting for it, when it lists the thinking
-levels it offers and the row holds another one, or when the Context row holds
-no count. The panel never shows something other than what the handoff sends,
-and the row is the only place the operator can clear the value, so it stays:
-the handoff fails on it until they clear it or choose an agent that takes it.
+screen in the warning color, and the guide under it says so and names the way
+out: `Backspace` clears a row, and the arrows cycle a list row onto a level
+its agent offers. A value cannot be taken when the agent maps no setting for
+it, when it lists the thinking levels it offers and the row holds another one,
+or when the Context row holds digits no count makes, `0` among them. The
+panel never shows something other than what the handoff sends, and the row is
+the only place the operator can clear the value, so it stays: the handoff
+fails on it until they clear it or choose an agent that takes it.
 
 The container environment is a future kind and is not offered by the panel.
 
@@ -202,13 +204,17 @@ defines one. Choosing a row hands the ticket off again with that target task
 type. `e` on such a row opens the override panel on the choice the edge
 resolved, so the operator can change the agent, environment, Model, or
 Thinking for this one handoff before it starts; the override outranks the
-edge pin, the Task profile, and the defaults. `Esc` there closes the panel
+edge pin, the Task profile, and the defaults. Moving that panel to another
+Task type re-derives the rows the operator never touched from the type's own
+profile, so the route's Agent pin goes with the target the edge named.
+`Esc` there closes the panel
 back to the decision: nothing is claimed and nothing runs. Enter on an
 awaiting ticket keeps the direct route, so a route the operator wants
 unchanged stays one press. The row's "handed-off" decision lands on the turn's
 trace only when the routed handoff settles with the agent started; a
 failed route leaves the trace pending, so Close and Goto keep working
-on the awaiting ticket.
+on the awaiting ticket. The automatic route decides the same way: its
+`auto-handed-off` record waits for the same start.
 
 ### Missing modal keys
 
@@ -424,7 +430,12 @@ limits:
   outgoing workflow edge with exactly one target, and the parallel limit
   has room. At the per-ticket handoff limit the route degrades to close.
   Zero or multiple edges close the cycle. A full parallel limit leaves the
-  ticket awaiting until a slot frees.
+  ticket awaiting until a slot frees. The route's `auto-handed-off` decision
+  lands the same way the operator's does: only once the routed handoff has
+  started the agent. A route that cannot start - because its Agent takes one
+  of the settings its target Task profile names - records nothing on the
+  turn, says why on the status line, and leaves the turn undecided, so the
+  next poll can route it once the config or the panel fixes the pair.
 - With auto-handoff off, the same decisions apply to auto-close task
   types only. A task type that is not auto-close leaves its settled turn
   awaiting for the operator.
@@ -554,6 +565,7 @@ context-window = "-c model_context_window={value}"
 kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
+context-window = "--autocompact {value}"
 
 # --- Task types -----------------------------------------------------------
 
@@ -860,7 +872,8 @@ The shipped defaults define the three agent types `pi`, `codex`, and
 and two task rules for `ready-for-review` and `needs-work` pull requests.
 They have no sources and no Consultation types. `config/development.toml`
 in this repository configures the live development path through `--config`;
-it carries the `grill-with-docs` Consultation type.
+it carries the `grill-with-docs` Consultation type and the Task profile the
+review handoffs start on.
 
 ## Shape
 

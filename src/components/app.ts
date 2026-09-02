@@ -114,13 +114,16 @@ type Panel =
  *
  * The panel edits one Handoff's settings, wherever its choice came from, so
  * it carries what the confirm step needs to claim the same handoff: which
- * Ticket, and which Origin of its dispatch. The prompt's previous message is
- * not carried here: the confirm reads it from the Ticket it claims, so an
- * edit can never send a message another Ticket left behind.
+ * Ticket, and which Origin of its dispatch. Only the two routes the panel
+ * opens from appear here: an open Ticket's own handoff, and a workflow route
+ * the operator edited from its decision row. A Restart or an automatic route
+ * never opens the panel, so neither Origin reaches it. The prompt's previous
+ * message is not carried here: the confirm reads it from the Ticket it
+ * claims, so an edit can never send a message another Ticket left behind.
  */
 interface PendingOverride {
 	ticketIdentity: string;
-	origin: HandoffOrigin;
+	origin: "open" | "workflow";
 	choice: HandoffChoice;
 }
 
@@ -270,6 +273,7 @@ export function App({
 			origin: HandoffOrigin;
 			claim: HandoffClaim;
 			previousMessage: string;
+			onStarted?: (started: DispatchResult) => void;
 		}[]
 	>([]);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
@@ -520,6 +524,12 @@ export function App({
 	 * claim has already moved the ticket, so only the external work waits.
 	 * When the in-flight handoff settles, the queue drains: the seat is
 	 * free, so the next claimed handoff starts.
+	 *
+	 * `onStarted` hears the one fact the claim cannot state: whether the
+	 * agent started. It fires once, and last, after the attempt settled and
+	 * after the handoff's own status line, so whoever asked for the route can
+	 * decide the turn it came from, and say so on the line. A caller that
+	 * records nothing on a start leaves it out.
 	 */
 	const runClaimedHandoff = (
 		ticket: Ticket,
@@ -527,10 +537,22 @@ export function App({
 		origin: HandoffOrigin,
 		claim: HandoffClaim,
 		previousMessage: string,
+		onStarted?: (started: DispatchResult) => void,
 	) => {
 		if (state === undefined) return;
+		// One report per handoff: the settle path and the error path both end
+		// in it, and a route's decision answers for exactly one start.
+		let reported = false;
+		const reportStarted = (started: DispatchResult): void => {
+			if (reported) return;
+			reported = true;
+			onStarted?.(started);
+		};
 		if (inFlightRef.current) {
-			queueRef.current = [...queueRef.current, { ticket, choice, origin, claim, previousMessage }];
+			queueRef.current = [
+				...queueRef.current,
+				{ ticket, choice, origin, claim, previousMessage, onStarted },
+			];
 			return;
 		}
 		inFlightRef.current = true;
@@ -570,24 +592,14 @@ export function App({
 								workspaceId: outcome.agent.workspaceId,
 							},
 				);
-				// The manual route's decision lands here, on the settled turn's
-				// trace, and only when the routed handoff actually started:
-				// the agent's pane is live, so the ticket reads as handed-off
-				// where the agent is. A failed route leaves the trace pending,
-				// so Close and Goto keep working on the awaiting ticket.
-				if (outcome.status !== "failed" && origin === "workflow") {
-					const previousHandoffId = ticket.handoff?.attemptId ?? "";
-					if (previousHandoffId !== "") {
-						state.applyCompletionDecision({
-							ticketIdentity: ticket.identity,
-							handoffId: previousHandoffId,
-							decision: "handed-off",
-							decidedAt: new Date().toISOString(),
-						});
-					}
-				}
+				// The route's own decision is not taken here: whoever asked for
+				// the route hears the start below and records what its start
+				// means for the turn it came from.
 				replaceTickets();
 				await finishOutcome(outcome);
+				reportStarted(
+					outcome.status === "failed" ? { ok: false, reason: outcome.reason } : { ok: true },
+				);
 				inFlightRef.current = false;
 				drainQueue();
 			})
@@ -595,6 +607,7 @@ export function App({
 				state.settleHandoff(claim.attemptId, false, errorMessage(error));
 				replaceTickets();
 				setStatus({ kind: "error", text: `handoff failed: ${errorMessage(error)}` });
+				reportStarted({ ok: false, reason: errorMessage(error) });
 				inFlightRef.current = false;
 				drainQueue();
 			});
@@ -632,6 +645,9 @@ export function App({
 							? `queued handoff for "${next.ticket.title}" was not run: the ticket no longer exists`
 							: `queued handoff for "${next.ticket.title}" was not run: the ticket is now ${currentState}`,
 				});
+				// The route the claim was for never started: the caller decides
+				// nothing on the turn it came from.
+				next.onStarted?.({ ok: false, reason: "the queued handoff was not run" });
 				continue;
 			}
 			// The fresh projection when the ticket is visible, else the claim's
@@ -640,7 +656,14 @@ export function App({
 				state
 					.visibleTickets(configRef.current.taskRules, configRef.current.defaultTaskType)
 					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
-			runClaimedHandoff(snapshot, next.choice, next.origin, next.claim, next.previousMessage);
+			runClaimedHandoff(
+				snapshot,
+				next.choice,
+				next.origin,
+				next.claim,
+				next.previousMessage,
+				next.onStarted,
+			);
 		}
 	};
 
@@ -662,7 +685,14 @@ export function App({
 			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
 		const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
-		runClaimedHandoff(ticket, intent.choice, intent.origin, claim.claim, intent.previousMessage);
+		runClaimedHandoff(
+			ticket,
+			intent.choice,
+			intent.origin,
+			claim.claim,
+			intent.previousMessage,
+			intent.onStarted,
+		);
 		return Promise.resolve({ ok: true });
 	};
 	const runIntentRef = useRef(runIntent);
@@ -821,10 +851,12 @@ export function App({
 	// Goto, then one handoff row per outgoing workflow edge the completed
 	// task type has, in config order: every edge stays reachable, and an
 	// edge naming several targets offers one row per target. Two edges to
-	// the same target offer two rows, and the row's detail shows the edge's
-	// pinning so the operator can tell them apart. The modal's context row
-	// names the repository, the task type, the agent, and the completion
-	// time, so the operator knows what the log is about.
+	// the same target offer two rows, and a row's detail names the Agent its
+	// route resolves to, beside the edge's Environment pin. Two rows that
+	// read the same start the same handoff: an edge that pins the Agent the
+	// target's own Task profile names has nothing beside it to show. The
+	// modal's context row names the repository, the task type, the agent,
+	// and the completion time, so the operator knows what the log is about.
 	const decisionFor = (
 		ticket: Ticket,
 	): {
@@ -964,21 +996,34 @@ export function App({
 	const runRouteHandoff = (ticket: Ticket, choice: HandoffChoice) => {
 		if (state === undefined) return;
 		// Claim first: a refused claim leaves the ticket where it was. The
-		// turn's decision is not recorded here: it lands on the settled
-		// turn's trace in the handoff's settle path, and only when the
-		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working.
+		// turn's decision is not recorded here: it lands when the routed
+		// handoff starts, on the settled turn's trace, and a route that never
+		// started leaves the trace pending, so Close and Goto keep working.
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
 			setStatus({ kind: "warning", text: claim.reason });
 			return;
 		}
+		const previousHandoffId = ticket.handoff?.attemptId ?? "";
 		runClaimedHandoff(
 			ticket,
 			choice,
 			"workflow",
 			claim.claim,
 			ticket.lastCompletion?.message ?? "",
+			// The routed handoff started: the operator's decision on the turn
+			// it routes from is `handed-off`, and the ticket reads as
+			// handed-off where the agent is.
+			(started) => {
+				if (!started.ok || previousHandoffId === "") return;
+				state.applyCompletionDecision({
+					ticketIdentity: ticket.identity,
+					handoffId: previousHandoffId,
+					decision: "handed-off",
+					decidedAt: new Date().toISOString(),
+				});
+				replaceTickets();
+			},
 		);
 	};
 

@@ -4,6 +4,7 @@ import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import {
 	type AgentReader,
+	type DispatchResult,
 	type HandoffIntent,
 	type HerdrAgent,
 	HerdrAgentReader,
@@ -111,6 +112,12 @@ function agent(
 interface Rig {
 	state: FactoryState;
 	intents: HandoffIntent[];
+	/**
+	 * Report the start of the oldest dispatch still waiting for one, the way
+	 * the app's handoff settle path does. The loop holds a route's decision
+	 * back to this report.
+	 */
+	reportStart: (started?: DispatchResult) => void;
 	statuses: Array<{ kind: "info" | "warning" | "error"; text: string }>;
 	cleanups: Array<{ paneId: string | null; tabId: string | null; workspaceId: string | null }>;
 	coordinator: ObservationCoordinator;
@@ -137,6 +144,10 @@ function rig(options: {
 	state.initializeSources([source]);
 	state.applyFetch(source, success([fetched()]));
 	const intents: HandoffIntent[] = [];
+	// The start reports the dispatches still owe the loop. The app answers a
+	// claim first and reports the start when its external work settles, so
+	// the rig holds each report back until a test fires it.
+	const pending: Array<(started: DispatchResult) => void> = [];
 	const statuses: Rig["statuses"] = [];
 	const cleanups: Rig["cleanups"] = [];
 	const coordinator = new ObservationCoordinator({
@@ -148,6 +159,7 @@ function rig(options: {
 		config: () => ({ ...config, ...options.config }),
 		dispatch: async (intent) => {
 			intents.push(intent);
+			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
 			return { ok: true };
 		},
 		cleanup: async (handoff) => {
@@ -169,6 +181,11 @@ function rig(options: {
 	return {
 		state,
 		intents,
+		reportStart: (started: DispatchResult = { ok: true }) => {
+			const next = pending.shift();
+			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
+			next(started);
+		},
 		statuses,
 		cleanups,
 		coordinator,
@@ -780,7 +797,10 @@ describe("the awaiting rule", () => {
 	});
 
 	test("a fully determined route hands off while auto mode is on", async () => {
-		const { state, intents, statuses, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, statuses, reportStart, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+		});
 		settleFor(state, "github:github.com:I_5", "route");
 		await coordinator.tick();
 		expect(intents).toEqual([
@@ -792,8 +812,12 @@ describe("the awaiting rule", () => {
 			}),
 		]);
 		const [ticket] = state.visibleTickets([], "implement");
-		// The decision is recorded on the trace before the handoff settles.
-		expect(ticket.lastCompletion?.decision).toBe("auto-handed-off");
+		// The claim alone decides nothing: the route's decision waits for the
+		// handoff's start, which the app reports when its agent is live.
+		expect(ticket.lastCompletion?.decision).toBe(null);
+		reportStart();
+		const [decided] = state.visibleTickets([], "implement");
+		expect(decided.lastCompletion?.decision).toBe("auto-handed-off");
 		expect(
 			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to implement"),
 		).toBe(true);
@@ -952,7 +976,10 @@ describe("the awaiting rule", () => {
 	});
 
 	test("auto mode routes a non-auto-close type along its one and only edge", async () => {
-		const { state, intents, statuses, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, statuses, reportStart, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+		});
 		settleFor(state, "github:github.com:I_5", "implement");
 		expect(coordinator.decideAwaiting("implement", 0, 0, true)).toBe("route");
 		await coordinator.tick();
@@ -964,11 +991,58 @@ describe("the awaiting rule", () => {
 				choice: expect.objectContaining({ taskType: "polish" }),
 			}),
 		]);
+		reportStart();
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket.lastCompletion?.decision).toBe("auto-handed-off");
 		expect(
 			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to polish"),
 		).toBe(true);
+		state.close();
+	});
+
+	test("a route whose handoff never starts leaves the turn undecided", async () => {
+		const { state, intents, statuses, reportStart, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+		});
+		settleFor(state, "github:github.com:I_5", "route");
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		// The app's reason here is the loud setting rule: the resolved Agent
+		// takes no Model, so nothing started at all.
+		reportStart({
+			ok: false,
+			reason: 'agent type "cursor" defines no model setting, so model "m" cannot reach it',
+		});
+		const [ticket] = state.visibleTickets([], "implement");
+		// The record holds no decision the handoff never made: the turn is
+		// still undecided, so the operator's rows still work on it and a later
+		// cycle can route it again.
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ decision: null }),
+			}),
+		);
+		expect(
+			statuses.some(
+				(entry) =>
+					entry.kind === "warning" &&
+					entry.text ===
+						"automatic route for ticket github:github.com:I_5 failed: " +
+							'agent type "cursor" defines no model setting, so model "m" cannot reach it',
+			),
+		).toBe(true);
+		expect(
+			statuses.filter((entry) => entry.text.startsWith("automatic route for ticket")),
+		).toHaveLength(1);
+		expect(
+			statuses.some((entry) => entry.text.startsWith("ticket github:github.com:I_5 routed to")),
+		).toBe(false);
+		// The next cycle sees the same undecided turn and routes it again: the
+		// failed start consumed nothing.
+		await coordinator.tick();
+		expect(intents).toHaveLength(2);
 		state.close();
 	});
 

@@ -30,17 +30,23 @@
  * A list row (agent, environment, task type, and the thinking value when the
  * agent has a value list) cycles its value with left/right and h/l.
  *
+ * The guide row under the rows follows the selection, and a row carrying an
+ * untakable value names the way out in its guide: the key that clears the
+ * row, or the arrows that cycle a list row onto a value its Agent offers.
+ *
  * The keys: up/down and tab/shift+tab move the row selection. j and k move
  * it too, except on a selected text row, where they type. left/right move
  * the caret on a text row and cycle a list row's value; h and l type on a
  * text row and cycle a list row's value. The input owns everything else:
  * typing, backspace, delete, Home, End, undo, redo, and paste. The Agent,
- * Model, Thinking, and Context rows start on the selected Task type's resolved
- * profile. Switching task type re-derives each untouched setting, so the
- * panel always shows what the handoff will run on. Clearing a text row, or
- * pressing Backspace or Delete on a Thinking list row, leaves that setting
- * to the Agent. Enter confirms and hands off. Esc cancels. While it is open,
- * the keys of the app below are disabled.
+ * Model, Thinking, and Context rows start on the selected Task type's
+ * resolved profile. Switching task type re-derives each untouched setting, so
+ * the panel always shows what the handoff will run on: on a route the operator
+ * opened from a workflow row, that re-derive follows the new Task type's own
+ * profile and leaves the edge's Agent pin behind. Clearing a text row, or
+ * pressing Backspace or Delete on a Thinking list row, leaves that setting to
+ * the Agent. Enter confirms and hands off. Esc cancels. While it is open, the
+ * keys of the app below are disabled.
  *
  * The panel sizes itself to the terminal: the value column shrinks first,
  * then the label column, then the marker. The hint row drops when the
@@ -98,7 +104,22 @@ interface PanelRow {
 }
 
 /** The three ways a drafted value cannot reach the Agent it is set on. */
-type UnfitSetting = "no-setting" | "no-value" | "no-count";
+type UnfitSetting = "no-setting" | "no-level" | "no-count";
+
+/**
+ * The settings a Task profile owns: the ones the panel prefills from the
+ * resolved profile and re-derives when the operator moves to another Task
+ * type and has not touched them.
+ */
+const PROFILE_KEYS = ["agentType", "model", "thinking", "contextWindow"] as const;
+
+/** One of the Task profile's settings, by the row key that edits it. */
+type ProfileKey = (typeof PROFILE_KEYS)[number];
+
+/** Whether `key` names a setting a Task profile owns. */
+function isProfileKey(key: ListKey | TextKey): key is ProfileKey {
+	return (PROFILE_KEYS as readonly string[]).includes(key);
+}
 
 /** The desired label column: the widest label plus a gap. */
 const LABEL_WIDTH = 12;
@@ -113,11 +134,11 @@ const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
 /** The guide of the token-count row: it takes digits and nothing else. */
 const DIGITS_HINT = "↑↓ tab/⇧tab type 0-9 ↵ esc";
 /** The guide of a row whose value the chosen Agent has no setting for. */
-const NO_SETTING_HINT = "no such Agent setting: clear it";
+const NO_SETTING_HINT = "no such Agent setting: Backspace clears";
 /** The guide of a Thinking row whose level the chosen Agent does not offer. */
-const NO_VALUE_HINT = "Agent offers no such value: clear it";
-/** The guide of a Context row that does not hold a token count. */
-const NO_COUNT_HINT = "not a token count: type digits";
+const NO_LEVEL_HINT = "no such level: cycle ←→/hl or Backspace";
+/** The guide of a Context row that holds digits no count makes. */
+const NO_COUNT_HINT = "not a token count: type digits above 0";
 // Every hint shares one width so the guide never truncates another one, and
 // a row that changes its guide does not move the rows beside it.
 const HINT_WIDTH = Math.max(
@@ -125,7 +146,7 @@ const HINT_WIDTH = Math.max(
 	widthOf(TEXT_HINT),
 	widthOf(DIGITS_HINT),
 	widthOf(NO_SETTING_HINT),
-	widthOf(NO_VALUE_HINT),
+	widthOf(NO_LEVEL_HINT),
 	widthOf(NO_COUNT_HINT),
 );
 const EMPTY_HINT = "(empty)";
@@ -215,12 +236,15 @@ export function OverridePanel({
 	const selectedRef = useRef(0);
 	// An untouched Task-profile setting follows a Task type change. Once an
 	// operator changes or clears it, their one-shot override stays in force.
-	const agentTouchedRef = useRef(false);
-	const modelTouchedRef = useRef(false);
-	const thinkingTouchedRef = useRef(false);
-	// The context window follows the same rule as the model: untouched, it
-	// re-derives from a new Task type; touched, the operator's value stays.
-	const contextTouchedRef = useRef(false);
+	// One record holds every setting the rule covers, so the next profile
+	// setting is a key on it rather than a new ref, a new branch, and a new
+	// spread.
+	const touchedRef = useRef<Record<ProfileKey, boolean>>({
+		agentType: false,
+		model: false,
+		thinking: false,
+		contextWindow: false,
+	});
 	// The live text fields, one ref each, so a character a row rejects can
 	// go back out of the field that holds it.
 	const inputRefs: Record<TextKey, RefObject<InputRenderable | null>> = {
@@ -263,8 +287,10 @@ export function OverridePanel({
 
 	const cycle = (delta: number) => {
 		const target = cursorRow();
-		if (target.kind === "list" && target.key === "agentType") agentTouchedRef.current = true;
-		if (target.kind === "list" && target.key === "thinking") thinkingTouchedRef.current = true;
+		// A cycled list row is the operator's choice from then on. Only the
+		// Agent and the Thinking rows are list rows among the profile's
+		// settings; Environment and Task type carry no profile value.
+		if (target.kind === "list" && isProfileKey(target.key)) touchedRef.current[target.key] = true;
 		commit((current) => {
 			const options = target.options;
 			if (options === undefined) return current;
@@ -280,20 +306,12 @@ export function OverridePanel({
 			// the one place the operator can clear it. See rowsFor.
 			if (target.key !== "taskType") return { ...current, [target.key]: next };
 			const profile = taskProfileChoices[next];
-			return {
-				...current,
-				taskType: next,
-				...(agentTouchedRef.current || profile === undefined
-					? {}
-					: { agentType: profile.agentType }),
-				...(modelTouchedRef.current || profile === undefined ? {} : { model: profile.model }),
-				...(thinkingTouchedRef.current || profile === undefined
-					? {}
-					: { thinking: profile.thinking }),
-				...(contextTouchedRef.current || profile === undefined
-					? {}
-					: { contextWindow: profile.contextWindow }),
-			};
+			const drafted: HandoffChoice = { ...current, taskType: next };
+			// Each setting the operator never touched follows the new Task type's
+			// profile; a changed or cleared one stays their one-shot override.
+			if (profile !== undefined)
+				for (const key of PROFILE_KEYS) if (!touchedRef.current[key]) drafted[key] = profile[key];
+			return drafted;
 		});
 	};
 
@@ -327,9 +345,7 @@ export function OverridePanel({
 		if (choiceRef.current[key] === value) {
 			return;
 		}
-		if (key === "model") modelTouchedRef.current = true;
-		if (key === "thinking") thinkingTouchedRef.current = true;
-		if (key === "contextWindow") contextTouchedRef.current = true;
+		touchedRef.current[key] = true;
 		commit((current) => ({ ...current, [key]: value }));
 	};
 
@@ -369,7 +385,7 @@ export function OverridePanel({
 			// A list row: left/right and h/l cycle its value, j/k move the
 			// selection. Backspace and Delete clear a Thinking list row.
 			if (target.key === "thinking" && (key.name === "backspace" || key.name === "delete")) {
-				thinkingTouchedRef.current = true;
+				touchedRef.current.thinking = true;
 				commit((current) => ({ ...current, thinking: "" }));
 				key.preventDefault();
 				return;
@@ -449,7 +465,7 @@ export function OverridePanel({
 /** The short control guide for the selected row. */
 function hintForRow(row: PanelRow): string {
 	if (row.unfit === "no-setting") return NO_SETTING_HINT;
-	if (row.unfit === "no-value") return NO_VALUE_HINT;
+	if (row.unfit === "no-level") return NO_LEVEL_HINT;
 	if (row.unfit === "no-count") return NO_COUNT_HINT;
 	if (row.digits === true) return DIGITS_HINT;
 	return row.kind === "text" ? TEXT_HINT : LIST_HINT;
@@ -501,7 +517,7 @@ function rowsFor(
 			key: "thinking",
 			kind: list ? "list" : "text",
 			options: list ? settings.thinkingValues : undefined,
-			unfit: settings.thinking ? (unlisted ? "no-value" : undefined) : "no-setting",
+			unfit: settings.thinking ? (unlisted ? "no-level" : undefined) : "no-setting",
 		});
 	}
 	// The token row reads the same way as the model row: its Agent's
@@ -518,6 +534,20 @@ function rowsFor(
 		});
 	}
 	return rows;
+}
+
+/**
+ * The color a list row's value wears.
+ *
+ * A value its Agent cannot take wears the warning, because the handoff sends
+ * it and fails on it. A value the row simply holds no choice for is left to
+ * the Agent and reads dim, and the selection brightens the row under the
+ * cursor.
+ */
+function rowColor(row: PanelRow, inList: boolean, selected: boolean): string {
+	if (row.unfit !== undefined) return COLORS.statusWarning;
+	if (!inList) return COLORS.dim;
+	return selected ? COLORS.textBright : COLORS.text;
 }
 
 /** One panel row as a marker, a label, and a value or an input. */
@@ -553,14 +583,7 @@ function rowElement(
 				"text",
 				{
 					width: geometry.valueWidth,
-					fg:
-						r.unfit !== undefined
-							? COLORS.statusWarning
-							: !inList
-								? COLORS.dim
-								: selected
-									? COLORS.textBright
-									: COLORS.text,
+					fg: rowColor(r, inList, selected),
 				},
 				truncateToWidth(shows ? value : UNSET_HINT, geometry.valueWidth),
 			),

@@ -8,6 +8,7 @@ import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
+	agentRowOf,
 	awaitFrame,
 	cellColors,
 	detailFocused,
@@ -34,10 +35,6 @@ const LONG_SCROLL_CONFIG: FactoryConfig = {
 	...DEFAULT_CONFIG,
 	scroll: { speed: 1, acceleration: 0.8, maximumSpeed: 6 },
 };
-
-function agentRow(frame: string): number {
-	return rowsOf(frame).findIndex((row) => row.includes("Agent:"));
-}
 
 function lastDescriptionRow(frame: string): number {
 	return rowsOf(frame).findIndex((row) => row.includes("their retries."));
@@ -237,18 +234,18 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);
-				const initial = agentRow(setup.captureCharFrame());
+				const initial = agentRowOf(setup.captureCharFrame());
 				const down = await pressArrow(
 					setup,
 					"down",
 					"Down to move the detail one row",
-					(frame) => agentRow(frame) === initial - 1,
+					(frame) => agentRowOf(frame) === initial - 1,
 				);
 				await pressArrow(
 					setup,
 					"up",
 					"Up to move the detail one row back",
-					(frame) => agentRow(frame) === agentRow(down) + 1,
+					(frame) => agentRowOf(frame) === agentRowOf(down) + 1,
 				);
 				await press(
 					setup,
@@ -323,15 +320,19 @@ describe("native Ticket detail viewport", () => {
 	test("applies slow speed, caps a rapid burst, resets after a pause, and resets on reversal", async () => {
 		await withApp(
 			async (setup) => {
-				const start = agentRow(setup.captureCharFrame());
+				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === start - 1,
+					(frame) => agentRowOf(frame) === start - 1,
 					"the first base wheel step",
 				);
 				await wheelAt(setup, 1_200, "down");
-				await awaitFrame(setup, (frame) => agentRow(frame) === start - 2, "a slow base wheel step");
+				await awaitFrame(
+					setup,
+					(frame) => agentRowOf(frame) === start - 2,
+					"a slow base wheel step",
+				);
 			},
 			SCROLL_WIDTH,
 			SCROLL_HEIGHT,
@@ -344,15 +345,19 @@ describe("native Ticket detail viewport", () => {
 		};
 		await withApp(
 			async (setup) => {
-				const start = agentRow(setup.captureCharFrame());
+				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === start - 1,
+					(frame) => agentRowOf(frame) === start - 1,
 					"the cap burst base step",
 				);
 				await wheelAt(setup, 1_001, "down");
-				await awaitFrame(setup, (frame) => agentRow(frame) === start - 4, "the maximum-speed cap");
+				await awaitFrame(
+					setup,
+					(frame) => agentRowOf(frame) === start - 4,
+					"the maximum-speed cap",
+				);
 			},
 			SCROLL_WIDTH,
 			SCROLL_HEIGHT,
@@ -365,21 +370,25 @@ describe("native Ticket detail viewport", () => {
 		};
 		await withApp(
 			async (setup) => {
-				const start = agentRow(setup.captureCharFrame());
+				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === start - 1,
+					(frame) => agentRowOf(frame) === start - 1,
 					"the reset burst base step",
 				);
 				await wheelAt(setup, 1_001, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === start - 3,
+					(frame) => agentRowOf(frame) === start - 3,
 					"the accelerated reset burst step",
 				);
 				await wheelAt(setup, 1_200, "down");
-				await awaitFrame(setup, (frame) => agentRow(frame) === start - 4, "the 150 ms reset step");
+				await awaitFrame(
+					setup,
+					(frame) => agentRowOf(frame) === start - 4,
+					"the 150 ms reset step",
+				);
 			},
 			SCROLL_WIDTH,
 			SCROLL_HEIGHT,
@@ -387,21 +396,25 @@ describe("native Ticket detail viewport", () => {
 		);
 		await withApp(
 			async (setup) => {
-				const start = agentRow(setup.captureCharFrame());
+				const start = agentRowOf(setup.captureCharFrame());
 				await wheelAt(setup, 1_000, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === start - 1,
+					(frame) => agentRowOf(frame) === start - 1,
 					"the reversal burst base step",
 				);
 				await wheelAt(setup, 1_001, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === start - 3,
+					(frame) => agentRowOf(frame) === start - 3,
 					"the reversal burst acceleration",
 				);
 				await wheelAt(setup, 1_002, "up");
-				await awaitFrame(setup, (frame) => agentRow(frame) === start - 2, "the reversed base step");
+				await awaitFrame(
+					setup,
+					(frame) => agentRowOf(frame) === start - 2,
+					"the reversed base step",
+				);
 			},
 			SCROLL_WIDTH,
 			SCROLL_HEIGHT,
@@ -420,11 +433,11 @@ describe("native Ticket detail viewport", () => {
 				const top = setup.captureCharFrame();
 				await wheelAt(setup, 1_000, "up");
 				expect(await settle(setup)).toBe(top);
-				const initialAgent = agentRow(top);
+				const initialAgent = agentRowOf(top);
 				await wheelAt(setup, 1_001, "down");
 				await awaitFrame(
 					setup,
-					(frame) => agentRow(frame) === initialAgent - 1,
+					(frame) => agentRowOf(frame) === initialAgent - 1,
 					"the precise first step away from the top edge",
 				);
 
@@ -578,7 +591,7 @@ describe("native Ticket detail viewport", () => {
 						setup.mockInput.pressKey("j");
 						await settle(setup);
 					}
-					const beforeRefresh = agentRow(setup.captureCharFrame());
+					const beforeRefresh = agentRowOf(setup.captureCharFrame());
 					setup.mockInput.pressKey("r");
 					await awaitFrame(setup, () => source.calls >= 2, "the second source refresh to start");
 					source.settle(sourceSuccess([sourceTicket(longDescription, "closed", "#11-refresh")]));
@@ -594,7 +607,7 @@ describe("native Ticket detail viewport", () => {
 					setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT);
 					await awaitFrame(
 						setup,
-						(frame) => agentRow(frame) === beforeRefresh,
+						(frame) => agentRowOf(frame) === beforeRefresh,
 						"the restored viewport to keep its Ticket offset",
 					);
 

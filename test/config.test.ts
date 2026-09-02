@@ -341,6 +341,23 @@ describe("validateConfig", () => {
 				thinking: "low",
 				autoClose: false,
 			});
+			// The review task type carries a full Task profile: this is the live
+			// development path's own use of the feature, so a review handoff
+			// starts on the agent, model, thinking level, and context window the
+			// profile names rather than on what the agent defaults to.
+			expect(config.taskTypes.review).toMatchObject({
+				agent: "codex",
+				model: "gpt-5.6-sol",
+				thinking: "high",
+				contextWindow: "272000",
+			});
+			// Every agent that can take a context window names its own spelling
+			// of the count, so one profile value reaches each of them.
+			expect(config.agents.codex?.contextWindow).toBe("-c model_context_window={value}");
+			expect(config.agents.claude?.contextWindow).toBe("--autocompact {value}");
+			// pi takes no per-run context-window argument, so it maps none, and no
+			// profile may set one for it.
+			expect(config.agents.pi?.contextWindow).toBeUndefined();
 			expect(config.taskRules).toEqual([
 				{
 					taskType: "rework",

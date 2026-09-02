@@ -1071,7 +1071,7 @@ describe("the override panel", () => {
 				// before the edit keys go in.
 				await settle(setup);
 				// The selected row's guide names the fix instead of the cycle keys.
-				expect(frameText(selected)).toContain("no such Agent setting: clear it");
+				expect(frameText(selected)).toContain("no such Agent setting: Backspace clears");
 				expect(frameText(selected)).not.toContain("move ↑↓ tab/⇧tab edit");
 
 				setup.mockInput.pressKey("HOME");
@@ -1604,13 +1604,15 @@ describe("the override panel", () => {
 
 				// Digits alone are not yet a count: zero asks an agent for no
 				// context at all, so the row wears the warning color and its guide
-				// says what the row takes, the same rule a config file is held to.
+				// says what the row takes beyond digits, the same rule a config file
+				// is held to.
 				await typeText(setup, "0");
 				const zero = await awaitFrame(
 					setup,
 					(f) => frameText(f).includes("not a token count"),
 					"the row to refuse the zero",
 				);
+				expect(frameText(zero)).toContain("not a token count: type digits above 0");
 				expect(frameText(zero)).toContain("Context 0");
 
 				setup.mockInput.pressEnter();
@@ -1661,7 +1663,7 @@ describe("the override panel", () => {
 				await selectRow(setup, "down", "Thinking");
 				const selected = await selectRow(setup, "down", "Context");
 				await settle(setup);
-				expect(frameText(selected)).toContain("no such Agent setting: clear it");
+				expect(frameText(selected)).toContain("no such Agent setting: Backspace clears");
 
 				// Up onto the Agent row, then right onto the agent that maps the
 				// count: the draft keeps its value, and the row goes plain.
@@ -1781,7 +1783,7 @@ describe("the override panel", () => {
 				// Its guide names the fix, not the cycle keys.
 				const selected = await selectThinking();
 				await settle(setup);
-				expect(frameText(selected)).toContain("Agent offers no such value: clear it");
+				expect(frameText(selected)).toContain("no such level: cycle ←→/hl or Backspace");
 
 				// Confirming a value the Agent does not offer fails the handoff
 				// with a readable reason: what the row showed is what the agent

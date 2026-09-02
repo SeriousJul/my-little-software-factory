@@ -712,6 +712,66 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	test("a route edit that moves to another Task type follows that profile, not the edge", async () => {
+		// The one place the panel can undo an edge pin without a keystroke on
+		// the Agent row: the edge pins the Agent of the route it triggers, and a
+		// Task type the operator moves to owns its own profile.
+		const app = seededApp("awaiting", {
+			workflows: [{ from: "implement", to: ["review"], agent: "claude" }],
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: { ...DEFAULT_CONFIG.taskTypes.review, model: "review-model" },
+				fix: { ...DEFAULT_CONFIG.taskTypes.fix, agent: "pi", model: "fix-model" },
+			},
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				const opened = frameText(await settle(setup));
+				// The panel starts on the route the edge resolved: its pinned Agent,
+				// and the target profile's Model.
+				expect(opened).toContain("Agent claude");
+				expect(opened).toContain("Model review-model");
+
+				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
+				// Left from `review` lands on `fix`, whose profile names its own
+				// Agent and Model. Both rows are untouched, so both follow it, and
+				// the edge's pin is gone with the edge's target.
+				await press(setup, "h", "the fix task type", (f) => frameText(f).includes("Task type fix"));
+				const moved = frameText(await settle(setup));
+				expect(moved).toContain("Agent pi");
+				expect(moved).toContain("Model fix-model");
+
+				await pressReturn(setup, "the routed handoff", (f) => f.includes("Handoff task type: fix"));
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain("--kind pi --pane pane-9 -- --model fix-model");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("escape in a route edit returns to the decision with no claim", async () => {
 		const app = seededApp("awaiting");
 		stubCheckout(app);
@@ -1326,6 +1386,43 @@ describe("the auto dispatch", () => {
 		app.state.close();
 	});
 
+	test("an open handoff its agent cannot take reports the ticket it failed", async () => {
+		// The same loud rule on the other automatic path: an open Ticket's own
+		// handoff resolves a Model its Agent maps no argument for, so nothing
+		// starts, and the report names the ticket rather than only the reason.
+		const app = seededApp("open", {
+			autoHandoff: true,
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+			},
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const failed = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("auto-handoff for ticket"),
+					"the failed automatic handoff",
+				);
+				expect(frameText(failed)).toContain("no model setting");
+				// Nothing ran, and the ticket stayed the open ticket it was.
+				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(ticketRow(failed)).toContain("[open]");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("manual mode leaves the open ticket alone", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1412,6 +1509,79 @@ describe("the auto decision", () => {
 			WIDTH,
 			HEIGHT,
 			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an auto route its agent cannot take starts nothing and decides nothing", async () => {
+		// The review's own setup: the flow's one edge routes to a task type whose
+		// profile names an agent that maps no Model setting, beside a configured
+		// default model. The route can only fail, and it fails before any
+		// external step, so it must leave the turn as undecided as it was: the
+		// trace records a route only once an agent runs.
+		const app = seededApp("awaiting", {
+			autoHandoff: true,
+			defaultAgent: "claude",
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, claude: { kind: "claude" } },
+			workflows: [{ from: "implement", to: ["review"] }],
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The loud reason reaches the status line, and it names the ticket
+				// the route was for.
+				const failed = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("automatic route for ticket"),
+					"the failed automatic route",
+				);
+				expect(frameText(failed)).toContain("no model setting");
+				// Nothing the record claims happened did happen: no agent started,
+				// and the settled turn holds no decision at all.
+				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
+				expect(failed).not.toContain("auto-handed-off");
+
+				// The ticket stayed awaiting, so the live agent that finished the
+				// turn reopens it as it always does, and the undecided trace keeps
+				// Close and Goto offered beside it. A route that consumed its own
+				// decision would leave the operator with a settled turn that could
+				// be neither routed nor closed.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "working",
+						},
+					]),
+				});
+				const reopened = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[running]"),
+					"the reopened turn",
+				);
+				expect(ticketRow(reopened)).toContain("[running]");
+				// And the turn it reopened is the same undecided turn: the record
+				// still holds no decision for a route that never started.
+				expect(app.state.ticketState(identity)).toBe("running");
+				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
+			},
+			WIDTH,
+			HEIGHT,
+			// A short interval keeps the route coming back each cycle: the failed
+			// start must not consume the turn it came from, cycle after cycle.
+			{ ...propsOf(app), pollIntervalMs: 25 },
 		);
 		app.state.close();
 	});
