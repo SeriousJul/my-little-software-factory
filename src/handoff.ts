@@ -33,7 +33,8 @@
  * the worktree checkout but never the branch, so pushed work and pull
  * requests survive. See closeHandoffEnvironment.
  */
-import type { FactoryConfig, WorkflowEdge } from "./config.ts";
+import type { AgentTypeConfig, FactoryConfig, WorkflowEdge } from "./config.ts";
+import { isTokenCount, TOKEN_COUNT_RULE } from "./domain/settings.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
 import {
 	agentNameFor,
@@ -180,13 +181,72 @@ interface HandoffContext {
 }
 
 /**
+ * The rule every resolved setting passes: it must be able to reach the Agent
+ * the handoff resolved onto.
+ *
+ * A non-empty setting the Agent maps no template for, a thinking level the
+ * Agent does not offer, and a context window that is not a token count all
+ * come back as the reason a handoff fails. The rule never drops a value:
+ * starting without the setting the operator asked for would absorb a config
+ * error silently, and ADR 0009 prefers a loud, readable one. Each reason
+ * names the way out, and every way out is in the override panel, because the
+ * panel is the last writer on a handoff's settings.
+ */
+function settingFailure(agent: AgentTypeConfig, choice: HandoffChoice): string | undefined {
+	if (choice.model !== "" && agent.model === undefined) {
+		return (
+			`agent type "${choice.agentType}" defines no model setting, so model ` +
+			`"${choice.model}" cannot reach it: clear the model in the override panel, ` +
+			`or start an agent type that maps one`
+		);
+	}
+	if (choice.thinking !== "" && agent.thinking === undefined) {
+		return (
+			`agent type "${choice.agentType}" defines no thinking setting, so thinking ` +
+			`level "${choice.thinking}" cannot reach it: clear the thinking level in the ` +
+			`override panel, or start an agent type that maps one`
+		);
+	}
+	// A level the Agent does list is the other way a thinking value cannot
+	// reach it: the config checks a profile's level against the profile's own
+	// agent, and a later reroute onto another agent is checked here.
+	if (
+		choice.thinking !== "" &&
+		agent.thinkingValues !== undefined &&
+		!agent.thinkingValues.includes(choice.thinking)
+	) {
+		return (
+			`agent type "${choice.agentType}" offers no thinking level "${choice.thinking}" ` +
+			`(it offers: ${agent.thinkingValues.join(", ")}): clear the thinking level in the ` +
+			`override panel, or start an agent type that offers it`
+		);
+	}
+	if (choice.contextWindow !== "") {
+		// A count the control plane cannot spell is refused whatever the Agent
+		// maps, so the typed path and the config path hold one rule.
+		if (!isTokenCount(choice.contextWindow)) {
+			return (
+				`context window "${choice.contextWindow}" is not ${TOKEN_COUNT_RULE}: clear ` +
+				`the context row in the override panel, or type a count such as 272000`
+			);
+		}
+		if (agent.contextWindow === undefined) {
+			return (
+				`agent type "${choice.agentType}" defines no context window setting, so the ` +
+				`count of ${choice.contextWindow} tokens cannot reach it: clear it in the ` +
+				`override panel, or start an agent type that maps one`
+			);
+		}
+	}
+	return undefined;
+}
+
+/**
  * Validate a handoff's choices. A failure comes back as its own outcome;
  * a pass carries the agent and task type records the steps need.
  *
- * A setting the resolved agent cannot map is a failure, not a dropped
- * argument: starting without it would absorb a config error silently, and
- * ADR 0009 prefers a loud, readable one. The check runs before any external
- * step, so the ticket stays where the claim left it.
+ * The checks run before any external step, so the ticket stays where the
+ * claim left it.
  */
 function validateChoice(
 	choice: HandoffChoice,
@@ -201,42 +261,8 @@ function validateChoice(
 	if (agent === undefined) {
 		return { status: "failed", reason: `unknown agent type: ${choice.agentType}` };
 	}
-	if (choice.model !== "" && agent.model === undefined) {
-		return {
-			status: "failed",
-			reason:
-				`agent type "${choice.agentType}" defines no model setting, so model ` +
-				`"${choice.model}" cannot reach it: clear the model in the override panel, ` +
-				`or start an agent type that maps one`,
-		};
-	}
-	if (choice.thinking !== "" && agent.thinking === undefined) {
-		return {
-			status: "failed",
-			reason:
-				`agent type "${choice.agentType}" defines no thinking setting, so thinking ` +
-				`level "${choice.thinking}" cannot reach it: clear the thinking level in the ` +
-				`override panel, or start an agent type that maps one`,
-		};
-	}
-	if (choice.contextWindow !== "" && agent.contextWindow === undefined) {
-		return {
-			status: "failed",
-			reason:
-				`agent type "${choice.agentType}" defines no context window setting, so the ` +
-				`count of ${choice.contextWindow} tokens cannot reach it: clear it in the ` +
-				`override panel, or start an agent type that maps one`,
-		};
-	}
-	if (choice.contextWindow !== "" && agent.contextWindow === undefined) {
-		return {
-			status: "failed",
-			reason:
-				`agent type "${choice.agentType}" defines no context-window setting, so the ` +
-				`context window "${choice.contextWindow}" cannot reach it: clear it in the ` +
-				`override panel, or start an agent type that maps one`,
-		};
-	}
+	const failure = settingFailure(agent, choice);
+	if (failure !== undefined) return { status: "failed", reason: failure };
 	const taskType = config.taskTypes[choice.taskType];
 	if (taskType === undefined) {
 		return { status: "failed", reason: `unknown task type: ${choice.taskType}` };

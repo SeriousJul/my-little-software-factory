@@ -5,6 +5,7 @@ import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
+import { isTokenCount, TOKEN_COUNT_RULE } from "./domain/settings.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
@@ -868,11 +869,9 @@ function tokenCountField(
 	const value = record[key];
 	if (value === undefined) return undefined;
 	const digits = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-	const count = /^[0-9]+$/.test(digits) ? Number(digits) : Number.NaN;
-	if (!Number.isSafeInteger(count) || count <= 0)
-		throw new ConfigError(
-			`config: ${where}.${key}: must be a positive whole number of tokens in digits`,
-		);
+	if (!isTokenCount(digits))
+		throw new ConfigError(`config: ${where}.${key}: must be ${TOKEN_COUNT_RULE}`);
+	const count = Number(digits);
 	// The digits are the value: the control plane never reformats a count, and
 	// a leading zero is the only spelling that can change.
 	return String(count);

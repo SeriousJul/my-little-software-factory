@@ -113,7 +113,7 @@ A free-text row owns `j`, `k`, `h`, and `l`, so `Up`, `Down`, `Tab`, and
 `Shift` + `Tab` move the selection past it. The guide at the bottom follows
 the selected row and shows its available controls.
 A row shows `(empty)` for an unset free-text value and `(unset)` for a list
-value that is not one of its options.
+value left to the agent.
 
 The Agent, Model, Thinking, and Context rows start on the selected Task
 type's resolved Task profile: the profile's own value, else `default-model` for
@@ -126,12 +126,19 @@ Thinking list row, hands that setting back to the agent.
 
 The Context row holds a count of tokens, so it takes digits and nothing
 else: a comma, a space, or a letter typed or pasted into it never reaches
-the value. A setting the chosen agent type does not map has no row, so an
-agent without a `model` template shows no Model row. One exception keeps a
-value in reach: when the config resolved a Model, a Thinking level, or a
-context window the selected agent cannot map, its row stays on screen in the
-warning color, because the handoff will fail on it until the operator clears
-it or chooses an agent that maps it.
+the value. Digits alone are not yet a count: a row that holds none, `0` for
+example, warns and fails its handoff, the way a config file that sets one
+fails at startup.
+
+A setting the chosen agent type does not map has no row, so an agent without
+a `model` template shows no Model row. One exception keeps a value in reach:
+when a row carries a value the selected agent cannot take, its row stays on
+screen in the warning color, and the guide under it says so. A value cannot
+be taken when the agent maps no setting for it, when it lists the thinking
+levels it offers and the row holds another one, or when the Context row holds
+no count. The panel never shows something other than what the handoff sends,
+and the row is the only place the operator can clear the value, so it stays:
+the handoff fails on it until they clear it or choose an agent that takes it.
 
 The container environment is a future kind and is not offered by the panel.
 
@@ -324,11 +331,20 @@ Each setting resolves on its own chain, closest to the handoff first (ADR
 - Environment: the operator's override, then a workflow edge's pin, then
   `default-environment`.
 
-A resolved value never disappears on its way to the agent. When the chain
-resolves a Model, a Thinking level, or a context window and the resolved
-agent has no template for it, the handoff fails with that reason before
-anything starts, and the ticket stays where it was, so a model written for
-one agent never runs a different one quietly.
+A resolved value never disappears on its way to the agent. A handoff fails
+with a readable reason before anything starts, and the ticket stays where it
+was, when the resolved agent maps no template for a Model, a Thinking level,
+or a context window the chain resolved; when the agent lists the levels it
+offers and the resolved level is not one of them; or when a context window is
+not a whole count of tokens. So a model written for one agent never runs a
+different one quietly, and an edge that reroutes a handoff onto a narrower
+agent is seen as a failure instead of absorbed as a default.
+
+One behavior is stricter than before the task profile: a config that sets a
+Task type `thinking` level, and a workflow edge that pins an agent which does
+not offer that level, used to drop the level quietly and start the agent on
+its own default. That handoff now fails, which is the point of the rule
+above.
 
 - The agent runs through herdr (ADR 0002): a live worktree handoff creates a
   herdr workspace at the checkout with a fresh tab, and a worktree handoff
@@ -744,7 +760,7 @@ source-kind = "github-issue"
 | `model` | no | - | The model command-line template. It must contain `{value}`. A handoff or a Consultation may set a model only when the agent defines one. |
 | `thinking` | no | - | The thinking-level command-line template. It must contain `{value}`. A handoff or a Consultation may set a thinking level only when the agent defines one. |
 | `context-window` | no | - | The context-window command-line template. It must contain `{value}`. A handoff or a Consultation may set a context window only when the agent defines one. |
-| `thinking-values` | no | - | The levels the override panel offers for this agent. A Task profile or Consultation `thinking` must be one of them when the list is set. |
+| `thinking-values` | no | - | The levels the override panel offers for this agent, and the only levels this agent's handoffs accept. A Task profile or Consultation `thinking` must be one of them when the list is set, and a handoff an edge reroutes onto this agent with another level fails with a readable reason. |
 
 **`[task-types.<name>]`** (one table per task type; names are one word).
 

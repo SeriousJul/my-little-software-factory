@@ -1028,6 +1028,65 @@ describe("handOffTicket: the guard rails", () => {
 		expect(runner.calls).toHaveLength(0);
 	});
 
+	test("a thinking level the resolved agent does not offer fails before any command", async () => {
+		const runner = new FakeRunner();
+		// zed maps a thinking template, so the value has an argv to ride on, and
+		// it offers only two levels. An operator can still draft a third one by
+		// cycling the panel's Agent row onto zed: the level list is the other
+		// half of the same loud rule (ADR 0009).
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "on"] },
+			},
+		};
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, agentType: "zed", thinking: "minimal" },
+			{ config, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toBe(
+			'agent type "zed" offers no thinking level "minimal" (it offers: off, on): clear ' +
+				"the thinking level in the override panel, or start an agent type that offers it",
+		);
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("a context window that is not a token count fails before any command", async () => {
+		const runner = new FakeRunner();
+		// The panel keeps a count to digits, but digits are not yet a count: an
+		// all-zero one asks for no context at all, and one that runs past the
+		// safe integer range cannot be stated without rounding it. A separator
+		// or a suffix would split into two argv elements.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				codex: { ...DEFAULT_CONFIG.agents.codex, contextWindow: "-c model_context_window={value}" },
+			},
+		};
+
+		for (const draft of ["0", "000", "200k", "272 000", "9007199254740993"]) {
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, agentType: "codex", contextWindow: draft },
+				{ config, runner, home: HOME },
+			);
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toBe(
+				`context window "${draft}" is not a positive whole number of tokens in ` +
+					"digits: clear the context row in the override panel, or type a count " +
+					"such as 272000",
+			);
+		}
+		// Nothing ran: a bad count is refused before the environment is touched.
+		expect(runner.calls).toHaveLength(0);
+	});
+
 	test("a failed herdr step after a sibling clone still hands back the mapping", async () => {
 		const runner = new FakeRunner();
 		// The convention path holds a different repository: a sibling clone.
@@ -1488,6 +1547,41 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain('agent type "cursor" defines no model setting');
+		expect(runner.calls).toHaveLength(0);
+	});
+
+	test("an edge reroute onto an agent that does not offer the profile's level fails", async () => {
+		const runner = new FakeRunner();
+		// Startup paired "medium" with pi, the profile's own agent. The edge
+		// replaced only the agent, so the pair the reroute creates is checked at
+		// handoff time by the same rule that fails a model (ADR 0009).
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "on"] },
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: { ...DEFAULT_CONFIG.taskTypes.review, thinking: "medium" },
+			},
+		};
+		const edge = { from: "implement", to: ["review"], agent: "zed" };
+
+		const outcome = await handOffStoredWorkspace({
+			ticket: { ...ticket, state: "awaiting" },
+			choice: resolveHandoffChoice(config, "review", edge),
+			config,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-prev",
+			previousMessage: "settled earlier",
+		});
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain('agent type "zed" offers no thinking level "medium"');
 		expect(runner.calls).toHaveLength(0);
 	});
 });

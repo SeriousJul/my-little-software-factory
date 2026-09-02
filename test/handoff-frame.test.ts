@@ -1427,6 +1427,58 @@ describe("the override panel", () => {
 		);
 	});
 
+	test("a Context row that holds no count says so, and the handoff refuses it", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: contextProfileConfig, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await selectRow(setup, "down", "Environment");
+				await selectRow(setup, "down", "Task type");
+				await selectRow(setup, "down", "Model");
+				await selectRow(setup, "down", "Thinking");
+				await selectRow(setup, "down", "Context");
+				await settle(setup);
+				// The caret sits at the row's end, where the last key landed, so the
+				// deletes have to start at its other end. The empty row below is
+				// what proves HOME moved the caret there.
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "272000") setup.mockInput.pressKey("DELETE");
+				await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("(empty)"),
+					"the Context row to empty",
+				);
+
+				// Digits alone are not yet a count: zero asks an agent for no
+				// context at all, so the row wears the warning color and its guide
+				// says what the row takes, the same rule a config file is held to.
+				await typeText(setup, "0");
+				const zero = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("not a token count"),
+					"the row to refuse the zero",
+				);
+				expect(frameText(zero)).toContain("Context 0");
+
+				setup.mockInput.pressEnter();
+				const failed = await awaitFrame(
+					setup,
+					(f) => f.includes("is not a positive whole number of tokens"),
+					"the count reason",
+				);
+				expect(selectedRow(failed)).toContain("[open]");
+				expect(runner.calls).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a Context row survives an Agent that cannot map it until it is cleared", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -1514,6 +1566,111 @@ describe("the override panel", () => {
 					firstAgent,
 					"--kind",
 					"pi",
+					"--pane",
+					"pane-1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a Thinking level the chosen Agent does not offer warns on its row, and fails the handoff", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// "minimal" is legal for pi, the profile's own agent, so the panel opens
+		// on it. zed maps a thinking template but offers only two other levels:
+		// cycling the Agent row onto it leaves a value with an argv to ride on
+		// and no Agent that takes it.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "on"] },
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "pi", thinking: "minimal" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				// zed is the last agent the Agent row offers, and the Thinking row
+				// sits under the three rows every panel carries.
+				const cycleToZed = async (): Promise<void> => {
+					for (const target of ["codex", "claude", "zed"]) {
+						await pressArrow(setup, "right", `the agent to move to ${target}`, (f) =>
+							rowWith(f, "Agent").includes(target),
+						);
+					}
+				};
+				const selectThinking = async (): Promise<string> => {
+					await selectRow(setup, "down", "Environment");
+					await selectRow(setup, "down", "Task type");
+					return await selectRow(setup, "down", "Thinking");
+				};
+
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Thinking minimal");
+				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.text)]);
+
+				await cycleToZed();
+				// The row keeps the level and shows it in the warning color. It
+				// never reads `(unset)` for a value the handoff will still send.
+				const warned = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Thinking").includes("minimal"),
+					"the Thinking row to keep the level",
+				);
+				expect(frameText(warned)).not.toContain("Thinking (unset)");
+				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.statusWarning)]);
+
+				// Its guide names the fix, not the cycle keys.
+				const selected = await selectThinking();
+				await settle(setup);
+				expect(frameText(selected)).toContain("Agent offers no such value: clear it");
+
+				// Confirming a value the Agent does not offer fails the handoff
+				// with a readable reason: what the row showed is what the agent
+				// would have been started with, and nothing starts at all.
+				setup.mockInput.pressEnter();
+				const failed = await awaitFrame(
+					setup,
+					(f) => f.includes('offers no thinking level "minimal"'),
+					"the mismatch reason",
+				);
+				expect(selectedRow(failed)).toContain("[open]");
+				expect(runner.calls).toHaveLength(0);
+
+				// The row is reachable, so the value is not stranded: clearing it
+				// hands the level back to the agent, and the handoff starts with no
+				// thinking argument at all.
+				const reopened = await openPanel(setup);
+				expect(frameText(reopened)).toContain("Thinking minimal");
+				await cycleToZed();
+				await selectThinking();
+				await settle(setup);
+				setup.mockInput.pressKey("BACKSPACE");
+				const cleared = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Thinking").includes("(unset)"),
+					"the Thinking row to hand the level to the agent",
+				);
+				expect(frameText(cleared)).not.toContain("Thinking minimal");
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"zed",
 					"--pane",
 					"pane-1",
 				]);

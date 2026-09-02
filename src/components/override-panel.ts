@@ -7,9 +7,12 @@
  * environment kind, the task type, and the settings the chosen agent type
  * maps. A setting the agent does not map has no row of its own, so the panel
  * shows only what the chosen agent supports. One exception keeps a value in
- * reach: a row the agent cannot map stays on screen, in the warning color,
- * while it still carries a value another source resolved, because that row
- * is the only place the operator can clear it.
+ * reach: a row carrying a value the agent cannot take stays on screen, in the
+ * warning color, while another source resolved that value, because that row
+ * is the only place the operator can clear it and the panel never shows
+ * something other than what the handoff sends. A value is untakable when the
+ * agent maps no setting for it, when it lists thinking levels and the value
+ * is not one of them, or when a context row does not hold a token count.
  *
  * The Model row, the free-text Thinking row, and the Context row are standard
  * single-line inputs. They show a caret, and take typing, caret movement with
@@ -46,6 +49,7 @@ import type { InputRenderable } from "@opentui/core";
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, type RefObject, useRef, useState } from "react";
 
+import { isTokenCount } from "../domain/settings.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
@@ -81,11 +85,17 @@ interface PanelRow {
 	key: ListKey | TextKey;
 	kind: "list" | "text";
 	options?: readonly string[];
-	/** True when the value is one the selected Agent cannot map. */
-	unsupported?: boolean;
+	/**
+	 * Why this row's value cannot reach the selected Agent, and so cannot
+	 * survive a handoff. Undefined means the Agent takes the value as it is.
+	 */
+	unfit?: UnfitSetting;
 	/** True when the row is a text field that takes digits and nothing else. */
 	digits?: boolean;
 }
+
+/** The three ways a drafted value cannot reach the Agent it is set on. */
+type UnfitSetting = "no-setting" | "no-value" | "no-count";
 
 /** The desired label column: the widest label plus a gap. */
 const LABEL_WIDTH = 12;
@@ -99,15 +109,21 @@ const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
 const TEXT_HINT = "move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc";
 /** The guide of the token-count row: it takes digits and nothing else. */
 const DIGITS_HINT = "↑↓ tab/⇧tab type 0-9 ↵ esc";
-/** The guide of a row whose value the chosen Agent cannot map. */
-const UNSUPPORTED_HINT = "no such Agent setting: clear it";
+/** The guide of a row whose value the chosen Agent has no setting for. */
+const NO_SETTING_HINT = "no such Agent setting: clear it";
+/** The guide of a Thinking row whose level the chosen Agent does not offer. */
+const NO_VALUE_HINT = "Agent offers no such value: clear it";
+/** The guide of a Context row that does not hold a token count. */
+const NO_COUNT_HINT = "not a token count: type digits";
 // Every hint shares one width so the guide never truncates another one, and
 // a row that changes its guide does not move the rows beside it.
 const HINT_WIDTH = Math.max(
 	widthOf(LIST_HINT),
 	widthOf(TEXT_HINT),
 	widthOf(DIGITS_HINT),
-	widthOf(UNSUPPORTED_HINT),
+	widthOf(NO_SETTING_HINT),
+	widthOf(NO_VALUE_HINT),
+	widthOf(NO_COUNT_HINT),
 );
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
@@ -419,7 +435,9 @@ export function OverridePanel({
 
 /** The short control guide for the selected row. */
 function hintForRow(row: PanelRow): string {
-	if (row.unsupported === true) return UNSUPPORTED_HINT;
+	if (row.unfit === "no-setting") return NO_SETTING_HINT;
+	if (row.unfit === "no-value") return NO_VALUE_HINT;
+	if (row.unfit === "no-count") return NO_COUNT_HINT;
 	if (row.digits === true) return DIGITS_HINT;
 	return row.kind === "text" ? TEXT_HINT : LIST_HINT;
 }
@@ -447,33 +465,43 @@ function rowsFor(
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
 		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
 	];
-	// A row shows when its Agent maps the setting. It also shows, marked
-	// unsupported, while it carries a value the Agent cannot map: hiding it
-	// would strand that value where no key can reach it, and the handoff
-	// would fail on it out of sight.
+	// A row shows when its Agent maps the setting. It also shows, wearing the
+	// warning color, while it carries a value the Agent cannot take: hiding it
+	// would strand that value where no key can reach it, and the panel must
+	// never show something other than what the handoff sends.
 	if (settings.model || choice.model !== "") {
-		rows.push({ label: "Model", key: "model", kind: "text", unsupported: !settings.model });
+		rows.push({
+			label: "Model",
+			key: "model",
+			kind: "text",
+			unfit: settings.model ? undefined : "no-setting",
+		});
 	}
 	if (settings.thinking || choice.thinking !== "") {
 		const list = settings.thinking !== undefined && settings.thinkingValues !== undefined;
+		// An agent with a template but no value list takes any level, so only a
+		// listed agent can refuse the one the chain resolved.
+		const unlisted =
+			list && choice.thinking !== "" && !settings.thinkingValues?.includes(choice.thinking);
 		rows.push({
 			label: "Thinking",
 			key: "thinking",
 			kind: list ? "list" : "text",
 			options: list ? settings.thinkingValues : undefined,
-			unsupported: !settings.thinking,
+			unfit: settings.thinking ? (unlisted ? "no-value" : undefined) : "no-setting",
 		});
 	}
 	// The token row reads the same way as the model row: its Agent's
-	// capability opens it, and a value the Agent cannot map keeps it open so
+	// capability opens it, and a value the Agent cannot take keeps it open so
 	// the operator can clear it.
 	if (settings.contextWindow || choice.contextWindow !== "") {
+		const count = choice.contextWindow === "" || isTokenCount(choice.contextWindow);
 		rows.push({
 			label: "Context",
 			key: "contextWindow",
 			kind: "text",
 			digits: true,
-			unsupported: !settings.contextWindow,
+			unfit: settings.contextWindow ? (count ? undefined : "no-count") : "no-setting",
 		});
 	}
 	return rows;
@@ -501,23 +529,27 @@ function rowElement(
 		),
 	];
 	if (r.kind === "list") {
-		// A list row whose value is not an option (the config default "")
-		// shows a dim hint instead of a blank.
 		const inList = r.options?.includes(value) ?? false;
+		// A value the Agent does not offer still shows, in the warning color:
+		// the handoff sends that value and fails on it, so the row must show
+		// what the handoff sends. Only an empty value reads as a placeholder,
+		// because an empty setting is the one the Agent owns.
+		const shows = value !== "" && (inList || r.unfit !== undefined);
 		children.push(
 			createElement(
 				"text",
 				{
 					width: geometry.valueWidth,
-					fg: !inList
-						? COLORS.dim
-						: r.unsupported === true
+					fg:
+						r.unfit !== undefined
 							? COLORS.statusWarning
-							: selected
-								? COLORS.textBright
-								: COLORS.text,
+							: !inList
+								? COLORS.dim
+								: selected
+									? COLORS.textBright
+									: COLORS.text,
 				},
-				truncateToWidth(inList ? value : UNSET_HINT, geometry.valueWidth),
+				truncateToWidth(shows ? value : UNSET_HINT, geometry.valueWidth),
 			),
 		);
 	} else {
@@ -534,16 +566,14 @@ function rowElement(
 				focused: selected,
 				placeholder: EMPTY_HINT,
 				placeholderColor: COLORS.dim,
-				textColor: r.unsupported === true ? COLORS.statusWarning : COLORS.text,
-				focusedTextColor: r.unsupported === true ? COLORS.statusWarning : COLORS.textBright,
+				textColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.text,
+				focusedTextColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.textBright,
 				backgroundColor: "transparent",
 				focusedBackgroundColor: COLORS.focusedBackground,
 				keyBindings: INPUT_KEY_BINDINGS,
-				// A token row keeps digits out of its buffer, typed or pasted
-				// alike: one value must never become two argv elements, and a
-				// count cannot carry a stray character.
-				onBeforeInput:
-					r.digits === true ? (text: string) => text.replace(/[^0-9]/gu, "") : undefined,
+				// A token row refuses a character that is not a digit in the
+				// panel's own input handler, which writes the field back without
+				// it: OpenTUI offers no before-input hook to hold it out.
 				onInput: handleInput(r.key as TextKey),
 			}),
 		);

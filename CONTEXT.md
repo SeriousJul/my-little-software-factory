@@ -104,7 +104,7 @@ The control plane is agent-agnostic and assumes no specific agent runtime (pi, c
 _Avoid_: bot, worker
 
 **Agent type**:
-The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level) map to the agent's own parameters, its Model list, and how to read the settled turn's log.
+The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level, context window) map to the agent's own parameters, its Model list, which thinking levels it offers, and how to read the settled turn's log.
 An Agent is a running instance of an Agent type.
 _Avoid_: agent definition, plugin, driver
 
@@ -241,6 +241,7 @@ _Avoid_: prompt, template
 **Task profile**:
 The agent type, model, thinking level, and context window a task type starts its handoffs with.
 It is a start value: the override panel prefills it, a workflow edge's agent pin can replace its agent for one handoff, and an operator override beats all of it.
+Each setting is checked against the Agent the handoff lands on, not against the profile's own Agent, so a reroute that leaves a setting behind fails the handoff.
 _Avoid_: run settings, task settings
 
 **Suggested task type**:
@@ -280,6 +281,7 @@ _Avoid_: console dump, session file
 A whole count of context tokens an Agent starts a Handoff or a Consultation with.
 It is a setting of a Task profile, a Consultation type, and an Override, and each Agent type maps it with its own command-line template.
 There is no configured default: a value left out stays with the Agent, because one count cannot fit every model.
+A count the resolved Agent maps no template for, or a value that is no count at all, fails the Handoff with a readable reason instead of starting the Agent without it.
 _Avoid_: token limit, budget, autocompact
 
 **Environment**:

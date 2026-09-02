@@ -34,14 +34,20 @@ operator changes it or clears it, and a cleared setting is left to the
 agent. A context window is a whole count of tokens written in plain digits,
 because the value becomes one argv element: a model cannot parse `272 000`,
 `272k`, or `0x42000`. The panel takes a count the same way, so a character
-that is not a digit never enters the field, typed or pasted.
+that is not a digit never enters the field, typed or pasted, and a draft that
+is digits but no count, `0` among them, is refused by the handoff rule below:
+one rule covers the typed path and the file path.
 
 The panel edits an operator override on any handoff, including one a
 workflow edge resolved: the operator edits the route's settings before it
-starts, and their choice is the last writer on it. When the resolved agent
-cannot map a resolved Model, Thinking level, or context window, the handoff
-fails with a readable reason before anything starts, and the ticket stays
-where it was.
+starts, and their choice is the last writer on it. A handoff fails with a
+readable reason before anything starts, and its ticket stays where it was,
+when the resolved agent maps no template for a resolved Model, Thinking
+level, or context window; when the agent lists the thinking levels it offers
+and the resolved level is not one of them; or when a resolved context window
+is not a whole count of tokens. The panel shows each of those values on its
+row, in the warning color, because the panel never shows something other than
+what the handoff sends.
 
 The considered alternatives:
 
@@ -69,8 +75,15 @@ The considered alternatives:
   at startup, and a profile's or Consultation type's context window is
   checked against its own agent's `context-window` template. A later edge
   reroute to another agent is checked only at handoff time, by the same rule
-  that fails the handoff.
-- Because a resolved value the resolved agent cannot map fails the handoff,
-  the override panel keeps such a value on screen in the warning color. A
-  row hidden behind an agent that maps no model would strand the value where
-  no key can clear it.
+  that fails the handoff, and that rule reads the agent's `thinking-values`
+  too: a level the new agent does not offer fails there.
+- A profile's `model`, and `default-model`, are free text with no startup
+  check, so a model an agent cannot map is caught at handoff time only. A
+  startup check would be wrong: an edge can reroute the handoff onto an agent
+  that does map a model, and the config cannot know which agent a given
+  handoff lands on.
+- Because a resolved value the resolved agent cannot take fails the handoff,
+  the override panel keeps such a value on screen in the warning color. A row
+  hidden behind an agent that maps no model would strand the value where no
+  key can clear it, and a row that hid a value it still sends would tell the
+  operator something false about the handoff they are confirming.
