@@ -4,7 +4,13 @@
 import { describe, expect, test } from "vitest";
 
 import type { Ticket } from "../src/domain/ticket.ts";
-import { agentNameFor, branchNameFor, titleSlug } from "../src/naming.ts";
+import {
+	agentNameFor,
+	branchNameFor,
+	consultationBranchName,
+	shortStableIdentity,
+	titleSlug,
+} from "../src/naming.ts";
 
 const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	identity: `github:github.com:I_${externalKey.slice(1)}`,
@@ -43,6 +49,10 @@ describe("titleSlug", () => {
 		expect(titleSlug("!!!")).toBe("ticket");
 		expect(titleSlug("")).toBe("ticket");
 	});
+
+	test("removes every leading and trailing slug separator", () => {
+		expect(titleSlug("---A title---")).toBe("a-title");
+	});
 });
 
 describe("branchNameFor", () => {
@@ -56,6 +66,14 @@ describe("branchNameFor", () => {
 		expect(branchNameFor(ticket("Same title", "2"))).toBe("factory/2-same-title");
 		expect(branchNameFor(ticket("Same title", "3"))).toBe("factory/3-same-title");
 	});
+
+	test("an external key with no safe characters falls back to ticket", () => {
+		expect(branchNameFor(ticket("Safe title", "///"))).toBe("factory/ticket-safe-title");
+	});
+
+	test("normalizes unsafe runs and outer separators in an external key", () => {
+		expect(branchNameFor(ticket("Safe title", " /#77! "))).toBe("factory/77-safe-title");
+	});
 });
 
 describe("agentNameFor", () => {
@@ -67,11 +85,41 @@ describe("agentNameFor", () => {
 		expect(agentNameFor("2fa rollout")).toBe("t-2fa-rollout");
 	});
 
-	test("a long slug is cut to 32 characters without a trailing hyphen", () => {
-		const title = "a-very-long-title-that-goes-on-and-on-past-thirty-two-characters";
+	test("keeps an agent name of exactly 32 characters", () => {
+		const name = "a".repeat(32);
+		expect(agentNameFor(name)).toBe(name);
+	});
+
+	test("a long slug cuts at 32 characters and drops a trailing hyphen", () => {
+		const title = `a${"x".repeat(30)}-more`;
 		const name = agentNameFor(title);
-		expect(name.length).toBeLessThanOrEqual(32);
+		expect(name).toBe(`a${"x".repeat(30)}`);
+		expect(name.length).toBe(31);
 		expect(name.endsWith("-")).toBe(false);
 		expect(/^[a-z][a-z0-9_-]*$/.test(name)).toBe(true);
+	});
+});
+
+describe("Consultation naming", () => {
+	test("uses unknown when a stable identity has no alphanumerics", () => {
+		expect(shortStableIdentity("---")).toBe("unknown0");
+	});
+
+	test("pads a short stable identity to the full width", () => {
+		expect(shortStableIdentity("a1")).toBe("a1000000");
+		expect(shortStableIdentity("Ab-12")).toBe("ab120000");
+	});
+
+	test("uses consultation when a Consultation type has no safe characters", () => {
+		expect(consultationBranchName("abc", "---")).toBe("factory/consultation-abc00000-consultation");
+		expect(consultationBranchName("abc", "!Review__!")).toBe(
+			"factory/consultation-abc00000-review__",
+		);
+	});
+
+	test("cuts an overlong Consultation branch without a trailing hyphen", () => {
+		const branch = consultationBranchName("abc", `type-${"x".repeat(120)}`);
+		expect(branch.length).toBe(100);
+		expect(branch.endsWith("-")).toBe(false);
 	});
 });

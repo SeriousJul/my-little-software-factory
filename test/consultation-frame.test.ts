@@ -759,6 +759,54 @@ describe("Consultation responses through the UI", () => {
 			state.close();
 		}
 	});
+
+	test("the settled Agent output stays visible until an accepted response opens the next turn", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, RESPONSE_ID);
+		state.settleConsultationTurn(RESPONSE_ID, null, "the design holds", "idle");
+		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubPaneReadText(inner, paneId, "Agent: the design holds");
+		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "v", "the consultations view", (f) =>
+						detailPaneText(f).includes("State: awaiting-response"),
+					);
+					// The Agent's last message stays readable until the operator answers.
+					const settled = await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("Agent: the design holds"),
+						"the settled Agent output",
+					);
+					expect(detailPaneText(settled)).toContain("Agent view:");
+					expect(detailPaneText(settled)).toContain("the design holds");
+					expect(frameText(settled)).toContain("Enter respond");
+
+					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					setup.mockInput.typeText("then ship it");
+					await pressEnter(setup, "the accepted response to start a new turn", (f) =>
+						f.includes("State: working"),
+					);
+					await waitForCommands(
+						runner,
+						[`herdr agent prompt ${AGENT} then ship it`],
+						"the operator's response",
+					);
+					expect(state.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					const turns = state.consultationTurns(RESPONSE_ID);
+					expect(turns).toHaveLength(2);
+					expect(turns.at(-1)?.input).toBe("then ship it");
+				},
+				WIDTH,
+				30,
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			);
+		} finally {
+			state.close();
+		}
+	});
 });
 
 describe("Agent interaction through the UI", () => {

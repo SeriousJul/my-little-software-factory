@@ -120,6 +120,183 @@ describe("turnLogFromPiSession", () => {
 	test("an empty file yields null", () => {
 		expect(turnLogFromPiSession("")).toBeNull();
 	});
+
+	test("skips a JSON line that is not a record", () => {
+		const log = turnLogFromPiSession(
+			[
+				JSON.stringify(["not", "a", "record"]),
+				line({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "kept" }] },
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("skips a record whose type is not message", () => {
+		const log = turnLogFromPiSession(
+			[
+				line({
+					type: "session",
+					message: { role: "assistant", content: [{ type: "text", text: "skip" }] },
+				}),
+				line({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "kept" }] },
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("skips a message without a readable role", () => {
+		const log = turnLogFromPiSession(
+			[
+				line({ type: "message", message: { content: [{ type: "text", text: "skip" }] } }),
+				line({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "kept" }] },
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "text", text: "kept" }]);
+		expect(
+			turnLogFromPiSession(
+				line({ type: "message", message: { content: [{ type: "text", text: "skip" }] } }),
+			),
+		).toBeNull();
+	});
+
+	test("an assistant message with non-list content contributes no entries", () => {
+		expect(
+			turnLogFromPiSession(
+				line({ type: "message", message: { role: "assistant", content: "text" } }),
+			),
+		).toEqual([]);
+	});
+
+	test("drops empty and whitespace-only assistant text parts", () => {
+		expect(
+			turnLogFromPiSession(
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							{ type: "text", text: "" },
+							{ type: "text", text: " \t\n " },
+							{ type: "text", text: "agent words" },
+						],
+					},
+				}),
+			),
+		).toEqual([{ kind: "text", text: "agent words" }]);
+	});
+
+	test("drops a tool call without a readable name", () => {
+		expect(
+			turnLogFromPiSession(
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							{ type: "toolCall", id: "bad-call", arguments: { command: "skip" } },
+							{ type: "toolCall", id: "good-call", name: "bash", arguments: { command: "keep" } },
+						],
+					},
+				}),
+			),
+		).toEqual([{ kind: "tool", name: "bash", target: "keep", failed: false }]);
+	});
+
+	test("a file with only non-message records yields null", () => {
+		expect(
+			turnLogFromPiSession(`${line({ type: "session" })}\n${line({ type: "model_change" })}`),
+		).toBeNull();
+	});
+
+	test("an error result marks only its matching tool note failed", () => {
+		const log = turnLogFromPiSession(
+			[
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+					},
+				}),
+				line({
+					type: "message",
+					message: { role: "toolResult", toolCallId: "call-1", isError: true },
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "tool", name: "bash", target: "", failed: true }]);
+	});
+
+	test("an orphan error result does not change the log", () => {
+		const log = turnLogFromPiSession(
+			[
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+					},
+				}),
+				line({
+					type: "message",
+					message: { role: "toolResult", toolCallId: "other", isError: true },
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "tool", name: "bash", target: "", failed: false }]);
+	});
+
+	test("skips blank and malformed nested values without changing readable entries", () => {
+		const log = turnLogFromPiSession(
+			[
+				"   ",
+				"null",
+				line({ type: "message", message: null }),
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							null,
+							{ type: "thinking", text: "inner text" },
+							{ type: "text", text: 42 },
+							{ type: "other", name: "not a tool" },
+							{ type: "text", text: "kept" },
+						],
+					},
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("only tool-result messages can mark a prior tool note failed", () => {
+		const log = turnLogFromPiSession(
+			[
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+					},
+				}),
+				line({
+					type: "message",
+					message: { role: "user", toolCallId: "call-1", isError: true },
+				}),
+			].join("\n"),
+		);
+		expect(log).toEqual([{ kind: "tool", name: "bash", target: "", failed: false }]);
+	});
 });
 
 describe("toolTarget", () => {
@@ -158,6 +335,12 @@ describe("lastMessageFromLog", () => {
 		expect(
 			lastMessageFromLog([{ kind: "tool", name: "bash", target: "npm test", failed: false }]),
 		).toBe("");
+	});
+
+	test("a one-entry log still returns its first message", () => {
+		expect(lastMessageFromLog([{ kind: "text", text: "the only message" }])).toBe(
+			"the only message",
+		);
 	});
 });
 

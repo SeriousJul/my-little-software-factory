@@ -304,6 +304,117 @@ describe("HerdrAgentReader.readPane", () => {
 	});
 });
 
+describe("HerdrAgentReader.listAgents", () => {
+	test("drops items without a pane id or agent name", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{ agent: "pi", agent_status: "working" },
+						{ pane_id: "pane-no-agent", agent_status: "working" },
+						{ pane_id: "pane-kept", agent: "pi", agent_status: "working" },
+					],
+				},
+			}),
+		});
+		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					paneId: "pane-kept",
+					tabId: "",
+					workspaceId: "",
+					agent: "pi",
+					status: "working",
+					sessionId: "",
+				},
+			],
+		});
+	});
+
+	test("keeps an item with a non-record session handle but no session path", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: "pane-1",
+							tab_id: "tab-1",
+							workspace_id: "ws-1",
+							agent: "pi",
+							agent_status: "idle",
+							agent_session: null,
+						},
+					],
+				},
+			}),
+		});
+		const probe = await new HerdrAgentReader(runner).listAgents();
+		expect(probe).toEqual(
+			expect.objectContaining({
+				agents: [expect.objectContaining({ paneId: "pane-1", sessionId: "" })],
+			}),
+		);
+	});
+
+	test("degrades non-string handles and a non-number sequence", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: "pane-1",
+							tab_id: 7,
+							workspace_id: null,
+							agent: "pi",
+							agent_status: "idle",
+							sequence: "not a number",
+						},
+					],
+				},
+			}),
+		});
+		const probe = await new HerdrAgentReader(runner).listAgents();
+		expect(probe).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					paneId: "pane-1",
+					tabId: "",
+					workspaceId: "",
+					agent: "pi",
+					status: "idle",
+					sessionId: "",
+				},
+			],
+		});
+	});
+
+	test("reports an unreadable agent list without replacing the last observation", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: "not JSON" });
+		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
+			kind: "error",
+			reason: "herdr agent list did not return a readable agent list",
+		});
+	});
+
+	test("reports the failed herdr command's readable reason", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			code: 1,
+			stderr: "herdr session is gone\nmore detail",
+		});
+		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
+			kind: "error",
+			reason: "herdr session is gone",
+		});
+	});
+});
+
 describe("the observation cycle", () => {
 	test("marks a working agent's ticket running and settles a done one into awaiting", async () => {
 		const { state, coordinator } = rig({ agents: [agent("pane-implement", "working")] });
@@ -1184,6 +1295,173 @@ describe("Consultation observation identity", () => {
 				paneId: "pane-1",
 				warning: "Opening Agent verified; explicit recovery is required",
 			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("warns when an opening Consultation has an ambiguous Agent match", async () => {
+		const { state, coordinator, statuses } = rig({
+			agents: [agent("pane-1", "idle", "", "replacement-session")],
+		});
+		try {
+			openingConsultation(state, "opening-ambiguous");
+			await coordinator.tick();
+			expect(state.consultation("opening-ambiguous")).toMatchObject({
+				state: "opening",
+				warning: "Opening Agent match is ambiguous; explicit recovery is required",
+			});
+			expect(statuses).toContainEqual(
+				expect.objectContaining({
+					kind: "warning",
+					text: expect.stringContaining("needs recovery"),
+				}),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("warns when an opening Consultation Agent is not visible", async () => {
+		const { state, coordinator, statuses } = rig({ agents: [] });
+		try {
+			openingConsultation(state, "opening-not-visible");
+			await coordinator.tick();
+			expect(state.consultation("opening-not-visible")).toMatchObject({
+				state: "opening",
+				warning: "Opening Agent is not visible; explicit recovery is required",
+			});
+			expect(statuses).toContainEqual(
+				expect.objectContaining({
+					kind: "warning",
+					text: expect.stringContaining("needs recovery"),
+				}),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("moves a working or awaiting Consultation with no Agent to missing", async () => {
+		for (const stateName of ["working", "awaiting-response"] as const) {
+			const rigged = rig({ agents: [] });
+			try {
+				openingConsultation(rigged.state, `missing-${stateName}`);
+				rigged.state.setConsultationAgent(`missing-${stateName}`, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "session-1",
+				});
+				if (stateName === "awaiting-response")
+					rigged.state.settleConsultationTurn(`missing-${stateName}`, null, "output", "idle");
+				await rigged.coordinator.tick();
+				expect(rigged.state.consultation(`missing-${stateName}`)).toMatchObject({
+					state: "missing",
+					warning: "Agent is missing",
+				});
+				expect(rigged.statuses).toContainEqual(
+					expect.objectContaining({
+						kind: "warning",
+						text: expect.stringContaining("Agent is missing"),
+					}),
+				);
+			} finally {
+				rigged.state.close();
+			}
+		}
+	});
+
+	test("moves a working or awaiting Consultation with an ambiguous Agent to missing", async () => {
+		for (const stateName of ["working", "awaiting-response"] as const) {
+			const rigged = rig({ agents: [agent("pane-1", "idle", "", "other-session")] });
+			try {
+				openingConsultation(rigged.state, `ambiguous-${stateName}`);
+				rigged.state.setConsultationAgent(`ambiguous-${stateName}`, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "session-1",
+				});
+				if (stateName === "awaiting-response")
+					rigged.state.settleConsultationTurn(`ambiguous-${stateName}`, null, "output", "idle");
+				await rigged.coordinator.tick();
+				expect(rigged.state.consultation(`ambiguous-${stateName}`)).toMatchObject({
+					state: "missing",
+					warning: "Agent session match is ambiguous",
+				});
+			} finally {
+				rigged.state.close();
+			}
+		}
+	});
+
+	test("keeps a uniquely verified opening state and refreshes its handles", async () => {
+		const verified = {
+			...agent("pane-new", "idle", "", "session-1"),
+			tabId: "tab-new",
+			workspaceId: "ws-new",
+		};
+		const { state, coordinator } = rig({ agents: [verified] });
+		try {
+			openingConsultation(state, "opening-verified", "pane-old", "session-1");
+			await coordinator.tick();
+			expect(state.consultation("opening-verified")).toMatchObject({
+				state: "opening",
+				paneId: "pane-new",
+				tabId: "tab-new",
+				workspaceId: "ws-new",
+				sessionId: "session-1",
+				warning: "Opening Agent verified; explicit recovery is required",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("gives a verified opening Agent with unknown status the weaker warning", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-1", "not reported", "", "session-1")],
+		});
+		try {
+			openingConsultation(state, "opening-unknown");
+			await coordinator.tick();
+			expect(state.consultation("opening-unknown")).toMatchObject({
+				state: "opening",
+				warning: "Agent status is unknown",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	// Issue #24: Herdr can omit this optional handle. Keep the expected
+	// behavior pinned until the observation match treats the pane as verified.
+	test.fails("keeps the stored session id when a verified opening Agent has no stable session id", async () => {
+		const { state, coordinator } = rig({ agents: [agent("pane-1", "idle")] });
+		try {
+			openingConsultation(state, "opening-without-stable-id");
+			await coordinator.tick();
+			expect(state.consultation("opening-without-stable-id")).toMatchObject({
+				state: "opening",
+				sessionId: "session-1",
+				warning: "Opening Agent verified; explicit recovery is required",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("does not re-warn an opening Consultation on the next identical poll", async () => {
+		const { state, coordinator, statuses } = rig({ agents: [] });
+		try {
+			openingConsultation(state, "opening-warned");
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(state.consultation("opening-warned")?.warning).toBe(
+				"Opening Agent is not visible; explicit recovery is required",
+			);
+			expect(statuses.filter(({ text }) => text.includes("needs recovery"))).toHaveLength(1);
 		} finally {
 			state.close();
 		}

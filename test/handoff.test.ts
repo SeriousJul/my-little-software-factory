@@ -95,6 +95,10 @@ const defaultChoice = {
 
 /** The exact prompt the implement task type renders for this ticket. */
 const PROMPT = renderPrompt(DEFAULT_CONFIG.taskTypes.implement.template, ticket);
+const EXPECTED_IMPLEMENT_PROMPT =
+	"Implement the following github-issue.\n\nRepository: acme/billing\n\n" +
+	"#7: Retry policy for webhooks\n\nURL: https://github.com/acme/billing/issues/7\n\n" +
+	"Labels: \n\nDescription:\nAdd a retry policy.";
 const AGENT = "retry-policy-for-webhooks";
 
 /** A git checkout that resolves from the convention path. */
@@ -120,10 +124,23 @@ describe("renderSettingArgs", () => {
 });
 
 describe("renderPrompt", () => {
-	test("fills the three placeholders of the template", () => {
-		const prompt = renderPrompt("Repo: {repository}\nTitle: {title}\n{description}", ticket);
+	test("substitutes every ticket placeholder with its source fact", () => {
+		const detailed: Ticket = {
+			...ticket,
+			sourceKind: "github-pull-request",
+			externalKey: "PR-42",
+			url: "https://example.test/pulls/42",
+			labels: ["ready-for-review", "security"],
+		};
+		const prompt = renderPrompt(
+			"Repo: {repository}\nTitle: {title}\nDescription: {description}\nKind: {source-kind}\n" +
+				"Key: {external-key}\nURL: {source-url}\nLabels: {labels}",
+			detailed,
+		);
 		expect(prompt).toBe(
-			"Repo: acme/billing\nTitle: Retry policy for webhooks\nAdd a retry policy.",
+			"Repo: acme/billing\nTitle: Retry policy for webhooks\nDescription: Add a retry policy.\n" +
+				"Kind: github-pull-request\nKey: PR-42\nURL: https://example.test/pulls/42\n" +
+				"Labels: ready-for-review, security",
 		);
 	});
 
@@ -208,6 +225,14 @@ describe("handOffTicket: the live worktree sequence", () => {
 			status: "ok",
 			agent: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-new" },
 		});
+		// This expected value is deliberately literal, not rendered through the
+		// production function. A template or substitution regression changes the
+		// command the Agent receives.
+		expect(
+			runner.calls.find(
+				(call) => call.command === "herdr" && call.args[0] === "agent" && call.args[1] === "prompt",
+			)?.args,
+		).toEqual(["agent", "prompt", AGENT, EXPECTED_IMPLEMENT_PROMPT]);
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
@@ -960,13 +985,13 @@ describe("handOffTicket: the guard rails", () => {
 			{ ...defaultChoice, agentType: "cursor" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(agent.status).toBe("failed");
+		expect(agent).toEqual({ status: "failed", reason: "unknown agent type: cursor" });
 		const task = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, taskType: "refactor" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(task.status).toBe("failed");
+		expect(task).toEqual({ status: "failed", reason: "unknown task type: refactor" });
 		expect(runner.calls).toHaveLength(0);
 	});
 
@@ -1083,6 +1108,49 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			`herdr agent start ${AGENT} --kind pi --pane pane-2`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 			"herdr tab close tab-prev",
+		]);
+	});
+
+	test("a restart repeats its stored agent model and thinking in the start command", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-restart"),
+		});
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" },
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-interrupted",
+			previousMessage: "the interrupted work",
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(
+			runner.calls.find(
+				(call) => call.command === "herdr" && call.args[0] === "agent" && call.args[1] === "start",
+			)?.args,
+		).toEqual([
+			"agent",
+			"start",
+			AGENT,
+			"--kind",
+			"codex",
+			"--pane",
+			"pane-restart",
+			"--",
+			"--model",
+			"gpt-5.6",
+			"-c",
+			"model_reasoning_effort=high",
 		]);
 	});
 

@@ -103,6 +103,8 @@ describe("control plane executable, terminal protocol", () => {
 
 				// The startup request remains observable in the full session.
 				expectMouseReportingEnabled(session.output(), "over the whole session");
+				// A config file that exists must not be reported as missing.
+				expect(session.output().toString("utf8")).not.toContain("no config file at");
 			} finally {
 				session.dispose();
 				session = null;
@@ -110,7 +112,153 @@ describe("control plane executable, terminal protocol", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+
+	// Every bad startup argument must end in a readable line and a nonzero exit,
+	// with the UI never entered.
+	const startupFailures: Array<{ name: string; argv: (dir: string) => string[]; needle: string }> =
+		[
+			{
+				name: "an unknown argument",
+				argv: () => ["--unknown"],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "a --config flag with no path",
+				argv: () => ["--config"],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "an empty config path",
+				argv: () => ["--config", ""],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "a trailing extra argument",
+				argv: (dir) => ["--config", join(dir, "unused.toml"), "extra"],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "an invalid config file",
+				argv: (dir) => {
+					writeFileSync(join(dir, "invalid.toml"), "default-agent = 42\n", "utf8");
+					return ["--config", join(dir, "invalid.toml")];
+				},
+				needle: "default-agent",
+			},
+			{
+				name: "a state file that cannot be opened",
+				argv: (dir) => {
+					// A directory where the state database must be created.
+					mkdirSync(join(dir, "state.sqlite"), { recursive: true });
+					writeFileSync(
+						join(dir, "blocked.toml"),
+						[
+							'default-agent = "pi"',
+							'default-environment = "live-worktree"',
+							'default-task-type = "implement"',
+							`state-file = "${join(dir, "state.sqlite")}"`,
+							"[agents.pi]",
+							'kind = "pi"',
+							"[task-types.implement]",
+							'template = "Implement {title}"',
+							"",
+						].join("\n"),
+						"utf8",
+					);
+					return ["--config", join(dir, "blocked.toml")];
+				},
+				needle: "cannot open factory state",
+			},
+		];
+
+	for (const failure of startupFailures) {
+		it(
+			`exits with a readable error before the UI starts for ${failure.name}`,
+			async (ctx) => {
+				const isolated = mkdtempSync(join(tmpdir(), "factory-exec-failure-"));
+				let bad: PtySession | null = null;
+				try {
+					bad = await openControlPlanePty(failure.argv(isolated), isolatedEnv(isolated));
+					if (bad === null) {
+						ctx.skip("cannot open a pseudo-terminal on this platform");
+						return;
+					}
+					const output = await bad.waitFor(
+						(out) => out.toString("utf8").includes(failure.needle),
+						`the ${failure.name} error`,
+						EXIT_TIMEOUT_MS,
+					);
+					const exit = await withTimeout(
+						bad.exit(),
+						EXIT_TIMEOUT_MS,
+						`the ${failure.name} process to exit`,
+					);
+					expect(exit.code).not.toBe(0);
+					expect(output.toString("utf8")).toContain(failure.needle);
+					expect(output.toString("utf8"), output.toString("utf8")).not.toContain(ALT_SCREEN);
+				} finally {
+					bad?.dispose();
+					rmSync(isolated, { recursive: true, force: true });
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+	}
+
+	it(
+		"starts with shipped defaults and a note when the config file is missing",
+		async (ctx) => {
+			const isolated = mkdtempSync(join(tmpdir(), "factory-exec-defaults-"));
+			let defaults: PtySession | null = null;
+			try {
+				const missing = join(isolated, "does-not-exist.toml");
+				defaults = await openControlPlanePty(["--config", missing], isolatedEnv(isolated));
+				if (defaults === null) {
+					ctx.skip("cannot open a pseudo-terminal on this platform");
+					return;
+				}
+				await defaults.waitFor(
+					(out) => out.includes(ALT_SCREEN),
+					"the defaults UI to start",
+					STARTUP_TIMEOUT_MS,
+				);
+				await defaults.waitFor(
+					(out) =>
+						out
+							.toString("utf8")
+							.includes(`no config file at ${missing}, using the shipped defaults`),
+					"the shipped-defaults note",
+					STARTUP_TIMEOUT_MS,
+				);
+				await defaults.waitForStable(500, STABLE_TIMEOUT_MS);
+				defaults.write(QUIT_KEY);
+				const exit = await withTimeout(
+					defaults.exit(),
+					EXIT_TIMEOUT_MS,
+					"the defaults process to exit",
+				);
+				expect(exit.code).toBe(0);
+			} finally {
+				defaults?.dispose();
+				rmSync(isolated, { recursive: true, force: true });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
+
+function isolatedEnv(dir: string): Record<string, string> {
+	const emptyBin = join(dir, "bin");
+	mkdirSync(emptyBin, { recursive: true });
+	return {
+		HOME: dir,
+		XDG_CONFIG_HOME: join(dir, ".config"),
+		XDG_STATE_HOME: join(dir, ".state"),
+		XDG_DATA_HOME: join(dir, ".data"),
+		XDG_CACHE_HOME: join(dir, ".cache"),
+		PATH: emptyBin,
+	};
+}
 
 /** Fail with the names of reporting modes missing from renderer startup. */
 function expectMouseReportingEnabled(out: Buffer, when: string): void {
