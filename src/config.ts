@@ -572,6 +572,14 @@ export function validateInteractionExitKey(value: string): InteractionExitKey {
 		.toLowerCase()
 		.replace(/^ctrl-/, "ctrl+");
 	if (/^f(?:[1-9]|1[0-9]|2[0-4])$/.test(normalized)) return normalized;
+	if (normalized === "ctrl+c") {
+		// Ctrl+C is the emergency exit the control catalogue owns: an Agent
+		// interaction mode that took it would end the app instead of leaving
+		// the mode.
+		throw new ConfigError(
+			"config: interaction-exit-key cannot be ctrl+c; the emergency exit owns that key",
+		);
+	}
 	if (/^ctrl\+[a-z]$/.test(normalized)) return normalized;
 	throw new ConfigError(
 		"config: interaction-exit-key must be a function key (for example f12) or ctrl plus one letter",

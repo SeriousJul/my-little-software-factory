@@ -39,21 +39,21 @@ export class RefreshCoordinator {
 		this.refreshAll();
 	}
 
-	/** Start every idle source and return the number this call started. */
-	refreshAll(): number {
-		let started = 0;
-		for (const source of this.sources) {
-			if (this.inFlight.has(source.name)) continue;
-			this.refresh(source);
-			started += 1;
-		}
-		return started;
+	/**
+	 * Start every idle source and return the names this call started.
+	 *
+	 * The idle filter lives in `idleSources()` alone, so the count a manual
+	 * refresh reports and the names it waits for can never disagree.
+	 */
+	refreshAll(): string[] {
+		const idle = this.idleSources();
+		for (const source of idle) this.refresh(source);
+		return idle.map((source) => source.name);
 	}
 
-	idleSourceNames(): string[] {
-		return this.sources
-			.filter((source) => !this.inFlight.has(source.name))
-			.map((source) => source.name);
+	/** The sources a refresh can start: the ones not already fetching. */
+	idleSources(): readonly TicketSource[] {
+		return this.sources.filter((source) => !this.inFlight.has(source.name));
 	}
 
 	refresh(source: TicketSource): void {

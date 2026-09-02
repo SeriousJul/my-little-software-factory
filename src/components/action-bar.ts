@@ -1,4 +1,12 @@
-/** The permanent, single-row contextual Action bar. */
+/**
+ * The permanent, single-row contextual Action bar.
+ *
+ * One row of complete key hints, packed from the control catalogue: the
+ * control module owns the content and this module owns the layout. A hint is
+ * a unit, so a narrow terminal drops whole hints by priority rather than
+ * breaking one in half. Help keeps its row to the end because it is the only
+ * way to find out what the other keys were.
+ */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 
@@ -42,7 +50,7 @@ const GAP = 2;
  * Pack complete hints. A hint is removed as a unit, starting with the lowest
  * priority. The original order of every remaining hint is unchanged.
  */
-export function packActionBar(
+function packActionBar(
 	controls: readonly ControlDefinition[],
 	context: ControlContext,
 	width: number,
@@ -141,7 +149,7 @@ export function ActionBar({ mode, context, rangeIndicator, overlay, compactHelp 
 		children.push(...hintSpans(packed.left[i], `hint-${i}`));
 		if (
 			packed.range !== undefined &&
-			["scroll-detail", "guide-scroll", "message-scroll"].includes(packed.left[i].control.id)
+			["guide-scroll", "message-scroll"].includes(packed.left[i].control.id)
 		) {
 			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
 			children.push(createElement("span", { key: "range", fg: COLORS.dim }, packed.range));
@@ -204,7 +212,7 @@ function availableResult(): { available: true } {
 	return { available: true };
 }
 
-/** Make a row that is exactly the terminal width when callers need plain text. */
-export function actionBarText(text: string, width: number): string {
+/** Make a row that is exactly the terminal width. */
+function actionBarText(text: string, width: number): string {
 	return padToWidth(truncateToWidth(text, width), width);
 }

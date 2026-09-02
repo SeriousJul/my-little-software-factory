@@ -1087,6 +1087,15 @@ describe("consultation configuration", () => {
 		}
 	});
 
+	test("the exit key refuses Ctrl+C, which the emergency exit owns", () => {
+		for (const raw of ["ctrl+c", "CTRL+C", "ctrl-c", " ctrl+c "]) {
+			expectConfigError(
+				{ ...base(), "interaction-exit-key": raw },
+				"interaction-exit-key cannot be ctrl+c",
+			);
+		}
+	});
+
 	test("the exit key rejects plain letters, punctuation, and out-of-range keys", () => {
 		for (const raw of ["q", "ctrl+.", "f0", "f25", "ctrl-x-y", "shift-f12"]) {
 			expectConfigError(

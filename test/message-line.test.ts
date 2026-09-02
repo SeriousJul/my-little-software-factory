@@ -289,18 +289,28 @@ describe("the permanent Message line", () => {
 						(f) => messageRowOf(f).includes("issues: stale - GitHub rate limit exceeded"),
 						"the source-health warning",
 					);
-					// A refused refresh sets an operation warning, covering it.
+					// A second refresh: its working covers the stale health.
 					await press(setup, "r", "the second refresh", (f) =>
 						messageRowOf(f).includes("refreshing 1 sources"),
 					);
-					await press(setup, "r", "the refusal", (f) =>
-						messageRowOf(f).includes("every Ticket source is already refreshing"),
+					// A refused refresh while that one runs: the refusal is an
+					// operation Warning, and active progress outranks it
+					// (user story 51), so the Working line stays.
+					await press(setup, "r", "the refused refresh", (f) => {
+						const row = messageRowOf(f);
+						return row.includes("already refreshing") || row.includes("refreshing 1 sources");
+					});
+					expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
+						"Working: refreshing 1 sources",
 					);
 					await callsReached(source, 3);
 					source.settle(RATE_LIMITED);
-					// The operation warning survives the settle: it covers the health one.
-					expect(messageRowOf(await settle(setup)).trim()).toBe(
-						"Warning: every Ticket source is already refreshing",
+					// The progress clears with the refresh: the refusal returns,
+					// and it outranks the source-health warning (story 52).
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).trim() === "Warning: every Ticket source is already refreshing",
+						"the refusal after the refresh",
 					);
 				},
 				WIDTH,

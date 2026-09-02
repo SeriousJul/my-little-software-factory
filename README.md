@@ -45,62 +45,61 @@ observation reclaims an agent that outlives its work cycle).
 
 ## Controls
 
-The control plane keeps a contextual Action bar at the bottom of the
-terminal. It shows the common controls for the current interaction mode,
-and it dims a control the app will not run in that state. Press `?` or
-`F1` to open the in-app Key guide. The guide is the complete control
-catalogue, including controls for other modes, Quit, and the `Ctrl+C`
-emergency exit. Press `Esc`, `F1`, or `?` to close it.
+The control plane keeps a contextual Action bar in the last row of the
+terminal. It shows the controls the current interaction mode can run, dims
+one it will not run in the present state, and names the reason on the Message
+line when the operator presses it anyway.
 
-| Key              | What it does                                                            |
-| ---------------- | ----------------------------------------------------------------------- |
-| `j` / `k`        | Move the selection, or move the detail by its configured row speed      |
-| `Up` / `Down`    | Move the selection, or move the detail by its configured row speed      |
-| `PageUp` / `PageDown` | Select one list page, or move the detail one viewport with one shared row |
-| `Home` / `End`   | Select the first or last Ticket, or move the detail to its start or end |
-| `h` / `l`        | Switch focus between the list and detail                                |
-| `Left` / `Right` | Switch focus between the list and detail                                |
-| `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
-| `e`              | Open the override panel for the selected open ticket                    |
-| `a`              | Toggle auto-handoff mode for this session                              |
-| `r`              | Refresh ticket sources, or retry a failed Consultation                 |
-| `q`              | Quit                                                                    |
-| `v` / `t`        | Open Consultations / return to Tickets                                 |
-| `c`              | Open the Consultation launcher                                          |
-| `f`              | Cycle open, closed, and all Consultations                              |
-| `x`              | Close the selected Consultation                                         |
-| `d`              | Delete a selected closed Consultation                                   |
-| `?`              | Open the contextual key guide                                           |
-| `m`              | Open the full current Message view                                     |
+The in-app Key guide is the complete control list. Press `?` or `F1` to open
+it from anywhere, including the panes and the modals. It carries every mode,
+the controls that are only reachable from another mode, Quit, and the `Ctrl+C`
+emergency exit, each with what it does and, where the app will not run it,
+why. Press `Esc`, `F1`, or `?` to close it.
+
+This file does not repeat that list. A table of keys here went stale twice:
+the guide and the Action bar are generated from one control catalogue
+(`src/components/controls.ts`), so what the app shows is what the app runs.
+
+The controls the Consultation surfaces use are listed below. They are the
+part of the app that does not dispatch from the catalogue yet, so the Key
+guide shows them as the controls of other modes without claiming they are
+reachable from a Consultation surface.
 
 ### Consultation controls
 
-The Consultation view keeps an independent list and Agent view. In the
-launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
-launches, `Shift+Enter` inserts a newline, and `Esc` cancels. `Enter` on an
-awaiting response opens the response editor. The editor stores its draft in
-SQLite, `Enter` submits it, `Shift+Enter` inserts a newline, and `Esc` leaves
-the draft in place. `End` follows the latest Agent output after scrolling.
-Closed history shows cleanup results and retained resources, including resources
-left by a Force-close.
+The Consultation surfaces are the part of the app that still handles their
+own keys: the Consultation launcher, the legacy Consultation view, the
+response editor, Agent interaction, and the Consultation confirmation panel
+are not wired to the shared control catalogue yet (issue #9). The keys they
+use are these:
 
-A blocked Agent uses Agent interaction mode instead of the response editor.
-The default exit key is `F12`; configure `interaction-exit-key` with a
-function key or `Ctrl` plus one letter. All other controls are shown in the
-in-app guide when the contextual Action bar is available.
+- The Consultation view keeps an independent list and Agent view. In the
+  launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
+  launches, `Shift+Enter` inserts a newline, and `Esc` cancels.
+- `Enter` on an awaiting response opens the response editor. The editor
+  stores its draft in SQLite, `Enter` submits it, `Shift+Enter` inserts a
+  newline, and `Esc` leaves the draft in place.
+- `End` follows the latest Agent output after scrolling. Closed history shows
+  cleanup results and retained resources, including resources left by a
+  Force-close.
+- A blocked Agent uses Agent interaction mode instead of the response editor.
+  The default exit key is `F12`; configure `interaction-exit-key` with a
+  function key or `Ctrl` plus one letter.
 
-In the Ticket list, `j`/`k` and `Up`/`Down` move the selection, `l`/`Right`
-focuses the detail, `Enter` hands an open ticket off, opens the decision
-modal on an awaiting one, opens the missing modal on a ticket whose agent
-is gone, or focuses the agent of a blocked one, and `e` opens the override
-panel. In the detail, the row keys scroll at the configured speed and
-`h`/`Left` returns to the list. The page and jump keys work in both panes:
-they move one visible page, or the pane edges. `a` toggles auto-handoff,
-`r` refreshes the sources, and `q` quits.
+Every other surface the app has now dispatches from the catalogue, so the Key
+guide and the Action bar state its controls. The Ticket list and detail move
+with the row, page and jump keys, focus the detail with `l` or `Right` and the
+list with `h` or `Left`, hand an open ticket off with `Enter`, open the
+decision modal on an awaiting one, the missing modal on a ticket whose agent
+is gone, and the override panel with `e`. `a` toggles auto-handoff, `r`
+refreshes the sources, `v` and `t` switch views, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
-Action bar always reserve the two bottom rows.
+the Action bar reserve the two bottom rows at every terminal size: below the
+smallest useful frame the panes give way to a size message and a compact Help
+control, and a surface that cannot draw its own rows says so instead of
+painting them over its border.
 
 ### Entry controls
 
@@ -645,7 +644,7 @@ source-kind = "github-issue"
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
 | `max-handoffs-per-ticket` | no | `10` | Handoffs per ticket after which auto-handoff stops dispatching it. A manual handoff may pass the limit. |
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
-| `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. |
+| `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |

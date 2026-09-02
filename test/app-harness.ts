@@ -22,7 +22,10 @@ export type Setup = Awaited<ReturnType<typeof testRender>>;
 export const WIDTH = 120;
 export const HEIGHT = 30;
 const FRAME_POLL_MS = 10;
-const FRAME_DEADLINE_MS = 2000;
+// Long enough for a frame on a loaded machine: the whole suite runs its
+// renderers in one process, and a poll can wait on the event loop. A test
+// that never reaches its predicate still fails, only later.
+const FRAME_DEADLINE_MS = 5000;
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
 /** The state badge the list pane renders for each ticket state. */

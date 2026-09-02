@@ -84,11 +84,12 @@ import {
 import { ConsultationDetail, consultationDetailLines } from "./consultation-detail.ts";
 import { ConsultationLauncher } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
+import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
 import {
 	availabilityFor,
+	type ControlContext,
 	contextFor,
 	controlById,
-	controlForKey,
 	type InteractionMode,
 } from "./controls.ts";
 import { DecisionModal } from "./decision-modal.ts";
@@ -96,10 +97,11 @@ import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { useMessageFacts } from "./message-facts.ts";
 import { formatMessage, type MessageFact } from "./messages.ts";
 import { type ActionRow, MissingModal } from "./missing-modal.ts";
+import { belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
-import { detailLines, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
+import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
 
@@ -284,7 +286,7 @@ export function App({
 		warning: setWarningMessage,
 		error: setErrorMessage,
 		clearOperation: clearOperationMessage,
-		clearRefreshWorking,
+		clearWorking: clearWorkingMessage,
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
@@ -316,7 +318,17 @@ export function App({
 			consultationCounts.recovery === 0)
 			? ""
 			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${bell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
-	const tooSmall = terminalWidth < 40 || terminalHeight < 7;
+	const tooSmall = belowMinimum(terminalWidth, terminalHeight);
+	// The compact frame's own arithmetic. One row holds the Action bar at any
+	// height (user story 73), the Message line gives up before it, and the size
+	// box takes what is left: padding first, then rows. It is handed no more
+	// lines than it holds, so nothing can paint through the bar's row.
+	const compactBarRows = 1;
+	const compactMessageRows = terminalHeight >= 2 ? 1 : 0;
+	const compactRows = Math.max(0, terminalHeight - compactBarRows - compactMessageRows);
+	const compactPadding = compactRows >= 3 ? 1 : 0;
+	const compactTextWidth = Math.max(1, terminalWidth - 2 * compactPadding);
+	const compactLineCount = Math.max(0, compactRows - 2 * compactPadding);
 	// The tickets view keeps the permanent Message line and Action bar. The
 	// mode line is above its panes, and the attention line joins the bottom
 	// rows when a Consultation needs the operator. Keep the compact size
@@ -335,14 +347,13 @@ export function App({
 	const listGeometry = usePaneGeometry("list", reservedRows);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	// The Scroll control's availability must agree with the native detail's
-	// own overflow: the same lines, at the same gutter-aware text width.
-	const detailTextCols = Math.max(
-		1,
-		detailGeometry.usableCols - (detailGeometry.usableCols >= 2 ? 1 : 0),
-	);
-	const detailMaxScroll = maxScrollOf(
-		detailLines(tickets[selectedIndex], detailTextCols, config.maxHandoffsPerTicket).length,
+	// own overflow, so it asks the pane for the measurement rather than
+	// repeating the pane's gutter rule here.
+	const detailMaxScroll = detailScrollRoom(
+		tickets[selectedIndex],
+		detailGeometry.usableCols,
 		detailGeometry.visibleRows,
+		config.maxHandoffsPerTicket,
 	);
 	const selectedTicket = tickets[selectedIndex];
 	const selectedConsultation = consultations[consultationIndex];
@@ -513,12 +524,19 @@ export function App({
 		return write;
 	};
 
-	/** Resolve a handoff operation into the durable Message facts. */
+	/**
+	 * Resolve a handoff operation into the durable Message facts.
+	 *
+	 * The Handoff's own progress ends here: its outcome is the last fact the
+	 * operator should read, and the Working line of a refresh that ran while
+	 * it was in flight stays.
+	 */
 	const finishOutcome = async (outcome: HandoffOutcome): Promise<void> => {
 		const persistWarning =
 			outcome.notes?.mappingToWrite === undefined
 				? undefined
 				: await persistMapping(outcome.notes.mappingToWrite);
+		clearWorkingMessage("handoff");
 		if (outcome.status !== "ok")
 			setErrorMessage(
 				persistWarning === undefined ? outcome.reason : `${outcome.reason}; ${persistWarning}`,
@@ -551,7 +569,7 @@ export function App({
 			return;
 		}
 		inFlightRef.current = true;
-		setWorkingMessage(`handing off "${ticket.title}"...`);
+		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		const onStage = (stage: string) => state.advanceHandoffAttempt(claim.attemptId, stage);
 		const run =
 			origin === "open"
@@ -689,7 +707,9 @@ export function App({
 			controlContextFor(currentBaseMode()),
 		);
 		if (!availability.available) {
-			setWarningMessage(availability.reason ?? "control is unavailable");
+			setWarningMessage(
+				refusalReason(controlById("handoff"), controlContextFor(currentBaseMode())),
+			);
 			return;
 		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
@@ -707,7 +727,7 @@ export function App({
 		// ticket list by hand instead of reading it back from SQLite. It has no
 		// queue, so it refuses to run behind a handoff already in flight.
 		inFlightRef.current = true;
-		setWorkingMessage(`handing off "${ticket.title}"...`);
+		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
 				if (outcome.status !== "failed") {
@@ -742,12 +762,10 @@ export function App({
 	};
 
 	const openOverride = () => {
-		const availability = availabilityFor(
-			controlById("override"),
-			controlContextFor(currentBaseMode()),
-		);
+		const overrideControl = controlById("override");
+		const availability = availabilityFor(overrideControl, controlContextFor(currentBaseMode()));
 		if (!availability.available) {
-			setWarningMessage(availability.reason ?? "control is unavailable");
+			setWarningMessage(refusalText(overrideControl, availability));
 			return;
 		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
@@ -1482,21 +1500,20 @@ export function App({
 	};
 
 	const manualRefreshPending = useRef(new Set<string>());
+	/**
+	 * Refresh now, from the `r` control.
+	 *
+	 * The dispatcher already gated the control, so this runs the behavior and
+	 * nothing else: one check, one reason. The names it starts are held so a
+	 * source that fails this round can still explain itself once the refresh
+	 * fact clears.
+	 */
 	const refreshNow = () => {
-		const availability = availabilityFor(
-			controlById("refresh"),
-			controlContextFor(currentBaseMode()),
-		);
-		if (!availability.available) {
-			setWarningMessage(availability.reason ?? "control is unavailable");
-			return;
-		}
 		const coordinator = coordinatorRef.current;
 		if (coordinator === undefined) return;
-		const idle = coordinator.idleSourceNames();
-		manualRefreshPending.current = new Set(idle);
 		const started = coordinator.refreshAll();
-		setWorkingMessage(`refreshing ${started} sources`, "refresh");
+		manualRefreshPending.current = new Set(started);
+		setWorkingMessage(`refreshing ${started.length} sources`, "refresh");
 	};
 
 	useKeyboard((key) => {
@@ -1730,100 +1747,92 @@ export function App({
 			return;
 		}
 
+		// The control catalogue decides the rest, through the same dispatch
+		// hook every modal, panel, and overlay uses. The Consultation paths
+		// above still match keys by name until the port recorded on the
+		// Consultations issue lands.
 		const mode = currentBaseMode();
-		const context = controlContextFor(mode);
-		const control = controlForKey(mode, key, context);
-		if (control === undefined) return;
-
-		// A settled Ticket uses the distinct Decide control. It names what Enter
-		// does instead of leaving a dimmed Hand off hint that still opens a panel.
-		if (control.id === "decide-completion" && context.selectedTicket !== undefined) {
-			const ticket = context.selectedTicket;
-			const taskType =
-				ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
-			if (autoModeRef.current) {
-				// The factory decides the ticket itself: the operator gets the
-				// notice on the Message line, and the observation makes the
-				// decision in the background.
-				setWorkingMessage("auto-handoff is on: the factory decides this ticket");
-				return;
-			}
-			if (configRef.current.taskTypes[taskType]?.autoClose === true) {
-				setWorkingMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
-				observationRef.current?.tick();
-			} else setPanel({ kind: "decision", identity: ticket.identity });
-			return;
-		}
-
-		// A missing or blocked agent has its own recovery action. It can queue
-		// behind another Handoff, so this route stays available even while the
-		// normal Hand off control is unavailable.
-		if (control.id === "handoff" && context.selectedTicket !== undefined) {
-			const ticket = context.selectedTicket;
-			if (ticket.state === "handed-off" || ticket.state === "running") {
-				if (markerOf(ticket) === "blocked") runGoto(ticket);
-				else if (markerOf(ticket) === "missing")
-					setPanel({ kind: "missing", identity: ticket.identity });
-				else
-					setWarningMessage(availabilityFor(control, context).reason ?? "control is unavailable");
-				return;
-			}
-		}
-
-		const availability = availabilityFor(control, context);
-		if (!availability.available) {
-			setWarningMessage(availability.reason ?? "control is unavailable");
-			return;
-		}
-		switch (control.id) {
-			case "emergency-exit":
-			case "quit":
-				renderer.destroy();
-				break;
-			case "detail":
-				focusPane("detail");
-				break;
-			case "tickets":
-				focusPane("list");
-				break;
-			case "move-list":
-			case "scroll-detail":
-				if (key.name === "pageup") movePage(-1);
-				else if (key.name === "pagedown") movePage(1);
-				else if (key.name === "home") moveEdge("start");
-				else if (key.name === "end") moveEdge("end");
-				else moveVertical(key.name === "up" || key.name === "k" ? -1 : 1);
-				break;
-			case "handoff": {
-				const ticket = ticketsRef.current[selectedIndexRef.current];
-				if (ticket !== undefined) startHandoff(choiceFor(ticket));
-				break;
-			}
-			case "consultations":
-				openConsultations();
-				break;
-			case "launch":
-				setLauncher(true);
-				break;
-			case "override":
-				openOverride();
-				break;
-			case "refresh":
-				refreshNow();
-				break;
-			case "auto-handoff":
-				if (!openAttention()) toggleAutoHandoff();
-				break;
-			case "help":
-				openGuide(mode);
-				break;
-			case "message":
-				openMessage(mode);
-				break;
-			default:
-				break;
-		}
+		createControlDispatch({
+			mode,
+			context: controlContextFor(mode),
+			ungated: ["decide-completion", "handoff"],
+			onUnavailable: setWarningMessage,
+			onEmergencyExit: () => renderer.destroy(),
+			handlers: {
+				// A settled Ticket uses the distinct Decide control. It names
+				// what Enter does instead of leaving a dimmed Hand off hint
+				// that still opens a panel.
+				"decide-completion": ({ context }) => decideCompletion(context),
+				// A missing or blocked agent has its own recovery action, and
+				// it can queue behind another Handoff, so this route stays
+				// open even while the normal Hand off control is unavailable.
+				handoff: ({ context, refuse }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined || !isInFlight(ticket)) {
+						if (ticket === undefined) refuse();
+						else startHandoff(choiceFor(ticket));
+						return;
+					}
+					if (markerOf(ticket) === "blocked") runGoto(ticket);
+					else if (markerOf(ticket) === "missing")
+						setPanel({ kind: "missing", identity: ticket.identity });
+					// The Ticket is in flight and its agent is neither blocked
+					// nor missing: Enter has no other meaning here, so the
+					// control refuses itself with the catalogue's reason.
+					else refuse();
+				},
+				quit: () => renderer.destroy(),
+				detail: () => focusPane("detail"),
+				tickets: () => focusPane("list"),
+				"move-list": ({ key }) => moveRange(key.name),
+				"scroll-detail": ({ key }) => moveRange(key.name),
+				consultations: openConsultations,
+				launch: () => setLauncher(true),
+				override: openOverride,
+				refresh: refreshNow,
+				"auto-handoff": () => {
+					if (!openAttention()) toggleAutoHandoff();
+				},
+				help: () => openGuide(mode),
+				message: () => openMessage(mode),
+			},
+		})(key);
 	});
+
+	/** The list and detail panes answer the same range of keys by name. */
+	const moveRange = (name: string) => {
+		if (name === "pageup") movePage(-1);
+		else if (name === "pagedown") movePage(1);
+		else if (name === "home") moveEdge("start");
+		else if (name === "end") moveEdge("end");
+		else moveVertical(name === "up" || name === "k" ? -1 : 1);
+	};
+
+	/** Whether a Ticket holds an Agent that is not finished with its work. */
+	const isInFlight = (ticket: Ticket) =>
+		ticket.state === "handed-off" || ticket.state === "running";
+
+	/**
+	 * Enter on a settled Ticket: decide its completion, or tell the operator
+	 * why the factory decides it alone.
+	 */
+	const decideCompletion = (context: ControlContext) => {
+		const ticket = context.selectedTicket;
+		if (ticket === undefined) return;
+		const taskType =
+			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		if (autoModeRef.current) {
+			// The factory decides the ticket itself: the operator gets the
+			// notice on the Message line, and the observation makes the
+			// decision in the background.
+			setWorkingMessage("auto-handoff is on: the factory decides this ticket");
+			return;
+		}
+		if (configRef.current.taskTypes[taskType]?.autoClose === true) {
+			setWorkingMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
+			observationRef.current?.tick();
+		} else setPanel({ kind: "decision", identity: ticket.identity });
+	};
 
 	// A state may already hold tickets when the app boots: read them once at
 	// mount, before any refresh or observation cycle runs.
@@ -1934,7 +1943,7 @@ export function App({
 				settled: (sourceName) => {
 					if (!manualRefreshPending.current.has(sourceName)) return;
 					manualRefreshPending.current.delete(sourceName);
-					if (manualRefreshPending.current.size === 0) clearRefreshWorking();
+					if (manualRefreshPending.current.size === 0) clearWorkingMessage("refresh");
 				},
 			},
 		);
@@ -1944,7 +1953,7 @@ export function App({
 			coordinator.stop();
 			coordinatorRef.current = undefined;
 		};
-	}, [state, sources, replaceTickets, replaceConsultations, clearRefreshWorking]);
+	}, [state, sources, replaceTickets, replaceConsultations, clearWorkingMessage]);
 
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test
@@ -2131,6 +2140,16 @@ export function App({
 		(visibleMessage.severity === "error" || visibleMessage.severity === "working")
 			? visibleMessageText
 			: undefined;
+	// The size message first, then an important operation's line, capped to the
+	// rows the size box actually holds.
+	const compactLines = (
+		importantSmallMessage === undefined
+			? [{ text: TOO_SMALL_TEXT, fg: COLORS.statusWarning }]
+			: [
+					{ text: TOO_SMALL_TEXT, fg: COLORS.statusWarning },
+					{ text: importantSmallMessage, fg: messageColor },
+				]
+	).slice(0, compactLineCount);
 	const utilityContext =
 		utility?.kind === "guide" || utility?.kind === "message"
 			? controlContextFor(utility.mode)
@@ -2148,27 +2167,37 @@ export function App({
 		view === "tickets" && tooSmall
 			? createElement(
 					"box",
-					{ style: { width: "100%", flexGrow: 1, flexDirection: "column", padding: 1 } },
-					createElement(
-						"text",
-						{ fg: COLORS.statusWarning },
-						padToWidth(
-							truncateToWidth(
-								"Terminal too small: minimum 40 columns by 7 rows",
-								Math.max(1, terminalWidth - 2),
-							),
-							Math.max(1, terminalWidth - 2),
-						),
-					),
-					importantSmallMessage !== undefined &&
+					// The bottom rows are the frame's promise: the Message line and
+					// the Action bar with its Help control, at any height (user
+					// stories 71 and 73). The size box pays for them first with its
+					// padding, then with its own rows, and it is given no more lines
+					// than it holds, so nothing can paint through the bar's row.
+					{
+						style: {
+							width: "100%",
+							height: compactRows,
+							flexGrow: 0,
+							flexShrink: 1,
+							flexDirection: "column",
+							overflow: "hidden",
+							padding: compactPadding,
+						},
+					},
+					...compactLines.map((line) =>
 						createElement(
 							"text",
-							{ fg: messageColor },
-							padToWidth(
-								truncateToWidth(importantSmallMessage, Math.max(1, terminalWidth - 2)),
-								Math.max(1, terminalWidth - 2),
-							),
+							{
+								key: line.text,
+								fg: line.fg,
+								// A row of a fixed box states its own height: a
+								// child with none is laid out over the rows that
+								// the frame has promised to the Message line and
+								// the Action bar.
+								style: { width: "100%", height: 1 },
+							},
+							padToWidth(truncateToWidth(line.text, compactTextWidth), compactTextWidth),
 						),
+					),
 				)
 			: createElement(
 					"box",
@@ -2336,6 +2365,7 @@ export function App({
 				truncateToWidth(attentionLine, terminalWidth),
 			),
 		view === "tickets" &&
+			terminalHeight >= 2 &&
 			createElement(
 				"text",
 				{ style: { width: "100%", height: 1, fg: messageColor } },

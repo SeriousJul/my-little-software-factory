@@ -37,13 +37,14 @@
  * sits at the terminal bottom and names the controls this panel dispatches
  * through the shared control catalogue.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, useRef, useState } from "react";
 
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { ActionBar } from "./action-bar.ts";
-import { availabilityFor, type ControlContext, contextFor, controlForKey } from "./controls.ts";
+import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor } from "./controls.ts";
+import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { padToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -91,7 +92,7 @@ const LABEL_WIDTH = 12;
 /** The desired value column: an agent name, a model, or an env kind. */
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
+
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
 /**
@@ -108,18 +109,7 @@ const INPUT_KEY_BINDINGS = [
 	{ name: "y", ctrl: true, action: "redo" },
 ];
 
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-
-/**
- * The panel geometry sized to the terminal.
- *
- * The modal takes what the terminal holds. The value column shrinks first,
- * then the label column, then the marker. The rows scroll within `maxRows`
- * when the height cannot hold them all; the viewport keeps the selected row
- * on screen. The shared Action bar sits outside the modal at the terminal
- * bottom, so it never alters these columns.
- */
+/** The panel's columns, within the rows and width the shared chrome leaves. */
 interface PanelGeometry {
 	markerWidth: number;
 	labelWidth: number;
@@ -127,26 +117,27 @@ interface PanelGeometry {
 	maxRows: number;
 }
 
-function panelGeometry(width: number, height: number): PanelGeometry {
-	const inner = Math.max(0, width - CHROME);
+/**
+ * The panel's columns at a content width.
+ *
+ * The value column shrinks first, then the label column, then the marker,
+ * and all three keep adding up to the width the box offers. The rows scroll
+ * within `maxRows` when the height cannot hold them all; the viewport keeps
+ * the selected row on screen, and a row never wraps.
+ */
+function panelGeometry(contentWidth: number, maxRows: number): PanelGeometry {
 	// Reserve one cell for the value before shrinking the marker at the
 	// smallest renderable widths.
-	const markerWidth = Math.min(MARKER_WIDTH, Math.max(0, inner - 1));
+	const markerWidth = Math.min(MARKER_WIDTH, Math.max(0, contentWidth - 1));
 	let labelWidth = 0;
 	let valueWidth = 0;
-	if (inner > markerWidth) {
-		const contentWidth = inner - markerWidth;
+	if (contentWidth > markerWidth) {
+		const room = contentWidth - markerWidth;
 		// Keep one value cell whenever the panel has room beyond its marker.
-		// The value shrinks first, then the label, while all three columns
-		// continue to add up to the modal's inner width.
-		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, contentWidth - LABEL_WIDTH));
-		labelWidth = Math.min(LABEL_WIDTH, contentWidth - valueWidth);
+		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, room - LABEL_WIDTH));
+		labelWidth = Math.min(LABEL_WIDTH, room - valueWidth);
 	}
-	// The Action bar is outside the modal and does not alter its row columns.
-	// The rows scroll within the viewport when a short terminal cannot hold
-	// them all; a row never wraps.
-	const maxRows = Math.max(1, height - CHROME);
-	return { markerWidth, labelWidth, valueWidth, maxRows };
+	return { markerWidth, labelWidth, valueWidth, maxRows: Math.max(1, maxRows) };
 }
 
 export function OverridePanel({
@@ -166,7 +157,6 @@ export function OverridePanel({
 	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const geometry = panelGeometry(terminalWidth, terminalHeight);
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
 	// The selection indexes the full row list, not the visible viewport. The
 	// viewport scrolls to keep this row on screen.
@@ -190,6 +180,14 @@ export function OverridePanel({
 		rowsFor(value, agents, environments, taskTypes, agentSettings);
 
 	const allRows = allRowsFor(choice);
+	// The shared chrome sizes the box: the terminal's rows above the Action
+	// bar, or the rows the panel needs, whichever is fewer. The panel spans
+	// the terminal edge to edge, so its value column keeps every cell it can.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		rows: allRows.length,
+		margin: 0,
+	});
+	const geometry = panelGeometry(frame.contentWidth, frame.contentRows);
 	// Switching the agent can hide the rows below the selection; clamp it.
 	const safeSelected = Math.min(selected, allRows.length - 1);
 	// The rows the terminal height holds, scrolled to keep the selected row
@@ -257,90 +255,56 @@ export function OverridePanel({
 		commit((current) => ({ ...current, [key]: value }));
 	};
 
-	useKeyboard((key) => {
-		if (!inputActive || key.meta) return;
+	// The panel's mode follows the row the cursor is on, so it is read at key
+	// time: one key can move the cursor, and the next belongs to the new row.
+	const currentMode = (): "override-list" | "override-text" =>
+		cursorRow().kind === "text" ? "override-text" : "override-list";
+
+	useControlDispatch({
+		mode: currentMode,
+		context,
+		active: inputActive,
 		// The Ctrl combos the catalogue does not name (undo, redo, word
 		// delete) belong to the focused input. Ctrl+C is the emergency exit.
-		if (key.ctrl) {
-			if (key.name === "c") onEmergencyExit();
-			return;
-		}
-		const target = cursorRow();
-		const interactionMode = target.kind === "text" ? "override-text" : "override-list";
-		const interactionContext = contextFor(interactionMode, context);
-		const control = controlForKey(interactionMode, key, interactionContext);
-		if (control === undefined) return;
-		const availability = availabilityFor(control, interactionContext);
-		if (!availability.available) {
-			onUnavailable?.(availability.reason ?? "control is unavailable");
-			key.preventDefault();
-			return;
-		}
-		switch (control.id) {
-			case "move-list":
+		skip: (key) => key.ctrl === true && key.name !== "c",
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			"move-list": ({ key }) => {
 				// Tab moves from a list row and a text row alike; Shift+Tab
 				// is the previous row.
 				move(key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1);
-				key.preventDefault();
-				return;
-			case "change-override":
+				key.preventDefault?.();
+			},
+			"change-override": ({ key }) => {
 				cycle(key.name === "left" || key.name === "h" ? -1 : 1);
-				key.preventDefault();
-				return;
-			case "handoff":
+				key.preventDefault?.();
+			},
+			handoff: ({ key }) => {
 				onConfirm(choiceRef.current);
-				key.preventDefault();
-				return;
-			case "cancel":
+				key.preventDefault?.();
+			},
+			cancel: ({ key }) => {
 				onCancel();
-				key.preventDefault();
-				return;
-			case "help":
-				onHelp?.(interactionMode);
-				return;
-			case "message":
-				onMessage?.(interactionMode);
-				return;
-			default:
-				return;
-		}
+				key.preventDefault?.();
+			},
+			help: () => onHelp?.(currentMode()),
+			message: () => onMessage?.(currentMode()),
+		},
 	});
 
-	return createElement(
-		"box",
-		{
-			// A full-screen overlay above the app, with the modal centered in it.
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
-			},
-		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				title: "Override",
-				padding: 1,
-				style: { flexDirection: "column" },
-			},
-			...rows.map((r) =>
-				rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputActive),
-			),
+	const mode = currentMode();
+	return createElement(ModalSurface, {
+		frame,
+		title: "Override",
+		borderColor: COLORS.borderFocused,
+		// One row is enough to be a panel: the rows that do not fit scroll.
+		minContentRows: 1,
+		bar: { mode, context: contextFor(mode, context) },
+		children: rows.map((r) =>
+			rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputActive),
 		),
-		createElement(ActionBar, {
-			mode: row.kind === "text" ? "override-text" : "override-list",
-			context: contextFor(row.kind === "text" ? "override-text" : "override-list", context),
-			overlay: true,
-		}),
-	);
+	});
 }
 
 /** The rows the panel offers for the current choice, in order. */

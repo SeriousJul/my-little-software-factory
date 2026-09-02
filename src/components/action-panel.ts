@@ -1,31 +1,25 @@
 /**
- * The action modal: a read-only message, and the rows the operator can
- * confirm on it.
+ * The Consultation confirm panel: a read-only message and the rows the
+ * operator can confirm on it.
  *
- * The control plane opens it in two places. On an awaiting ticket it is
- * the decision: close (first, selected by default), a Goto, and one
- * handoff row per workflow target the ticket's task type allows. On an
- * in-flight ticket whose pane herdr no longer lists it is the missing
- * panel: restart or abandon.
+ * It serves the Consultation surfaces that predate the control catalogue:
+ * closing, deleting, and the live-checkout conflict. The control plane's own
+ * decisions render through the decision modal and the missing modal, which
+ * share this module's chrome but dispatch their keys through the catalogue.
  *
- * The keys: up and down move the action rows, j/k scroll the message,
- * enter confirms the selected action, esc cancels. While it is open, the
- * keys of the app below are disabled.
+ * The keys stay the panel's own until the Consultations port lands: up and
+ * down move the action rows, j/k scroll the message, enter confirms the
+ * selected action, esc cancels. While it is open, the keys of the app below
+ * are disabled.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-
 import { windowOf } from "./geometry.ts";
-import { padToWidth, truncateToWidth, wrapToWidth } from "./text.ts";
+import { type ActionRow, actionRowSpans, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
-/** One confirmable action, with its label and an optional detail. */
-export interface ActionRow {
-	key: string;
-	label: string;
-	detail?: string;
-}
+export type { ActionRow };
 
 interface ActionPanelProps {
 	title: string;
@@ -36,27 +30,33 @@ interface ActionPanelProps {
 	onCancel: () => void;
 }
 
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-/** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
-/** The label column: the widest action label plus its gap. */
-const LABEL_WIDTH = 12;
-/** The body and the detail column share this width. */
+/** The message column stops at 60 cells: a confirmation line is short. */
 const CONTENT_WIDTH = 60;
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
+/** The hint row: this panel owns no Action bar, so it names its keys itself. */
 const HINT = "up/down select  j/k message  enter  esc";
 
+/** Wrap the message, retaining explicit blank lines. */
+function wrapBody(lines: readonly string[], width: number): string[] {
+	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
+}
+
 export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
-	const { width: terminalWidth } = useTerminalDimensions();
-	// The body wraps to the content width; the wide terminals cap it there
-	// and the narrow ones keep what they hold.
-	const bodyCols = Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
-	const wrapped = (bodyLines ?? []).flatMap((line) =>
-		line === "" ? [""] : wrapToWidth(line, bodyCols),
-	);
-	const bodyRows = Math.min(wrapped.length, MAX_BODY_ROWS);
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
+	const message = bodyLines ?? [];
+	// The panel owns no Action bar, so it reserves no bar row. It is still as
+	// tall as its content and no taller, and it clips what cannot fit.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		maxWidth: CONTENT_WIDTH + 4,
+		bar: false,
+		rows: actions.length + 1 + MAX_BODY_ROWS,
+		// Every action row plus one line of the message.
+		minRows: actions.length + 1,
+	});
+	const wrapped = wrapBody(message, frame.contentWidth);
+	const bodyRows = Math.max(0, frame.contentRows - actions.length - 1);
+	const maxBodyScroll = Math.max(0, wrapped.length - bodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
 	const [selected, setSelected] = useState(0);
 	const selectedRef = useRef(0);
@@ -84,7 +84,7 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 				move(-1);
 				break;
 			case "j":
-				setBodyScroll((current) => Math.min(current + 1, Math.max(0, wrapped.length - bodyRows)));
+				setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
 				break;
 			case "k":
 				setBodyScroll((current) => Math.max(0, current - 1));
@@ -92,67 +92,34 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 		}
 	});
 
-	const scroll = Math.min(bodyScroll, Math.max(0, wrapped.length - bodyRows));
-	const visibleBody = windowOf(wrapped, scroll, bodyRows);
-
-	return createElement(
-		"box",
-		{
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
-			},
-		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				title,
-				padding: 1,
-				style: { flexDirection: "column" },
-			},
-			...visibleBody.map((line, index) =>
+	const scroll = Math.min(bodyScroll, maxBodyScroll);
+	return createElement(ModalSurface, {
+		frame,
+		title,
+		borderColor: COLORS.borderFocused,
+		// Every action row plus the hint: without them the panel states a
+		// problem with no way to answer it.
+		minContentRows: actions.length + 1,
+		children: [
+			...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}`, fg: COLORS.dim },
-					truncateToWidth(line, bodyCols),
+					truncateToWidth(line, frame.contentWidth),
 				),
 			),
 			...actions.map((row, index) =>
-				createElement("text", { key: row.key }, ...actionSpans(row, index === selected)),
+				createElement(
+					"text",
+					{ key: row.key },
+					...actionRowSpans(row, index === selected, frame.contentWidth),
+				),
 			),
-			createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, bodyCols)),
-		),
-	);
-}
-
-/** One action row as spans: the marker, the label, the dim detail. */
-function actionSpans(row: ActionRow, selected: boolean): ReactElement[] {
-	const detail = row.detail ?? "";
-	const detailWidth = Math.max(0, CONTENT_WIDTH - MARKER_WIDTH - LABEL_WIDTH);
-	return [
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			selected ? "❯ " : "  ",
-		),
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.text },
-			padToWidth(`${row.label} `, LABEL_WIDTH),
-		),
-		createElement(
-			"span",
-			{ fg: COLORS.dim },
-			detailWidth > 0 ? truncateToWidth(detail, detailWidth) : "",
-		),
-	];
+			createElement(
+				"text",
+				{ key: "hint", fg: COLORS.dim },
+				truncateToWidth(HINT, frame.contentWidth),
+			),
+		],
+	});
 }

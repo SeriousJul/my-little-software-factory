@@ -26,7 +26,7 @@ export type InteractionMode =
 	| "key-guide"
 	| "message-view";
 
-export type ControlScope =
+type ControlScope =
 	| "global"
 	| "control-plane"
 	| "ticket-list"
@@ -34,7 +34,7 @@ export type ControlScope =
 	| "override"
 	| "modal"
 	| "utility";
-export type ControlKey =
+type ControlKey =
 	| "up"
 	| "down"
 	| "left"
@@ -97,10 +97,27 @@ export interface ControlDefinition {
 	priority: number;
 	modes: readonly InteractionMode[];
 	availability: (context: ControlContext) => ControlAvailability;
+	/**
+	 * The note the Key guide shows beside a control that is always available.
+	 * A consequence of the control, not a claim about the current state, so it
+	 * never dims the row: the Emergency exit's recovery warning is the one.
+	 */
+	guideNote?: string;
 }
 
 const available = (): ControlAvailability => ({ available: true });
 const unavailable = (reason: string): ControlAvailability => ({ available: false, reason });
+
+/**
+ * The two catalogue strings a surface other than the Message line shows.
+ *
+ * The Key guide names both, so they live here with the controls they belong
+ * to: a reason the guide cuts is a reason the operator cannot act on.
+ */
+const CONSULTATION_TYPES_MISSING =
+	"no Consultation types configured; add [consultation-types.<name>] to the config file";
+/** Why an emergency exit is not a clean shutdown. */
+const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
 
 /** The Handoff and Override eligibility rules, with one source for each reason. */
 const handoffEligibility = (context: ControlContext): ControlAvailability => {
@@ -152,8 +169,17 @@ const allModes: readonly InteractionMode[] = [
 	"message-view",
 ];
 
-/** The exhaustive fixed control definitions. */
-export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
+/**
+ * The exhaustive fixed control definitions.
+ *
+ * The Action bar priorities form one ladder for the whole plane, highest
+ * first: Help, the conditional Message control, the overlay's own Cancel,
+ * mode navigation, the primary action, the secondary actions the spec names
+ * for the base modes (Override, then Refresh), and last the Consultation
+ * entries the control plane reached for. Two controls of one mode never
+ * share a priority, so the packing order is total.
+ */
+const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "move-list",
 		label: "Move",
@@ -269,7 +295,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "v",
 		scope: "control-plane",
 		actionBar: true,
-		priority: 60,
+		priority: 45,
 		modes: [...baseModes],
 		availability: available,
 	},
@@ -280,14 +306,10 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "c",
 		scope: "control-plane",
 		actionBar: true,
-		priority: 50,
+		priority: 40,
 		modes: [...baseModes],
 		availability: (context) =>
-			context.consultationTypesConfigured
-				? available()
-				: unavailable(
-						"no Consultation types configured; add [consultation-types.<name>] to the config file",
-					),
+			context.consultationTypesConfigured ? available() : unavailable(CONSULTATION_TYPES_MISSING),
 	},
 	{
 		id: "override",
@@ -296,7 +318,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "e",
 		scope: "control-plane",
 		actionBar: true,
-		priority: 55,
+		priority: 65,
 		modes: [...baseModes],
 		availability: handoffEligibility,
 	},
@@ -307,7 +329,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "r",
 		scope: "control-plane",
 		actionBar: true,
-		priority: 40,
+		priority: 60,
 		modes: [...baseModes],
 		availability: refresh,
 	},
@@ -380,6 +402,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 1,
 		modes: [...allModes],
 		availability: available,
+		guideNote: EMERGENCY_EXIT_NOTE,
 	},
 	{
 		id: "select-action",
@@ -484,7 +507,7 @@ export const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	},
 ];
 
-export function controlsForMode(mode: InteractionMode): ControlDefinition[] {
+function controlsForMode(mode: InteractionMode): ControlDefinition[] {
 	return CONTROL_DEFINITIONS.filter((control) => control.modes.includes(mode));
 }
 

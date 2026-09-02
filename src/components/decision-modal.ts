@@ -11,27 +11,36 @@
  *
  * The shape: near-fullscreen, one cell of margin on every side, so the log
  * gets the whole terminal. It pops in over the app: a short fade with the
- * box growing to its final size.
+ * box growing to its final size. Its chrome is the shared modal chrome, so
+ * the Action bar keeps its own row at every size.
  *
- * The keys dispatch through the shared control catalogue in the
+ * The keys dispatch through the shared control catalogue hook in the
  * decision-modal interaction mode: up and down move the action rows, j/k
  * scroll the log one row with the page and jump keys as aliases, enter
- * confirms the selected action, and esc cancels. The shared Action bar
- * names the controls, and the in-app Key guide catalogs them. While it is
- * open, the keys of the app below are disabled.
+ * confirms the selected action, and esc cancels. While it is open, the keys
+ * of the app below are disabled.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { TurnLogEntry } from "../turn-log.ts";
-import { ActionBar } from "./action-bar.ts";
-import { availabilityFor, type ControlContext, contextFor, controlForKey } from "./controls.ts";
+import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import { type MdLine, renderMarkdown } from "./markdown.ts";
-import type { ActionRow } from "./missing-modal.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import {
+	type ActionRow,
+	actionRowSpans,
+	bodyRowSpans,
+	ModalSurface,
+	modalFrame,
+	scrollbarRows,
+	useActionSelection,
+} from "./modal-chrome.ts";
+import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
+
+export type { ActionRow };
 
 interface DecisionModalProps {
 	/** The ticket's title, for the border. */
@@ -56,60 +65,23 @@ interface DecisionModalProps {
 
 /** The modal leaves one cell of margin on every side. */
 const MARGIN = 1;
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-/** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
-/** The label column: enough for the usual "Handoff: <type>" action. */
-const LABEL_WIDTH = 20;
 /** The pop-in: a short fade with the box growing to its final size. */
 const POP_MS = 120;
 const POP_TICK_MS = 16;
 /** The box's size at the pop-in's start, of its final size. */
 const POP_START = 0.94;
-
-/** The log's three voices, in the shared palette. */
-const LOG_COLORS = {
-	text: COLORS.text,
-	bright: COLORS.textBright,
-	dim: COLORS.dim,
-};
+/** The one row under the border that names the context. */
+const CONTEXT_ROWS = 1;
 
 /**
- * The modal's final box size: the terminal minus one cell of margin on
- * every side.
- */
-export function decisionBoxSize(
-	terminalWidth: number,
-	terminalHeight: number,
-): { width: number; height: number } {
-	return {
-		width: Math.max(1, terminalWidth - MARGIN * 2),
-		height: Math.max(1, terminalHeight - MARGIN * 2),
-	};
-}
-
-/**
- * Fit the log window within a modal of a given box size.
+ * Fit the log window within a box that holds `contentRows` rows.
  *
- * The context row and the action rows are always kept. The shared Action
- * bar sits in the modal's bottom margin row, so it never takes a row from
- * the log.
- *
- * The layout derives from the box, not the terminal, so the pop-in stays
- * honest: while the box is still growing, lines wrap at its current width
- * and the body window has its current row count. A line that is wider than
- * the frame being drawn is what a terminal shows as a smudge.
+ * The context row and every action row are always kept: an action row is
+ * the only way out of the modal, so the log yields to them. The shared
+ * Action bar owns the surface's last row, so it never takes a row here.
  */
-export function decisionLayout(
-	boxWidth: number,
-	boxHeight: number,
-	actionRows: number,
-): { contentWidth: number; bodyRows: number } {
-	const contentWidth = Math.max(1, boxWidth - CHROME);
-	const innerRows = Math.max(0, boxHeight - CHROME);
-	const bodyRows = Math.max(0, innerRows - actionRows - 1);
-	return { contentWidth, bodyRows };
+function logRows(contentRows: number, actionRows: number): number {
+	return Math.max(0, contentRows - actionRows - CONTEXT_ROWS);
 }
 
 /**
@@ -142,6 +114,13 @@ function buildBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
 	return out;
 }
 
+/** The log's three voices, in the shared palette. */
+const LOG_COLORS = {
+	text: COLORS.text,
+	bright: COLORS.textBright,
+	dim: COLORS.dim,
+};
+
 export function DecisionModal({
 	title,
 	contextLine,
@@ -157,15 +136,10 @@ export function DecisionModal({
 	onEmergencyExit,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	// The box size the pop-in grows into, decided at the terminal's size. The
-	// content layout follows the box while it grows; the hint and the
-	// scrollbar are decided at the final size, so neither flickers in and
-	// out during the pop.
-	const finalBox = decisionBoxSize(terminalWidth, terminalHeight);
-	const finalLayout = useMemo(
-		() => decisionLayout(finalBox.width, finalBox.height, actions.length),
-		[finalBox.width, finalBox.height, actions.length],
-	);
+	// The size the pop-in grows into, decided at the terminal's size. The
+	// scrollbar is decided there too, so neither the scrollbar nor the log
+	// window flickers in and out while the box grows.
+	const finalFrame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
 	// The pop-in: a short fade with the box growing to its final size. A
 	// self-driven progress keeps it deterministic in the test renderer,
 	// where the animation engine never ticks.
@@ -180,209 +154,98 @@ export function DecisionModal({
 		return () => clearInterval(id);
 	}, []);
 	const popFactor = POP_START + (1 - POP_START) * pop;
-	const boxWidth = Math.max(1, Math.round(finalBox.width * popFactor));
-	const boxHeight = Math.max(1, Math.round(finalBox.height * popFactor));
-	const geometry = decisionLayout(boxWidth, boxHeight, actions.length);
+	// The modal is a near-fullscreen surface: it takes the room the terminal
+	// offers above its Action bar, and the log scrolls inside it. The shared
+	// chrome keeps the box above the bar's row, so its border can never draw
+	// through the bar at a short size.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		margin: MARGIN,
+		scale: popFactor,
+	});
 	// Reserve a column for the scrollbar only when the log needs one. A
 	// scrollbar can add wrap rows, so determine overflow once at the final
 	// width, then make the final window from the narrower text width.
 	const fullWidthBody = useMemo(
-		() => buildBody(entries, finalLayout.contentWidth),
-		[entries, finalLayout.contentWidth],
+		() => buildBody(entries, finalFrame.contentWidth),
+		[entries, finalFrame.contentWidth],
 	);
-	const hasScrollbar = fullWidthBody.length > finalLayout.bodyRows;
-	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
+	const hasScrollbar = fullWidthBody.length > logRows(finalFrame.contentRows, actions.length);
+	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
 	const body = useMemo(() => buildBody(entries, bodyWidth), [entries, bodyWidth]);
-	const bodyRows = Math.min(body.length, geometry.bodyRows);
+	const bodyRows = Math.min(body.length, logRows(frame.contentRows, actions.length));
 	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the
 	// newest line in view. `null` pins the view to the bottom until the
 	// operator scrolls: the bottom's index moves while the box grows in.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-	const [selected, setSelected] = useState(0);
-	const selectedRef = useRef(0);
+	const selection = useActionSelection(actions);
 
-	const move = (delta: number) => {
-		if (actions.length === 0) return;
-		const at = Math.min(selectedRef.current, actions.length - 1);
-		selectedRef.current = (at + delta + actions.length) % actions.length;
-		setSelected(selectedRef.current);
+	// Scroll the log by one step of the named key: a page moves one viewport
+	// minus the shared row, and the jump keys take either edge. A null view
+	// is the bottom, so the first step reads the bottom's index.
+	const scrollLog = (name: string) => {
+		if (name === "pageup")
+			setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
+		else if (name === "pagedown")
+			setBodyScroll((current) =>
+				Math.min(maxBodyScroll, (current ?? maxBodyScroll) + Math.max(1, bodyRows)),
+			);
+		else if (name === "home") setBodyScroll(0);
+		else if (name === "end") setBodyScroll(maxBodyScroll);
+		else if (name === "j")
+			setBodyScroll((current) => Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll));
+		else setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
 	};
 
-	const actionContext = contextFor("decision-modal", context);
-
-	useKeyboard((key) => {
-		if (!inputActive || key.meta) return;
-		const control = controlForKey("decision-modal", key, actionContext);
-		if (control === undefined) return;
-		const availability = availabilityFor(control, actionContext);
-		if (!availability.available) {
-			onUnavailable?.(availability.reason ?? "control is unavailable");
-			return;
-		}
-		switch (control.id) {
-			case "emergency-exit":
-				onEmergencyExit();
-				return;
-			case "help":
-				onHelp?.();
-				return;
-			case "message":
-				onMessage?.();
-				return;
-			case "cancel-action":
-				onCancel();
-				return;
-			case "confirm-action": {
-				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
-				if (action !== undefined) onAction(action.key);
-				return;
-			}
-			case "select-action":
-				move(key.name === "up" ? -1 : 1);
-				return;
-			case "scroll-turn-log":
-				if (key.name === "pageup")
-					setBodyScroll((current) =>
-						Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)),
-					);
-				else if (key.name === "pagedown")
-					setBodyScroll((current) =>
-						Math.min(maxBodyScroll, (current ?? maxBodyScroll) + Math.max(1, bodyRows)),
-					);
-				else if (key.name === "home") setBodyScroll(0);
-				else if (key.name === "end") setBodyScroll(maxBodyScroll);
-				else if (key.name === "j")
-					setBodyScroll((current) => Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll));
-				else setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
-				return;
-			default:
-				return;
-		}
+	useControlDispatch({
+		mode: "decision-modal",
+		context,
+		active: inputActive,
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			help: () => onHelp?.(),
+			message: () => onMessage?.(),
+			"cancel-action": onCancel,
+			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
+			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
+			"scroll-turn-log": ({ key }) => scrollLog(key.name),
+		},
 	});
 
 	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
-	const visibleBody = windowOf(body, scroll, bodyRows);
 	const thumbRows = hasScrollbar ? scrollbarRows(body.length, bodyRows, scroll) : null;
-
-	return createElement(
-		"box",
-		{
-			// A full-screen overlay above the app, with the modal centered in
-			// it. Near-fullscreen itself: one cell of margin on every side.
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
-			},
-		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				title: truncateToWidth(`Decision: ${title}`, geometry.contentWidth),
-				padding: 1,
-				style: {
-					flexDirection: "column",
-					width: boxWidth,
-					height: boxHeight,
-					opacity: pop,
-				},
-			},
+	return createElement(ModalSurface, {
+		frame,
+		title: `Decision: ${title}`,
+		borderColor: COLORS.borderFocused,
+		// The context row and every action row: without them the modal is
+		// not a decision, so it holds itself back at that size.
+		minContentRows: actions.length + CONTEXT_ROWS,
+		opacity: pop,
+		bar: { mode: "decision-modal", context: contextFor("decision-modal", context) },
+		children: [
 			createElement(
 				"text",
-				{ fg: COLORS.dim },
-				truncateToWidth(contextLine, geometry.contentWidth),
+				{ key: "context", fg: COLORS.dim },
+				truncateToWidth(contextLine, frame.contentWidth),
 			),
-			...visibleBody.map((line, index) =>
+			...windowOf(body, scroll, bodyRows).map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}` },
-					...bodySpans(line, bodyWidth, thumbRows?.has(index)),
+					...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
 				),
 			),
 			...actions.map((row, index) =>
 				createElement(
 					"text",
 					{ key: row.key },
-					...actionSpans(row, index === selected, geometry.contentWidth),
+					...actionRowSpans(row, index === selection.at, frame.contentWidth),
 				),
 			),
-		),
-		createElement(ActionBar, {
-			mode: "decision-modal",
-			context: actionContext,
-			overlay: true,
-		}),
-	);
-}
-
-/** The proportional scrollbar rows for the log window. */
-function scrollbarRows(
-	lineCount: number,
-	visibleRows: number,
-	scroll: number,
-): ReadonlySet<number> {
-	const thumbHeight = Math.max(1, Math.ceil((visibleRows * visibleRows) / lineCount));
-	const travel = Math.max(0, visibleRows - thumbHeight);
-	const maxScroll = maxScrollOf(lineCount, visibleRows);
-	const start = maxScroll === 0 ? 0 : Math.round((scroll / maxScroll) * travel);
-	return new Set(Array.from({ length: thumbHeight }, (_, index) => start + index));
-}
-
-/** One log row as spans, with a dim track and bright thumb when it scrolls. */
-function bodySpans(line: MdLine, width: number, thumb: boolean | undefined): ReactElement[] {
-	const spans: ReactElement[] =
-		line.length === 0
-			? [createElement("span", { fg: COLORS.dim }, "")]
-			: line.map((span) =>
-					createElement("span", { fg: span.fg }, truncateToWidth(span.text, width)),
-				);
-	if (thumb !== undefined) {
-		// Pin the scrollbar to the body's last column. Without the pad, the
-		// thumb and track float behind short lines: a block in the middle of
-		// the row reads as an artifact.
-		let used = 0;
-		for (const span of line) used += widthOf(span.text);
-		const pad = Math.max(0, width - used);
-		if (pad > 0) spans.push(createElement("span", {}, " ".repeat(pad)));
-		spans.push(
-			createElement("span", { fg: thumb ? COLORS.textBright : COLORS.dim }, thumb ? "█" : "│"),
-		);
-	}
-	return spans;
-}
-
-/** One action row as spans: the marker, the label, and the dim detail. */
-function actionSpans(row: ActionRow, selected: boolean, contentWidth: number): ReactElement[] {
-	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
-	const labelWidth = Math.min(LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
-	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
-	const detail = row.detail ?? "";
-	return [
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			truncateToWidth(selected ? "❯ " : "  ", markerWidth),
-		),
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.text },
-			truncateToWidth(padToWidth(`${row.label} `, labelWidth), labelWidth),
-		),
-		createElement(
-			"span",
-			{ fg: COLORS.dim },
-			detailWidth > 0 ? truncateToWidth(detail, detailWidth) : "",
-		),
-	];
+		],
+	});
 }

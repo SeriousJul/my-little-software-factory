@@ -39,6 +39,7 @@ import {
 	rgb,
 	rowsOf,
 	settle,
+	sleep,
 	spanColorAt,
 	WIDTH,
 	withApp,
@@ -257,8 +258,10 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Refresh, Launch, Override, Consultations, Hand off, Detail,
-				// Move, and Help last.
+				// Launch consultation, Consultations, Refresh, Override, Hand
+				// off, Detail, Move, and Help last. The spec's common controls
+				// of the base modes, Override and Refresh, therefore outlive
+				// the Consultation entries the control plane reached for.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -273,7 +276,22 @@ describe("the contextual Action bar", () => {
 							"? Help",
 						],
 					],
-					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "v Consultations", "? Help"]],
+					// The two widths the last review measured: the Consultation
+					// entries give way, and the spec's common controls stay.
+					[
+						100,
+						[
+							"↑↓/jk Move",
+							"→/l Detail",
+							"Enter Hand off",
+							"v Consultations",
+							"e Override",
+							"r Refresh",
+							"? Help",
+						],
+					],
+					[70, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"]],
+					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "? Help"]],
 					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "? Help"]],
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 					[40, ["↑↓/jk Move", "→/l Detail", "? Help"]],
@@ -497,12 +515,14 @@ describe("the contextual Action bar", () => {
 				await press(setup, "return", "the handoff working", (f) =>
 					messageRowOf(f).startsWith("Working: handing off"),
 				);
-				await press(setup, "q", "the quit refusal", (f) =>
-					messageRowOf(f).includes("normal Quit is unavailable during a Handoff"),
-				);
+				// The refusal is recorded, but it does not erase the active
+				// progress: the spec ranks Working above an operation
+				// Warning, so the line keeps the Handoff's own progress.
+				setup.mockInput.pressKey("q");
+				await sleep(400);
+				expect(messageRowOf(setup.captureCharFrame()).trim()).toContain("Working: handing off");
 				// The app is still up behind the refusal.
 				expect(actionBarRowOf(setup.captureCharFrame())).toContain("? Help");
-				// The handoff settles: its outcome replaces the refusal.
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).startsWith("Error: "),
@@ -964,9 +984,13 @@ describe("the contextual Action bar", () => {
 				const barRow = rowsOf(frame).length - 1;
 				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(COLORS.dim));
 				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(COLORS.dim));
-				await press(setup, "return", "the handoff refusal", (f) =>
-					messageRowOf(f).includes("a Handoff is active"),
-				);
+				// The second Enter is refused as a Hand off. The refusal is
+				// an operation Warning, and active progress outranks it
+				// (user story 51), so the Handoff's own Working keeps the
+				// line: an answer never erases the work in flight.
+				setup.mockInput.pressKey("return");
+				await sleep(400);
+				expect(messageRowOf(setup.captureCharFrame())).toContain("handing off");
 				await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).trim() === "",

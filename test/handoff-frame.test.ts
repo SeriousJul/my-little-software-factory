@@ -1198,14 +1198,16 @@ describe("the override panel", () => {
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
 
-				// The panel is refused while the handoff is in flight, and the
-				// refusal shows on the Message line.
+				// The panel is refused while the handoff is in flight. The
+				// refusal is an operation Warning, and active progress
+				// outranks it (user story 51), so the Handoff's own Working
+				// keeps the line: the run in flight is never erased by an
+				// answer. The refresh variant in test/message-line.test.ts
+				// reads the refusal itself once the progress clears.
 				setup.mockInput.pressKey("e");
-				const refused = await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("a Handoff is active"),
-					"the refusal on the Message line",
-				);
+				await awaitFrame(setup, (f) => !frameText(f).includes("❯ Agent"), "the refusal to run");
+				const refused = setup.captureCharFrame();
+				expect(messageRowOf(refused)).toContain("Working: handing off");
 				// The panel never opens: the Action bar's dimmed Override hint is
 				// permanent, so the refusal is read from the panel's row.
 				expect(refused).not.toContain("❯ Agent");
@@ -1939,8 +1941,9 @@ describe("the override panel", () => {
 
 		await withApp(
 			async (setup) => {
-				// An eight-row terminal holds four of the five panel rows, so the
-				// last row is off screen while the first is selected...
+				// A six-row terminal holds the box's two borders, the Action
+				// bar, and three of the five panel rows, so the last row is off
+				// screen while the first is selected...
 				const open = await openPanel(setup);
 				expect(frameText(open)).not.toContain("Thinking");
 
@@ -1963,7 +1966,7 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("Agent");
 			},
 			24,
-			8,
+			6,
 			props,
 		);
 	});
@@ -2027,18 +2030,19 @@ describe("the override panel", () => {
 				const frame = await openPanel(setup);
 
 				const rows = rowsOf(frame);
-				expect(rows).toHaveLength(8);
+				expect(rows).toHaveLength(7);
 				for (const row of rows) {
 					expect(row.length).toBe(24);
 				}
 
-				// The height cannot hold every row: the last row, Thinking,
-				// drops, and the rows above it keep their columns.
+				// The height cannot hold every row once the Action bar takes
+				// its own: the box gives up its padding first, and the last
+				// row, Thinking, drops. The rows above it keep their columns.
 				expect(frameText(frame)).toContain("Model");
 				expect(frameText(frame)).not.toContain("Thinking");
 			},
 			24,
-			8,
+			7,
 			props,
 		);
 	});

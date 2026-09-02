@@ -26,9 +26,15 @@ _Avoid_: status line, notification bar
 The on-demand, read-only presentation of a full message that does not fit on the Message line.
 _Avoid_: message modal, error popup
 
+**Control catalogue**:
+The one list of the controls the control plane dispatches, with the keys, interaction modes, availability and reason of each.
+The `src/components/controls.ts` table is the only place that states them: the Action bar, the Key guide and the key dispatch all read it, so what the app shows is what the app runs.
+_Avoid_: key map, binding table
+
 **Key guide**:
-The on-demand catalog of all controls, with the current interaction mode and global controls shown first.
+The on-demand catalog of the controls in the control catalogue, with the current interaction mode and global controls shown first.
 It includes controls that the action bar does not show.
+The Consultation launcher, Consultation view, response editor and Agent terminal still dispatch their own keys, so the guide lists their controls as another mode's, not as controls it can run (issue #9).
 _Avoid_: help popup, keybinding popin, shortcut window
 
 **Decision modal**:

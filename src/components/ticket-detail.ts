@@ -12,7 +12,7 @@ import {
 
 import type { ScrollConfig } from "../config.ts";
 import type { Ticket } from "../domain/ticket.ts";
-import { usePaneGeometry } from "./geometry.ts";
+import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS, STATE_COLORS, stateBadge, taskTypeColor, ticketTaskType } from "./theme.ts";
@@ -160,6 +160,40 @@ export interface TicketDetailHandle {
 	toEnd(): void;
 }
 
+/**
+ * The columns the detail can draw text in, at one usable width.
+ *
+ * The scrollbar gutter is kept even when the content fits, so a later
+ * overflow cannot reflow the text; at one inner text column it is dropped,
+ * because the control must not consume the last readable cell. The rule
+ * lives here once: `detailScrollRoom` measures with it and the pane draws
+ * with it, so the shell can never promise a scroll the ScrollBox does not
+ * have.
+ */
+function detailTextCols(usableCols: number): number {
+	return Math.max(1, usableCols - (usableCols >= 2 ? 1 : 0));
+}
+
+/**
+ * The rows the detail can still scroll, measured the way the pane measures
+ * its own content.
+ *
+ * The app's Scroll control asks this instead of repeating the pane's
+ * arithmetic: a copy of the gutter rule would let the control promise a
+ * scroll the real ScrollBox does not have.
+ */
+export function detailScrollRoom(
+	ticket: Ticket | undefined,
+	usableCols: number,
+	visibleRows: number,
+	handoffLimit: number,
+): number {
+	return maxScrollOf(
+		detailLines(ticket, detailTextCols(usableCols), handoffLimit).length,
+		visibleRows,
+	);
+}
+
 interface TicketDetailProps {
 	ticket: Ticket | undefined;
 	focused: boolean;
@@ -187,11 +221,9 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	ref,
 ) {
 	const geometry = usePaneGeometry("detail", reservedRows);
-	// The scroll box owns the gutter. Keep it even when content fits so a
-	// later overflow cannot reflow the text. At one inner text column, remove
-	// it so the control never consumes the last readable cell.
-	const reserveGutter = geometry.usableCols >= 2;
-	const textCols = Math.max(1, geometry.usableCols - (reserveGutter ? 1 : 0));
+	// The scroll box owns the gutter; see `detailTextCols`.
+	const textCols = detailTextCols(geometry.usableCols);
+	const reserveGutter = textCols < geometry.usableCols;
 	const lines = detailLines(ticket, textCols, handoffLimit);
 	const hasOverflow = lines.length > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
