@@ -241,7 +241,7 @@ _Avoid_: prompt, template
 **Task profile**:
 The agent type, model, thinking level, and context window a task type starts its handoffs with.
 It is a start value: the override panel prefills it, a workflow edge's agent pin can replace its agent for one handoff, and an operator override beats all of it.
-Each setting is checked against the Agent the handoff lands on, not against the profile's own Agent, so a reroute that leaves a setting behind fails the handoff.
+A setting the Agent a Handoff lands on cannot take fails that Handoff with a readable reason, so a reroute that leaves a setting behind is seen, not absorbed.
 _Avoid_: run settings, task settings
 
 **Suggested task type**:

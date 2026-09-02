@@ -1,6 +1,6 @@
 # ADR 0009: Handoff settings resolve on their own chains
 
-Status: accepted
+Status: accepted, with one part superseded by ADR 0010
 Date: 2026-09-02
 
 ## Context
@@ -77,13 +77,36 @@ The considered alternatives:
   reroute to another agent is checked only at handoff time, by the same rule
   that fails the handoff, and that rule reads the agent's `thinking-values`
   too: a level the new agent does not offer fails there.
-- A profile's `model`, and `default-model`, are free text with no startup
-  check, so a model an agent cannot map is caught at handoff time only. A
-  startup check would be wrong: an edge can reroute the handoff onto an agent
-  that does map a model, and the config cannot know which agent a given
-  handoff lands on.
+- A model can name an agent that the handoff never lands on, and an agent can
+  be reached only through a reroute or an override, so the handoff-time rule
+  above is what catches a model those two cannot see: an edge reroute, an
+  operator override, and `default-model` all name no agent of their own. A
+  profile's own `model` and a Consultation type's `model` do name their agent,
+  so ADR 0010 supersedes this record there and checks those two at startup
+  against the agent's own Model list, while the handoff keeps checking them
+  too. What this record decides and ADR 0010 keeps is the loud rule itself: a
+  setting its agent cannot take fails the handoff with a readable reason
+  instead of being absorbed.
 - Because a resolved value the resolved agent cannot take fails the handoff,
   the override panel keeps such a value on screen in the warning color. A row
   hidden behind an agent that maps no model would strand the value where no
   key can clear it, and a row that hid a value it still sends would tell the
   operator something false about the handoff they are confirming.
+- Known limitation: a Consultation dispatch does not carry the handoff-time
+  rule. A setting its resolved agent cannot map is still dropped there, so a
+  Consultation can start without the model, level, or count its type names.
+  Its own ticket retires that drop.
+- Known limitation: in auto-handoff mode a profile setting its agent cannot
+  take fails every pass, and each pass records a handoff attempt. Nothing
+  holds the ticket back, because the loud rule is the point: the reason is the
+  report, and the fix is the config or the panel.
+- Known limitation: a Model is free text, and the panel cannot yet list what
+  an agent offers (ADR 0010), so a value that carries a space reaches the agent
+  as two arguments. The Context row was made digits-only to keep one count in
+  one argument; the shape rule for a model belongs beside it once the Model
+  list lands.
+- Known limitation: the panel still takes a Thinking level as free text when
+  its agent maps a template but lists no values, because the shared level set
+  is ADR 0010's to ship. A row can therefore hold a level its agent will
+  refuse; the handoff-time rule above is what makes that value loud, and the
+  row shows it in the warning color until the operator clears it.
