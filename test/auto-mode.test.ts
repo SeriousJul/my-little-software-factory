@@ -1150,7 +1150,7 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
-	test("an abandon at the handoff limit records the failed cleanup, and the row wears both markers", async () => {
+	test("the observation abandons a missing cycle at the limit, and records the failed cleanup", async () => {
 		const app = seededApp(
 			"in-flight",
 			{ maxHandoffsPerTicket: 1, autoHandoff: true },

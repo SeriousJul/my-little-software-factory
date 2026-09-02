@@ -6,7 +6,9 @@
  * never overflows the pane. A blocked or missing agent shows its failure
  * in place of the state badge; a ticket at the handoff limit, or one whose
  * closed cycle still has an environment alive in herdr, wears its markers
- * as trailing text. The task type badge sits between the state badge and
+ * as trailing text. Trailing markers are all or nothing: a row too narrow
+ * to hold them beside a readable title drops every one of them, and the
+ * detail pane keeps carrying the facts. The task type badge sits between the state badge and
  * the title at its natural width: complete or absent, never truncated.
  * When the terminal is narrow, the repository drops out before the title
  * does, so a row never wraps and the title stays readable. The window
