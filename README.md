@@ -236,12 +236,14 @@ A non-open ticket without a recorded handoff shows `[unknown]`, and only
 that badge wears a warning color; every configured task type uses one
 neutral style. The detail pane on the right shows the full detail of the
 selected ticket: repository, ticket state, the Agent its handoff runs on with
-that handoff's Model, Thinking level, and context window, source name,
-source kind, external key, source state, URL, labels, and source health. An
-open ticket shows the settings its suggested task type's Task profile
-resolves to, which is what Enter starts; a ticket with a handoff shows the
-settings that handoff started with. A setting left to the agent reads `left
-to agent` in the dim color.
+its Environment and that handoff's Model, Thinking level, and context window,
+source name, source kind, external key, source state, URL, labels, and source
+health. An open ticket shows the settings its suggested task type's Task
+profile resolves to, which is what Enter starts, including the Environment it
+starts in; a ticket inside a work cycle shows the settings its own handoff
+started with. A close returns a ticket to open and keeps that handoff's record
+as history, so the rows follow the ticket's state rather than whichever record
+survives. A setting left to the agent reads `left to agent` in the dim color.
 The detail carries one explicit task type line for every ticket: `Suggested
 task type:` for an open ticket, `Handoff task type:` for every other, with
 `Handoff task type: unknown` when the handoff data is absent. The detail

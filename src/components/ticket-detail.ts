@@ -16,6 +16,27 @@ export interface DetailLine {
 	fg: string;
 }
 
+/**
+ * The Handoff settings the detail rows show: a resolved choice for the next
+ * Handoff, or the choices a started Handoff was recorded with.
+ */
+type DetailChoice = Pick<
+	HandoffChoice,
+	"agentType" | "environment" | "model" | "thinking" | "contextWindow"
+>;
+
+/**
+ * Pick the Handoff whose settings the rows show, with the Ticket state as the
+ * switch. An open Ticket starts `suggestedChoice`, so that is what an open
+ * Ticket shows: a close ends a work cycle and returns the ticket to `open`
+ * while its last Handoff's record stays, and showing that record would state
+ * settings Enter does not start. Every other state sits inside a cycle one
+ * Handoff started, so it shows that Handoff's own recorded settings.
+ */
+function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailChoice | undefined {
+	return ticket.state === "open" ? suggestedChoice : (ticket.handoff ?? undefined);
+}
+
 export function detailLines(
 	ticket: Ticket | undefined,
 	usableCols: number,
@@ -30,11 +51,14 @@ export function detailLines(
 	pushWrapped(ticket.title, COLORS.textBright);
 	pushWrapped(ticket.repository, COLORS.text);
 	lines.push({ text: stateBadge(ticket.state), fg: STATE_COLORS[ticket.state] });
-	// An open Ticket shows its next Handoff's resolved profile. A started
-	// Handoff instead shows the choices stored with that Handoff.
-	const choice = ticket.handoff ?? suggestedChoice;
+	const choice = detailChoice(ticket, suggestedChoice);
 	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, COLORS.text);
 	if (choice !== undefined) {
+		// The Environment rides beside the Agent, the way the override panel
+		// orders its rows: where a Handoff runs, then what it runs with. The
+		// same choice carries it, so an open Ticket shows the Environment Enter
+		// starts in rather than the one a closed cycle happened to use.
+		pushWrapped(`Environment: ${choice.environment}`, COLORS.text);
 		const left = (value: string) => (value === "" ? "left to agent" : value);
 		// The three settings a Task profile carries, each dim when the
 		// resolved choice leaves it to the Agent.
@@ -45,9 +69,6 @@ export function detailLines(
 		] as const) {
 			pushWrapped(`${label}: ${left(value)}`, value === "" ? COLORS.dim : COLORS.text);
 		}
-	}
-	if (ticket.handoff !== null) {
-		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
 	}
 	// One explicit task type line for every ticket: the open ticket's
 	// suggestion, or the recorded handoff's task type. The label says which

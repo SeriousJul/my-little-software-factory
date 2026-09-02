@@ -852,9 +852,12 @@ describe("the control plane", () => {
 				expect(listHalfOf(rows[markerRowOf(setup.captureCharFrame())])).toBe(
 					"│ ❯ [open]       中文 webhoo │",
 				);
-				// The detail keeps the full value the row dropped.
-				expect(detailPaneText(setup.captureCharFrame(), 60)).toContain(
-					"Suggested task type: consultation",
+				// The detail keeps the full value the row dropped. Its profile
+				// rows take the short viewport first, so scroll down to the Task
+				// type row instead of assuming it is initially visible.
+				await focusDetail(setup);
+				await scrollDetailUntil(setup, "the suggested task type line", (candidate) =>
+					detailPaneText(candidate, 60).includes("Suggested task type: consultation"),
 				);
 			},
 			60,

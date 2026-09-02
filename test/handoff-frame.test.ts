@@ -775,6 +775,89 @@ describe("the override panel", () => {
 		);
 	});
 
+	test("an open ticket of a second work cycle shows what Enter starts, not its last cycle", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// The cycle that closed ran on an agent that maps every setting; the
+		// profile the ticket now resolves takes another agent and names none of
+		// them, so the record and the next handoff disagree on all four.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				codex: {
+					...DEFAULT_CONFIG.agents.codex,
+					model: "-m {value}",
+					thinking: "-r {value}",
+					contextWindow: "-c model_context_window={value}",
+				},
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "pi" },
+			},
+		};
+		// A close ends a work cycle and returns the ticket to open, but its
+		// last Handoff's record stays. That record is history; the profile is
+		// what the next Enter starts with.
+		const secondCycle: Ticket = {
+			...SAMPLE_TICKETS[0],
+			handoff: {
+				agentType: "codex",
+				environment: "worktree",
+				taskType: "implement",
+				model: "old-cycle-model",
+				thinking: "high",
+				contextWindow: "65536",
+				attemptId: "attempt-old-cycle",
+				paneId: "pane-old-cycle",
+				tabId: "tab-old-cycle",
+				workspaceId: "ws-old-cycle",
+			},
+			handoffCount: 1,
+		};
+		const props = { config, runner, home, configPath, initialTickets: [secondCycle] };
+
+		await withApp(
+			async (setup) => {
+				const detail = detailPaneText(setup.captureCharFrame());
+				// Each row reads the choice Enter starts: the profiled agent with
+				// every setting left to it, in the environment the choice resolves
+				// to rather than the one the closed cycle used.
+				expect(detail).toContain("Agent: pi");
+				expect(detail).toContain("Model: left to agent");
+				expect(detail).toContain("Thinking: left to agent");
+				expect(detail).toContain("Context: left to agent");
+				expect(detail).toContain("Environment: live-worktree");
+				// The closed cycle's record shows in none of them.
+				expect(detail).not.toContain("old-cycle-model");
+				expect(detail).not.toContain("Thinking: high");
+				expect(detail).not.toContain("65536");
+				expect(detail).not.toContain("Environment: worktree ");
+
+				await pressEnterToHandoff(setup);
+				// The handoff that ran is the one the rows showed: the profiled
+				// agent, and no setting argument at all.
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a model rejected by the profiled agent fails and leaves the ticket open", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
