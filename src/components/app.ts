@@ -49,11 +49,11 @@ import { type CommandRunner, createChildProcessRunner, errorMessage } from "../r
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import { ActionPanel, type ActionRow } from "./action-panel.ts";
-import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
+import { usePaneGeometry } from "./geometry.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-import { detailLines, TicketDetail } from "./ticket-detail.ts";
+import { TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 
 type Pane = "list" | "detail";
@@ -76,7 +76,11 @@ export type AppKey =
 	| "up"
 	| "down"
 	| "left"
-	| "right";
+	| "right"
+	| "pageup"
+	| "pagedown"
+	| "home"
+	| "end";
 
 export interface AppProps {
 	config?: FactoryConfig;
@@ -126,7 +130,7 @@ export function App({
 	onReady,
 }: AppProps) {
 	const renderer = useRenderer();
-	const { width: terminalWidth } = useTerminalDimensions();
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [config, setConfig] = useState<FactoryConfig>(() => configProp ?? DEFAULT_CONFIG);
 	// Only test callers supply deterministic tickets. Production starts with
 	// the empty SQLite projection while configured sources refresh.
@@ -137,7 +141,11 @@ export function App({
 	const configRef = useRef(config);
 	configRef.current = config;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
-	const [detailScroll, setDetailScroll] = useState(0);
+	// Focus keys can arrive before React publishes the next render. The ref
+	// records that immediate intent, so the next navigation key stays with
+	// the pane the operator just focused.
+	const focusedPaneRef = useRef<Pane>("list");
+	const detailRef = useRef<TicketDetailHandle | null>(null);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
 	const [override, setOverride] = useState<HandoffChoice | null>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
@@ -197,11 +205,8 @@ export function App({
 				}`;
 	const reservedRows =
 		(status === null ? 0 : 1) + (healthLine === "" ? 0 : 1) + (modeLine === "" ? 0 : 1);
-	const detailGeometry = usePaneGeometry("detail", reservedRows);
+	const listGeometry = usePaneGeometry("list", reservedRows);
 	const selectedTicket = tickets[selectedIndex];
-	const lines = detailLines(selectedTicket, detailGeometry.usableCols, config.maxHandoffsPerTicket);
-	const maxScroll = maxScrollOf(lines.length, detailGeometry.visibleRows);
-	const scroll = Math.min(detailScroll, maxScroll);
 
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
@@ -218,8 +223,6 @@ export function App({
 		setTickets(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
-		if (selectedId === undefined || !next.some((ticket) => ticket.identity === selectedId))
-			setDetailScroll(0);
 	}, [state]);
 
 	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
@@ -750,11 +753,11 @@ export function App({
 				break;
 			case "h":
 			case "left":
-				setFocusedPane("list");
+				focusPane("list");
 				break;
 			case "l":
 			case "right":
-				setFocusedPane("detail");
+				focusPane("detail");
 				break;
 			case "j":
 			case "down":
@@ -763,6 +766,18 @@ export function App({
 			case "k":
 			case "up":
 				moveVertical(-1);
+				break;
+			case "pagedown":
+				movePage(1);
+				break;
+			case "pageup":
+				movePage(-1);
+				break;
+			case "home":
+				moveEdge("start");
+				break;
+			case "end":
+				moveEdge("end");
 				break;
 			case "return": {
 				const ticket = ticketsRef.current[selectedIndexRef.current];
@@ -878,16 +893,40 @@ export function App({
 		};
 	}, [state, initialTickets, pollIntervalMs, replaceTickets, commandRunner, onReady]);
 
+	function focusPane(pane: Pane) {
+		focusedPaneRef.current = pane;
+		setFocusedPane(pane);
+	}
+
+	function selectTicket(index: number) {
+		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
+		if (next === selectedIndexRef.current) return;
+		selectedIndexRef.current = next;
+		setSelectedIndex(next);
+	}
+
+	function moveList(delta: number) {
+		selectTicket(selectedIndexRef.current + delta);
+	}
+
 	function moveVertical(delta: number) {
-		if (focusedPane === "detail")
-			setDetailScroll((current) => clamp(current + delta, 0, maxScroll));
-		else {
-			setSelectedIndex((index) => {
-				const next = clamp(index + delta, 0, ticketsRef.current.length - 1);
-				selectedIndexRef.current = next;
-				return next;
-			});
-			setDetailScroll(0);
+		if (focusedPaneRef.current === "detail")
+			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
+		else moveList(delta);
+	}
+
+	function movePage(direction: 1 | -1) {
+		if (focusedPaneRef.current === "detail")
+			detailRef.current?.movePage(direction === 1 ? "down" : "up");
+		else moveList(direction * listGeometry.visibleRows);
+	}
+
+	function moveEdge(edge: "start" | "end") {
+		if (focusedPaneRef.current === "detail") {
+			if (edge === "start") detailRef.current?.toStart();
+			else detailRef.current?.toEnd();
+		} else {
+			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 		}
 	}
 
@@ -918,7 +957,19 @@ export function App({
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
 		createElement(
 			"box",
-			{ style: { width: "100%", flexGrow: 1, flexDirection: "row" } },
+			// The mode, health, and status lines reserve terminal rows below this
+			// flex child. Allow it to shrink on a resize so it cannot paint its
+			// bottom borders through one of those lines.
+			{
+				style: {
+					width: "100%",
+					height: Math.max(0, terminalHeight - reservedRows),
+					flexGrow: 0,
+					flexShrink: 1,
+					flexDirection: "row",
+					overflow: "hidden",
+				},
+			},
 			createElement(TicketList, {
 				tickets,
 				selectedIndex,
@@ -927,12 +978,20 @@ export function App({
 				emptyMessage,
 				markerOf,
 				limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+				active: override === null && panel === null,
+				onFocus: () => focusPane("list"),
+				onSelect: selectTicket,
+				onMove: moveList,
 			}),
 			createElement(TicketDetail, {
-				lines,
-				visibleRows: detailGeometry.visibleRows,
-				scroll,
+				ref: detailRef,
+				ticket: selectedTicket,
 				focused: focusedPane === "detail",
+				active: override === null && panel === null,
+				reservedRows,
+				handoffLimit: config.maxHandoffsPerTicket,
+				scroll: config.scroll,
+				onFocus: () => focusPane("detail"),
 			}),
 		),
 		healthLine !== "" &&

@@ -1,19 +1,10 @@
 /**
- * Regression test at the real executable boundary: the host owns the mouse.
+ * Regression test at the real executable boundary: mouse controls are live.
  *
- * The frame test seam (testRender) cannot observe production renderer
- * startup, so this test starts the shipped control plane bin on a real
- * pseudo-terminal, watches the terminal protocol it emits, and proves the
- * operator-facing contract: the control plane never asks the host for mouse
- * reporting. A host that receives no mouse request keeps its own text
- * selection, so a plain drag or double-click in Herdr (or any terminal or
- * multiplexer) selects control plane text the normal way.
- *
- * The test is isolated: a temporary config with no sources, a temporary
- * state file, a temporary home and XDG state, and an empty PATH, so no real
- * ticket source, user state, or external command (herdr, git, gh) is ever
- * touched. The only outside effect is the process itself, which the test
- * starts and cleanly quits.
+ * The frame test seam cannot observe production renderer startup, so this
+ * test starts the shipped bin on a pseudo-terminal and reads its protocol.
+ * Ticket controls need mouse reporting for wheel input, track clicks, and
+ * thumb drags. This later control decision supersedes host text selection.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,12 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { openControlPlanePty, type PtySession } from "./executable-pty.ts";
 
-/**
- * The mouse tracking modes that make a host forward mouse gestures to the
- * application instead of selecting text. Any one of them enabled means the
- * control plane claims the mouse and host text selection stops. The test
- * asserts that none of them is ever requested.
- */
+/** The reporting modes required for the control plane's pointer controls. */
 const MOUSE_ENABLE: readonly (readonly [name: string, sequence: string])[] = [
 	["normal mouse tracking", "\x1b[?1000h"],
 	["button-event (drag) tracking", "\x1b[?1002h"],
@@ -55,7 +41,7 @@ describe("control plane executable, terminal protocol", () => {
 	});
 
 	it(
-		"never enables terminal mouse reporting and quits cleanly",
+		"enables terminal mouse reporting and quits cleanly",
 		async (ctx) => {
 			dir = mkdtempSync(join(tmpdir(), "factory-exec-"));
 			const statePath = join(dir, "state.sqlite");
@@ -105,9 +91,9 @@ describe("control plane executable, terminal protocol", () => {
 				// keyboard handler is reliably live and the quit key will land.
 				await session.waitForStable(500, STABLE_TIMEOUT_MS);
 
-				// The operator-facing contract at startup: the control plane
-				// must not have asked the host for any mouse tracking mode.
-				expectMouseReportingDisabled(session.output(), "at startup");
+				// The executable boundary must enable the reporting modes that
+				// deliver wheel, click, and drag input to the panes.
+				expectMouseReportingEnabled(session.output(), "at startup");
 
 				// Send the normal quit key and wait for a clean exit: the
 				// input path and shutdown both worked end to end.
@@ -115,9 +101,8 @@ describe("control plane executable, terminal protocol", () => {
 				const exit = await withTimeout(session.exit(), EXIT_TIMEOUT_MS, "the process to exit");
 				expect(exit.code, `process exit (signal ${String(exit.signal)})`).toBe(0);
 
-				// Across the whole session, not just startup, no mouse
-				// tracking mode was enabled.
-				expectMouseReportingDisabled(session.output(), "over the whole session");
+				// The startup request remains observable in the full session.
+				expectMouseReportingEnabled(session.output(), "over the whole session");
 			} finally {
 				session.dispose();
 				session = null;
@@ -127,12 +112,12 @@ describe("control plane executable, terminal protocol", () => {
 	);
 });
 
-/** Fail with the names of every mouse tracking mode that was enabled. */
-function expectMouseReportingDisabled(out: Buffer, when: string): void {
-	const enabled = MOUSE_ENABLE.filter(([, sequence]) => out.includes(sequence));
+/** Fail with the names of reporting modes missing from renderer startup. */
+function expectMouseReportingEnabled(out: Buffer, when: string): void {
+	const missing = MOUSE_ENABLE.filter(([, sequence]) => !out.includes(sequence));
 	expect(
-		enabled.map(([name]) => name),
-		`terminal mouse reporting was enabled ${when}; the host must keep text selection`,
+		missing.map(([name]) => name),
+		`terminal mouse reporting was not fully enabled ${when}; Ticket pointer controls need it`,
 	).toEqual([]);
 }
 

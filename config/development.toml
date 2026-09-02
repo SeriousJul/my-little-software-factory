@@ -4,6 +4,11 @@ default-agent = "pi"
 default-environment = "worktree"
 default-task-type = "implement"
 
+[scroll]
+speed = 1
+acceleration = 0.8
+maximum-speed = 6
+
 [agents.pi]
 kind = "pi"
 model = "--model {value}"

@@ -64,13 +64,8 @@ process.on("exit", () => state.close());
 
 const runner = createChildProcessRunner();
 const sources = config.sources.map((source) => createTicketSource(source, runner));
-// The host owns the mouse. OpenTUI enables terminal mouse reporting by
-// default, and a multiplexer such as Herdr then forwards drag gestures to the
-// renderer instead of selecting the visible text. The control plane defines
-// no mouse controls, so it yields mouse ownership to the host: a plain drag
-// or double-click selects terminal text and the host applies its own
-// clipboard and selection-clearing policy. A future feature that needs mouse
-// input must first redesign the boundary between host text selection and
-// control plane mouse controls before re-enabling reporting here.
-const renderer = await createCliRenderer({ exitOnCtrlC: true, useMouse: false });
+// Ticket detail and Ticket list have direct wheel, click, and scrollbar
+// controls. They need terminal mouse reporting, so this intentionally
+// supersedes the old host-owned text-selection setting.
+const renderer = await createCliRenderer({ exitOnCtrlC: true, useMouse: true });
 createRoot(renderer).render(createElement(App, { config, runner, configPath, state, sources }));
