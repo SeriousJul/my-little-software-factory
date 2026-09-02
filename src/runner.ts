@@ -172,6 +172,11 @@ const PI_MODEL_TABLE_MIN_COLUMNS = PI_MODEL_TABLE_TRAILING + 2;
  * it selected, or any other line the spawned program writes first. Every line
  * before the header is skipped, so that noise does not hide the list.
  *
+ * The value form is what the installed runtime takes: `pi --model` splits a
+ * pattern at the provider, so a provider whose name carries a URL and a model
+ * id that carries a slash both resolve back to the same model they were
+ * listed as.
+ *
  * The shape is a pinned contract on the installed pi version. A layout change
  * is a failure case with a readable reason, which every caller degrades
  * around; it is never a crash and never a partial list.
