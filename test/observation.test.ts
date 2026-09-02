@@ -1578,8 +1578,134 @@ describe("Consultation observation identity", () => {
 				"Opening Agent is not visible; explicit recovery is required",
 			);
 			expect(statuses.filter(({ text }) => text.includes("needs recovery"))).toHaveLength(1);
+			// The warning is one message, not a general note: the bar names the
+			// Consultation by its short id and nothing else.
+			expect(statuses).toContainEqual({
+				kind: "warning",
+				text: "Consultation opening- needs recovery",
+			});
 		} finally {
 			state.close();
+		}
+	});
+
+	test("refreshes a live Consultation when any one herdr handle moves", async () => {
+		// One handle at a time: a check that stops comparing a handle must let
+		// that move go unrecorded, and a stored handle the operator cannot see
+		// is a cleanup that closes the wrong pane.
+		for (const [moved, value] of [
+			["paneId", "pane-new"],
+			["tabId", "tab-new"],
+			["workspaceId", "ws-new"],
+		] as const) {
+			const id = `live-${moved}`;
+			const reported = {
+				...agent("pane-1", "working", "", "session-1"),
+				[moved]: value,
+			};
+			const { state, coordinator } = rig({ agents: [reported] });
+			try {
+				openingConsultation(state, id);
+				state.setConsultationAgent(id, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "session-1",
+				});
+				await coordinator.tick();
+				expect(state.consultation(id), `the moved ${moved}`).toMatchObject({
+					state: "working",
+					paneId: reported.paneId,
+					tabId: reported.tabId,
+					workspaceId: reported.workspaceId,
+				});
+			} finally {
+				state.close();
+			}
+		}
+	});
+
+	test("holds a live Consultation's unknown-status warning only while herdr is unsure", async () => {
+		const { state, coordinator, statuses, setAgents } = rig({
+			agents: [agent("pane-1", "meditating", "", "session-1")],
+		});
+		try {
+			openingConsultation(state, "live-unknown");
+			state.setConsultationAgent("live-unknown", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "session-1",
+			});
+			await coordinator.tick();
+			expect(state.consultation("live-unknown")).toMatchObject({
+				state: "working",
+				warning: "Agent status is unknown",
+			});
+			expect(statuses).toContainEqual({
+				kind: "warning",
+				text: "Agent status is unknown for Consultation live-unk",
+			});
+			// A known status clears it: the warning is the poll's current read,
+			// not a mark the Consultation carries for good.
+			setAgents([agent("pane-1", "working", "", "session-1")]);
+			await coordinator.tick();
+			expect(state.consultation("live-unknown")?.warning).toBeNull();
+		} finally {
+			state.close();
+		}
+	});
+
+	test("records an external turn only when herdr reports a newer sequence", async () => {
+		const open = (sequence: number | undefined) => {
+			const rigged = rig({
+				agents: [{ ...agent("pane-1", "idle", "", "session-1"), sequence }],
+			});
+			openingConsultation(rigged.state, "live-sequence");
+			rigged.state.setConsultationAgent("live-sequence", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "session-1",
+			});
+			rigged.state.settleConsultationTurn("live-sequence", 5, "the settled turn", "idle");
+			return rigged;
+		};
+		// The same sequence is the turn the control plane already holds: a new
+		// turn would double-count the Agent's own step.
+		const same = open(5);
+		try {
+			await same.coordinator.tick();
+			expect(same.state.consultationTurns("live-sequence")).toHaveLength(1);
+			expect(same.state.consultation("live-sequence")?.latestSequence).toBe(5);
+		} finally {
+			same.state.close();
+		}
+		// A newer sequence is input the operator never sent: it opens a turn of
+		// its own, with the placeholder input the modal shows.
+		const newer = open(6);
+		try {
+			await newer.coordinator.tick();
+			const turns = newer.state.consultationTurns("live-sequence");
+			expect(turns).toHaveLength(2);
+			const external = turns.find((turn) => turn.input === "[external Agent input not captured]");
+			expect(external, "the turn herdr reported on its own").toBeDefined();
+			expect(external?.sequenceBaseline).toBe(5);
+			expect(newer.state.consultation("live-sequence")?.latestSequence).toBe(6);
+			expect(newer.statuses).toContainEqual({
+				kind: "info",
+				text: "Consultation live-seq awaits a response",
+			});
+		} finally {
+			newer.state.close();
+		}
+		// No sequence at all is no evidence of a new turn.
+		const unknown = open(undefined);
+		try {
+			await unknown.coordinator.tick();
+			expect(unknown.state.consultationTurns("live-sequence")).toHaveLength(1);
+		} finally {
+			unknown.state.close();
 		}
 	});
 
