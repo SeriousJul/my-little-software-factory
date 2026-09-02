@@ -147,3 +147,7 @@ vite.config.ts.timestamp-*
 
 # Checked-in development config state
 config/.factory-development.sqlite*
+
+# Mutation testing artifacts
+reports/
+.stryker-tmp/
