@@ -1482,6 +1482,50 @@ describe("a leftover agent that holds the ticket's name", () => {
 		).toHaveLength(3);
 	});
 
+	test("a refusal that names two holders reports the one the ticket recorded", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-stranger", "ws-stranger");
+		// herdr names the stranger first and the ticket's own leftover pane
+		// after it, on every candidate the handoff asks for. The collision the
+		// operator reads must point at the pane that is the ticket's to clear.
+		const bothHeld = (name: string) =>
+			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
+			`candidates: terminal_id=term_1 pane_id=pane-stranger workspace_id=ws-stranger ` +
+			`tab_id=ws-stranger:t1 cwd=unknown status=Working terminal_id=term_2 pane_id=pane-old ` +
+			`workspace_id=ws-old tab_id=ws-old:t2 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n`;
+		for (const name of [AGENT, "retry-policy-for-webhooks-c1", "retry-policy-for-webhooks-c1-1"]) {
+			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
+				code: 1,
+				stderr: bothHeld(name),
+			});
+		}
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		// The collision is the ticket's own, and its holder is the pane the
+		// ticket's handoffs recorded - not the stranger herdr named first.
+		expect(outcome.status === "failed" && outcome.collision).toEqual(
+			expect.objectContaining({
+				stableName: AGENT,
+				startedAs: null,
+				own: true,
+				holder: expect.objectContaining({ paneId: "pane-old", workspaceId: "ws-old" }),
+			}),
+		);
+		expect(reasonOf(outcome)).toContain("pane pane-old in workspace ws-old");
+		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
+	});
+
 	test("asks herdr for each name once, even when its cycle rebuilds the stable one", async () => {
 		const runner = new FakeRunner();
 		// A 32-character slug whose tail already spells the cycle suffix

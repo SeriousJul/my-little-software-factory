@@ -43,7 +43,7 @@ const MARKER_WIDTH = 2;
 /** The label column: the widest action label plus its gap. */
 const LABEL_WIDTH = 12;
 /** The body and the detail column share this width. */
-const CONTENT_WIDTH = 60;
+export const CONTENT_WIDTH = 60;
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
 const HINT = "up/down select  j/k message  enter  esc";

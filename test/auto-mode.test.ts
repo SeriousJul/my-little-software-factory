@@ -1143,6 +1143,51 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
+	test("an abandon at the handoff limit records the failed cleanup, and the row wears both markers", async () => {
+		const app = seededApp(
+			"in-flight",
+			{ maxHandoffsPerTicket: 1, autoHandoff: true },
+			success,
+			"worktree",
+		);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr: "the checkout is dirty",
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("leftover"),
+					"the leftover marker",
+				);
+				// Auto mode ends the missing cycle at the limit, and the failed
+				// Close cleanup of the abandoned handoff lands as a fact on the
+				// ticket.
+				expect(frameText(frame)).toContain(
+					"abandoned; the close cleanup failed: the checkout is dirty",
+				);
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.leftoverEnvironment(identity)).toEqual(
+					expect.objectContaining({ workspaceId: "ws-1", reason: "the checkout is dirty" }),
+				);
+				// The row wears both trailing markers at once: the limit that
+				// ended the cycle, and the leftover its cleanup left behind.
+				// The terminal row also carries the detail pane, so check only
+				// the list half.
+				const row = frameText(ticketRow(frame).slice(0, Math.floor(WIDTH / 2))).trimEnd();
+				expect(row.endsWith("handoff limit leftover")).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("one action clears a leftover environment, with force as its own choice", async () => {
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1289,6 +1334,87 @@ describe("the leftover environment", () => {
 			WIDTH,
 			HEIGHT,
 			{ ...propsOf(app), pollIntervalMs: 20 },
+		);
+		app.state.close();
+	});
+
+	test("two unresolved leftovers show each reason under its own environment line", async () => {
+		const app = seededApp("awaiting", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// Two closed cycles over the same reused workspace, each of whose
+		// Close cleanup failed: the shape the ticket wears after a second
+		// failed close.
+		const first = app.state.latestHandoff(identity);
+		if (first === null) throw new Error("the seeded handoff is missing");
+		app.state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: first.handoffId,
+			decision: "closed",
+			decidedAt: "2026-09-02T09:30:00.000Z",
+		});
+		const claim = app.state.claimHandoff(
+			identity,
+			{ agentType: "pi", environment: "worktree", taskType: "implement", model: "", thinking: "" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		app.state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-1",
+		});
+		const second = app.state.latestHandoff(identity);
+		if (second === null) throw new Error("the second handoff is missing");
+		app.state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: second.handoffId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "The second turn is done.",
+			turnLog: [{ kind: "text", text: "The second turn is done." }],
+			completedAt: "2026-09-02T10:30:00.000Z",
+		});
+		app.state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: second.handoffId,
+			decision: "closed",
+			decidedAt: "2026-09-02T10:40:00.000Z",
+		});
+		app.state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId: first.handoffId,
+			reason: "the first close failed",
+			at: "2026-09-02T09:30:00.000Z",
+		});
+		app.state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId: second.handoffId,
+			reason: "the second close failed",
+			at: "2026-09-02T10:40:00.000Z",
+		});
+
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				const panel = rowsOf(setup.captureCharFrame());
+				// The guidance is on screen with the actions: the two rows mean
+				// them, and the branch fact stands.
+				expect(panel.some((row) => row.includes("Retry runs the Close cleanup again"))).toBe(true);
+				expect(panel.some((row) => row.includes("The git branch stays either way"))).toBe(true);
+				expect(panel.some((row) => row.includes("Force"))).toBe(true);
+				// Each fact's reason follows its own environment line, in the
+				// order the ticket holds them: the newest handoff first.
+				const secondEnv = panel.findIndex((row) => row.includes("pane pane-2 is still open"));
+				expect(secondEnv).toBeGreaterThan(-1);
+				expect(panel[secondEnv + 1]).toContain("the second close failed");
+				const firstEnv = panel.findIndex((row) => row.includes("pane pane-1 is still open"));
+				expect(firstEnv).toBeGreaterThan(-1);
+				expect(panel[firstEnv + 1]).toContain("the first close failed");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
 		);
 		app.state.close();
 	});

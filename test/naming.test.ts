@@ -110,7 +110,7 @@ describe("cycleAgentName", () => {
 		expect(/^[a-z][a-z0-9_-]{0,31}$/.test(cycle)).toBe(true);
 	});
 
-	test("a cycle name never equals the stable name of the same title", () => {
+	test("a short title's cycle name differs from its stable name", () => {
 		for (const title of ["Retry policy", "2fa rollout", "!!!", "Close the mutation testing gaps"]) {
 			expect(cycleAgentName(title, 1)).not.toBe(agentNameFor(title));
 			expect(cycleAgentName(title, 1).length).toBeLessThanOrEqual(32);

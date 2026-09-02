@@ -76,7 +76,7 @@ import { type CommandRunner, createChildProcessRunner, errorMessage } from "../r
 import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
-import { ActionPanel } from "./action-panel.ts";
+import { ActionPanel, CONTENT_WIDTH } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
 import {
 	type ActionContext,
@@ -603,12 +603,23 @@ export function App({
 	 * A forced removal kills every agent in the workspace with the checkout,
 	 * so the action refuses a workspace the ticket's own live agent runs in:
 	 * the operator closes that cycle first, and the leftover goes with it.
+	 * The guard reads the durable state at the moment of the action, and the
+	 * handoff seat serializes it: a handoff that has started but not settled
+	 * is invisible to the render snapshot, and its workspace is not a
+	 * leftover the operator can remove while the agent takes its seat.
 	 */
 	const clearLeftover = (ticket: Ticket, force: boolean) => {
 		if (state === undefined) {
 			setStatus({
 				kind: "warning",
 				text: "no factory state is open, so a leftover environment cannot be cleared",
+			});
+			return;
+		}
+		if (inFlightRef.current) {
+			setStatus({
+				kind: "warning",
+				text: `a handoff is in flight: wait for it to settle before you clear the leftover environment of ticket ${ticket.identity}`,
 			});
 			return;
 		}
@@ -621,15 +632,19 @@ export function App({
 			replaceTickets();
 			return;
 		}
-		const liveWorkspace = ticket.handoff?.workspaceId ?? null;
+		// The live workspace is what the durable state says at the moment of
+		// the action, not what the render snapshot showed: the snapshot can
+		// miss a handoff that settled after it was drawn.
+		const liveWorkspace =
+			state.ticketState(ticket.identity) === "open"
+				? null
+				: (state.latestHandoff(ticket.identity)?.workspaceId ?? null);
 		const protectedLeftover =
-			ticket.state === "open"
+			liveWorkspace === null
 				? undefined
 				: leftovers.find(
 						(candidate) =>
-							candidate.environment === "worktree" &&
-							liveWorkspace !== null &&
-							candidate.workspaceId === liveWorkspace,
+							candidate.environment === "worktree" && candidate.workspaceId === liveWorkspace,
 					);
 		if (protectedLeftover !== undefined) {
 			setStatus({
@@ -680,23 +695,32 @@ export function App({
 	 * The leftover panel: what still lives in herdr for this ticket, and the
 	 * one action that ends it.
 	 *
-	 * herdr's force is a row of its own. Removing a dirty checkout discards
-	 * that checkout and stops every agent in the workspace, so the control
-	 * plane never reaches for it on the operator's behalf; the operator
-	 * chooses it with their own hands, and the git branch stays either way.
+	 * The guidance leads the body: it is constant, and the rows above the
+	 * action rows are where the variable fact lines scroll, so the meaning
+	 * of the rows - and the branch fact - stays on screen with them however
+	 * many facts the ticket holds. Each fact carries its own reason on the
+	 * line below its environment, trimmed to one line: the panel is the
+	 * hint, and the detail pane carries the whole reason.
+	 *
+	 * herdr's force is a row of its own. A forced removal discards the
+	 * checkout, so the control plane never reaches for it on the operator's
+	 * behalf; the operator chooses it with their own hands, and the git
+	 * branch stays either way.
 	 */
 	const createLeftoverPanel = (ticket: Ticket) => {
 		const leftovers = state?.leftoverEnvironments(ticket.identity) ?? [];
 		const forced = leftovers.some((leftover) => leftover.environment === "worktree");
+		const facts = leftovers.flatMap((leftover) => [
+			`${leftoverWhere(leftover)} is still open`,
+			truncateToWidth(leftover.reason, CONTENT_WIDTH),
+		]);
 		return createElement(ActionPanel, {
 			title: `Leftover environment ${ticket.identity}`,
 			bodyLines: [
-				...leftovers.map((leftover) => `${leftoverWhere(leftover)} is still open`),
-				...leftovers.map((leftover) => `  ${leftover.reason}`),
+				"Retry runs the Close cleanup again. Force adds --force,",
+				"discards the checkout. The git branch stays either way.",
 				"",
-				"Retry runs the Close cleanup again. herdr refuses a dirty",
-				"checkout: a forced removal discards it and stops the agents in",
-				"the workspace. The git branch stays either way.",
+				...facts,
 			],
 			actions: [
 				{ key: "retry", label: "Retry", detail: "clean the environment up again" },

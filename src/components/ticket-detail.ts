@@ -48,12 +48,15 @@ export function detailLines(
 	const leftover = ticket.leftover;
 	if (leftover !== null) {
 		const at = leftover.at === "" ? "" : ` ${leftover.at.slice(0, 16).replace("T", " ")}`;
+		// The warning color is the block's indent: the wrap drops leading
+		// spaces, and a dim run would read on as one flat line with the rest
+		// of the detail. The block is one warning the operator can act on.
 		pushWrapped(
 			`Leftover: ${leftoverWhere(leftover)} is still open for this ticket`,
 			COLORS.statusWarning,
 		);
-		pushWrapped(`  since${at}: ${leftover.reason}`, COLORS.dim);
-		pushWrapped("  press w to clear it", COLORS.dim);
+		pushWrapped(`since${at}: ${leftover.reason}`, COLORS.statusWarning);
+		pushWrapped("press w to clear it", COLORS.statusWarning);
 	}
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;

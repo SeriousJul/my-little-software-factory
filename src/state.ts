@@ -1045,9 +1045,10 @@ export class FactoryState {
 	 * Mark a ticket's leftover environments cleared.
 	 *
 	 * A workspace id clears only the facts that name it: removing one
-	 * workspace says nothing about another. A null workspace id clears every
-	 * unresolved fact of the ticket, which is what the operator's clear
-	 * action leaves behind. Returns how many facts were cleared.
+	 * workspace says nothing about another. A null workspace id answers a
+	 * handoff row that recorded none: there is no workspace to name, so the
+	 * close that ends it ends every environment the ticket could still hold.
+	 * Returns how many facts were cleared.
 	 */
 	clearLeftoverEnvironments(identity: string, workspaceId: string | null): number {
 		const at = new Date(this.now()).toISOString();

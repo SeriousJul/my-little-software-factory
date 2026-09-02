@@ -143,7 +143,11 @@ export interface NameCollision {
 	stableName: string;
 	/** The name the agent started under, or null when nothing started. */
 	startedAs: string | null;
-	/** The agent that held the stable name, when herdr named one. */
+	/**
+	 * The agent that held the stable name, when herdr named one. For an own
+	 * collision this is the holder the ticket's handoffs recorded, so the
+	 * fact the collision refreshes lands on the handoff that owns it.
+	 */
 	holder: AgentHolder | null;
 	/** True when the holder is one of this ticket's own handoffs. */
 	own: boolean;
@@ -1118,11 +1122,14 @@ async function startAgentUnderAvailableName(
 		nameHeld = herdrErrorCode(result) === "agent_name_taken";
 		if (!nameHeld) break;
 		const holders = herdrNameHolders(result);
+		const own = nameIsOwnLeftover(ctx.names, holders);
 		collision = {
 			stableName: candidates[0],
 			startedAs: null,
-			holder: holders.length === 0 ? null : holders[0],
-			own: nameIsOwnLeftover(ctx.names, holders),
+			// The operator is sent to find the holder that matters: for an own
+			// collision, the one this ticket's handoffs recorded.
+			holder: own ? (ownHolder(ctx.names, holders) ?? holders[0] ?? null) : (holders[0] ?? null),
+			own,
 			reason: herdrFailureText(result),
 		};
 		// Another ticket's agent, or the last candidate spent: the collision
@@ -1181,21 +1188,30 @@ function holderText(holder: AgentHolder | null): string {
 /**
  * Whether the agents that hold the name are this ticket's own leftovers.
  *
- * A handle the control plane recorded for the ticket settles it. So does the
- * durable fact of a leftover of this ticket: when herdr's reason names no
- * holder the control plane can read, the ticket still knows what it left
- * alive, and its handoff starts under its cycle name rather than repeating
- * a message the operator cannot act on.
+ * A handle the control plane recorded for the ticket settles it: a named
+ * holder this ticket's own handoffs recorded is its own leftover agent. When
+ * herdr names no holder the control plane can read - no candidates at all,
+ * or only candidates it never recorded - the durable fact of a leftover of
+ * this ticket decides: the ticket still knows what it left alive, and its
+ * handoff starts under its cycle name rather than repeating a message the
+ * operator cannot act on.
  */
 function nameIsOwnLeftover(names: NamePlan, holders: readonly AgentHolder[]): boolean {
-	if (names.known.leftoverKnown) return true;
-	const paneIds = new Set(names.known.ownPaneIds);
-	const workspaceIds = new Set(names.known.ownWorkspaceIds);
-	return holders.some(
-		(holder) =>
-			(holder.paneId !== null && paneIds.has(holder.paneId)) ||
-			(holder.workspaceId !== null && workspaceIds.has(holder.workspaceId)),
+	if (holders.some((holder) => holderIsOwn(names, holder))) return true;
+	return names.known.leftoverKnown;
+}
+
+/** Whether a named holder is one the control plane recorded for the ticket. */
+function holderIsOwn(names: NamePlan, holder: AgentHolder): boolean {
+	return (
+		(holder.paneId !== null && names.known.ownPaneIds.includes(holder.paneId)) ||
+		(holder.workspaceId !== null && names.known.ownWorkspaceIds.includes(holder.workspaceId))
 	);
+}
+
+/** The named holder that is the ticket's own, when herdr named one. */
+function ownHolder(names: NamePlan, holders: readonly AgentHolder[]): AgentHolder | null {
+	return holders.find((holder) => holderIsOwn(names, holder)) ?? null;
 }
 
 /**
