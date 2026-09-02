@@ -31,7 +31,11 @@ interface PtyLibs {
 	openpty: (amaster: Int32Array, aslave: Int32Array) => number;
 	fcntl: (fd: number, cmd: number, arg: bigint) => number;
 	close: (fd: number) => number;
+	ioctl: (fd: number, request: number, winsize: Uint16Array) => number;
 }
+
+/** TIOCSWINSZ: set the slave's window size from the master. */
+const TIOCSWINSZ: Record<string, number> = { linux: 0x5414, darwin: 0x40087467 };
 
 /**
  * The libc symbol table and fcntl constants differ per platform. Anything
@@ -56,11 +60,13 @@ function loadPtyLibs(): PtyLibs | null {
 				},
 				fcntl: { arguments: ["i32", "i32", "i64"], return: "i32" },
 				close: { arguments: ["i32"], return: "i32" },
+				ioctl: { arguments: ["i32", "i32", "pointer"], return: "i32" },
 			});
 			return {
 				openpty: (amaster, aslave) => functions.openpty(amaster, aslave, null, null, null),
 				fcntl: (fd, cmd, arg) => functions.fcntl(fd, cmd, arg),
 				close: (fd) => functions.close(fd),
+				ioctl: (fd, request, winsize) => functions.ioctl(fd, request, winsize),
 			};
 		} catch {
 			// Try the next candidate path.
@@ -100,9 +106,15 @@ export interface PtySession {
  * `env` is merged over a clean base, so the process never inherits the
  * operator's home, XDG state, or GitHub credentials.
  */
+export interface PtyOptions {
+	/** The terminal window size in cells. The renderer draws to it. */
+	size?: { cols: number; rows: number };
+}
+
 export async function openControlPlanePty(
 	args: string[],
 	env: Record<string, string>,
+	options: PtyOptions = {},
 ): Promise<PtySession | null> {
 	const libs = loadPtyLibs();
 	if (libs === null) return null;
@@ -120,6 +132,17 @@ export async function openControlPlanePty(
 		libs.close(master);
 		libs.close(slave);
 		return null;
+	}
+	// A zero-size window renders nothing. Set the size before the child
+	// spawns, so the renderer reads it at startup.
+	if (options.size !== undefined) {
+		const winsize = new Uint16Array([options.size.rows, options.size.cols, 0, 0]);
+		const request = TIOCSWINSZ[process.platform];
+		if (request === undefined || libs.ioctl(master, request, winsize) !== 0) {
+			libs.close(master);
+			libs.close(slave);
+			return null;
+		}
 	}
 
 	const child = spawn(process.execPath, [CONTROLLER_BIN, ...args], {

@@ -1,12 +1,11 @@
 /**
- * The action modal: a read-only message, and the rows the operator can
+ * The missing modal: a read-only message, and the rows the operator can
  * confirm on it.
  *
- * The control plane opens it in two places. On an awaiting ticket it is
- * the decision: close (first, selected by default), a Goto, and one
- * handoff row per workflow target the ticket's task type allows. On an
- * in-flight ticket whose pane herdr no longer lists it is the missing
- * panel: restart or abandon.
+ * The control plane opens it on an in-flight ticket whose pane herdr no
+ * longer lists: restart the agent, or abandon the cycle. The awaiting
+ * ticket's decision has its own modal, the decision modal, which carries
+ * the turn log.
  *
  * The keys: up and down move the action rows, j/k scroll the message,
  * enter confirms the selected action, esc cancels. While it is open, the
@@ -27,7 +26,7 @@ export interface ActionRow {
 	detail?: string;
 }
 
-interface ActionPanelProps {
+interface MissingModalProps {
 	title: string;
 	/** The read-only message rows shown above the actions, if any. */
 	bodyLines?: readonly string[];
@@ -77,7 +76,7 @@ function wrapBody(lines: readonly string[], width: number): string[] {
 	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
 }
 
-export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
+export function MissingModal({ title, bodyLines, actions, onAction, onCancel }: MissingModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const geometry = panelGeometry(terminalWidth, terminalHeight, actions.length);
 	// Reserve a column for the scrollbar only when the message needs one. A

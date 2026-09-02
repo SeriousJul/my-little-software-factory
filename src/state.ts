@@ -23,8 +23,9 @@ import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor } from "./naming.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
+import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -63,6 +64,8 @@ interface SettleTurnInput {
 	taskType: string;
 	agentType: string;
 	message: string;
+	/** The agent's messages of the turn, in order, from its session record. */
+	turnLog: TurnLogEntry[];
 	completedAt: string;
 }
 
@@ -188,6 +191,51 @@ const MIGRATION_V1_TO_V2 = `
 	CREATE INDEX traces_ticket ON completion_traces(ticket_identity, completed_at);
 `;
 
+/**
+ * The v3 step: the trace's turn log. The settled turn's messages, in order,
+ * from the agent's session record (ADR 0008), as JSON. A legacy v2 trace
+ * reads NULL here and degrades to a plain-text log of its last message on
+ * read.
+ */
+const MIGRATION_V2_TO_V3 = "ALTER TABLE completion_traces ADD COLUMN turn_log_json TEXT;";
+
+/**
+ * The stored turn log of a trace, or its degraded form. A legacy trace
+ * predates the column and reads NULL: its last message, one line per entry,
+ * stands in for the log. Unreadable JSON degrades the same way, so a
+ * corrupt cell never blanks the modal.
+ */
+function turnLogOf(json: string | null, lastMessage: string): TurnLogEntry[] {
+	if (json === null) return turnLogFromCapture(lastMessage);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		return turnLogFromCapture(lastMessage);
+	}
+	if (!Array.isArray(parsed)) return turnLogFromCapture(lastMessage);
+	const entries: TurnLogEntry[] = [];
+	for (const value of parsed) {
+		if (!isRecord(value)) continue;
+		if (value.kind === "text" && typeof value.text === "string") {
+			entries.push({ kind: "text", text: value.text });
+		} else if (
+			value.kind === "tool" &&
+			typeof value.name === "string" &&
+			typeof value.target === "string" &&
+			typeof value.failed === "boolean"
+		) {
+			entries.push({ kind: "tool", name: value.name, target: value.target, failed: value.failed });
+		}
+	}
+	return entries.length > 0 ? entries : turnLogFromCapture(lastMessage);
+}
+
+/** A record guard for the stored log's entries. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -249,6 +297,7 @@ export class FactoryState {
 				// The absent flag only served the old done-cycle bump.
 				this.db.exec("ALTER TABLE tickets DROP COLUMN absent");
 			}
+			if (version < 3) this.db.exec(MIGRATION_V2_TO_V3);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -547,7 +596,7 @@ export class FactoryState {
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db
 			.prepare(
-				"SELECT task_type, agent_type, agent_name, completed_at, last_message, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				"SELECT task_type, agent_type, agent_name, completed_at, last_message, turn_log_json, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
@@ -556,6 +605,7 @@ export class FactoryState {
 					agent_name: string;
 					completed_at: string;
 					last_message: string;
+					turn_log_json: string | null;
 					decision: string | null;
 			  }
 			| undefined;
@@ -566,6 +616,7 @@ export class FactoryState {
 			agentName: row.agent_name,
 			completedAt: row.completed_at,
 			message: row.last_message,
+			turnLog: turnLogOf(row.turn_log_json, row.last_message),
 			decision: row.decision as CompletionDecision | null,
 		};
 	}
@@ -740,12 +791,14 @@ export class FactoryState {
 			if (handoff === undefined) return;
 			if (pending !== undefined) {
 				this.db
-					.prepare("UPDATE completion_traces SET last_message = ?, completed_at = ? WHERE id = ?")
-					.run(input.message, input.completedAt, pending.id);
+					.prepare(
+						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ? WHERE id = ?",
+					)
+					.run(input.message, JSON.stringify(input.turnLog), input.completedAt, pending.id);
 			} else {
 				this.db
 					.prepare(
-						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message, turn_log_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						randomUUID(),
@@ -757,6 +810,7 @@ export class FactoryState {
 						this.agentNameForTicket(input.ticketIdentity),
 						input.completedAt,
 						input.message,
+						JSON.stringify(input.turnLog),
 					);
 			}
 		});

@@ -1,5 +1,7 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
+import type { TurnLogEntry } from "../turn-log.ts";
+
 /**
  * The ticket states.
  *
@@ -43,6 +45,8 @@ export interface Completion {
 	completedAt: string;
 	/** The last captured message of the settled agent turn. */
 	message: string;
+	/** The agent's messages of the turn, in order; the decision modal's body. */
+	turnLog: TurnLogEntry[];
 	/** Null until a decision was made on this completion. */
 	decision: CompletionDecision | null;
 }

@@ -4,10 +4,10 @@
  *
  * The mode line carries the auto-handoff state and the live agent count
  * against the parallel limit. Enter on an open ticket hands it off; Enter
- * on an awaiting ticket opens the decision panel (close, Goto, or a
+ * on an awaiting ticket opens the decision modal (close, Goto, or a
  * workflow handoff), unless the task type is auto-close and decides alone;
  * Enter on a blocked ticket Gotos the agent; Enter on an in-flight ticket
- * whose pane herdr no longer lists opens the missing panel (restart or
+ * whose pane herdr no longer lists opens the missing modal (restart or
  * abandon). `a` toggles auto-handoff.
  */
 import os from "node:os";
@@ -48,8 +48,10 @@ import { commandFailureText, type RepositoryMapping } from "../repo.ts";
 import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
-import { ActionPanel, type ActionRow } from "./action-panel.ts";
+import type { TurnLogEntry } from "../turn-log.ts";
+import { DecisionModal } from "./decision-modal.ts";
 import { usePaneGeometry } from "./geometry.ts";
+import { type ActionRow, MissingModal } from "./missing-modal.ts";
 import { type AgentSettings, OverridePanel } from "./override-panel.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -554,15 +556,28 @@ export function App({
 		setStatus({ kind: "info", text: `auto-handoff ${next ? "on" : "off"}` });
 	};
 
-	// The decision panel's rows: Close first, selected by default, then a Goto,
-	// then one handoff row per outgoing workflow edge the completed task type
-	// has, in config order: every edge stays reachable, and an edge naming
-	// several targets offers one row per target. Two edges to the same target
-	// offer two rows, and the row's detail shows the edge's pinning so the
-	// operator can tell them apart.
-	const decisionFor = (ticket: Ticket): { actions: ActionRow[]; body: string[] } => {
+	// The decision modal's rows: Close first, selected by default, then a
+	// Goto, then one handoff row per outgoing workflow edge the completed
+	// task type has, in config order: every edge stays reachable, and an
+	// edge naming several targets offers one row per target. Two edges to
+	// the same target offer two rows, and the row's detail shows the edge's
+	// pinning so the operator can tell them apart. The modal's context row
+	// names the repository, the task type, the agent, and the completion
+	// time, so the operator knows what the log is about.
+	const decisionFor = (
+		ticket: Ticket,
+	): {
+		actions: ActionRow[];
+		entries: readonly TurnLogEntry[];
+		contextLine: string;
+	} => {
 		const taskType =
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const completion = ticket.lastCompletion;
+		const time = completion === null ? "" : completion.completedAt.slice(0, 16).replace("T", " ");
+		const contextLine = [ticket.repository, taskType, completion?.agentType ?? "?", time]
+			.filter((part) => part !== "")
+			.join(" · ");
 		const actions: ActionRow[] = [
 			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
 			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
@@ -579,7 +594,8 @@ export function App({
 		});
 		return {
 			actions,
-			body: ticket.lastCompletion === null ? [] : ticket.lastCompletion.message.split("\n"),
+			entries: completion?.turnLog ?? [],
+			contextLine,
 		};
 	};
 
@@ -618,7 +634,7 @@ export function App({
 	};
 
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
-	// workflow handoff, or (from the missing panel) restart and abandon.
+	// workflow handoff, or (from the missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
 		setPanel(null);
 		if (state === undefined) return;
@@ -1029,14 +1045,15 @@ export function App({
 		panel !== null &&
 			panelTicket !== undefined &&
 			(panel.kind === "decision" && decision !== undefined
-				? createElement(ActionPanel, {
-						title: truncateToWidth(`Decision: ${panelTicket.title}`, 40),
-						bodyLines: decision.body,
+				? createElement(DecisionModal, {
+						title: panelTicket.title,
+						contextLine: decision.contextLine,
+						entries: decision.entries,
 						actions: decision.actions,
 						onAction: (key) => runDecisionAction(panelTicket, key),
 						onCancel: () => setPanel(null),
 					})
-				: createElement(ActionPanel, {
+				: createElement(MissingModal, {
 						title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
 						bodyLines: [
 							"The agent's pane is not in herdr's agent list.",

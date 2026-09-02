@@ -13,6 +13,7 @@ import {
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { TurnLogEntry } from "../src/turn-log.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -87,8 +88,15 @@ function reader(
 	};
 }
 
-function agent(paneId: string, status = "working"): HerdrAgent {
-	return { paneId, tabId: "tab-1", workspaceId: "ws-1", agent: "factory-implement-I_5", status };
+function agent(paneId: string, status = "working", sessionId = ""): HerdrAgent {
+	return {
+		paneId,
+		tabId: "tab-1",
+		workspaceId: "ws-1",
+		agent: "factory-implement-I_5",
+		status,
+		sessionId,
+	};
 }
 
 interface Rig {
@@ -107,6 +115,8 @@ function rig(options: {
 	autoOn?: boolean;
 	agents?: HerdrAgent[];
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
+	/** The turn log the fake session reader returns. Null: no session log. */
+	turnLogs?: (kind: string, sessionId: string) => Promise<TurnLogEntry[] | null>;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = [...(options.agents ?? [])];
@@ -121,6 +131,9 @@ function rig(options: {
 	const coordinator = new ObservationCoordinator({
 		state,
 		herdr: reader(() => agents, options.readPane),
+		turnLogs: {
+			read: options.turnLogs ?? (async () => null),
+		},
 		config: () => config,
 		dispatch: async (intent) => {
 			intents.push(intent);
@@ -178,6 +191,7 @@ function settleFor(state: FactoryState, identity: string, taskType: string): str
 		taskType,
 		agentType: "pi",
 		message: "settled the turn",
+		turnLog: [{ kind: "text", text: "settled the turn" }],
 		completedAt: "2026-08-31T11:00:00Z",
 	});
 	return attempt;
@@ -207,21 +221,51 @@ describe("HerdrAgentReader.readPane", () => {
 		const lines = ["first", "second", "third"].map(
 			(text, index) => `\u001b[1m${text}\u001b[0m ${index}`,
 		);
-		runner.set("herdr", ["agent", "read", "pane-1", "--lines", "10", "--format", "text"], {
-			stdout: JSON.stringify({ result: { output: lines.join("\n") } }),
-		});
+		runner.set(
+			"herdr",
+			[
+				"agent",
+				"read",
+				"pane-1",
+				"--lines",
+				"10",
+				"--source",
+				"recent-unwrapped",
+				"--format",
+				"text",
+			],
+			{
+				stdout: JSON.stringify({ result: { output: lines.join("\n") } }),
+			},
+		);
 		const reader = new HerdrAgentReader(runner);
 		const pane = await reader.readPane("pane-1", 10);
 		expect(pane).toBe("first 0\nsecond 1\nthird 2");
-		expect(runner.commands()).toEqual(["herdr agent read pane-1 --lines 10 --format text"]);
+		expect(runner.commands()).toEqual([
+			"herdr agent read pane-1 --lines 10 --source recent-unwrapped --format text",
+		]);
 	});
 
 	test("re-caps the output client side when herdr returns more lines", async () => {
 		const runner = new FakeRunner();
 		const lines = Array.from({ length: 12 }, (_, index) => `line ${index}`);
-		runner.set("herdr", ["agent", "read", "pane-1", "--lines", "4", "--format", "text"], {
-			stdout: lines.join("\n"),
-		});
+		runner.set(
+			"herdr",
+			[
+				"agent",
+				"read",
+				"pane-1",
+				"--lines",
+				"4",
+				"--source",
+				"recent-unwrapped",
+				"--format",
+				"text",
+			],
+			{
+				stdout: lines.join("\n"),
+			},
+		);
 		const reader = new HerdrAgentReader(runner);
 		const pane = await reader.readPane("pane-1", 4);
 		expect(pane).toBe("line 0\nline 1\nline 2\nline 3");
@@ -229,10 +273,24 @@ describe("HerdrAgentReader.readPane", () => {
 
 	test("a failed read yields null", async () => {
 		const runner = new FakeRunner();
-		runner.set("herdr", ["agent", "read", "pane-1", "--lines", "1", "--format", "text"], {
-			code: 1,
-			stderr: "no such pane",
-		});
+		runner.set(
+			"herdr",
+			[
+				"agent",
+				"read",
+				"pane-1",
+				"--lines",
+				"1",
+				"--source",
+				"recent-unwrapped",
+				"--format",
+				"text",
+			],
+			{
+				code: 1,
+				stderr: "no such pane",
+			},
+		);
 		const reader = new HerdrAgentReader(runner);
 		expect(await reader.readPane("pane-1", 1)).toBeNull();
 	});
@@ -263,6 +321,84 @@ describe("the observation cycle", () => {
 			}),
 		);
 		done.state.close();
+	});
+
+	test("settle reads the turn log from the agent's session record, not the pane", async () => {
+		const calls: Array<{ kind: string; sessionId: string }> = [];
+		const paneReads: string[] = [];
+		const entries: TurnLogEntry[] = [
+			{ kind: "text", text: "I looked at the code." },
+			{ kind: "tool", name: "bash", target: "npm test", failed: false },
+			{ kind: "text", text: "Done. The tests pass." },
+		];
+		const { state, coordinator, advance } = rig({
+			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			turnLogs: async (kind, sessionId) => {
+				calls.push({ kind, sessionId });
+				return entries;
+			},
+			readPane: async (paneId) => {
+				paneReads.push(paneId);
+				return "the pane capture";
+			},
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket.state).toBe("awaiting");
+		// The session record wins: the trace holds the log and its final
+		// text, and the pane was never read.
+		expect(calls).toEqual([{ kind: "pi", sessionId: "/tmp/session.jsonl" }]);
+		expect(paneReads).toEqual([]);
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "Done. The tests pass.",
+				turnLog: entries,
+				decision: null,
+			}),
+		);
+		state.close();
+	});
+
+	test("settle falls back to the pane capture when the session log is missing", async () => {
+		const { state, coordinator, advance } = rig({
+			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
+			turnLogs: async () => null,
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket.state).toBe("awaiting");
+		// The capture stands in: the message is the raw output, and its
+		// lines become a plain-text log.
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				message: "Done. message of pane-implement",
+				turnLog: [{ kind: "text", text: "Done. message of pane-implement" }],
+				decision: null,
+			}),
+		);
+		state.close();
+	});
+
+	test("an agent herdr gives no session for falls back without asking a reader", async () => {
+		let asked = false;
+		const { state, coordinator, advance } = rig({
+			agents: [agent("pane-implement", "done")],
+			turnLogs: async () => {
+				asked = true;
+				return [{ kind: "text", text: "a log" }];
+			},
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(asked).toBe(false);
+		expect(ticket.lastCompletion?.message).toBe("Done. message of pane-implement");
+		state.close();
 	});
 
 	test("an idle agent settles too: the turn ended, even without an explicit done", async () => {
@@ -671,6 +807,7 @@ describe("the awaiting rule", () => {
 			taskType: "route",
 			agentType: "pi",
 			message: "settled the turn",
+			turnLog: [{ kind: "text", text: "settled the turn" }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		await coordinator.tick();
@@ -717,6 +854,7 @@ describe("the awaiting rule", () => {
 			taskType: "route",
 			agentType: "pi",
 			message: "again settled",
+			turnLog: [{ kind: "text", text: "again settled" }],
 			completedAt: "2026-08-31T11:00:00Z",
 		});
 		expect(coordinator.decideAwaiting("route", 0, 2)).toBe("close");
@@ -831,6 +969,7 @@ describe("the open dispatch", () => {
 				taskType: "implement",
 				agentType: "pi",
 				message: "done again",
+				turnLog: [{ kind: "text", text: "done again" }],
 				completedAt: "2026-08-31T11:00:00Z",
 			});
 			// implement never auto-closes, so decide the trace by hand to keep

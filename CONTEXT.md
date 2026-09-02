@@ -31,8 +31,16 @@ The on-demand catalog of all controls, with the current interaction mode and glo
 It includes controls that the action bar does not show.
 _Avoid_: help popup, keybinding popin, shortcut window
 
+**Decision modal**:
+The near-fullscreen Interaction mode above an awaiting ticket: the turn log, and the rows the operator confirms: close, goto, and the workflow handoffs.
+_Avoid_: action panel, decision popup
+
+**Missing modal**:
+The Interaction mode above a ticket whose agent is missing: restart or abandon.
+_Avoid_: missing panel, restart popup
+
 **Interaction mode**:
-The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, or Message view.
+The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, Decision modal, Missing modal, or Message view.
 _Avoid_: context, screen
 
 **Text field**:
@@ -94,7 +102,7 @@ The control plane is agent-agnostic and assumes no specific agent runtime (pi, c
 _Avoid_: bot, worker
 
 **Agent type**:
-The declarative description of a class of agents: its name, how to start it, and how its settings (model, thinking level) map to the agent's own parameters.
+The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level) map to the agent's own parameters, and how to read the settled turn's log.
 An Agent is a running instance of an Agent type.
 _Avoid_: agent definition, plugin, driver
 
@@ -236,10 +244,15 @@ _Avoid_: auto complete, auto done
 The choice made on a settled agent turn: close the cycle, go to the agent, or hand off with a workflow task.
 _Avoid_: action, verdict
 
+**Turn log**:
+The agent's messages of one settled turn, in order: the agent's text, and one short note per tool call.
+The control plane builds it from the agent's session record when herdr reports one, or from the terminal capture when herdr does not.
+_Avoid_: agent log, transcript, terminal capture
+
 **Completion trace**:
-The durable record of a settled agent turn: task type, agent, completion time, last message, and decision.
+The durable record of a settled agent turn: task type, agent, completion time, turn log, last message, and decision.
 A cycle holds one trace per settled turn.
-_Avoid_: log, transcript
+_Avoid_: console dump, session file
 
 **Environment**:
 The place where an Agent executes a Ticket or leads a Consultation.

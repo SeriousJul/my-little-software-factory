@@ -275,6 +275,30 @@ export async function press(
 	return awaitFrame(setup, predicate, what);
 }
 
+/**
+ * The raw input bytes of the scroll keys the mock input cannot name.
+ *
+ * The mock input sends a plain string as typed characters, so the page and
+ * jump keys must go out as their terminal sequences.
+ */
+const SCROLL_KEY_BYTES: Record<"pageup" | "pagedown" | "home" | "end", string> = {
+	pageup: "\u001B[5~",
+	pagedown: "\u001B[6~",
+	home: "\u001B[H",
+	end: "\u001B[F",
+};
+
+/** Press a page or jump key by name, and wait for the effect it produces. */
+export async function pressScrollKey(
+	setup: Setup,
+	key: "pageup" | "pagedown" | "home" | "end",
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressKey(SCROLL_KEY_BYTES[key]);
+	return awaitFrame(setup, predicate, what);
+}
+
 /** Press an arrow key and wait for the effect it should produce. */
 export async function pressArrow(
 	setup: Setup,

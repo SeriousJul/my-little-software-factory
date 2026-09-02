@@ -100,6 +100,14 @@ export const SAMPLE_TICKETS: readonly Ticket[] = [
 			agentType: "claude",
 			message:
 				"The auth shim and its flag are removed.\nAll 142 tests pass. I left the migration note in docs/auth.md.",
+			turnLog: [
+				{ kind: "text", text: "I removed the legacy auth shim and its feature flag." },
+				{ kind: "tool", name: "bash", target: "rg -n auth_shim src", failed: false },
+				{
+					kind: "text",
+					text: "The auth shim and its flag are removed.\nAll 142 tests pass. I left the migration note in docs/auth.md.",
+				},
+			],
 			decision: null,
 			completedAt: "2026-01-01T12:00:00Z",
 		},

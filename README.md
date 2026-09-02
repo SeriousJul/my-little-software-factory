@@ -10,8 +10,8 @@ cycle. Enter hands an actionable open ticket off through herdr. The `e` key
 opens the override panel for a one-shot change of the handoff settings.
 
 The control plane polls herdr for the agents it started. It marks a blocked
-agent and a missing agent on the ticket, captures the agent's last message
-when a turn settles, and records a completion trace. In auto-handoff mode it
+agent and a missing agent on the ticket, reads the agent's turn log when a
+turn settles, and records a completion trace. In auto-handoff mode it
 hands eligible open tickets off by itself within the configured limits, and
 routes or closes completed turns along the configured workflows.
 
@@ -51,7 +51,7 @@ ends at close, ADR 0006: the control plane polls herdr).
 | `Home` / `End`   | Select the first or last Ticket, or move the detail to its start or end |
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
-| `Enter`          | Hand the selected open ticket off, or open the decision panel on an awaiting ticket, or the missing panel on a ticket whose agent is gone, or focus the agent of a blocked ticket |
+| `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
 | `e`              | Open the override panel for the selected open ticket                    |
 | `a`              | Toggle auto-handoff mode for this session                              |
 | `r`              | Refresh every ticket source now                                        |
@@ -97,19 +97,35 @@ when it does not fit. The rows scroll within the remaining viewport, and the
 selected row stays visible. A row never wraps: it carries less, not broken
 text.
 
-### Completion decision panel keys
+### Decision modal keys
 
-Enter on an `awaiting` ticket shows the last completion: the agent's last
-message. The panel opens at the bottom, where the latest conclusion is. A
-large message window and its scrollbar show more output and the current
-position. The panel offers the choices the state allows.
+Enter on an `awaiting` ticket opens the decision modal: a near-fullscreen
+modal that pops in over the app with a short fade and grow, one cell of
+margin on every side. Its border reads `Decision: <ticket title>`, and the
+first row under the border names the context: repository, task type,
+agent, completion time.
+
+The body is the turn log of the settled turn, in order. The agent's text
+blocks carry light markdown dressing: headings render bright without their
+hashes, bold renders bright, code renders dim, lists keep their markers
+and indent per level, links keep their label. Each tool call is one dim
+note, `▸ name: target`; a failed call wears the warning color. The agent's
+thinking text is not shown. The log comes from the agent's session record
+(ADR 0008); when no session is known, the terminal capture stands in. The
+modal opens at the bottom, where the agent's conclusion is, and a
+proportional scrollbar shows the position when the log is longer than the
+window.
+
+The modal offers the choices the state allows.
 
 | Key             | What it does                                                        |
 | --------------- | ------------------------------------------------------------------- |
 | `Up` / `Down`  | Move between the choice rows                                      |
-| `j` / `k`      | Scroll the completion message, up or down                         |
+| `j` / `k`      | Scroll the turn log, one row up or down                           |
+| `PgUp` / `PgDn` | Scroll the turn log by a page                                    |
+| `Home` / `End` | Jump to the top or the bottom of the turn log                     |
 | `Enter`         | Choose the selected row                                            |
-| `Esc`           | Close the panel: nothing runs, the ticket stays awaiting           |
+| `Esc`           | Close the modal: nothing runs, the ticket stays awaiting           |
 
 The first row, "Close", ends the work cycle: the ticket returns to open
 with its cycle number incremented, and the handoff's environment is closed
@@ -132,16 +148,16 @@ trace only when the routed handoff settles with the agent started; a
 failed route leaves the trace pending, so Close and Goto keep working
 on the awaiting ticket.
 
-### Missing agent panel keys
+### Missing modal keys
 
-Enter on a ticket whose agent is missing shows the missing panel.
+Enter on a ticket whose agent is missing opens the missing modal.
 
 | Key             | What it does                                                        |
 | --------------- | ------------------------------------------------------------------- |
 | `Up` / `Down`  | Move between the choice rows                                      |
-| `j` / `k`      | Scroll the panel message                                          |
+| `j` / `k`      | Scroll the modal message                                          |
 | `Enter`         | Choose the selected row                                            |
-| `Esc`           | Close the panel: nothing runs, the badge stays                     |
+| `Esc`           | Close the modal: nothing runs, the badge stays                     |
 
 "Restart" hands the ticket off again with the same choices, in the
 workspace the handoff recorded, and the last completion's message as the
@@ -286,7 +302,7 @@ handoff that follows an awaiting ticket renders its prompt with the
 agent reads what the previous one left behind.
 
 In manual mode, `awaiting` waits for the operator. Enter opens the decision
-panel. The operator routes the ticket to a workflow target or closes the
+modal. The operator routes the ticket to a workflow target or closes the
 work cycle.
 
 Auto-handoff mode decides without the operator, within the configured
@@ -314,7 +330,7 @@ A missing agent in auto mode restarts the handoff once, with the last
 message as the previous message. At the per-ticket handoff limit, the
 cycle is abandoned instead. When the agent is missing again, or the
 parallel limit is full, the control plane stops: the `missing` badge stays
-until the operator restarts or abandons from the missing panel. In manual
+until the operator restarts or abandons from the missing modal. In manual
 mode the control plane never touches a missing agent. Abandon ends the
 work cycle, closes the handoff's environment, and returns the ticket to
 open with its cycle number incremented.
@@ -406,7 +422,7 @@ the first write-back: the data round-trips, the comments do not.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
   pane, the override panel, the shared action panel (the completion decision
-  and the missing agent panel both render through it), the shared pane
+  and the missing agent modal both render through it), the shared pane
   geometry, the shared palette, and the display-width-aware text helpers.
 - `test/`: the test suite.
   The seam is the rendered terminal frame and the recorded command sequence.
