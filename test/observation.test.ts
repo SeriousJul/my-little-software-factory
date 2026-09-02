@@ -9,6 +9,7 @@ import {
 	HerdrAgentReader,
 	normalizeAgentStatus,
 	ObservationCoordinator,
+	STARTUP_GRACE_MS,
 	stripAnsi,
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
@@ -320,6 +321,10 @@ describe("HerdrAgentReader.listAgents", () => {
 	}
 
 	test("reads every name herdr may give the turn sequence", async () => {
+		// herdr 0.8.2 names this field `state_change_seq`. The three longer
+		// names are the aliases the reader accepts, not fields herdr emits, so
+		// a new herdr that renames the sequence still reads. Do not add a name
+		// here without a herdr release that sends it.
 		for (const [field, sequence] of [
 			["sequence", 1],
 			["seq", 2],
@@ -338,6 +343,8 @@ describe("HerdrAgentReader.listAgents", () => {
 	});
 
 	test("reads every name herdr may give the checkout path", async () => {
+		// herdr 0.8.2 names this field `cwd`; the other two are accepted
+		// aliases. See the turn sequence note for the same rule.
 		for (const [field, checkout] of [
 			["checkout_path", "/a"],
 			["cwd", "/b"],
@@ -354,6 +361,9 @@ describe("HerdrAgentReader.listAgents", () => {
 	});
 
 	test("reads every name herdr may give the stable session identity", async () => {
+		// herdr 0.8.2 sends no stable session id at all, which is why the
+		// reader keeps two aliases and the Coordinator holds its stored id
+		// when a verified Agent reports none: issue #24.
 		for (const [field, stable] of [
 			["session_id", "s1"],
 			["agent_session_id", "s2"],
@@ -392,8 +402,13 @@ describe("HerdrAgentReader.listAgents", () => {
 			stdout: JSON.stringify({
 				result: {
 					agents: [
+						// A missing handle is unusable, and so is an empty one:
+						// herdr reports "" when it has nothing to name, and an
+						// item that cannot be addressed cannot claim a ticket.
 						{ agent: "pi", agent_status: "working" },
+						{ pane_id: "", agent: "pi", agent_status: "working" },
 						{ pane_id: "pane-no-agent", agent_status: "working" },
+						{ pane_id: "pane-empty-name", agent: "", agent_status: "working" },
 						{ pane_id: "pane-kept", agent: "pi", agent_status: "working" },
 					],
 				},
@@ -474,7 +489,7 @@ describe("HerdrAgentReader.listAgents", () => {
 		});
 	});
 
-	test("reports an unreadable agent list without replacing the last observation", async () => {
+	test("reports an agent list that is not JSON with a readable reason", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], { stdout: "not JSON" });
 		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
@@ -626,6 +641,26 @@ describe("the observation cycle", () => {
 		expect(statuses.filter((status) => status.text.includes("settled"))).toHaveLength(0);
 		// Past the grace, the same idle agent settles.
 		advance(30_001);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
+		]);
+		state.close();
+	});
+
+	test("the grace window is inclusive: one ms short holds, the last ms settles", async () => {
+		// The window's last millisecond still settles the turn, so a
+		// comparison that reads the boundary as exclusive fails here.
+		expect(STARTUP_GRACE_MS).toBe(30_000);
+		const { state, coordinator, advance } = rig({ agents: [agent("pane-implement", "idle")] });
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS - 1);
+		await coordinator.tick();
+		expect(state.ticketsByState(["handed-off"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
+		]);
+		// One ms more, and the window is over: the same idle agent settles.
+		advance(1);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toEqual([
 			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),

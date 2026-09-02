@@ -4,7 +4,8 @@ import { testRender } from "@opentui/react/test-utils";
 import { describe, expect, test } from "vitest";
 
 import { ActionBar, ActionGuide } from "../src/components/consultation-actions.ts";
-import { frameText } from "./app-harness.ts";
+import type { Consultation } from "../src/state.ts";
+import { frameText, overlayRows } from "./app-harness.ts";
 
 const ticketContext = {
 	view: "tickets" as const,
@@ -18,6 +19,19 @@ const ticketContext = {
 	interactionExitKey: "f12",
 	agentStatus: null,
 };
+
+/**
+ * The guide rows as the terminal shows them, top row first.
+ *
+ * The Key guide orders its rows by hint priority, so the row order an
+ * operator reads is the assertion: a priority that moves reorders this list.
+ */
+const guideRows = (frame: string) => overlayRows(frame);
+
+/** The two Consultation fields the control hints read. */
+function selectedConsultation(state: Consultation["state"], paneId: string | null): Consultation {
+	return { state, paneId } as Consultation;
+}
 
 describe("contextual controls", () => {
 	test("the Action bar shows the controls of the current interaction mode", async () => {
@@ -38,7 +52,26 @@ describe("contextual controls", () => {
 		}
 	});
 
-	test("the Key guide lists current controls before the global close control", async () => {
+	test("a narrow Action bar keeps the highest priority controls of its mode", async () => {
+		// The bar packs by priority and drops what does not fit, so the row it
+		// can hold is the order the operator reads: the move control, then the
+		// handoff, and nothing of lower priority.
+		const setup = await testRender(createElement(ActionBar, { context: ticketContext }), {
+			width: 28,
+			height: 4,
+		});
+		try {
+			await setup.flush();
+			const frame = frameText(setup.captureCharFrame()).trim();
+			expect(frame).toBe("Enter hand off ↑↓/jk move");
+			expect(frame).not.toContain("e override");
+			expect(frame).not.toContain("q quit");
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("the Key guide lists the ticket controls in priority order", async () => {
 		const setup = await testRender(
 			createElement(ActionGuide, {
 				context: ticketContext,
@@ -50,11 +83,55 @@ describe("contextual controls", () => {
 		);
 		try {
 			await setup.flush();
-			const frame = frameText(setup.captureCharFrame());
-			expect(frame).toContain("↑↓/jk move");
-			expect(frame).toContain("Enter hand off");
-			expect(frame).toContain("Esc closes this guide.");
-			expect(frame.indexOf("Enter hand off")).toBeLessThan(frame.indexOf("Esc closes this guide."));
+			expect(guideRows(setup.captureCharFrame())).toEqual([
+				"↑↓/jk move",
+				"Enter hand off",
+				"e override",
+				"v Consultations",
+				"c launch",
+				"r refresh",
+				"? help",
+				"q quit",
+				"Esc closes this guide. F2 or m opens the full Message view.",
+			]);
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("the Key guide lists a Consultation's own controls above the global ones", async () => {
+		const setup = await testRender(
+			createElement(ActionGuide, {
+				context: {
+					...ticketContext,
+					view: "consultations" as const,
+					status: { kind: "warning" as const, text: "the agent stopped" },
+					selectedConsultation: selectedConsultation("awaiting-response", "pane-1"),
+				},
+				utility: "guide",
+				onClose: () => undefined,
+				onMessage: () => undefined,
+			}),
+			{ width: 100, height: 30 },
+		);
+		try {
+			await setup.flush();
+			expect(guideRows(setup.captureCharFrame())).toEqual([
+				"↑↓/jk move",
+				"Enter respond",
+				"c launch",
+				"m message",
+				"f history",
+				"x close",
+				"t Tickets",
+				"r refresh",
+				"? help",
+				"q quit",
+				"Launcher: Tab fields, arrows choose, Shift+Enter newline",
+				"Response: Enter submit, Shift+Enter newline, Esc keep draft",
+				"Agent view: End follows output; interaction exits with F12",
+				"Esc closes this guide. F2 or m opens the full Message view.",
+			]);
 		} finally {
 			await setup.renderer.destroy();
 		}

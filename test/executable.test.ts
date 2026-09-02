@@ -44,36 +44,10 @@ describe("control plane executable, terminal protocol", () => {
 		"enables terminal mouse reporting and quits cleanly",
 		async (ctx) => {
 			dir = mkdtempSync(join(tmpdir(), "factory-exec-"));
-			const statePath = join(dir, "state.sqlite");
-			// An empty bin dir on PATH: the control plane's external commands
-			// (herdr, git, gh) resolve through it, so none of them can run.
-			const emptyBin = join(dir, "bin");
-			mkdirSync(emptyBin, { recursive: true });
 			const configPath = join(dir, "config.toml");
-			writeFileSync(
-				configPath,
-				[
-					'default-agent = "pi"',
-					'default-environment = "live-worktree"',
-					'default-task-type = "implement"',
-					`state-file = "${statePath}"`,
-					"[agents.pi]",
-					'kind = "pi"',
-					"[task-types.implement]",
-					'template = "Implement {title}"',
-					"",
-				].join("\n"),
-				"utf8",
-			);
+			writeFileSync(configPath, configToml(join(dir, "state.sqlite")), "utf8");
 
-			session = await openControlPlanePty(["--config", configPath], {
-				HOME: dir,
-				XDG_CONFIG_HOME: join(dir, ".config"),
-				XDG_STATE_HOME: join(dir, ".state"),
-				XDG_DATA_HOME: join(dir, ".data"),
-				XDG_CACHE_HOME: join(dir, ".cache"),
-				PATH: emptyBin,
-			});
+			session = await openControlPlanePty(["--config", configPath], isolatedEnv(dir));
 			if (session === null) {
 				ctx.skip("cannot open a pseudo-terminal on this platform");
 				return;
@@ -150,22 +124,9 @@ describe("control plane executable, terminal protocol", () => {
 				argv: (dir) => {
 					// A directory where the state database must be created.
 					mkdirSync(join(dir, "state.sqlite"), { recursive: true });
-					writeFileSync(
-						join(dir, "blocked.toml"),
-						[
-							'default-agent = "pi"',
-							'default-environment = "live-worktree"',
-							'default-task-type = "implement"',
-							`state-file = "${join(dir, "state.sqlite")}"`,
-							"[agents.pi]",
-							'kind = "pi"',
-							"[task-types.implement]",
-							'template = "Implement {title}"',
-							"",
-						].join("\n"),
-						"utf8",
-					);
-					return ["--config", join(dir, "blocked.toml")];
+					const blocked = join(dir, "blocked.toml");
+					writeFileSync(blocked, configToml(join(dir, "state.sqlite")), "utf8");
+					return ["--config", blocked];
 				},
 				needle: "cannot open factory state",
 			},
@@ -247,6 +208,11 @@ describe("control plane executable, terminal protocol", () => {
 	);
 });
 
+/**
+ * The environment one startup case runs in: a home nothing reads, and an
+ * empty bin dir on PATH so the control plane's external commands (herdr, git,
+ * gh) resolve through it and none of them can run.
+ */
 function isolatedEnv(dir: string): Record<string, string> {
 	const emptyBin = join(dir, "bin");
 	mkdirSync(emptyBin, { recursive: true });
@@ -258,6 +224,21 @@ function isolatedEnv(dir: string): Record<string, string> {
 		XDG_CACHE_HOME: join(dir, ".cache"),
 		PATH: emptyBin,
 	};
+}
+
+/** One valid startup config, pointed at the state file the case needs. */
+function configToml(stateFile: string): string {
+	return [
+		'default-agent = "pi"',
+		'default-environment = "live-worktree"',
+		'default-task-type = "implement"',
+		`state-file = "${stateFile}"`,
+		"[agents.pi]",
+		'kind = "pi"',
+		"[task-types.implement]",
+		'template = "Implement {title}"',
+		"",
+	].join("\n");
 }
 
 /** Fail with the names of reporting modes missing from renderer startup. */
