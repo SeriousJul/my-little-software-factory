@@ -6,8 +6,7 @@
  */
 import type { GitHubAuthentication, TicketSourceConfig } from "./config.ts";
 import type { FetchedTicket } from "./domain/ticket.ts";
-import { commandFailureText } from "./repo.ts";
-import type { CommandRunner } from "./runner.ts";
+import { type CommandRunner, commandFailureText } from "./runner.ts";
 
 export type FetchOutcome =
 	| { status: "success"; fetchedAt: string; tickets: FetchedTicket[] }

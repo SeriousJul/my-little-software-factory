@@ -19,7 +19,7 @@ import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
+import type { CommandResult, CommandRunner, ModelListResult } from "../src/runner.ts";
 import {
 	awaitFrame,
 	detailPaneText,
@@ -35,6 +35,7 @@ import {
 	type Setup,
 	settle,
 	showsTicket,
+	spanColors,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -137,6 +138,43 @@ class DelayedRunner implements CommandRunner {
 			setTimeout(() => resolve(this.inner.run(command, args)), this.delayMs),
 		);
 	}
+
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
+	}
+}
+
+/**
+ * Walk the panel selection from its first row down to the Model row.
+ *
+ * The rows come in order, so three moves reach it whatever the agent maps.
+ */
+async function moveToModelRow(setup: Setup): Promise<string> {
+	await press(setup, "j", "the selection to move to the environment", (f) =>
+		f.includes("❯ Environment"),
+	);
+	await press(setup, "j", "the selection to move to the task type", (f) =>
+		f.includes("❯ Task type"),
+	);
+	return press(setup, "j", "the selection to move to the model", (f) => f.includes("❯ Model"));
+}
+
+/** Walk the panel selection down to the Thinking row, below the Model row. */
+async function moveToThinkingRow(setup: Setup): Promise<string> {
+	await moveToModelRow(setup);
+	return pressArrow(setup, "down", "the selection to move to the thinking row", (f) =>
+		f.includes("❯ Thinking"),
+	);
+}
+
+/** Press Backspace, and wait for the effect it should produce. */
+async function pressBackspace(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressBackspace();
+	return awaitFrame(setup, predicate, what);
 }
 
 /**
@@ -1571,7 +1609,7 @@ describe("the override panel", () => {
 		);
 	});
 
-	test("bracketed paste works in a free-text Thinking row", async () => {
+	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
@@ -1580,7 +1618,8 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
-				// codex exposes Thinking as a free-text field rather than a list.
+				// codex is an agent kind that reports no Model list, so its Model row
+				// stays the standard free-text field (ADR 0010).
 				await pressArrow(setup, "right", "the agent to become codex", (f) =>
 					frameText(f).includes("Agent codex"),
 				);
@@ -1590,28 +1629,28 @@ describe("the override panel", () => {
 				await press(setup, "j", "the row selection to move to the task type", (f) =>
 					f.includes("❯ Task type"),
 				);
-				await press(setup, "j", "the row selection to move to the model", (f) =>
-					f.includes("❯ Model"),
-				);
-				const thinking = await pressArrow(
+				const model = await pressArrow(
 					setup,
 					"down",
-					"the row selection to move to free-text Thinking",
-					(f) => f.includes("❯ Thinking"),
+					"the row selection to move to the model",
+					(f) => f.includes("❯ Model"),
 				);
-				expect(frameText(thinking)).toContain("Thinking (empty)");
+				expect(frameText(model)).toContain("Model (empty)");
+				// Only the agent the panel opened on was queried: switching to a
+				// kind with no list runs no query of its own.
+				expect(runner.modelListCalls).toEqual(["pi"]);
 
-				await setup.mockInput.pasteBracketedText("med\u001b[31mium\r\n");
+				await setup.mockInput.pasteBracketedText("gpt-5.1\u001b[31m-codex\r\n");
 				const frame = await awaitFrame(
 					setup,
-					(f) => frameText(f).includes("Thinking medium"),
-					"the sanitized Thinking paste",
+					(f) => frameText(f).includes("Model gpt-5.1-codex"),
+					"the sanitized Model paste",
 				);
-				expect(frameText(frame)).toContain("Thinking medium");
+				expect(frameText(frame)).toContain("Model gpt-5.1-codex");
 
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-				expect(start?.args).toContain("model_reasoning_effort=medium");
+				expect(start?.args).toContain("gpt-5.1-codex");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1962,6 +2001,9 @@ describe("the override panel", () => {
 
 	test("the control guide follows the selected row", async () => {
 		const runner = new FakeRunner();
+		// The canned list makes the Model row a list row, so its guide reads as a
+		// choice row rather than as a text field.
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
 
 		await withApp(
@@ -1977,12 +2019,20 @@ describe("the override panel", () => {
 				await press(setup, "j", "the row selection to move to the task type", (f) =>
 					f.includes("❯ Task type"),
 				);
-				const textFrame = await press(setup, "j", "the row selection to move to the model", (f) =>
+				const modelFrame = await press(setup, "j", "the guide to reach the model", (f) =>
 					f.includes("❯ Model"),
 				);
-				// A text row describes editing and terminal paste, not cycling.
-				expect(frameText(textFrame)).toContain("move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc");
-				expect(frameText(textFrame)).not.toContain("cycle ←→/hl");
+				// The Model list row describes typing, editing, and cycling.
+				expect(frameText(modelFrame)).toContain("↑↓/tab move type jumps ←→ cycle ⌫ clear");
+				expect(frameText(modelFrame)).not.toContain("edit hjkl/←→ paste");
+
+				// Leaving the Model list row takes the arrow, not `j`: on that row
+				// `j` is a letter.
+				const thinkingFrame = await pressArrow(setup, "down", "the guide to reach Thinking", (f) =>
+					f.includes("❯ Thinking"),
+				);
+				expect(frameText(thinkingFrame)).toContain("↑↓/jk move ←→/hl cycle ⌫ clear ↵/esc");
+				expect(frameText(thinkingFrame)).not.toContain("type jumps");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2053,6 +2103,492 @@ describe("the override panel", () => {
 			},
 			17,
 			12,
+			props,
+		);
+	});
+
+	test("the Model row cycles the list the selected agent reported", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// The panel keeps the order the agent reported: pi sorts the list itself.
+		runner.setModelList("pi", [
+			"anthropic/claude-sonnet-4-5",
+			"openai/gpt-5.1",
+			"openai/gpt-5.1-codex",
+		]);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				expect(runner.modelListCalls).toEqual(["pi"]);
+				await moveToModelRow(setup);
+				// The task type names no model, so the row starts unset.
+				expect(frameText(setup.captureCharFrame())).toContain("Model (unset)");
+
+				await pressArrow(setup, "right", "the first model to be offered", (f) =>
+					frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+				);
+				const second = await pressArrow(
+					setup,
+					"right",
+					"the next model to be offered",
+					(f) =>
+						frameText(f).includes("Model openai/gpt-5.1 ") ||
+						frameText(f).endsWith("openai/gpt-5.1"),
+				);
+				expect(frameText(second)).toContain("openai/gpt-5.1");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"openai/gpt-5.1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("typing on the Model row jumps the value to the first model that holds the text", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", [
+			"anthropic/claude-haiku-4-5",
+			"anthropic/claude-sonnet-4-5",
+			"openai/gpt-5.1-codex",
+		]);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await moveToModelRow(setup);
+
+				// Case does not matter: the operator typed the family in capitals.
+				await setup.mockInput.typeText("SONNET");
+				const jumped = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					"the value to jump to the model holding the typed text",
+				);
+				// The typed text is never displayed: the jumping value is the feedback.
+				expect(frameText(jumped)).not.toContain("SONNET");
+				// The selection stays on the row: typing never moves it.
+				expect(jumped).toContain("❯ Model");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("anthropic/claude-sonnet-4-5");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a letter that matches no model leaves the value, and the arrows then take a match", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", [
+			"anthropic/claude-sonnet-4-5",
+			"openai/gpt-5.1",
+			"openai/gpt-5.1-codex",
+		]);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await moveToModelRow(setup);
+				await setup.mockInput.typeText("gpt-5.1");
+				const jumped = await awaitFrame(
+					setup,
+					(f) =>
+						frameText(f).includes("Model openai/gpt-5.1 ") ||
+						frameText(f).endsWith("openai/gpt-5.1"),
+					"the value to jump to the first match",
+				);
+				expect(frameText(jumped)).toContain("openai/gpt-5.1");
+
+				// A letter no model holds extends the run and changes nothing: the
+				// value stays on the last match rather than jumping away.
+				await setup.mockInput.typeText("q");
+				const held = await settle(setup);
+				expect(frameText(held)).toContain("openai/gpt-5.1");
+
+				// The arrows select from there, and end the type-ahead run.
+				const next = await pressArrow(setup, "right", "the next model to be offered", (f) =>
+					frameText(f).includes("openai/gpt-5.1-codex"),
+				);
+				expect(frameText(next)).toContain("openai/gpt-5.1-codex");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("openai/gpt-5.1-codex");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("backspace clears the Model row and leaves the model to the agent", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await moveToModelRow(setup);
+				await setup.mockInput.typeText("gpt");
+				await awaitFrame(setup, (f) => frameText(f).includes("openai/gpt-5.1"), "the jumped model");
+
+				const cleared = await pressArrow(setup, "left", "the row to fall back one model", (f) =>
+					frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+				);
+				expect(frameText(cleared)).toContain("anthropic/claude-sonnet-4-5");
+				const unset = await pressBackspace(setup, "the Model row to clear", (f) =>
+					frameText(f).includes("Model (unset)"),
+				);
+				expect(frameText(unset)).toContain("Model (unset)");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				// A row the operator cleared names no model: the agent starts on its own.
+				expect(start?.args).not.toContain("--model");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the Model row holds a loading marker while the control plane fetches the list", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		runner.holdModelLists();
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Model (loading...)");
+
+				await moveToModelRow(setup);
+				// The row takes no typing while the list is missing: the letters
+				// cannot be mistaken for a model the operator meant to choose.
+				await setup.mockInput.typeText("sonnet");
+				const held = await settle(setup);
+				expect(frameText(held)).toContain("Model (loading...)");
+				expect(frameText(held)).not.toContain("sonnet");
+
+				// Only movement keys leave the row.
+				const thinking = await pressArrow(setup, "down", "the selection to move to Thinking", (f) =>
+					f.includes("❯ Thinking"),
+				);
+				expect(frameText(thinking)).toContain("❯ Thinking");
+
+				// The query answers: the row becomes the list it reported.
+				runner.releaseModelLists();
+				const ready = await pressArrow(setup, "up", "the Model row to hold the list", (f) =>
+					f.includes("❯ Model"),
+				);
+				expect(frameText(ready)).toContain("Model (unset)");
+				await pressArrow(setup, "right", "the fetched model to show", (f) =>
+					frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the Model row says so when the agent reports no models", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", []);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Model (no models available)");
+
+				await moveToModelRow(setup);
+				// Nothing to cycle and nothing to type: the row takes the letters
+				// as a run that can never match, so the value stays unset.
+				await setup.mockInput.typeText("gpt");
+				await pressBackspace(setup, "the row to stay cleared", (f) =>
+					frameText(f).includes("Model (no models available)"),
+				);
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).not.toContain("--model");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a Model the selected agent cannot run shows in the warning color", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				// The task type names a model the agent's own list does not hold:
+				// the handoff would fail on it, so the row warns before it can.
+				expect(frameText(opened)).toContain("Model gpt-4o");
+				expect(spanColors(setup, "gpt-4o")).toEqual([rgb(COLORS.statusWarning)]);
+				// The thinking level the task type names is supported, so it stays plain.
+				expect(frameText(opened)).toContain("Thinking (unset)");
+
+				// Cycling to a model the agent does hold clears the warning.
+				await moveToModelRow(setup);
+				await pressArrow(setup, "right", "the row to take a model the agent offers", (f) =>
+					frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+				);
+				expect(spanColors(setup, "gpt-4o")).toEqual([]);
+				// The selected row reads in the bright color, never the warning one.
+				expect(spanColors(setup, "anthropic/claude-sonnet-4-5")).toEqual([rgb(COLORS.textBright)]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("switching the agent keeps an untouched Model and queries the new agent's list", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				// Each setting resolves on its own chain: the agent row is the only
+				// thing cycling it changes, so the task type's model rides on.
+				await pressArrow(setup, "right", "the agent to become codex", (f) =>
+					frameText(f).includes("Agent codex"),
+				);
+				expect(frameText(setup.captureCharFrame())).toContain("Model gpt-4o");
+				// codex reports no list, so no query runs for it.
+				expect(runner.modelListCalls).toEqual(["pi"]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("switching the task type re-derives an untouched Model row", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				merge: {
+					template: "Merge pull request {external-key}.",
+					model: "openai/gpt-5.1",
+					autoClose: false,
+				},
+			},
+		};
+		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Model openai/gpt-5.1");
+
+				await press(setup, "j", "the selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				// implement names no model: the untouched row re-derives to unset.
+				const toImplement = await pressArrow(
+					setup,
+					"right",
+					"the task type to become implement",
+					(f) => frameText(f).includes("Task type implement"),
+				);
+				expect(frameText(toImplement)).toContain("Model (unset)");
+
+				// Cycling back restores the merge profile's model.
+				const back = await pressArrow(setup, "right", "the task type to cycle", (f) =>
+					frameText(f).includes("Task type fix"),
+				);
+				expect(frameText(back)).toContain("Model (unset)");
+				await pressArrow(setup, "right", "the task type to become review", (f) =>
+					frameText(f).includes("Task type review"),
+				);
+				await pressArrow(setup, "right", "the task type to become rework", (f) =>
+					frameText(f).includes("Task type rework"),
+				);
+				const toMerge = await pressArrow(setup, "right", "the task type to become merge", (f) =>
+					frameText(f).includes("Task type merge"),
+				);
+				expect(frameText(toMerge)).toContain("Model openai/gpt-5.1");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("openai/gpt-5.1");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = { ...DEFAULT_CONFIG, defaultAgent: "claude" };
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await moveToThinkingRow(setup);
+				expect(frameText(setup.captureCharFrame())).toContain("Thinking (unset)");
+
+				// claude declares low through max, in that order: its row starts on
+				// low and never offers minimal or off.
+				await pressArrow(setup, "right", "the first level the agent supports", (f) =>
+					frameText(f).includes("Thinking low"),
+				);
+				await press(setup, "l", "the next level", (f) => frameText(f).includes("Thinking medium"));
+				await press(setup, "l", "the next level", (f) => frameText(f).includes("Thinking high"));
+				await press(setup, "l", "the next level", (f) => frameText(f).includes("Thinking xhigh"));
+				const last = await press(setup, "l", "the last level the agent supports", (f) =>
+					frameText(f).includes("Thinking max"),
+				);
+				expect(frameText(last)).toContain("Thinking max");
+				expect(frameText(last)).not.toContain("Thinking minimal");
+				await press(setup, "l", "the level to wrap to the first", (f) =>
+					frameText(f).includes("Thinking low"),
+				);
+
+				const cleared = await pressBackspace(setup, "the Thinking row to clear", (f) =>
+					frameText(f).includes("Thinking (unset)"),
+				);
+				expect(frameText(cleared)).toContain("Thinking (unset)");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).not.toContain("--effort");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a Model wider than its column shows its end and rides on whole", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// A real agent list carries one long provider in front of many models:
+		// the head of the value says nothing the neighbour's head does not.
+		const long =
+			"llama-server=http://127.0.0.1:8080/AtomicChat/DeepSeek-V4-Flash-0731-GGUF:IQ1_M_XL";
+		runner.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await moveToModelRow(setup);
+				const shown = await pressArrow(setup, "right", "the long model to show its tail", (f) =>
+					frameText(f).includes(`…${long.slice(-29)}`),
+				);
+				// The default value column is 30 cells: the marker plus 29 cells
+				// of the end, and nothing of the shared provider prefix.
+				expect(frameText(shown)).not.toContain("llama-server");
+				expect(frameText(shown)).not.toContain("AtomicChat");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				// The clip is display only: the handoff names the whole value.
+				expect(start?.args).toContain(long);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a failed model list query falls the Model row back to free text", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.setModelListFailure("pi", "network unreachable");
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				const onModel = await moveToModelRow(setup);
+				// The fallback keeps the whole input: the caret and the editing keys.
+				expect(frameText(onModel)).toContain("Model (empty)");
+				expect(frameText(onModel)).toContain("move ↑↓ tab/⇧tab edit hjkl/←→ paste ↵ esc");
+
+				await setup.mockInput.typeText("gpt-4o");
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).toContain("gpt-4o");
+			},
+			WIDTH,
+			HEIGHT,
 			props,
 		);
 	});

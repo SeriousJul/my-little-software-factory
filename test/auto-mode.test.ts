@@ -211,6 +211,7 @@ function holding(runner: FakeRunner, command: string, ms: number): CommandRunner
 			}
 			return runner.run(name, args, options);
 		},
+		listModels: (kind) => runner.listModels(kind),
 	};
 }
 
@@ -1083,6 +1084,90 @@ describe("the auto dispatch", () => {
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
 				expect(commands.some((c) => c.startsWith("herdr agent prompt"))).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an auto-handoff starts on the settings its task profile resolves", async () => {
+		// ADR 0009: an unattended handoff resolves through the same chain the
+		// panel shows, so the profile's own agent, model, and level start it.
+		const app = seededApp("open", {
+			autoHandoff: true,
+			defaultModel: "anthropic/claude-sonnet-4-5",
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					thinking: "high",
+				},
+			},
+		});
+		stubCheckout(app);
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The detail pane names the agent the handoff started on, so the
+				// wait cannot resolve on the mode line alone, before the dispatch.
+				await awaitFrame(
+					setup,
+					(f) => f.includes("auto: on 0/2") && f.includes("Agent: codex"),
+					"the dispatch",
+				);
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				// The profile's agent, then that agent's settings: codex names its
+				// level as a -c pair, and the default model resolves onto it.
+				expect(start).toContain(
+					"--kind codex --pane pane-1 -- --model anthropic/claude-sonnet-4-5 -c model_reasoning_effort=high",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an unfit model fails an auto-handoff before it touches herdr", async () => {
+		// ADR 0010: the fit check guards the unattended route too. The fake
+		// reports a pi list without the profile's model, so the dispatch dies
+		// on the check, not inside an agent terminal.
+		const app = seededApp("open", {
+			autoHandoff: true,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+			},
+		});
+		stubCheckout(app);
+		app.runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("has no model"), "the refused dispatch");
+				// The handoff never reached herdr: no workspace, no agent start.
+				expect(app.runner.commands().some((c) => c.startsWith("herdr workspace"))).toBe(false);
+				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
+				// The ticket stays open and dispatchable once the config is fixed.
+				expect(ticketRow(setup.captureCharFrame())).toContain("[open]");
 			},
 			WIDTH,
 			HEIGHT,

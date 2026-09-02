@@ -29,8 +29,7 @@ import { dirname, join } from "node:path";
 import type { FactoryConfig } from "./config.ts";
 import type { RepositoryRef } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
-import { firstNonEmptyLine } from "./lines.ts";
-import { type CommandResult, type CommandRunner, errorMessage } from "./runner.ts";
+import { type CommandRunner, commandFailureText, errorMessage } from "./runner.ts";
 
 /** An explicit repository mapping: a GitHub repository pinned to a checkout path. */
 export interface RepositoryMapping {
@@ -262,14 +261,6 @@ function normalizeRemote(url: string): string | null {
 		.replace(/^\/+|\/+$/g, "")
 		.replace(/\.git$/, "");
 	return `${host}/${path}`;
-}
-
-/**
- * The first non-empty line of a failed command's stderr, trimmed.
- * A result with no message at all reports its exit code.
- */
-export function commandFailureText(result: CommandResult): string {
-	return firstNonEmptyLine(result.stderr) ?? `exit code ${result.code}`;
 }
 
 /**

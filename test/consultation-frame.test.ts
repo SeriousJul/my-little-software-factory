@@ -19,7 +19,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
+import type {
+	CommandOptions,
+	CommandResult,
+	CommandRunner,
+	ModelListResult,
+} from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
 	awaitFrame,
@@ -261,6 +266,10 @@ class ConsultationRunner implements CommandRunner {
 
 	commands(): string[] {
 		return this.inner.commands();
+	}
+
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
 	}
 
 	async run(

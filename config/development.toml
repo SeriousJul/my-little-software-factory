@@ -28,11 +28,13 @@ thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 kind = "codex"
 model = "--model {value}"
 thinking = "-c model_reasoning_effort={value}"
+thinking-values = ["minimal", "low", "medium", "high"]
 
 [agents.claude]
 kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
+thinking-values = ["low", "medium", "high", "xhigh", "max"]
 
 [consultation-types.grill-with-docs]
 agent = "pi"

@@ -5,6 +5,7 @@ import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
+import { isThinkingLevel, type ThinkingLevel, thinkingLevelList } from "./domain/agent.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
@@ -13,13 +14,23 @@ export interface AgentTypeConfig {
 	kind: string;
 	model?: string;
 	thinking?: string;
-	thinkingValues?: string[];
+	/**
+	 * The Thinking levels this Agent type maps, as a non-empty subset of the
+	 * standard set. An agent that maps thinking must declare it: the override
+	 * panel offers exactly this list, and the handoff fit check tests against
+	 * it (ADR 0010).
+	 */
+	thinkingValues?: ThinkingLevel[];
 }
 
 export interface TaskTypeConfig {
 	template: string;
+	/** The Task profile's agent type. Omitted leaves the agent to `default-agent`. */
+	agent?: string;
+	/** The Task profile's model. Omitted leaves the model to `default-model`. */
+	model?: string;
 	/** The thinking level of its handoffs when no explicit choice is made. Omitted leaves the setting to the agent. */
-	thinking?: string;
+	thinking?: ThinkingLevel;
 	/** Settle turns of this type without an operator decision. */
 	autoClose: boolean;
 }
@@ -35,7 +46,7 @@ export interface ConsultationTypeConfig {
 	/** Optional model setting passed through the Agent type mapping. */
 	model?: string;
 	/** Optional thinking setting passed through the Agent type mapping. */
-	thinking?: string;
+	thinking?: ThinkingLevel;
 }
 
 /** A semantic key used to leave Agent interaction mode. */
@@ -101,6 +112,14 @@ export interface FactoryConfig {
 	defaultAgent: string;
 	defaultEnvironment: EnvironmentKind;
 	defaultTaskType: string;
+	/**
+	 * The model a handoff starts with when the task profile names none and the
+	 * operator overrides none (ADR 0009). Empty leaves the setting to the
+	 * agent. Startup checks it through every task profile that resolves it, so
+	 * a value one agent offers and another does not is still reported per
+	 * agent; the handoff fit check guards it again there.
+	 */
+	defaultModel?: string;
 	agents: Record<string, AgentTypeConfig>;
 	taskTypes: Record<string, TaskTypeConfig>;
 	/** Optional interactive Consultation patterns. Empty is valid. */
@@ -154,8 +173,14 @@ export const DEFAULT_CONFIG: FactoryConfig = {
 			kind: "codex",
 			model: "--model {value}",
 			thinking: "-c model_reasoning_effort={value}",
+			thinkingValues: ["minimal", "low", "medium", "high"],
 		},
-		claude: { kind: "claude", model: "--model {value}", thinking: "--effort {value}" },
+		claude: {
+			kind: "claude",
+			model: "--model {value}",
+			thinking: "--effort {value}",
+			thinkingValues: ["low", "medium", "high", "xhigh", "max"],
+		},
 	},
 	consultationTypes: {},
 	attentionBell: true,
@@ -260,6 +285,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 		"default-agent",
 		"default-environment",
 		"default-task-type",
+		"default-model",
 		"agents",
 		"task-types",
 		"consultation-types",
@@ -293,8 +319,14 @@ export function validateConfig(data: unknown): FactoryConfig {
 		throw new ConfigError(`config: default-environment must be one of: ${handoffKinds.join(", ")}`);
 	}
 	const defaultTaskType = stringField(data, "default-task-type");
+	const defaultModel = optionalStringField(data, "default-model");
 	const agents = validateAgents(data.agents);
-	const taskTypes = validateTaskTypes(data["task-types"]);
+	if (!(defaultAgent in agents)) {
+		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
+	}
+	// The task profile resolves its agent through `default-agent` when the
+	// profile names none, so the thinking and model checks need that agent.
+	const taskTypes = validateTaskTypes(data["task-types"], agents, defaultAgent);
 	const consultationTypes = validateConsultationTypes(data["consultation-types"], agents);
 	const attentionBell = booleanField(data, "attention-bell", true);
 	const interactionExitKey = validateInteractionExitKey(
@@ -311,9 +343,6 @@ export function validateConfig(data: unknown): FactoryConfig {
 	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
 	const maxHandoffsPerTicket = positiveIntField(data, "max-handoffs-per-ticket", 10);
 	const scroll = validateScroll(data.scroll);
-	if (!(defaultAgent in agents)) {
-		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
-	}
 	if (!(defaultTaskType in taskTypes)) {
 		throw new ConfigError(
 			`config: default-task-type "${defaultTaskType}" does not match any task type`,
@@ -323,6 +352,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 		defaultAgent,
 		defaultEnvironment: defaultEnvironment as EnvironmentKind,
 		defaultTaskType,
+		...(defaultModel === undefined ? {} : { defaultModel }),
 		agents,
 		taskTypes,
 		consultationTypes,
@@ -382,14 +412,19 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 		if (thinking !== undefined)
 			agent.thinking = settingTemplate(thinking, `agents.${name}.thinking`);
 		if ("thinking-values" in raw) {
-			const values = raw["thinking-values"];
-			if (
-				!Array.isArray(values) ||
-				values.some((item) => typeof item !== "string" || item === "")
-			) {
-				throw new ConfigError(`config: agents.${name}.thinking-values: must be a list of strings`);
-			}
-			agent.thinkingValues = [...values];
+			agent.thinkingValues = validateThinkingValues(raw["thinking-values"], name);
+		}
+		if (agent.thinking !== undefined && agent.thinkingValues === undefined) {
+			// Free-text thinking is retired: the panel offers, and the fit check
+			// tests against, the levels the agent declares.
+			throw new ConfigError(
+				`config: agents.${name}.thinking-values: an agent that maps thinking must declare the levels it supports (${thinkingLevelList()})`,
+			);
+		}
+		if (agent.thinking === undefined && agent.thinkingValues !== undefined) {
+			throw new ConfigError(
+				`config: agents.${name}.thinking-values: the agent maps no thinking setting, so it has no levels to declare`,
+			);
 		}
 		for (const key of Object.keys(raw)) {
 			if (!new Set(["kind", "model", "thinking", "thinking-values"]).has(key)) {
@@ -397,6 +432,31 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 			}
 		}
 		out[name] = agent;
+	}
+	return out;
+}
+
+/**
+ * One agent's declared Thinking levels: a non-empty subset of the standard
+ * set, in the order the operator wants them offered.
+ */
+function validateThinkingValues(value: unknown, name: string): ThinkingLevel[] {
+	const where = `config: agents.${name}.thinking-values`;
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item === "")) {
+		throw new ConfigError(`${where}: must be a list of level strings`);
+	}
+	if (value.length === 0) {
+		throw new ConfigError(`${where}: must declare at least one level (${thinkingLevelList()})`);
+	}
+	const out: ThinkingLevel[] = [];
+	for (const item of value) {
+		if (!isThinkingLevel(item)) {
+			throw new ConfigError(
+				`${where}: "${String(item)}" is not a standard thinking level (${thinkingLevelList()})`,
+			);
+		}
+		if (out.includes(item)) throw new ConfigError(`${where}: "${item}" is declared twice`);
+		out.push(item);
 	}
 	return out;
 }
@@ -465,32 +525,88 @@ const PROMPT_PLACEHOLDERS = [
 	"labels",
 	"previous-message",
 ];
-function validateTaskTypes(value: unknown): Record<string, TaskTypeConfig> {
+function validateTaskTypes(
+	value: unknown,
+	agents: Record<string, AgentTypeConfig>,
+	defaultAgent: string,
+): Record<string, TaskTypeConfig> {
 	const taskTypes = tableField(value === undefined ? {} : value, "task-types");
 	if (Object.keys(taskTypes).length === 0)
 		throw new ConfigError("config: at least one task type is required under [task-types]");
 	const out: Record<string, TaskTypeConfig> = {};
 	for (const [name, raw] of Object.entries(taskTypes)) {
-		if (/\s/.test(name))
-			throw new ConfigError(`config: task-types.${name}: must be a one-word name`);
-		if (!isRecord(raw)) throw new ConfigError(`config: task-types.${name}: must be a table`);
-		const template = stringField(raw, "template", `task-types.${name}`);
-		const thinking = optionalStringField(raw, "thinking", `task-types.${name}`);
+		const where = `task-types.${name}`;
+		if (/\s/.test(name)) throw new ConfigError(`config: ${where}: must be a one-word name`);
+		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+		const template = stringField(raw, "template", where);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
-					`config: task-types.${name}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
+					`config: ${where}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
 				);
 			}
 		}
+		// The Task profile (ADR 0009): its own agent, model, and thinking level.
+		// An omitted agent leaves the agent to `default-agent`, so the profile's
+		// settings are checked against the agent its handoffs start on.
+		const agent = optionalStringField(raw, "agent", where);
+		if (agent !== undefined && !(agent in agents))
+			throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
+		const profileAgent = agent ?? defaultAgent;
+		const agentConfig = agents[profileAgent];
+		const model = optionalStringField(raw, "model", where);
+		if (model !== undefined && agentConfig?.model === undefined)
+			throw new ConfigError(
+				`config: ${where}.model: agent "${profileAgent}" does not define a model setting`,
+			);
+		const thinking = validateThinkingLevel(
+			optionalStringField(raw, "thinking", where),
+			profileAgent,
+			agentConfig,
+			`${where}.thinking`,
+		);
 		const autoClose = booleanField(raw, "auto-close", false);
 		for (const key of Object.keys(raw))
-			if (key !== "template" && key !== "thinking" && key !== "auto-close")
-				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
-		out[name] =
-			thinking === undefined ? { template, autoClose } : { template, thinking, autoClose };
+			if (!["template", "agent", "model", "thinking", "auto-close"].includes(key))
+				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
+		out[name] = {
+			template,
+			...(agent === undefined ? {} : { agent }),
+			...(model === undefined ? {} : { model }),
+			...(thinking === undefined ? {} : { thinking }),
+			autoClose,
+		};
 	}
 	return out;
+}
+
+/**
+ * A configured Thinking level: one of the standard set, and one the agent the
+ * setting resolves to actually maps. An omitted level stays unset: the level
+ * is left to the agent.
+ */
+function validateThinkingLevel(
+	value: string | undefined,
+	agentName: string,
+	agent: AgentTypeConfig | undefined,
+	where: string,
+): ThinkingLevel | undefined {
+	if (value === undefined) return undefined;
+	if (!isThinkingLevel(value)) {
+		throw new ConfigError(
+			`config: ${where}: "${value}" is not a standard thinking level (${thinkingLevelList()})`,
+		);
+	}
+	if (agent === undefined || agent.thinking === undefined)
+		throw new ConfigError(
+			`config: ${where}: agent "${agentName}" does not define a thinking setting`,
+		);
+	const supported = agent.thinkingValues ?? [];
+	if (!supported.includes(value))
+		throw new ConfigError(
+			`config: ${where}: agent "${agentName}" does not support "${value}"; it supports: ${supported.join(", ")}`,
+		);
+	return value;
 }
 
 /** Validate the optional Consultation type table at startup. */
@@ -523,20 +639,12 @@ function validateConsultationTypes(
 		const model = optionalStringField(raw, "model", where);
 		if (model !== undefined && agentConfig.model === undefined)
 			throw new ConfigError(`${where}.model: agent "${agent}" does not define a model setting`);
-		const thinking = optionalStringField(raw, "thinking", where);
-		if (thinking !== undefined) {
-			if (agentConfig.thinking === undefined)
-				throw new ConfigError(
-					`${where}.thinking: agent "${agent}" does not define a thinking setting`,
-				);
-			if (
-				agentConfig.thinkingValues !== undefined &&
-				!agentConfig.thinkingValues.includes(thinking)
-			)
-				throw new ConfigError(
-					`${where}.thinking: must be one of: ${agentConfig.thinkingValues.join(", ")}`,
-				);
-		}
+		const thinking = validateThinkingLevel(
+			raw.thinking === undefined ? undefined : stringField(raw, "thinking", where),
+			agent,
+			agentConfig,
+			`${where}.thinking`,
+		);
 		out[name] = {
 			agent,
 			environment: environment as EnvironmentKind,
@@ -864,7 +972,7 @@ function positiveNumberField(record: Record<string, unknown>, key: string, def: 
 function optionalStringField(
 	record: Record<string, unknown>,
 	key: string,
-	where: string,
+	where?: string,
 ): string | undefined {
 	return key in record ? stringField(record, key, where) : undefined;
 }
@@ -881,6 +989,7 @@ export function configToToml(config: FactoryConfig): string {
 		"default-agent": config.defaultAgent,
 		"default-environment": config.defaultEnvironment,
 		"default-task-type": config.defaultTaskType,
+		...(config.defaultModel === undefined ? {} : { "default-model": config.defaultModel }),
 		...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
 		agents: Object.fromEntries(
 			Object.entries(config.agents).map(([name, agent]) => [
@@ -900,6 +1009,8 @@ export function configToToml(config: FactoryConfig): string {
 				name,
 				{
 					template: task.template,
+					...(task.agent === undefined ? {} : { agent: task.agent }),
+					...(task.model === undefined ? {} : { model: task.model }),
 					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
 					...(task.autoClose ? { "auto-close": true } : {}),
 				},

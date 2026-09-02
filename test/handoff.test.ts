@@ -93,6 +93,17 @@ const defaultChoice = {
 	thinking: "",
 };
 
+/** Stub the live-worktree herdr sequence at the convention checkout. */
+function stubLiveWorkspace(runner: FakeRunner): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-new"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
+
 /** The exact prompt the implement task type renders for this ticket. */
 const PROMPT = renderPrompt(DEFAULT_CONFIG.taskTypes.implement.template, ticket);
 const AGENT = "retry-policy-for-webhooks";
@@ -951,6 +962,118 @@ describe("handOffTicket: the guard rails", () => {
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("reserved");
 		expect(runner.calls).toHaveLength(0);
+	});
+
+	describe("handOffTicket: the setting fit check (ADR 0010)", () => {
+		test("a model the agent does not report fails before its first external change", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "gpt-4o" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toBe(
+				'agent "pi" (pi) has no model "gpt-4o": check the model id and its provider auth',
+			);
+			// Nothing ran: not the repository resolution, not herdr, not the start.
+			expect(runner.calls).toHaveLength(0);
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
+
+		test("a model the agent reports rides on the start", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("ok");
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toEqual([
+				"agent",
+				"start",
+				AGENT,
+				"--kind",
+				"pi",
+				"--pane",
+				"pane-1",
+				"--",
+				"--model",
+				"anthropic/claude-sonnet-4-5",
+			]);
+		});
+
+		test("an unfit thinking level fails the handoff, and no list query is needed to see it", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5", thinking: "ultra" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain('does not support the thinking level "ultra"');
+			expect(runner.calls).toHaveLength(0);
+			// The levels the agent declares are in the config, so the check needs
+			// no query.
+			expect(runner.modelListCalls).toHaveLength(0);
+		});
+
+		test("a model list that cannot be fetched lets the handoff run on", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			// The fake holds no list for the pi kind: the query fails as an
+			// uninstalled or unreadable CLI would, and the agent's own rejection
+			// stands.
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "gpt-4o" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("ok");
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toContain("gpt-4o");
+		});
+
+		test("a restart fails an unfit model before it touches the stored workspace", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffStoredWorkspace({
+				ticket,
+				choice: { ...defaultChoice, model: "gpt-4o" },
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				previousTabId: "tab-prev",
+				previousMessage: "settled earlier",
+			});
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain('has no model "gpt-4o"');
+			expect(runner.calls).toHaveLength(0);
+		});
 	});
 
 	test("an unknown agent type or task type fails without a command", async () => {

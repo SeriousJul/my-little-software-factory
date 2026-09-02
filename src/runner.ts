@@ -2,13 +2,16 @@
  * The command runner: the only exit of the control plane to the outside
  * world.
  *
- * Every external call (the herdr CLI, git) goes through this interface: it
- * executes a program with an argv and returns the output, the exit status,
- * and the error. It is the only injected test seam: tests hand the app a
- * fake runner that records the commands and returns canned results, so the
- * automated suite never calls a real herdr.
+ * Every external call (the herdr CLI, git, an agent CLI's model list) goes
+ * through this interface: it executes a program with an argv and returns the
+ * output, the exit status, and the error. It is the only injected test seam:
+ * tests hand the app a fake runner that records the commands and returns
+ * canned results, so the automated suite never calls a real herdr, agent
+ * runtime, or ticket source.
  */
 import { execFile } from "node:child_process";
+
+import { firstNonEmptyLine } from "./lines.ts";
 
 /** The result of one command: the exit status plus both streams. */
 export interface CommandResult {
@@ -24,8 +27,43 @@ export interface CommandOptions {
 	secretEnv?: readonly string[];
 }
 
+/**
+ * The Model list an Agent runtime reports as available, or why it could not
+ * be read. The runtime owns the set (ADR 0010): it lists only the models it
+ * can actually run, so provider auth is already applied.
+ */
+export type ModelListResult = { ok: true; models: string[] } | { ok: false; reason: string };
+
 export interface CommandRunner {
 	run(command: string, args: readonly string[], options?: CommandOptions): Promise<CommandResult>;
+	/**
+	 * The models the agent CLI of this kind offers, in the `provider/model`
+	 * form its own `--model` option takes. It never throws: an unknown kind,
+	 * a failed command, and an unreadable table all come back as a failure
+	 * case with a readable reason.
+	 */
+	listModels(kind: string): Promise<ModelListResult>;
+}
+
+/**
+ * The agent kinds whose own CLI reports a Model list, and the command that
+ * prints it (ADR 0010). A kind outside this map has no list: the override
+ * panel keeps its free-text Model row, and the handoff fit check skips the
+ * model for it. A declarative per-agent list command is the follow-up this
+ * map is built for.
+ */
+export const MODEL_LIST_COMMANDS: Readonly<Record<string, readonly string[]>> = {
+	pi: ["pi", "--list-models"],
+};
+
+/** The argv of one kind's model list command, or undefined when it has none. */
+export function modelListCommand(kind: string): readonly string[] | undefined {
+	return Object.hasOwn(MODEL_LIST_COMMANDS, kind) ? MODEL_LIST_COMMANDS[kind] : undefined;
+}
+
+/** True when the agent kind's CLI can report a Model list. */
+export function supportsModelList(kind: string): boolean {
+	return modelListCommand(kind) !== undefined;
 }
 
 /** Give a command ten minutes; handoffs clone repositories. */
@@ -52,7 +90,7 @@ export interface ChildProcessRunnerOptions {
 export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}): CommandRunner {
 	const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
 	const maxBuffer = options.maxBuffer ?? COMMAND_MAX_BUFFER;
-	return {
+	const runner: CommandRunner = {
 		async run(command, args, options) {
 			try {
 				const result = await new Promise<{ code: number; stdout: string; stderr: string }>(
@@ -87,7 +125,101 @@ export function createChildProcessRunner(options: ChildProcessRunnerOptions = {}
 				return commandFailure(command, error, timeoutMs, maxBuffer);
 			}
 		},
+		async listModels(kind) {
+			return listModelsFor(runner, kind);
+		},
 	};
+	return runner;
+}
+
+/**
+ * Query one agent kind's own CLI for its Model list (ADR 0010).
+ *
+ * The never-throw contract of `run` carries over: every failure comes back as
+ * a reason the caller shows or degrades around.
+ */
+async function listModelsFor(runner: CommandRunner, kind: string): Promise<ModelListResult> {
+	const argv = modelListCommand(kind);
+	if (argv === undefined) {
+		return { ok: false, reason: `the agent kind "${kind}" has no model list command` };
+	}
+	const [command, ...args] = argv;
+	const result = await runner.run(command, args);
+	if (result.code !== 0) {
+		return {
+			ok: false,
+			reason: `${command} ${args.join(" ")} failed: ${commandFailureText(result)}`,
+		};
+	}
+	return parsePiModelList(result.stdout, command);
+}
+
+/** The fixed right-hand columns after the model: context, max-out, thinking, images. */
+const PI_MODEL_TABLE_TRAILING = 4;
+/** The least number of columns one `pi --list-models` row can hold. */
+const PI_MODEL_TABLE_MIN_COLUMNS = PI_MODEL_TABLE_TRAILING + 2;
+
+/**
+ * The `pi --list-models` table, read from the right edge.
+ *
+ * The last four columns are fixed, so the model is the fifth column from the
+ * end and the provider is everything before it: a provider name that carries
+ * spaces still parses. The value form is the `provider/model` the pi
+ * `--model` option takes, which is what makes a model id that already carries
+ * a slash (a GGUF repo path, for one) resolve to the right provider.
+ *
+ * The table can sit behind a preamble: a tool manager announcing the version
+ * it selected, or any other line the spawned program writes first. Every line
+ * before the header is skipped, so that noise does not hide the list.
+ *
+ * The shape is a pinned contract on the installed pi version. A layout change
+ * is a failure case with a readable reason, which every caller degrades
+ * around; it is never a crash and never a partial list.
+ */
+export function parsePiModelList(stdout: string, command = "pi"): ModelListResult {
+	const models: string[] = [];
+	let header = false;
+	for (const line of stdout.split("\n")) {
+		const trimmed = line.trim();
+		if (trimmed === "") continue;
+		const columns = trimmed.split(/\s{2,}/);
+		// Fifth from the end: the four columns after the model are fixed, and
+		// the provider is everything before it.
+		const at = columns.length - (PI_MODEL_TABLE_TRAILING + 1);
+		const model = at >= 0 ? columns[at] : "";
+		const provider = at >= 0 ? columns.slice(0, at).join("  ") : "";
+		if (!header) {
+			// Look for the header row wherever it sits, and skip whatever came
+			// before it.
+			if (provider === "provider" && model === "model") {
+				header = true;
+			}
+			continue;
+		}
+		if (columns.length < PI_MODEL_TABLE_MIN_COLUMNS) {
+			return unparseableModelTable(
+				command,
+				`a row holds ${columns.length} columns, not at least ${PI_MODEL_TABLE_MIN_COLUMNS}`,
+			);
+		}
+		models.push(`${provider}/${model}`);
+	}
+	if (!header) {
+		return unparseableModelTable(command, "it printed no header row");
+	}
+	return { ok: true, models };
+}
+
+function unparseableModelTable(command: string, detail: string): ModelListResult {
+	return {
+		ok: false,
+		reason: `${command} --list-models returned a table this version cannot read: ${detail}`,
+	};
+}
+
+/** The first readable line of a failed command's output. */
+export function commandFailureText(result: CommandResult): string {
+	return firstNonEmptyLine(result.stderr) ?? `exit code ${result.code}`;
 }
 
 /** Map a spawn-level failure to a failed command with a readable reason. */

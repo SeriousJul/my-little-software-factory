@@ -46,6 +46,46 @@ export function truncateToWidth(text: string, width: number): string {
 	return out;
 }
 
+/**
+ * Shorten a string to at most `width` cells, keeping its end.
+ *
+ * The override panel's Model row uses this for a value whose start repeats
+ * across the list: a real agent list carries one long provider in front of
+ * many models, so a clip that keeps the head shows the same text for two
+ * different choices. On the installed pi runtime's 54-model list, a 30-cell
+ * head clip leaves 18 distinct values and a tail clip leaves 45. The tail is
+ * what tells them apart. A leading ellipsis marks the cut and costs one cell,
+ * and the clip stays on grapheme boundaries.
+ */
+export function truncateTailToWidth(text: string, width: number): string {
+	if (width < 1) {
+		return "";
+	}
+	if (widthOf(text) <= width) {
+		return text;
+	}
+	if (width === 1) {
+		return ELLIPSIS;
+	}
+	const clusters = graphemes(text);
+	const kept: string[] = [];
+	// One cell less than the column, because the marker costs a cell.
+	let budget = width - widthOf(ELLIPSIS);
+	for (let at = clusters.length - 1; at >= 0 && budget > 0; at -= 1) {
+		const cluster = clusters[at];
+		const clusterWidth = widthOf(cluster);
+		// A wide cluster that no longer fits the budget is dropped, so the row
+		// never overruns its column.
+		if (clusterWidth > budget) break;
+		kept.unshift(cluster);
+		budget -= clusterWidth;
+	}
+	return `${ELLIPSIS}${kept.join("")}`;
+}
+
+/** The cut marker: one cell, and never ambiguous with a model name. */
+const ELLIPSIS = "…";
+
 /** Pad a string with trailing spaces to exactly `width` cells. */
 export function padToWidth(text: string, width: number): string {
 	const w = widthOf(text);

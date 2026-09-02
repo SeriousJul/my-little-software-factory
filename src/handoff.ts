@@ -35,6 +35,7 @@
  */
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
+import { checkSettingFit } from "./model-settings.ts";
 import {
 	agentNameFor,
 	branchNameFor,
@@ -42,37 +43,37 @@ import {
 	consultationBranchName,
 } from "./naming.ts";
 import {
-	commandFailureText,
 	type ResolutionNotes,
 	type ResolvedRepository,
 	realPathOf,
 	resolveRepository,
 } from "./repo.ts";
-import type { CommandResult, CommandRunner } from "./runner.ts";
+import { type CommandResult, type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation } from "./state.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
 const AGENT_PANE_BUSY_RETRY_WINDOW_MS = 2_000;
 
-/** One handoff's choices: the defaults plus whatever an override changed. */
+/** One handoff's choices: the resolved task profile plus whatever an override changed. */
 export interface HandoffChoice {
 	agentType: string;
 	environment: EnvironmentKind;
 	taskType: string;
-	/** Free-text model; empty means the setting is left to the agent. */
+	/** The model, in the `provider/model` form the agent takes; empty leaves the setting to the agent. */
 	model: string;
-	/** Free-text thinking level; empty means the level is left to the agent.
-	 *  The app prefills the suggested task type's thinking default here, so
-	 *  the panel shows the level the handoff will run on, and clearing the
-	 *  row in the panel hands the level back to the agent. */
+	/** The Thinking level of the standard set; empty leaves the level to the agent.
+	 *  The app prefills it from the resolved task profile, so the panel shows
+	 *  the level the handoff will run on, and clearing the row in the panel
+	 *  hands the level back to the agent. Durable state keeps it a plain
+	 *  string: a restart must repeat a stored value without casting it. */
 	thinking: string;
 }
 
 /**
  * The base shape of a handoff's choices: a task type on an agent type in an
- * environment, with the model and thinking left to the agent's defaults.
- * A restart passes the previous handoff's model and thinking through.
+ * environment, with the settings the resolved task profile names. A restart
+ * passes the previous handoff's model and thinking through, unchanged.
  */
 export function baseChoice(
 	agentType: string,
@@ -168,6 +169,30 @@ function validateChoice(
 	return { agent, taskType };
 }
 
+/**
+ * The setting fit check of a handoff (ADR 0010).
+ *
+ * It runs before the handoff's first external change, so an unfit model or
+ * thinking level fails with a readable reason and leaves the ticket open
+ * instead of starting an agent that dies inside its own terminal. A model list
+ * that cannot be fetched skips the model check: the handoff proceeds, and the
+ * agent's own rejection stands.
+ */
+async function settingFitFailure(
+	choice: HandoffChoice,
+	agent: FactoryConfig["agents"][string],
+	runner: CommandRunner,
+): Promise<HandoffOutcome | null> {
+	const fit = await checkSettingFit({
+		agentType: choice.agentType,
+		agent,
+		model: choice.model,
+		thinking: choice.thinking,
+		runner,
+	});
+	return fit.ok ? null : { status: "failed", reason: fit.reason };
+}
+
 /** Hand an open ticket off, returning the facts the app records on it. */
 export async function handOffTicket(
 	ticket: Ticket,
@@ -182,6 +207,8 @@ export async function handOffTicket(
 	}
 	const checked = validateChoice(choice, config);
 	if ("status" in checked) return checked;
+	const unfit = await settingFitFailure(choice, checked.agent, runner);
+	if (unfit !== null) return unfit;
 
 	onStage?.("resolving-repository");
 	const resolved = await resolveRepository(ticket.repositoryRef, config, { runner, home });
@@ -243,6 +270,14 @@ export async function handOffConsultation({
 		return { status: "failed", reason: `unknown agent type: ${consultation.agentType}` };
 	if (consultation.environment === "container")
 		return { status: "failed", reason: "the container environment is reserved and not yet built" };
+	const fit = await checkSettingFit({
+		agentType: consultation.agentType,
+		agent,
+		model: consultation.model,
+		thinking: consultation.thinking,
+		runner,
+	});
+	if (!fit.ok) return { status: "failed", reason: fit.reason };
 	if (resolvedRepository === undefined) onStage?.("resolving-repository");
 	const resolved =
 		resolvedRepository === undefined
@@ -458,6 +493,8 @@ export async function handOffStoredWorkspace({
 }: StoredWorkspaceHandoffOptions): Promise<HandoffOutcome> {
 	const checked = validateChoice(choice, config);
 	if ("status" in checked) return checked;
+	const unfit = await settingFitFailure(choice, checked.agent, runner);
+	if (unfit !== null) return unfit;
 	const agent = checked.agent;
 	const taskType = checked.taskType;
 
