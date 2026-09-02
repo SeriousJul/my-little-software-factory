@@ -7,7 +7,7 @@
  * assertion, because the wait ends only when the effect appears or the
  * deadline dumps the last frame.
  */
-import { MouseButtons, type MouseButton } from "@opentui/core/testing";
+import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { afterEach, beforeEach, expect, vi } from "vitest";

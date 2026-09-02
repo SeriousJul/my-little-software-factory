@@ -183,6 +183,11 @@ The window from a handoff during which the agent's idle report is its boot, not 
 A ticket that has never shown working waits the window out before an idle agent settles it.
 _Avoid_: boot delay, settle delay
 
+**Reclaim**:
+The observation that an Agent herdr reports working or blocked in the pane of a handoff whose work cycle already closed.
+The poll records it as a handoff of the ticket's current cycle and runs the ticket again, so the list never reads `open` over live work.
+_Avoid_: orphaned agent, re-handoff, resume
+
 **Restart**:
 A recovery Handoff after a Missing agent.
 It repeats the interrupted Handoff's choices and counts toward the Handoff limit.
