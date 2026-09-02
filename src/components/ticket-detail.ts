@@ -302,6 +302,12 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			title: focused ? "❯ Detail" : "  Detail",
 			border: true,
 			borderColor: focused ? COLORS.borderFocused : COLORS.border,
+			// A left click gives this scroll box OpenTUI's own focus, and a box
+			// that holds it paints its border with focusedBorderColor instead of
+			// borderColor. That focus outlives the app's pane focus, so the border
+			// would stay blue on a deactivated pane. Pane focus is app state; both
+			// border colors follow it.
+			focusedBorderColor: focused ? COLORS.borderFocused : COLORS.border,
 			// At normal widths the detail keeps one padding cell around text.
 			// At tiny widths, yield right then left padding before the only text
 			// column. The gutter has already yielded there.
