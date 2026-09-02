@@ -305,21 +305,58 @@ describe("toolTarget", () => {
 		expect(toolTarget("exec", { cmd: "make test" })).toBe("make test");
 	});
 
+	// A readable entry that is not the command proves the shell branch was taken:
+	// the last resort reads the first string argument in key order.
+	test("a shell tool gives the command, never another string argument", () => {
+		expect(toolTarget("bash", { note: "read it", command: "git status" })).toBe("git status");
+		expect(toolTarget("exec", { note: "read it", cmd: "make test" })).toBe("make test");
+		expect(toolTarget("shell", { note: "read it", command: "ls" })).toBe("ls");
+	});
+
+	test("a shell tool gives an empty command as its own", () => {
+		expect(toolTarget("bash", { note: "read it", command: "", cmd: "make" })).toBe("");
+	});
+
+	// Only these names read a command. Any other tool falls back to its first
+	// string argument, so a decoy string in front proves which branch answered.
+	test("only a shell tool name reads the command argument", () => {
+		expect(toolTarget("search", { note: "keep it", command: "git status" })).toBe("keep it");
+	});
+
 	test("a file tool gives its path", () => {
 		expect(toolTarget("read", { path: "src/state.ts" })).toBe("src/state.ts");
 		expect(toolTarget("write", { file_path: "src/app.ts" })).toBe("src/app.ts");
 		expect(toolTarget("edit", { path: "src/app.ts" })).toBe("src/app.ts");
 	});
 
+	test("a file tool gives the path, never another string argument", () => {
+		expect(toolTarget("read", { note: "open it", path: "src/state.ts" })).toBe("src/state.ts");
+		expect(toolTarget("write", { note: "open it", file_path: "src/app.ts" })).toBe("src/app.ts");
+		expect(toolTarget("edit", { note: "open it", path: "src/app.ts" })).toBe("src/app.ts");
+		expect(toolTarget("apply_patch", { note: "open it", path: "src/app.ts" })).toBe("src/app.ts");
+	});
+
+	test("only a file tool name reads the path argument", () => {
+		expect(toolTarget("search", { note: "keep it", path: "src/state.ts" })).toBe("keep it");
+		expect(toolTarget("read", { note: "keep it" })).toBe("keep it");
+	});
+
 	test("the mcp gateway gives the target tool name", () => {
 		expect(toolTarget("mcp", { tool: "xcodebuild_list_sims", args: {} })).toBe(
 			"xcodebuild_list_sims",
 		);
+		expect(toolTarget("mcp", { note: "call it", tool: "xcodebuild_list_sims" })).toBe(
+			"xcodebuild_list_sims",
+		);
+		// Only the gateway reads a tool argument this way.
+		expect(toolTarget("search", { note: "keep it", tool: "other" })).toBe("keep it");
+		expect(toolTarget("mcp", { note: "keep it" })).toBe("keep it");
 	});
 
-	test("anything else gives its first string argument", () => {
+	test("anything else gives its first non-blank string argument", () => {
 		expect(toolTarget("search", { query: "pattern", limit: 5 })).toBe("pattern");
 		expect(toolTarget("search", { limit: 5, query: "pattern" })).toBe("pattern");
+		expect(toolTarget("search", { blank: "", padded: "   ", query: "pattern" })).toBe("pattern");
 		expect(toolTarget("search", { limit: 5 })).toBe("");
 		expect(toolTarget("search", {})).toBe("");
 	});

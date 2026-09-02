@@ -305,7 +305,86 @@ describe("HerdrAgentReader.readPane", () => {
 });
 
 describe("HerdrAgentReader.listAgents", () => {
-	test("drops items without a pane id or agent name", async () => {
+	/** Parse one agent item shaped with the given extra fields. */
+	async function parseItem(extra: Record<string, unknown>): Promise<HerdrAgent | undefined> {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: { agents: [{ pane_id: "pane-1", agent: "pi", ...extra }] },
+			}),
+		});
+		const probe = await new HerdrAgentReader(runner).listAgents();
+		return probe.kind === "ok" ? probe.agents[0] : undefined;
+	}
+
+	test("reads every name herdr may give the turn sequence", async () => {
+		for (const [field, sequence] of [
+			["sequence", 1],
+			["seq", 2],
+			["state_change_sequence", 3],
+			["state_change_seq", 4],
+		] as const) {
+			expect(await parseItem({ [field]: sequence }), `the ${field} name`).toMatchObject({
+				sequence,
+			});
+		}
+		// The first name wins when herdr reports two of them.
+		expect(await parseItem({ sequence: 1, seq: 9 })).toMatchObject({ sequence: 1 });
+		// A value that is not a number leaves the sequence off the item.
+		expect(await parseItem({ seq: "not a number" })).not.toHaveProperty("sequence");
+		expect(await parseItem({ sequence: null, seq: 2 })).toMatchObject({ sequence: 2 });
+	});
+
+	test("reads every name herdr may give the checkout path", async () => {
+		for (const [field, checkout] of [
+			["checkout_path", "/a"],
+			["cwd", "/b"],
+			["working_directory", "/c"],
+		] as const) {
+			expect(await parseItem({ [field]: checkout }), `the ${field} name`).toMatchObject({
+				checkoutPath: checkout,
+			});
+		}
+		expect(await parseItem({ cwd: "/b", checkout_path: "/a" })).toMatchObject({
+			checkoutPath: "/a",
+		});
+		expect(await parseItem({ cwd: 7 })).not.toHaveProperty("checkoutPath");
+	});
+
+	test("reads every name herdr may give the stable session identity", async () => {
+		for (const [field, stable] of [
+			["session_id", "s1"],
+			["agent_session_id", "s2"],
+		] as const) {
+			expect(await parseItem({ [field]: stable }), `the ${field} name`).toMatchObject({
+				stableSessionId: stable,
+			});
+		}
+		expect(await parseItem({ agent_session_id: "s2", session_id: "s1" })).toMatchObject({
+			stableSessionId: "s1",
+		});
+		expect(await parseItem({ session_id: 7 })).not.toHaveProperty("stableSessionId");
+	});
+
+	test("an item with no readable status reads as unknown", async () => {
+		expect(await parseItem({})).toMatchObject({ status: "unknown" });
+		expect(await parseItem({ agent_status: 7 })).toMatchObject({ status: "unknown" });
+		expect(await parseItem({ agent_status: "busy" })).toMatchObject({ status: "busy" });
+	});
+
+	test("only a path session handle gives a session path", async () => {
+		expect(await parseItem({ agent_session: { kind: "path", value: "/s/jsonl" } })).toMatchObject({
+			sessionId: "/s/jsonl",
+		});
+		expect(await parseItem({ agent_session: { kind: "id", value: "/s/jsonl" } })).toMatchObject({
+			sessionId: "",
+		});
+		expect(await parseItem({ agent_session: { kind: "path", value: 7 } })).toMatchObject({
+			sessionId: "",
+		});
+	});
+
+	test("drops items without a usable pane id or agent name", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["agent", "list"], {
 			stdout: JSON.stringify({
