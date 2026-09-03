@@ -387,6 +387,84 @@ describe("the failure markers", () => {
 		app.state.close();
 	});
 
+	test("restart in the Missing modal repeats the interrupted handoff choices", async () => {
+		const app = seededApp("in-flight", {}, success, "live-worktree", "", "gpt-5.6", "high");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		stubCheckout(app);
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1" }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-restart", "tab-restart"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await pressReturn(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				const modal = frameText(await settle(setup));
+				expect(modal).toContain("Restart");
+				expect(modal).toContain("same task type, same workspace");
+				expect(modal).toContain("Abandon");
+				await pressReturn(setup, "the restart handoff", (_frame) =>
+					app.runner.commands().some((command) => command.startsWith("herdr agent prompt")),
+				);
+				expect(app.runner.commands()).toContain(
+					"herdr agent start persist-source-facts --kind pi --pane pane-restart -- --model gpt-5.6 --thinking high",
+				);
+				expect(app.state.visibleTickets([], "implement")[0].handoff).toEqual(
+					expect.objectContaining({
+						model: "gpt-5.6",
+						thinking: "high",
+						paneId: "pane-restart",
+					}),
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("abandon in the Missing modal closes the cycle and increments its durable number", async () => {
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await pressReturn(setup, "the Missing modal", (f) => f.includes("Missing:"));
+				await pressArrow(setup, "down", "select abandon", (f) =>
+					frameText(f).includes("❯ Abandon"),
+				);
+				await pressReturn(setup, "the abandonment", (f) => ticketRow(f).includes("[open]"));
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		const next = app.state.claimHandoff(
+			identity,
+			{
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+			},
+			"open",
+		);
+		if (!next.ok) throw new Error(next.reason);
+		app.state.settleHandoff(next.claim.attemptId, true);
+		expect(app.state.ticketsByState(["handed-off"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity, workCycle: 2 }),
+		]);
+		app.state.close();
+	});
+
 	test("enter on a blocked ticket focuses the agent's pane", async () => {
 		const app = seededApp("in-flight");
 		app.runner.set("herdr", ["agent", "list"], {

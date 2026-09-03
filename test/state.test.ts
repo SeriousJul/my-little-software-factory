@@ -35,6 +35,52 @@ function textLog(message: string): TurnLogEntry[] {
 	return message.split("\n").map((text) => ({ kind: "text", text }));
 }
 
+/** A persisted settled trace that corrupt-cell tests can alter outside the store. */
+function storedTrace(message = "fallback first\nfallback last"): {
+	path: string;
+	identity: string;
+} {
+	const path = statePath();
+	const state = openFactoryState(path);
+	state.initializeSources([sourceA]);
+	state.applyFetch(sourceA, success([fetched()]));
+	const [ticket] = state.visibleTickets([], "implement");
+	const claim = state.claimHandoff(ticket.identity, choice, "open");
+	if (!claim.ok) throw new Error(claim.reason);
+	state.settleHandoff(claim.claim.attemptId, true);
+	state.settleTurn({
+		ticketIdentity: ticket.identity,
+		handoffId: claim.claim.attemptId,
+		taskType: "implement",
+		agentType: "pi",
+		message,
+		turnLog: [{ kind: "text", text: "stored valid entry" }],
+		completedAt: "2026-08-31T11:00:00Z",
+	});
+	state.close();
+	return { path, identity: ticket.identity };
+}
+
+function replaceStoredLog(path: string, identity: string, cell: string | null): void {
+	const db = new DatabaseSync(path);
+	db.prepare("UPDATE completion_traces SET turn_log_json = ? WHERE ticket_identity = ?").run(
+		cell,
+		identity,
+	);
+	db.close();
+}
+
+function readStoredLog(path: string, identity: string): TurnLogEntry[] {
+	const state = openFactoryState(path);
+	try {
+		const trace = state.lastCompletion(identity);
+		if (trace === null) throw new Error("stored trace disappeared");
+		return trace.turnLog;
+	} finally {
+		state.close();
+	}
+}
+
 function fetched(identity = "github:github.com:I_5"): FetchedTicket {
 	return {
 		identity,
@@ -848,5 +894,84 @@ describe("factory SQLite state", () => {
 		first.close();
 		second.acquireLease();
 		second.close();
+	});
+});
+
+describe("stored completion trace degradation", () => {
+	const fallback = [
+		{ kind: "text", text: "fallback first" },
+		{ kind: "text", text: "fallback last" },
+	];
+
+	test("a null turn-log cell degrades to one entry per last-message line", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, null);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("invalid turn-log JSON degrades to the last-message fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, "not json");
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("a turn-log cell that parses to a non-list degrades to the fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, JSON.stringify({ kind: "text", text: "wrong" }));
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("skips a non-record stored entry while keeping readable entries", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify(["bad", { kind: "text", text: "kept" }]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("skips an unknown stored entry kind while keeping readable entries", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify([
+				{ kind: "future", payload: "skip" },
+				{ kind: "text", text: "kept" },
+			]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("skips a stored tool entry missing a required field", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify([
+				{ kind: "tool", name: "bash", target: "npm test" },
+				{ kind: "text", text: "kept" },
+			]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("a stored log without valid entries degrades to the last-message fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, JSON.stringify([null, { kind: "future" }]));
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("a stored log with a valid entry wins over the last-message fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify([{ kind: "text", text: "stored wins" }]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([
+			{ kind: "text", text: "stored wins" },
+		]);
 	});
 });
