@@ -27,8 +27,16 @@ describe("task profile configuration", () => {
 		"default-environment": "live-worktree",
 		"default-task-type": "implement",
 		agents: {
-			pi: { kind: "pi", "thinking-values": ["low", "high"] },
-			codex: { kind: "codex", "thinking-values": ["minimal", "high"] },
+			// Every level list rides on a thinking template (ADR 0010), and a
+			// profile model rides on a model template (ADR 0009), so the base
+			// agents map both even though these tests do not render either.
+			pi: { kind: "pi", thinking: "-t {value}", "thinking-values": ["low", "high"] },
+			codex: {
+				kind: "codex",
+				model: "--model {value}",
+				thinking: "-t {value}",
+				"thinking-values": ["minimal", "high"],
+			},
 		},
 		"task-types": { implement: { template: "Implement {title}" } },
 	});
@@ -71,7 +79,9 @@ describe("task profile configuration", () => {
 					implement: { template: "x", agent: "codex", thinking: "low" },
 				},
 			}),
-		).toThrow("task-types.implement.thinking: must be one of: minimal, high");
+		).toThrow(
+			'task-types.implement.thinking: agent "codex" does not support the thinking level "low"; it supports: minimal, high',
+		);
 	});
 
 	test("keeps the context window of an agent, a task type, and a Consultation type", () => {

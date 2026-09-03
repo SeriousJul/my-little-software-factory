@@ -10,6 +10,7 @@ import {
 	HerdrAgentReader,
 	normalizeAgentStatus,
 	ObservationCoordinator,
+	STARTUP_GRACE_MS,
 	stripAnsi,
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
@@ -324,6 +325,210 @@ describe("HerdrAgentReader.readPane", () => {
 	});
 });
 
+describe("HerdrAgentReader.listAgents", () => {
+	/** Parse one agent item shaped with the given extra fields. */
+	async function parseItem(extra: Record<string, unknown>): Promise<HerdrAgent | undefined> {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: { agents: [{ pane_id: "pane-1", agent: "pi", ...extra }] },
+			}),
+		});
+		const probe = await new HerdrAgentReader(runner).listAgents();
+		return probe.kind === "ok" ? probe.agents[0] : undefined;
+	}
+
+	test("reads every name herdr may give the turn sequence", async () => {
+		// herdr 0.8.2 names this field `state_change_seq`. The other three
+		// names are the aliases the reader accepts, not fields herdr emits, so
+		// a new herdr that renames the sequence still reads. Do not add a name
+		// here without a herdr release that sends it.
+		for (const [field, sequence] of [
+			["sequence", 1],
+			["seq", 2],
+			["state_change_sequence", 3],
+			["state_change_seq", 4],
+		] as const) {
+			expect(await parseItem({ [field]: sequence }), `the ${field} name`).toMatchObject({
+				sequence,
+			});
+		}
+		// The first name wins when herdr reports two of them.
+		expect(await parseItem({ sequence: 1, seq: 9 })).toMatchObject({ sequence: 1 });
+		// A value that is not a number leaves the sequence off the item.
+		expect(await parseItem({ seq: "not a number" })).not.toHaveProperty("sequence");
+		expect(await parseItem({ sequence: null, seq: 2 })).toMatchObject({ sequence: 2 });
+	});
+
+	test("reads every name herdr may give the checkout path", async () => {
+		// herdr 0.8.2 names this field `cwd`; the other two are accepted
+		// aliases. See the turn sequence note for the same rule.
+		for (const [field, checkout] of [
+			["checkout_path", "/a"],
+			["cwd", "/b"],
+			["working_directory", "/c"],
+		] as const) {
+			expect(await parseItem({ [field]: checkout }), `the ${field} name`).toMatchObject({
+				checkoutPath: checkout,
+			});
+		}
+		expect(await parseItem({ cwd: "/b", checkout_path: "/a" })).toMatchObject({
+			checkoutPath: "/a",
+		});
+		expect(await parseItem({ cwd: 7 })).not.toHaveProperty("checkoutPath");
+	});
+
+	test("reads every name herdr may give the stable session identity", async () => {
+		// herdr 0.8.2 sends no stable session id at all, which is why the
+		// reader keeps two aliases and the Coordinator holds its stored id
+		// when a verified Agent reports none: issue #24.
+		for (const [field, stable] of [
+			["session_id", "s1"],
+			["agent_session_id", "s2"],
+		] as const) {
+			expect(await parseItem({ [field]: stable }), `the ${field} name`).toMatchObject({
+				stableSessionId: stable,
+			});
+		}
+		expect(await parseItem({ agent_session_id: "s2", session_id: "s1" })).toMatchObject({
+			stableSessionId: "s1",
+		});
+		expect(await parseItem({ session_id: 7 })).not.toHaveProperty("stableSessionId");
+	});
+
+	test("an item with no readable status reads as unknown", async () => {
+		expect(await parseItem({})).toMatchObject({ status: "unknown" });
+		expect(await parseItem({ agent_status: 7 })).toMatchObject({ status: "unknown" });
+		expect(await parseItem({ agent_status: "busy" })).toMatchObject({ status: "busy" });
+	});
+
+	test("only a path session handle gives a session path", async () => {
+		expect(await parseItem({ agent_session: { kind: "path", value: "/s/jsonl" } })).toMatchObject({
+			sessionId: "/s/jsonl",
+		});
+		expect(await parseItem({ agent_session: { kind: "id", value: "/s/jsonl" } })).toMatchObject({
+			sessionId: "",
+		});
+		expect(await parseItem({ agent_session: { kind: "path", value: 7 } })).toMatchObject({
+			sessionId: "",
+		});
+	});
+
+	test("drops items without a usable pane id or agent name", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						// A missing handle is unusable, and so is an empty one: an
+						// empty string names no pane and no agent, so the item can
+						// never be addressed, and it must not claim a ticket.
+						{ agent: "pi", agent_status: "working" },
+						{ pane_id: "", agent: "pi", agent_status: "working" },
+						{ pane_id: "pane-no-agent", agent_status: "working" },
+						{ pane_id: "pane-empty-name", agent: "", agent_status: "working" },
+						{ pane_id: "pane-kept", agent: "pi", agent_status: "working" },
+					],
+				},
+			}),
+		});
+		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					paneId: "pane-kept",
+					tabId: "",
+					workspaceId: "",
+					agent: "pi",
+					status: "working",
+					sessionId: "",
+				},
+			],
+		});
+	});
+
+	test("keeps an item with a non-record session handle but no session path", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: "pane-1",
+							tab_id: "tab-1",
+							workspace_id: "ws-1",
+							agent: "pi",
+							agent_status: "idle",
+							agent_session: null,
+						},
+					],
+				},
+			}),
+		});
+		const probe = await new HerdrAgentReader(runner).listAgents();
+		expect(probe).toEqual(
+			expect.objectContaining({
+				agents: [expect.objectContaining({ paneId: "pane-1", sessionId: "" })],
+			}),
+		);
+	});
+
+	test("degrades non-string handles and a non-number sequence", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: "pane-1",
+							tab_id: 7,
+							workspace_id: null,
+							agent: "pi",
+							agent_status: "idle",
+							sequence: "not a number",
+						},
+					],
+				},
+			}),
+		});
+		const probe = await new HerdrAgentReader(runner).listAgents();
+		expect(probe).toEqual({
+			kind: "ok",
+			agents: [
+				{
+					paneId: "pane-1",
+					tabId: "",
+					workspaceId: "",
+					agent: "pi",
+					status: "idle",
+					sessionId: "",
+				},
+			],
+		});
+	});
+
+	test("reports an agent list that is not JSON with a readable reason", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], { stdout: "not JSON" });
+		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
+			kind: "error",
+			reason: "herdr agent list did not return a readable agent list",
+		});
+	});
+
+	test("reports the failed herdr command's readable reason", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			code: 1,
+			stderr: "herdr session is gone\nmore detail",
+		});
+		expect(await new HerdrAgentReader(runner).listAgents()).toEqual({
+			kind: "error",
+			reason: "herdr session is gone",
+		});
+	});
+});
+
 describe("the observation cycle", () => {
 	test("marks a working agent's ticket running and settles a done one into awaiting", async () => {
 		const { state, coordinator } = rig({ agents: [agent("pane-implement", "working")] });
@@ -454,6 +659,25 @@ describe("the observation cycle", () => {
 		expect(statuses.filter((status) => status.text.includes("settled"))).toHaveLength(0);
 		// Past the grace, the same idle agent settles.
 		advance(30_001);
+		await coordinator.tick();
+		expect(state.ticketsByState(["awaiting"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
+		]);
+		state.close();
+	});
+
+	test("the grace window is inclusive: one ms short holds, the last ms settles", async () => {
+		// The window's last millisecond still settles the turn, so a
+		// comparison that reads the boundary as exclusive fails here.
+		const { state, coordinator, advance } = rig({ agents: [agent("pane-implement", "idle")] });
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS - 1);
+		await coordinator.tick();
+		expect(state.ticketsByState(["handed-off"])).toEqual([
+			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
+		]);
+		// One ms more, and the window is over: the same idle agent settles.
+		advance(1);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toEqual([
 			expect.objectContaining({ ticketIdentity: "github:github.com:I_5" }),
@@ -1318,6 +1542,299 @@ describe("Consultation observation identity", () => {
 			});
 		} finally {
 			state.close();
+		}
+	});
+
+	test("warns when an opening Consultation has an ambiguous Agent match", async () => {
+		const { state, coordinator, statuses } = rig({
+			agents: [agent("pane-1", "idle", "", "replacement-session")],
+		});
+		try {
+			openingConsultation(state, "opening-ambiguous");
+			await coordinator.tick();
+			expect(state.consultation("opening-ambiguous")).toMatchObject({
+				state: "opening",
+				warning: "Opening Agent match is ambiguous; explicit recovery is required",
+			});
+			expect(statuses).toContainEqual(
+				expect.objectContaining({
+					kind: "warning",
+					text: expect.stringContaining("needs recovery"),
+				}),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("warns when an opening Consultation Agent is not visible", async () => {
+		const { state, coordinator, statuses } = rig({ agents: [] });
+		try {
+			openingConsultation(state, "opening-not-visible");
+			await coordinator.tick();
+			expect(state.consultation("opening-not-visible")).toMatchObject({
+				state: "opening",
+				warning: "Opening Agent is not visible; explicit recovery is required",
+			});
+			expect(statuses).toContainEqual(
+				expect.objectContaining({
+					kind: "warning",
+					text: expect.stringContaining("needs recovery"),
+				}),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("moves a working or awaiting Consultation with no Agent to missing", async () => {
+		for (const stateName of ["working", "awaiting-response"] as const) {
+			const rigged = rig({ agents: [] });
+			try {
+				openingConsultation(rigged.state, `missing-${stateName}`);
+				rigged.state.setConsultationAgent(`missing-${stateName}`, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "session-1",
+				});
+				if (stateName === "awaiting-response")
+					rigged.state.settleConsultationTurn(`missing-${stateName}`, null, "output", "idle");
+				await rigged.coordinator.tick();
+				expect(rigged.state.consultation(`missing-${stateName}`)).toMatchObject({
+					state: "missing",
+					warning: "Agent is missing",
+				});
+				expect(rigged.statuses).toContainEqual(
+					expect.objectContaining({
+						kind: "warning",
+						text: expect.stringContaining("Agent is missing"),
+					}),
+				);
+			} finally {
+				rigged.state.close();
+			}
+		}
+	});
+
+	test("moves a working or awaiting Consultation with an ambiguous Agent to missing", async () => {
+		for (const stateName of ["working", "awaiting-response"] as const) {
+			const rigged = rig({ agents: [agent("pane-1", "idle", "", "other-session")] });
+			try {
+				openingConsultation(rigged.state, `ambiguous-${stateName}`);
+				rigged.state.setConsultationAgent(`ambiguous-${stateName}`, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "session-1",
+				});
+				if (stateName === "awaiting-response")
+					rigged.state.settleConsultationTurn(`ambiguous-${stateName}`, null, "output", "idle");
+				await rigged.coordinator.tick();
+				expect(rigged.state.consultation(`ambiguous-${stateName}`)).toMatchObject({
+					state: "missing",
+					warning: "Agent session match is ambiguous",
+				});
+			} finally {
+				rigged.state.close();
+			}
+		}
+	});
+
+	test("keeps a uniquely verified opening state and refreshes its handles", async () => {
+		const verified = {
+			...agent("pane-new", "idle", "", "session-1"),
+			tabId: "tab-new",
+			workspaceId: "ws-new",
+		};
+		const { state, coordinator } = rig({ agents: [verified] });
+		try {
+			openingConsultation(state, "opening-verified", "pane-old", "session-1");
+			await coordinator.tick();
+			expect(state.consultation("opening-verified")).toMatchObject({
+				state: "opening",
+				paneId: "pane-new",
+				tabId: "tab-new",
+				workspaceId: "ws-new",
+				sessionId: "session-1",
+				warning: "Opening Agent verified; explicit recovery is required",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("gives a verified opening Agent with unknown status the weaker warning", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-1", "not reported", "", "session-1")],
+		});
+		try {
+			openingConsultation(state, "opening-unknown");
+			await coordinator.tick();
+			expect(state.consultation("opening-unknown")).toMatchObject({
+				state: "opening",
+				warning: "Agent status is unknown",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	// Issue #24: Herdr can omit this optional handle. Keep the expected
+	// behavior pinned until the observation match treats the pane as verified.
+	test.fails("keeps the stored session id when a verified opening Agent has no stable session id", async () => {
+		const { state, coordinator } = rig({ agents: [agent("pane-1", "idle")] });
+		try {
+			openingConsultation(state, "opening-without-stable-id");
+			await coordinator.tick();
+			expect(state.consultation("opening-without-stable-id")).toMatchObject({
+				state: "opening",
+				sessionId: "session-1",
+				warning: "Opening Agent verified; explicit recovery is required",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("does not re-warn an opening Consultation on the next identical poll", async () => {
+		const { state, coordinator, statuses } = rig({ agents: [] });
+		try {
+			openingConsultation(state, "opening-warned");
+			await coordinator.tick();
+			await coordinator.tick();
+			expect(state.consultation("opening-warned")?.warning).toBe(
+				"Opening Agent is not visible; explicit recovery is required",
+			);
+			expect(statuses.filter(({ text }) => text.includes("needs recovery"))).toHaveLength(1);
+			// The warning is one message, not a general note: the bar names the
+			// Consultation by its short id and nothing else.
+			expect(statuses).toContainEqual({
+				kind: "warning",
+				text: "Consultation opening- needs recovery",
+			});
+		} finally {
+			state.close();
+		}
+	});
+
+	test("refreshes a live Consultation when any one herdr handle moves", async () => {
+		// One handle at a time: a check that stops comparing a handle must let
+		// that move go unrecorded, and a stored handle the operator cannot see
+		// is a cleanup that closes the wrong pane.
+		for (const [moved, value] of [
+			["paneId", "pane-new"],
+			["tabId", "tab-new"],
+			["workspaceId", "ws-new"],
+		] as const) {
+			const id = `live-${moved}`;
+			const reported = {
+				...agent("pane-1", "working", "", "session-1"),
+				[moved]: value,
+			};
+			const { state, coordinator } = rig({ agents: [reported] });
+			try {
+				openingConsultation(state, id);
+				state.setConsultationAgent(id, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					sessionId: "session-1",
+				});
+				await coordinator.tick();
+				expect(state.consultation(id), `the moved ${moved}`).toMatchObject({
+					state: "working",
+					paneId: reported.paneId,
+					tabId: reported.tabId,
+					workspaceId: reported.workspaceId,
+				});
+			} finally {
+				state.close();
+			}
+		}
+	});
+
+	test("holds a live Consultation's unknown-status warning only while herdr is unsure", async () => {
+		const { state, coordinator, statuses, setAgents } = rig({
+			agents: [agent("pane-1", "meditating", "", "session-1")],
+		});
+		try {
+			openingConsultation(state, "live-unknown");
+			state.setConsultationAgent("live-unknown", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "session-1",
+			});
+			await coordinator.tick();
+			expect(state.consultation("live-unknown")).toMatchObject({
+				state: "working",
+				warning: "Agent status is unknown",
+			});
+			expect(statuses).toContainEqual({
+				kind: "warning",
+				text: "Agent status is unknown for Consultation live-unk",
+			});
+			// A known status clears it: the warning is the poll's current read,
+			// not a mark the Consultation carries for good.
+			setAgents([agent("pane-1", "working", "", "session-1")]);
+			await coordinator.tick();
+			expect(state.consultation("live-unknown")?.warning).toBeNull();
+		} finally {
+			state.close();
+		}
+	});
+
+	test("records an external turn only when herdr reports a newer sequence", async () => {
+		const open = (sequence: number | undefined) => {
+			const rigged = rig({
+				agents: [{ ...agent("pane-1", "idle", "", "session-1"), sequence }],
+			});
+			openingConsultation(rigged.state, "live-sequence");
+			rigged.state.setConsultationAgent("live-sequence", {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				sessionId: "session-1",
+			});
+			rigged.state.settleConsultationTurn("live-sequence", 5, "the settled turn", "idle");
+			return rigged;
+		};
+		// The same sequence is the turn the control plane already holds: a new
+		// turn would double-count the Agent's own step.
+		const same = open(5);
+		try {
+			await same.coordinator.tick();
+			expect(same.state.consultationTurns("live-sequence")).toHaveLength(1);
+			expect(same.state.consultation("live-sequence")?.latestSequence).toBe(5);
+		} finally {
+			same.state.close();
+		}
+		// A newer sequence is input the operator never sent: it opens a turn of
+		// its own, with the placeholder input the modal shows.
+		const newer = open(6);
+		try {
+			await newer.coordinator.tick();
+			const turns = newer.state.consultationTurns("live-sequence");
+			expect(turns).toHaveLength(2);
+			const external = turns.find((turn) => turn.input === "[external Agent input not captured]");
+			expect(external, "the turn herdr reported on its own").toBeDefined();
+			expect(external?.sequenceBaseline).toBe(5);
+			expect(newer.state.consultation("live-sequence")?.latestSequence).toBe(6);
+			expect(newer.statuses).toContainEqual({
+				kind: "info",
+				text: "Consultation live-seq awaits a response",
+			});
+		} finally {
+			newer.state.close();
+		}
+		// No sequence at all is no evidence of a new turn.
+		const unknown = open(undefined);
+		try {
+			await unknown.coordinator.tick();
+			expect(unknown.state.consultationTurns("live-sequence")).toHaveLength(1);
+		} finally {
+			unknown.state.close();
 		}
 	});
 

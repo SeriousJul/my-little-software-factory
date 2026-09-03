@@ -160,6 +160,7 @@ describe("Agent interaction input queue", () => {
 				active -= 1;
 				return { code: 0, stdout: "", stderr: "" };
 			},
+			listModels: async () => ({ ok: false, reason: "no model list here" }),
 		};
 		const queue = new ConsultationInputQueue(runner);
 		queue.enqueue("pane-1", { kind: "text", text: "one" });
@@ -182,6 +183,7 @@ describe("Agent interaction input queue", () => {
 				settled += 1;
 				return { code: 0, stdout: "", stderr: "" };
 			},
+			listModels: async () => ({ ok: false, reason: "no model list here" }),
 		};
 		const queue = new ConsultationInputQueue(runner);
 		await Promise.all([

@@ -39,9 +39,9 @@
  *    decision follows its Handoff's start, which the app reports, so a
  *    route that cannot start leaves the turn for the next cycle.
  * 5. With auto-handoff on, each eligible open ticket - actionable, under
- *    both limits - is handed off with the configured defaults. The
- *    parallel count is the in-flight tickets whose agent was alive in the
- *    latest poll: a blocked agent holds a slot, a missing one does not.
+ *    both limits - is handed off on its task profile's configured settings.
+ *    The parallel count is the in-flight tickets whose agent was alive in
+ *    the latest poll: a blocked agent holds a slot, a missing one does not.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -52,8 +52,7 @@
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import { baseChoice, type HandoffChoice, resolveHandoffChoice } from "./handoff.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
-import { commandFailureText } from "./repo.ts";
-import type { CommandRunner } from "./runner.ts";
+import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
 import {
 	lastMessageFromLog,
@@ -914,7 +913,7 @@ export class ObservationCoordinator {
 		const target = edge.to[0];
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
 		// A Workflow Handoff resolves a fresh target profile and never
-		// inherits Model or Thinking from the previous Handoff.
+		// inherits the previous Handoff's model, thinking, or context window.
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
@@ -1024,6 +1023,9 @@ export class ObservationCoordinator {
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;
+			// The configured settings of the ticket's task profile (ADR 0009): an
+			// unattended handoff starts with the same resolution chain a manual
+			// one sees in the panel, and the fit check guards what it starts with.
 			const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
 			// One report covers both ways an automatic handoff fails: the claim
 			// refusing it, and the external work never starting the agent. The

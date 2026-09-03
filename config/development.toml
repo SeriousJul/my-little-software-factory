@@ -11,7 +11,9 @@ agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 10
 workflows = []
-repos = {}
+
+[repos]
+"github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
 
 [scroll]
 speed = 1
@@ -28,12 +30,14 @@ thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 kind = "codex"
 model = "--model {value}"
 thinking = "-c model_reasoning_effort={value}"
+thinking-values = ["minimal", "low", "medium", "high"]
 context-window = "-c model_context_window={value}"
 
 [agents.claude]
 kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
+thinking-values = ["low", "medium", "high", "xhigh", "max"]
 context-window = "--autocompact {value}"
 
 [consultation-types.grill-with-docs]
@@ -176,14 +180,14 @@ auto-close = false
 name = "factory-issues"
 kind = "github-issues"
 refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions"]
 host = "github.com"
 
 [[sources]]
 name = "factory-pull-requests"
 kind = "github-pull-requests"
 refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions"]
 host = "github.com"
 
 [[task-rules]]

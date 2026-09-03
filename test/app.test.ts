@@ -52,6 +52,7 @@ import {
 	mousePress,
 	mouseWheel,
 	openPanel,
+	overlayRows,
 	press,
 	pressArrow,
 	rgb,
@@ -1132,6 +1133,45 @@ describe("the control plane", () => {
 			60,
 			8,
 		);
+	});
+
+	test("the Key guide the app opens lists the mode's controls above the global ones", async () => {
+		// The operator's own path: the app's key handler opens the guide, and
+		// the ordering the app computes is the ordering on screen. A hint
+		// priority that moves reorders these rows.
+		const state = openFactoryState(":memory:");
+		try {
+			await withApp(
+				async (setup) => {
+					const frame = await press(setup, "?", "the Key guide", (candidate) =>
+						candidate.includes("Key guide"),
+					);
+					expect(overlayRows(frame)).toEqual([
+						"↑↓/jk move",
+						"Enter hand off",
+						"e override",
+						"v Consultations",
+						"c launch",
+						"r refresh",
+						"? help",
+						"q quit",
+						"Esc closes this guide. F2 or m opens the full Message view.",
+					]);
+					// Closing the guide returns to the tickets view.
+					setup.mockInput.pressEscape();
+					await awaitFrame(
+						setup,
+						(candidate) => !candidate.includes("Key guide"),
+						"the Key guide to close",
+					);
+				},
+				WIDTH,
+				30,
+				{ state },
+			);
+		} finally {
+			state.close();
+		}
 	});
 
 	test("tiny terminals stay intact", async () => {

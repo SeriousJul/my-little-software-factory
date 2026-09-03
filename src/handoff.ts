@@ -36,6 +36,7 @@
 import type { AgentTypeConfig, FactoryConfig, WorkflowEdge } from "./config.ts";
 import { isTokenCount, TOKEN_COUNT_RULE } from "./domain/settings.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
+import { checkSettingFit } from "./model-settings.ts";
 import {
 	agentNameFor,
 	branchNameFor,
@@ -43,30 +44,31 @@ import {
 	consultationBranchName,
 } from "./naming.ts";
 import {
-	commandFailureText,
 	type ResolutionNotes,
 	type ResolvedRepository,
 	realPathOf,
 	resolveRepository,
 } from "./repo.ts";
-import type { CommandResult, CommandRunner } from "./runner.ts";
+import { type CommandResult, type CommandRunner, commandFailureText } from "./runner.ts";
+import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation } from "./state.ts";
 
 /** A fresh pane can need a short time to reach its shell prompt. */
 const AGENT_PANE_BUSY_RETRY_DELAY_MS = 100;
 const AGENT_PANE_BUSY_RETRY_WINDOW_MS = 2_000;
 
-/** One handoff's choices: the defaults plus whatever an override changed. */
+/** One handoff's choices: the resolved task profile plus whatever an override changed. */
 export interface HandoffChoice {
 	agentType: string;
 	environment: EnvironmentKind;
 	taskType: string;
-	/** Free-text model; empty means the setting is left to the agent. */
+	/** The model, in the `provider/model` form the agent takes; empty leaves the setting to the agent. */
 	model: string;
-	/** Free-text thinking level; empty means the level is left to the agent.
-	 *  The app prefills the suggested Task profile's resolved value here, so
-	 *  the panel shows the level the handoff will run on, and clearing the
-	 *  row in the panel hands the level back to the agent. */
+	/** The Thinking level of the standard set; empty leaves the level to the agent.
+	 *  The app prefills it from the resolved task profile, so the panel shows
+	 *  the level the handoff will run on, and clearing the row in the panel
+	 *  hands the level back to the agent. Durable state keeps it a plain
+	 *  string: a restart must repeat a stored value without casting it. */
 	thinking: string;
 	/**
 	 * The maximum context window in tokens, as plain digits; empty leaves the
@@ -79,8 +81,9 @@ export interface HandoffChoice {
 
 /**
  * The base shape of a handoff's choices: a task type on an agent type in an
- * environment, with the settings left to the agent's defaults. A restart
- * passes the previous handoff's model, thinking, and context window through.
+ * environment, with the settings the resolved task profile names. A restart
+ * passes the previous handoff's model, thinking, and context window through,
+ * unchanged.
  */
 export function baseChoice(
 	agentType: string,
@@ -109,14 +112,16 @@ export function resolveHandoffChoice(
 	taskType: string,
 	edge?: WorkflowEdge,
 ): HandoffChoice {
-	const profile = config.taskTypes[taskType];
+	// The setting chains live in one module (ADR 0009); this wrapper only
+	// shapes their result as the handoff's complete choice.
+	const settings = resolveSettings({ config, taskType, edgeAgent: edge?.agent });
 	return baseChoice(
-		edge?.agent ?? profile?.agent ?? config.defaultAgent,
-		edge?.environment ?? config.defaultEnvironment,
+		settings.agentType,
+		resolveEnvironment(config, edge?.environment),
 		taskType,
-		profile?.model ?? config.defaultModel ?? "",
-		profile?.thinking ?? "",
-		profile?.contextWindow ?? "",
+		settings.model,
+		settings.thinking,
+		settings.contextWindow,
 	);
 }
 
@@ -213,7 +218,7 @@ function settingFailure(agent: AgentTypeConfig, choice: HandoffChoice): string |
 	if (
 		choice.thinking !== "" &&
 		agent.thinkingValues !== undefined &&
-		!agent.thinkingValues.includes(choice.thinking)
+		!agent.thinkingValues.some((level) => level === choice.thinking)
 	) {
 		return (
 			`agent type "${choice.agentType}" offers no thinking level "${choice.thinking}" ` +
@@ -270,6 +275,30 @@ function validateChoice(
 	return { agent, taskType };
 }
 
+/**
+ * The setting fit check of a handoff (ADR 0010).
+ *
+ * It runs before the handoff's first external change, so an unfit model or
+ * thinking level fails with a readable reason and leaves the ticket open
+ * instead of starting an agent that dies inside its own terminal. A model list
+ * that cannot be fetched skips the model check: the handoff proceeds, and the
+ * agent's own rejection stands.
+ */
+async function settingFitFailure(
+	choice: HandoffChoice,
+	agent: FactoryConfig["agents"][string],
+	runner: CommandRunner,
+): Promise<HandoffOutcome | null> {
+	const fit = await checkSettingFit({
+		agentType: choice.agentType,
+		agent,
+		model: choice.model,
+		thinking: choice.thinking,
+		runner,
+	});
+	return fit.ok ? null : { status: "failed", reason: fit.reason };
+}
+
 /** Hand an open ticket off, returning the facts the app records on it. */
 export async function handOffTicket(
 	ticket: Ticket,
@@ -284,6 +313,8 @@ export async function handOffTicket(
 	}
 	const checked = validateChoice(choice, config);
 	if ("status" in checked) return checked;
+	const unfit = await settingFitFailure(choice, checked.agent, runner);
+	if (unfit !== null) return unfit;
 
 	onStage?.("resolving-repository");
 	const resolved = await resolveRepository(ticket.repositoryRef, config, { runner, home });
@@ -304,10 +335,48 @@ export async function handOffTicket(
 }
 
 /**
- * The options of a workflow handoff or a restart: the stored workspace of
- * the ticket's previous handoff, the tab to close once the new agent has
- * started, and the last captured message the prompt carries.
+ * What the pre-flight of a Consultation start answers (ADR 0010). A pass
+ * carries the Agent record the start steps need, so the check and the start
+ * read the config once.
  */
+export type ConsultationStartCheck =
+	| { ok: true; agent: FactoryConfig["agents"][string] }
+	| { ok: false; reason: string };
+
+/**
+ * The pre-flight of a Consultation start: the record checks and the setting fit
+ * check.
+ *
+ * A launch route resolves its repository, and a resolve can clone a repository,
+ * before it reaches `handOffConsultation`, so the route runs this first: an
+ * unfit model or thinking level must leave no checkout behind. The verdict
+ * rides into the start, so the Agent's Model list answers one query per
+ * Consultation rather than one per step.
+ */
+export async function checkConsultationStart({
+	consultation,
+	config,
+	runner,
+}: {
+	consultation: Consultation;
+	config: FactoryConfig;
+	runner: CommandRunner;
+}): Promise<ConsultationStartCheck> {
+	const agent = config.agents[consultation.agentType];
+	if (agent === undefined)
+		return { ok: false, reason: `unknown agent type: ${consultation.agentType}` };
+	if (consultation.environment === "container")
+		return { ok: false, reason: "the container environment is reserved and not yet built" };
+	const fit = await checkSettingFit({
+		agentType: consultation.agentType,
+		agent,
+		model: consultation.model,
+		thinking: consultation.thinking,
+		runner,
+	});
+	return fit.ok ? { ok: true, agent } : { ok: false, reason: fit.reason };
+}
+
 /** A durable Consultation uses the same Herdr and repository boundary as a Handoff. */
 export interface ConsultationHandoffOptions extends HandoffOptions {
 	consultation: Consultation;
@@ -316,6 +385,12 @@ export interface ConsultationHandoffOptions extends HandoffOptions {
 	onRepositoryResolved?: (path: string) => void;
 	/** A resolution already made by the serialized live safety operation. */
 	resolvedRepository?: ResolvedRepository;
+	/**
+	 * The pre-flight the launch route ran before its first external change.
+	 * A start that carries one is not checked again here; a start that carries
+	 * none is, so no path reaches the Agent unchecked.
+	 */
+	startCheck?: ConsultationStartCheck;
 }
 
 export type ConsultationHandoffOutcome =
@@ -339,12 +414,11 @@ export async function handOffConsultation({
 	onAgentStarted,
 	onRepositoryResolved,
 	resolvedRepository,
+	startCheck,
 }: ConsultationHandoffOptions): Promise<ConsultationHandoffOutcome> {
-	const agent = config.agents[consultation.agentType];
-	if (agent === undefined)
-		return { status: "failed", reason: `unknown agent type: ${consultation.agentType}` };
-	if (consultation.environment === "container")
-		return { status: "failed", reason: "the container environment is reserved and not yet built" };
+	const check = startCheck ?? (await checkConsultationStart({ consultation, config, runner }));
+	if (!check.ok) return { status: "failed", reason: check.reason };
+	const agent = check.agent;
 	if (resolvedRepository === undefined) onStage?.("resolving-repository");
 	const resolved =
 		resolvedRepository === undefined
@@ -524,6 +598,11 @@ async function startConsultationWorktree(
 	) as Promise<ConsultationHandoffOutcome>;
 }
 
+/**
+ * The options of a workflow handoff or a restart: the stored workspace of
+ * the ticket's previous handoff, the tab to close once the new agent has
+ * started, and the last captured message the prompt carries.
+ */
 export interface StoredWorkspaceHandoffOptions extends HandoffOptions {
 	ticket: Ticket;
 	choice: HandoffChoice;
@@ -561,6 +640,8 @@ export async function handOffStoredWorkspace({
 }: StoredWorkspaceHandoffOptions): Promise<HandoffOutcome> {
 	const checked = validateChoice(choice, config);
 	if ("status" in checked) return checked;
+	const unfit = await settingFitFailure(choice, checked.agent, runner);
+	if (unfit !== null) return unfit;
 	const agent = checked.agent;
 	const taskType = checked.taskType;
 
@@ -1172,10 +1253,15 @@ function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
 
 /**
  * The setting arguments of a handoff: each chosen setting the agent type
- * maps is substituted into its argument template and split on whitespace
- * into argv. A setting left empty is ignored: no template, no arguments,
- * and the setting is left to the agent. validateChoice already refused a
- * non-empty setting whose template the agent has no mapping for.
+ * maps is substituted into its argument template into argv. A setting left
+ * empty is ignored: no template, no arguments, and the setting is left to
+ * the agent. validateChoice already refused a non-empty setting whose
+ * template the agent has no mapping for.
+ *
+ * One setting value is one argv cell, whatever the value holds. That is the
+ * invariant the Model list is read against: a value the panel offers, a value
+ * the config names, or a value the operator types must reach the agent as the
+ * single argument it was chosen to be.
  */
 export function settingArgs(
 	agent: FactoryConfig["agents"][string],
@@ -1194,15 +1280,28 @@ export function settingArgs(
 	return args;
 }
 
-/** Substitute {value} in a setting template and split the result on whitespace. */
+/**
+ * Substitute {value} in a setting template, one argv cell per template token.
+ *
+ * The template is split first, and the value is placed inside each token
+ * afterwards, never before the split: a value that carries whitespace (a
+ * pasted model name, or a config value with a space in it) stays one argument
+ * cell instead of becoming an argument plus a stray positional the agent reads
+ * as its model. `execFile` carries argv without a shell, so the cell keeps its
+ * text all the way to the agent. The codex thinking template,
+ * `-c model_reasoning_effort={value}`, splits into two tokens and gains the
+ * level inside the second one, exactly as it did before.
+ */
 export function renderSettingArgs(template: string, value: string): string[] {
 	return (
 		template
+			.split(/\s+/)
+			.filter((token) => token !== "")
 			// The function replacer keeps dollar patterns in the value ($&, $1)
 			// literal: a string replacement would interpret them.
-			.replace(/\{value\}/g, () => value)
-			.split(/\s+/)
-			.filter((part) => part !== "")
+			.map((token) => token.replace(/\{value\}/g, () => value))
+			// A bare {value} token with an empty value leaves no argument behind.
+			.filter((token) => token !== "")
 	);
 }
 

@@ -5,6 +5,12 @@ import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
+import {
+	isThinkingLevel,
+	type ThinkingLevel,
+	thinkingLevelList,
+	unsupportedThinkingLevel,
+} from "./domain/agent.ts";
 import { isTokenCount, TOKEN_COUNT_RULE, tokenCountDigits } from "./domain/settings.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
@@ -16,17 +22,23 @@ export interface AgentTypeConfig {
 	thinking?: string;
 	/** The template that carries a maximum context window to this agent. */
 	contextWindow?: string;
-	thinkingValues?: string[];
+	/**
+	 * The Thinking levels this Agent type maps, as a non-empty subset of the
+	 * standard set. An agent that maps thinking must declare it: the override
+	 * panel offers exactly this list, and the handoff fit check tests against
+	 * it (ADR 0010).
+	 */
+	thinkingValues?: ThinkingLevel[];
 }
 
 export interface TaskTypeConfig {
 	template: string;
-	/** The Agent type its handoffs start on. Omitted uses default-agent. */
+	/** The Task profile's agent type. Omitted leaves the agent to `default-agent`. */
 	agent?: string;
-	/** The model its handoffs start on. Omitted uses default-model. */
+	/** The Task profile's model. Omitted leaves the model to `default-model`. */
 	model?: string;
-	/** The thinking level its handoffs start on. Omitted leaves the setting to the agent. */
-	thinking?: string;
+	/** The thinking level of its handoffs when no explicit choice is made. Omitted leaves the setting to the agent. */
+	thinking?: ThinkingLevel;
 	/**
 	 * The maximum context window, in tokens, its handoffs start on: plain
 	 * digits, the same string the Handoff carries. Omitted leaves the room to
@@ -49,7 +61,7 @@ export interface ConsultationTypeConfig {
 	/** Optional model setting passed through the Agent type mapping. */
 	model?: string;
 	/** Optional thinking setting passed through the Agent type mapping. */
-	thinking?: string;
+	thinking?: ThinkingLevel;
 	/** Optional context window setting passed through the Agent type mapping. */
 	contextWindow?: string;
 }
@@ -115,7 +127,14 @@ export interface ScrollConfig {
 
 export interface FactoryConfig {
 	defaultAgent: string;
-	/** The model handoffs use when their Task profile names none. */
+	/**
+	 * The model a handoff starts with when the task profile names none and the
+	 * operator overrides none (ADR 0009). Startup checks it through every task
+	 * profile that resolves it against the Model list the agent reports
+	 * (ADR 0010), and the handoff fit check guards it again there; a resolved
+	 * agent that maps no model template fails the handoff with a readable
+	 * reason instead of dropping the value.
+	 */
 	defaultModel?: string;
 	defaultEnvironment: EnvironmentKind;
 	defaultTaskType: string;
@@ -172,8 +191,14 @@ export const DEFAULT_CONFIG: FactoryConfig = {
 			kind: "codex",
 			model: "--model {value}",
 			thinking: "-c model_reasoning_effort={value}",
+			thinkingValues: ["minimal", "low", "medium", "high"],
 		},
-		claude: { kind: "claude", model: "--model {value}", thinking: "--effort {value}" },
+		claude: {
+			kind: "claude",
+			model: "--model {value}",
+			thinking: "--effort {value}",
+			thinkingValues: ["low", "medium", "high", "xhigh", "max"],
+		},
 	},
 	consultationTypes: {},
 	attentionBell: true,
@@ -306,17 +331,19 @@ export function validateConfig(data: unknown): FactoryConfig {
 		throw new ConfigError("config: use either sources or ticket-sources, not both");
 	}
 	const defaultAgent = stringField(data, "default-agent");
-	const defaultModel = optionalStringField(data, "default-model", "config");
 	const defaultEnvironment = stringField(data, "default-environment");
 	const handoffKinds = HANDOFF_ENVIRONMENT_KINDS as readonly string[];
 	if (!handoffKinds.includes(defaultEnvironment)) {
 		throw new ConfigError(`config: default-environment must be one of: ${handoffKinds.join(", ")}`);
 	}
 	const defaultTaskType = stringField(data, "default-task-type");
+	const defaultModel = optionalStringField(data, "default-model");
 	const agents = validateAgents(data.agents);
 	if (!(defaultAgent in agents)) {
 		throw new ConfigError(`config: default-agent "${defaultAgent}" does not match any agent`);
 	}
+	// The task profile resolves its agent through `default-agent` when the
+	// profile names none, so the thinking and model checks need that agent.
 	const taskTypes = validateTaskTypes(data["task-types"], agents, defaultAgent);
 	const consultationTypes = validateConsultationTypes(data["consultation-types"], agents);
 	const attentionBell = booleanField(data, "attention-bell", true);
@@ -406,14 +433,19 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 		if (contextWindow !== undefined)
 			agent.contextWindow = settingTemplate(contextWindow, `agents.${name}.context-window`);
 		if ("thinking-values" in raw) {
-			const values = raw["thinking-values"];
-			if (
-				!Array.isArray(values) ||
-				values.some((item) => typeof item !== "string" || item === "")
-			) {
-				throw new ConfigError(`config: agents.${name}.thinking-values: must be a list of strings`);
-			}
-			agent.thinkingValues = [...values];
+			agent.thinkingValues = validateThinkingValues(raw["thinking-values"], name);
+		}
+		if (agent.thinking !== undefined && agent.thinkingValues === undefined) {
+			// Free-text thinking is retired: the panel offers, and the fit check
+			// tests against, the levels the agent declares.
+			throw new ConfigError(
+				`config: agents.${name}.thinking-values: an agent that maps thinking must declare the levels it supports (${thinkingLevelList()})`,
+			);
+		}
+		if (agent.thinking === undefined && agent.thinkingValues !== undefined) {
+			throw new ConfigError(
+				`config: agents.${name}.thinking-values: the agent maps no thinking setting, so it has no levels to declare`,
+			);
 		}
 		for (const key of Object.keys(raw)) {
 			if (!new Set(["kind", "model", "thinking", "thinking-values", "context-window"]).has(key)) {
@@ -421,6 +453,31 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 			}
 		}
 		out[name] = agent;
+	}
+	return out;
+}
+
+/**
+ * One agent's declared Thinking levels: a non-empty subset of the standard
+ * set, in the order the operator wants them offered.
+ */
+function validateThinkingValues(value: unknown, name: string): ThinkingLevel[] {
+	const where = `config: agents.${name}.thinking-values`;
+	if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item === "")) {
+		throw new ConfigError(`${where}: must be a list of level strings`);
+	}
+	if (value.length === 0) {
+		throw new ConfigError(`${where}: must declare at least one level (${thinkingLevelList()})`);
+	}
+	const out: ThinkingLevel[] = [];
+	for (const item of value) {
+		if (!isThinkingLevel(item)) {
+			throw new ConfigError(
+				`${where}: "${String(item)}" is not a standard thinking level (${thinkingLevelList()})`,
+			);
+		}
+		if (out.includes(item)) throw new ConfigError(`${where}: "${item}" is declared twice`);
+		out.push(item);
 	}
 	return out;
 }
@@ -499,64 +556,87 @@ function validateTaskTypes(
 		throw new ConfigError("config: at least one task type is required under [task-types]");
 	const out: Record<string, TaskTypeConfig> = {};
 	for (const [name, raw] of Object.entries(taskTypes)) {
-		if (/\s/.test(name))
-			throw new ConfigError(`config: task-types.${name}: must be a one-word name`);
-		if (!isRecord(raw)) throw new ConfigError(`config: task-types.${name}: must be a table`);
-		const template = stringField(raw, "template", `task-types.${name}`);
-		const agent = optionalStringField(raw, "agent", `task-types.${name}`);
-		if (agent !== undefined && agents[agent] === undefined)
-			throw new ConfigError(`config: task-types.${name}.agent: unknown agent "${agent}"`);
-		const model = optionalStringField(raw, "model", `task-types.${name}`);
-		const thinking = optionalStringField(raw, "thinking", `task-types.${name}`);
-		const contextWindow = tokenCountField(raw, "context-window", `task-types.${name}`);
-		// The profile agent always resolves: `agent` is checked against the
-		// agents table just above, and `default-agent` before this function
-		// runs, so one of the two names a table that exists.
-		const profileAgent = agents[agent ?? defaultAgent];
-		if (
-			thinking !== undefined &&
-			profileAgent.thinkingValues !== undefined &&
-			!profileAgent.thinkingValues.includes(thinking)
-		) {
-			throw new ConfigError(
-				`config: task-types.${name}.thinking: must be one of: ${profileAgent.thinkingValues.join(", ")}`,
-			);
-		}
-		// The profile's own agent is the one its context window must reach. An
-		// edge can reroute the handoff onto another agent later; that pair is
-		// caught at handoff time, the same way a model is.
-		if (contextWindow !== undefined && profileAgent.contextWindow === undefined)
-			throw new ConfigError(
-				`config: task-types.${name}.context-window: agent "${agent ?? defaultAgent}" does not define a context-window setting`,
-			);
+		const where = `task-types.${name}`;
+		if (/\s/.test(name)) throw new ConfigError(`config: ${where}: must be a one-word name`);
+		if (!isRecord(raw)) throw new ConfigError(`config: ${where}: must be a table`);
+		const template = stringField(raw, "template", where);
 		for (const placeholder of placeholderNames(template)) {
 			if (!PROMPT_PLACEHOLDERS.includes(placeholder)) {
 				throw new ConfigError(
-					`config: task-types.${name}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
+					`config: ${where}.template: unknown placeholder {${placeholder}}; use ${PROMPT_PLACEHOLDERS.map((name) => `{${name}}`).join(", ")}`,
 				);
 			}
 		}
+		// The Task profile (ADR 0009): its own agent, model, and thinking level.
+		// An omitted agent leaves the agent to `default-agent`, so the profile's
+		// settings are checked against the agent its handoffs start on.
+		const agent = optionalStringField(raw, "agent", where);
+		if (agent !== undefined && !(agent in agents))
+			throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
+		const profileAgent = agent ?? defaultAgent;
+		const agentConfig = agents[profileAgent];
+		const model = optionalStringField(raw, "model", where);
+		if (model !== undefined && agentConfig?.model === undefined)
+			throw new ConfigError(
+				`config: ${where}.model: agent "${profileAgent}" does not define a model setting`,
+			);
+		const thinking = validateThinkingLevel(
+			optionalStringField(raw, "thinking", where),
+			profileAgent,
+			agentConfig,
+			`${where}.thinking`,
+		);
+		// The profile's own agent is the one its context window must reach. An
+		// edge can reroute the handoff onto another agent later; that pair is
+		// caught at handoff time, the same way a model is.
+		const contextWindow = tokenCountField(raw, "context-window", where);
+		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
+			throw new ConfigError(
+				`config: ${where}.context-window: agent "${profileAgent}" does not define a context-window setting`,
+			);
 		const autoClose = booleanField(raw, "auto-close", false);
 		for (const key of Object.keys(raw))
-			if (
-				key !== "template" &&
-				key !== "agent" &&
-				key !== "model" &&
-				key !== "thinking" &&
-				key !== "context-window" &&
-				key !== "auto-close"
-			)
-				throw new ConfigError(`config: task-types.${name}: unknown key "${key}"`);
+			if (!["template", "agent", "model", "thinking", "context-window", "auto-close"].includes(key))
+				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
 		out[name] = {
 			template,
-			autoClose,
 			...(agent === undefined ? {} : { agent }),
 			...(model === undefined ? {} : { model }),
 			...(thinking === undefined ? {} : { thinking }),
 			...(contextWindow === undefined ? {} : { contextWindow }),
+			autoClose,
 		};
 	}
 	return out;
+}
+
+/**
+ * A configured Thinking level: one of the standard set, and one the agent the
+ * setting resolves to actually maps. An omitted level stays unset: the level
+ * is left to the agent.
+ */
+function validateThinkingLevel(
+	value: string | undefined,
+	agentName: string,
+	agent: AgentTypeConfig | undefined,
+	where: string,
+): ThinkingLevel | undefined {
+	if (value === undefined) return undefined;
+	if (!isThinkingLevel(value)) {
+		throw new ConfigError(
+			`config: ${where}: "${value}" is not a standard thinking level (${thinkingLevelList()})`,
+		);
+	}
+	if (agent === undefined || agent.thinking === undefined)
+		throw new ConfigError(
+			`config: ${where}: agent "${agentName}" does not define a thinking setting`,
+		);
+	const supported = agent.thinkingValues ?? [];
+	if (!supported.includes(value))
+		throw new ConfigError(
+			`config: ${where}: ${unsupportedThinkingLevel(agentName, value, supported)}`,
+		);
+	return value;
 }
 
 /** Validate the optional Consultation type table at startup. */
@@ -591,20 +671,12 @@ function validateConsultationTypes(
 		const model = optionalStringField(raw, "model", where);
 		if (model !== undefined && agentConfig.model === undefined)
 			throw new ConfigError(`${where}.model: agent "${agent}" does not define a model setting`);
-		const thinking = optionalStringField(raw, "thinking", where);
-		if (thinking !== undefined) {
-			if (agentConfig.thinking === undefined)
-				throw new ConfigError(
-					`${where}.thinking: agent "${agent}" does not define a thinking setting`,
-				);
-			if (
-				agentConfig.thinkingValues !== undefined &&
-				!agentConfig.thinkingValues.includes(thinking)
-			)
-				throw new ConfigError(
-					`${where}.thinking: must be one of: ${agentConfig.thinkingValues.join(", ")}`,
-				);
-		}
+		const thinking = validateThinkingLevel(
+			raw.thinking === undefined ? undefined : stringField(raw, "thinking", where),
+			agent,
+			agentConfig,
+			`${where}.thinking`,
+		);
 		const contextWindow = tokenCountField(raw, "context-window", where);
 		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
 			throw new ConfigError(
@@ -959,7 +1031,7 @@ function positiveNumberField(record: Record<string, unknown>, key: string, def: 
 function optionalStringField(
 	record: Record<string, unknown>,
 	key: string,
-	where: string,
+	where?: string,
 ): string | undefined {
 	return key in record ? stringField(record, key, where) : undefined;
 }
