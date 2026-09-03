@@ -321,7 +321,7 @@ describe("HerdrAgentReader.listAgents", () => {
 	}
 
 	test("reads every name herdr may give the turn sequence", async () => {
-		// herdr 0.8.2 names this field `state_change_seq`. The three longer
+		// herdr 0.8.2 names this field `state_change_seq`. The other three
 		// names are the aliases the reader accepts, not fields herdr emits, so
 		// a new herdr that renames the sequence still reads. Do not add a name
 		// here without a herdr release that sends it.
