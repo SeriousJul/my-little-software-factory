@@ -15,6 +15,7 @@ import type {
 	Completion,
 	CompletionDecision,
 	EnvironmentKind,
+	LeftoverEnvironment,
 	SourceMembership,
 	Ticket,
 	TicketState,
@@ -25,7 +26,7 @@ import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -81,6 +82,8 @@ interface HandoffDetails {
 	paneId?: string | null;
 	tabId?: string | null;
 	workspaceId?: string | null;
+	/** The herdr name the agent started under. */
+	agentName?: string | null;
 }
 
 export const CONSULTATION_STATES = [
@@ -405,6 +408,31 @@ const MIGRATION_V4_TO_V5 = `
 	);
 `;
 
+/**
+ * The v6 step: what a handoff left behind, and what herdr called its agent.
+ *
+ * The Close cleanup can fail: herdr refuses to remove a dirty checkout
+ * without force, so the workspace, its pane, and the agent in it outlive the
+ * work cycle that started them. The ticket's next handoff then needs the
+ * herdr agent name that leftover agent still holds. Three columns make the
+ * surviving environment a fact on the handoff it belongs to: why the control
+ * plane knows it is alive, when it learned that, and when the operator
+ * cleared it (null while the fact stands).
+ *
+ * The fourth column records the herdr name the agent started under. A handoff
+ * normally asks for the ticket's stable name, which the naming rule can
+ * re-derive from the title. It does not always get it: a leftover agent of
+ * the ticket's own can still hold that name, and the handoff then starts
+ * under its cycle name (ADR 0012). Herdr's answer is a fact of that handoff,
+ * so the completion trace of its turn reads it here instead of guessing.
+ */
+const MIGRATION_V5_TO_V6 = `
+	ALTER TABLE handoffs ADD COLUMN leftover_reason TEXT;
+	ALTER TABLE handoffs ADD COLUMN leftover_at TEXT;
+	ALTER TABLE handoffs ADD COLUMN leftover_cleared_at TEXT;
+	ALTER TABLE handoffs ADD COLUMN herdr_name TEXT;
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -510,6 +538,7 @@ export class FactoryState {
 			if (version < 3) this.db.exec(MIGRATION_V2_TO_V3);
 			if (version < 4) this.db.exec(MIGRATION_V3_TO_V4);
 			if (version < 5) this.db.exec(MIGRATION_V4_TO_V5);
+			if (version < 6) this.db.exec(MIGRATION_V5_TO_V6);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -660,9 +689,10 @@ export class FactoryState {
 	 * works, and the ticket must stay visible for the decision.
 	 */
 	visibleTickets(rules: readonly TaskRule[], fallbackTaskType: string): Ticket[] {
-		const rows = this.db.prepare("SELECT identity, state FROM tickets").all() as Array<{
+		const rows = this.db.prepare("SELECT identity, state, work_cycle FROM tickets").all() as Array<{
 			identity: string;
 			state: TicketState;
+			work_cycle: number;
 		}>;
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
@@ -695,6 +725,7 @@ export class FactoryState {
 				repository: facts.repository.displayName,
 				state: row.state,
 				handoff,
+				workCycle: row.work_cycle,
 				handoffCount: this.handoffCount(row.identity),
 				lastCompletion: this.lastCompletion(row.identity),
 				description: facts.description,
@@ -713,6 +744,7 @@ export class FactoryState {
 				),
 				actionable,
 				handoffRecoveryRequired: pending,
+				leftover: this.leftoverEnvironment(row.identity),
 			});
 		}
 		return tickets.sort(
@@ -856,6 +888,14 @@ export class FactoryState {
 	 * lookup falls back to the ticket's remaining memberships.
 	 */
 	agentNameForTicket(identity: string): string {
+		const started = this.db
+			.prepare(
+				"SELECT herdr_name FROM handoffs WHERE ticket_identity = ? AND herdr_name IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as { herdr_name: string | null } | undefined;
+		if (started?.herdr_name !== undefined && started?.herdr_name !== null) {
+			return started.herdr_name;
+		}
 		const row = this.db
 			.prepare(
 				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? ORDER BY m.active DESC, m.source_name LIMIT 1",
@@ -869,24 +909,193 @@ export class FactoryState {
 	 * cleanup closes. Null when the ticket never had a handoff.
 	 */
 	latestHandoff(identity: string): {
+		handoffId: string;
 		environment: EnvironmentKind;
+		paneId: string | null;
 		tabId: string | null;
 		workspaceId: string | null;
 	} | null {
 		const row = this.db
 			.prepare(
-				"SELECT choice_json, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+				"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
-			| { choice_json: string; tab_id: string | null; workspace_id: string | null }
+			| {
+					attempt_id: string;
+					choice_json: string;
+					pane_id: string | null;
+					tab_id: string | null;
+					workspace_id: string | null;
+			  }
 			| undefined;
 		if (row === undefined) return null;
 		const choice = jsonChoice(row.choice_json);
 		return {
+			handoffId: row.attempt_id,
 			environment: choice?.environment ?? "worktree",
+			paneId: row.pane_id,
 			tabId: row.tab_id,
 			workspaceId: row.workspace_id,
 		};
+	}
+
+	/**
+	 * Record that the herdr environment of one of a ticket's handoffs is
+	 * still alive after its work cycle closed.
+	 *
+	 * Two facts name the handoff: the Close cleanup of a known handoff
+	 * carries its attempt id, and a handoff that found its agent name taken
+	 * carries only the pane herdr named in the collision. With neither, the
+	 * ticket's latest handoff is the one whose cycle closed. A fact that
+	 * already stands on that handoff is refreshed, never duplicated.
+	 *
+	 * Returns the leftover environment, or null when the ticket holds no
+	 * handoff to carry the fact.
+	 */
+	recordLeftoverEnvironment(input: {
+		ticketIdentity: string;
+		handoffId?: string | null;
+		paneId?: string | null;
+		reason: string;
+		at?: string;
+	}): LeftoverEnvironment | null {
+		return this.transaction(() => {
+			const row =
+				input.handoffId !== undefined && input.handoffId !== null
+					? (this.db
+							.prepare(
+								"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? AND attempt_id = ?",
+							)
+							.get(input.ticketIdentity, input.handoffId) as HandoffRow | undefined)
+					: input.paneId !== undefined && input.paneId !== null
+						? (this.db
+								.prepare(
+									"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? AND pane_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+								)
+								.get(input.ticketIdentity, input.paneId) as HandoffRow | undefined)
+						: (this.db
+								.prepare(
+									"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+								)
+								.get(input.ticketIdentity) as HandoffRow | undefined);
+			if (row === undefined) return null;
+			const at = input.at ?? new Date(this.now()).toISOString();
+			const choice = jsonChoice(row.choice_json);
+			// A fact that already stood on this handoff is refreshed: the clear
+			// that ended it belongs to an attempt that did not end the
+			// environment after all, so the new reason stands again.
+			this.db
+				.prepare(
+					"UPDATE handoffs SET leftover_reason = ?, leftover_at = ?, leftover_cleared_at = NULL WHERE attempt_id = ?",
+				)
+				.run(input.reason, at, row.attempt_id);
+			return {
+				handoffId: row.attempt_id,
+				environment: choice?.environment ?? "worktree",
+				workspaceId: row.workspace_id,
+				tabId: row.tab_id,
+				paneId: row.pane_id,
+				reason: input.reason,
+				at,
+			};
+		});
+	}
+
+	/**
+	 * The ticket's newest leftover environment that stands unresolved, or
+	 * null when every environment its handoffs started is gone.
+	 */
+	leftoverEnvironment(identity: string): LeftoverEnvironment | null {
+		const rows = this.leftoverEnvironments(identity);
+		return rows.length === 0 ? null : rows[0];
+	}
+
+	/**
+	 * Every unresolved leftover environment of a ticket, newest first.
+	 *
+	 * A ticket can hold more than one: a cycle can close twice over the same
+	 * workspace herdr cannot remove, and a reused workspace carries the fact
+	 * of each handoff that lived in it.
+	 */
+	leftoverEnvironments(identity: string): LeftoverEnvironment[] {
+		const rows = this.db
+			.prepare(
+				"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id, leftover_reason, leftover_at FROM handoffs WHERE ticket_identity = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL ORDER BY started_at DESC, rowid DESC",
+			)
+			.all(identity) as unknown as Array<
+			HandoffRow & { leftover_reason: string; leftover_at: string | null }
+		>;
+		const out: LeftoverEnvironment[] = [];
+		for (const row of rows) {
+			const choice = jsonChoice(row.choice_json);
+			out.push({
+				handoffId: row.attempt_id,
+				environment: choice?.environment ?? "worktree",
+				workspaceId: row.workspace_id,
+				tabId: row.tab_id,
+				paneId: row.pane_id,
+				reason: row.leftover_reason,
+				at: row.leftover_at ?? "",
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * Mark the leftover environments a successful Close cleanup ended.
+	 *
+	 * The handle says how far that cleanup reached, and only the facts inside
+	 * the reach end with it: a workspace removal closes every environment that
+	 * named that workspace, and a close that reached one tab or ran no command
+	 * at all ends only the environments its own row named. Facts outside the
+	 * reach stand, because one row's close says nothing about another row's
+	 * environment. Returns how many facts were cleared.
+	 */
+	clearLeftoverEnvironments(
+		identity: string,
+		ended: { workspaceId: string } | { tabId: string } | { handoffId: string },
+	): number {
+		const at = new Date(this.now()).toISOString();
+		const cleared =
+			"workspaceId" in ended
+				? this.db
+						.prepare(
+							"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND workspace_id = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
+						)
+						.run(at, identity, ended.workspaceId)
+				: "tabId" in ended
+					? this.db
+							.prepare(
+								"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND tab_id = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
+							)
+							.run(at, identity, ended.tabId)
+					: this.db
+							.prepare(
+								"UPDATE handoffs SET leftover_cleared_at = ? WHERE ticket_identity = ? AND attempt_id = ? AND leftover_reason IS NOT NULL AND leftover_cleared_at IS NULL",
+							)
+							.run(at, identity, ended.handoffId);
+		return Number(cleared.changes);
+	}
+
+	/**
+	 * The herdr handles every handoff of a ticket recorded.
+	 *
+	 * A handoff that finds its agent name taken uses these to tell its own
+	 * leftover agent from another ticket's: herdr names the pane and the
+	 * workspace that holds the name, and a handle this ticket recorded makes
+	 * it the ticket's own.
+	 */
+	handoffHandles(identity: string): { paneIds: string[]; workspaceIds: string[] } {
+		const rows = this.db
+			.prepare("SELECT pane_id, workspace_id FROM handoffs WHERE ticket_identity = ?")
+			.all(identity) as Array<{ pane_id: string | null; workspace_id: string | null }>;
+		const paneIds: string[] = [];
+		const workspaceIds: string[] = [];
+		for (const row of rows) {
+			if (row.pane_id !== null) paneIds.push(row.pane_id);
+			if (row.workspace_id !== null) workspaceIds.push(row.workspace_id);
+		}
+		return { paneIds, workspaceIds };
 	}
 
 	/**
@@ -1273,7 +1482,7 @@ export class FactoryState {
 					.run(attempt.ticket_identity);
 				this.db
 					.prepare(
-						"INSERT OR REPLACE INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT OR REPLACE INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						attemptId,
@@ -1284,6 +1493,7 @@ export class FactoryState {
 						details?.paneId ?? null,
 						details?.tabId ?? null,
 						details?.workspaceId ?? null,
+						details?.agentName ?? null,
 					);
 			}
 			this.db
@@ -2262,6 +2472,16 @@ function jsonStringRecord(value: string): Record<string, string> {
 		return {};
 	}
 }
+
+/** A stored handoff row, with the herdr handles it started. */
+interface HandoffRow {
+	attempt_id: string;
+	choice_json: string;
+	pane_id: string | null;
+	tab_id: string | null;
+	workspace_id: string | null;
+}
+
 function jsonChoice(value: string): HandoffChoice | undefined {
 	try {
 		const parsed = JSON.parse(value) as Partial<HandoffChoice>;

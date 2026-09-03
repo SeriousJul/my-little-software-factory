@@ -47,6 +47,21 @@ export function truncateToWidth(text: string, width: number): string {
 }
 
 /**
+ * Shorten a string to at most `width` cells, and say that it was cut.
+ *
+ * A cut that leaves no mark reads as a whole line, so the operator cannot
+ * tell a fact from the first half of it. The ellipsis takes the last cell of
+ * the budget, so the result still fits `width`. Widths too small to hold both
+ * a cell of text and the mark fall back to a plain cut.
+ */
+export function truncateWithEllipsis(text: string, width: number): string {
+	if (widthOf(text) <= width || width < 2) {
+		return truncateToWidth(text, width);
+	}
+	return `${truncateToWidth(text, width - 1)}\u2026`;
+}
+
+/**
  * Shorten a string to at most `width` cells, keeping its end.
  *
  * The override panel's Model row uses this for a value whose start repeats

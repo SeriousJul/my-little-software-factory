@@ -17,7 +17,7 @@ import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
 import { windowOf } from "./geometry.ts";
-import { padToWidth, truncateToWidth, wrapToWidth } from "./text.ts";
+import { padToWidth, truncateToWidth, truncateWithEllipsis, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** One confirmable action, with its label and an optional detail. */
@@ -43,20 +43,36 @@ const MARKER_WIDTH = 2;
 /** The label column: the widest action label plus its gap. */
 const LABEL_WIDTH = 12;
 /** The body and the detail column share this width. */
-const CONTENT_WIDTH = 60;
+export const CONTENT_WIDTH = 60;
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
 const HINT = "up/down select  j/k message  enter  esc";
+
+/**
+ * The columns the panel gives its message.
+ *
+ * The caller that builds the body lines clips to this width, so a line the
+ * panel would have to wrap or drop is cut where the panel really renders it
+ * instead of at a width the panel only has on a wide terminal.
+ */
+export const panelBodyCols = (terminalWidth: number): number =>
+	Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
 
 export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
 	const { width: terminalWidth } = useTerminalDimensions();
 	// The body wraps to the content width; the wide terminals cap it there
 	// and the narrow ones keep what they hold.
-	const bodyCols = Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
+	const bodyCols = panelBodyCols(terminalWidth);
 	const wrapped = (bodyLines ?? []).flatMap((line) =>
 		line === "" ? [""] : wrapToWidth(line, bodyCols),
 	);
-	const bodyRows = Math.min(wrapped.length, MAX_BODY_ROWS);
+	// The window holds MAX_BODY_ROWS lines, and its last one is the marker
+	// that says how many rows it does not show. Rows that only vanish read as
+	// a message that ended, and the operator never learns to scroll.
+	const marksOverflow = wrapped.length > MAX_BODY_ROWS;
+	const contentRows = marksOverflow
+		? Math.max(1, Math.min(wrapped.length, MAX_BODY_ROWS) - 1)
+		: Math.min(wrapped.length, MAX_BODY_ROWS);
 	const [bodyScroll, setBodyScroll] = useState(0);
 	const [selected, setSelected] = useState(0);
 	const selectedRef = useRef(0);
@@ -84,7 +100,9 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 				move(-1);
 				break;
 			case "j":
-				setBodyScroll((current) => Math.min(current + 1, Math.max(0, wrapped.length - bodyRows)));
+				setBodyScroll((current) =>
+					Math.min(current + 1, Math.max(0, wrapped.length - contentRows)),
+				);
 				break;
 			case "k":
 				setBodyScroll((current) => Math.max(0, current - 1));
@@ -92,8 +110,12 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 		}
 	});
 
-	const scroll = Math.min(bodyScroll, Math.max(0, wrapped.length - bodyRows));
-	const visibleBody = windowOf(wrapped, scroll, bodyRows);
+	const scroll = Math.min(bodyScroll, Math.max(0, wrapped.length - contentRows));
+	const shownBody = windowOf(wrapped, scroll, contentRows);
+	const hiddenRows = Math.max(0, wrapped.length - (scroll + shownBody.length));
+	const bodyShown =
+		marksOverflow && hiddenRows > 0 ? [...shownBody, `+${hiddenRows} more (j/k)`] : shownBody;
+	const panelWidth = Math.min(terminalWidth, bodyCols + CHROME);
 
 	return createElement(
 		"box",
@@ -115,11 +137,14 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 			{
 				border: true,
 				borderColor: COLORS.borderFocused,
-				title,
+				// herdr drops a title that does not fit the top border, and a
+				// modal with no name on it is the same modal as the next one.
+				// The title is cut to the panel's own width and marked.
+				title: truncateWithEllipsis(title, Math.max(8, panelWidth - CHROME - 2)),
 				padding: 1,
 				style: { flexDirection: "column" },
 			},
-			...visibleBody.map((line, index) =>
+			...bodyShown.map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}`, fg: COLORS.dim },

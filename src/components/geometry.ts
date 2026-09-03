@@ -27,7 +27,7 @@ export interface PaneGeometry {
  * step when the layout changes.
  *
  * `reservedRows` are terminal rows the panes do not take: the app shell
- * reserves one for the status line when it carries a message, and the pane
+ * reserves one for the Message line when it carries a message, and the pane
  * boxes render one row shorter. The window math must agree with the boxes,
  * so the reservation travels to the panes as a prop.
  */

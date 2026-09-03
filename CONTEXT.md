@@ -221,6 +221,7 @@ _Avoid_: abandon, force delete
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
+It asks Herdr for the ticket's stable Agent name, and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
 _Avoid_: assign, dispatch, launch
 
 **Handoff attempt**:
@@ -294,6 +295,17 @@ _Avoid_: sandbox, isolation
 The condition where an Agent would start in a live checkout already used by another active Agent.
 It blocks the start unless the operator gives a one-shot safety confirmation.
 _Avoid_: dirty checkout, parallel limit
+
+**Leftover environment**:
+The workspace, tab, or Agent of a ticket's closed Handoff that Herdr still holds after its Close cleanup.
+It is a durable fact on the ticket, visible in its row and in its detail.
+It never blocks a Handoff of that ticket.
+_Avoid_: orphaned agent, zombie workspace, stale checkout
+
+**Clear**:
+The one operator action that retries the Close cleanup of a ticket's Leftover environment.
+A forced removal is its own explicit choice within the action, because it discards a dirty checkout and stops the Agents in the workspace.
+_Avoid_: force delete, cleanup retry
 
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.

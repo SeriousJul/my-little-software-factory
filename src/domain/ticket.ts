@@ -95,6 +95,29 @@ export interface SourceMembership extends FetchedTicket {
 	health: "loading" | "healthy" | "stale" | "removed";
 }
 
+/**
+ * The herdr environment of one of the ticket's closed handoffs that outlived
+ * its work cycle: a workspace, a tab, or an agent herdr still holds. The
+ * Close cleanup could not remove it, or a handoff found its name still taken
+ * by the agent it started. It is a fact on the ticket until the operator
+ * clears it, and it never blocks a handoff.
+ */
+export interface LeftoverEnvironment {
+	/** The handoff whose environment survived its close. */
+	handoffId: string;
+	environment: EnvironmentKind;
+	/** The herdr workspace still open, when one is recorded. */
+	workspaceId: string | null;
+	/** The herdr tab still open, when one is recorded. */
+	tabId: string | null;
+	/** The pane the leftover agent holds, when one is recorded. */
+	paneId: string | null;
+	/** Why the control plane knows the environment is still alive. */
+	reason: string;
+	/** When it learned that, in ISO time. */
+	at: string;
+}
+
 /** The factory projection used by the control plane and handoff boundary. */
 export interface Ticket {
 	/** Stable external ticket identity. */
@@ -105,6 +128,8 @@ export interface Ticket {
 	repositoryRef: RepositoryRef;
 	state: TicketState;
 	handoff: Handoff | null;
+	/** The number of the work cycle the ticket is in now. */
+	workCycle: number;
 	/** The total handoffs ever recorded for the ticket, across work cycles. */
 	handoffCount: number;
 	/** The ticket's latest settled turn, or null when none settled yet. */
@@ -120,6 +145,11 @@ export interface Ticket {
 	suggestedTaskType: string;
 	actionable: boolean;
 	handoffRecoveryRequired: boolean;
+	/**
+	 * The ticket's newest leftover environment that stands unresolved, or
+	 * null when nothing of its closed handoffs is still alive in herdr.
+	 */
+	leftover: LeftoverEnvironment | null;
 }
 
 /** The marker an observation poll sets on an in-flight ticket. */
