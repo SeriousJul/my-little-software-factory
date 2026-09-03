@@ -4,11 +4,13 @@
  * becomes a new default.
  *
  * It is a centered modal with one row per setting: the agent type, the
- * environment kind, the task type, and the settings the chosen agent type
- * maps. A setting the agent does not map is hidden, so the panel shows only
- * what the chosen agent supports. The rows start on the settings the resolved
- * task profile names (ADR 0009), so the panel shows what the handoff will run
- * on.
+ * environment kind, the task type, the model, the thinking level, and the
+ * maximum context window. A row shows when its agent maps the setting. It
+ * also shows, in the warning color, while it carries a value the agent cannot
+ * take: hiding it would strand that value where no key can reach it, and the
+ * panel must never show anything other than what the handoff sends. The rows
+ * start on the settings the resolved task profile names (ADR 0009), so the
+ * panel shows what the handoff will run on.
  *
  * The Model row offers the selected agent's Model list (ADR 0010). It is a
  * list row that also takes type-ahead: each typed letter extends the typed
@@ -33,25 +35,35 @@
  * those keys do not type. Backspace or Delete clears a Model or Thinking row,
  * which leaves that setting to the agent. The agent, environment, task type,
  * and thinking rows are pure cycling; only the Model list row takes typed
- * letters. A value that is set but not available for the current agent renders
- * in the warning color, so a handoff that would fail is visible before it is
- * confirmed. A row whose list has not arrived is not judged at all: it holds
- * its value in the dim tone the panel uses for a setting it cannot confirm,
- * and its guide names the wait. A model value wider than the column shows its
- * end, where a real agent list tells its models apart, with a leading marker
- * for the cut; the whole value still rides on the handoff.
+ * letters. The Context row is a token field: it takes digits and nothing else,
+ * typed or pasted, because a count cannot carry a stray character and one
+ * value must never become two argv elements. It folds a leading zero the same
+ * way the config parser does, so what the panel shows is the count the agent
+ * gets.
+ *
+ * A value that is set but cannot reach the current agent renders in the
+ * warning color, and its guide names the way out: a row whose agent maps no
+ * template for the setting clears with backspace, a listed row that holds a
+ * level the agent does not offer cycles or clears, and a context row that
+ * holds no count takes digits. The panel's own check is the same one the
+ * handoff's preflight runs, so a handoff the panel shows as doomed is the one
+ * the preflight refuses. A row whose list has not arrived is not judged at
+ * all: it holds its value in the dim tone the panel uses for a setting it
+ * cannot confirm, and its guide names the wait. A model value wider than the
+ * column shows its end, where a real agent list tells its models apart, with
+ * a leading marker for the cut; the whole value still rides on the handoff.
  *
  * The keys: up/down and tab/shift+tab move the row selection. j and k move it
  * too, except on a row that takes typing (a Text field, or the Model list),
  * where they type. left/right move the caret on a Text field and cycle a list
  * row's value; h and l type on a Text field and on the Model list, and cycle
  * every other list row. Switching the task type re-derives the agent, model,
- * and thinking rows from the new task type's profile while the operator has
- * not touched each row, so the panel keeps showing the true start values; a
- * row the operator touched keeps its value. Switching the agent never
- * re-derives the model: each setting resolves on its own chain. Enter confirms
- * and hands off. Esc cancels. While the panel is open, the keys of the app
- * below are disabled.
+ * thinking, and context rows from the new task type's profile while the
+ * operator has not touched each row, so the panel keeps showing the true
+ * start values; a row the operator touched keeps its value. Switching the
+ * agent never re-derives the model: each setting resolves on its own chain.
+ * Enter confirms and hands off. Esc cancels. While the panel is open, the
+ * keys of the app below are disabled.
  *
  * The panel sizes itself to the terminal: the value column shrinks first, then
  * the label column, then the marker. The hint row drops when the terminal
@@ -59,20 +71,24 @@
  * cannot hold them all: the selected row always stays on screen. A row never
  * wraps or interleaves.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, useRef, useState } from "react";
 
+import type { InputRenderable } from "@opentui/core";
+import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { type ReactElement, type RefObject, useRef, useState } from "react";
 import type { ThinkingLevel } from "../domain/agent.ts";
+import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
-/** Which settings an agent type maps, for hiding rows it does not support. */
+/** Which settings an agent type maps, for the rows it opens. */
 export interface AgentSettings {
 	model: boolean;
 	thinking: boolean;
+	/** Whether a maximum context window can reach this agent type. */
+	contextWindow?: boolean;
 	/** The levels this Agent type supports, in the order the row offers them. */
 	thinkingValues?: readonly ThinkingLevel[];
 }
@@ -113,8 +129,16 @@ export interface AgentModelList {
 type RowKey = keyof HandoffChoice;
 /** The rows whose value the operator can clear to leave the setting to the agent. */
 type ClearKey = "model" | "thinking";
-/** The rows a task type switch re-derives from its profile: the list rows that set a value. */
+/** The rows whose value a text field edits. */
+type TextKey = "model" | "thinking" | "contextWindow";
+/** The rows a task type switch re-derives from its profile: every setting with a value. */
 type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
+
+/**
+ * The three ways a drafted value cannot reach the agent it is set on, so the
+ * row can wear the warning and name the fix.
+ */
+type UnfitSetting = "no-setting" | "no-level" | "no-count";
 
 interface PanelRow {
 	label: string;
@@ -133,6 +157,17 @@ interface PanelRow {
 	 * free-text Model row carries one.
 	 */
 	fallbackCause?: ModelListCause;
+	/**
+	 * Why this row's value cannot reach the selected agent, and so cannot
+	 * survive a handoff. Undefined means the agent takes the value as it is.
+	 */
+	unfit?: UnfitSetting;
+	/**
+	 * True when the row is a text field that takes digits and nothing else.
+	 * The input callback sanitizes on the flag, so a row declares its own
+	 * input rule.
+	 */
+	digits?: boolean;
 }
 
 interface OverridePanelProps {
@@ -158,17 +193,15 @@ const LABEL_WIDTH = 12;
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 const MARKER_WIDTH = 2;
-// The hint rows follow the selected row. Keep every variant no wider than the
-// text-row hint, or the guide drops on the default terminal.
+// Every hint shares one width so the guide never truncates another one, and a
+// row that changes its guide does not move the rows beside it. Keep them all
+// inside that width, or the guide drops on a normal terminal.
 const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
 /**
  * The guide of a free-text Model row: the text keys, and why the list is gone.
  *
  * A Model row is a Text field only because its agent's list is missing, so the
- * guide spends one cell group on the fact the row cannot show by itself. Keep
- * both inside HINT_WIDTH: a guide wider than the threshold drops the whole
- * guide line on a normal terminal, because the modal is only as wide as the
- * three columns its rows use.
+ * guide spends one cell group on the fact the row cannot show by itself.
  */
 const NO_LIST_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (none)";
 const LIST_FAILED_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (failed)";
@@ -177,10 +210,8 @@ const CHOICE_HINT = "↑↓/jk move ←→/hl cycle ⌫ clear ↵/esc";
 /**
  * The Model list row: typing jumps the value, the arrows take a match.
  *
- * It names confirm and cancel like every other guide, and it stays inside the
- * 41 cells the guides are sized to: a longer one raises HINT_WIDTH and drops
- * the guide line on a normal terminal. Tab moves rows too, but the arrows are
- * the keys the row is steered with.
+ * It names confirm and cancel like every other guide. Tab moves rows too, but
+ * the arrows are the keys the row is steered with.
  */
 const MODEL_HINT = "↑↓ move type jumps ←→ cycle ⌫ clear ↵/esc";
 /**
@@ -190,6 +221,14 @@ const MODEL_HINT = "↑↓ move type jumps ←→ cycle ⌫ clear ↵/esc";
  * panel has not judged yet, not a row that works.
  */
 const PENDING_HINT = "↑↓/jk move (loading...) ↵/esc";
+/** The guide of the token-count row: it takes digits and nothing else. */
+const DIGITS_HINT = "↑↓ tab/⇧tab type 0-9 ↵ esc";
+/** The guide of a row whose value the chosen agent has no setting for. */
+const NO_SETTING_HINT = "no such Agent setting: Backspace clears";
+/** The guide of a Thinking row whose level the chosen agent does not offer. */
+const NO_LEVEL_HINT = "no such level: cycle ←→/hl or Backspace";
+/** The guide of a Context row that holds digits no count makes. */
+const NO_COUNT_HINT = "not a token count: type digits above 0";
 const HINT_WIDTH = Math.max(
 	widthOf(LIST_HINT),
 	widthOf(NO_LIST_HINT),
@@ -197,6 +236,10 @@ const HINT_WIDTH = Math.max(
 	widthOf(CHOICE_HINT),
 	widthOf(MODEL_HINT),
 	widthOf(PENDING_HINT),
+	widthOf(DIGITS_HINT),
+	widthOf(NO_SETTING_HINT),
+	widthOf(NO_LEVEL_HINT),
+	widthOf(NO_COUNT_HINT),
 );
 const EMPTY_HINT = "(empty)";
 const UNSET_HINT = "(unset)";
@@ -329,17 +372,27 @@ export function OverridePanel({
 	// previous key left behind.
 	const choiceRef = useRef<HandoffChoice>(choice);
 	const selectedRef = useRef(0);
-	// True once the operator sets a row themselves. While a row stays untouched,
-	// switching the task type re-derives it from the new task type's profile, so
-	// the panel keeps showing what the handoff will run on.
+	// An untouched Task-profile setting follows a Task type change. Once an
+	// operator changes or clears it, their one-shot override stays in force.
+	// One record holds every setting the rule covers, so the next profile
+	// setting is a key on it rather than a new ref, a new branch, and a new
+	// spread.
 	const touchedRef = useRef<Record<DerivedKey, boolean>>({
 		agentType: false,
 		model: false,
 		thinking: false,
+		contextWindow: false,
 	});
 	// The Model row's accumulated type-ahead text. It is never displayed: the
 	// value jumping to a match is the feedback.
 	const typedRef = useRef("");
+	// The live text fields, one ref each, so a character a row rejects can
+	// go back out of the field that holds it.
+	const inputRefs: Record<TextKey, RefObject<InputRenderable | null>> = {
+		model: useRef<InputRenderable | null>(null),
+		thinking: useRef<InputRenderable | null>(null),
+		contextWindow: useRef<InputRenderable | null>(null),
+	};
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
 		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
@@ -397,6 +450,7 @@ export function OverridePanel({
 			agentType: touched.agentType ? current.agentType : profile.agentType,
 			model: touched.model ? current.model : profile.model,
 			thinking: touched.thinking ? current.thinking : profile.thinking,
+			contextWindow: touched.contextWindow ? current.contextWindow : profile.contextWindow,
 		};
 	};
 
@@ -459,12 +513,36 @@ export function OverridePanel({
 	// One text field's input callback. The input owns its own caret and text,
 	// so this only mirrors the value into the choice. The guard skips the
 	// no-op echo the input emits, so a re-render never re-commits.
-	const handleInput = (value: string) => {
-		if (choiceRef.current.model === value) {
+	const handleInput = (row: PanelRow) => (text: string) => {
+		// A digits row takes digits and nothing else, typed or pasted: one
+		// value must never become two argv elements, and a count cannot carry
+		// a stray character. A count also keeps one spelling: the row folds a
+		// leading zero the same way the config parser does, so what the panel
+		// shows is the count the agent gets. The field owns its text, so a
+		// rejected character goes back out of it: the setter echoes an input
+		// event of its own, which the guard below absorbs.
+		const key = row.key as TextKey;
+		const value = row.digits === true ? tokenCountDigits(text.replace(/[^0-9]/gu, "")) : text;
+		if (value !== text) {
+			// The row's own buffer holds a character the row refuses, so push
+			// the refused text back out of it. The ref is live whenever a key
+			// reached this callback, and a missing one only costs the write-back.
+			const input = inputRefs[key].current;
+			if (input !== null) {
+				// The refused characters all stood inside the run the field just
+				// inserted, so they were all before the caret. The write-back's
+				// setter lands the caret at the row's end, which would move every
+				// later keystroke there, so the caret goes back by their count.
+				const kept = Math.max(0, input.cursorOffset - (text.length - value.length));
+				input.value = value;
+				input.cursorOffset = Math.min(value.length, kept);
+			}
+		}
+		if (choiceRef.current[key] === value) {
 			return;
 		}
-		touch("model");
-		commit((current) => ({ ...current, model: value }));
+		touch(key);
+		commit((current) => ({ ...current, [key]: value }));
 	};
 
 	useKeyboard((key) => {
@@ -577,7 +655,9 @@ export function OverridePanel({
 				padding: 1,
 				style: { flexDirection: "column" },
 			},
-			...rows.map((r) => rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput)),
+			...rows.map((r) =>
+				rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputRefs),
+			),
 			geometry.showHint &&
 				createElement(
 					"text",
@@ -603,12 +683,19 @@ function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListSta
 
 /** The short control guide for the selected row. */
 function hintForRow(row: PanelRow): string {
+	if (row.unfit === "no-setting") return NO_SETTING_HINT;
+	if (row.unfit === "no-level") return NO_LEVEL_HINT;
+	if (row.unfit === "no-count") return NO_COUNT_HINT;
 	switch (row.kind) {
 		case "text":
 			// A Model row reaches a Text field only through a missing list, so the
-			// row always carries which cause sent it there; a text row without one
-			// has no list to lose.
-			return row.fallbackCause === "query-failed" ? LIST_FAILED_HINT : NO_LIST_HINT;
+			// row always carries which cause sent it there; a text row without
+			// one is the token row, and its guide names the digits rule.
+			return row.fallbackCause === "query-failed"
+				? LIST_FAILED_HINT
+				: row.fallbackCause === "no-list"
+					? NO_LIST_HINT
+					: DIGITS_HINT;
 		case "pending":
 			return PENDING_HINT;
 		default:
@@ -631,19 +718,51 @@ function rowsFor(
 	agentSettings: Readonly<Record<string, AgentSettings>>,
 	modelStatus: ModelListStatus,
 ): PanelRow[] {
-	const settings = agentSettings[choice.agentType] ?? { model: false, thinking: false };
+	const settings = agentSettings[choice.agentType] ?? {
+		model: false,
+		thinking: false,
+		contextWindow: false,
+	};
 	const rows: PanelRow[] = [
 		{ label: "Agent", key: "agentType", kind: "list", options: agents },
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
 		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
 	];
-	if (settings.model) rows.push(modelRow(modelStatus));
+	// A row shows when its agent maps the setting. It also shows, wearing the
+	// warning color, while it carries a value the agent cannot take: hiding it
+	// would strand that value where no key can reach it, and the panel must
+	// never show something other than what the handoff sends.
+	if (settings.model) {
+		rows.push(modelRow(modelStatus));
+	} else if (choice.model !== "") {
+		rows.push({ label: "Model", key: "model", kind: "text", unfit: "no-setting" });
+	}
 	if (settings.thinking) {
+		const values = settings.thinkingValues ?? [];
+		// An agent that maps thinking offers its declared levels, so only a
+		// listed agent can refuse the one the chain resolved.
+		const unlisted = choice.thinking !== "" && !values.some((level) => level === choice.thinking);
 		rows.push({
 			label: "Thinking",
 			key: "thinking",
 			kind: "list",
-			options: settings.thinkingValues ?? [],
+			options: values,
+			unfit: unlisted ? "no-level" : undefined,
+		});
+	} else if (choice.thinking !== "") {
+		rows.push({ label: "Thinking", key: "thinking", kind: "text", unfit: "no-setting" });
+	}
+	// The token row reads the same way as the model row: its agent's
+	// capability opens it, and a value the agent cannot take keeps it open so
+	// the operator can clear it.
+	if (settings.contextWindow || choice.contextWindow !== "") {
+		const count = choice.contextWindow === "" || isTokenCount(choice.contextWindow);
+		rows.push({
+			label: "Context",
+			key: "contextWindow",
+			kind: "text",
+			digits: true,
+			unfit: settings.contextWindow ? (count ? undefined : "no-count") : "no-setting",
 		});
 	}
 	return rows;
@@ -682,13 +801,14 @@ function modelRow(status: ModelListStatus): PanelRow {
 	};
 }
 
-/** One panel row as a marker, a label, and a value, a field, or a dim marker. */
+/** One panel row as a marker, a label, and a value or an input. */
 function rowElement(
 	r: PanelRow,
 	value: string,
 	selected: boolean,
 	geometry: PanelGeometry,
-	handleInput: (value: string) => void,
+	handleInput: (row: PanelRow) => (text: string) => void,
+	inputRefs: Record<TextKey, RefObject<InputRenderable | null>>,
 ): ReactElement {
 	const children: ReactElement[] = [
 		createElement(
@@ -706,7 +826,8 @@ function rowElement(
 		// A text row: a standard single-line input. It owns the caret, the
 		// editing keys, and paste, and scrolls horizontally within the value
 		// column. The empty field shows the dim placeholder, like the old
-		// (empty) hint.
+		// (empty) hint. A value the agent cannot take wears the warning, so
+		// the row shows what the handoff sends and that it will fail on it.
 		children.push(
 			createElement("input", {
 				key: r.key,
@@ -715,12 +836,16 @@ function rowElement(
 				focused: selected,
 				placeholder: EMPTY_HINT,
 				placeholderColor: COLORS.dim,
-				textColor: COLORS.text,
-				focusedTextColor: COLORS.textBright,
+				textColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.text,
+				focusedTextColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.textBright,
 				backgroundColor: "transparent",
 				focusedBackgroundColor: COLORS.focusedBackground,
 				keyBindings: INPUT_KEY_BINDINGS,
-				onInput: r.key === "model" ? handleInput : undefined,
+				ref: inputRefs[r.key as TextKey],
+				// A digits row refuses a character that is not a digit in the
+				// panel's own input handler, which writes the field back without
+				// it: OpenTUI offers no before-input hook to hold it out.
+				onInput: handleInput(r),
 			}),
 		);
 		return createElement(
@@ -738,15 +863,16 @@ function rowElement(
 	// correctly must not read as a handoff that would fail. The row shows that
 	// value in the dim tone the panel uses for a setting it cannot yet confirm.
 	const pending = r.kind === "pending";
-	const unavailable = !pending && !unset && !(r.options ?? []).includes(value);
+	const inList = (r.options ?? []).includes(value);
 	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
-	const color = unavailable
-		? COLORS.statusWarning
-		: unset || pending
-			? COLORS.dim
-			: selected
-				? COLORS.textBright
-				: COLORS.text;
+	const color =
+		r.unfit !== undefined || (!pending && !unset && !inList)
+			? COLORS.statusWarning
+			: unset || pending
+				? COLORS.dim
+				: selected
+					? COLORS.textBright
+					: COLORS.text;
 	// The tail clip marks a cut-off value with "…", so it belongs to a value
 	// alone. A hint that does not fit keeps its front like every other row
 	// text, and never carries a marker that claims it is a truncated name.

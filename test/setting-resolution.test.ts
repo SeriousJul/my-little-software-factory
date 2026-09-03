@@ -41,6 +41,7 @@ describe("the Task profile of a task type", () => {
 			agentType: "pi",
 			model: "",
 			thinking: "",
+			contextWindow: "",
 		});
 	});
 
@@ -53,6 +54,7 @@ describe("the Task profile of a task type", () => {
 			agentType: "codex",
 			model: "openai/gpt-5.1",
 			thinking: "high",
+			contextWindow: "",
 		});
 		// An omitted profile model resolves through `default-model`, and an
 		// omitted profile agent through `default-agent`.
@@ -60,6 +62,7 @@ describe("the Task profile of a task type", () => {
 			agentType: "pi",
 			model: "anthropic/claude-sonnet-4-5",
 			thinking: "",
+			contextWindow: "",
 		});
 	});
 
@@ -97,6 +100,7 @@ describe("resolveSettings", () => {
 			agentType: "claude",
 			model: "anthropic/claude-sonnet-4-5",
 			thinking: "high",
+			contextWindow: "",
 		});
 	});
 
@@ -109,13 +113,15 @@ describe("resolveSettings", () => {
 			agentType: "claude",
 			model: "anthropic/x",
 			thinking: "max",
+			contextWindow: "",
 		});
 	});
 
-	test("a model the resolved agent maps nothing for stays empty", () => {
-		// The default agent has no model setting: `default-model` cannot apply
-		// to an agent that maps no model, so the row is hidden and the setting
-		// is left to the agent.
+	test("a default model the resolved agent maps nothing for still resolves", () => {
+		// The profile keeps a value the agent cannot take: the panel shows it
+		// wearing the warning, because the handoff sends it and the preflight
+		// fails it with a readable reason. Dropping it here would strand the
+		// value where no row can reach it.
 		const config = configWith(
 			{
 				defaultModel: "anthropic/claude-sonnet-4-5",
@@ -125,10 +131,9 @@ describe("resolveSettings", () => {
 		);
 		expect(taskProfileOf(config, "merge")).toEqual({
 			agentType: "plain",
-			// The profile names no model, and the default cannot resolve onto an
-			// agent that maps none.
-			model: "",
+			model: "anthropic/claude-sonnet-4-5",
 			thinking: "",
+			contextWindow: "",
 		});
 	});
 });

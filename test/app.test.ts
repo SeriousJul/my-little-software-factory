@@ -57,6 +57,7 @@ import {
 	pressArrow,
 	rgb,
 	rowsOf,
+	scrollDetailUntil,
 	settle,
 	showsTicket,
 	sleep,
@@ -104,7 +105,12 @@ describe("the control plane", () => {
 			const first = SAMPLE_TICKETS[0];
 			// The full title and description live in the detail pane.
 			expect(detail).toContain(first.description);
-			expect(detail).toContain("Agent: unassigned");
+			expect(detail).toContain("Agent: pi");
+			expect(detail).toContain("Model: left to agent");
+			expect(detail).toContain("Thinking: left to agent");
+			// A setting the profile leaves out reads the same way: the agent's own
+			// default is the only one the control plane does not know.
+			expect(detail).toContain("Context: left to agent");
 			expect(detail).toContain("Source state: open");
 			// The open ticket's task type line says which fact it is.
 			expect(detail).toContain("Suggested task type: implement");
@@ -523,7 +529,11 @@ describe("the control plane", () => {
 					expect(row[1]).toBe(" ");
 					expect(row[35]).toBe(" ");
 					expect(row[38]).toBe(" ");
-					expect(row[73]).toBe(" ");
+					// The detail pane holds more lines than this 25-row frame shows, so it
+					// scrolls and its native scrollbar paints the right padding column on
+					// every body row: a thumb cell where the thumb has reached, and the
+					// track's blank where it has not. The probe allows either.
+					expect([" ", "▀", "▄", "█"]).toContain(row[73]);
 				}
 				// The detail pane carries its content at this size.
 				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
@@ -625,6 +635,7 @@ describe("the control plane", () => {
 				taskType: "review",
 				model: "",
 				thinking: "",
+				contextWindow: "",
 				attemptId: "attempt-1",
 				paneId: "pane-1",
 				tabId: "tab-1",
@@ -781,8 +792,14 @@ describe("the control plane", () => {
 				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[handed-off]")) as string);
 				expect(line).toBe("│ ❯ [handed-off] Fix pan dri │");
 				expect(line).not.toContain("[implem");
-				// The detail carries the full value the row dropped.
-				expect(detailPaneText(frame, 60)).toContain("Handoff task type: implement");
+				// The detail carries the full value the row dropped. Its profile
+				// rows take the short viewport first, so scroll down to the Task
+				// type row instead of assuming it is initially visible.
+				await focusDetail(setup);
+				const detail = await scrollDetailUntil(setup, "the handoff task type line", (candidate) =>
+					detailPaneText(candidate, 60).includes("Handoff task type: implement"),
+				);
+				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
 			},
 			60,
 			12,
@@ -838,9 +855,12 @@ describe("the control plane", () => {
 				expect(listHalfOf(rows[markerRowOf(setup.captureCharFrame())])).toBe(
 					"│ ❯ [open]       中文 webhoo │",
 				);
-				// The detail keeps the full value the row dropped.
-				expect(detailPaneText(setup.captureCharFrame(), 60)).toContain(
-					"Suggested task type: consultation",
+				// The detail keeps the full value the row dropped. Its profile
+				// rows take the short viewport first, so scroll down to the Task
+				// type row instead of assuming it is initially visible.
+				await focusDetail(setup);
+				await scrollDetailUntil(setup, "the suggested task type line", (candidate) =>
+					detailPaneText(candidate, 60).includes("Suggested task type: consultation"),
 				);
 			},
 			60,

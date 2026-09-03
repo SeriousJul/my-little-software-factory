@@ -33,6 +33,7 @@ _Avoid_: help popup, keybinding popin, shortcut window
 
 **Decision modal**:
 The near-fullscreen Interaction mode above an awaiting ticket: the turn log, and the rows the operator confirms: close, goto, and the workflow handoffs.
+`e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
 **Live view**:
@@ -51,6 +52,7 @@ _Avoid_: context, screen
 **Text field**:
 A single-line control in which the operator enters or edits a free-text value.
 In the override panel, the Model is a Text field when the Agent has no Model list.
+The Context window is a Text field that takes digits only, because its value reaches the Agent as one argument.
 _Avoid_: input, free-text row
 
 **Ticket**:
@@ -107,7 +109,7 @@ The control plane is agent-agnostic and assumes no specific agent runtime (pi, c
 _Avoid_: bot, worker
 
 **Agent type**:
-The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level) map to the agent's own parameters, its Model list, and how to read the settled turn's log.
+The declarative description of a class of agents: its name, how to start it, how its settings (model, thinking level, context window) map to the agent's own parameters, its Model list, which thinking levels it offers, and how to read the settled turn's log.
 An Agent is a running instance of an Agent type.
 _Avoid_: agent definition, plugin, driver
 
@@ -254,8 +256,9 @@ A one-word category of work (for example "implement", "fix", "review", or "rewor
 _Avoid_: prompt, template
 
 **Task profile**:
-The agent type, model, and thinking level a task type starts its handoffs with.
+The agent type, model, thinking level, and context window a task type starts its handoffs with.
 It is a start value: the override panel prefills it, a workflow edge's agent pin can replace its agent for one handoff, and an operator override beats all of it.
+A setting the Agent a Handoff lands on cannot take fails that Handoff with a readable reason, so a reroute that leaves a setting behind is seen, not absorbed.
 _Avoid_: run settings, task settings
 
 **Suggested task type**:
@@ -287,9 +290,16 @@ The control plane builds it from the agent's session record when herdr reports o
 _Avoid_: agent log, transcript, terminal capture
 
 **Completion trace**:
-The durable record of a settled agent turn: task type, agent, model, thinking level, completion time, turn log, last message, and decision.
+The durable record of a settled agent turn: task type, agent, model, thinking level, context window, completion time, turn log, last message, and decision.
 A cycle holds one trace per settled turn.
 _Avoid_: console dump, session file
+
+**Context window**:
+A whole count of context tokens an Agent starts a Handoff or a Consultation with.
+It is a setting of a Task profile, a Consultation type, and an Override, and each Agent type maps it with its own command-line template.
+There is no configured default: a value left out stays with the Agent, because one count cannot fit every model.
+A count the resolved Agent maps no template for, or a value that is no count at all, fails the Handoff with a readable reason instead of starting the Agent without it.
+_Avoid_: token limit, budget, autocompact
 
 **Environment**:
 The place where an Agent executes a Ticket or leads a Consultation.
@@ -314,9 +324,10 @@ _Avoid_: force delete, cleanup retry
 
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
-It applies to that Handoff only and never becomes a new default.
-A Workflow Handoff does not inherit it. A Restart repeats the interrupted Handoff's choices as recovery.
-The settings are: Agent type, Environment kind, Task type, Model, and Thinking level.
+The panel edits an open Ticket's next Handoff and a Workflow Handoff alike: `e` on a decision row opens the panel on the choice its edge resolved.
+It applies to that Handoff only and never becomes a new default; a later Workflow Handoff resolves its own profile instead of inheriting one.
+A Restart repeats the interrupted Handoff's choices as recovery.
+The settings are: Agent type, Environment kind, Task type, Model, Thinking level, and Context window.
 _Avoid_: custom setting, tweak
 
 **Config file**:

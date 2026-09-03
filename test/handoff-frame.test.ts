@@ -279,6 +279,68 @@ async function pressEnter(setup: Setup, what: string, text: string): Promise<str
 	return awaitFrame(setup, (frame) => frame.includes(text), what);
 }
 
+/**
+ * The panel row whose text holds `label`, or an empty string when no row does.
+ *
+ * The panel is the only thing on screen that carries these labels, so a line
+ * search is enough to read one row.
+ */
+const rowWith = (frame: string, label: string): string =>
+	rowsOf(frame).find((r) => r.includes(label)) ?? "";
+
+/** Press one arrow, and wait for the named panel row to hold the marker. */
+async function selectRow(setup: Setup, direction: "up" | "down", label: string): Promise<string> {
+	return pressArrow(setup, direction, `the ${label} row to be selected`, (f) =>
+		f.includes(`\u276f ${label}`.replace("\u276f", "❯")),
+	);
+}
+
+/**
+ * Walk the panel's arrows down to the Context row, and return a settled frame.
+ *
+ * A free-text row owns j and k, so the walk uses the arrows, which always move.
+ */
+async function selectContextRow(setup: Setup): Promise<string> {
+	await selectRow(setup, "down", "Environment");
+	await selectRow(setup, "down", "Task type");
+	await selectRow(setup, "down", "Model");
+	await selectRow(setup, "down", "Thinking");
+	await selectRow(setup, "down", "Context");
+	return settle(setup);
+}
+
+/** The digits the Context row holds, or an empty string when it holds none. */
+const contextDigitsOf = (frame: string): string =>
+	rowWith(frame, "Context").match(/Context\s+([0-9]+)/u)?.[1] ?? "";
+
+/** Type into the row the panel holds focused. */
+async function typeText(setup: Setup, text: string): Promise<void> {
+	await setup.mockInput.typeText(text);
+}
+
+/** A profile that names a context window, on an agent that maps one. */
+const contextProfileConfig: FactoryConfig = {
+	...DEFAULT_CONFIG,
+	agents: {
+		...DEFAULT_CONFIG.agents,
+		codex: {
+			...DEFAULT_CONFIG.agents.codex,
+			model: "-m {value}",
+			thinking: "-r {value}",
+			contextWindow: "-c model_context_window={value}",
+		},
+	},
+	taskTypes: {
+		...DEFAULT_CONFIG.taskTypes,
+		implement: {
+			...DEFAULT_CONFIG.taskTypes.implement,
+			agent: "codex",
+			model: "gpt-5.6-codex",
+			contextWindow: "272000",
+		},
+	},
+};
+
 async function pressEnterToHandoff(setup: Setup): Promise<string> {
 	setup.mockInput.pressEnter();
 	return awaitFrame(
@@ -785,6 +847,385 @@ describe("the override panel", () => {
 		);
 	});
 
+	test("a task profile prefills the detail and panel, then starts its agent with all settings", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			defaultModel: "global-model",
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				codex: { ...DEFAULT_CONFIG.agents.codex, contextWindow: "-c {value}" },
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "task-model",
+					thinking: "high",
+					contextWindow: "272000",
+				},
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const before = detailPaneText(setup.captureCharFrame());
+				expect(before).toContain("Agent: codex");
+				expect(before).toContain("Model: task-model");
+				expect(before).toContain("Thinking: high");
+				// The fourth profile setting reads the same way, in the same
+				// place: the detail shows what Enter will start with.
+				expect(before).toContain("Context: 272000");
+
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Agent codex");
+				expect(frameText(opened)).toContain("Model task-model");
+				expect(frameText(opened)).toContain("Thinking high");
+				expect(frameText(opened)).toContain("Context 272000");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"codex",
+					"--pane",
+					"pane-1",
+					"--",
+					"--model",
+					"task-model",
+					"-c",
+					"model_reasoning_effort=high",
+					"-c",
+					"272000",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("an open ticket of a second work cycle shows what Enter starts, not its last cycle", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// The cycle that closed ran on an agent that maps every setting; the
+		// profile the ticket now resolves takes another agent and names none of
+		// them, so the record and the next handoff disagree on all four.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				codex: {
+					...DEFAULT_CONFIG.agents.codex,
+					model: "-m {value}",
+					thinking: "-r {value}",
+					contextWindow: "-c model_context_window={value}",
+				},
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "pi" },
+			},
+		};
+		// A close ends a work cycle and returns the ticket to open, but its
+		// last Handoff's record stays. That record is history; the profile is
+		// what the next Enter starts with.
+		const secondCycle: Ticket = {
+			...SAMPLE_TICKETS[0],
+			handoff: {
+				agentType: "codex",
+				environment: "worktree",
+				taskType: "implement",
+				model: "old-cycle-model",
+				thinking: "high",
+				contextWindow: "65536",
+				attemptId: "attempt-old-cycle",
+				paneId: "pane-old-cycle",
+				tabId: "tab-old-cycle",
+				workspaceId: "ws-old-cycle",
+			},
+			handoffCount: 1,
+		};
+		const props = { config, runner, home, configPath, initialTickets: [secondCycle] };
+
+		await withApp(
+			async (setup) => {
+				const detail = detailPaneText(setup.captureCharFrame());
+				// Each row reads the choice Enter starts: the profiled agent with
+				// every setting left to it, in the environment the choice resolves
+				// to rather than the one the closed cycle used.
+				expect(detail).toContain("Agent: pi");
+				expect(detail).toContain("Model: left to agent");
+				expect(detail).toContain("Thinking: left to agent");
+				expect(detail).toContain("Context: left to agent");
+				expect(detail).toContain("Environment: live-worktree");
+				// The closed cycle's record shows in none of them.
+				expect(detail).not.toContain("old-cycle-model");
+				expect(detail).not.toContain("Thinking: high");
+				expect(detail).not.toContain("65536");
+				expect(detail).not.toContain("Environment: worktree ");
+
+				await pressEnterToHandoff(setup);
+				// The handoff that ran is the one the rows showed: the profiled
+				// agent, and no setting argument at all.
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a model rejected by the profiled agent fails and leaves the ticket open", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		runner.set(
+			"herdr",
+			[
+				"agent",
+				"start",
+				firstAgent,
+				"--kind",
+				"codex",
+				"--pane",
+				"pane-1",
+				"--",
+				"--model",
+				"rejected-model",
+			],
+			{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
+		);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "rejected-model",
+				},
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressEnter();
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes("codex rejected model rejected-model"),
+					"the model rejection",
+				);
+				expect(selectedRow(frame)).toContain("[open]");
+				expect(detailPaneText(frame)).toContain("Agent: codex");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("clearing a profiled Model row leaves it to the agent", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "task-model" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "task-model") setup.mockInput.pressKey("DELETE");
+				const cleared = await awaitFrame(
+					setup,
+					(frame) => frameText(frame).includes("Model (empty)"),
+					"the cleared Model value",
+				);
+				expect(frameText(cleared)).toContain("Model (empty)");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).not.toContain("--model");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("clearing a profiled Thinking list row leaves it to the agent", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, thinking: "low" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
+				await pressArrow(setup, "down", "the Thinking row", (f) => f.includes("❯ Thinking"));
+				setup.mockInput.pressKey("DELETE");
+				const cleared = await awaitFrame(
+					setup,
+					(frame) => frameText(frame).includes("Thinking (unset)"),
+					"the cleared Thinking value",
+				);
+				expect(frameText(cleared)).toContain("Thinking (unset)");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).not.toContain("--thinking");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a model no agent argument can carry fails the handoff and keeps the ticket open", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// The profile sends its handoffs to an agent that maps no setting, and
+		// the default model still resolves onto it.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				setup.mockInput.pressEnter();
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes("defines no model setting"),
+					"the mismatch reason",
+				);
+				expect(selectedRow(frame)).toContain("[open]");
+				// The handoff failed before its first external step: no workspace,
+				// no agent, so the ticket is ready for a retry once the config is
+				// fixed.
+				expect(runner.calls).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the panel keeps an unmappable model in reach, and clearing it starts the handoff", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				// The row is not hidden: the value needs a row to be cleared in.
+				expect(frameText(opened)).toContain("Model factory-model");
+				expect(spanColors(setup, "factory-model")).toEqual([rgb(COLORS.statusWarning)]);
+				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
+				const selected = await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
+				// The row's input takes focus on its own render pass: let it land
+				// before the edit keys go in.
+				await settle(setup);
+				// The selected row's guide names the fix instead of the cycle keys.
+				expect(frameText(selected)).toContain("no such Agent setting: Backspace clears");
+				expect(frameText(selected)).not.toContain("move ↑↓ tab/⇧tab edit");
+
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "factory-model") setup.mockInput.pressKey("DELETE");
+				// With its value gone the row has nothing left to clear, so it
+				// drops back behind the agent's capability.
+				const cleared = await awaitFrame(
+					setup,
+					(frame) => !frameText(frame).includes("Model"),
+					"the model row to drop once its value is cleared",
+				);
+				expect(frameText(cleared)).not.toContain("factory-model");
+				await pressEnterToHandoff(setup);
+
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"cursor",
+					"--pane",
+					"pane-1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
 	test("a task type thinking default shows in the panel and rides on the start", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -1069,6 +1510,442 @@ describe("the override panel", () => {
 				expect(closed).not.toContain("Override");
 				// No command ever ran.
 				expect(runner.calls).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("switching the task type re-derives an untouched Context row", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// A second profile on the same agent, naming another count: the row
+		// follows the task type instead of hiding behind an agent.
+		const config: FactoryConfig = {
+			...contextProfileConfig,
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "gpt-5.6-codex",
+					contextWindow: "272000",
+				},
+				fix: {
+					...DEFAULT_CONFIG.taskTypes.fix,
+					agent: "codex",
+					model: "gpt-5.6-codex",
+					contextWindow: "65536",
+				},
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Context 272000");
+				// Cycle the Task type row: the untouched Context row takes the
+				// new profile's count, so the panel keeps showing what the
+				// handoff will run on.
+				await selectRow(setup, "down", "Environment");
+				await selectRow(setup, "down", "Task type");
+				const next = await pressArrow(
+					setup,
+					"right",
+					"the task type to change",
+					(f) => !frameText(f).includes("Task type implement"),
+				);
+				expect(frameText(next)).toContain("Context 65536");
+
+				// A count the operator typed is a one-shot override: it survives
+				// the switch back to the profile that names another one.
+				await selectRow(setup, "down", "Model");
+				await selectRow(setup, "down", "Thinking");
+				await selectRow(setup, "down", "Context");
+				await settle(setup);
+				setup.mockInput.pressKey("END");
+				await typeText(setup, "8");
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Context 655368"),
+					"the count the operator typed",
+				);
+				await selectRow(setup, "up", "Thinking");
+				await selectRow(setup, "up", "Model");
+				await selectRow(setup, "up", "Task type");
+				const back = await pressArrow(setup, "left", "the task type to come back", (f) =>
+					frameText(f).includes("Task type implement"),
+				);
+				expect(frameText(back)).toContain("Context 655368");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the Context row carries the profile's count and takes digits only", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: contextProfileConfig, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				// The profile names the room and its agent maps it, so the row is
+				// there and holds the profile's count from the first frame.
+				expect(frameText(opened)).toContain("Context 272000");
+
+				// A free-text row owns j and k, so the walk to the last row uses
+				// the arrows, which always move.
+				const selected = await selectContextRow(setup);
+				// The selected row's guide names the characters the row takes.
+				expect(frameText(selected)).toContain("0-9");
+
+				// A count is whole digits: a letter typed at the end of the row
+				// never reaches the value the agent starts with, and the digits
+				// beside it do.
+				setup.mockInput.pressKey("END");
+				await typeText(setup, "5x");
+				const typed = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("2720005"),
+					"the count to take the digit and drop the letter",
+				);
+				expect(rowWith(typed, "Context")).toContain("2720005");
+				expect(typed).not.toContain("5x");
+
+				// A refused character also has to leave the caret where the
+				// operator left it: the row is edited from its front here, so a
+				// caret that jumped to the end would land every later keystroke
+				// after the digits instead of between them.
+				setup.mockInput.pressKey("HOME");
+				for (const key of ["1", "2", " ", "3"]) {
+					setup.mockInput.pressKey(key);
+				}
+				const inserted = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("1232720005"),
+					"the typed digits to build the count at the caret",
+				);
+				expect(rowWith(inserted, "Context")).toContain("1232720005");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"codex",
+					"--pane",
+					"pane-1",
+					"--",
+					"-m",
+					"gpt-5.6-codex",
+					"-c",
+					"model_context_window=1232720005",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("the Context row folds a typed count to one spelling, the way the config does", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: contextProfileConfig, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await selectContextRow(setup);
+				// The profile's own count goes first, so the digits below are the
+				// only ones the row can hold: a frame that still carried them could
+				// never pass this test by accident.
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "272000") setup.mockInput.pressKey("DELETE");
+				await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("(empty)"),
+					"the Context row to empty",
+				);
+				// A count is its value, not its spelling: the row folds the leading
+				// zeros the way the config parser folds `007`, so the row shows the
+				// one spelling the agent gets.
+				await typeText(setup, "007");
+				const folded = await awaitFrame(
+					setup,
+					(f) => contextDigitsOf(f) === "7",
+					"the row to hold one spelling of the count",
+				);
+				expect(frameText(folded)).toContain("Context 7");
+
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toContain("model_context_window=7");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a Context row that holds no count says so, and the handoff refuses it", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const props = { config: contextProfileConfig, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await selectContextRow(setup);
+				// The caret sits at the row's end, where the last key landed, so the
+				// deletes have to start at its other end. The empty row below is
+				// what proves HOME moved the caret there.
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "272000") setup.mockInput.pressKey("DELETE");
+				await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Context").includes("(empty)"),
+					"the Context row to empty",
+				);
+
+				// Digits alone are not yet a count: zero asks an agent for no
+				// context at all, so the row wears the warning color and its guide
+				// says what the row takes beyond digits, the same rule a config file
+				// is held to.
+				await typeText(setup, "0");
+				const zero = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("not a token count"),
+					"the row to refuse the zero",
+				);
+				expect(frameText(zero)).toContain("not a token count: type digits above 0");
+				expect(frameText(zero)).toContain("Context 0");
+
+				setup.mockInput.pressEnter();
+				const failed = await awaitFrame(
+					setup,
+					(f) => f.includes("is not a positive whole number of tokens"),
+					"the count reason",
+				);
+				expect(selectedRow(failed)).toContain("[open]");
+				expect(runner.calls).toHaveLength(0);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a Context row survives an Agent that cannot map it until it is cleared", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// pi maps no context window, so the count the profile names has no argv
+		// to ride on: the handoff would fail on it.
+		const config: FactoryConfig = {
+			...contextProfileConfig,
+			taskTypes: {
+				...contextProfileConfig.taskTypes,
+				implement: {
+					...contextProfileConfig.taskTypes.implement,
+					agent: "pi",
+					model: "",
+				},
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				const opened = await openPanel(setup);
+				// The row is there because the value needs a row to be cleared in,
+				// and it warns because the chosen agent cannot carry the count.
+				expect(frameText(opened)).toContain("Context 272000");
+				expect(spanColors(setup, "272000")).toEqual([rgb(COLORS.statusWarning)]);
+
+				await selectRow(setup, "down", "Environment");
+				await selectRow(setup, "down", "Task type");
+				await selectRow(setup, "down", "Model");
+				await selectRow(setup, "down", "Thinking");
+				const selected = await selectRow(setup, "down", "Context");
+				await settle(setup);
+				expect(frameText(selected)).toContain("no such Agent setting: Backspace clears");
+
+				// Up onto the Agent row, then right onto the agent that maps the
+				// count: the draft keeps its value, and the row goes plain.
+				await selectRow(setup, "up", "Thinking");
+				await selectRow(setup, "up", "Model");
+				await selectRow(setup, "up", "Task type");
+				await selectRow(setup, "up", "Environment");
+				await selectRow(setup, "up", "Agent");
+				await pressArrow(setup, "right", "the agent to map the count", (f) =>
+					rowWith(f, "Agent").includes("codex"),
+				);
+				await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Agent").includes("codex") && frameText(f).includes("Context 272000"),
+					"the Context row to return with an agent that maps it",
+				);
+				expect(spanColors(setup, "272000")).not.toEqual([rgb(COLORS.statusWarning)]);
+
+				// Back onto the agent that cannot map it, then clear the row: the
+				// handoff starts and leaves the room to the agent.
+				await pressArrow(setup, "left", "the agent to map nothing", (f) =>
+					rowWith(f, "Agent").includes("pi"),
+				);
+				await selectRow(setup, "down", "Environment");
+				await selectRow(setup, "down", "Task type");
+				await selectRow(setup, "down", "Model");
+				await selectRow(setup, "down", "Thinking");
+				await selectRow(setup, "down", "Context");
+				await settle(setup);
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Context 272000"),
+					"the Context row to come back",
+				);
+				expect(spanColors(setup, "272000")).toEqual([rgb(COLORS.statusWarning)]);
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "272000") setup.mockInput.pressKey("DELETE");
+				const cleared = await awaitFrame(
+					setup,
+					(f) => !frameText(f).includes("Context"),
+					"the Context row to drop once it is cleared",
+				);
+				expect(frameText(cleared)).not.toContain("272000");
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"pi",
+					"--pane",
+					"pane-1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+
+	test("a Thinking level the chosen Agent does not offer warns on its row, and fails the handoff", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		// "minimal" is legal for pi, the profile's own agent, so the panel opens
+		// on it. zed maps a thinking template but offers only two other levels:
+		// cycling the Agent row onto it leaves a value with an argv to ride on
+		// and no Agent that takes it.
+		const config: FactoryConfig = {
+			...DEFAULT_CONFIG,
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "low"] },
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "pi", thinking: "minimal" },
+			},
+		};
+		const props = { config, runner, home, configPath };
+
+		await withApp(
+			async (setup) => {
+				// zed is the last agent the Agent row offers, and the Thinking row
+				// sits under the three rows every panel carries.
+				const cycleToZed = async (): Promise<void> => {
+					for (const target of ["codex", "claude", "zed"]) {
+						await pressArrow(setup, "right", `the agent to move to ${target}`, (f) =>
+							rowWith(f, "Agent").includes(target),
+						);
+					}
+				};
+				const selectThinking = async (): Promise<string> => {
+					await selectRow(setup, "down", "Environment");
+					await selectRow(setup, "down", "Task type");
+					return await selectRow(setup, "down", "Thinking");
+				};
+
+				const opened = await openPanel(setup);
+				expect(frameText(opened)).toContain("Thinking minimal");
+				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.text)]);
+
+				await cycleToZed();
+				// The row keeps the level and shows it in the warning color. It
+				// never reads `(unset)` for a value the handoff will still send.
+				const warned = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Thinking").includes("minimal"),
+					"the Thinking row to keep the level",
+				);
+				expect(frameText(warned)).not.toContain("Thinking (unset)");
+				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.statusWarning)]);
+
+				// Its guide names the fix, not the cycle keys.
+				const selected = await selectThinking();
+				await settle(setup);
+				expect(frameText(selected)).toContain("no such level: cycle ←→/hl or Backspace");
+
+				// Confirming a value the Agent does not offer fails the handoff
+				// with a readable reason: what the row showed is what the agent
+				// would have been started with, and nothing starts at all.
+				setup.mockInput.pressEnter();
+				const failed = await awaitFrame(
+					setup,
+					(f) => f.includes('offers no thinking level "minimal"'),
+					"the mismatch reason",
+				);
+				expect(selectedRow(failed)).toContain("[open]");
+				expect(runner.calls).toHaveLength(0);
+
+				// The row is reachable, so the value is not stranded: clearing it
+				// hands the level back to the agent, and the handoff starts with no
+				// thinking argument at all.
+				const reopened = await openPanel(setup);
+				expect(frameText(reopened)).toContain("Thinking minimal");
+				await cycleToZed();
+				await selectThinking();
+				await settle(setup);
+				setup.mockInput.pressKey("BACKSPACE");
+				const cleared = await awaitFrame(
+					setup,
+					(f) => rowWith(f, "Thinking").includes("(unset)"),
+					"the Thinking row to hand the level to the agent",
+				);
+				expect(frameText(cleared)).not.toContain("Thinking minimal");
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find(
+					(call) => call.args[0] === "agent" && call.args[1] === "start",
+				);
+				expect(start?.args).toEqual([
+					"agent",
+					"start",
+					firstAgent,
+					"--kind",
+					"zed",
+					"--pane",
+					"pane-1",
+				]);
 			},
 			WIDTH,
 			HEIGHT,
@@ -2003,8 +2880,9 @@ describe("the override panel", () => {
 				await setup.mockInput.typeText("draft");
 				await awaitFrame(setup, (f) => frameText(f).includes("Model draft"), "the draft text");
 
-				// The cursor agent hides Model. The choice remains the draft, not
-				// the transient set of rows currently visible.
+				// The cursor agent maps no model, but the draft keeps its row in
+				// the warning color: a value with no row is a value the operator
+				// cannot clear, and the handoff would fail on it out of sight.
 				await pressArrow(setup, "up", "the task type row", (f) => f.includes("❯ Task type"));
 				await pressArrow(setup, "up", "the environment row", (f) => f.includes("❯ Environment"));
 				await pressArrow(setup, "up", "the agent row", (f) => f.includes("❯ Agent"));
@@ -2014,10 +2892,11 @@ describe("the override panel", () => {
 				await pressArrow(setup, "right", "the agent to become claude", (f) =>
 					frameText(f).includes("Agent claude"),
 				);
-				await pressArrow(setup, "right", "the agent to become cursor", (f) =>
+				const unmapped = await pressArrow(setup, "right", "the agent to become cursor", (f) =>
 					frameText(f).includes("Agent cursor"),
 				);
-				expect(frameText(setup.captureCharFrame())).not.toContain("Model");
+				expect(frameText(unmapped)).toContain("Model draft");
+				expect(spanColors(setup, "draft")).toEqual([rgb(COLORS.statusWarning)]);
 
 				await pressArrow(setup, "right", "the agent to return to pi", (f) =>
 					frameText(f).includes("Agent pi"),

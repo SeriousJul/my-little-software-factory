@@ -28,6 +28,7 @@ const choice = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /** A plain-text turn log for a settle fixture, one entry per line. */
@@ -300,6 +301,38 @@ describe("factory SQLite state", () => {
 				agentType: "pi",
 				message: "The work is done. Tests pass.",
 				decision: null,
+			}),
+		);
+		state.close();
+	});
+
+	test("records the model, thinking level, and context window of the settled handoff", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(
+			ticket.identity,
+			{ ...choice, model: "gpt-5.6", thinking: "high", contextWindow: "272000" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+
+		expect(state.lastCompletion(ticket.identity)).toEqual(
+			expect.objectContaining({
+				model: "gpt-5.6",
+				thinking: "high",
+				contextWindow: "272000",
 			}),
 		);
 		state.close();
@@ -620,6 +653,12 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 		`);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
+		// A v2 trace carries no model, thinking, or context window: the v7 and
+		// v8 columns go with the v6 ones. The consultations table does not
+		// exist at this version.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
 		// The leftover columns belong to v6: a v2 record never heard of them.
 		db.exec(
 			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
@@ -644,6 +683,113 @@ describe("factory SQLite state", () => {
 				decision: null,
 			}),
 		);
+		reopened.close();
+	});
+
+	test("a v5 database migrates to v8: the handoff gains the leftover columns, the trace the settings", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.close();
+
+		// Downgrade the record to the v5 shape: drop the columns the v6, v7,
+		// and v8 migrations add, and rewrite the stored choice without the key
+		// the v8 step gives it. A v5 handoff row knows nothing of a leftover or
+		// a herdr name, and a v5 trace carries no settings.
+		const db = new DatabaseSync(path);
+		db.exec(
+			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
+				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
+		);
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
+		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
+		db.prepare("UPDATE schema_version SET version = 5").run();
+		db.prepare(
+			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
+		).run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The trace survives the two settings steps with their empty defaults:
+		// no v5 handoff named a model, a level, or a count.
+		expect(reopened.lastCompletion(ticket.identity)).toEqual(
+			expect.objectContaining({
+				message: "Done.",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			}),
+		);
+		// The handoff carries no leftover fact, and its stored choice reads
+		// back without the key a v5 row never held.
+		expect(reopened.leftoverEnvironment(ticket.identity)).toBe(null);
+		const [restored] = reopened.visibleTickets([], "implement");
+		expect(restored.handoff).toEqual(
+			expect.objectContaining({ model: "", thinking: "", contextWindow: "" }),
+		);
+		reopened.close();
+	});
+
+	test("a v7 database migrates to v8: the trace and a stored choice gain no context window", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.close();
+
+		// Downgrade the record to the v7 shape: drop the column the v8
+		// migration adds, and rewrite a stored choice without the key, which
+		// is exactly what a v7 handoff row holds.
+		const db = new DatabaseSync(path);
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
+		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
+		db.prepare("UPDATE schema_version SET version = 7").run();
+		db.prepare(
+			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
+		).run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The trace survives, and its context window reads as the empty one
+		// the migration's default gives it: no v7 handoff named a count.
+		expect(reopened.lastCompletion(ticket.identity)).toEqual(
+			expect.objectContaining({ message: "Done.", contextWindow: "" }),
+		);
+		// A choice written before the key existed reads back with it empty, so
+		// a Restart of a v7 handoff never carries a count it never chose.
+		const [restored] = reopened.visibleTickets([], "implement");
+		expect(restored.handoff).toEqual(expect.objectContaining({ contextWindow: "" }));
 		reopened.close();
 	});
 

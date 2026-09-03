@@ -6,8 +6,10 @@ It watches tickets and hands them off to agents.
 
 It fetches configured GitHub issue and pull request sources, stores factory
 state in SQLite, and refreshes each source without resetting a ticket's work
-cycle. Enter hands an actionable open ticket off through herdr. The `e` key
-opens the override panel for a one-shot change of the handoff settings.
+cycle. A Task type carries a Task profile: the agent type, Model, Thinking
+level, and context window its handoffs start on. Enter hands an actionable
+open ticket off through herdr with that profile's resolved settings. The `e`
+key opens the override panel for a one-shot change to them.
 
 The control plane polls herdr for the agents it started. It marks a blocked
 agent and a missing agent on the ticket, reclaims an agent that outlived its
@@ -73,7 +75,7 @@ as `npm run mutate -- --dryRunOnly`.
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
 | `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
-| `e`              | Open the override panel for the selected open ticket                    |
+| `e`              | Open the override panel for the selected open ticket, or for the selected Handoff row of the decision modal |
 | `w`              | Clear a leftover herdr environment of the selected ticket               |
 | `a`              | Toggle auto-handoff mode for this session                              |
 | `r`              | Refresh ticket sources, or retry a failed Consultation                 |
@@ -90,7 +92,10 @@ as `npm run mutate -- --dryRunOnly`.
 
 The Consultation view keeps an independent list and Agent view. In the
 launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
-launches, `Shift+Enter` inserts a newline, and `Esc` cancels. `Enter` on an
+launches, `Shift+Enter` inserts a newline, and `Esc` cancels. A Consultation
+starts on the agent, environment, model, thinking level, and context window
+its type names, each one passed through the agent's own template, so the
+type must name an agent that maps every setting it sets. `Enter` on an
 awaiting response opens the response editor. The editor stores its draft in
 SQLite, `Enter` submits it, `Shift+Enter` inserts a newline, and `Esc` leaves
 the draft in place. `End` follows the latest Agent output after scrolling.
@@ -158,17 +163,43 @@ takes typing, and move or cycle everywhere else; `Up`, `Down`, `Tab`, and
 the selected row and shows its available controls.
 A row shows `(empty)` for an unset text value, `(unset)` for a list value the
 operator has not chosen, and `(loading...)` while the Model list is being
-fetched. A value that is set but not available for the current agent shows in
-the warning color, so a handoff that would fail is visible before it is
-confirmed; a waiting Model row is not judged, because its list has not
-arrived to judge it against. Switching the task type row re-derives the
-agent, model, and thinking rows from the new task type's profile while the
-operator has not
-touched each row, so the panel keeps showing what the handoff will run on; a
-touched row keeps its value. Switching the agent never re-derives the model:
-every setting resolves on its own chain. Clearing a Model or Thinking row
-leaves that setting to the agent. The container environment is a future kind
-and is not offered by the panel.
+fetched.
+
+The Agent, Model, Thinking, and Context rows start on the selected Task
+type's resolved Task profile: the profile's own value, else `default-model` for
+the Model row, else empty, which leaves that setting to the agent. The panel
+always shows what the handoff will run on. Switching the Task type row
+re-derives each setting the operator has not touched, so an untouched row
+follows the new Task type while a changed or cleared row stays a one-shot
+override. Switching the agent never re-derives the model: every setting
+resolves on its own chain. Clearing a Model or Thinking list row with
+`Backspace` or `Delete`, or clearing a text row, hands that setting back to
+the agent.
+
+The Context row holds a count of tokens, so it takes digits and nothing
+else: a comma, a space, or a letter typed or pasted into it never reaches
+the value, and the caret stays where the operator left it. A count also keeps
+one spelling: the row folds a leading zero the way a config file's count is
+folded, so `007` and `7` reach the agent as `7`. Digits alone are not yet a
+count: a row that holds none, `0` for example, warns and fails its handoff,
+the way a config file that sets one fails at startup.
+
+A setting the chosen agent type does not map has no row, so an agent without
+a `model` template shows no Model row. One exception keeps a value in reach:
+when a row carries a value the selected agent cannot take, its row stays on
+screen in the warning color, and the guide under it says so and names the way
+out: `Backspace` clears a row, and the arrows cycle a list row onto a level
+its agent offers. A value cannot be taken when the agent maps no setting for
+it, when it lists the thinking levels it offers and the row holds another one,
+or when the Context row holds digits no count makes, `0` among them. A model
+the agent's own CLI does not report shows the same warning the fit check will
+fail on (ADR 0010); a waiting Model row is not judged, because its list has
+not arrived to judge it against. The panel never shows something other than
+what the handoff sends, and the row is the only place the operator can clear
+the value, so it stays: the handoff fails on it until they clear it or choose
+an agent that takes it.
+
+The container environment is a future kind and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
 column shrinks first, then the label column, then the marker. The guide drops
@@ -206,6 +237,7 @@ The modal offers the choices the state allows.
 | `PgUp` / `PgDn` | Scroll the turn log by a page                                    |
 | `Home` / `End` | Jump to the top or the bottom of the turn log                     |
 | `Enter`         | Choose the selected row                                            |
+| `e`             | Edit the selected Handoff row's settings before it starts          |
 | `Esc`           | Close the modal: nothing runs, the ticket stays awaiting           |
 
 The first row, "Close", ends the work cycle: the ticket returns to open
@@ -220,14 +252,24 @@ pending, and the next settle refreshes it with the agent's new last message.
 Then one "Handoff: `<task type>`" row per outgoing workflow edge the
 completed task type has, in config order: an edge naming several targets
 offers one row per target, and two edges to the same target keep both
-rows, so every edge stays reachable. The row's detail shows the edge's
-pinned agent type and environment when the edge defines them, so two
-rows that share a target differ. Choosing a row hands the ticket off again with that
-target task type, pinning the edge's agent type and environment when the
-edge defines them. The row's "handed-off" decision lands on the turn's
+rows, so every edge stays reachable. The row's detail shows the Agent the
+arriving handoff resolves to (the edge's pin, else the target Task profile's
+agent, else `default-agent`), and the edge's pinned environment when the edge
+defines one. Choosing a row hands the ticket off again with that target task
+type. `e` on such a row opens the override panel on the choice the edge
+resolved, so the operator can change the agent, environment, Model, or
+Thinking for this one handoff before it starts; the override outranks the
+edge pin, the Task profile, and the defaults. Moving that panel to another
+Task type re-derives the rows the operator never touched from the type's own
+profile, so the route's Agent pin goes with the target the edge named.
+`Esc` there closes the panel
+back to the decision: nothing is claimed and nothing runs. Enter on an
+awaiting ticket keeps the direct route, so a route the operator wants
+unchanged stays one press. The row's "handed-off" decision lands on the turn's
 trace only when the routed handoff settles with the agent started; a
 failed route leaves the trace pending, so Close and Goto keep working
-on the awaiting ticket.
+on the awaiting ticket. The automatic route decides the same way: its
+`auto-handed-off` record waits for the same start.
 
 ### Missing modal keys
 
@@ -284,10 +326,17 @@ every other ticket shows the task type its recorded handoff started with.
 A non-open ticket without a recorded handoff shows `[unknown]`, and only
 that badge wears a warning color; every configured task type uses one
 neutral style. The detail pane on the right shows the full detail of the
-selected ticket: repository, ticket state, assigned agent, source name,
-source kind, external key, source state, URL, labels, and source health. It
-carries one explicit task type line for every ticket: `Suggested task
-type:` for an open ticket, `Handoff task type:` for every other, with
+selected ticket: repository, ticket state, the Agent its handoff runs on with
+its Environment and that handoff's Model, Thinking level, and context window,
+source name, source kind, external key, source state, URL, labels, and source
+health. An open ticket shows the settings its suggested task type's Task
+profile resolves to, which is what Enter starts, including the Environment it
+starts in; a ticket inside a work cycle shows the settings its own handoff
+started with. A close returns a ticket to open and keeps that handoff's record
+as history, so the rows follow the ticket's state rather than whichever record
+survives. A setting left to the agent reads `left to agent` in the dim color.
+The detail carries one explicit task type line for every ticket: `Suggested
+task type:` for an open ticket, `Handoff task type:` for every other, with
 `Handoff task type: unknown` when the handoff data is absent. The detail
 also carries
 the ticket's handoff count against its per-ticket limit, counting the
@@ -358,29 +407,48 @@ remain, the reason the control plane knows, and since when. `w` clears it.
 
 ## Handoffs
 
-Enter on an open ticket starts a handoff on the settings its Task profile
+Enter on an open ticket starts a handoff with the settings its Task profile
 resolves. The override panel changes them for that one handoff only; it never
-becomes a new default. Each setting resolves on its own chain, and the closer
-a decision is to the handoff in front of the operator, the more weight it
-gets (ADR 0009):
-
-- Agent: operator override, workflow edge pin, task profile `agent`,
-  `default-agent`.
-- Model: operator override, task profile `model`, `default-model`, the agent's
-  own default.
-- Thinking: operator override, task profile `thinking`, the agent's own level.
-
-A workflow handoff resolves those chains for its target task type, so it
-starts fresh: it does not inherit the Model or Thinking of the handoff that
-just settled. A Restart repeats the interrupted handoff's Model and Thinking,
+becomes a new default. A workflow handoff resolves the target task type's own
+profile and does not inherit any value from the previous handoff; `e` on its
+decision row edits the resolved settings first. A Restart repeats the
+interrupted handoff's agent, Model, Thinking level, and context window,
 because that handoff is the decision being resumed.
 
-Before an agent start, the control plane checks that the settings fit the
-resolved agent (ADR 0010): its model must be one the agent's own CLI reports,
-and its level must be one the agent declares. An unfit setting fails the
-handoff with a readable reason before it changes anything outside the control
-plane, and the ticket stays open. A model list that cannot be fetched skips
-the model check, and the agent's own rejection stands.
+Each setting resolves on its own chain, closest to the handoff first (ADR
+0009):
+
+- Agent: the operator's override, then a workflow edge's pin, then the Task
+  profile's `agent`, then `default-agent`.
+- Model: the operator's override, then the Task profile's `model`, then
+  `default-model`, then the agent's own default.
+- Thinking: the operator's override, then the Task profile's `thinking`, then
+  the agent's own default.
+- Context window: the operator's override, then the Task profile's
+  `context-window`, then the agent's own default. It has no top-level
+  default, because one count cannot fit every model.
+- Environment: the operator's override, then a workflow edge's pin, then
+  `default-environment`.
+
+A resolved value never disappears on its way to the agent. A handoff fails
+with a readable reason before anything starts, and the ticket stays where it
+was, when the resolved agent maps no template for a Model, a Thinking level,
+or a context window the chain resolved; when the agent lists the levels it
+offers and the resolved level is not one of them; or when a context window is
+not a whole count of tokens. So a model written for one agent never runs a
+different one quietly, and an edge that reroutes a handoff onto a narrower
+agent is seen as a failure instead of absorbed as a default. One behavior is
+stricter than before: a setting the resolved agent maps no template for used
+to be dropped quietly, and the agent started on its own default. It now fails
+the handoff with a readable reason, so a value the config or the panel names
+is never lost.
+
+Before an agent start, the control plane also checks that the settings fit
+the resolved agent (ADR 0010): the model must be one the agent's own CLI
+reports. An unfit model fails the handoff with a readable reason before it
+changes anything outside the control plane, and the ticket stays open. A
+model list that cannot be fetched skips the model check, and the agent's own
+rejection stands.
 
 - The agent runs through herdr (ADR 0002): a live worktree handoff creates a
   herdr workspace at the checkout with a fresh tab, and a worktree handoff
@@ -390,13 +458,13 @@ the model check, and the agent's own rejection stands.
   A worktree handoff that fails before the agent starts removes the
   worktree and the branch, so a retry can run.
 - The agent starts under the title slug as its herdr name, with the settings
-  the agent type maps (model, thinking level), and receives the prompt
-  rendered from the task type's template with the ticket's repository,
-  title, and description. When the ticket's own leftover agent still holds
-  that name, the handoff starts under the same slug with its work cycle, as
-  `persist-source-facts-c2`, and says so on the Message line (ADR 0012). A
-  name held by any other agent fails the handoff, with the pane and workspace
-  that hold it in the reason.
+  the agent type maps (model, thinking level, context window), and receives
+  the prompt rendered from the task type's template with the ticket's
+  repository, title, and description. When the ticket's own leftover agent
+  still holds that name, the handoff starts under the same slug with its
+  work cycle, as `persist-source-facts-c2`, and says so on the Message line
+  (ADR 0012). A name held by any other agent fails the handoff, with the
+  pane and workspace that hold it in the reason.
 - The ticket moves to `handed-off` when the agent starts, even if the prompt
   later fails. The agent is running and can be prompted by hand. A failure
   before the start (a missing herdr, a missing checkout, a clone target the
@@ -483,8 +551,9 @@ reused workspace until someone ends it.
 
 When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The
-completion trace records the task type, the agent, the completion time, the
-last message, and the decision that ends the awaiting state. A workflow
+completion trace records the task type, the agent, the Model, Thinking level,
+and context window that handoff started with, the completion time, the last
+message, and the decision that ends the awaiting state. A workflow
 handoff that follows an awaiting ticket renders its prompt with the
 `{previous-message}` placeholder filled from that last message, so the next
 agent reads what the previous one left behind.
@@ -501,7 +570,12 @@ limits:
   outgoing workflow edge with exactly one target, and the parallel limit
   has room. At the per-ticket handoff limit the route degrades to close.
   Zero or multiple edges close the cycle. A full parallel limit leaves the
-  ticket awaiting until a slot frees.
+  ticket awaiting until a slot frees. The route's `auto-handed-off` decision
+  lands the same way the operator's does: only once the routed handoff has
+  started the agent. A route that cannot start - because its Agent takes one
+  of the settings its target Task profile names - records nothing on the
+  turn, says why on the status line, and leaves the turn undecided, so the
+  next poll can route it once the config or the panel fixes the pair.
 - With auto-handoff off, the same decisions apply to auto-close task
   types only. A task type that is not auto-close leaves its settled turn
   awaiting for the operator.
@@ -549,9 +623,15 @@ line for line. The values are illustrative.
 ```toml
 # --- Handoff defaults ----------------------------------------------
 
-# The agent type a handoff starts with when the workflow edge does not
-# pin one. It must name an [agents.*] table.
+# The agent type a handoff starts with when neither its Task profile names
+# one nor a workflow edge pins one. It must name an [agents.*] table.
 default-agent = "pi"
+
+# The model a handoff starts with when its Task profile names none. Free
+# text: it is passed through the resolved agent's model template, so a
+# handoff whose resolved agent maps no model fails with a readable reason.
+# It is checked at startup through every task profile that resolves it.
+default-model = "anthropic/claude-opus-4-6"
 
 # The environment a handoff starts with when the workflow edge does not
 # pin one. One of "live-worktree" or "worktree".
@@ -560,12 +640,6 @@ default-environment = "worktree"
 # The task type of a handoff when no task rule matches.
 # It must name a [task-types.*] table.
 default-task-type = "implement"
-
-# The model a handoff starts on when its Task profile names none. It is
-# passed through the resolved agent's model template, so it never reaches
-# an agent that maps no model setting at all. Omitted: the agent's own
-# default. It is checked at startup through every task profile that resolves it.
-default-model = "anthropic/claude-sonnet-4-5"
 
 # The SQLite state file. A relative path resolves against the directory
 # of this config file. Omitted: $XDG_STATE_HOME/factory/state.sqlite,
@@ -609,12 +683,15 @@ maximum-speed = 6
 
 # --- Agent types ---------------------------------------------------------
 
-# kind is the herdr agent kind. model and thinking are command-line
-# templates for the agent start and must contain {value}.
+# kind is the herdr agent kind. model, thinking, and context-window are
+# command-line templates for the agent start and must contain {value}.
 # thinking-values lists the levels this agent supports, in the order the
 # override panel offers them. An agent that maps thinking must declare a
 # non-empty subset of the standard set: off, minimal, low, medium, high,
 # xhigh, max. Thinking is never free text (ADR 0010).
+# A handoff or a Consultation can pass one of those settings only when the
+# agent defines its template; a setting the agent cannot take fails the
+# handoff with a readable reason (ADR 0009).
 # The control plane reads the model list of a kind that can report one from
 # the agent's own CLI; the config declares no models.
 [agents.pi]
@@ -628,24 +705,29 @@ kind = "codex"
 model = "--model {value}"
 thinking = "-c model_reasoning_effort={value}"
 thinking-values = ["minimal", "low", "medium", "high"]
+context-window = "-c model_context_window={value}"
 
 [agents.claude]
 kind = "claude"
 model = "--model {value}"
 thinking = "--effort {value}"
 thinking-values = ["low", "medium", "high", "xhigh", "max"]
+context-window = "--autocompact {value}"
 
 # --- Task types -----------------------------------------------------------
 
 # template is required. Placeholders: {repository}, {title},
 # {description}, {source-kind}, {external-key}, {source-url}, {labels},
 # {previous-message}. Any other brace pair is a startup error.
-# The three settings below are the Task profile: what a handoff of this
-# type starts on. agent names an [agents.*] table, model is a model that
-# agent offers, and thinking must be one of that agent's thinking-values.
-# An omitted agent leaves the agent to default-agent, an omitted model
-# leaves the model to default-model, and an omitted level leaves it to the
-# agent.
+# agent, model, thinking, and context-window are the Task profile: the
+# settings this task type's handoffs start on. agent must name an
+# [agents.*] table, model is free text the profile agent's model template
+# renders, thinking must be one of that agent's thinking-values, and
+# context-window must be a whole count of tokens in digits. An omitted agent
+# leaves the agent to default-agent, an omitted model leaves the model to
+# default-model, and an omitted level or window leaves it to the agent. The
+# override panel prefills all four, and each one applies to its own setting
+# only.
 # auto-close lets the control plane decide the completions of this type
 # without the operator even in manual mode.
 [task-types.implement]
@@ -678,6 +760,8 @@ Labels: {labels}
 
 Description:
 {description}'''
+agent = "codex"
+context-window = 272000
 auto-close = false
 
 [task-types.rework]
@@ -711,13 +795,15 @@ auto-close = true
 
 # agent names an [agents.*] table. environment is one of "live-worktree"
 # or "worktree". template contains {input} exactly once and no other
-# placeholder. model and thinking map through the agent's templates.
+# placeholder. model, thinking, and context-window map through the agent's
+# templates, so the agent must define each one this table sets.
 [consultation-types.grill-with-docs]
-agent = "pi"
+agent = "codex"
 environment = "live-worktree"
 template = "/skill:grill-with-docs {input}"
-model = "anthropic/claude-opus-4-6"
-thinking = "high"
+model = "gpt-5.6-codex"
+thinking = "medium"
+context-window = 272000
 
 # --- Workflows ----------------------------------------------------------------
 
@@ -801,10 +887,10 @@ source-kind = "github-issue"
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `default-agent` | yes | - | The agent type a handoff starts with when the workflow edge does not pin one. It must name an `[agents.*]` table. |
+| `default-agent` | yes | - | The agent type a handoff starts with when neither its Task profile names one nor a workflow edge pins one. It must name an `[agents.*]` table. |
+| `default-model` | no | empty | The model a handoff starts with when its Task profile names none, and the starting value of the Model row. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
-| `default-model` | no | - | The model a handoff starts on when its Task profile names none, and the starting value of the Model row. It is passed through the resolved agent's `model` template, so it never reaches an agent that maps no model setting. Omitted: each agent's own default. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
 | `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
 | `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it per session. |
 | `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
@@ -835,18 +921,20 @@ source-kind = "github-issue"
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `kind` | yes | - | The herdr agent kind, passed to the herdr agent start. |
-| `model` | no | - | The model command-line template. It must contain `{value}`. A Consultation may set a model only when the agent defines one. |
-| `thinking` | no | - | The thinking-level command-line template. It must contain `{value}`. |
-| `thinking-values` | yes, when the agent maps `thinking` | - | The non-empty subset of the standard levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) this agent supports, in the order the override panel offers them. A Consultation `thinking` and a task type `thinking` must be one of them. An agent that maps no `thinking` setting declares no levels. |
+| `model` | no | - | The model command-line template. It must contain `{value}`. A handoff or a Consultation may set a model only when the agent defines one. |
+| `thinking` | no | - | The thinking-level command-line template. It must contain `{value}`. A handoff or a Consultation may set a thinking level only when the agent defines one. |
+| `thinking-values` | yes, when the agent maps `thinking` | - | The non-empty subset of the standard levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) this agent supports, in the order the override panel offers them. A Consultation `thinking` and a task type `thinking` must be one of them, and a handoff an edge reroutes onto this agent with another level fails with a readable reason. An agent that maps no `thinking` setting declares no levels. |
+| `context-window` | no | - | The context-window command-line template. It must contain `{value}`. A handoff or a Consultation may set a context window only when the agent defines one. |
 
 **`[task-types.<name>]`** (one table per task type; names are one word).
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `template` | yes | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
-| `agent` | no | - | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. Omitted: `default-agent`. |
-| `model` | no | - | The Task profile's model: the model a handoff of this type starts on, passed through the profile agent's `model` template, so that agent must define one. Omitted: `default-model`, then the agent's own default. |
-| `thinking` | no | - | The Task profile's level: the level a handoff of this type starts on, and the starting value of the thinking row. It must be one of the profile agent's `thinking-values`. Omitted: the level is left to the agent. |
+| `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A workflow edge's pin beats it. |
+| `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
+| `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |
+| `context-window` | no | - | The Task profile's context window: a whole count of tokens, written as digits with no separators, that this task type's handoffs start their agent with. The profile agent must define a `context-window` template. There is no top-level default: a profile that names none leaves the room to the agent. |
 | `auto-close` | no | `false` | The control plane decides the completions of this type without the operator even in manual mode. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).
@@ -858,6 +946,7 @@ source-kind = "github-issue"
 | `template` | yes | - | The opening prompt. It contains `{input}` exactly once and no other placeholder. |
 | `model` | no | - | The model, passed through the agent's model template. The agent must define one. |
 | `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values`. |
+| `context-window` | no | - | The context window, a whole count of tokens in digits, passed through the agent's context-window template. The agent must define one. |
 
 **`[[workflows]]`** (one table per workflow edge).
 
@@ -931,7 +1020,8 @@ The shipped defaults define the three agent types `pi`, `codex`, and
 and two task rules for `ready-for-review` and `needs-work` pull requests.
 They have no sources and no Consultation types. `config/development.toml`
 in this repository configures the live development path through `--config`;
-it carries the `grill-with-docs` Consultation type.
+it carries the `grill-with-docs` Consultation type and the Task profile the
+review handoffs start on.
 
 ## Shape
 

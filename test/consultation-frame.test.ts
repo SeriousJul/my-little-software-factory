@@ -135,6 +135,7 @@ function seed(
 		environment: "worktree",
 		model: "",
 		thinking: "",
+		contextWindow: "",
 		template: "/grill {input}",
 		initialInput: "review auth",
 		renderedOpeningPrompt: "/grill review auth",
@@ -1304,6 +1305,72 @@ describe("Consultation live-worktree launch through the UI", () => {
 				WIDTH,
 				30,
 				{ state, runner, config: liveConfigFor(), home },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a Consultation type's context window rides on its agent start", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const inner = new FakeRunner();
+		stubLiveCheckout(inner, false);
+		stubLiveLaunchExisting(inner);
+		// The count is part of the argv, so the stub that answers the start
+		// names it: a Consultation that loses its context window never reaches
+		// this answer and the launch below fails.
+		inner.set(
+			"herdr",
+			["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-c1", "--", "--context", "131072"],
+			{ stdout: JSON.stringify({ result: { agent: { session_id: "sess-c1" } } }) },
+		);
+		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const config: FactoryConfig = {
+			...liveConfigFor(),
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				pi: { ...DEFAULT_CONFIG.agents.pi, contextWindow: "--context {value}" },
+			},
+			consultationTypes: {
+				"grill-live": {
+					agent: "pi",
+					environment: "live-worktree",
+					template: "/grill {input}",
+					contextWindow: "131072",
+				},
+			},
+		};
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "c", "the launcher to open", (f) =>
+						f.includes("Consultation launcher"),
+					);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					setup.mockInput.pressTab();
+					setup.mockInput.pressTab();
+					setup.mockInput.typeText("review auth");
+					await pressEnter(setup, "the Consultation to reach working", (f) =>
+						f.includes("State: working"),
+					);
+					await waitForCommands(
+						runner,
+						[`herdr agent start ${AGENT} --kind pi --pane pane-c1 -- --context 131072`],
+						"the live start with the count",
+					);
+					// The record keeps the count the Agent started with, so a
+					// Restart of this Consultation keeps the room it ran in.
+					const [consultation] = state.consultations("open");
+					expect(consultation.contextWindow).toBe("131072");
+				},
+				WIDTH,
+				30,
+				{ state, runner, config, home },
 			);
 		} finally {
 			state.close();

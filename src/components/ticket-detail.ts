@@ -5,6 +5,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 
 
 import type { ScrollConfig } from "../config.ts";
 import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
+import type { HandoffChoice } from "../handoff.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
@@ -15,10 +16,32 @@ export interface DetailLine {
 	fg: string;
 }
 
+/**
+ * The Handoff settings the detail rows show: a resolved choice for the next
+ * Handoff, or the choices a started Handoff was recorded with.
+ */
+type DetailChoice = Pick<
+	HandoffChoice,
+	"agentType" | "environment" | "model" | "thinking" | "contextWindow"
+>;
+
+/**
+ * Pick the Handoff whose settings the rows show, with the Ticket state as the
+ * switch. An open Ticket starts `suggestedChoice`, so that is what an open
+ * Ticket shows: a close ends a work cycle and returns the ticket to `open`
+ * while its last Handoff's record stays, and showing that record would state
+ * settings Enter does not start. Every other state sits inside a cycle one
+ * Handoff started, so it shows that Handoff's own recorded settings.
+ */
+function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailChoice | undefined {
+	return ticket.state === "open" ? suggestedChoice : (ticket.handoff ?? undefined);
+}
+
 export function detailLines(
 	ticket: Ticket | undefined,
 	usableCols: number,
 	handoffLimit: number,
+	suggestedChoice?: HandoffChoice,
 ): DetailLine[] {
 	if (ticket === undefined) return [{ text: "no ticket selected", fg: COLORS.dim }];
 	const lines: DetailLine[] = [];
@@ -28,9 +51,24 @@ export function detailLines(
 	pushWrapped(ticket.title, COLORS.textBright);
 	pushWrapped(ticket.repository, COLORS.text);
 	lines.push({ text: stateBadge(ticket.state), fg: STATE_COLORS[ticket.state] });
-	pushWrapped(`Agent: ${ticket.handoff?.agentType ?? "unassigned"}`, COLORS.text);
-	if (ticket.handoff !== null) {
-		pushWrapped(`Environment: ${ticket.handoff.environment}`, COLORS.text);
+	const choice = detailChoice(ticket, suggestedChoice);
+	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, COLORS.text);
+	if (choice !== undefined) {
+		// The Environment rides beside the Agent, the way the override panel
+		// orders its rows: where a Handoff runs, then what it runs with. The
+		// same choice carries it, so an open Ticket shows the Environment Enter
+		// starts in rather than the one a closed cycle happened to use.
+		pushWrapped(`Environment: ${choice.environment}`, COLORS.text);
+		const left = (value: string) => (value === "" ? "left to agent" : value);
+		// The three settings a Task profile carries, each dim when the
+		// resolved choice leaves it to the Agent.
+		for (const [label, value] of [
+			["Model", choice.model],
+			["Thinking", choice.thinking],
+			["Context", choice.contextWindow],
+		] as const) {
+			pushWrapped(`${label}: ${left(value)}`, value === "" ? COLORS.dim : COLORS.text);
+		}
 	}
 	// One explicit task type line for every ticket: the open ticket's
 	// suggestion, or the recorded handoff's task type. The label says which
@@ -192,6 +230,8 @@ interface TicketDetailProps {
 	active: boolean;
 	reservedRows: number;
 	handoffLimit: number;
+	/** The resolved choice for an open Ticket's suggested Task type. */
+	suggestedChoice?: HandoffChoice;
 	scroll: ScrollConfig;
 	onFocus: () => void;
 }
@@ -202,7 +242,7 @@ interface TicketDetailProps {
  * replaces a React-owned visible-row window.
  */
 export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(function TicketDetail(
-	{ ticket, focused, active, reservedRows, handoffLimit, scroll, onFocus },
+	{ ticket, focused, active, reservedRows, handoffLimit, suggestedChoice, scroll, onFocus },
 	ref,
 ) {
 	const geometry = usePaneGeometry("detail", reservedRows);
@@ -211,7 +251,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// it so the control never consumes the last readable cell.
 	const reserveGutter = geometry.usableCols >= 2;
 	const textCols = Math.max(1, geometry.usableCols - (reserveGutter ? 1 : 0));
-	const lines = detailLines(ticket, textCols, handoffLimit);
+	const lines = detailLines(ticket, textCols, handoffLimit, suggestedChoice);
 	const hasOverflow = lines.length > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);
