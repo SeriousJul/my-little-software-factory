@@ -86,12 +86,19 @@ function groupOf(heading: string): string | null {
 	return table[1].replace(/\.<name>$/u, "");
 }
 
-/** The key paths the "Key reference" section documents, by group. */
-function referenceGroups(): Map<string, Set<string>> {
+/**
+ * The key paths the "Key reference" section documents, by group, and the
+ * keys that appear more than once in a group. The sets absorb a duplicate
+ * row, so the key-for-key check cannot see one: the README claims the
+ * example and the reference "agree line for line", and two rows for one key
+ * can document two different behaviors while their key sets match.
+ */
+function referenceGroups(): { groups: Map<string, Set<string>>; duplicates: string[] } {
 	const start = README.indexOf("### Key reference");
 	const end = README.indexOf("\n## ", start);
 	const section = README.slice(start, end < 0 ? README.length : end);
 	const groups = new Map<string, Set<string>>();
+	const duplicates: string[] = [];
 	let group: string | null = null;
 	for (const line of section.split("\n")) {
 		if (line.startsWith("**")) {
@@ -102,12 +109,15 @@ function referenceGroups(): Map<string, Set<string>> {
 		if (group === null) continue;
 		const key = line.match(/^\|\s*`([^`]+)`\s*\|/u)?.[1];
 		if (key === undefined) continue;
-		groups.get(group)?.add(key);
+		const keys = groups.get(group);
+		if (keys === undefined) continue;
+		if (keys.has(key)) duplicates.push(`${group} -> ${key}`);
+		keys.add(key);
 	}
 	// A heading with no rows documents itself in prose: [repos] holds
 	// repository identities, so it has no fixed key names to compare.
 	for (const [group, keys] of [...groups]) if (keys.size === 0) groups.delete(group);
-	return groups;
+	return { groups, duplicates };
 }
 
 describe("the README configuration documentation", () => {
@@ -119,7 +129,7 @@ describe("the README configuration documentation", () => {
 
 	test("the example and the key reference agree key for key", () => {
 		const example = exampleGroups(parseToml(exampleToml()));
-		const reference = referenceGroups();
+		const { groups: reference } = referenceGroups();
 		expect([...reference.keys()].sort()).toEqual([...example.keys()].sort());
 		for (const [group, keys] of reference) {
 			expect(
@@ -127,6 +137,13 @@ describe("the README configuration documentation", () => {
 				`the key reference and the complete example disagree about [${group}]`,
 			).toEqual([...(example.get(group) ?? [])].sort());
 		}
+	});
+
+	test("the key reference names each key once per group", () => {
+		// A set comparison absorbs a key row that appears twice, so the
+		// "agree line for line" claim needs the uniqueness on its own: two
+		// rows for one key can carry two different behaviors.
+		expect(referenceGroups().duplicates).toEqual([]);
 	});
 
 	test("the example carries the task profile and the default model", () => {

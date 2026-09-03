@@ -162,7 +162,11 @@ interface PanelRow {
 	 * survive a handoff. Undefined means the agent takes the value as it is.
 	 */
 	unfit?: UnfitSetting;
-	/** True when the row is a text field that takes digits and nothing else. */
+	/**
+	 * True when the row is a text field that takes digits and nothing else.
+	 * The input callback sanitizes on the flag, so a row declares its own
+	 * input rule.
+	 */
 	digits?: boolean;
 }
 
@@ -509,15 +513,16 @@ export function OverridePanel({
 	// One text field's input callback. The input owns its own caret and text,
 	// so this only mirrors the value into the choice. The guard skips the
 	// no-op echo the input emits, so a re-render never re-commits.
-	const handleInput = (key: TextKey) => (text: string) => {
-		// A token row takes digits and nothing else, typed or pasted: one
+	const handleInput = (row: PanelRow) => (text: string) => {
+		// A digits row takes digits and nothing else, typed or pasted: one
 		// value must never become two argv elements, and a count cannot carry
 		// a stray character. A count also keeps one spelling: the row folds a
 		// leading zero the same way the config parser does, so what the panel
 		// shows is the count the agent gets. The field owns its text, so a
 		// rejected character goes back out of it: the setter echoes an input
 		// event of its own, which the guard below absorbs.
-		const value = key === "contextWindow" ? tokenCountDigits(text.replace(/[^0-9]/gu, "")) : text;
+		const key = row.key as TextKey;
+		const value = row.digits === true ? tokenCountDigits(text.replace(/[^0-9]/gu, "")) : text;
 		if (value !== text) {
 			// The row's own buffer holds a character the row refuses, so push
 			// the refused text back out of it. The ref is live whenever a key
@@ -802,7 +807,7 @@ function rowElement(
 	value: string,
 	selected: boolean,
 	geometry: PanelGeometry,
-	handleInput: (key: TextKey) => (text: string) => void,
+	handleInput: (row: PanelRow) => (text: string) => void,
 	inputRefs: Record<TextKey, RefObject<InputRenderable | null>>,
 ): ReactElement {
 	const children: ReactElement[] = [
@@ -837,10 +842,10 @@ function rowElement(
 				focusedBackgroundColor: COLORS.focusedBackground,
 				keyBindings: INPUT_KEY_BINDINGS,
 				ref: inputRefs[r.key as TextKey],
-				// A token row refuses a character that is not a digit in the
+				// A digits row refuses a character that is not a digit in the
 				// panel's own input handler, which writes the field back without
 				// it: OpenTUI offers no before-input hook to hold it out.
-				onInput: handleInput(r.key as TextKey),
+				onInput: handleInput(r),
 			}),
 		);
 		return createElement(

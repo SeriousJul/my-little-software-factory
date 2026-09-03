@@ -829,10 +829,9 @@ source-kind = "github-issue"
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `default-agent` | yes | - | The agent type a handoff starts with when neither its Task profile names one nor a workflow edge pins one. It must name an `[agents.*]` table. |
-| `default-model` | no | empty | The model a handoff starts with when its Task profile names none. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. |
+| `default-model` | no | empty | The model a handoff starts with when its Task profile names none, and the starting value of the Model row. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
-| `default-model` | no | - | The model a handoff starts on when its Task profile names none, and the starting value of the Model row. It is passed through the resolved agent's `model` template, so it never reaches an agent that maps no model setting. Omitted: each agent's own default. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
 | `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
 | `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it per session. |
 | `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
