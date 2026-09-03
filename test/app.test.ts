@@ -1155,6 +1155,7 @@ describe("the control plane", () => {
 						"r refresh",
 						"? help",
 						"q quit",
+						"Live view: j/k scroll, pgup/pgdn page, home/end, enter goto, esc close",
 						"Esc closes this guide. F2 or m opens the full Message view.",
 					]);
 					// Closing the guide returns to the tickets view.

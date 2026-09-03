@@ -6,10 +6,12 @@
  * against the parallel limit. Enter on an open ticket hands it off; Enter
  * on an awaiting ticket opens the decision modal (close, Goto, or a
  * workflow handoff), while the factory does not decide the ticket itself
- * (auto mode, or an auto-close task type);
- * Enter on a blocked ticket Gotos the agent; Enter on an in-flight ticket
- * whose pane herdr no longer lists opens the missing modal (restart or
- * abandon). `a` toggles auto-handoff.
+ * (auto mode, or an auto-close task type); Enter on an in-flight ticket
+ * opens the Live view, which streams the agent's terminal output, offers
+ * the Goto, and becomes the decision modal when the turn settles and the
+ * factory waits for the operator; Enter on an in-flight ticket whose pane
+ * herdr no longer lists opens the missing modal (restart or abandon).
+ * `a` toggles auto-handoff.
  */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
@@ -95,6 +97,7 @@ import { ConsultationLauncher } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
+import { LiveView } from "./live-view.ts";
 import { type ActionRow, MissingModal } from "./missing-modal.ts";
 import {
 	type AgentModelList,
@@ -122,7 +125,14 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "leftover"; identity: string };
+	| { kind: "leftover"; identity: string }
+	| { kind: "live"; identity: string };
+
+/**
+ * The dim note under the last stream lines when the latest read failed:
+ * the Stale Agent output, the glossary's name for it.
+ */
+const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
 
 /**
  * The handoff waiting behind the override panel.
@@ -270,6 +280,14 @@ export function App({
 	overrideRef.current = override;
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
+	/**
+	 * The Live view's stream: the lines of the last pane read, and the stale
+	 * note while the latest read failed. Null while no stream runs.
+	 */
+	const [liveStream, setLiveStream] = useState<{
+		lines: readonly string[];
+		note: string | null;
+	} | null>(null);
 	const [autoMode, setAutoMode] = useState<boolean>(
 		() => (configProp ?? DEFAULT_CONFIG).autoHandoff,
 	);
@@ -372,6 +390,9 @@ export function App({
 	const actionContext: ActionContext = {
 		view,
 		focusedPane,
+		selectedInFlight:
+			(tickets[selectedIndex]?.state ?? null) === "handed-off" ||
+			(tickets[selectedIndex]?.state ?? null) === "running",
 		selectedConsultation,
 		selectedLeftover: (tickets[selectedIndex]?.leftover ?? null) !== null,
 		status,
@@ -1261,6 +1282,16 @@ export function App({
 		setStatus({ kind: "info", text: `auto-handoff ${next ? "on" : "off"}` });
 	};
 
+	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
+	const taskTypeOf = (ticket: Ticket): string =>
+		ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+
+	/** The Live view's context line: repository, task type, agent. No time: the turn has not settled. */
+	const liveContextLine = (ticket: Ticket): string =>
+		[ticket.repository, taskTypeOf(ticket), ticket.handoff?.agentType ?? "?"]
+			.filter((part) => part !== "")
+			.join(" · ");
+
 	// The decision modal's rows: Close first, selected by default, then a
 	// Goto, then one handoff row per outgoing workflow edge the completed
 	// task type has, in config order: every edge stays reachable, and an
@@ -1344,7 +1375,9 @@ export function App({
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
 	// workflow handoff, or (from the missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
-		setPanel(null);
+		// A routed handoff from the Live view keeps the screen open: the
+		// stream resumes for the new agent pane on its next tick.
+		if (!(panel?.kind === "live" && key.startsWith("route:"))) setPanel(null);
 		if (state === undefined) return;
 		const handoffId = ticket.handoff?.attemptId ?? "";
 		if (key === "close") {
@@ -1954,7 +1987,9 @@ export function App({
 	};
 
 	const runMissingAction = (ticket: Ticket, key: string) => {
-		setPanel(null);
+		// A restart from the Live view's Missing mode keeps the screen open:
+		// it returns to the stream when the restarted agent is back.
+		if (!(panel?.kind === "live" && key === "restart")) setPanel(null);
 		if (state === undefined) return;
 		if (key === "abandon") {
 			const applied = state.applyCompletionDecision({
@@ -2207,15 +2242,15 @@ export function App({
 					setPanel({ kind: "decision", identity: ticket.identity });
 					break;
 				}
-				if (markerOf(ticket) === "blocked") {
-					runGoto(ticket);
-					break;
-				}
+				// Enter on an in-flight ticket opens the Live view, the
+				// ticket's own screen, which streams the agent's output and
+				// offers the Goto. A missing agent keeps its own recovery
+				// screen: the restart or the abandon, and nothing else.
 				if (markerOf(ticket) === "missing") {
 					setPanel({ kind: "missing", identity: ticket.identity });
-					break;
+				} else {
+					setPanel({ kind: "live", identity: ticket.identity });
 				}
-				setStatus({ kind: "warning", text: "only open tickets can be handed off" });
 				break;
 			}
 			case "e":
@@ -2461,12 +2496,16 @@ export function App({
 	}
 
 	// The ticket panels are the closed set: the decision on a settled turn, the
-	// missing-agent choice, and the leftover environment. Everything that reads
-	// an open panel goes through this list, so a new consultation kind can
-	// never be taken for a ticket panel by falling through the exclusions.
+	// live view over an in-flight agent, the missing-agent choice, and the
+	// leftover environment. Everything that reads an open panel goes through
+	// this list, so a new consultation kind can never be taken for a ticket
+	// panel by falling through the exclusions.
 	const ticketPanel =
 		panel !== null &&
-		(panel.kind === "decision" || panel.kind === "missing" || panel.kind === "leftover")
+		(panel.kind === "decision" ||
+			panel.kind === "live" ||
+			panel.kind === "missing" ||
+			panel.kind === "leftover")
 			? panel
 			: null;
 	const panelTicket =
@@ -2481,6 +2520,26 @@ export function App({
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
 			: undefined;
+	// The mode the open Live panel shows, re-derived from the ticket's current
+	// facts on every render, so the screen follows the ticket without the
+	// operator asking: the stream while the agent works (a settled turn the
+	// factory decides for itself keeps streaming), the decision body when
+	// the factory waits for the operator, the missing box when the pane is
+	// gone, and closed when the ticket leaves the in-flight states.
+	const liveMode: "stream" | "decision" | "missing" | "closed" =
+		panel?.kind === "live" && panelTicket !== undefined
+			? panelTicket.state === "open"
+				? "closed"
+				: panelTicket.state === "awaiting"
+					? autoMode || configRef.current.taskTypes[taskTypeOf(panelTicket)]?.autoClose === true
+						? "stream"
+						: "decision"
+					: markerOf(panelTicket) === "missing"
+						? "missing"
+						: "stream"
+			: "closed";
+	const liveDecision =
+		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;
 	/**
 	 * Whether the open ticket panel has nothing left to show.
 	 *
@@ -2494,10 +2553,58 @@ export function App({
 		ticketPanel !== null &&
 		(panelTicket === undefined ||
 			(ticketPanel.kind === "decision" && decision === undefined) ||
+			(ticketPanel.kind === "live" && liveMode === "closed") ||
 			(ticketPanel.kind === "leftover" && panelTicket.leftover === null));
 	useEffect(() => {
 		if (panelHasNothingToShow) setPanel(null);
 	}, [panelHasNothingToShow]);
+
+	// The Live view's stream: while the view shows the stream, a dedicated
+	// refresh reads the pane the ticket's current handoff records at the
+	// one-second cadence, the cadence the Consultation agent view uses
+	// outside of interaction. A routed handoff moves the stream to the new
+	// pane on its next tick. A failed read stands the last lines under a
+	// stale note, and the refresh continues.
+	useEffect(() => {
+		if (panel?.kind !== "live" || liveMode !== "stream") {
+			setLiveStream(null);
+			return;
+		}
+		const identity = panel.identity;
+		let active = true;
+		const reader = new HerdrAgentReader(commandRunner);
+		const refresh = async () => {
+			// Re-read the pane the ticket's current handoff records, so a
+			// routed handoff moves the stream to the new pane on the next
+			// tick.
+			const ticket = ticketsRef.current.find((item) => item.identity === identity);
+			const paneId = ticket?.handoff?.paneId ?? null;
+			if (paneId === null) {
+				if (active)
+					setLiveStream({
+						lines: [],
+						note: "no agent pane is recorded for this ticket",
+					});
+				return;
+			}
+			const output = await reader.readPane(paneId, configRef.current.completionMessageLines);
+			if (!active) return;
+			if (output === null) {
+				setLiveStream((previous) => ({
+					lines: previous?.lines ?? [],
+					note: STALE_STREAM_NOTE,
+				}));
+			} else {
+				setLiveStream({ lines: output.split("\n"), note: null });
+			}
+		};
+		void refresh();
+		const timer = setInterval(() => void refresh(), 1000);
+		return () => {
+			active = false;
+			clearInterval(timer);
+		};
+	}, [panel, liveMode, commandRunner]);
 	const emptyMessage =
 		state === undefined
 			? undefined
@@ -2699,9 +2806,43 @@ export function App({
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
 				onCancel: () => setPanel(null),
 			}),
+		// The Live view streams the agent's terminal while the ticket is in
+		// flight. When the turn settles and the factory waits for the
+		// operator, the same box carries the decision sub-mode: the turn
+		// log, the decision's rows, and their keys.
+		panel !== null &&
+			panel.kind === "live" &&
+			panelTicket !== undefined &&
+			liveMode !== "closed" &&
+			liveMode !== "missing" &&
+			createElement(LiveView, {
+				title: panelTicket.title,
+				contextLine: liveContextLine(panelTicket),
+				blocked: markerOf(panelTicket) === "blocked",
+				body:
+					liveDecision !== undefined
+						? { kind: "turn-log" as const, entries: liveDecision.entries }
+						: liveStream === null
+							? { kind: "stream" as const, lines: [], note: null }
+							: { kind: "stream" as const, lines: liveStream.lines, note: liveStream.note },
+				actions:
+					liveDecision !== undefined
+						? liveDecision.actions
+						: [
+								{
+									key: "goto",
+									label: "Goto",
+									detail: "focus the agent's pane; the handoff stays open",
+								},
+							],
+				decideable: liveDecision !== undefined,
+				onAction: (key) => runDecisionAction(panelTicket, key),
+				onEditAction: (key) => openRouteOverride(panelTicket, key),
+				onCancel: () => setPanel(null),
+			}),
 		panel !== null &&
 			panelTicket !== undefined &&
-			panel.kind === "missing" &&
+			(panel.kind === "missing" || liveMode === "missing") &&
 			createElement(MissingModal, {
 				title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
 				bodyLines: [

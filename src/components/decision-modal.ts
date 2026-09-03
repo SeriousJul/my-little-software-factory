@@ -57,7 +57,9 @@ const POP_MS = 120;
 const POP_TICK_MS = 16;
 /** The box's size at the pop-in's start, of its final size. */
 const POP_START = 0.94;
-const HINT = "up/down select  j/k scroll  pgup/pgdn page  home/end  enter  e edit  esc";
+/** The hint of the decision sub-mode: row selection, scroll, confirm, edit. */
+export const DECISION_HINT =
+	"up/down select  j/k scroll  pgup/pgdn page  home/end  enter  e edit  esc";
 
 /** The log's three voices, in the shared palette. */
 const LOG_COLORS = {
@@ -91,19 +93,51 @@ export function decisionBoxSize(
  * honest: while the box is still growing, lines wrap at its current width
  * and the body window has its current row count. A line that is wider than
  * the frame being drawn is what a terminal shows as a smudge.
+ *
+ * The `hint` names the row the layout decides the space for: the Live view
+ * passes its own shorter stream hint in its stream sub-mode.
  */
 export function decisionLayout(
 	boxWidth: number,
 	boxHeight: number,
 	actionRows: number,
+	hint = DECISION_HINT,
 ): { contentWidth: number; bodyRows: number; showHint: boolean } {
 	const contentWidth = Math.max(1, boxWidth - CHROME);
 	const innerRows = Math.max(0, boxHeight - CHROME);
 	// The hint yields its row before the body drops to zero: a too-small
 	// terminal still shows one log line.
-	const showHint = contentWidth >= widthOf(HINT) && innerRows >= actionRows + 3;
+	const showHint = contentWidth >= widthOf(hint) && innerRows >= actionRows + 3;
 	const bodyRows = Math.max(0, innerRows - actionRows - 1 - (showHint ? 1 : 0));
 	return { contentWidth, bodyRows, showHint };
+}
+
+/**
+ * The modal pop-in: a short fade with the box growing to its final size.
+ *
+ * A self-driven progress keeps it deterministic in the test renderer,
+ * where the animation engine never ticks.
+ */
+export function useModalPopIn(
+	finalWidth: number,
+	finalHeight: number,
+): { pop: number; boxWidth: number; boxHeight: number } {
+	const [pop, setPop] = useState(0);
+	useEffect(() => {
+		const startedAt = performance.now();
+		const id = setInterval(() => {
+			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
+			setPop(1 - (1 - t) ** 3);
+			if (t >= 1) clearInterval(id);
+		}, POP_TICK_MS);
+		return () => clearInterval(id);
+	}, []);
+	const popFactor = POP_START + (1 - POP_START) * pop;
+	return {
+		pop,
+		boxWidth: Math.max(1, Math.round(finalWidth * popFactor)),
+		boxHeight: Math.max(1, Math.round(finalHeight * popFactor)),
+	};
 }
 
 /**
@@ -112,7 +146,7 @@ export function decisionLayout(
  * between two text blocks; a tool note sits close to the text that asked
  * for it. Failed calls wear the warning color.
  */
-function buildBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
+export function turnLogBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
 	const out: MdLine[] = [];
 	let previousWasText = false;
 	for (const entry of entries) {
@@ -155,35 +189,20 @@ export function DecisionModal({
 		() => decisionLayout(finalBox.width, finalBox.height, actions.length),
 		[finalBox.width, finalBox.height, actions.length],
 	);
-	// The pop-in: a short fade with the box growing to its final size. A
-	// self-driven progress keeps it deterministic in the test renderer,
-	// where the animation engine never ticks.
-	const [pop, setPop] = useState(0);
-	useEffect(() => {
-		const startedAt = performance.now();
-		const id = setInterval(() => {
-			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
-			setPop(1 - (1 - t) ** 3);
-			if (t >= 1) clearInterval(id);
-		}, POP_TICK_MS);
-		return () => clearInterval(id);
-	}, []);
-	const popFactor = POP_START + (1 - POP_START) * pop;
-	const boxWidth = Math.max(1, Math.round(finalBox.width * popFactor));
-	const boxHeight = Math.max(1, Math.round(finalBox.height * popFactor));
+	const { pop, boxWidth, boxHeight } = useModalPopIn(finalBox.width, finalBox.height);
 	const geometry = decisionLayout(boxWidth, boxHeight, actions.length);
 	// Reserve a column for the scrollbar only when the log needs one. A
 	// scrollbar can add wrap rows, so determine overflow once at the final
 	// width, then make the final window from the narrower text width.
 	const fullWidthBody = useMemo(
-		() => buildBody(entries, finalLayout.contentWidth),
+		() => turnLogBody(entries, finalLayout.contentWidth),
 		[entries, finalLayout.contentWidth],
 	);
 	const hasScrollbar = fullWidthBody.length > finalLayout.bodyRows;
 	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
-	const body = useMemo(() => buildBody(entries, bodyWidth), [entries, bodyWidth]);
+	const body = useMemo(() => turnLogBody(entries, bodyWidth), [entries, bodyWidth]);
 	const bodyRows = Math.min(body.length, geometry.bodyRows);
 	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the
@@ -307,13 +326,17 @@ export function DecisionModal({
 				),
 			),
 			finalLayout.showHint &&
-				createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, geometry.contentWidth)),
+				createElement(
+					"text",
+					{ fg: COLORS.dim },
+					truncateToWidth(DECISION_HINT, geometry.contentWidth),
+				),
 		),
 	);
 }
 
 /** The proportional scrollbar rows for the log window. */
-function scrollbarRows(
+export function scrollbarRows(
 	lineCount: number,
 	visibleRows: number,
 	scroll: number,
@@ -326,7 +349,7 @@ function scrollbarRows(
 }
 
 /** One log row as spans, with a dim track and bright thumb when it scrolls. */
-function bodySpans(line: MdLine, width: number, thumb: boolean | undefined): ReactElement[] {
+export function bodySpans(line: MdLine, width: number, thumb: boolean | undefined): ReactElement[] {
 	const spans: ReactElement[] =
 		line.length === 0
 			? [createElement("span", { fg: COLORS.dim }, "")]
@@ -349,7 +372,11 @@ function bodySpans(line: MdLine, width: number, thumb: boolean | undefined): Rea
 }
 
 /** One action row as spans: the marker, the label, the dim detail. */
-function actionSpans(row: ActionRow, selected: boolean, contentWidth: number): ReactElement[] {
+export function actionSpans(
+	row: ActionRow,
+	selected: boolean,
+	contentWidth: number,
+): ReactElement[] {
 	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
 	const labelWidth = Math.min(LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
 	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);

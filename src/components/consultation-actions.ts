@@ -16,6 +16,8 @@ export interface ActionContext {
 	selectedConsultation?: Consultation;
 	/** True when the selected Ticket holds a leftover environment in herdr. */
 	selectedLeftover?: boolean;
+	/** True while the selected ticket is in flight, its agent handed off or running. */
+	selectedInFlight?: boolean;
 	status?: { kind: "info" | "warning" | "error"; text: string } | null;
 	launcher: boolean;
 	modal: boolean;
@@ -144,7 +146,13 @@ function actionHints(context: ActionContext): ActionHint[] {
 	if (context.view === "tickets") {
 		return [
 			{ key: "↑↓/jk", label: "move", priority: 90 },
-			{ key: "Enter", label: "hand off", priority: 80 },
+			// Enter opens what the selected ticket's state offers: the handoff
+			// on an open ticket, the Live view on an in-flight one.
+			{
+				key: "Enter",
+				label: context.selectedInFlight === true ? "live" : "hand off",
+				priority: 80,
+			},
 			// One action ends a leftover environment of the selected ticket, so
 			// the control only shows while the ticket carries one.
 			...(context.selectedLeftover === true
@@ -218,6 +226,7 @@ function guideRows(context: ActionContext): string[] {
 			"Response: Enter submit, Shift+Enter newline, Esc keep draft",
 			`Agent view: End follows output; interaction exits with ${exitKeyLabel(context.interactionExitKey)}`,
 		);
+	else rows.push("", "Live view: j/k scroll, pgup/pgdn page, home/end, enter goto, esc close");
 	rows.push("", "Esc closes this guide. F2 or m opens the full Message view.");
 	return rows;
 }

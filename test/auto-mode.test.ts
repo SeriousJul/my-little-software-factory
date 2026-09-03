@@ -486,7 +486,7 @@ describe("the failure markers", () => {
 		app.state.close();
 	});
 
-	test("enter on a blocked ticket focuses the agent's pane", async () => {
+	test("enter on a blocked ticket opens the Live view without acting", async () => {
 		const app = seededApp("in-flight");
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
@@ -499,16 +499,42 @@ describe("the failure markers", () => {
 				},
 			]),
 		});
+		app.runner.set(
+			"herdr",
+			[
+				"agent",
+				"read",
+				"pane-1",
+				"--lines",
+				"200",
+				"--source",
+				"recent-unwrapped",
+				"--format",
+				"text",
+			],
+			{ stdout: "the agent is waiting on a build\n" },
+		);
 
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("blocked"), "the blocked badge");
-				// Enter on the blocked ticket runs the Goto: it focuses the stored pane.
+				// Enter on the blocked ticket opens the Live view: the Goto is
+				// one confirm away, and nothing focuses before it.
+				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				expect(app.runner.commands().join("\n")).not.toContain("herdr agent focus");
+				// The stream shows the pane output under the ticket's context,
+				// and the blocked status stands on the context line.
+				await awaitFrame(setup, (f) => f.includes("the agent is waiting on a build"), "the stream");
+				expect(frameText(setup.captureCharFrame())).toContain("acme/factory · implement · pi");
+				// The pop-in fades in for a little while, so wait it out before
+				// reading the painted colors: mid-fade they are blended.
+				await sleep(250);
+				expect(spanColors(setup, "blocked")).toContainEqual(rgb(COLORS.statusWarning));
+				// Enter confirms the Goto: the focus runs, the view closes, and
+				// the ticket stays in flight with the blocked badge standing.
 				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				// The focus does not settle the turn: the ticket stays in flight,
-				// and the blocked badge stands until the next poll.
 				expect(app.state.ticketState(identity)).toBe("handed-off");
 				expect(ticketRow(await settle(setup))).toContain("blocked");
 			},

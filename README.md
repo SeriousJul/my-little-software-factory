@@ -74,8 +74,8 @@ as `npm run mutate -- --dryRunOnly`.
 | `Home` / `End`   | Select the first or last Ticket, or move the detail to its start or end |
 | `h` / `l`        | Switch focus between the list and detail                                |
 | `Left` / `Right` | Switch focus between the list and detail                                |
-| `Enter`          | Hand the selected open ticket off, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone, or focus the agent of a blocked ticket |
-| `e`              | Open the override panel for the selected open ticket, or for the selected Handoff row of the decision modal |
+| `Enter`          | Hand the selected open ticket off, open the Live view on an in-flight ticket, or open the decision modal on an awaiting ticket the factory does not decide itself, or the missing modal on a ticket whose agent is gone |
+| `e`              | Open the override panel for the selected open ticket, or for the selected Handoff row of the decision modal or the Live view |
 | `w`              | Clear a leftover herdr environment of the selected ticket               |
 | `a`              | Toggle auto-handoff mode for this session                              |
 | `r`              | Refresh ticket sources, or retry a failed Consultation                 |
@@ -270,6 +270,43 @@ trace only when the routed handoff settles with the agent started; a
 failed route leaves the trace pending, so Close and Goto keep working
 on the awaiting ticket. The automatic route decides the same way: its
 `auto-handed-off` record waits for the same start.
+
+### Live view keys
+
+Enter on an in-flight ticket opens the Live view: a near-fullscreen screen
+that pops in over the app with the same fade and grow as the decision
+modal, one cell of margin on every side. Its border reads
+`Live: <ticket title>` in every state the screen carries, and the first row
+under the border names the context: repository, task type, agent, and
+`blocked` when the ticket wears the blocked marker.
+
+The body is the agent's terminal output as plain text. The screen reads the
+ticket's agent pane on a one-second cadence and keeps the newest
+`completion-message-lines` of it. New output pins the stream to the bottom;
+a scroll releases the pin, and reaching the bottom by scrolling pins it
+again. A failed read keeps the last good lines under a dim stale note. A
+ticket without a recorded pane shows a note in place of the stream and
+reads nothing.
+
+The action row under the stream is the Goto, and it is pure focus: it
+focuses the agent's pane and closes the screen. It changes no state and
+records no decision. The screen follows the ticket: when the turn settles
+and the factory leaves the decision to the operator, the same box turns
+into the decision, with the turn log and the choice rows; when the agent
+leaves herdr, it carries the missing modal; when the ticket leaves the
+in-flight and awaiting states, the screen closes. A settled turn the
+factory decides for itself never hands the screen over: the stream stands
+where the operator left it.
+
+| Key             | What it does                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| `j` / `k`      | Scroll the stream, one row down or up                             |
+| `PgUp` / `PgDn` | Scroll the stream by a page                                    |
+| `Home` / `End` | Jump to the top or the bottom of the stream                        |
+| `Up` / `Down`  | Move between the choice rows, in the decision sub-mode            |
+| `Enter`         | Focus the agent's pane and close the screen; choose the selected row, in the decision sub-mode |
+| `e`             | Edit the selected Handoff row's settings before it starts, in the decision sub-mode |
+| `Esc`           | Close the screen: nothing runs, the ticket stays where it is        |
 
 ### Missing modal keys
 
