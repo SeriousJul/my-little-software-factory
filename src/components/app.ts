@@ -46,6 +46,7 @@ import {
 import {
 	baseChoice,
 	type CloseCleanupOptions,
+	checkConsultationStart,
 	closeCleanupReach,
 	closeHandoffEnvironment,
 	type HandoffChoice,
@@ -68,13 +69,20 @@ import {
 	ObservationCoordinator,
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
+import { type RepositoryMapping, type ResolvedRepository, resolveRepository } from "../repo.ts";
 import {
+	type CommandRunner,
 	commandFailureText,
-	type RepositoryMapping,
-	type ResolvedRepository,
-	resolveRepository,
-} from "../repo.ts";
-import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
+	createChildProcessRunner,
+	errorMessage,
+	supportsModelList,
+} from "../runner.ts";
+import {
+	resolveEnvironment,
+	resolveSettings,
+	type TaskProfileStart,
+	taskProfilesOf,
+} from "../setting-resolution.ts";
 import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
@@ -92,7 +100,12 @@ import { ConsultationList } from "./consultation-list.ts";
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { type ActionRow, MissingModal } from "./missing-modal.ts";
-import { type AgentSettings, OverridePanel } from "./override-panel.ts";
+import {
+	type AgentModelList,
+	type AgentSettings,
+	type ModelListStatus,
+	OverridePanel,
+} from "./override-panel.ts";
 import { truncateToWidth, truncateWithEllipsis } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import { leftoverWhere, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
@@ -442,23 +455,67 @@ export function App({
 			},
 		]),
 	);
-	// The task types' thinking defaults, keyed by task type name, for the
-	// override panel's thinking row.
-	const thinkingDefaults: Record<string, string | undefined> = Object.fromEntries(
-		Object.entries(config.taskTypes).map(([name, type]) => [name, type.thinking]),
+	// The Task profile of every task type (ADR 0009): what the panel prefills,
+	// and what it re-derives when the operator switches the task type row.
+	const profiles: Record<string, TaskProfileStart> = taskProfilesOf(config);
+	// The Model list of the agent the override panel is on (ADR 0010). The panel
+	// asks for it when it opens and whenever the operator switches agents inside
+	// it, so it reflects provider auth changed after startup. There is no cache:
+	// every request runs a fresh query, and a request a newer one overtakes is
+	// dropped.
+	const [modelList, setModelList] = useState<AgentModelList>({
+		agentType: "",
+		status: { status: "loading" },
+	});
+	const modelListRequest = useRef(0);
+	const requestModelList = useCallback(
+		(agentType: string) => {
+			const request = modelListRequest.current + 1;
+			modelListRequest.current = request;
+			const agent = configRef.current.agents[agentType];
+			const settle = (status: ModelListStatus) => {
+				// Only the newest request may show: a stale answer for another
+				// agent must never reach the row.
+				if (modelListRequest.current !== request) return;
+				setModelList({ agentType, status });
+			};
+			if (agent === undefined || agent.model === undefined || !supportsModelList(agent.kind)) {
+				// The kind reports no list: the row keeps the Text field, and no
+				// agent CLI runs for it.
+				settle({ status: "unavailable", cause: "no-list" });
+				return;
+			}
+			settle({ status: "loading" });
+			void commandRunner
+				.listModels(agent.kind)
+				.then((result) =>
+					settle(
+						result.ok
+							? { status: "available", models: result.models }
+							: { status: "unavailable", cause: "query-failed" },
+					),
+				)
+				.catch(() => settle({ status: "unavailable", cause: "query-failed" }));
+		},
+		[commandRunner],
 	);
-	const choiceFor = (ticket: Ticket): HandoffChoice =>
-		baseChoice(
-			config.defaultAgent,
-			config.defaultEnvironment,
+	const choiceFor = (ticket: Ticket): HandoffChoice => {
+		// The resolved Task profile of the ticket's suggested task type: the
+		// panel prefills it, and Enter applies it (ADR 0009). The operator
+		// changes a row in the panel, or clears one to leave the setting to the
+		// agent.
+		const settings = resolveSettings({
+			config: configRef.current,
+			taskType: ticket.suggestedTaskType,
+		});
+		return baseChoice(
+			settings.agentType,
+			configRef.current.defaultEnvironment,
 			ticket.suggestedTaskType,
-			"",
-			// The task type's thinking default: the panel shows it as the
-			// starting value of the thinking row, and Enter applies it. The
-			// operator picks another level in the panel, or clears a free-text
-			// row to leave the level to the agent.
-			config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
+			settings.model,
+			settings.thinking,
 		);
+	};
 
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
@@ -1103,7 +1160,12 @@ export function App({
 			});
 			return;
 		}
-		setOverride(choiceFor(ticket));
+		const choice = choiceFor(ticket);
+		// Opening the panel is a point of use for the Model list (ADR 0010): the
+		// list of the agent the panel starts on is fetched fresh, so provider
+		// auth the operator changed after startup shows up here.
+		requestModelList(choice.agentType);
+		setOverride(choice);
 	};
 
 	/**
@@ -1239,16 +1301,23 @@ export function App({
 		// turn's decision is not recorded here: it lands on the settled
 		// turn's trace in the handoff's settle path, and only when the
 		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working. A Workflow Handoff never
-		// inherits the previous Handoff's Model or Thinking: the model
-		// starts empty, and the thinking starts on the target task type's
-		// own default.
+		// pending, so Close and Goto keep working. A routed handoff resolves
+		// agent, model, and thinking through the target task profile's chain,
+		// with the edge's own pin above the profile (ADR 0009); it never
+		// inherits the previous handoff's model or thinking.
+		const routed = resolveSettings({
+			config: configRef.current,
+			taskType: target,
+			edgeAgent: edge.agent,
+		});
 		const choice = baseChoice(
-			edge.agent ?? configRef.current.defaultAgent,
-			edge.environment ?? configRef.current.defaultEnvironment,
+			routed.agentType,
+			// The same question the panel asks, through the same helper, so a
+			// route that starts without a panel cannot read the pin differently.
+			resolveEnvironment(configRef.current, edge.environment),
 			target,
-			"",
-			configRef.current.taskTypes[target]?.thinking ?? "",
+			routed.model,
+			routed.thinking,
 		);
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
@@ -1277,6 +1346,17 @@ export function App({
 			consultationOperationQueues.current,
 			consultation.repository.identity,
 			async () => {
+				// The setting fit check (ADR 0010) is this route's first step, before
+				// its first external change: a live consultation resolves its
+				// repository here, and a resolve can clone one. The verdict rides
+				// into the start, so the Agent's Model list answers one query per
+				// Consultation.
+				const startCheck = await checkConsultationStart({
+					consultation,
+					config: configRef.current,
+					runner: commandRunner,
+				});
+				if (!startCheck.ok) return { status: "failed" as const, reason: startCheck.reason };
 				let resolvedRepository: ResolvedRepository | undefined;
 				if (consultation.environment === "live-worktree") {
 					onStage("resolving-repository");
@@ -1320,6 +1400,7 @@ export function App({
 					runner: commandRunner,
 					home: homeDir,
 					onStage,
+					startCheck,
 					resolvedRepository,
 					onRepositoryResolved: (path) =>
 						state.setConsultationRepositoryPath(consultation.id, path),
@@ -2471,7 +2552,9 @@ export function App({
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
-				thinkingDefaults,
+				profiles,
+				modelList,
+				onAgentChange: requestModelList,
 				initial: override,
 				onConfirm: (choice) => {
 					setOverride(null);

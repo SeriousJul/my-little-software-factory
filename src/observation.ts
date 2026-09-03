@@ -37,9 +37,9 @@
  *    degrades to close. A full parallel limit leaves a route awaiting
  *    until a slot frees, and the rest wait for the operator.
  * 5. With auto-handoff on, each eligible open ticket - actionable, under
- *    both limits - is handed off with the configured defaults. The
- *    parallel count is the in-flight tickets whose agent was alive in the
- *    latest poll: a blocked agent holds a slot, a missing one does not.
+ *    both limits - is handed off on its task profile's configured settings.
+ *    The parallel count is the in-flight tickets whose agent was alive in
+ *    the latest poll: a blocked agent holds a slot, a missing one does not.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -50,8 +50,8 @@
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import { baseChoice, type HandoffChoice } from "./handoff.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
-import { commandFailureText } from "./repo.ts";
-import type { CommandRunner } from "./runner.ts";
+import { type CommandRunner, commandFailureText } from "./runner.ts";
+import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation, FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
 import {
 	lastMessageFromLog,
@@ -895,17 +895,23 @@ export class ObservationCoordinator {
 		if (edge === undefined || edge.to.length !== 1) return false;
 		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
 		// A Workflow Handoff never inherits the previous Handoff's Model or
-		// Thinking: the model starts empty, and the thinking starts on the
-		// target task type's own default.
+		// Thinking: the routed handoff resolves agent, model, and thinking
+		// through the target task profile's chain, with the edge's own pin above
+		// the profile (ADR 0009).
+		const routed = resolveSettings({
+			config,
+			taskType: edge.to[0],
+			edgeAgent: edge.agent,
+		});
 		const result = await this.dispatch({
 			origin: "workflow",
 			ticketIdentity: ticket.ticketIdentity,
 			choice: baseChoice(
-				edge.agent ?? config.defaultAgent,
-				edge.environment ?? config.defaultEnvironment,
+				routed.agentType,
+				resolveEnvironment(config, edge.environment),
 				edge.to[0],
-				"",
-				config.taskTypes[edge.to[0]]?.thinking ?? "",
+				routed.model,
+				routed.thinking,
 			),
 			previousMessage,
 		});
@@ -975,10 +981,19 @@ export class ObservationCoordinator {
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;
+			// The configured settings of the ticket's task profile (ADR 0009): an
+			// unattended handoff starts with the same resolution chain a manual
+			// one sees in the panel, and the fit check guards what it starts with.
+			const resolved = resolveSettings({
+				config,
+				taskType: ticket.suggestedTaskType,
+			});
 			const choice = baseChoice(
-				config.defaultAgent,
+				resolved.agentType,
 				config.defaultEnvironment,
 				ticket.suggestedTaskType,
+				resolved.model,
+				resolved.thinking,
 			);
 			void this.dispatch({
 				origin: "open",

@@ -114,7 +114,18 @@ _Avoid_: reasoning effort, effort
 **Model list**:
 The models an Agent runtime reports as available.
 The agent runtime, not the config file, owns this set, and a model outside it is not a valid choice for that agent.
+One Model list value is one start argument: a value that cannot travel as a single cell is never offered.
 _Avoid_: model catalog, model registry
+
+**Type-ahead**:
+The Model row's search by typing: each letter extends the typed run, and the row jumps to the first Model whose whole value contains that run.
+The run is never displayed; the jumping value is the feedback, and a letter that matches nothing starts a new run.
+_Avoid_: autocomplete, fuzzy filter
+
+**Setting fit check**:
+The check one agent start runs against the resolved Agent type before its first external change: the model must be on that agent's Model list, and the thinking level must be one it declares.
+An unfit setting fails the start with a readable reason and leaves the Ticket open. A Model list that cannot be fetched skips the model part of the check, and the Agent's own rejection stands.
+_Avoid_: preflight, validation gate
 
 **Consultation**:
 An operator-started interactive exchange with an Agent in a Repository that is independent of a Ticket and stays open until the operator closes it.
