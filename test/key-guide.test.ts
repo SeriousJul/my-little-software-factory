@@ -21,6 +21,7 @@ import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
+	closeOverlay,
 	detailFocused,
 	detailPaneText,
 	focusDetail,
@@ -28,10 +29,11 @@ import {
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
+	openGuide,
+	openMessageView,
 	openPanel,
+	openSurface,
 	press,
-	pressF1,
-	pressF2,
 	rgb,
 	rowsOf,
 	settle,
@@ -104,14 +106,12 @@ describe("the in-app Key guide", () => {
 			async (setup) => {
 				expect(await settle(setup)).not.toContain("Key guide");
 
-				await press(setup, "?", "the key guide to open", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				expect(setup.captureCharFrame()).toContain("Key guide - Ticket list");
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await closeOverlay(setup, "Key guide", "the guide to close");
 
-				pressF1(setup);
-				await awaitFrame(setup, (f) => f.includes("Key guide"), "the guide to open");
-				pressF1(setup);
-				await awaitFrame(setup, (f) => !f.includes("Key guide"), "the guide to close");
+				await openGuide(setup, "F1");
+				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
 			},
 			WIDTH,
 			HEIGHT,
@@ -124,28 +124,26 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				// Ticket list.
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide - Ticket list"));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openGuide(setup, "?", "Key guide - Ticket list");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				// Ticket detail.
 				await focusDetail(setup);
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide - Ticket detail"));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openGuide(setup, "?", "Key guide - Ticket detail");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				// Override list row.
 				await focusList(setup);
 				await openPanel(setup);
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide - Override list row"));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openGuide(setup, "?", "Key guide - Override list row");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				// Override text row.
 				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
 				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
-				pressF1(setup);
-				await awaitFrame(setup, (f) => f.includes("Key guide - Override text row"), "the guide");
-				pressF1(setup);
-				await awaitFrame(setup, (f) => !f.includes("Key guide"), "the guide to close");
+				await openGuide(setup, "F1", "Key guide - Override text row");
+				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
 				// The bar keeps the e Override hint forever, so the panel's box
 				// title is the close signal.
-				await press(setup, "escape", "the panel to close", (f) => !f.includes("┌─Override"));
+				await closeOverlay(setup, "┌─Override", "the panel to close");
 				// Decision modal: select the awaiting ticket. The list truncates
 				// titles, so the checks use short stable prefixes.
 				await press(setup, "j", "the handed-off ticket", (f) =>
@@ -157,9 +155,9 @@ describe("the in-app Key guide", () => {
 				await press(setup, "j", "the awaiting ticket", (f) =>
 					rowsOf(f)[markerRowOf(f)].includes("Drop the legacy"),
 				);
-				await press(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide - Decision modal"));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
+				await openGuide(setup, "?", "Key guide - Decision modal");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				// The panel survived the guide.
 				expect(setup.captureCharFrame()).toContain("Decision:");
 			},
@@ -206,9 +204,8 @@ describe("the in-app Key guide", () => {
 							(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
 							"the missing badge",
 						);
-						await press(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
-						await press(setup, "?", "the guide", (f) => f.includes("Key guide - Missing modal"));
-						const rows = rowsOf(await settle(setup));
+						await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
+						const rows = rowsOf(await openGuide(setup, "?", "Key guide - Missing modal"));
 						const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 						const between = (top: number, bottom: number) =>
 							rows.slice(top + 1, bottom).map(contentOf);
@@ -222,7 +219,7 @@ describe("the in-app Key guide", () => {
 							"Enter Confirm action",
 							"Esc Cancel",
 						]);
-						await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+						await closeOverlay(setup, "Key guide", "the guide to close");
 						// The panel survived the guide.
 						expect(setup.captureCharFrame()).toContain("Missing:");
 					},
@@ -246,7 +243,7 @@ describe("the in-app Key guide", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				const rows = rowsOf(await settle(setup));
 				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 
@@ -356,7 +353,7 @@ describe("the in-app Key guide", () => {
 			await withApp(
 				async (setup) => {
 					setup.resize(width, height);
-					await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+					await openGuide(setup, "?");
 					const reasons = [
 						// The longest reason in the catalogue.
 						"no Consultation types configured; add [consultation-types.<name>] to the config file",
@@ -383,7 +380,7 @@ describe("the in-app Key guide", () => {
 					}
 					// No row of the guide is wider than the terminal.
 					for (const row of rowsOf(await settle(setup))) expect(widthOf(row)).toBe(width);
-					await press(setup, "escape", "the guide closed", (f) => !f.includes("Key guide"));
+					await closeOverlay(setup, "Key guide", "the guide closed");
 				},
 				width,
 				height,
@@ -403,7 +400,7 @@ describe("the in-app Key guide", () => {
 				// names that meaning alone: a hint whose key runs the other one
 				// would point at the wrong control. The guide still lists Decide
 				// and says why this Ticket cannot use it (user stories 12, 16).
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				let rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Decide")).toContain(
 					"the selected Ticket has no completion to decide",
@@ -415,7 +412,7 @@ describe("the in-app Key guide", () => {
 						"Decide",
 					),
 				).toEqual(rgb(COLORS.dim));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				let bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Hand off");
 				expect(bar).not.toContain("Decide");
@@ -427,13 +424,13 @@ describe("the in-app Key guide", () => {
 				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
 				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
 				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Hand off")).toContain("only an open Ticket can be handed off");
 				expect(rowOf(rows, "Enter Decide")).toContain("opens the decision on a settled Ticket");
 				const decideRow = rows.findIndex((r) => norm(r).includes("Enter Decide"));
 				expect(spanColorAt(setup, decideRow, "Decide")).toEqual(rgb(COLORS.text));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Decide");
 				expect(bar).not.toContain("Hand off");
@@ -442,13 +439,13 @@ describe("the in-app Key guide", () => {
 				// says so twice rather than dropping a row: both keys carry
 				// their own reason, and the bar states the one Enter runs.
 				await press(setup, "k", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				rows = rowsOf(await settle(setup));
 				expect(rowOf(rows, "Enter Hand off")).toContain("only an open Ticket can be handed off");
 				expect(rowOf(rows, "Enter Decide")).toContain(
 					"the selected Ticket has no completion to decide",
 				);
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await closeOverlay(setup, "Key guide", "the guide to close");
 			},
 			WIDTH,
 			HEIGHT,
@@ -463,8 +460,8 @@ describe("the in-app Key guide", () => {
 				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
 				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
 				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
-				await press(setup, "?", "the key guide", (f) => f.includes("Key guide - Decision modal"));
+				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
+				await openGuide(setup, "?", "Key guide - Decision modal");
 				const rows = rowsOf(await settle(setup));
 				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
@@ -488,7 +485,7 @@ describe("the in-app Key guide", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				const rows = rowsOf(await settle(setup));
 				const rowOf = (needle: string) => rows.find((row) => norm(row).includes(needle)) ?? "";
 
@@ -530,7 +527,7 @@ describe("the in-app Key guide", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				await settle(setup);
 				const rows = rowsOf(setup.captureCharFrame());
 				const rowOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
@@ -569,7 +566,7 @@ describe("the in-app Key guide", () => {
 					// While the first fetch runs, every source is refreshing:
 					// the current Refresh row carries the reason, dim.
 					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "loading");
-					await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+					await openGuide(setup, "?");
 					await settle(setup);
 					let rows = rowsOf(setup.captureCharFrame());
 					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
@@ -611,7 +608,7 @@ describe("the in-app Key guide", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				expect(actionBarRowOf(await settle(setup))).toContain("1-19/33");
 
 				await scrollGuide(setup, "j", "2-20/33");
@@ -658,8 +655,8 @@ describe("the in-app Key guide", () => {
 				const selectedBefore = rowsOf(setup.captureCharFrame())[
 					markerRowOf(setup.captureCharFrame())
 				];
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openGuide(setup, "?");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				let frame = await settle(setup);
 				expect(rowsOf(frame)[markerRowOf(frame)]).toBe(selectedBefore);
 
@@ -671,8 +668,8 @@ describe("the in-app Key guide", () => {
 				await press(setup, "j", "the detail to scroll", (f) => detailPaneText(f) !== detailTop);
 				const detailBefore = detailPaneText(setup.captureCharFrame());
 				expect(detailBefore).not.toBe(detailTop);
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openGuide(setup, "?");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				frame = await settle(setup);
 				expect(detailFocused(frame)).toBe(true);
 				expect(detailPaneText(frame)).toBe(detailBefore);
@@ -691,8 +688,7 @@ describe("the in-app Key guide", () => {
 				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
 				await press(setup, "a", "the text to type", (f) => modelValueOf(f) === "a");
 				await press(setup, "b", "the text to type", (f) => modelValueOf(f) === "ab");
-				pressF1(setup);
-				await awaitFrame(setup, (f) => f.includes("Key guide - Override text row"), "the guide");
+				await openGuide(setup, "F1", "Key guide - Override text row");
 				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
 				frame = await settle(setup);
 				expect(modelValueOf(frame)).toBe("ab");
@@ -707,11 +703,10 @@ describe("the in-app Key guide", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
-				pressF1(setup);
-				await awaitFrame(setup, (f) => !f.includes("Key guide"), "F1 to close the guide");
+				await openGuide(setup, "?");
+				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
 
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
 			},
 			WIDTH,
@@ -727,7 +722,7 @@ describe("the in-app Key guide", () => {
 				const before = await settle(setup);
 				const markerBefore = markerRowOf(before);
 
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				// j scrolls the guide, not the list.
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
@@ -747,7 +742,7 @@ describe("the in-app Key guide", () => {
 
 				// The base is exactly where it was. While the guide is open the
 				// base is behind the overlay, so the checks run on close.
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				const frame = await settle(setup);
 				expect(frame).not.toContain("❯ Agent");
 				expect(markerRowOf(frame)).toBe(markerBefore);
@@ -774,8 +769,7 @@ describe("the in-app Key guide", () => {
 				await press(setup, "q", "the letter to type", (f) => modelValueOf(f) === "?q");
 				expect(setup.captureCharFrame()).not.toContain("Key guide");
 				// F1 is the help alias in the text row.
-				pressF1(setup);
-				await awaitFrame(setup, (f) => f.includes("Key guide - Override text row"), "the guide");
+				await openGuide(setup, "F1", "Key guide - Override text row");
 				// ? closes the guide from any mode. The typed characters stay.
 				await press(setup, "?", "the guide to close", (f) => !f.includes("Key guide"));
 				const frame = await settle(setup);
@@ -804,30 +798,20 @@ describe("the in-app Key guide", () => {
 
 				// The guide over the error: the Message row loses its reason,
 				// and F2 hands the keys to the Message view.
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				const guideFrame = await settle(setup);
 				expect(guideFrame).not.toContain("the current Message fits on the Message line");
 				expect(actionBarRowOf(guideFrame)).toContain("F2 Message");
-				pressF2(setup);
-				const viewFrame = await awaitFrame(
-					setup,
-					(f) => f.includes("Message view - Error"),
-					"the message view",
-				);
+				const viewFrame = await openMessageView(setup, "F2", "Message view - Error");
 				expect(viewFrame).not.toContain("Key guide");
 				expect(viewFrame).toContain("the daemon refused the request");
 
 				// F1 hands the keys back to the guide, over the same mode.
-				pressF1(setup);
-				const backFrame = await awaitFrame(
-					setup,
-					(f) => f.includes("Key guide - Ticket list"),
-					"the guide back",
-				);
+				const backFrame = await openGuide(setup, "F1", "Key guide - Ticket list");
 				expect(backFrame).not.toContain("Message view");
 
 				// Closing both leaves the error on the Message line.
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				const closed = await settle(setup);
 				expect(messageRowOf(closed)).toContain("the daemon refused the request");
 			},
@@ -843,7 +827,7 @@ describe("the in-app Key guide", () => {
 			async (setup) => {
 				// The message fits: the bar names Scroll and Close only. F1
 				// and ? close the guide here, so a Help hint would lie.
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
 				expect(bar).toContain("1-19/33");
@@ -861,7 +845,7 @@ describe("the in-app Key guide", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				expect(actionBarRowOf(await settle(setup))).toContain("1-19/33");
 
 				// A short, wide terminal: four visible rows, the full title

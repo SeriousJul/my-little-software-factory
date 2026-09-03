@@ -25,16 +25,19 @@ import type { AppSetup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
+	closeOverlay,
 	detailFocused,
 	HEIGHT,
 	listFocused,
 	markerRowOf,
 	messageRowOf,
+	openGuide,
+	openLauncher,
 	openPanel,
+	openSurface,
 	press,
 	pressArrow,
 	pressCtrlC,
-	pressF1,
 	pressF2,
 	rgb,
 	rowsOf,
@@ -223,8 +226,7 @@ describe("the contextual Action bar", () => {
 				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
 				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
 				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
-				await settle(setup);
+				await openSurface(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 				// Enter on a modal action that is not the selected row is not a
 				// control the modal will run: F2 refuses for the same reason the
 				// catalogue names, and says it where the operator can read it.
@@ -264,8 +266,9 @@ describe("the contextual Action bar", () => {
 				expect(awaitingBar).toContain("Enter Decide");
 				expect(awaitingBar).not.toContain("Hand off");
 
-				await press(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
-				const panelFrame = await settle(setup);
+				const panelFrame = await openSurface(setup, "return", "the decision panel", (f) =>
+					f.includes("Decision:"),
+				);
 				const panelBar = actionBarRowOf(panelFrame);
 				for (const hint of [
 					"↑↓ Select action",
@@ -314,7 +317,7 @@ describe("the contextual Action bar", () => {
 						(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
 						"the missing badge",
 					);
-					await press(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
+					await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
 					pressF2(setup);
 					const open = await awaitFrame(
 						setup,
@@ -428,7 +431,7 @@ describe("the contextual Action bar", () => {
 				// no width may leave it blank and no width may cut a key: the one
 				// surface whose job is to name keys has to name its own way out
 				// (user stories 65 and 73).
-				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				await openGuide(setup, "?");
 				for (let width = 1; width <= 13; width += 1) {
 					setup.resize(width, 3);
 					const rows = rowsOf(await settle(setup));
@@ -471,7 +474,7 @@ describe("the contextual Action bar", () => {
 		// With a type configured: c opens the launcher from the Ticket view.
 		await withApp(
 			async (setup) => {
-				await press(setup, "c", "the launcher", (f) => f.includes("Consultation launcher"));
+				await openLauncher(setup);
 			},
 			120,
 			HEIGHT,
@@ -535,11 +538,10 @@ describe("the contextual Action bar", () => {
 				// Override: e opens the panel, Esc closes it.
 				await openPanel(setup);
 				expect(await settle(setup)).toContain("❯ Agent");
-				await press(setup, "escape", "the panel to close", (f) => !f.includes("❯ Agent"));
+				await closeOverlay(setup, "❯ Agent", "the panel to close");
 				// Help: ? opens the guide, F1 closes it.
-				await press(setup, "?", "the key guide to open", (f) => f.includes("Key guide"));
-				pressF1(setup);
-				await awaitFrame(setup, (f) => !f.includes("Key guide"), "the guide to close");
+				await openGuide(setup, "?");
+				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
 				// Hand off: Enter starts the handoff, and it settles.
 				await press(setup, "return", "the handoff to settle", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("[handed-off]"),

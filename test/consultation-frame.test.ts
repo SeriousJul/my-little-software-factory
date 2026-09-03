@@ -24,8 +24,12 @@ import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
 	awaitFrame,
+	closeOverlay,
+	confirmPanel,
 	detailPaneText,
 	frameText,
+	openConsultationPanel,
+	openLauncher,
 	press,
 	pressArrow,
 	rgb,
@@ -428,14 +432,6 @@ async function pressEnter(
 	setup.mockInput.pressEnter();
 	return awaitFrame(setup, predicate, what);
 }
-async function pressEscape(
-	setup: Setup,
-	what: string,
-	predicate: (frame: string) => boolean,
-): Promise<string> {
-	setup.mockInput.pressEscape();
-	return awaitFrame(setup, predicate, what);
-}
 async function pressF12(
 	setup: Setup,
 	what: string,
@@ -479,9 +475,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
+					await openLauncher(setup);
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),
@@ -540,9 +534,15 @@ describe("Consultation launch and monitoring through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					// The first observation cycle settles the opening turn.
-					await press(setup, "v", "the consultations view with the settled state", (f) =>
-						f.includes("State: awaiting-response"),
+					// The first observation cycle settles the opening turn. The
+					// Agent view label is the stable signal that the settle has
+					// fully landed: the status badge can flip before the detail
+					// pane repaints, so wait for both.
+					await press(
+						setup,
+						"v",
+						"the consultations view with the settled state",
+						(f) => f.includes("State: awaiting-response") && f.includes("Agent view:"),
 					);
 					const detail = detailPaneText(setup.captureCharFrame());
 					expect(detail).toContain("Agent view:");
@@ -637,15 +637,11 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(joined).not.toContain("agent start");
 					expect(joined).not.toContain("agent prompt");
 					// c opens the Replacement launcher with the retained context.
-					const launcher = await press(setup, "c", "the replacement launcher", (f) =>
-						f.includes("Replacement Consultation"),
-					);
+					const launcher = await openLauncher(setup, "Replacement Consultation");
 					expect(frameText(launcher)).toContain("Original input:");
-					await pressEscape(setup, "the launcher to close", (f) => f.includes("State: failed"));
+					await closeOverlay(setup, "┌─Replacement Consultation", "the launcher to close");
 					// Relaunch: the replacement carries the failed id forward.
-					await press(setup, "c", "the replacement launcher to open again", (f) =>
-						f.includes("Replacement Consultation"),
-					);
+					await openLauncher(setup, "Replacement Consultation");
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),
@@ -876,8 +872,10 @@ describe("Consultation close and cleanup through the UI", () => {
 							/Agent: pi \(consultation-([0-9a-f]{8})\)/,
 						)?.[1];
 						if (id8 === undefined) throw new Error("no Consultation agent selected");
-						await press(setup, "x", "the close panel", (f) => f.includes("Close Consultation"));
-						await pressEnter(setup, `the close status for ${id8}`, (f) =>
+						await openConsultationPanel(setup, "x", "the close panel", (f) =>
+							f.includes("Close Consultation"),
+						);
+						await confirmPanel(setup, `the close status for ${id8}`, (f) =>
 							f.includes(`${id8} closed`),
 						);
 						closedIds.push(id8);
@@ -933,19 +931,21 @@ describe("Consultation close and cleanup through the UI", () => {
 					await press(setup, "v", "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await press(setup, "x", "the close panel", (f) => f.includes("Close Consultation"));
-					await pressEnter(setup, "the failed cleanup status", (f) =>
+					await openConsultationPanel(setup, "x", "the close panel", (f) =>
+						f.includes("Close Consultation"),
+					);
+					await confirmPanel(setup, "the failed cleanup status", (f) =>
 						f.includes("close needs recovery: refused"),
 					);
 					expect(state.consultation(FORCE_ID)?.state).toBe("closing");
 					// Retry offers force-close once the cleanup is stuck.
-					await press(setup, "x", "the recovery close panel", (f) =>
+					await openConsultationPanel(setup, "x", "the recovery close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await pressArrow(setup, "down", "the force-close action to be selected", (f) =>
 						f.includes("Force-close"),
 					);
-					await pressEnter(setup, "the force-close confirmation", (f) =>
+					await confirmPanel(setup, "the force-close confirmation", (f) =>
 						f.includes("Force-close Consultation"),
 					);
 					await pressEnter(setup, "the force-close status", (f) =>
@@ -1037,7 +1037,9 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					expect(detailPaneText(detail)).toContain("Input 2026-09-01 10:00: review auth");
 					// Delete removes the local history.
-					await press(setup, "d", "the delete panel", (f) => f.includes("Delete Consultation"));
+					await openConsultationPanel(setup, "d", "the delete panel", (f) =>
+						f.includes("Delete Consultation"),
+					);
 					await pressEnter(setup, "the empty closed history", (f) =>
 						f.includes("no closed Consultations"),
 					);
@@ -1242,9 +1244,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
+					await openLauncher(setup);
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),
@@ -1301,9 +1301,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
+					await openLauncher(setup);
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),
@@ -1366,9 +1364,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
+					await openLauncher(setup);
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),
@@ -1422,9 +1418,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
+					await openLauncher(setup);
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),
@@ -1596,9 +1590,7 @@ describe("The full Consultation operator flow", () => {
 			await withApp(
 				async (setup) => {
 					// Launch.
-					await press(setup, "c", "the launcher to open", (f) =>
-						f.includes("Consultation launcher"),
-					);
+					await openLauncher(setup);
 					await awaitFrame(
 						setup,
 						(f) => f.includes("acme/factory"),

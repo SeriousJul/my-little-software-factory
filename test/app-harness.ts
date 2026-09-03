@@ -422,20 +422,250 @@ export async function focusList(setup: Setup): Promise<string> {
 }
 
 /**
+ * The keypress handlers live on the renderer's key bus.
+ *
+ * Every surface that owns keys (the override panel, the modals, both utility
+ * overlays, the Consultation launcher, the Consultation action panel)
+ * subscribes one stable handler in a passive effect when it mounts, and the
+ * effect's cleanup removes it when the surface unmounts. React flushes those
+ * effects after the commit that opened or closed the surface, and under load
+ * the flush can lag the drawn frame by far more than a fixed grace: the frame
+ * never proves the key routing is settled, but the subscription list moves
+ * only when a surface's handler appears or leaves.
+ *
+ * The list holds the stable wrapper of each mounted hook instance, so the
+ * helpers below snapshot it around a key and compare by identity, never by
+ * length: a swap, where one overlay replaces another, leaves the count
+ * unchanged while a new handler appears and an old one leaves.
+ */
+export function keyHandlerListeners(setup: Setup): unknown[] {
+	return setup.renderer.keyInput.listeners("keypress");
+}
+
+/**
+ * Wait until the key bus holds a subscription that `before` did not.
+ *
+ * That is the moment a mounting surface's key handler takes the keys: until
+ * it is subscribed, a key for the surface is dropped by the shell below. The
+ * deadline matches the frame waits, and a timeout dumps the list size and
+ * the last frame.
+ */
+export async function awaitNewKeyHandler(
+	setup: Setup,
+	before: unknown[],
+	what: string,
+): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		if (keyHandlerListeners(setup).some((handler) => !before.includes(handler))) return;
+		if (Date.now() >= deadline) {
+			throw new Error(
+				`timed out waiting for ${what} (key handlers: ${keyHandlerListeners(setup).length})\nlast frame:\n${setup.captureCharFrame()}`,
+			);
+		}
+		await sleep(FRAME_POLL_MS);
+	}
+}
+
+/**
+ * Wait until the key bus drops one of the subscriptions `before` held.
+ *
+ * That is the moment an unmounting surface's key handler releases the keys:
+ * until it is unsubscribed, a key still reaches the stale handler, which can
+ * act on it with the closed surface's meaning.
+ */
+export async function awaitGoneKeyHandler(
+	setup: Setup,
+	before: unknown[],
+	what: string,
+): Promise<void> {
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	for (;;) {
+		const now = keyHandlerListeners(setup);
+		if (before.some((handler) => !now.includes(handler))) return;
+		if (Date.now() >= deadline) {
+			throw new Error(
+				`timed out waiting for ${what} (key handlers: ${now.length})\nlast frame:\n${setup.captureCharFrame()}`,
+			);
+		}
+		await sleep(FRAME_POLL_MS);
+	}
+}
+
+/**
  * Open the override panel, and wait until it owns the keys.
  *
  * Opening the panel renders it in the same commit as the press, but the
  * panel's key handler subscribes in an effect that flushes after the
  * commit. A panel key sent in that window reaches the app below and is
- * lost: the test would time out on its first panel key. The settle after
- * the open closes the window: when this returns, the subscription is live
- * and the next key is safe.
+ * lost: the test would time out on its first panel key. The wait on the
+ * key bus subscription closes the window deterministically: when this
+ * returns, the panel's handler is live and the next key is safe.
  */
 export async function openPanel(setup: Setup): Promise<string> {
+	const before = keyHandlerListeners(setup);
 	// The Action bar always shows the e Override hint, so the panel's own
 	// first row is the real open signal.
 	await press(setup, "e", "the override panel to open", (f) => f.includes("❯ Agent"));
+	await awaitNewKeyHandler(setup, before, "the override panel to take the keys");
 	return await settle(setup);
+}
+
+/**
+ * Open the Key guide, and wait until it owns the keys.
+ *
+ * The open renders the guide in the same commit as the press, but the guide's
+ * key handler subscribes in an effect that flushes after the commit. A guide
+ * key sent in that window reaches the shell below, which drops non-emergency
+ * keys while a utility is open, so the first guide key is lost and the test
+ * times out on it. The wait on the key bus subscription closes the window
+ * deterministically: when this returns, the guide's handler is live and the
+ * next key is safe.
+ *
+ * `opener` is the key that opens the guide from the current mode: `?` in most
+ * modes, `F1` where that is the mode's help alias. `title` is the open
+ * signal, usually the guide's mode line.
+ */
+export async function openGuide(
+	setup: Setup,
+	opener: "?" | "F1" = "?",
+	title = "Key guide",
+): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	if (opener === "F1") {
+		pressF1(setup);
+		await awaitFrame(setup, (f) => f.includes(title), "the key guide to open");
+	} else {
+		await press(setup, "?", "the key guide to open", (f) => f.includes(title));
+	}
+	await awaitNewKeyHandler(setup, before, "the key guide to take the keys");
+	return await settle(setup);
+}
+
+/**
+ * Open the Message view, and wait until it owns the keys.
+ *
+ * The view mounts in the open's commit and its key handler subscribes after
+ * it, so the first view key must wait for the subscription the same way the
+ * Key guide does. `opener` is the key that opens the view from the current
+ * mode: F2 anywhere, or `m` from the Message line's own hint.
+ */
+export async function openMessageView(
+	setup: Setup,
+	opener: "m" | "F2" = "F2",
+	title = "Message view",
+): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	if (opener === "F2") {
+		pressF2(setup);
+	} else {
+		setup.mockInput.pressKey("m");
+	}
+	await awaitFrame(setup, (f) => f.includes(title), "the message view to open");
+	await awaitNewKeyHandler(setup, before, "the message view to take the keys");
+	return await settle(setup);
+}
+
+/**
+ * Open the Consultation launcher, and wait until it owns the keys.
+ *
+ * The launcher's fields take the first keys after the open: Tab to the input,
+ * the typed request, Enter to launch. A key sent before the launcher's key
+ * handler subscribes is dropped by the shell below, so the wait on the key
+ * bus subscription runs before any of them.
+ */
+export async function openLauncher(setup: Setup, title = "Consultation launcher"): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	await press(setup, "c", "the launcher to open", (f) => f.includes(title));
+	await awaitNewKeyHandler(setup, before, "the Consultation launcher to take the keys");
+	return await settle(setup);
+}
+
+/**
+ * Close an open key-owning surface, and wait until it releases the keys.
+ *
+ * The close unmounts the surface in the same commit, but the surface's key
+ * handler is removed in an effect cleanup that flushes after it. A key sent
+ * in that window reaches both the shell in the base mode and the stale
+ * surface handler, and the two can act on it with different meanings: the
+ * classic case is a guide closed and immediately reopened, where the stale
+ * handler's close lands after the shell's open and the guide never appears.
+ * The wait on the key bus subscription closes the window deterministically:
+ * when this returns, no handler of the closed surface is still subscribed,
+ * so the next key is safe.
+ *
+ * `title` is the substring that marks the surface open, and `closeKey` the
+ * key that closes it (Escape by default, F1 or F2 where that is the
+ * surface's own close alias).
+ */
+export async function closeOverlay(
+	setup: Setup,
+	title: string,
+	what: string,
+	closeKey: "escape" | "F1" | "F2" = "escape",
+): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	if (closeKey === "F1") pressF1(setup);
+	else if (closeKey === "F2") pressF2(setup);
+	else setup.mockInput.pressEscape();
+	await awaitFrame(setup, (f) => !f.includes(title), what);
+	await awaitGoneKeyHandler(setup, before, `${what} to release the keys`);
+	return await settle(setup);
+}
+
+/**
+ * Open a key-owning surface on a key, and wait until it owns the keys.
+ *
+ * The decision and missing modals open this way: Enter from the base mounts
+ * the modal in the open's commit, and the test then sends the modal's own
+ * keys. The modal's key handler subscribes in the passive effect after the
+ * commit, so the wait on the key bus subscription runs before any modal key.
+ */
+export async function openSurface(
+	setup: Setup,
+	key: string,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	await press(setup, key, what, predicate);
+	await awaitNewKeyHandler(setup, before, `${what} to take the keys`);
+	return await settle(setup);
+}
+
+/**
+ * x and d open a confirmation panel over the consultations view for the
+ * states that need one. The panel's key handler subscribes after the open
+ * commit, and the next key in the test is the panel's own, so wait for the
+ * panel's subscription the same way.
+ */
+export async function openConsultationPanel(
+	setup: Setup,
+	key: "x" | "d",
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<void> {
+	const before = keyHandlerListeners(setup);
+	await press(setup, key, what, predicate);
+	await awaitNewKeyHandler(setup, before, "the confirmation panel to take the keys");
+}
+
+/**
+ * Confirm an open confirmation panel on Enter, and wait until the panel
+ * releases the keys. A key sent while the panel's unsubscribe is still
+ * pending reaches the stale handler, which would run the panel's own action
+ * again on the same key.
+ */
+export async function confirmPanel(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	setup.mockInput.pressEnter();
+	const frame = await awaitFrame(setup, predicate, what);
+	await awaitGoneKeyHandler(setup, before, `${what} to release the keys`);
+	return frame;
 }
 
 /**

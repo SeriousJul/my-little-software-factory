@@ -18,11 +18,13 @@ import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
+	closeOverlay,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
+	openGuide,
+	openMessageView,
 	press,
-	pressF1,
 	pressF2,
 	rgb,
 	rowsOf,
@@ -401,7 +403,7 @@ describe("the permanent Message line", () => {
 					messageRowOf(f).startsWith("Working: handing off"),
 				);
 				// The truncated working earns the view.
-				await press(setup, "m", "the message view", (f) => f.includes("Message view - Working"));
+				await openMessageView(setup, "m", "Message view - Working");
 				// The failure lands while the view is open.
 				await sleep(4000);
 				const frame = await settle(setup);
@@ -415,7 +417,7 @@ describe("the permanent Message line", () => {
 				// after it opened, so the surface reports it like any other.
 				expect(messageRowOf(frame).trim()).toBe("Error: error: the daemon is down");
 				// And the base frame behind it says the same.
-				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
+				await closeOverlay(setup, "Message view", "the view to close");
 				expect(messageRowOf(await settle(setup)).trim()).toBe("Error: error: the daemon is down");
 			},
 			WIDTH,
@@ -472,9 +474,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				pressF2(setup);
-				await awaitFrame(setup, (f) => f.includes("Message view - Error"), "the view");
-				let frame = await settle(setup);
+				let frame = await openMessageView(setup, "F2", "Message view - Error");
 				// 2056 characters wrap to 22 rows; 20 fit.
 				expect(frame).toContain("1-20/22");
 				await press(setup, "j", "the scroll down", (f) => f.includes("2-21/22"));
@@ -482,13 +482,11 @@ describe("the permanent Message line", () => {
 				expect(frame).toContain("2-21/22");
 				await press(setup, "k", "the scroll up", (f) => f.includes("1-20/22"));
 				// Esc closes; the error is back on the base line.
-				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
+				await closeOverlay(setup, "Message view", "the view to close");
 				expect(messageRowOf(await settle(setup))).toContain("the daemon refused");
 				// F2 closes too.
-				pressF2(setup);
-				await awaitFrame(setup, (f) => f.includes("Message view - Error"), "the view");
-				pressF2(setup);
-				await awaitFrame(setup, (f) => !f.includes("Message view"), "the view to close");
+				await openMessageView(setup, "F2", "Message view - Error");
+				await closeOverlay(setup, "Message view", "the view to close", "F2");
 				expect(messageRowOf(setup.captureCharFrame())).toContain("the daemon refused");
 			},
 			WIDTH,
@@ -504,8 +502,7 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				pressF2(setup);
-				await awaitFrame(setup, (f) => f.includes("Message view - Error"), "the view");
+				await openMessageView(setup, "F2", "Message view - Error");
 				// The view's Close owns the row's end cells, so a frame that
 				// cannot hold the hint states one whole key instead. It never
 				// states part of a key, and only falls silent where no key of
@@ -527,7 +524,7 @@ describe("the permanent Message line", () => {
 					(f) => actionBarRowOf(f).includes("Esc/F2 Close"),
 					"the view's full Close hint",
 				);
-				await press(setup, "escape", "the view to close", (f) => !f.includes("Message view"));
+				await closeOverlay(setup, "Message view", "the view to close");
 				expect(actionBarRowOf(await settle(setup))).toContain("Help");
 			},
 			WIDTH,
@@ -541,14 +538,9 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				await press(setup, "m", "the message view", (f) => f.includes("Message view - Error"));
-				pressF1(setup);
-				await awaitFrame(
-					setup,
-					(f) => f.includes("Key guide - Ticket list"),
-					"the guide from the view",
-				);
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openMessageView(setup, "m", "Message view - Error");
+				await openGuide(setup, "F1", "Key guide - Ticket list");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				// The view closed with the guide: the base holds the truncated error.
 				expect(messageRowOf(await settle(setup)).trim()).toBe(
 					truncateToWidth(`Error: ${LONG_LINE}`, WIDTH),
@@ -563,11 +555,9 @@ describe("the permanent Message line", () => {
 		await withApp(
 			async (setup) => {
 				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
-				await press(setup, "m", "the message view", (f) => f.includes("Message view - Error"));
-				await press(setup, "?", "the guide from the view", (f) =>
-					f.includes("Key guide - Ticket list"),
-				);
-				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+				await openMessageView(setup, "m", "Message view - Error");
+				await openGuide(setup, "?", "Key guide - Ticket list");
+				await closeOverlay(setup, "Key guide", "the guide to close");
 				expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
 					truncateToWidth(`Error: ${LONG_LINE}`, WIDTH),
 				);
