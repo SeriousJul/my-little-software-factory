@@ -338,7 +338,7 @@ interface ObservationOptions {
 	 * changes, so a failure marker can appear without any state change.
 	 */
 	onAgents?: (agents: readonly HerdrAgent[] | null) => void;
-	/** A message for the status line. */
+	/** A message for the Message line. */
 	onStatus: (kind: "info" | "warning" | "error", text: string) => void;
 	/** Optional Consultation side of the shared monitor. */
 	onConsultationAttention?: (consultationId: string) => void;

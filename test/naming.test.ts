@@ -9,7 +9,9 @@ import {
 	branchNameFor,
 	consultationAgentName,
 	consultationBranchName,
+	cycleAgentName,
 	shortStableIdentity,
+	ticketAgentNames,
 	titleSlug,
 } from "../src/naming.ts";
 
@@ -24,6 +26,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	},
 	state: "open",
 	handoff: null,
+	workCycle: 1,
 	description: "A description.",
 	sourceKind: "github-issue",
 	externalKey,
@@ -37,6 +40,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	handoffRecoveryRequired: false,
 	handoffCount: 0,
 	lastCompletion: null,
+	leftover: null,
 });
 
 describe("titleSlug", () => {
@@ -175,5 +179,107 @@ describe("Consultation naming", () => {
 		const branch = consultationBranchName("abc", `type-${"x".repeat(120)}`);
 		expect(branch.length).toBe(100);
 		expect(branch.endsWith("-")).toBe(false);
+	});
+});
+
+describe("cycleAgentName", () => {
+	test("keeps the ticket's own words and names the work cycle", () => {
+		expect(cycleAgentName("Retry policy for webhooks", 2)).toBe("retry-policy-for-webhooks-c2");
+	});
+
+	test("the handoff's ordinal tells two handoffs of one cycle apart", () => {
+		expect(cycleAgentName("Retry policy for webhooks", 2, 5)).toBe(
+			"retry-policy-for-webhooks-c2-5",
+		);
+	});
+
+	test("a digit slug keeps its prefix beside its cycle", () => {
+		expect(cycleAgentName("2fa rollout", 1)).toBe("t-2fa-rollout-c1");
+	});
+
+	test("a cut cycle name still says which cycle it belongs to", () => {
+		const title = "a-very-long-title-that-goes-on-and-on-past-thirty-two-characters";
+		const stable = agentNameFor(title);
+		const cycle = cycleAgentName(title, 3);
+		expect(stable.length).toBe(32);
+		expect(cycle.length).toBeLessThanOrEqual(32);
+		expect(cycle.endsWith("-c3")).toBe(true);
+		expect(cycle).not.toBe(stable);
+		expect(/^[a-z][a-z0-9_-]{0,31}$/.test(cycle)).toBe(true);
+	});
+
+	test("a short title's cycle name differs from its stable name", () => {
+		for (const title of ["Retry policy", "2fa rollout", "!!!", "Close the mutation testing gaps"]) {
+			expect(cycleAgentName(title, 1)).not.toBe(agentNameFor(title));
+			expect(cycleAgentName(title, 1).length).toBeLessThanOrEqual(32);
+		}
+	});
+});
+
+describe("ticketAgentNames", () => {
+	/**
+	 * A slug whose own tail spells the cycle suffix: the cut that keeps the
+	 * suffix can rebuild the stable name out of it. `-c2` at the 32-character
+	 * boundary is the shortest case where the two names meet.
+	 */
+	const rebuildsStable = `${"a".repeat(29)}-c2`;
+
+	test("offers the stable name, then the cycle, then the handoff ordinal", () => {
+		expect(ticketAgentNames("Retry policy", 2, 3)).toEqual([
+			"retry-policy",
+			"retry-policy-c2",
+			"retry-policy-c2-3",
+		]);
+	});
+
+	test("drops a cycle name that rebuilds the stable name", () => {
+		expect(agentNameFor(rebuildsStable)).toBe(rebuildsStable);
+		expect(cycleAgentName(rebuildsStable, 2)).toBe(rebuildsStable);
+		// The repeat is gone rather than left for the caller to notice, and
+		// the ordinal name is still there to start under.
+		expect(ticketAgentNames(rebuildsStable, 2, 1)).toEqual([
+			rebuildsStable,
+			`${"a".repeat(27)}-c2-1`,
+		]);
+	});
+
+	test("drops an ordinal name that rebuilds the stable name", () => {
+		const title = `${"b".repeat(27)}-c2-3`;
+		expect(agentNameFor(title)).toBe(title);
+		// Here the cycle name is the usable one, and the ordinal name is the
+		// repeat: both orders of the same rebuild.
+		expect(ticketAgentNames(title, 2, 3)).toEqual([title, cycleAgentName(title, 2)]);
+	});
+
+	test("the t- prefix moves the same boundary", () => {
+		const title = `2${"a".repeat(26)}-c2`;
+		const stable = agentNameFor(title);
+		expect(stable).toBe(`t-${title}`);
+		expect(cycleAgentName(title, 2)).toBe(stable);
+		expect(ticketAgentNames(title, 2, 1)).toEqual([stable, `t-2${"a".repeat(24)}-c2-1`]);
+	});
+
+	test("a handoff always keeps two names to ask for, and no name repeats", () => {
+		const titles = [
+			"Retry policy",
+			"2fa rollout",
+			"!!!",
+			rebuildsStable,
+			`${"b".repeat(27)}-c2-3`,
+			`2${"a".repeat(26)}-c2`,
+			"a-very-long-title-that-goes-on-and-on-past-thirty-two-characters",
+		];
+		for (const title of titles) {
+			for (const cycle of [1, 2, 12]) {
+				const candidates = ticketAgentNames(title, cycle, cycle + 1);
+				expect(candidates.length).toBe(new Set(candidates).size);
+				expect(candidates.length).toBeGreaterThanOrEqual(2);
+				expect(candidates[0]).toBe(agentNameFor(title));
+				for (const name of candidates) {
+					expect(name.length).toBeLessThanOrEqual(32);
+					expect(/^[a-z][a-z0-9_-]{0,31}$/.test(name)).toBe(true);
+				}
+			}
+		}
 	});
 });

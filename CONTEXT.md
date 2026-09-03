@@ -36,12 +36,17 @@ The near-fullscreen Interaction mode above an awaiting ticket: the turn log, and
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
+**Live view**:
+The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
+When the turn settles it becomes the Decision modal; when the agent goes missing it becomes the Missing modal.
+_Avoid_: watch, live log, agent stream
+
 **Missing modal**:
 The Interaction mode above a ticket whose agent is missing: restart or abandon.
 _Avoid_: missing panel, restart popup
 
 **Interaction mode**:
-The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, Decision modal, Missing modal, or Message view.
+The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, Decision modal, Live view, Missing modal, or Message view.
 _Avoid_: context, screen
 
 **Text field**:
@@ -223,6 +228,7 @@ _Avoid_: abandon, force delete
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
+It asks Herdr for the ticket's stable Agent name, and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
 _Avoid_: assign, dispatch, launch
 
 **Handoff attempt**:
@@ -304,6 +310,17 @@ _Avoid_: sandbox, isolation
 The condition where an Agent would start in a live checkout already used by another active Agent.
 It blocks the start unless the operator gives a one-shot safety confirmation.
 _Avoid_: dirty checkout, parallel limit
+
+**Leftover environment**:
+The workspace, tab, or Agent of a ticket's closed Handoff that Herdr still holds after its Close cleanup.
+It is a durable fact on the ticket, visible in its row and in its detail.
+It never blocks a Handoff of that ticket.
+_Avoid_: orphaned agent, zombie workspace, stale checkout
+
+**Clear**:
+The one operator action that retries the Close cleanup of a ticket's Leftover environment.
+A forced removal is its own explicit choice within the action, because it discards a dirty checkout and stops the Agents in the workspace.
+_Avoid_: force delete, cleanup retry
 
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
