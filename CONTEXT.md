@@ -35,12 +35,17 @@ _Avoid_: help popup, keybinding popin, shortcut window
 The near-fullscreen Interaction mode above an awaiting ticket: the turn log, and the rows the operator confirms: close, goto, and the workflow handoffs.
 _Avoid_: action panel, decision popup
 
+**Live view**:
+The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
+When the turn settles it becomes the Decision modal; when the agent goes missing it becomes the Missing modal.
+_Avoid_: watch, live log, agent stream
+
 **Missing modal**:
 The Interaction mode above a ticket whose agent is missing: restart or abandon.
 _Avoid_: missing panel, restart popup
 
 **Interaction mode**:
-The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, Decision modal, Missing modal, or Message view.
+The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, Decision modal, Live view, Missing modal, or Message view.
 _Avoid_: context, screen
 
 **Text field**:
