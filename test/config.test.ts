@@ -314,22 +314,18 @@ describe("validateConfig", () => {
 			// and ignored by git.
 			expect(config.stateFile).toBe(".factory-development.sqlite");
 			expect(config.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
-			expect(config.sources).toEqual([
-				{
-					name: "factory-issues",
-					kind: "github-issues",
-					refreshIntervalSeconds: 60,
-					repositories: ["SeriousJul/my-little-software-factory"],
-					host: "github.com",
-				},
-				{
-					name: "factory-pull-requests",
-					kind: "github-pull-requests",
-					refreshIntervalSeconds: 60,
-					repositories: ["SeriousJul/my-little-software-factory"],
-					host: "github.com",
-				},
+			// Both adapters track this repository. A local development setup may
+			// add more repositories to the same sources, so track membership
+			// rather than the exact list.
+			expect(config.sources.map(({ name, kind }) => ({ name, kind }))).toEqual([
+				{ name: "factory-issues", kind: "github-issues" },
+				{ name: "factory-pull-requests", kind: "github-pull-requests" },
 			]);
+			for (const source of config.sources) {
+				expect(source.refreshIntervalSeconds).toBe(60);
+				expect(source.host).toBe("github.com");
+				expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
+			}
 			// Normal gh authentication and no explicit filters: the file reads
 			// neither an auth table nor a filter, so no token is committed.
 			for (const source of config.sources) {

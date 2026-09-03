@@ -90,4 +90,14 @@ const sources = config.sources.map((source) => createTicketSource(source, runner
 // controls. They need terminal mouse reporting, so this intentionally
 // supersedes the old host-owned text-selection setting.
 const renderer = await createCliRenderer({ exitOnCtrlC: true, useMouse: true });
+// The native renderer diffs each frame against its model of the screen and
+// marks a model cell as written while it emits the cell's bytes. If the host
+// terminal loses bytes of a frame, the model and the screen diverge and the
+// later frames skip the lost cells, so stale fragments of an earlier frame
+// linger until the next full repaint (anomalyco/opentui issue 1187). Force a
+// full repaint every frame so any lost bytes are overwritten within one
+// frame and the screen always converges to the model.
+renderer.setFrameCallback(async () => {
+	(renderer as unknown as { forceFullRepaintRequested?: boolean }).forceFullRepaintRequested = true;
+});
 createRoot(renderer).render(createElement(App, { config, runner, configPath, state, sources }));
