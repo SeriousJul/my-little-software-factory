@@ -1640,7 +1640,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		);
 
 		// The reason is herdr's own message with its stable error code: the
-		// caller reports it on the status line, and the ticket carries it as
+		// caller reports it on the Message line, and the ticket carries it as
 		// the durable reason of its leftover environment.
 		expect(failure).toBe(
 			"fatal: the worktree contains modified or untracked files, use --force to delete it (dirty_worktree_requires_force)",

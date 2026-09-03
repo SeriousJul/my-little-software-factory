@@ -59,7 +59,7 @@ const identity = "github:github.com:I_5";
 const secondIdentity = "github:github.com:I_6";
 const repoIdentity = "github.com/acme/factory";
 /**
- * A terminal wide enough to hold a whole status line at once.
+ * A terminal wide enough to hold a whole Message line at once.
  *
  * The status row is one line, truncated to the terminal width, so a test
  * that reads two facts off it (a failure and the warning that came with it)
@@ -567,6 +567,53 @@ describe("the decision modal", () => {
 				// The route's decision landed on the settled turn's trace when
 				// the routed handoff started, not at the claim.
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a routed handoff does not record the predecessor it closed as leftover", async () => {
+		const app = seededApp("awaiting");
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+		// The previous agent holds the stable name. The routed handoff starts
+		// under its cycle name, then closes the predecessor tab that held it.
+		app.runner.set(
+			"herdr",
+			["agent", "start", "persist-source-facts", "--kind", "pi", "--pane", "pane-9"],
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts is already used; candidates: terminal_id=term_1 pane_id=pane-1 workspace_id=ws-1 tab_id=tab-1 cwd=unknown status=Idle"}}\n',
+			},
+		);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
+				expect(app.runner.commands()).toContain("herdr tab close tab-1");
+				// The name holder is gone with its predecessor tab. It is not a
+				// leftover fact, and the row must not carry a false marker.
+				expect(app.state.leftoverEnvironment(identity)).toBe(null);
+				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1551,8 +1598,13 @@ describe("the leftover environment", () => {
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("leftover"), "the leftover marker");
 				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				const panel = frameText(setup.captureCharFrame());
+				// A tab retry cannot use --force. The panel gives no Force row or
+				// force guidance when no checkout removal is available.
+				expect(panel).not.toContain("Force");
+				expect(panel).not.toContain("Force adds --force");
 				await pressReturn(setup, "the refusal", (f) =>
-					// The status line is truncated to the terminal width here.
+					// The Message line is truncated to the terminal width here.
 					f.includes("close its work cycle before you clear"),
 				);
 				// The refusal names the handle it refused: the live agent's tab.
@@ -1666,6 +1718,75 @@ describe("the leftover environment", () => {
 				);
 				expect(commands.lastIndexOf("herdr worktree remove --workspace ws-1")).toBeLessThan(
 					commands.findIndex((c) => c.startsWith("herdr workspace create")),
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), runner: gate.runner },
+		);
+		app.state.close();
+	});
+
+	test("queued Close cleanups finish before their queued handoff starts", async () => {
+		const app = seededApp("awaiting", {}, pairSuccess, "worktree");
+		stubCheckout(app);
+		const second = app.state.claimHandoff(
+			secondIdentity,
+			{ agentType: "pi", environment: "worktree", taskType: "implement", model: "", thinking: "" },
+			"open",
+		);
+		if (!second.ok) throw new Error(second.reason);
+		app.state.settleHandoff(second.claim.attemptId, true, undefined, {
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-2",
+		});
+		app.state.settleTurn({
+			ticketIdentity: secondIdentity,
+			handoffId: second.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "The second turn is done.",
+			turnLog: [{ kind: "text", text: "The second turn is done." }],
+			completedAt: "2026-09-02T11:00:00.000Z",
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		const gate = gatedRunner(app, (command) => command.startsWith("herdr worktree remove"));
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[awaiting]"),
+					"the first awaiting ticket",
+				);
+				await pressReturn(setup, "the first decision", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the first Close cleanup", () => gate.busy());
+				await awaitFrame(setup, (f) => !f.includes("Decision:"), "the first panel closing");
+
+				await pressArrow(setup, "up", "the second ticket", (f) =>
+					detailPaneText(f).includes("External key: #6"),
+				);
+				await pressReturn(setup, "the second decision", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the queued second Close cleanup", (f) =>
+					ticketRow(f, "Watch agent turns").includes("[open]"),
+				);
+				// The second ticket is open again. Its handoff claims now, but the
+				// cleanup seat keeps its external work out of herdr.
+				setup.mockInput.pressEnter();
+				await settle(setup);
+
+				gate.release();
+				await awaitFrame(setup, () => gate.arrivals() === 2, "the second cleanup reaching herdr");
+				expect(app.runner.commands()).not.toContain("herdr workspace list");
+
+				gate.release();
+				await awaitFrame(
+					setup,
+					() => app.runner.commands().includes("herdr workspace list"),
+					"the queued handoff after both cleanups",
 				);
 			},
 			WIDTH,
@@ -1887,14 +2008,16 @@ describe("the leftover environment", () => {
 	function gatedRunner(
 		app: SeededApp,
 		matches: (command: string) => boolean,
-	): { runner: CommandRunner; release: () => void; busy: () => boolean } {
+	): { runner: CommandRunner; release: () => void; busy: () => boolean; arrivals: () => number } {
 		const waiting: (() => void)[] = [];
 		let held = 0;
+		let arrivals = 0;
 		return {
 			runner: {
 				run: async (name, args, options) => {
 					const command = [name, ...args].join(" ").trim();
 					if (matches(command)) {
+						arrivals += 1;
 						held += 1;
 						await new Promise<void>((resolve) => waiting.push(resolve));
 						held -= 1;
@@ -1904,6 +2027,7 @@ describe("the leftover environment", () => {
 			},
 			release: () => waiting.shift()?.(),
 			busy: () => held > 0,
+			arrivals: () => arrivals,
 		};
 	}
 
@@ -2019,6 +2143,49 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
+	test("an earlier own collision stays durable when a later name belongs to a stranger", async () => {
+		const app = leftoverNameApp();
+		// The earlier close succeeded, so the ticket has its old handoff handles
+		// but no durable fact. The name collision itself must create that fact.
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], { code: 0 });
+		const collisionRunner: CommandRunner = {
+			run: (command, args, options) =>
+				command === "herdr" &&
+				args[0] === "agent" &&
+				args[1] === "start" &&
+				args[2] !== "persist-source-facts"
+					? Promise.resolve({
+							code: 1,
+							stdout: "",
+							stderr:
+								'{"error":{"code":"agent_name_taken","message":"agent name persist-source-facts-c2 is already used; candidates: terminal_id=term_2 pane_id=pane-stranger workspace_id=ws-stranger tab_id=tab-stranger cwd=unknown status=Idle"}}\n',
+						})
+					: app.runner.run(command, args, options),
+		};
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await pressReturn(setup, "the handoff stopped by the stranger", (f) =>
+					f.includes("pane pane-stranger"),
+				);
+				// The stranger blocks the new name, but the stable name was still
+				// this ticket's own leftover. That first collision remains a fact.
+				expect(app.state.leftoverEnvironment(identity)).toEqual(
+					expect.objectContaining({ paneId: "pane-1", workspaceId: "ws-1" }),
+				);
+				expect(ticketRow(setup.captureCharFrame())).toContain("leftover");
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), runner: collisionRunner },
+		);
+		app.state.close();
+	});
+
 	test("a prompt that fails beside the leftover keeps its own reason", async () => {
 		const app = leftoverNameApp();
 		// The handoff's own failure: the agent started under its cycle name,
@@ -2040,7 +2207,7 @@ describe("the leftover environment", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await closeAndHandOffAgain(setup);
-				// One status line carries both facts: the failure first, the name
+				// One Message line carries both facts: the failure first, the name
 				// warning after it. The line is truncated to the terminal width,
 				// so the test renders wide enough to hold the whole of it.
 				const shown = frameText(setup.captureCharFrame());
@@ -2412,7 +2579,7 @@ describe("the handoff queue", () => {
 					"the missing badge",
 				);
 				// Every key here waits for its effect and then for the chained
-				// updates (the observation tick, the status line) to go quiet:
+				// updates (the observation tick, the Message line) to go quiet:
 				// a key that lands while they are in flight stalls the test
 				// renderer.
 				const pressQuiet = async (

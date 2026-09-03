@@ -9,7 +9,7 @@ ADR 0005 ends a work cycle at close, and the Close cleanup then removes the
 herdr environment that cycle started. For a worktree handoff that cleanup runs
 `herdr worktree remove --workspace <id>`, and herdr refuses a dirty checkout
 without `--force`. The control plane keeps the state transition and warns on
-the message line (issue #7), so the cycle closes while the workspace, its
+the Message line (issue #7), so the cycle closes while the workspace, its
 pane, and the agent in it stay alive. A live-worktree handoff can leave the
 same shape behind when its `tab close` fails.
 
@@ -49,7 +49,7 @@ The considered alternatives:
 - Force-remove the leftover workspace when a handoff needs the name. Rejected:
   the checkout is dirty, and discarding someone's uncommitted work is never the
   side effect of an unrelated action.
-- Report the failed cleanup as a message line only, as today. Rejected: the
+- Report the failed cleanup on the Message line only, as today. Rejected: the
   line fades, the fact does not, and the ticket's next handoff fails on it.
 
 ## Decision
@@ -67,6 +67,10 @@ leftover records it too, so the fact exists even when no cleanup ran, as after
 a crash between the decision and the cleanup. The ticket's newest unresolved
 fact is `leftover`, and it shows in the list row and in the detail pane: which
 workspace, tab, and pane still live, since when, and what the operator can do.
+When the handoff's own close of the predecessor tab settles after the name
+refusal, the handoff drops the collision instead: the tab it closed is not a
+leftover, and a routed handoff that records one would teach the fact about an
+environment the cycle already ended.
 
 **The action.** One control, `w`, on a ticket that holds the fact. It retries
 the Close cleanup of every leftover environment of that ticket, and herdr's
@@ -84,14 +88,15 @@ dangerous as a workspace one. The operator closes the live cycle first, and its
 own cleanup ends the leftover with it.
 
 **The seat.** One handoff runs at a time, and a herdr environment change is
-the same kind of work. A clear holds the seat for all its cleanups, refuses
-while a handoff is in flight, and refuses while another clear runs. The Close
-cleanup of any path takes the seat too when it is free, and never waits for
-it: the cycle it closes has already ended, so a cleanup held behind a handoff
-would only delay the fact the operator sees. A handoff the operator starts
-beside an environment change queues behind it, so no agent is built in a
-workspace herdr is taking away, and no removal of that ticket reaches under a
-new agent.
+the same kind of work. The seat is held by a handoff in flight or by a
+queued environment change, and every environment change takes it: the Clear
+action's cleanups, and the Close cleanup of every path. A cleanup queued
+behind an in-flight handoff reserves the seat from the moment it is queued,
+and cleanups run one at a time behind each other. A handoff the operator
+starts beside any of that queues behind every queued cleanup, so no agent is
+built in a workspace herdr is taking away, and no removal of that ticket
+reaches under a new agent. A queued handoff re-reads the durable state when
+it runs, so the wait cannot start a ticket that moved on.
 
 **The reach.** A cleanup that succeeds clears the facts it ended, and only
 those: the facts that named the workspace it removed, or the one that named the
@@ -127,7 +132,7 @@ the holder's pane and workspace and says it is no agent of this ticket.
   operator no longer works out in herdr that a pane of the same ticket blocks
   it, and the herdr reason is never the only clue.
 - The leftover survives a new handoff, so the fact stays on the ticket until
-  someone clears it: the message line is no longer the only place it appears.
+  someone clears it: the Message line is no longer the only place it appears.
   A stale fact is possible the other way too - a workspace closed in herdr by
   hand leaves the record standing until a clear or a Close cleanup resolves it.
 - Two agents can live in one worktree checkout: the leftover one, and the one
@@ -135,19 +140,27 @@ the holder's pane and workspace and says it is no agent of this ticket.
   keys on the pane of the ticket's latest handoff (ADR 0006), so a leftover
   agent the operator re-prompts after the new handoff is not reclaimed. The
   visible fact and its action are what keep that window small.
+- An earlier collision survives a later one of a different kind: a handoff
+  that meets its own leftover's name and then a stranger's name keeps the own
+  collision recorded. The stranger's refusal is the attempt's reason, but it
+  says nothing about the ticket's own environment, and the fact is the one
+  the operator can act on. The detail pane shows the `--force` guidance only
+  while a leftover the guidance could reach stands.
 - herdr's `agent_name_taken` message is read for the holder's pane and
   workspace. It is a herdr 0.8.2 format, and the fake-runner tests pin it. When
   herdr changes it, the collision degrades to a reported failure with herdr's
   own reason, unless the ticket already carries the durable fact, which needs
   no message to act on.
 - The herdr name the operator sees in the control plane can say a different
-  cycle from the one they expect. The status line and the detail pane both say
-  so while a leftover of the ticket stands.
+  cycle from the one they expect. The Message line and the detail pane both
+  say so while a leftover of the ticket stands.
 - The seat makes an environment change wait for a handoff, and a handoff wait
-  for an environment change. A queued handoff runs when the cleanup settles,
-  and the durable state is re-read before it runs, so the wait cannot start a
-  ticket that moved on. A clear that meets a taken seat reports it and does
-  nothing: the operator presses the key again.
+  for an environment change. Close cleanups queue behind an in-flight handoff
+  as well: the cycle they close has already ended, so the wait delays only
+  the fact the operator sees, and a queued handoff never starts in a
+  workspace a cleanup is still taking away. A clear that meets an in-flight
+  handoff or another clear reports it and does nothing: the operator presses
+  the key again.
 - A stale fact can survive its own environment the other way too: a handoff
   that recorded no handle can end nothing in herdr, so its close clears only
   its own row. Facts of other rows stand until a cleanup reaches them, and a

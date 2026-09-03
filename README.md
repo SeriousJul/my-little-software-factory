@@ -215,7 +215,7 @@ the leftovers that named that workspace, a tab close the one that named that
 tab, and a cleanup that ran no command only the fact of its own cycle. Facts
 outside that reach stand. Because a cleanup reaches an environment, it refuses
 a leftover naming the ticket's own live agent: the workspace, tab, or pane
-that agent runs on, and the status line names what it refused. Close that work
+that agent runs on, and the Message line names what it refused. Close that work
 cycle first, and its own cleanup ends the leftover with it. A clear refused
 because a handoff or another clear is already at herdr reports that too, and
 the operator presses `w` again. A clear holds the handoff seat while it runs,
@@ -270,7 +270,7 @@ or the badge drops and the title takes the cells. A partial badge could
 read as another task type, so it never truncates; the full value stays in
 the detail pane.
 
-Under the panes sits a status line. It carries the progress and the outcome
+Under the panes sits the Message line. It carries the progress and the outcome
 of the last handoff: `handing off "..."...` while one is in flight, the
 warning a sibling clone raises, or the readable reason a handoff failed.
 A clean handoff clears the line. While a handoff is in flight the keys keep
@@ -324,14 +324,14 @@ Restart repeats the interrupted handoff's Model and Thinking.
   rendered from the task type's template with the ticket's repository,
   title, and description. When the ticket's own leftover agent still holds
   that name, the handoff starts under the same slug with its work cycle, as
-  `persist-source-facts-c2`, and says so on the status line (ADR 0012). A
+  `persist-source-facts-c2`, and says so on the Message line (ADR 0012). A
   name held by any other agent fails the handoff, with the pane and workspace
   that hold it in the reason.
 - The ticket moves to `handed-off` when the agent starts, even if the prompt
   later fails. The agent is running and can be prompted by hand. A failure
   before the start (a missing herdr, a missing checkout, a clone target the
   filesystem refuses) leaves the ticket open and shows the reason on the
-  status line. The app never crashes on a handoff failure.
+  Message line. The app never crashes on a handoff failure.
 
 ### Repository resolution
 
@@ -347,7 +347,7 @@ The control plane finds the ticket's repository in this order:
 
 When the convention path holds a different repository, the control plane
 clones the ticket's repository to a sibling path (for example
-`~/src/billing_1`), hands off there, warns on the status line, and hands the
+`~/src/billing_1`), hands off there, warns on the Message line, and hands the
 mapping back to be written to the config file, so the next handoff resolves
 it explicitly. The mapping is handed back even when a later step of the
 handoff fails, so the clone is not lost.

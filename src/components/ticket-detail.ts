@@ -44,7 +44,7 @@ export function detailLines(
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
 	// and says what the operator can do, so the ticket itself carries the
-	// fact instead of a message line that fades.
+	// fact instead of a Message line that fades.
 	const leftover = ticket.leftover;
 	if (leftover !== null) {
 		const at = leftover.at === "" ? "" : ` ${leftover.at.slice(0, 16).replace("T", " ")}`;

@@ -212,10 +212,10 @@ function consultationNamePlan(name: string): NamePlan {
  * The outcome of one handoff attempt, as one of three facts.
  *
  * - `failed`: the agent never started. The ticket stays where the claim
- *   left it, and the reason goes to the status line.
+ *   left it, and the reason goes to the Message line.
  * - `prompt-failed`: the agent started but the prompt did not get through.
  *   The agent is running and can be prompted manually in herdr, so the
- *   ticket moves to handed-off, and the reason goes to the status line.
+ *   ticket moves to handed-off, and the reason goes to the Message line.
  * - `ok`: the agent started and received the prompt.
  *
  * An agent-started outcome carries the handles it started, so the state
@@ -227,8 +227,9 @@ function consultationNamePlan(name: string): NamePlan {
  *
  * `collision` is set on an outcome that met herdr's `agent_name_taken`: it
  * says whose agent held the name, and the name the handoff started under
- * when it took a cycle name instead of failing. The caller makes the
- * leftover it names a durable fact on the ticket (ADR 0012).
+ * when it took a cycle name instead of failing. `ownCollision` keeps an
+ * earlier collision with this ticket's own agent when a later candidate is
+ * held by a stranger. The caller makes every own collision durable (ADR 0012).
  */
 export type HandoffOutcome =
 	| {
@@ -236,6 +237,7 @@ export type HandoffOutcome =
 			reason: string;
 			notes?: ResolutionNotes;
 			collision?: NameCollision;
+			ownCollision?: NameCollision;
 	  }
 	| {
 			status: "prompt-failed";
@@ -243,8 +245,15 @@ export type HandoffOutcome =
 			agent: StartedAgent;
 			notes?: ResolutionNotes;
 			collision?: NameCollision;
+			ownCollision?: NameCollision;
 	  }
-	| { status: "ok"; agent: StartedAgent; notes?: ResolutionNotes; collision?: NameCollision };
+	| {
+			status: "ok";
+			agent: StartedAgent;
+			notes?: ResolutionNotes;
+			collision?: NameCollision;
+			ownCollision?: NameCollision;
+	  };
 
 interface HandoffOptions {
 	config: FactoryConfig;
@@ -1061,23 +1070,22 @@ async function startAgentAndPrompt(
 	ctx.onAgentStarted?.(startedAgent);
 	ctx.onStage?.("sending-prompt");
 	const sent = await ctx.runner.run("herdr", ["agent", "prompt", name, prompt]);
+	const previousTabClosed = await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
+	const collisions = collisionsAfterPreviousTabClose(
+		attempt,
+		handles.previousTabId,
+		previousTabClosed,
+	);
 	if (sent.code !== 0) {
-		await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
 		return {
 			status: "prompt-failed",
 			reason: `agent ${name} started, but the prompt failed: ${herdrFailureText(sent)}`,
 			agent: startedAgent,
 			notes: ctx.notes,
-			...(attempt.collision === undefined ? {} : { collision: attempt.collision }),
+			...collisions,
 		};
 	}
-	await closePreviousTab(handles.previousTabId, startedAgent.tabId, ctx);
-	return {
-		status: "ok",
-		agent: startedAgent,
-		notes: ctx.notes,
-		...(attempt.collision === undefined ? {} : { collision: attempt.collision }),
-	};
+	return { status: "ok", agent: startedAgent, notes: ctx.notes, ...collisions };
 }
 
 /**
@@ -1100,6 +1108,10 @@ async function startAgentUnderAvailableName(
 	const candidates = ctx.names.candidates;
 	ctx.onStage?.("starting-agent");
 	let collision: NameCollision | undefined;
+	// Keep the first own collision when a later candidate has another owner:
+	// the failure reports the later owner, but the earlier leftover is still
+	// this ticket's durable fact.
+	let ownCollision: NameCollision | undefined;
 	let result: CommandResult = { code: 0, stdout: "", stderr: "" };
 	/** True while the attempt that ended the search was herdr refusing a name. */
 	let nameHeld = false;
@@ -1116,7 +1128,7 @@ async function startAgentUnderAvailableName(
 				result,
 				// The last answer herdr gave was an acceptance, not a refusal.
 				nameHeld: false,
-				...(collision === undefined ? {} : { collision: { ...collision, startedAs: name } }),
+				...collisionFields(collision, ownCollision, name),
 			};
 		}
 		nameHeld = herdrErrorCode(result) === "agent_name_taken";
@@ -1132,16 +1144,12 @@ async function startAgentUnderAvailableName(
 			own,
 			reason: herdrFailureText(result),
 		};
+		if (collision.own && ownCollision === undefined) ownCollision = collision;
 		// Another ticket's agent, or the last candidate spent: the collision
 		// stands, and no further name is asked for.
 		if (!collision.own || index + 1 === candidates.length) break;
 	}
-	return {
-		name: null,
-		result,
-		nameHeld,
-		...(collision === undefined ? {} : { collision }),
-	};
+	return { name: null, result, nameHeld, ...collisionFields(collision, ownCollision) };
 }
 
 /**
@@ -1165,14 +1173,19 @@ function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOu
 			status: "failed",
 			reason: herdrFailureText(attempt.result),
 			notes: ctx.notes,
-			...(collision === undefined ? {} : { collision }),
+			...collisionFields(collision, attempt.ownCollision),
 		};
 	}
 	const holder = holderText(collision.holder);
 	const reason = collision.own
 		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); clear its leftover environment, then hand off again: ${collision.reason}`
 		: `the herdr name ${collision.stableName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
-	return { status: "failed", reason, notes: ctx.notes, collision };
+	return {
+		status: "failed",
+		reason,
+		notes: ctx.notes,
+		...collisionFields(collision, attempt.ownCollision),
+	};
 }
 
 /** Where a name is held, as herdr named it. */
@@ -1253,6 +1266,24 @@ interface AgentStart {
 	nameHeld: boolean;
 	/** The last name collision the attempt met, when it met one. */
 	collision?: NameCollision;
+	/** An earlier own collision the final collision must not hide. */
+	ownCollision?: NameCollision;
+}
+
+/** The collision fields an outcome keeps, with the accepted name when one ran. */
+function collisionFields(
+	collision: NameCollision | undefined,
+	ownCollision: NameCollision | undefined,
+	startedAs?: string,
+): { collision?: NameCollision; ownCollision?: NameCollision } {
+	const finalCollision =
+		collision === undefined || startedAs === undefined ? collision : { ...collision, startedAs };
+	return {
+		...(finalCollision === undefined ? {} : { collision: finalCollision }),
+		// When the final collision is the ticket's own, it already preserves the
+		// fact. A later stranger collision needs the earlier own one alongside it.
+		...(ownCollision === undefined || finalCollision?.own === true ? {} : { ownCollision }),
+	};
 }
 
 /**
@@ -1280,15 +1311,34 @@ async function startAgentWhenPaneIsReady(
 	}
 }
 
-/** Close the previous handoff's tab, best effort, when it differs. */
+/** Close the previous handoff's tab, and say when herdr confirms it is gone. */
 async function closePreviousTab(
 	previousTabId: string | null | undefined,
 	newTabId: string,
 	ctx: HandoffContext,
-): Promise<void> {
-	if (previousTabId === null || previousTabId === undefined) return;
-	if (previousTabId === newTabId) return;
-	await ctx.runner.run("herdr", ["tab", "close", previousTabId]);
+): Promise<boolean> {
+	if (previousTabId === null || previousTabId === undefined || previousTabId === newTabId)
+		return false;
+	const closed = await ctx.runner.run("herdr", ["tab", "close", previousTabId]);
+	return closed.code === 0 || herdrErrorCode(closed) === "tab_not_found";
+}
+
+/** The predecessor close resolves only a collision whose holder was in that tab. */
+function collisionsAfterPreviousTabClose(
+	attempt: AgentStart,
+	previousTabId: string | null | undefined,
+	previousTabClosed: boolean,
+): { collision?: NameCollision; ownCollision?: NameCollision } {
+	const holderWasClosed = (collision: NameCollision | undefined) =>
+		previousTabClosed &&
+		previousTabId !== null &&
+		previousTabId !== undefined &&
+		collision?.own === true &&
+		collision.holder?.tabId === previousTabId;
+	return collisionFields(
+		holderWasClosed(attempt.collision) ? undefined : attempt.collision,
+		holderWasClosed(attempt.ownCollision) ? undefined : attempt.ownCollision,
+	);
 }
 
 /**
@@ -1305,7 +1355,7 @@ async function closePreviousTab(
  *   stays.
  *
  * Returns a readable reason when a cleanup command fails; the caller keeps
- * the state transition, warns on the status line, and records the surviving
+ * the state transition, warns on the Message line, and records the surviving
  * environment as a leftover of the ticket (ADR 0012).
  *
  * `force` asks herdr to remove a dirty checkout. It kills every agent in the
