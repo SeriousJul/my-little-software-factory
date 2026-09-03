@@ -14,7 +14,7 @@
 	"scripts": {
 		"dev": "NODE_OPTIONS=--experimental-ffi node --watch src/factory.ts --config config/development.toml",
 		"test": "NODE_OPTIONS=--experimental-ffi vitest run",
-		"mutate": "NODE_OPTIONS=--experimental-ffi bash scripts/crash-guard.sh node_modules/.bin/stryker run; status=$?; rm -rf .stryker-tmp; exit $status",
+		"mutate": "bash scripts/mutate.sh",
 		"lint": "biome check .",
 		"fmt": "biome check --write .",
 		"typecheck": "tsc"
