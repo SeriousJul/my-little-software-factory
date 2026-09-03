@@ -15,7 +15,7 @@
  * the caller skips the test rather than failing it.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { dlopen } from "node:ffi";
 import { readSync, writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -226,13 +226,49 @@ export async function openControlPlanePty(
 		dispose(): void {
 			reading = false;
 			clearInterval(timer);
-			if (child.exitCode === null && child.signalCode === null) {
-				child.kill("SIGKILL");
+			if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+				// The bin wrapper re-runs the entry as its own child, so
+				// killing the wrapper alone would orphan that child. Kill
+				// the whole tree: children first, the wrapper last.
+				killProcessTree(child.pid);
 			}
 			libs.close(master);
 		},
 	};
 	return session;
+}
+
+/**
+ * Every pid in the process tree rooted at `root`, including `root`.
+ * Children are reparented when a member dies, so the tree must be
+ * collected in one pass while the links are still live.
+ */
+function processTree(root: number): number[] {
+	const seen = new Set<number>([root]);
+	const queue = [root];
+	while (queue.length > 0) {
+		const current = queue.shift() as number;
+		const out = spawnSync("pgrep", ["-P", String(current)]).stdout.toString();
+		for (const line of out.split("\n")) {
+			const pid = Number(line);
+			if (pid > 0 && !seen.has(pid)) {
+				seen.add(pid);
+				queue.push(pid);
+			}
+		}
+	}
+	return [...seen];
+}
+
+/** SIGKILL every pid in the tree rooted at `root`, children before parent. */
+function killProcessTree(root: number): void {
+	for (const pid of processTree(root).reverse()) {
+		try {
+			process.kill(pid, "SIGKILL");
+		} catch {
+			// The process already exited between the scan and the kill.
+		}
+	}
 }
 
 function isNoPendingData(error: unknown): boolean {

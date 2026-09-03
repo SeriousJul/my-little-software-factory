@@ -407,6 +407,25 @@ describe("durable Consultation lifecycle", () => {
 		state.close();
 	});
 
+	test("ignores an external turn for a consultation that does not exist", () => {
+		const state = makeState();
+		expect(state.recordExternalConsultationTurn("no-such-consultation", 1)).toBe(false);
+		state.close();
+	});
+
+	test("ignores an external turn while the Agent works on a response", () => {
+		const state = makeState();
+		const consultation = createConsultation(state);
+		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.settleConsultationTurn(consultation.id, 1, "answer");
+		const pending = state.beginConsultationResponse(consultation.id, "second question", 1);
+		if (pending === undefined) throw new Error("pending delivery missing");
+		state.acceptConsultationResponse(consultation.id, pending.id);
+		expect(state.consultation(consultation.id)?.state).toBe("working");
+		expect(state.recordExternalConsultationTurn(consultation.id, 2)).toBe(false);
+		state.close();
+	});
+
 	test("preserves a draft when a pending delivery is rejected", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);

@@ -24,7 +24,7 @@ observation reclaims an agent that outlives its work cycle).
 
 ## Requirements
 
-- node v26.4 or newer (developed on v26.5.0).
+- node v26.4 or newer (developed on v26.8.1).
   The OpenTUI native renderer loads `node:ffi`, which node 26 still gates
   behind `--experimental-ffi`, and the `factory` binary re-execs node with that flag.
 - The project pins the node version in `.tool-versions`.
@@ -40,13 +40,26 @@ observation reclaims an agent that outlives its work cycle).
 
 ## Commands
 
-| Command         | What it does                              |
-| --------------- | ----------------------------------------- |
-| `npm run dev`   | Start the control plane in watch mode     |
-| `npm test`      | Run the full test suite                   |
-| `npm run lint`  | Lint and check formatting with Biome      |
-| `npm run fmt`   | Lint, format, and fix with Biome          |
-| `npm run typecheck` | Typecheck with TypeScript             |
+| Command             | What it does                              |
+| ------------------- | ----------------------------------------- |
+| `npm run dev`       | Start the control plane in watch mode     |
+| `npm test`          | Run the full test suite                   |
+| `npm run mutate`    | Run Stryker mutation testing, contained   |
+| `npm run lint`      | Lint and check formatting with Biome      |
+| `npm run fmt`       | Lint, format, and fix with Biome          |
+| `npm run typecheck` | Typecheck with TypeScript                 |
+
+### Mutation testing
+
+`npm run mutate` runs Stryker through the crash guard
+(`scripts/crash-guard.sh`). The suite spawns control plane processes, and a
+native crash in the runner (the known case is the node:sqlite use-after-free
+in node 26.5.0) would otherwise leave them orphaned under systemd and write
+a core file for every death. The guard contains both: it runs the whole
+process tree with core files disabled, so the OS records no crash, and when
+Stryker exits, by success, failure, or crash, the guard terminates every
+surviving process of the run. Extra arguments pass through to Stryker, such
+as `npm run mutate -- --dryRunOnly`.
 
 ## Keys
 

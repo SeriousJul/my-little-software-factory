@@ -1473,7 +1473,9 @@ export class FactoryState {
 				.get(id) as
 				| { state: ConsultationState; latest_sequence: number | null; draft: string }
 				| undefined;
-			if (row?.state !== "awaiting-response") return false;
+			// Check `row` for existence before the state, so a missing
+			// consultation cannot reach the next line's dereference.
+			if (row === undefined || row.state !== "awaiting-response") return false;
 			if (row.latest_sequence !== null && sequence <= row.latest_sequence) return false;
 			const pending = this.pendingConsultationResponse(id);
 			this.db
