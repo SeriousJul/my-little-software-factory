@@ -117,18 +117,8 @@ The considered alternatives:
   claims a route the factory did not start. Holding a ticket whose failure
   reason repeats is a rule this record does not set: the loud failure is the
   report, and the fix is the config or the panel.
-- Known limitation: a Model is free text, and the panel cannot yet list what
-  an agent offers (ADR 0010), so a value that carries a space reaches the agent
-  as two arguments. The Context row was made digits-only to keep one count in
-  one argument; the shape rule for a model belongs beside it once the Model
-  list lands.
 - Known limitation: a Restart repeats the handoff it interrupted, and the
   missing modal offers no way to edit that choice. A stored Model, thinking
   level, or count its Agent no longer takes therefore leaves that cycle by
   Abandon alone, which ends the work cycle. The loud failure is the report;
   editing a restart the way a route is edited is a later ticket's rule.
-- Known limitation: the panel still takes a Thinking level as free text when
-  its agent maps a template but lists no values, because the shared level set
-  is ADR 0010's to ship. A row can therefore hold a level its agent will
-  refuse; the handoff-time rule above is what makes that value loud, and the
-  row shows it in the warning color until the operator clears it.
