@@ -14,14 +14,17 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
+	checkConsultationStart,
 	closeHandoffEnvironment,
 	type HandoffOutcome,
+	handOffConsultation,
 	handOffStoredWorkspace,
 	handOffTicket,
 	renderPrompt,
 	renderSettingArgs,
 	settingArgs,
 } from "../src/handoff.ts";
+import type { Consultation } from "../src/state.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -93,6 +96,17 @@ const defaultChoice = {
 	thinking: "",
 };
 
+/** Stub the live-worktree herdr sequence at the convention checkout. */
+function stubLiveWorkspace(runner: FakeRunner): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-new"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
+
 /** The exact prompt the implement task type renders for this ticket. */
 const PROMPT = renderPrompt(DEFAULT_CONFIG.taskTypes.implement.template, ticket);
 const EXPECTED_IMPLEMENT_PROMPT =
@@ -109,8 +123,50 @@ function conventionCheckout(runner: FakeRunner): void {
 	});
 }
 
+/** A Consultation record, as the state hands it to its own start. */
+function consultationRecord(over: Partial<Consultation> = {}): Consultation {
+	return {
+		id: "consultation-1",
+		typeName: "grill-with-docs",
+		agentType: "pi",
+		environment: "live-worktree",
+		model: "",
+		thinking: "",
+		template: "/grill {input}",
+		initialInput: "review auth",
+		renderedOpeningPrompt: "/grill review auth",
+		repository: {
+			identity: "github.com/acme/billing",
+			displayName: "acme/billing",
+			cloneUrl: "https://github.com/acme/billing.git",
+			path: CHECKOUT,
+		},
+		state: "opening",
+		createdAt: "2026-09-01T00:00:00.000Z",
+		updatedAt: "2026-09-01T00:00:00.000Z",
+		agentName: "consultation-11111111",
+		paneId: null,
+		tabId: null,
+		workspaceId: null,
+		sessionId: null,
+		latestSequence: null,
+		draft: "",
+		draftUpdatedAt: null,
+		draftOld: false,
+		failure: null,
+		warning: null,
+		replacementOf: null,
+		closeResult: null,
+		liveConflictOverride: false,
+		attentionAt: null,
+		pendingResponse: null,
+		resources: [],
+		...over,
+	};
+}
+
 describe("renderSettingArgs", () => {
-	test("substitutes the value and splits on whitespace", () => {
+	test("substitutes the value into the token that asks for it", () => {
 		expect(renderSettingArgs("--model {value}", "gpt-5.6")).toEqual(["--model", "gpt-5.6"]);
 		expect(renderSettingArgs("-c model_reasoning_effort={value}", "high")).toEqual([
 			"-c",
@@ -118,8 +174,27 @@ describe("renderSettingArgs", () => {
 		]);
 	});
 
+	test("one value is always one argument cell", () => {
+		// The rule the Model list is offered against. A value that carries
+		// whitespace (a config value, or text pasted into the free-text row) must
+		// not split into an argument plus a stray positional, because the agent
+		// would start on a model nobody chose.
+		expect(renderSettingArgs("--model {value}", "my corp/model-x")).toEqual([
+			"--model",
+			"my corp/model-x",
+		]);
+		expect(renderSettingArgs("-c model_reasoning_effort={value}", "x y")).toEqual([
+			"-c",
+			"model_reasoning_effort=x y",
+		]);
+	});
+
 	test("dollar patterns in the value stay literal", () => {
 		expect(renderSettingArgs("--model {value}", "$&-$1-model")).toEqual(["--model", "$&-$1-model"]);
+	});
+
+	test("a template with no value to place leaves no empty argument", () => {
+		expect(renderSettingArgs("--model {value}", "")).toEqual(["--model"]);
 	});
 });
 
@@ -976,6 +1051,228 @@ describe("handOffTicket: the guard rails", () => {
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("reserved");
 		expect(runner.calls).toHaveLength(0);
+	});
+
+	describe("handOffTicket: the setting fit check (ADR 0010)", () => {
+		test("a model the agent does not report fails before its first external change", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "gpt-4o" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toBe(
+				'agent "pi" (pi) has no model "gpt-4o": check the model id and its provider auth',
+			);
+			// Nothing ran: not the repository resolution, not herdr, not the start.
+			expect(runner.calls).toHaveLength(0);
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
+
+		test("a model the agent reports rides on the start", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("ok");
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toEqual([
+				"agent",
+				"start",
+				AGENT,
+				"--kind",
+				"pi",
+				"--pane",
+				"pane-1",
+				"--",
+				"--model",
+				"anthropic/claude-sonnet-4-5",
+			]);
+		});
+
+		test("an unfit thinking level fails the handoff, and no list query is needed to see it", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5", thinking: "ultra" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain('does not support the thinking level "ultra"');
+			expect(runner.calls).toHaveLength(0);
+			// The levels the agent declares are in the config, so the check needs
+			// no query.
+			expect(runner.modelListCalls).toHaveLength(0);
+		});
+
+		test("a model list that cannot be fetched lets the handoff run on", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			// The fake holds no list for the pi kind: the query fails as an
+			// uninstalled or unreadable CLI would, and the agent's own rejection
+			// stands.
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "gpt-4o" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("ok");
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toContain("gpt-4o");
+		});
+
+		test("a restart fails an unfit model before it touches the stored workspace", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffStoredWorkspace({
+				ticket,
+				choice: { ...defaultChoice, model: "gpt-4o" },
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				previousTabId: "tab-prev",
+				previousMessage: "settled earlier",
+			});
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain('has no model "gpt-4o"');
+			expect(runner.calls).toHaveLength(0);
+		});
+	});
+
+	/**
+	 * A Consultation start on its own, without the launch route around it.
+	 *
+	 * The route runs the pre-flight itself and carries its verdict in, so these
+	 * tests answer for the branch that backs the claim that no path reaches the
+	 * Agent unchecked: a start that carries no verdict is checked here.
+	 */
+	describe("handOffConsultation: the setting fit check", () => {
+		test("a start with no verdict refuses an unfit model before any external change", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ model: "gpt-4o" }),
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+			});
+
+			expect(outcome.status).toBe("failed");
+			if (outcome.status === "ok") throw new Error("expected a refusal");
+			expect(outcome.reason).toContain('has no model "gpt-4o"');
+			// Nothing outside the control plane: not the resolve, not the workspace,
+			// not the start, not the prompt.
+			expect(runner.calls).toHaveLength(0);
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
+
+		test("a start with no verdict refuses an unfit thinking level", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ thinking: "ultra" }),
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+			});
+
+			expect(outcome.status).toBe("failed");
+			if (outcome.status === "ok") throw new Error("expected a refusal");
+			expect(outcome.reason).toContain('does not support the thinking level "ultra"');
+			expect(runner.calls).toHaveLength(0);
+			// The levels an Agent declares are in the config: no query is needed.
+			expect(runner.modelListCalls).toHaveLength(0);
+		});
+
+		test("a start with no verdict runs on a fit model, and asks the CLI once", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ model: "anthropic/claude-sonnet-4-5" }),
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+			});
+
+			expect(outcome.status).toBe("ok");
+			expect(runner.modelListCalls).toEqual(["pi"]);
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toEqual([
+				"agent",
+				"start",
+				"consultation-11111111",
+				"--kind",
+				"pi",
+				// A live Consultation with no workspace of its own starts in the root
+				// pane of the workspace the launch created.
+				"--pane",
+				"pane-w",
+				"--",
+				"--model",
+				"anthropic/claude-sonnet-4-5",
+			]);
+		});
+
+		test("a start that carries the launch route's verdict does not ask again", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const consultation = consultationRecord({ model: "anthropic/claude-sonnet-4-5" });
+			const startCheck = await checkConsultationStart({
+				consultation,
+				config: DEFAULT_CONFIG,
+				runner,
+			});
+			expect(startCheck.ok).toBe(true);
+
+			const outcome = await handOffConsultation({
+				consultation,
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				startCheck,
+			});
+
+			expect(outcome.status).toBe("ok");
+			// One Consultation, one query: the route checked first, and the start read
+			// that verdict instead of asking the agent's CLI a second time.
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
 	});
 
 	test("an unknown agent type or task type fails without a command", async () => {

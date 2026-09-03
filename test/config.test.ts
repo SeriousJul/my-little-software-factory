@@ -33,6 +33,7 @@ import {
 	type TicketSourceConfig,
 	validateConfig,
 } from "../src/config.ts";
+import { THINKING_LEVELS } from "../src/domain/agent.ts";
 
 const tempDirs: string[] = [];
 
@@ -560,7 +561,13 @@ describe("validateConfig", () => {
 			"default-agent": "pi",
 			"default-environment": "worktree",
 			"default-task-type": "merge",
-			agents: { pi: { kind: "pi" } },
+			agents: {
+				pi: {
+					kind: "pi",
+					thinking: "--thinking {value}",
+					"thinking-values": ["low", "high"],
+				},
+			},
 			"task-types": {
 				merge: { template: "Merge {title}", thinking: "low" },
 			},
@@ -577,6 +584,221 @@ describe("validateConfig", () => {
 			thinking: "low",
 			autoClose: false,
 		});
+	});
+
+	test("a Task profile names its agent, its model, and its level", () => {
+		const config = validateConfig({
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "merge",
+			agents: {
+				pi: {
+					kind: "pi",
+					model: "--model {value}",
+					thinking: "--thinking {value}",
+					"thinking-values": ["low", "high"],
+				},
+				slow: {
+					kind: "codex",
+					model: "--model {value}",
+					thinking: "-c model_reasoning_effort={value}",
+					"thinking-values": ["high", "low"],
+				},
+			},
+			"task-types": {
+				merge: {
+					template: "Merge {title}",
+					agent: "slow",
+					model: "openai/gpt-5.1",
+					thinking: "high",
+				},
+			},
+		});
+		expect(config.taskTypes.merge).toEqual({
+			template: "Merge {title}",
+			agent: "slow",
+			model: "openai/gpt-5.1",
+			thinking: "high",
+			autoClose: false,
+		});
+		// The profile keys survive a write/read cycle.
+		const roundTrip = validateConfig(parseToml(configToToml(config)));
+		expect(roundTrip.taskTypes.merge).toEqual(config.taskTypes.merge);
+	});
+
+	test("a task type names an agent the config defines", () => {
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "x", agent: "cursor" } },
+			},
+			'task-types.t.agent: unknown agent "cursor"',
+		);
+	});
+
+	test("a task type names a model for an agent that maps one", () => {
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "x", model: "gpt-4o" } },
+			},
+			'task-types.t.model: agent "pi" does not define a model setting',
+		);
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi", model: "--model {value}" } },
+				"task-types": { t: { template: "x", model: 7 } },
+			},
+			"task-types.t.model: must be a non-empty string",
+		);
+	});
+
+	test("a task type level must be one the profile's agent declares", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "t",
+			agents: {
+				pi: {
+					kind: "pi",
+					thinking: "--thinking {value}",
+					"thinking-values": ["low", "high"],
+				},
+				cx: {
+					kind: "codex",
+					thinking: "-c model_reasoning_effort={value}",
+					"thinking-values": ["minimal", "low"],
+				},
+			},
+		};
+		// The default agent's own set admits the level.
+		expect(() =>
+			validateConfig({ ...base, "task-types": { t: { template: "x", thinking: "low" } } }),
+		).not.toThrow();
+		expectConfigError(
+			{ ...base, "task-types": { t: { template: "x", thinking: "xhigh" } } },
+			'agent "pi" does not support the thinking level "xhigh"',
+		);
+		// The profile's agent owns the set once the profile names one: the
+		// level that pi supports is unfit for cx.
+		expectConfigError(
+			{
+				...base,
+				"task-types": { t: { template: "x", agent: "cx", thinking: "high" } },
+			},
+			'agent "cx" does not support the thinking level "high"',
+		);
+	});
+
+	test("the top-level default model is a non-empty string and round-trips", () => {
+		const config = validateConfig({
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "t",
+			"default-model": "anthropic/claude-sonnet-4-5",
+			agents: { pi: { kind: "pi", model: "--model {value}" } },
+			"task-types": { t: { template: "x" } },
+		});
+		expect(config.defaultModel).toBe("anthropic/claude-sonnet-4-5");
+		expect(validateConfig(parseToml(configToToml(config))).defaultModel).toBe(
+			"anthropic/claude-sonnet-4-5",
+		);
+		// Omitted: the key is absent, not an empty string.
+		expect(DEFAULT_CONFIG.defaultModel).toBeUndefined();
+		expect(configToToml(DEFAULT_CONFIG)).not.toContain("default-model");
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				"default-model": "",
+				agents: { pi: { kind: "pi" } },
+				"task-types": { t: { template: "x" } },
+			},
+			"default-model: must be a non-empty string",
+		);
+	});
+
+	test("an agent that maps thinking must declare its levels", () => {
+		expectConfigError(
+			{
+				"default-agent": "pi",
+				"default-environment": "worktree",
+				"default-task-type": "t",
+				agents: { pi: { kind: "pi", thinking: "--thinking {value}" } },
+				"task-types": { t: { template: "x" } },
+			},
+			"agents.pi.thinking-values: an agent that maps thinking must declare the levels",
+		);
+	});
+
+	test("declared levels are a non-empty subset of the standard set, without repeats", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "t",
+			"task-types": { t: { template: "x" } },
+		};
+		const withValues = (values: unknown) => ({
+			...base,
+			agents: { pi: { kind: "pi", thinking: "--thinking {value}", "thinking-values": values } },
+		});
+		// The order the operator declares is the order the row offers.
+		expect(validateConfig(withValues(["max", "off"])).agents.pi.thinkingValues).toEqual([
+			"max",
+			"off",
+		]);
+		expectConfigError(withValues([]), "agents.pi.thinking-values: must declare at least one");
+		expectConfigError(
+			withValues(["ultra"]),
+			'agents.pi.thinking-values: "ultra" is not a standard thinking level',
+		);
+		expectConfigError(
+			withValues(["low", "low"]),
+			'agents.pi.thinking-values: "low" is declared twice',
+		);
+		expectConfigError(withValues("low"), "must be a list of level strings");
+		// An agent that maps no thinking has no levels to declare.
+		expectConfigError(
+			{
+				...base,
+				agents: { pi: { kind: "pi", "thinking-values": ["low"] } },
+			},
+			"agents.pi.thinking-values: the agent maps no thinking setting",
+		);
+	});
+
+	test("every shipped agent declares the levels its runtime supports", () => {
+		// Each shipped subset holds standard levels in the runtime's own order,
+		// and every one of them fits inside the standard set.
+		expect(DEFAULT_CONFIG.agents.pi.thinkingValues).toEqual(THINKING_LEVELS);
+		expect(DEFAULT_CONFIG.agents.codex.thinkingValues).toEqual([
+			"minimal",
+			"low",
+			"medium",
+			"high",
+		]);
+		expect(DEFAULT_CONFIG.agents.claude.thinkingValues).toEqual([
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		for (const agent of Object.values(DEFAULT_CONFIG.agents)) {
+			for (const level of agent.thinkingValues ?? []) {
+				expect(THINKING_LEVELS).toContain(level);
+			}
+		}
 	});
 
 	test("a task type thinking level must be a non-empty string", () => {
