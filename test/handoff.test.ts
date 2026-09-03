@@ -1684,6 +1684,24 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
 	});
 
+	test("a live worktree handoff whose tab is already gone is a clean close", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["tab", "close", "tab-1"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"tab_not_found","message":"tab tab-1 not found"},"id":"cli:tab:close"}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+		);
+
+		// The tab is gone: there is no environment left to clean up.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
+	});
+
 	test("a worktree handoff whose checkout is gone closes the left workspace", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {

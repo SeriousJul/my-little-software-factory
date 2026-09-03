@@ -1306,6 +1306,64 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
+	test("a clear retry resolves a tab the operator already closed in herdr", async () => {
+		const app = seededApp("awaiting", {}, success, "live-worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		// The Close cleanup's tab close fails once, and the retry meets the tab
+		// the operator has since closed in herdr: herdr answers tab_not_found,
+		// which the cleanup reads as already gone, the way it reads the
+		// workspace's workspace_not_found.
+		app.runner.setSequence(
+			"herdr",
+			["tab", "close", "tab-1"],
+			[
+				{ code: 1, stderr: "the tab close failed" },
+				{
+					code: 1,
+					stderr:
+						'{"error":{"code":"tab_not_found","message":"tab tab-1 not found"},"id":"cli:tab:close"}\n',
+				},
+			],
+		);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				// The failed close leaves the fact of the tab it could not end,
+				// and the close stands: the ticket is open, so a clear is free
+				// to reach that tab.
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.leftoverEnvironment(identity)).toEqual(
+					expect.objectContaining({
+						tabId: "tab-1",
+						reason: "the tab close failed",
+					}),
+				);
+
+				// The operator has since closed the tab in herdr. The retry's tab
+				// close meets tab_not_found: the environment is gone, the
+				// cleanup succeeds, and the fact that names the tab clears.
+				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await pressReturn(setup, "the retry", (f) =>
+					f.includes("cleared the leftover environment"),
+				);
+				expect(app.state.leftoverEnvironment(identity)).toBe(null);
+				expect(app.runner.commands()).toContain("herdr tab close tab-1");
+				// The fact is gone, so the marker leaves the row, and the close
+				// still stands: the ticket is open, not awaiting.
+				expect(ticketRow(setup.captureCharFrame())).not.toContain("leftover");
+				expect(app.state.ticketState(identity)).toBe("open");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("a clear refuses to force the workspace its live agent runs in", async () => {
 		const app = seededApp("in-flight", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], {

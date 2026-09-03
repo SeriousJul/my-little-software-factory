@@ -624,7 +624,7 @@ export function App({
 		queueCleanup(() => settleCloseCleanup(openState, commandRunner, handoff, options));
 
 	/**
-	 * The Close cleanup of the handoff a cycle ends, reported on the status
+	 * The Close cleanup of the handoff a cycle ends, reported on the Message
 	 * line. The durable half of it (record the surviving environment, clear
 	 * what the removal ended) is settleCloseCleanup's.
 	 */

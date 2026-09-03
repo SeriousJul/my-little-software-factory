@@ -1352,7 +1352,8 @@ function collisionsAfterPreviousTabClose(
  *   gone (deleted outside herdr), the workspace is what remains, and herdr
  *   `workspace close` clears it. The git branch stays.
  * - The live worktree environment loses the handoff's tab; the workspace
- *   stays.
+ *   stays. When the tab is already gone (closed outside herdr), herdr
+ *   answers `tab_not_found`, and the cleanup succeeds.
  *
  * Returns a readable reason when a cleanup command fails; the caller keeps
  * the state transition, warns on the Message line, and records the surviving
@@ -1440,7 +1441,16 @@ export async function closeHandoffEnvironment(
 	}
 	if (reach.scope === "tab") {
 		const result = await runner.run("herdr", ["tab", "close", reach.tabId]);
-		return result.code === 0 ? undefined : herdrFailureText(result);
+		if (result.code === 0) {
+			// The tab closed: the environment is gone.
+			return undefined;
+		}
+		if (herdrErrorCode(result) === "tab_not_found") {
+			// The tab is already gone (closed outside herdr): there is
+			// nothing left to clean up.
+			return undefined;
+		}
+		return herdrFailureText(result);
 	}
 	return undefined;
 }

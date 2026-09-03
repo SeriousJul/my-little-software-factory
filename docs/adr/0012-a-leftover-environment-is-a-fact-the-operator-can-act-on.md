@@ -101,8 +101,10 @@ it runs, so the wait cannot start a ticket that moved on.
 **The reach.** A cleanup that succeeds clears the facts it ended, and only
 those: the facts that named the workspace it removed, or the one that named the
 tab it closed, or - when herdr gave it no command to run at all - the fact of
-its own handoff row. Facts outside that reach stand, because one row's close
-says nothing about another row's environment.
+its own handoff row. A success is also the environment already gone - herdr's
+`workspace_not_found` on a workspace, `tab_not_found` on a tab - and the fact
+that named it clears with it. Facts outside that reach stand, because one
+row's close says nothing about another row's environment.
 
 **The handoff.** A handoff does not fail on the ticket's own leftover name. The
 stable name is still the one it asks for; when herdr says the name is taken and
@@ -133,8 +135,11 @@ the holder's pane and workspace and says it is no agent of this ticket.
   it, and the herdr reason is never the only clue.
 - The leftover survives a new handoff, so the fact stays on the ticket until
   someone clears it: the Message line is no longer the only place it appears.
-  A stale fact is possible the other way too - a workspace closed in herdr by
-  hand leaves the record standing until a clear or a Close cleanup resolves it.
+  A stale fact is possible the other way too - a workspace or tab closed in
+  herdr by hand leaves the record standing until a clear or a Close cleanup
+  resolves it, and a retry resolves it: herdr's `workspace_not_found` and
+  `tab_not_found` answers both mean the environment is already gone, so the
+  cleanup succeeds and the fact that names it clears.
 - Two agents can live in one worktree checkout: the leftover one, and the one
   the handoff started beside it. Only the second is tracked: the observation
   keys on the pane of the ticket's latest handoff (ADR 0006), so a leftover
