@@ -583,7 +583,15 @@ export function OverridePanel({
 		message,
 		bar: { mode, context: contextFor(mode, context) },
 		children: rows.map((r) =>
-			rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputRefs, inputActive),
+			rowElement(
+				r,
+				choice[r.key],
+				r.key === row.key,
+				geometry,
+				handleInput,
+				inputRefs,
+				inputActive,
+			),
 		),
 	});
 }

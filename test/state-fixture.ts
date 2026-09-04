@@ -103,6 +103,7 @@ export function seedInFlightTurn(
 			taskType: "implement",
 			model: "",
 			thinking: "",
+			contextWindow: "",
 		},
 		"open",
 	);

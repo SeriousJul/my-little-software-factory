@@ -186,6 +186,7 @@ describe("the in-app Key guide", () => {
 						taskType: "implement",
 						model: "",
 						thinking: "",
+						contextWindow: "",
 					},
 					"open",
 				);

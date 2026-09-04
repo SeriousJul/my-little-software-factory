@@ -553,6 +553,7 @@ export async function awaitGoneKeyHandler(
 		}
 		await sleep(FRAME_POLL_MS);
 	}
+}
 
 /**
  * Press a key, wait for its effect, then wait for the app to go quiet.

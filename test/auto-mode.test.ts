@@ -3461,7 +3461,11 @@ describe("the handoff queue", () => {
 				// again on demand. It is the second row (row four: the mode
 				// line and the border sit above the list), and the selection
 				// already holds it, so the move is the boundary no-op.
-				await pressQuietFor("j", "the boundary no-op on the open ticket", (f) => markerRowOf(f) === 4);
+				await pressQuietFor(
+					"j",
+					"the boundary no-op on the open ticket",
+					(f) => markerRowOf(f) === 4,
+				);
 				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(
 					setup,

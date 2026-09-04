@@ -1145,7 +1145,7 @@ describe("the override panel", () => {
 				expect(spanColors(setup, "factory-model")).toEqual([rgb(COLORS.statusWarning)]);
 				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
-				const selected = await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
+				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
 				// The row's input takes focus on its own render pass: let it land
 				// before the edit keys go in.
 				await settle(setup);
@@ -1722,7 +1722,7 @@ describe("the override panel", () => {
 				await selectRow(setup, "down", "Task type");
 				await selectRow(setup, "down", "Model");
 				await selectRow(setup, "down", "Thinking");
-				const selected = await selectRow(setup, "down", "Context");
+				await selectRow(setup, "down", "Context");
 				await settle(setup);
 				expect(spanColors(setup, "272000")).toEqual([rgb(COLORS.statusWarning)]);
 
@@ -1843,7 +1843,7 @@ describe("the override panel", () => {
 
 				// The warning holds while the row is selected: the value is
 				// still unfit, and the handoff would still fail on it.
-				const selected = await selectThinking();
+				await selectThinking();
 				await settle(setup);
 				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.statusWarning)]);
 
