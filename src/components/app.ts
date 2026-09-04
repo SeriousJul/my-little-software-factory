@@ -141,16 +141,27 @@ const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
  * it carries what the confirm step needs to claim the same handoff: which
  * Ticket, and which Origin of its dispatch. Only the two routes the panel
  * opens from appear here: an open Ticket's own handoff, and a workflow route
- * the operator edited from its decision row. A Restart or an automatic route
- * never opens the panel, so neither Origin reaches it. The prompt's previous
- * message is not carried here: the confirm reads it from the Ticket it
- * claims, so an edit can never send a message another Ticket left behind.
+ * the operator edited from its decision row, in the decision modal or in the
+ * Live view's decision sub-mode. The workflow route also carries which
+ * ticket panel it opened from, so an Esc and a confirmed route return there
+ * instead of guessing. A Restart or an automatic route never opens the
+ * panel, so neither Origin reaches it. The prompt's previous message is not
+ * carried here: the confirm reads it from the Ticket it claims, so an edit
+ * can never send a message another Ticket left behind.
  */
-interface PendingOverride {
-	ticketIdentity: string;
-	origin: "open" | "workflow";
-	choice: HandoffChoice;
-}
+type PendingOverride =
+	| {
+			ticketIdentity: string;
+			origin: "open";
+			choice: HandoffChoice;
+	  }
+	| {
+			ticketIdentity: string;
+			origin: "workflow";
+			/** The ticket panel the route row was on: Esc and the confirm return there. */
+			from: "decision" | "live";
+			choice: HandoffChoice;
+	  };
 
 export type AppKey =
 	| "j"
@@ -1250,6 +1261,13 @@ export function App({
 			return;
 		}
 		if (pending.origin === "workflow") {
+			// A route confirmed from the Live view keeps the screen open, like
+			// the direct route: the stream moves to the new pane on the next
+			// tick. A refused claim comes back to the decision sub-mode, where
+			// the route row still stands.
+			if (pending.from === "live") {
+				setPanel({ kind: "live", identity: pending.ticketIdentity });
+			}
 			runRouteHandoff(ticket, choice);
 			return;
 		}
@@ -1259,15 +1277,16 @@ export function App({
 	/**
 	 * Leave the override panel with no handoff.
 	 *
-	 * A route edit came out of the decision modal, so Esc returns there: only
-	 * the edit is dropped, the turn is still undecided. An open-ticket edit
-	 * returns to the list, where it started.
+	 * A route edit returns to the panel it opened from - the decision modal
+	 * or the Live view's decision sub-mode: only the edit is dropped, the
+	 * turn is still undecided. An open-ticket edit returns to the list, where
+	 * it started.
 	 */
 	const cancelOverride = () => {
 		const pending = overrideRef.current;
 		setOverride(null);
 		if (pending?.origin === "workflow") {
-			setPanel({ kind: "decision", identity: pending.ticketIdentity });
+			setPanel({ kind: pending.from, identity: pending.ticketIdentity });
 		}
 	};
 
@@ -1309,8 +1328,7 @@ export function App({
 		entries: readonly TurnLogEntry[];
 		contextLine: string;
 	} => {
-		const taskType =
-			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const taskType = taskTypeOf(ticket);
 		const completion = ticket.lastCompletion;
 		const time = completion === null ? "" : completion.completedAt.slice(0, 16).replace("T", " ");
 		const contextLine = [ticket.repository, taskType, completion?.agentType ?? "?", time]
@@ -1419,8 +1437,7 @@ export function App({
 		const separator = rest.indexOf(":");
 		const edge = configRef.current.workflows[Number(rest.slice(0, separator))];
 		const target = rest.slice(separator + 1);
-		const taskType =
-			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const taskType = taskTypeOf(ticket);
 		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
 			setStatus({ kind: "warning", text: `no workflow edge from ${taskType} to ${target}` });
 			return null;
@@ -1479,10 +1496,14 @@ export function App({
 		if (choice === null) return;
 		// The panel opens on this choice's agent: fetch its Model list (ADR 0010).
 		requestModelList(choice.agentType);
+		// The panel the route row was on is where an Esc and a confirmed route
+		// return: the decision modal, or the Live view's decision sub-mode.
+		const from = panel?.kind === "live" ? ("live" as const) : ("decision" as const);
 		setPanel(null);
 		setOverride({
 			ticketIdentity: ticket.identity,
 			origin: "workflow",
+			from,
 			choice,
 		});
 	};
@@ -2230,8 +2251,7 @@ export function App({
 						});
 						break;
 					}
-					const taskType =
-						ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+					const taskType = taskTypeOf(ticket);
 					if (configRef.current.taskTypes[taskType]?.autoClose === true) {
 						setStatus({
 							kind: "info",

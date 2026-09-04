@@ -174,11 +174,17 @@ export function LiveView({
 				setBodyScroll((s) => Math.max((s === null ? maxBodyScroll : s) - 1, 0));
 				break;
 			case "pageup":
-				setBodyScroll((s) => Math.max((s === null ? maxBodyScroll : s) - bodyRows, 0));
+				// The Decision modal pages by the same count: a body with no
+				// rows still moves one row, so the page size never collapses
+				// to zero on a very small terminal.
+				setBodyScroll((s) => Math.max((s === null ? maxBodyScroll : s) - Math.max(1, bodyRows), 0));
 				break;
 			case "pagedown":
 				setBodyScroll((s) => {
-					const next = Math.min((s === null ? maxBodyScroll : s) + bodyRows, maxBodyScroll);
+					const next = Math.min(
+						(s === null ? maxBodyScroll : s) + Math.max(1, bodyRows),
+						maxBodyScroll,
+					);
 					return next >= maxBodyScroll ? null : next;
 				});
 				break;
@@ -186,7 +192,10 @@ export function LiveView({
 				setBodyScroll(0);
 				break;
 			case "end":
-				setBodyScroll(maxBodyScroll);
+				// Reaching the bottom by key re-pins the stream, like j and
+				// PgDn: new output comes into view again without the operator
+				// asking.
+				setBodyScroll(null);
 				break;
 		}
 	});

@@ -32,9 +32,11 @@ import {
 	awaitFrame,
 	frameText,
 	HEIGHT,
+	openPanel,
 	press,
 	pressArrow,
 	pressEnterQuiet,
+	pressScrollKey,
 	rgb,
 	rowsOf,
 	settle,
@@ -379,6 +381,48 @@ describe("the Live view on the ticket list", () => {
 		);
 	});
 
+	test("reaching the bottom by key re-pins the stream", async () => {
+		const many = (count: number) =>
+			Array.from({ length: count }, (_, i) => `tick ${String(i + 1).padStart(2, "0")}`).join("\n");
+		const runner = new FakeRunner();
+		runner.setSequence(
+			"herdr",
+			[...READ("pane-implement")],
+			[{ stdout: `${many(30)}\n` }, { stdout: `${many(35)}\n` }, { stdout: `${many(35)}\n` }],
+		);
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "j", "the selection to move", (f) =>
+					f.includes("Fix pan drift in split panes"),
+				);
+				await pressEnterQuiet(setup, "the Live view", (f) =>
+					f.includes("Live: Fix pan drift in split panes"),
+				);
+				const first = await awaitFrame(
+					setup,
+					(f) => f.includes("tick 30"),
+					"the first read at the bottom",
+				);
+				expect(first).not.toContain("tick 01");
+				// Two rows up: the pin releases, like a read while the operator
+				// reads.
+				await press(setup, "k", "the first scroll row", (f) => f.includes("tick 10"));
+				await press(setup, "k", "the scroll up two rows", (f) => !f.includes("tick 30"));
+				// End reaches the bottom: the pin comes back, and the newest
+				// line of the next read comes into view without asking.
+				await pressScrollKey(setup, "end", "the stream at its bottom", (f) =>
+					f.includes("tick 30"),
+				);
+				await awaitFrame(setup, (f) => f.includes("tick 35"), "the re-pinned stream");
+				expect(frameText(setup.captureCharFrame())).not.toContain("tick 01");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner },
+		);
+	});
+
 	test("a failed read keeps the last lines under the stale note", async () => {
 		const runner = new FakeRunner();
 		runner.setSequence(
@@ -455,6 +499,12 @@ describe("the Live view on the ticket list", () => {
 					f.includes("Live: Migrate scheduler to clock"),
 				);
 				expect(frame).toContain("no agent pane is recorded for this ticket");
+				// The context line names the repository, the task type, and the
+				// agent: with no handoff stored, the agent is the question mark.
+				expect(frame).toContain("acme/ingest · implement · ?");
+				// The one row is the Goto, and the hint says so.
+				expect(frame.match(/Goto/g)?.length).toBe(1);
+				expect(frame).toContain("enter goto");
 				// No pane to read: the runner was never asked for one.
 				expect(runner.calls).toHaveLength(0);
 			},
@@ -761,6 +811,204 @@ describe("the Live view against a running factory", () => {
 				// focus, which is the Goto's alone.
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 				expect(app.runner.commands().join("\n")).not.toContain("agent focus");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("esc on the override returns to the Live view, not the decision modal", async () => {
+		const app = seededApp();
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				// The agent reports done: the same box turns into the decision.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "done",
+						},
+					]),
+				});
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Live: Persist source facts") && f.includes("Handoff: review"),
+					"the decision",
+				);
+				// The workflow handoff row, then e: the override opens on the
+				// route's choice.
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await openPanel(setup);
+				// Esc drops the edit and returns to the panel it opened from:
+				// the Live view's decision sub-mode, not the decision modal.
+				const frame = await pressEscape(
+					setup,
+					"the Live view to return",
+					(f) =>
+						f.includes("Live: Persist source facts") &&
+						f.includes("Handoff: review") &&
+						!f.includes("Override"),
+				);
+				expect(frame).not.toContain("Decision:");
+				// Only the edit is dropped: the turn is still undecided, and no
+				// handoff was claimed.
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
+				expect(app.state.handoffCount(identity)).toBe(1);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a route confirmed through the override keeps the screen and streams the new pane", async () => {
+		const app = seededApp();
+		stubCheckout(app);
+		const checkoutPath = Object.values(app.config.repos)[0];
+		const list = (implementerStatus: string, reviewerStatus: string) =>
+			agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: implementerStatus,
+				},
+				{
+					paneId: "pane-9",
+					tabId: "tab-9",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: reviewerStatus,
+				},
+			]);
+		app.runner.set("herdr", ["agent", "list"], { stdout: list("working", "working") });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the implementer is finishing\n" });
+		app.runner.set("herdr", [...READ("pane-9")], { stdout: "the reviewer is on it\n" });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
+				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Live: Persist source facts") && f.includes("Handoff: review"),
+					"the decision",
+				);
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				// e opens the override on the route's choice; Enter confirms it
+				// from the panel.
+				await openPanel(setup);
+				// The screen keeps the box: the stream moves to the new pane,
+				// and the route's decision lands on the settled turn.
+				const frame = await pressReturn(
+					setup,
+					"the confirmed route",
+					(f) => f.includes("Live: Persist source facts") && f.includes("the reviewer is on it"),
+				);
+				expect(frame).not.toContain("Override");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the cycle ending while the view is open closes the screen", async () => {
+		// A task type the factory closes by itself, and no workflow: the turn
+		// can only end the cycle, never hand off.
+		const app = seededApp({
+			workflows: [],
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, autoClose: true },
+			},
+		});
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], { stdout: "the agent is wrapping up\n" });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
+				await awaitFrame(setup, (f) => f.includes("the agent is wrapping up"), "the stream");
+				// The agent reports done. The turn settles, the auto-close type
+				// decides for the factory, and the cycle ends while the operator
+				// watches: the screen closes on its own.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "done",
+						},
+					]),
+				});
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("[open]") && !f.includes("Live: Persist source facts"),
+					"the screen to close",
+				);
+				// The factory decided the turn, and the screen is gone with the
+				// cycle: no choice rows, no box.
+				expect(frame).not.toContain("Handoff: review");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				expect(app.state.ticketState(identity)).toBe("open");
 			},
 			WIDTH,
 			HEIGHT,

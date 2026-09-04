@@ -298,15 +298,15 @@ in-flight and awaiting states, the screen closes. A settled turn the
 factory decides for itself never hands the screen over: the stream stands
 where the operator left it.
 
-| Key             | What it does                                                        |
-| --------------- | ------------------------------------------------------------------- |
-| `j` / `k`      | Scroll the stream, one row down or up                             |
-| `PgUp` / `PgDn` | Scroll the stream by a page                                    |
-| `Home` / `End` | Jump to the top or the bottom of the stream                        |
-| `Up` / `Down`  | Move between the choice rows, in the decision sub-mode            |
+| Key             | What it does                                                                                   |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| `j` / `k`       | Scroll the stream, one row down or up                                                          |
+| `PgUp` / `PgDn` | Scroll the stream by a page                                                                    |
+| `Home` / `End`  | Jump to the top or the bottom of the stream                                                    |
+| `Up` / `Down`   | Move between the choice rows, in the decision sub-mode                                         |
 | `Enter`         | Focus the agent's pane and close the screen; choose the selected row, in the decision sub-mode |
-| `e`             | Edit the selected Handoff row's settings before it starts, in the decision sub-mode |
-| `Esc`           | Close the screen: nothing runs, the ticket stays where it is        |
+| `e`             | Edit the selected Handoff row's settings before it starts, in the decision sub-mode            |
+| `Esc`           | Close the screen: nothing runs, the ticket stays where it is                                   |
 
 ### Missing modal keys
 
