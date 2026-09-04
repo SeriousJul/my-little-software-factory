@@ -52,7 +52,6 @@ import {
 	mousePress,
 	mouseWheel,
 	openPanel,
-	overlayRows,
 	press,
 	pressArrow,
 	rgb,
@@ -185,14 +184,15 @@ describe("the control plane", () => {
 			// l moves the focus to the detail pane.
 			frame = await focusDetail(setup);
 
-			// j with the detail focused scrolls the detail, it does not
-			// move the selection. At this size the detail does not
-			// overflow, so the frame does not change and the marker stays
-			// on the first ticket.
-			const before = setup.captureCharFrame();
+			// j with the detail focused cannot scroll at this size. The
+			// catalogue reports its unavailable reason on the Message line;
+			// it does not move the selected Ticket.
 			setup.mockInput.pressKey("j");
-			const after = await settle(setup);
-			expect(after).toBe(before);
+			const after = await awaitFrame(
+				setup,
+				(frame) => frame.includes("the Ticket detail has nowhere to scroll"),
+				"the unavailable Scroll reason",
+			);
 			expect(markerRowOf(after)).toBe(2);
 
 			// h moves the focus back to the list pane; the selection is
@@ -299,7 +299,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(back)).toBe(2);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -337,7 +337,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(atBottom)).toBe(2);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -396,7 +396,7 @@ describe("the control plane", () => {
 				expect(rows3.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
 			},
 			WIDTH,
-			6,
+			8,
 		);
 	});
 
@@ -519,7 +519,7 @@ describe("the control plane", () => {
 				// box on 37-74. At an odd width a "50%" list would take 38
 				// columns, and the shared geometry would then lay text one
 				// cell off the rendered box.
-				for (const row of rows.slice(1, -1)) {
+				for (const row of rows.slice(1, -3)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -529,11 +529,9 @@ describe("the control plane", () => {
 					expect(row[1]).toBe(" ");
 					expect(row[35]).toBe(" ");
 					expect(row[38]).toBe(" ");
-					// The detail pane holds more lines than this 25-row frame shows, so it
-					// scrolls and its native scrollbar paints the right padding column on
-					// every body row: a thumb cell where the thumb has reached, and the
-					// track's blank where it has not. The probe allows either.
-					expect([" ", "▀", "▄", "█"]).toContain(row[73]);
+					// The detail's right padding cell is the native scrollbar
+					// gutter: blank, track, or thumb.
+					expect(row[73]).toMatch(/[ ▀▄█]/);
 				}
 				// The detail pane carries its content at this size.
 				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
@@ -802,7 +800,7 @@ describe("the control plane", () => {
 				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
 			},
 			60,
-			12,
+			14,
 		);
 	});
 
@@ -910,7 +908,7 @@ describe("the control plane", () => {
 				expect(top).not.toBe(page);
 			},
 			60,
-			8,
+			12,
 		);
 	});
 
@@ -930,7 +928,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			6,
+			8,
 		);
 	});
 
@@ -974,7 +972,7 @@ describe("the control plane", () => {
 				expect(await settle(setup)).toBe(stable);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -995,14 +993,17 @@ describe("the control plane", () => {
 				// track. It is not present on a fitting detail.
 				const initial = setup.captureCharFrame();
 				expect(initial).toMatch(/[▀▄█]/);
-				await mouseClick(setup, 58, 6);
+				// The panes sit above the Message line and Action bar, so the
+				// track spans the pane's inner rows one to four.
+				await mouseClick(setup, 58, 4);
 				const trackJump = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== initial,
 					"a scrollbar track click to jump to a proportional detail position",
 				);
 				expect(markerRowOf(trackJump)).toBe(2);
-				await mouseDrag(setup, [58, 5], [58, 1]);
+				const thumbRow = rowsOf(trackJump).findIndex((row) => /[▀▄█]/.test(row.slice(58, 59)));
+				await mouseDrag(setup, [58, thumbRow], [58, 1]);
 				await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -1111,7 +1112,8 @@ describe("the control plane", () => {
 					expect(rows).toHaveLength(10);
 					expect(rows.every((row) => row.length === 60)).toBe(true);
 					expect(rows[0]).toContain("┌");
-					expect(rows.at(-1)).toContain("└");
+					// The panes sit above the Message line and Action bar.
+					expect(rows.at(-3)).toContain("└");
 					expect(detailPaneText(frame, 60).trim()).not.toBe("");
 				}
 			},
@@ -1146,18 +1148,25 @@ describe("the control plane", () => {
 					const frame = await press(setup, "?", "the Key guide", (candidate) =>
 						candidate.includes("Key guide"),
 					);
-					expect(overlayRows(frame)).toEqual([
-						"↑↓/jk move",
-						"Enter hand off",
-						"e override",
-						"v Consultations",
-						"c launch",
-						"r refresh",
-						"? help",
-						"q quit",
-						"Live view: j/k scroll, pgup/pgdn page, home/end, enter goto, esc close",
-						"Esc closes this guide. F2 or m opens the full Message view.",
-					]);
+					// The guide opens on this mode's section, and the sections
+					// keep the catalogue's order on screen. A hint priority
+					// that moves reorders these rows.
+					const rows = rowsOf(frame);
+					const indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
+					const modeIdx = indexOf("Current interaction mode");
+					const globalIdx = indexOf("Global controls");
+					const controlPlaneIdx = indexOf("Control plane controls");
+					expect(modeIdx).toBeGreaterThan(0);
+					expect(globalIdx).toBeGreaterThan(modeIdx);
+					expect(controlPlaneIdx).toBeGreaterThan(globalIdx);
+					const modeSection = rows.slice(modeIdx, globalIdx).join("\n");
+					expect(modeSection).toContain("Move");
+					expect(modeSection).toContain("Hand off");
+					// The three meanings of Enter each keep their own row.
+					expect(modeSection).toContain("Live view");
+					expect(modeSection).toContain("Decide");
+					const globalSection = rows.slice(globalIdx, controlPlaneIdx).join("\n");
+					expect(globalSection).toContain("Quit");
 					// Closing the guide returns to the tickets view.
 					setup.mockInput.pressEscape();
 					await awaitFrame(

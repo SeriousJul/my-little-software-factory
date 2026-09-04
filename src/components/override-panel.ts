@@ -65,11 +65,12 @@
  * Enter confirms and hands off. Esc cancels. While the panel is open, the
  * keys of the app below are disabled.
  *
- * The panel sizes itself to the terminal: the value column shrinks first, then
- * the label column, then the marker. The hint row drops when the terminal
- * cannot hold it, and the rows scroll within the viewport when the height
- * cannot hold them all: the selected row always stays on screen. A row never
- * wraps or interleaves.
+ * The panel sizes itself to the terminal: the value column shrinks first,
+ * then the label column, then the marker. The rows scroll within the
+ * viewport when the height cannot hold them all: the selected row always
+ * stays on screen. A row never wraps or interleaves. The shared Action bar
+ * sits at the terminal bottom and names the controls this panel dispatches
+ * through the shared control catalogue.
  */
 
 import type { InputRenderable } from "@opentui/core";
@@ -80,7 +81,11 @@ import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
-import { padToWidth, truncateTailToWidth, truncateToWidth, widthOf } from "./text.ts";
+import { createControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor } from "./controls.ts";
+import type { MessageFact } from "./messages.ts";
+import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { padToWidth, truncateTailToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 /** Which settings an agent type maps, for the rows it opens. */
@@ -108,7 +113,6 @@ export type ModelListCause =
 	| "no-list"
 	/** The query ran and did not answer: a failed command or an unreadable table. */
 	| "query-failed";
-
 /**
  * One agent's Model list, as the control plane fetched it (ADR 0010).
  * `unavailable` covers both an agent kind that reports no list and a fetch
@@ -118,7 +122,6 @@ export type ModelListStatus =
 	| { status: "loading" }
 	| { status: "available"; models: readonly string[] }
 	| { status: "unavailable"; cause: ModelListCause };
-
 /** The list of the agent the panel is on, tagged so a stale answer cannot show. */
 export interface AgentModelList {
 	agentType: string;
@@ -185,6 +188,17 @@ interface OverridePanelProps {
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
+	/** The base control facts, preserved when this overlay owns input. */
+	context: ControlContext;
+	/** False while a Key guide or Message view is above this panel. */
+	inputActive?: boolean;
+	onHelp?: (mode: "override-list" | "override-model" | "override-text") => void;
+	onMessage?: (mode: "override-list" | "override-model" | "override-text") => void;
+	/** Reports the catalogue reason for a refused control on the Message line. */
+	onUnavailable?: (reason: string) => void;
+	/** The Message fact this panel's own Message line shows. */
+	message: MessageFact | null;
+	onEmergencyExit: () => void;
 }
 
 /** The desired label column: the widest label plus a gap. */
@@ -192,56 +206,14 @@ const LABEL_WIDTH = 12;
 /** The desired value column: an agent name, a model, or an env kind. */
 const VALUE_WIDTH = 30;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
-// Every hint shares one width so the guide never truncates another one, and a
-// row that changes its guide does not move the rows beside it. Keep them all
-// inside that width, or the guide drops on a normal terminal.
-const LIST_HINT = "move ↑↓/jk tab/⇧tab cycle ←→/hl ↵ esc";
-/**
- * The guide of a free-text Model row: the text keys, and why the list is gone.
- *
- * A Model row is a Text field only because its agent's list is missing, so the
- * guide spends one cell group on the fact the row cannot show by itself.
- */
-const NO_LIST_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (none)";
-const LIST_FAILED_HINT = "↑↓ move edit hjkl/←→ paste ↵/esc (failed)";
-/** A list row the operator can also clear, leaving the setting to the agent. */
-const CHOICE_HINT = "↑↓/jk move ←→/hl cycle ⌫ clear ↵/esc";
-/**
- * The Model list row: typing jumps the value, the arrows take a match.
- *
- * It names confirm and cancel like every other guide. Tab moves rows too, but
- * the arrows are the keys the row is steered with.
- */
-const MODEL_HINT = "↑↓ move type jumps ←→ cycle ⌫ clear ↵/esc";
-/**
- * The row that waits for its agent's Model list. Only the movement keys and
- * confirm and cancel reach it, and the guide says why: the loading marker is
- * how the row tells an operator that a value filling its column is a value the
- * panel has not judged yet, not a row that works.
- */
-const PENDING_HINT = "↑↓/jk move (loading...) ↵/esc";
-/** The guide of the token-count row: it takes digits and nothing else. */
-const DIGITS_HINT = "↑↓ tab/⇧tab type 0-9 ↵ esc";
-/** The guide of a row whose value the chosen agent has no setting for. */
-const NO_SETTING_HINT = "no such Agent setting: Backspace clears";
-/** The guide of a Thinking row whose level the chosen agent does not offer. */
-const NO_LEVEL_HINT = "no such level: cycle ←→/hl or Backspace";
-/** The guide of a Context row that holds digits no count makes. */
-const NO_COUNT_HINT = "not a token count: type digits above 0";
-const HINT_WIDTH = Math.max(
-	widthOf(LIST_HINT),
-	widthOf(NO_LIST_HINT),
-	widthOf(LIST_FAILED_HINT),
-	widthOf(CHOICE_HINT),
-	widthOf(MODEL_HINT),
-	widthOf(PENDING_HINT),
-	widthOf(DIGITS_HINT),
-	widthOf(NO_SETTING_HINT),
-	widthOf(NO_LEVEL_HINT),
-	widthOf(NO_COUNT_HINT),
-);
 const EMPTY_HINT = "(empty)";
+// The cause the empty Model field states, for the two ways its list row is
+// gone: a kind that reports no list and a query that failed. Both stay short
+// enough to hold in the value column at the smallest pinned panel size.
+const FALLBACK_PLACEHOLDERS: Record<ModelListCause, string> = {
+	"no-list": "(empty - no model list)",
+	"query-failed": "(empty - query failed)",
+};
 const UNSET_HINT = "(unset)";
 const LOADING_HINT = "(loading...)";
 const NO_MODELS_HINT = "(no models available)";
@@ -259,58 +231,50 @@ const INPUT_KEY_BINDINGS = [
 	{ name: "y", ctrl: true, action: "redo" },
 ];
 
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-
-/**
- * The panel geometry sized to the terminal.
- *
- * The modal takes what the terminal holds. The value column shrinks first,
- * then the label column, then the marker. The hint row drops when its text
- * no longer fits the inner width. The rows scroll within `maxRows` when the
- * height cannot hold them all; the viewport keeps the selected row on screen.
- */
+/** The panel's columns, within the rows and width the shared chrome leaves. */
 interface PanelGeometry {
 	markerWidth: number;
 	labelWidth: number;
 	valueWidth: number;
-	showHint: boolean;
 	maxRows: number;
 }
 
-function panelGeometry(width: number, height: number): PanelGeometry {
-	const inner = Math.max(0, width - CHROME);
+/**
+ * The panel's columns at a content width.
+ *
+ * The value column shrinks first, then the label column, then the marker,
+ * and all three keep adding up to the width the box offers. The rows scroll
+ * within `maxRows` when the height cannot hold them all; the viewport keeps
+ * the selected row on screen, and a row never wraps.
+ */
+function panelGeometry(contentWidth: number, maxRows: number): PanelGeometry {
 	// Reserve one cell for the value before shrinking the marker at the
 	// smallest renderable widths.
-	const markerWidth = Math.min(MARKER_WIDTH, Math.max(0, inner - 1));
+	const markerWidth = Math.min(MARKER_WIDTH, Math.max(0, contentWidth - 1));
 	let labelWidth = 0;
 	let valueWidth = 0;
-	if (inner > markerWidth) {
-		const contentWidth = inner - markerWidth;
+	if (contentWidth > markerWidth) {
+		const room = contentWidth - markerWidth;
 		// Keep one value cell whenever the panel has room beyond its marker.
-		// The value shrinks first, then the label, while all three columns
-		// continue to add up to the modal's inner width.
-		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, contentWidth - LABEL_WIDTH));
-		labelWidth = Math.min(LABEL_WIDTH, contentWidth - valueWidth);
+		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, room - LABEL_WIDTH));
+		labelWidth = Math.min(LABEL_WIDTH, room - valueWidth);
 	}
-	// The hint renders inside the modal, so it must fit the width the rows
-	// use, not the terminal: a hint wider than the box would render
-	// truncated, and a row never carries broken text.
-	const columns = markerWidth + labelWidth + valueWidth;
-	const showHint = columns >= HINT_WIDTH && height - CHROME >= 2;
-	// The hint takes a row of its own; the rows need at least one.
-	const maxRows = Math.max(1, height - CHROME - (showHint ? 1 : 0));
-	return { markerWidth, labelWidth, valueWidth, showHint, maxRows };
+	return { markerWidth, labelWidth, valueWidth, maxRows: Math.max(1, maxRows) };
 }
+
+/** The rows a full panel offers: agent, environment, task type, model, thinking, context. */
+const PANEL_ROW_COUNT = 6;
 
 /**
  * The cells one terminal size gives a row's value.
  *
  * The panel owns its geometry, so a test that checks a clipped value asks the
- * panel how wide the column is instead of mirroring the number by hand.
+ * panel how wide the column is instead of mirroring the number by hand. The
+ * box is sized the way the panel sizes it: edge to edge, for its full row set.
  */
 export function panelValueCells(width: number, height: number): number {
-	return panelGeometry(width, height).valueWidth;
+	const frame = modalFrame(width, height, { rows: PANEL_ROW_COUNT, margin: 0 });
+	return panelGeometry(frame.contentWidth, frame.contentRows).valueWidth;
 }
 
 /**
@@ -356,14 +320,19 @@ export function OverridePanel({
 	initial,
 	onConfirm,
 	onCancel,
+	context,
+	inputActive = true,
+	onHelp,
+	onMessage,
+	onUnavailable,
+	message,
+	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const geometry = panelGeometry(terminalWidth, terminalHeight);
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
 	// The selection indexes the full row list, not the visible viewport. The
 	// viewport scrolls to keep this row on screen.
 	const [selected, setSelected] = useState(0);
-
 	// The key parser can deliver several key events in one tick. React batches
 	// their state updates, so a closure that reads `choice` or `selected`
 	// would see the stale value and drop or misaddress an update. The refs
@@ -396,8 +365,15 @@ export function OverridePanel({
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
 		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
-
 	const allRows = rowsForChoice(choice);
+	// The shared chrome sizes the box: the terminal's rows above the Action
+	// bar, or the rows the panel needs, whichever is fewer. The panel spans
+	// the terminal edge to edge, so its value column keeps every cell it can.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		rows: allRows.length,
+		margin: 0,
+	});
+	const geometry = panelGeometry(frame.contentWidth, frame.contentRows);
 	// Switching the agent can hide the rows below the selection; clamp it.
 	const safeSelected = Math.min(selected, allRows.length - 1);
 	// The rows the terminal height holds, scrolled to keep the selected row
@@ -407,25 +383,21 @@ export function OverridePanel({
 	start = Math.max(0, Math.min(start, allRows.length - visibleCount));
 	const rows = allRows.slice(start, start + visibleCount);
 	const row = rows[Math.max(0, safeSelected - start)];
-
 	/** Move to another agent: its Model list is the one the row must offer. */
 	const selectAgent = (next: HandoffChoice, previous: HandoffChoice) => {
 		if (next.agentType !== previous.agentType) onAgentChange(next.agentType);
 	};
-
 	const commit = (update: (current: HandoffChoice) => HandoffChoice) => {
 		const previous = choiceRef.current;
 		choiceRef.current = update(previous);
 		setChoice(choiceRef.current);
 		selectAgent(choiceRef.current, previous);
 	};
-
 	// The row under the cursor, clamped the way the render clamps it.
 	const cursorRow = (): PanelRow => {
 		const all = rowsForChoice(choiceRef.current);
 		return all[Math.min(selectedRef.current, all.length - 1)];
 	};
-
 	const move = (delta: number) => {
 		// Leaving a row ends its type-ahead run: the next row starts clean.
 		typedRef.current = "";
@@ -434,7 +406,6 @@ export function OverridePanel({
 		selectedRef.current = (at + delta + count) % count;
 		setSelected(selectedRef.current);
 	};
-
 	/**
 	 * The rows a task type switch re-derives: every setting the operator has
 	 * not touched, from the new task type's profile (ADR 0009). A touched row
@@ -453,7 +424,6 @@ export function OverridePanel({
 			contextWindow: touched.contextWindow ? current.contextWindow : profile.contextWindow,
 		};
 	};
-
 	const cycle = (delta: number) => {
 		const target = cursorRow();
 		if (target.kind !== "list") return;
@@ -475,22 +445,21 @@ export function OverridePanel({
 			return { ...current, [target.key]: next };
 		});
 	};
-
 	/** Record that the operator set one of the rows a task type switch re-derives. */
 	const touch = (key: DerivedKey) => {
 		touchedRef.current[key] = true;
 	};
-
 	/** Backspace or Delete on a Model or Thinking row: leave the setting to the agent. */
 	const clearRow = () => {
 		const target = cursorRow();
+		// The pending row takes no input at all: it holds no value to clear.
+		if (target.kind === "pending") return;
 		if (target.key !== "model" && target.key !== "thinking") return;
 		const key: ClearKey = target.key;
 		typedRef.current = "";
 		touch(key);
 		commit((current) => (current[key] === "" ? current : { ...current, [key]: "" }));
 	};
-
 	/** One type-ahead letter on the Model list row. */
 	const typeLetter = (char: string) => {
 		const target = cursorRow();
@@ -509,7 +478,6 @@ export function OverridePanel({
 		if (match === undefined) return;
 		commit((current) => (current.model === match ? current : { ...current, model: match }));
 	};
-
 	// One text field's input callback. The input owns its own caret and text,
 	// so this only mirrors the value into the choice. The guard skips the
 	// no-op echo the input emits, so a re-render never re-commits.
@@ -544,128 +512,88 @@ export function OverridePanel({
 		touch(key);
 		commit((current) => ({ ...current, [key]: value }));
 	};
-
-	useKeyboard((key) => {
-		// Undo, redo, and the other modifier combos belong to the focused
-		// input, so they fall through untouched.
-		if (key.ctrl || key.meta || key.super) {
-			return;
-		}
+	// The panel's mode follows the row the cursor is on, so it is read at key
+	// time: one key can move the cursor, and the next belongs to the new row.
+	const currentMode = (): "override-list" | "override-model" | "override-text" => {
 		const target = cursorRow();
-		// Movement and confirm/cancel are the panel's, whatever row is under
-		// the cursor. They are prevented so the focused input never also
-		// acts on them.
-		switch (key.name) {
-			case "escape":
-				onCancel();
-				key.preventDefault();
-				return;
-			case "return":
+		if (target.kind === "text") return "override-text";
+		if (target.kind === "list" && target.typeAhead === true) return "override-model";
+		return "override-list";
+	};
+	const dispatch = createControlDispatch({
+		mode: currentMode,
+		context,
+		active: inputActive,
+		// The Ctrl combos the catalogue does not name (undo, redo, word
+		// delete) belong to the focused input. Ctrl+C is the emergency exit.
+		skip: (key) => key.ctrl === true && key.name !== "c",
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			"move-list": ({ key }) => {
+				// Tab moves from a list row and a text row alike; Shift+Tab
+				// is the previous row.
+				move(key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1);
+				key.preventDefault?.();
+			},
+			"change-override": ({ key }) => {
+				cycle(key.name === "left" || key.name === "h" ? -1 : 1);
+				key.preventDefault?.();
+			},
+			handoff: ({ key }) => {
 				onConfirm(choiceRef.current);
-				key.preventDefault();
-				return;
-			case "tab":
-				move(key.shift ? -1 : 1);
-				key.preventDefault();
-				return;
-			case "down":
-				move(1);
-				key.preventDefault();
-				return;
-			case "up":
-				move(-1);
-				key.preventDefault();
-				return;
-		}
-		if (target.kind === "pending") {
-			// The Model list has not arrived: the row takes no input at all, so
-			// nothing the operator means for it can be lost. Only j and k still
-			// move the selection off the row.
-			if (key.name === "j" || key.name === "k") {
-				move(key.name === "j" ? 1 : -1);
-			}
-			key.preventDefault();
-			return;
-		}
-		if (target.kind === "list") {
-			// The Model list row takes typed letters before anything else, so h,
-			// j, k, and l type into it instead of cycling or moving.
-			if (target.typeAhead === true) {
+				key.preventDefault?.();
+			},
+			"clear-override": ({ key }) => {
+				clearRow();
+				key.preventDefault?.();
+			},
+			cancel: ({ key }) => {
+				onCancel();
+				key.preventDefault?.();
+			},
+			help: () => onHelp?.(currentMode()),
+			message: () => onMessage?.(currentMode()),
+		},
+	});
+	useKeyboard((key) => {
+		// The Model list row takes typed letters before anything else, so h,
+		// j, k, and l type into it instead of cycling or moving.
+		if (inputActive && key.meta !== true) {
+			const target = cursorRow();
+			if (target.kind === "list" && target.typeAhead === true) {
 				const char = typedChar(key);
 				if (char !== null) {
 					typeLetter(char);
-					key.preventDefault();
+					key.preventDefault?.();
 					return;
 				}
-			} else if (key.name === "j") {
-				move(1);
-				key.preventDefault();
-				return;
-			} else if (key.name === "k") {
-				move(-1);
-				key.preventDefault();
-				return;
 			}
-			if (key.name === "left" || (target.typeAhead !== true && key.name === "h")) {
-				cycle(-1);
-				key.preventDefault();
-				return;
-			}
-			if (key.name === "right" || (target.typeAhead !== true && key.name === "l")) {
-				cycle(1);
-				key.preventDefault();
-				return;
-			}
-			if (key.name === "backspace" || key.name === "delete") {
-				// A list row has no caret, so forward delete and backspace are the
-				// same decision: clear the setting, and leave it to the agent.
-				clearRow();
-				key.preventDefault();
-				return;
-			}
-			return;
 		}
-		// A text row: the focused input owns the caret, typing, backspace,
-		// delete, Home, End, undo, redo, and paste. j, k, h, and l type into
-		// it; everything else falls through. Nothing is prevented here.
+		dispatch(key);
 	});
-
-	return createElement(
-		"box",
-		{
-			// A full-screen overlay above the app, with the modal centered in it.
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
-			},
-		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				title: "Override",
-				padding: 1,
-				style: { flexDirection: "column" },
-			},
-			...rows.map((r) =>
-				rowElement(r, choice[r.key], r.key === row.key, geometry, handleInput, inputRefs),
+	const mode = currentMode();
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		title: "Override",
+		borderColor: COLORS.borderFocused,
+		// One row is enough to be a panel: the rows that do not fit scroll.
+		minContentRows: 1,
+		message,
+		bar: { mode, context: contextFor(mode, context) },
+		children: rows.map((r) =>
+			rowElement(
+				r,
+				choice[r.key],
+				r.key === row.key,
+				geometry,
+				handleInput,
+				inputRefs,
+				inputActive,
 			),
-			geometry.showHint &&
-				createElement(
-					"text",
-					{ fg: COLORS.dim },
-					truncateToWidth(hintForRow(row), innerWidthOf(geometry)),
-				),
 		),
-	);
+	});
 }
 
 /**
@@ -679,34 +607,6 @@ export function OverridePanel({
  */
 function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListStatus {
 	return modelList.agentType === choice.agentType ? modelList.status : { status: "loading" };
-}
-
-/** The short control guide for the selected row. */
-function hintForRow(row: PanelRow): string {
-	if (row.unfit === "no-setting") return NO_SETTING_HINT;
-	if (row.unfit === "no-level") return NO_LEVEL_HINT;
-	if (row.unfit === "no-count") return NO_COUNT_HINT;
-	switch (row.kind) {
-		case "text":
-			// A Model row reaches a Text field only through a missing list, so the
-			// row always carries which cause sent it there; a text row without
-			// one is the token row, and its guide names the digits rule.
-			return row.fallbackCause === "query-failed"
-				? LIST_FAILED_HINT
-				: row.fallbackCause === "no-list"
-					? NO_LIST_HINT
-					: DIGITS_HINT;
-		case "pending":
-			return PENDING_HINT;
-		default:
-			if (row.typeAhead === true) return MODEL_HINT;
-			return row.key === "thinking" ? CHOICE_HINT : LIST_HINT;
-	}
-}
-
-/** The inner width of the modal in cells, for the hint row. */
-function innerWidthOf(geometry: PanelGeometry): number {
-	return geometry.markerWidth + geometry.labelWidth + geometry.valueWidth;
 }
 
 /** The rows the panel offers for the current choice, in order. */
@@ -772,7 +672,7 @@ function rowsFor(
  * The Model row for one agent: the agent's own list with type-ahead, a loading
  * marker while the control plane fetches it, the no-models hint when the agent
  * reports none, and the Text field when its kind reports no list or the fetch
- * failed. The Text field's guide line names the reason the list is gone.
+ * failed. The Text field's placeholder names the reason the list is gone.
  */
 function modelRow(status: ModelListStatus): PanelRow {
 	if (status.status === "loading") {
@@ -809,6 +709,7 @@ function rowElement(
 	geometry: PanelGeometry,
 	handleInput: (row: PanelRow) => (text: string) => void,
 	inputRefs: Record<TextKey, RefObject<InputRenderable | null>>,
+	inputActive: boolean,
 ): ReactElement {
 	const children: ReactElement[] = [
 		createElement(
@@ -833,8 +734,11 @@ function rowElement(
 				key: r.key,
 				width: geometry.valueWidth,
 				value,
-				focused: selected,
-				placeholder: EMPTY_HINT,
+				// A Key guide or Message view above the panel takes the keys:
+				// the field blurs so their keys cannot type into it.
+				focused: selected && inputActive,
+				placeholder:
+					r.fallbackCause === undefined ? EMPTY_HINT : FALLBACK_PLACEHOLDERS[r.fallbackCause],
 				placeholderColor: COLORS.dim,
 				textColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.text,
 				focusedTextColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.textBright,

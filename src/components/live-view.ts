@@ -25,18 +25,15 @@ import { useMemo, useRef, useState } from "react";
 
 import type { TurnLogEntry } from "../turn-log.ts";
 import {
-	actionSpans,
-	bodySpans,
 	DECISION_HINT,
 	decisionBoxSize,
 	decisionLayout,
-	scrollbarRows,
 	turnLogBody,
 	useModalPopIn,
 } from "./decision-modal.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
-import type { ActionRow } from "./missing-modal.ts";
+import { type ActionRow, actionRowSpans, bodyRowSpans, scrollbarRows } from "./modal-chrome.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -249,14 +246,14 @@ export function LiveView({
 				createElement(
 					"text",
 					{ key: `body-${index}` },
-					...bodySpans(line, bodyWidth, thumbRows?.has(index)),
+					...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
 				),
 			),
 			...actions.map((row, index) =>
 				createElement(
 					"text",
 					{ key: row.key },
-					...actionSpans(row, index === selected, geometry.contentWidth),
+					...actionRowSpans(row, index === selected, geometry.contentWidth),
 				),
 			),
 			finalLayout.showHint &&

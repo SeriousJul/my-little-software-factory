@@ -1034,7 +1034,9 @@ describe("the decision modal", () => {
 				const frame = await press(setup, "e", "the hint on the status line", (f) =>
 					frameText(f).includes("press Enter, then e on a Handoff row"),
 				);
-				expect(frame).not.toContain("Override");
+				// The bar carries the e Override hint with its reason; the panel's
+				// box title is the open signal.
+				expect(frame).not.toContain("┌─Override");
 				expect(app.state.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},
@@ -1240,7 +1242,12 @@ describe("the decision modal", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				// Goto is the second row: one down, confirm.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
-				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
+				setup.mockInput.pressEnter();
+				await awaitFrame(
+					setup,
+					() => app.runner.commands().includes("herdr agent focus pane-1"),
+					"the focus",
+				);
 				// The focus went to the stored pane, and the handoff stayed
 				// open: the ticket is running, and the row wears the missing
 				// badge only because the faked agent list is empty.
@@ -1273,10 +1280,13 @@ describe("the decision modal", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const panel = await settle(setup);
 				const text = frameText(panel);
-				// The near-fullscreen modal holds 19 of the 40 lines. It opens at
-				// the bottom, where the agent's conclusion is, and the scrollbar
-				// thumb rests there.
-				expect(text).toContain("log 022");
+				// The near-fullscreen modal gives the terminal's last two rows to
+				// its own Message line and Action bar, and the log window is what
+				// the box has left. It opens at the bottom, where the agent's
+				// conclusion is, and the scrollbar thumb rests there.
+				const shown = rowsOf(panel).filter((row) => /log \d\d\d/.test(row)).length;
+				expect(shown).toBeGreaterThan(2);
+				expect(text).toContain(`log ${String(41 - shown).padStart(3, "0")}`);
 				expect(text).toContain("log 040");
 				expect(text).toContain("█");
 				const bottomThumbRow = thumbRowOf(panel);
@@ -1284,17 +1294,15 @@ describe("the decision modal", () => {
 
 				// k scrolls up through the log, one row per press. Each press
 				// drops the newest row; two presses move the thumb with the log.
-				await press(
-					setup,
-					"k",
-					"one row up",
-					(f) => f.includes("log 021") && !f.includes("log 040"),
-				);
+				// `first(n)` is the oldest line still on screen after n steps up.
+				const first = (steps: number) => `log ${String(41 - shown - steps).padStart(3, "0")}`;
+				const last = (steps: number) => `log ${String(40 - steps).padStart(3, "0")}`;
+				await press(setup, "k", "one row up", (f) => f.includes(first(1)) && !f.includes(last(0)));
 				const higher = await press(
 					setup,
 					"k",
 					"one more row up",
-					(f) => f.includes("log 020") && !f.includes("log 039"),
+					(f) => f.includes(first(2)) && !f.includes(last(1)),
 				);
 				expect(thumbRowOf(higher)).toBeLessThan(bottomThumbRow);
 				// j scrolls back down and brings the thumb with it.
@@ -1302,7 +1310,7 @@ describe("the decision modal", () => {
 					setup,
 					"j",
 					"one row down",
-					(f) => f.includes("log 039") && !f.includes("log 020"),
+					(f) => f.includes(last(1)) && !f.includes(first(2)),
 				);
 				expect(thumbRowOf(backDown)).toBe(bottomThumbRow);
 
@@ -1372,8 +1380,8 @@ describe("the decision modal", () => {
 				expect(modal).toContain("All 142 tests pass.");
 				expect(modal).not.toContain("**");
 				expect(modal).not.toContain("##");
-				// The key hint offers the log's scroll keys.
-				expect(modal).toContain("pgup/pgdn page home/end");
+				// The shared Action bar offers the log's scroll key.
+				expect(modal).toContain("j/k Scroll log");
 
 				// The failed tool call wears the warning color, the passing one
 				// the dim one. Both are painted, so the notes are on screen. The
@@ -2153,6 +2161,24 @@ describe("the leftover environment", () => {
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["tab", "close", "tab-1"], { code: 1, stderr: "the tab has an agent" });
+		// The handoff the refusal waits behind settles cleanly once the gate
+		// opens, so the Working line goes and the refusal comes out.
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set(
+			"herdr",
+			[
+				"tab",
+				"create",
+				"--workspace",
+				"ws-1",
+				"--cwd",
+				Object.values(app.config.repos)[0],
+				"--no-focus",
+			],
+			{ stdout: tabCreateJson("pane-2", "tab-2") },
+		);
 		// The handoff stops at herdr's first call, so the seat stays taken while
 		// the operator works the clear behind it.
 		const gate = gatedRunner(app, (command) => command.startsWith("herdr workspace list"));
@@ -2168,13 +2194,28 @@ describe("the leftover environment", () => {
 				await awaitFrame(setup, () => gate.busy(), "the handoff reaching herdr");
 
 				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
-				await pressReturn(setup, "the refusal", (f) => f.includes("a handoff is in flight"));
+				// The refusal is written while the handoff's Working line holds, so
+				// the panel closes and the refusal waits behind it on the Message
+				// line rather than showing now.
+				const refused = await pressReturn(
+					setup,
+					"the panel closing",
+					(f) => !f.includes("Leftover environment"),
+				);
+				expect(refused).not.toContain("a handoff is in flight");
 				// The tab close the clear would have run never reaches herdr: the
 				// agent being built cannot meet it half way.
 				expect(tabCloses(app)).toBe(1);
 				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
 				gate.release();
-				await awaitFrame(setup, () => !gate.busy(), "the handoff settling");
+				// The clean settle clears the Working line and lets the refusal out
+				// behind it: a Warning written during a refresh appears when the
+				// refresh settles.
+				await awaitFrame(
+					setup,
+					(f) => f.includes("a handoff is in flight"),
+					"the refusal behind the Working line",
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -3386,17 +3427,18 @@ describe("the handoff queue", () => {
 				const pressReturnQuietFor = (what: string, predicate: (f: string) => boolean) =>
 					pressEnterQuiet(setup, what, predicate);
 				// Hand off the open ticket: it runs, and it holds the seat.
-				// The list rows sit on frame lines two and three: line one is
-				// the box border, and the list pads a blank line above its
-				// first row. The in-flight ticket is first, and it is the
-				// initial selection, so the move down lands the marker on
-				// line three - a line it was not on, so the key is applied
-				// before the next key is pressed.
-				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 3);
+				// The mode line sits above the list box, so the list rows sit
+				// on frame lines three and four: line one is the box border,
+				// and the list pads a blank line above its first row. The
+				// in-flight ticket is first, and it is the initial selection,
+				// so the move down lands the marker on line four - a line it
+				// was not on, so the key is applied before the next key is
+				// pressed.
+				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 4);
 				await pressReturnQuietFor("the handoff to start", (f) => f.includes("handing off"));
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 2);
+				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
 				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
@@ -3438,8 +3480,14 @@ describe("the handoff queue", () => {
 				expect(inFlight?.handoffRecoveryRequired).toBe(false);
 
 				// The claim settled, so the ticket is not dead: it hands off
-				// again on demand.
-				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 3);
+				// again on demand. It is the second row (row four: the mode
+				// line and the border sit above the list), and the selection
+				// already holds it, so the move is the boundary no-op.
+				await pressQuietFor(
+					"j",
+					"the boundary no-op on the open ticket",
+					(f) => markerRowOf(f) === 4,
+				);
 				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(
 					setup,

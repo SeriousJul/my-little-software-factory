@@ -17,17 +17,20 @@ export class RefreshCoordinator {
 	private readonly state: FactoryState;
 	private readonly changed: () => void;
 	private readonly clock: RefreshClock;
+	private readonly settled?: (sourceName: string) => void;
 
 	constructor(
 		sources: readonly TicketSource[],
 		state: FactoryState,
 		changed: () => void,
 		clock: RefreshClock = SYSTEM_CLOCK,
+		options: { settled?: (sourceName: string) => void } = {},
 	) {
 		this.sources = sources;
 		this.state = state;
 		this.changed = changed;
 		this.clock = clock;
+		this.settled = options.settled;
 	}
 
 	start(): void {
@@ -36,8 +39,21 @@ export class RefreshCoordinator {
 		this.refreshAll();
 	}
 
-	refreshAll(): void {
-		for (const source of this.sources) this.refresh(source);
+	/**
+	 * Start every idle source and return the names this call started.
+	 *
+	 * The idle filter lives in `idleSources()` alone, so the count a manual
+	 * refresh reports and the names it waits for can never disagree.
+	 */
+	refreshAll(): string[] {
+		const idle = this.idleSources();
+		for (const source of idle) this.refresh(source);
+		return idle.map((source) => source.name);
+	}
+
+	/** The sources a refresh can start: the ones not already fetching. */
+	idleSources(): readonly TicketSource[] {
+		return this.sources.filter((source) => !this.inFlight.has(source.name));
 	}
 
 	refresh(source: TicketSource): void {
@@ -62,6 +78,7 @@ export class RefreshCoordinator {
 				this.inFlight.delete(source.name);
 				if (this.stopped) return;
 				this.changed();
+				this.settled?.(source.name);
 				const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
 				this.timers.set(source.name, timer);
 			});

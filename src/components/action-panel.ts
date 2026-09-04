@@ -1,31 +1,25 @@
 /**
- * The action modal: a read-only message, and the rows the operator can
- * confirm on it.
+ * The Consultation confirm panel: a read-only message and the rows the
+ * operator can confirm on it.
  *
- * The control plane opens it in two places. On an awaiting ticket it is
- * the decision: close (first, selected by default), a Goto, and one
- * handoff row per workflow target the ticket's task type allows. On an
- * in-flight ticket whose pane herdr no longer lists it is the missing
- * panel: restart or abandon.
+ * It serves the Consultation surfaces that predate the control catalogue:
+ * closing, deleting, and the live-checkout conflict. The control plane's own
+ * decisions render through the decision modal and the missing modal, which
+ * share this module's chrome but dispatch their keys through the catalogue.
  *
- * The keys: up and down move the action rows, j/k scroll the message,
- * enter confirms the selected action, esc cancels. While it is open, the
- * keys of the app below are disabled.
+ * The keys stay the panel's own until the Consultations port lands: up and
+ * down move the action rows, j/k scroll the message, enter confirms the
+ * selected action, esc cancels. While it is open, the keys of the app below
+ * are disabled.
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
 import { windowOf } from "./geometry.ts";
-import { padToWidth, truncateToWidth, truncateWithEllipsis, wrapToWidth } from "./text.ts";
+import type { MessageFact } from "./messages.ts";
+import { type ActionRow, actionRowSpans, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-/** One confirmable action, with its label and an optional detail. */
-export interface ActionRow {
-	key: string;
-	label: string;
-	detail?: string;
-}
 
 interface ActionPanelProps {
 	title: string;
@@ -34,19 +28,14 @@ interface ActionPanelProps {
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	onCancel: () => void;
+	/** The Message fact the panel's own Message line shows. */
+	message: MessageFact | null;
 }
 
+/** The message column stops at 60 cells: a confirmation line is short. */
+const CONTENT_WIDTH = 60;
 /** The modal chrome: one border and one padding cell on each side. */
 const CHROME = 4;
-/** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
-/** The label column: the widest action label plus its gap. */
-const LABEL_WIDTH = 12;
-/** The body and the detail column share this width. */
-export const CONTENT_WIDTH = 60;
-/** The message window caps here; the rest scrolls. */
-const MAX_BODY_ROWS = 8;
-const HINT = "up/down select  j/k message  enter  esc";
 
 /**
  * The columns the panel gives its message.
@@ -58,21 +47,48 @@ const HINT = "up/down select  j/k message  enter  esc";
 export const panelBodyCols = (terminalWidth: number): number =>
 	Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
 
-export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: ActionPanelProps) {
-	const { width: terminalWidth } = useTerminalDimensions();
-	// The body wraps to the content width; the wide terminals cap it there
-	// and the narrow ones keep what they hold.
-	const bodyCols = panelBodyCols(terminalWidth);
-	const wrapped = (bodyLines ?? []).flatMap((line) =>
-		line === "" ? [""] : wrapToWidth(line, bodyCols),
-	);
-	// The window holds MAX_BODY_ROWS lines, and its last one is the marker
-	// that says how many rows it does not show. Rows that only vanish read as
-	// a message that ended, and the operator never learns to scroll.
-	const marksOverflow = wrapped.length > MAX_BODY_ROWS;
-	const contentRows = marksOverflow
-		? Math.max(1, Math.min(wrapped.length, MAX_BODY_ROWS) - 1)
-		: Math.min(wrapped.length, MAX_BODY_ROWS);
+/** The message window caps here; the rest scrolls. */
+const MAX_BODY_ROWS = 8;
+/** The hint row: this panel owns no Action bar, so it names its keys itself. */
+const HINT = "up/down select  j/k message  enter  esc";
+
+/** Wrap the message, retaining explicit blank lines. */
+function wrapBody(lines: readonly string[], width: number): string[] {
+	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
+}
+
+export function ActionPanel({
+	title,
+	bodyLines,
+	actions,
+	onAction,
+	onCancel,
+	message,
+}: ActionPanelProps) {
+	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
+	const body = bodyLines ?? [];
+	// The panel is as tall as its content and no taller, and it clips what
+	// cannot fit. The shared chrome still owns its last two rows.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		maxWidth: CONTENT_WIDTH + 4,
+		rows: actions.length + 1 + MAX_BODY_ROWS,
+		// Every action row plus one line of the message.
+		minRows: actions.length + 1,
+		// The panel body is the whole terminal width between the borders, so
+		// a fact row cut at the width it renders never wraps inside the box.
+		margin: 0,
+	});
+	const wrapped = wrapBody(body, frame.contentWidth);
+	// The body takes the content rows the actions and the hint leave. When it
+	// is longer, the window's last row becomes the marker that says how many
+	// rows it does not show: rows that only vanish read as a message that
+	// ended, and the operator never learns to scroll.
+	const bodyRows = Math.max(0, frame.contentRows - actions.length - 1);
+	const marksOverflow = wrapped.length > bodyRows;
+	const shownBodyRows = marksOverflow
+		? Math.max(1, Math.min(wrapped.length, bodyRows) - 1)
+		: Math.min(wrapped.length, bodyRows);
+	const maxBodyScroll = Math.max(0, wrapped.length - shownBodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
 	const [selected, setSelected] = useState(0);
 	const selectedRef = useRef(0);
@@ -100,9 +116,7 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 				move(-1);
 				break;
 			case "j":
-				setBodyScroll((current) =>
-					Math.min(current + 1, Math.max(0, wrapped.length - contentRows)),
-				);
+				setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
 				break;
 			case "k":
 				setBodyScroll((current) => Math.max(0, current - 1));
@@ -110,74 +124,41 @@ export function ActionPanel({ title, bodyLines, actions, onAction, onCancel }: A
 		}
 	});
 
-	const scroll = Math.min(bodyScroll, Math.max(0, wrapped.length - contentRows));
-	const shownBody = windowOf(wrapped, scroll, contentRows);
+	const scroll = Math.min(bodyScroll, maxBodyScroll);
+	const shownBody = windowOf(wrapped, scroll, shownBodyRows);
 	const hiddenRows = Math.max(0, wrapped.length - (scroll + shownBody.length));
 	const bodyShown =
 		marksOverflow && hiddenRows > 0 ? [...shownBody, `+${hiddenRows} more (j/k)`] : shownBody;
-	const panelWidth = Math.min(terminalWidth, bodyCols + CHROME);
 
-	return createElement(
-		"box",
-		{
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
-			},
-		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				// herdr drops a title that does not fit the top border, and a
-				// modal with no name on it is the same modal as the next one.
-				// The title is cut to the panel's own width and marked.
-				title: truncateWithEllipsis(title, Math.max(8, panelWidth - CHROME - 2)),
-				padding: 1,
-				style: { flexDirection: "column" },
-			},
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		title,
+		borderColor: COLORS.borderFocused,
+		// Every action row plus the hint: without them the panel states a
+		// problem with no way to answer it.
+		minContentRows: actions.length + 1,
+		message,
+		children: [
 			...bodyShown.map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}`, fg: COLORS.dim },
-					truncateToWidth(line, bodyCols),
+					truncateToWidth(line, frame.contentWidth),
 				),
 			),
 			...actions.map((row, index) =>
-				createElement("text", { key: row.key }, ...actionSpans(row, index === selected)),
+				createElement(
+					"text",
+					{ key: row.key },
+					...actionRowSpans(row, index === selected, frame.contentWidth),
+				),
 			),
-			createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, bodyCols)),
-		),
-	);
-}
-
-/** One action row as spans: the marker, the label, the dim detail. */
-function actionSpans(row: ActionRow, selected: boolean): ReactElement[] {
-	const detail = row.detail ?? "";
-	const detailWidth = Math.max(0, CONTENT_WIDTH - MARKER_WIDTH - LABEL_WIDTH);
-	return [
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			selected ? "❯ " : "  ",
-		),
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.text },
-			padToWidth(`${row.label} `, LABEL_WIDTH),
-		),
-		createElement(
-			"span",
-			{ fg: COLORS.dim },
-			detailWidth > 0 ? truncateToWidth(detail, detailWidth) : "",
-		),
-	];
+			createElement(
+				"text",
+				{ key: "hint", fg: COLORS.dim },
+				truncateToWidth(HINT, frame.contentWidth),
+			),
+		],
+	});
 }

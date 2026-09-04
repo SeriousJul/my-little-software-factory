@@ -7,26 +7,29 @@
  * ticket's decision has its own modal, the decision modal, which carries
  * the turn log.
  *
- * The keys: up and down move the action rows, j/k scroll the message,
- * enter confirms the selected action, esc cancels. While it is open, the
- * keys of the app below are disabled.
+ * The keys dispatch through the shared control catalogue hook in the
+ * missing-modal interaction mode: up and down move the action rows, j/k
+ * scroll the message, enter confirms the selected action, and esc cancels.
+ * The shared Action bar names the controls, and the in-app Key guide
+ * catalogs them. While it is open, the keys of the app below are disabled.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
-import { useRef, useState } from "react";
-
+import { createElement, useTerminalDimensions } from "@opentui/react";
+import { useState } from "react";
+import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
-import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
+import type { MessageFact } from "./messages.ts";
+import {
+	type ActionRow,
+	actionRowSpans,
+	bodyRowSpans,
+	ModalSurface,
+	modalFrame,
+	scrollbarRows,
+	useActionSelection,
+} from "./modal-chrome.ts";
+import { wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-/** One confirmable action, with its label and an optional detail. */
-export interface ActionRow {
-	key: string;
-	label: string;
-	detail?: string;
-	/** The row starts a Handoff whose settings `e` edits before it starts. */
-	editable?: boolean;
-}
 
 interface MissingModalProps {
 	title: string;
@@ -35,199 +38,117 @@ interface MissingModalProps {
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	onCancel: () => void;
+	/** The base control facts, preserved when this modal owns input. */
+	context: ControlContext;
+	/** False while a Key guide or Message view is above this modal. */
+	inputActive?: boolean;
+	onHelp?: () => void;
+	onMessage?: () => void;
+	/** Reports the catalogue reason for a refused control on the Message line. */
+	onUnavailable?: (reason: string) => void;
+	/** The Message fact this modal's own Message line shows. */
+	message: MessageFact | null;
+	onEmergencyExit: () => void;
 }
 
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-/** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
-/** The label column: enough for the usual "Handoff: <type>" action. */
-const LABEL_WIDTH = 20;
-/** The body and action detail columns share this maximum width. */
+/** The message column stops at 80 cells: a line that wide is hard to read. */
 const CONTENT_WIDTH = 80;
 /** The message window is large enough for an agent's useful conclusion. */
 const MAX_BODY_ROWS = 16;
-const HINT = "up/down select  j/k message  enter  esc";
-
-interface PanelGeometry {
-	contentWidth: number;
-	maxBodyRows: number;
-	showHint: boolean;
-}
-
-/**
- * Fit the panel within the terminal while preserving every action row.
- *
- * Message rows yield first when the terminal is short. The key hint yields
- * before the message, so the operator can still read at least one row when
- * there is room after the actions.
- */
-function panelGeometry(width: number, height: number, actionRows: number): PanelGeometry {
-	const contentWidth = Math.max(1, Math.min(CONTENT_WIDTH, width - CHROME));
-	const innerRows = Math.max(0, height - CHROME);
-	const showHint = contentWidth >= widthOf(HINT) && innerRows >= actionRows + 2;
-	const maxBodyRows = Math.min(
-		MAX_BODY_ROWS,
-		Math.max(0, innerRows - actionRows - (showHint ? 1 : 0)),
-	);
-	return { contentWidth, maxBodyRows, showHint };
-}
 
 /** Wrap the message, retaining explicit blank lines. */
 function wrapBody(lines: readonly string[], width: number): string[] {
 	return lines.flatMap((line) => (line === "" ? [""] : wrapToWidth(line, width)));
 }
 
-export function MissingModal({ title, bodyLines, actions, onAction, onCancel }: MissingModalProps) {
+export function MissingModal({
+	title,
+	bodyLines,
+	actions,
+	onAction,
+	onCancel,
+	context,
+	inputActive = true,
+	onHelp,
+	onMessage,
+	onUnavailable,
+	message,
+	onEmergencyExit,
+}: MissingModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const geometry = panelGeometry(terminalWidth, terminalHeight, actions.length);
-	// Reserve a column for the scrollbar only when the message needs one. A
-	// scrollbar can add wrap rows, so determine overflow once at full width,
-	// then make the final window from the narrower text width.
-	const fullWidthBody = wrapBody(bodyLines ?? [], geometry.contentWidth);
-	const hasScrollbar = fullWidthBody.length > geometry.maxBodyRows;
-	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
-	const wrapped = hasScrollbar ? wrapBody(bodyLines ?? [], bodyWidth) : fullWidthBody;
-	const bodyRows = Math.min(wrapped.length, geometry.maxBodyRows);
+	const body = bodyLines ?? [];
+	// The text column is set by the terminal width alone, so measure it once
+	// and read the message at it. Reserve a column for the scrollbar only when
+	// the message needs one: wrapping can add rows, so the overflow question
+	// is answered at the full width before the narrower window is built.
+	const widthFrame = modalFrame(terminalWidth, terminalHeight, { maxWidth: CONTENT_WIDTH + 4 });
+	const fullWidthBody = wrapBody(body, widthFrame.contentWidth);
+	// The box is only as tall as its own content: a two-line message with two
+	// actions does not claim the whole terminal.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		maxWidth: CONTENT_WIDTH + 4,
+		rows: actions.length + Math.min(MAX_BODY_ROWS, fullWidthBody.length),
+		// Every action row plus one line of the message: the message is the
+		// part that scrolls.
+		minRows: actions.length + 1,
+	});
+	const bodyRows = Math.max(0, frame.contentRows - actions.length);
+	const hasScrollbar = fullWidthBody.length > bodyRows;
+	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
+	const wrapped = hasScrollbar ? wrapBody(body, bodyWidth) : fullWidthBody;
 	const maxBodyScroll = maxScrollOf(wrapped.length, bodyRows);
 	// A completed turn ends with its conclusion, so open the panel at the
 	// newest message row. The current position stays stable while the
 	// operator uses j and k.
-	const [bodyScroll, setBodyScroll] = useState(() => maxBodyScroll);
-	const [selected, setSelected] = useState(0);
-	const selectedRef = useRef(0);
-
-	const move = (delta: number) => {
-		if (actions.length === 0) return;
-		const at = Math.min(selectedRef.current, actions.length - 1);
-		selectedRef.current = (at + delta + actions.length) % actions.length;
-		setSelected(selectedRef.current);
-	};
-
-	useKeyboard((key) => {
-		if (key.ctrl || key.meta) {
-			return;
-		}
-		switch (key.name) {
-			case "escape":
-				onCancel();
-				break;
-			case "return":
-				onAction(actions[Math.min(selectedRef.current, actions.length - 1)].key);
-				break;
-			case "down":
-				move(1);
-				break;
-			case "up":
-				move(-1);
-				break;
-			case "j":
-				setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
-				break;
-			case "k":
-				setBodyScroll((current) => Math.max(0, current - 1));
-				break;
-			default:
-				break;
-		}
-	});
-
+	const [bodyScroll, setBodyScroll] = useState(maxBodyScroll);
+	const selection = useActionSelection(actions);
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
-	const visibleBody = windowOf(wrapped, scroll, bodyRows);
-	const thumbRows = hasScrollbar ? scrollbarRows(wrapped.length, bodyRows, scroll) : null;
 
-	return createElement(
-		"box",
-		{
-			// A full-screen overlay above the app, with the modal centered in it.
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
+	useControlDispatch({
+		mode: "missing-modal",
+		context,
+		active: inputActive,
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			help: () => onHelp?.(),
+			message: () => onMessage?.(),
+			"cancel-action": onCancel,
+			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
+			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
+			"scroll-message": ({ key }) => {
+				if (key.name === "j") setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
+				else setBodyScroll((current) => Math.max(0, current - 1));
 			},
 		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				title,
-				padding: 1,
-				style: { flexDirection: "column" },
-			},
-			...visibleBody.map((line, index) =>
+	});
+
+	const thumbRows = hasScrollbar ? scrollbarRows(wrapped.length, bodyRows, scroll) : null;
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		title,
+		borderColor: COLORS.borderFocused,
+		// Every action row: without one of them the modal has no way out, so
+		// it holds itself back at that size.
+		minContentRows: actions.length,
+		message,
+		bar: { mode: "missing-modal", context: contextFor("missing-modal", context) },
+		children: [
+			...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}` },
-					...bodySpans(line, bodyWidth, thumbRows?.has(index)),
+					...bodyRowSpans([{ text: line, fg: COLORS.dim }], bodyWidth, thumbRows?.has(index)),
 				),
 			),
 			...actions.map((row, index) =>
 				createElement(
 					"text",
 					{ key: row.key },
-					...actionSpans(row, index === selected, geometry.contentWidth),
+					...actionRowSpans(row, index === selection.at, frame.contentWidth),
 				),
 			),
-			geometry.showHint &&
-				createElement("text", { fg: COLORS.dim }, truncateToWidth(HINT, geometry.contentWidth)),
-		),
-	);
-}
-
-/** The proportional scrollbar rows for the message window. */
-function scrollbarRows(
-	lineCount: number,
-	visibleRows: number,
-	scroll: number,
-): ReadonlySet<number> {
-	const thumbHeight = Math.max(1, Math.ceil((visibleRows * visibleRows) / lineCount));
-	const travel = Math.max(0, visibleRows - thumbHeight);
-	const maxScroll = maxScrollOf(lineCount, visibleRows);
-	const start = maxScroll === 0 ? 0 : Math.round((scroll / maxScroll) * travel);
-	return new Set(Array.from({ length: thumbHeight }, (_, index) => start + index));
-}
-
-/** One message row, with a dim track and bright thumb when it scrolls. */
-function bodySpans(line: string, width: number, thumb: boolean | undefined): ReactElement[] {
-	const spans: ReactElement[] = [
-		createElement("span", { fg: COLORS.dim }, truncateToWidth(line, width)),
-	];
-	if (thumb !== undefined) {
-		spans.push(
-			createElement("span", { fg: thumb ? COLORS.textBright : COLORS.dim }, thumb ? "█" : "│"),
-		);
-	}
-	return spans;
-}
-
-/** One action row as spans: the marker, the label, the dim detail. */
-function actionSpans(row: ActionRow, selected: boolean, contentWidth: number): ReactElement[] {
-	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
-	const labelWidth = Math.min(LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
-	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
-	const detail = row.detail ?? "";
-	return [
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			truncateToWidth(selected ? "❯ " : "  ", markerWidth),
-		),
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.text },
-			truncateToWidth(padToWidth(`${row.label} `, labelWidth), labelWidth),
-		),
-		createElement(
-			"span",
-			{ fg: COLORS.dim },
-			detailWidth > 0 ? truncateToWidth(detail, detailWidth) : "",
-		),
-	];
+		],
+	});
 }

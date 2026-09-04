@@ -86,10 +86,12 @@ try {
 process.on("exit", () => state.close());
 
 const sources = config.sources.map((source) => createTicketSource(source, runner));
+// Ctrl+C is a documented emergency control. Keep it in the shared control
+// catalogue instead of letting OpenTUI bypass the application.
 // Ticket detail and Ticket list have direct wheel, click, and scrollbar
 // controls. They need terminal mouse reporting, so this intentionally
 // supersedes the old host-owned text-selection setting.
-const renderer = await createCliRenderer({ exitOnCtrlC: true, useMouse: true });
+const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
 // The native renderer diffs each frame against its model of the screen and
 // marks a model cell as written while it emits the cell's bytes. If the host
 // terminal loses bytes of a frame, the model and the screen diverge and the

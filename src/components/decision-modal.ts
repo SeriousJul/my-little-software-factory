@@ -11,23 +11,35 @@
  *
  * The shape: near-fullscreen, one cell of margin on every side, so the log
  * gets the whole terminal. It pops in over the app: a short fade with the
- * box growing to its final size.
+ * box growing to its final size. Its chrome is the shared modal chrome, so
+ * the Action bar keeps its own row at every size.
  *
- * The keys: up and down move the action rows, j/k scroll the log one row,
- * pgup and pgdn page it, home and end jump to its ends, enter confirms the
- * selected action, e edits the settings of a selected handoff row before it
- * starts, and esc cancels. While it is open, the keys of the app
- * below are disabled.
+ * The keys dispatch through the shared control catalogue hook in the
+ * decision-modal interaction mode: up and down move the action rows, j/k
+ * scroll the log one row with the page and jump keys as aliases, e edits
+ * the settings of a selected handoff row before it starts, enter confirms
+ * the selected action, and esc cancels. While it is open, the keys of the
+ * app below are disabled.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { TurnLogEntry } from "../turn-log.ts";
+import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import { type MdLine, renderMarkdown } from "./markdown.ts";
-import type { ActionRow } from "./missing-modal.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import type { MessageFact } from "./messages.ts";
+import {
+	type ActionRow,
+	actionRowSpans,
+	bodyRowSpans,
+	ModalSurface,
+	modalFrame,
+	scrollbarRows,
+	useActionSelection,
+} from "./modal-chrome.ts";
+import { truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 interface DecisionModalProps {
@@ -42,35 +54,39 @@ interface DecisionModalProps {
 	/** The `e` key on a row flagged editable: change its Handoff's settings. */
 	onEditAction?: (key: string) => void;
 	onCancel: () => void;
+	/** The base control facts, preserved when this modal owns input. */
+	context: ControlContext;
+	/** False while a Key guide or Message view is above this modal. */
+	inputActive?: boolean;
+	onHelp?: () => void;
+	onMessage?: () => void;
+	/** Reports the catalogue reason for a refused control on the Message line. */
+	onUnavailable?: (reason: string) => void;
+	/** The Message fact this modal's own Message line shows. */
+	message: MessageFact | null;
+	onEmergencyExit: () => void;
 }
 
 /** The modal leaves one cell of margin on every side. */
 const MARGIN = 1;
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-/** The marker column: "❯ " when the row is selected, two spaces otherwise. */
-const MARKER_WIDTH = 2;
-/** The label column: enough for the usual "Handoff: <type>" action. */
-const LABEL_WIDTH = 20;
 /** The pop-in: a short fade with the box growing to its final size. */
 const POP_MS = 120;
 const POP_TICK_MS = 16;
 /** The box's size at the pop-in's start, of its final size. */
 const POP_START = 0.94;
-/** The hint of the decision sub-mode: row selection, scroll, confirm, edit. */
+/** The border, the padding, and nothing else: a box's own cells. */
+const CHROME = 4;
+/** The one row under the border that names the context. */
+const CONTEXT_ROWS = 1;
+
+/** The hint of the decision sub-mode: row selection, scroll, confirm, edit.
+ *  The Live view's decision sub-mode reads the same hint from here. */
 export const DECISION_HINT =
 	"up/down select  j/k scroll  pgup/pgdn page  home/end  enter  e edit  esc";
 
-/** The log's three voices, in the shared palette. */
-const LOG_COLORS = {
-	text: COLORS.text,
-	bright: COLORS.textBright,
-	dim: COLORS.dim,
-};
-
 /**
  * The modal's final box size: the terminal minus one cell of margin on
- * every side.
+ * every side. The Live view sizes its own box from it.
  */
 export function decisionBoxSize(
 	terminalWidth: number,
@@ -80,6 +96,17 @@ export function decisionBoxSize(
 		width: Math.max(1, terminalWidth - MARGIN * 2),
 		height: Math.max(1, terminalHeight - MARGIN * 2),
 	};
+}
+
+/**
+ * Fit the log window within a box that holds `contentRows` rows.
+ *
+ * The context row and every action row are always kept: an action row is
+ * the only way out of the modal, so the log yields to them. The shared
+ * Action bar owns the surface's last row, so it never takes a row here.
+ */
+function logRows(contentRows: number, actionRows: number): number {
+	return Math.max(0, contentRows - actionRows - CONTEXT_ROWS);
 }
 
 /**
@@ -170,6 +197,13 @@ export function turnLogBody(entries: readonly TurnLogEntry[], width: number): Md
 	return out;
 }
 
+/** The log's three voices, in the shared palette. */
+const LOG_COLORS = {
+	text: COLORS.text,
+	bright: COLORS.textBright,
+	dim: COLORS.dim,
+};
+
 export function DecisionModal({
 	title,
 	contextLine,
@@ -178,224 +212,141 @@ export function DecisionModal({
 	onAction,
 	onEditAction,
 	onCancel,
+	context,
+	inputActive = true,
+	onHelp,
+	onMessage,
+	onUnavailable,
+	message,
+	onEmergencyExit,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	// The box size the pop-in grows into, decided at the terminal's size. The
-	// content layout follows the box while it grows; the hint and the
-	// scrollbar are decided at the final size, so neither flickers in and
-	// out during the pop.
-	const finalBox = decisionBoxSize(terminalWidth, terminalHeight);
-	const finalLayout = useMemo(
-		() => decisionLayout(finalBox.width, finalBox.height, actions.length),
-		[finalBox.width, finalBox.height, actions.length],
-	);
-	const { pop, boxWidth, boxHeight } = useModalPopIn(finalBox.width, finalBox.height);
-	const geometry = decisionLayout(boxWidth, boxHeight, actions.length);
+	// The size the pop-in grows into, decided at the terminal's size. The
+	// scrollbar is decided there too, so neither the scrollbar nor the log
+	// window flickers in and out while the box grows.
+	const finalFrame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
+	// The pop-in: a short fade with the box growing to its final size. A
+	// self-driven progress keeps it deterministic in the test renderer,
+	// where the animation engine never ticks.
+	const [pop, setPop] = useState(0);
+	useEffect(() => {
+		const startedAt = performance.now();
+		const id = setInterval(() => {
+			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
+			setPop(1 - (1 - t) ** 3);
+			if (t >= 1) clearInterval(id);
+		}, POP_TICK_MS);
+		return () => clearInterval(id);
+	}, []);
+	const popFactor = POP_START + (1 - POP_START) * pop;
+	// The modal is a near-fullscreen surface: it takes the room the terminal
+	// offers above its Action bar, and the log scrolls inside it. The shared
+	// chrome keeps the box above the bar's row, so its border can never draw
+	// through the bar at a short size.
+	const frame = modalFrame(terminalWidth, terminalHeight, {
+		margin: MARGIN,
+		scale: popFactor,
+	});
 	// Reserve a column for the scrollbar only when the log needs one. A
 	// scrollbar can add wrap rows, so determine overflow once at the final
 	// width, then make the final window from the narrower text width.
 	const fullWidthBody = useMemo(
-		() => turnLogBody(entries, finalLayout.contentWidth),
-		[entries, finalLayout.contentWidth],
+		() => turnLogBody(entries, finalFrame.contentWidth),
+		[entries, finalFrame.contentWidth],
 	);
-	const hasScrollbar = fullWidthBody.length > finalLayout.bodyRows;
-	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
+	const hasScrollbar = fullWidthBody.length > logRows(finalFrame.contentRows, actions.length);
+	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
 	const body = useMemo(() => turnLogBody(entries, bodyWidth), [entries, bodyWidth]);
-	const bodyRows = Math.min(body.length, geometry.bodyRows);
+	const bodyRows = Math.min(body.length, logRows(frame.contentRows, actions.length));
 	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the
 	// newest line in view. `null` pins the view to the bottom until the
 	// operator scrolls: the bottom's index moves while the box grows in.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-	const [selected, setSelected] = useState(0);
-	const selectedRef = useRef(0);
+	const selection = useActionSelection(actions);
+	// The fact the gate and the bar share: the row under the cursor carries
+	// settings to edit, and this surface can open the panel for them. Close
+	// and Goto decide about the turn that ended, so their rows leave the
+	// control dimmed and say why when it is pressed.
+	const editableActionSelected =
+		onEditAction !== undefined && actions[selection.at]?.editable === true;
+	const modalContext = { ...context, editableActionSelected };
 
-	const move = (delta: number) => {
-		if (actions.length === 0) return;
-		const at = Math.min(selectedRef.current, actions.length - 1);
-		selectedRef.current = (at + delta + actions.length) % actions.length;
-		setSelected(selectedRef.current);
+	// Scroll the log by one step of the named key: a page moves one viewport
+	// minus the shared row, and the jump keys take either edge. A null view
+	// is the bottom, so the first step reads the bottom's index.
+	const scrollLog = (name: string) => {
+		if (name === "pageup")
+			setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
+		else if (name === "pagedown")
+			setBodyScroll((current) =>
+				Math.min(maxBodyScroll, (current ?? maxBodyScroll) + Math.max(1, bodyRows)),
+			);
+		else if (name === "home") setBodyScroll(0);
+		else if (name === "end") setBodyScroll(maxBodyScroll);
+		else if (name === "j")
+			setBodyScroll((current) => Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll));
+		else setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
 	};
 
-	useKeyboard((key) => {
-		if (key.ctrl || key.meta) {
-			return;
-		}
-		switch (key.name) {
-			case "escape":
-				onCancel();
-				break;
-			case "return": {
-				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
-				if (action !== undefined) onAction(action.key);
-				break;
-			}
-			case "e": {
-				// Only a Handoff row carries settings to edit: Close and Goto
-				// decide about the turn that ended, not about a new Agent.
-				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
-				if (action !== undefined && action.editable === true && onEditAction !== undefined)
-					onEditAction(action.key);
-				break;
-			}
-			case "down":
-				move(1);
-				break;
-			case "up":
-				move(-1);
-				break;
-			case "j":
-				setBodyScroll((current) => Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll));
-				break;
-			case "k":
-				setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
-				break;
-			case "pageup":
-				setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
-				break;
-			case "pagedown":
-				setBodyScroll((current) =>
-					Math.min(maxBodyScroll, (current ?? maxBodyScroll) + Math.max(1, bodyRows)),
-				);
-				break;
-			case "home":
-				setBodyScroll(0);
-				break;
-			case "end":
-				setBodyScroll(maxBodyScroll);
-				break;
-			default:
-				break;
-		}
+	useControlDispatch({
+		mode: "decision-modal",
+		context: modalContext,
+		active: inputActive,
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			help: () => onHelp?.(),
+			message: () => onMessage?.(),
+			"cancel-action": onCancel,
+			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
+			"edit-action": () => {
+				const row = actions[selection.at];
+				if (row !== undefined && editableActionSelected) onEditAction?.(row.key);
+			},
+			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
+			"scroll-turn-log": ({ key }) => scrollLog(key.name),
+		},
 	});
 
 	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
-	const visibleBody = windowOf(body, scroll, bodyRows);
 	const thumbRows = hasScrollbar ? scrollbarRows(body.length, bodyRows, scroll) : null;
-
-	return createElement(
-		"box",
-		{
-			// A full-screen overlay above the app, with the modal centered in
-			// it. Near-fullscreen itself: one cell of margin on every side.
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: "100%",
-				height: "100%",
-				zIndex: 10,
-				backgroundColor: COLORS.overlay,
-				alignItems: "center",
-				justifyContent: "center",
-			},
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		title: `Decision: ${title}`,
+		borderColor: COLORS.borderFocused,
+		// The context row and every action row: without them the modal is
+		// not a decision, so it holds itself back at that size.
+		minContentRows: actions.length + CONTEXT_ROWS,
+		opacity: pop,
+		message,
+		bar: {
+			mode: "decision-modal",
+			context: contextFor("decision-modal", modalContext),
 		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: COLORS.borderFocused,
-				title: truncateToWidth(`Decision: ${title}`, geometry.contentWidth),
-				padding: 1,
-				style: {
-					flexDirection: "column",
-					width: boxWidth,
-					height: boxHeight,
-					opacity: pop,
-				},
-			},
+		children: [
 			createElement(
 				"text",
-				{ fg: COLORS.dim },
-				truncateToWidth(contextLine, geometry.contentWidth),
+				{ key: "context", fg: COLORS.dim },
+				truncateToWidth(contextLine, frame.contentWidth),
 			),
-			...visibleBody.map((line, index) =>
+			...windowOf(body, scroll, bodyRows).map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}` },
-					...bodySpans(line, bodyWidth, thumbRows?.has(index)),
+					...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
 				),
 			),
 			...actions.map((row, index) =>
 				createElement(
 					"text",
 					{ key: row.key },
-					...actionSpans(row, index === selected, geometry.contentWidth),
+					...actionRowSpans(row, index === selection.at, frame.contentWidth),
 				),
 			),
-			finalLayout.showHint &&
-				createElement(
-					"text",
-					{ fg: COLORS.dim },
-					truncateToWidth(DECISION_HINT, geometry.contentWidth),
-				),
-		),
-	);
-}
-
-/** The proportional scrollbar rows for the log window. */
-export function scrollbarRows(
-	lineCount: number,
-	visibleRows: number,
-	scroll: number,
-): ReadonlySet<number> {
-	const thumbHeight = Math.max(1, Math.ceil((visibleRows * visibleRows) / lineCount));
-	const travel = Math.max(0, visibleRows - thumbHeight);
-	const maxScroll = maxScrollOf(lineCount, visibleRows);
-	const start = maxScroll === 0 ? 0 : Math.round((scroll / maxScroll) * travel);
-	return new Set(Array.from({ length: thumbHeight }, (_, index) => start + index));
-}
-
-/** One log row as spans, with a dim track and bright thumb when it scrolls. */
-export function bodySpans(line: MdLine, width: number, thumb: boolean | undefined): ReactElement[] {
-	const spans: ReactElement[] =
-		line.length === 0
-			? [createElement("span", { fg: COLORS.dim }, "")]
-			: line.map((span) =>
-					createElement("span", { fg: span.fg }, truncateToWidth(span.text, width)),
-				);
-	if (thumb !== undefined) {
-		// Pin the scrollbar to the body's last column. Without the pad, the
-		// thumb and track float behind short lines: a block in the middle of
-		// the row reads as an artifact.
-		let used = 0;
-		for (const span of line) used += widthOf(span.text);
-		const pad = Math.max(0, width - used);
-		if (pad > 0) spans.push(createElement("span", {}, " ".repeat(pad)));
-		spans.push(
-			createElement("span", { fg: thumb ? COLORS.textBright : COLORS.dim }, thumb ? "█" : "│"),
-		);
-	}
-	return spans;
-}
-
-/** One action row as spans: the marker, the label, the dim detail. */
-export function actionSpans(
-	row: ActionRow,
-	selected: boolean,
-	contentWidth: number,
-): ReactElement[] {
-	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
-	const labelWidth = Math.min(LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
-	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
-	const detail = row.detail ?? "";
-	return [
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
-			truncateToWidth(selected ? "❯ " : "  ", markerWidth),
-		),
-		createElement(
-			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.text },
-			truncateToWidth(padToWidth(`${row.label} `, labelWidth), labelWidth),
-		),
-		createElement(
-			"span",
-			{ fg: COLORS.dim },
-			detailWidth > 0 ? truncateToWidth(detail, detailWidth) : "",
-		),
-	];
+		],
+	});
 }

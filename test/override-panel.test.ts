@@ -10,6 +10,7 @@
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { afterEach, describe, expect, test } from "vitest";
+import type { ControlContext } from "../src/components/controls.ts";
 import {
 	type AgentModelList,
 	type AgentSettings,
@@ -27,6 +28,18 @@ const SETTINGS: Record<string, AgentSettings> = {
 	scribe: { model: true, thinking: true, thinkingValues: ["low"] },
 };
 const PROFILES = { implement: taskProfileOf(DEFAULT_CONFIG, "implement") };
+
+/** The base control facts the panel is mounted over: the list, idle. */
+const BASE_CONTEXT: ControlContext = {
+	mode: "ticket-list",
+	listCanMove: true,
+	detailCanScroll: false,
+	sourceCount: 1,
+	refreshingSourceCount: 0,
+	handoffActive: false,
+	messageTruncated: false,
+	consultationTypesConfigured: false,
+};
 
 /** The choice the panel opens on: the pilot agent, no setting chosen. */
 const INITIAL: HandoffChoice = {
@@ -63,6 +76,9 @@ async function withPanel(
 			initial,
 			onConfirm: () => undefined,
 			onCancel: () => undefined,
+			context: BASE_CONTEXT,
+			message: null,
+			onEmergencyExit: () => undefined,
 		}),
 		{ width: WIDTH, height: HEIGHT },
 	);

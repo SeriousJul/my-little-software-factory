@@ -3,8 +3,21 @@ import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { describe, expect, test } from "vitest";
 
+import type { ControlContext } from "../src/components/controls.ts";
 import { MissingModal } from "../src/components/missing-modal.ts";
 import { awaitFrame } from "./app-harness.ts";
+
+/** The base control facts a modal is mounted over: the list, idle. */
+const BASE_CONTEXT: ControlContext = {
+	mode: "ticket-list",
+	listCanMove: true,
+	detailCanScroll: false,
+	sourceCount: 1,
+	refreshingSourceCount: 0,
+	handoffActive: false,
+	messageTruncated: false,
+	consultationTypesConfigured: false,
+};
 
 describe("the Missing modal", () => {
 	test("j and k scroll a long reason while arrows move only the recovery rows", async () => {
@@ -18,6 +31,9 @@ describe("the Missing modal", () => {
 				],
 				onAction: () => undefined,
 				onCancel: () => undefined,
+				context: BASE_CONTEXT,
+				message: null,
+				onEmergencyExit: () => undefined,
 			}),
 			{ width: 90, height: 12 },
 		);

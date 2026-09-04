@@ -28,6 +28,7 @@ import {
 	detailPaneText,
 	HEIGHT,
 	markerRowOf,
+	messageRowOf,
 	press,
 	rowsOf,
 	settle,
@@ -245,11 +246,11 @@ describe("source-driven frames", () => {
 					setup.mockInput.pressEnter();
 					const refused = await awaitFrame(
 						setup,
-						(f) => f.includes("its sources are stale, removed, or absent"),
+						(f) => f.includes("Ticket is not actionable because source data is stale"),
 						"the refused handoff",
 					);
-					expect(rowsOf(refused)[HEIGHT - 1]).toContain(
-						"its sources are stale, removed, or absent",
+					expect(messageRowOf(refused)).toContain(
+						"Ticket is not actionable because source data is stale",
 					);
 				},
 				WIDTH,
@@ -624,19 +625,19 @@ describe("source-driven frames", () => {
 				setup.mockInput.pressEnter();
 				const refused = await awaitFrame(
 					setup,
-					(f) => f.includes("handoff recovery is required before another handoff"),
+					(f) => f.includes("Handoff recovery is required before another handoff"),
 					"the refused handoff",
 				);
-				expect(rowsOf(refused)[HEIGHT - 1]).toContain(
-					"handoff recovery is required before another handoff",
+				expect(messageRowOf(refused)).toContain(
+					"Handoff recovery is required before another handoff",
 				);
 
 				// The override path is refused the same way: no panel opens.
 				setup.mockInput.pressKey("e");
 				const panel = await settle(setup);
-				expect(panel).not.toContain("Override");
-				expect(rowsOf(panel)[HEIGHT - 1]).toContain(
-					"handoff recovery is required before another handoff",
+				expect(panel).not.toContain("❯ Agent");
+				expect(messageRowOf(panel)).toContain(
+					"Handoff recovery is required before another handoff",
 				);
 			},
 			WIDTH,

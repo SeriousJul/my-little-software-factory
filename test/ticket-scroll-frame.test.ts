@@ -41,8 +41,10 @@ function lastDescriptionRow(frame: string): number {
 }
 
 function thumbRows(frame: string): number[] {
+	// The gutter holds scrollbar glyphs only on the thumb; the track is a
+	// background cell, and the pane border row holds a box-drawing char.
 	return rowsOf(frame).flatMap((row, y) =>
-		y > 0 && y < rowsOf(frame).length - 1 && row[GUTTER_X] !== " " ? [y] : [],
+		y > 0 && y < rowsOf(frame).length - 1 && /[\u2580\u2584\u2588]/.test(row[GUTTER_X]) ? [y] : [],
 	);
 }
 
@@ -127,7 +129,9 @@ describe("native Ticket detail viewport", () => {
 				await awaitFrame(setup, detailFocused, "the detail to take click focus");
 				expect(cellColors(setup, GUTTER_X, thumb[0]).fg).toEqual(rgb(COLORS.borderFocused));
 
-				await mouseClick(setup, GUTTER_X, 8);
+				// The panes sit above the Message line and Action bar, so the
+				// track spans content rows one to six.
+				await mouseClick(setup, GUTTER_X, 5);
 				const end = await awaitFrame(
 					setup,
 					(frame) => frame !== initial && !frame.includes("Retry policy for webhooks"),
@@ -145,7 +149,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
-				await mouseClick(setup, GUTTER_X, 6);
+				await mouseClick(setup, GUTTER_X, 4);
 				const end = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== initial,
@@ -170,14 +174,14 @@ describe("native Ticket detail viewport", () => {
 				expect(detailFocused(middle)).toBe(true);
 
 				await mouseClick(setup, GUTTER_X, 1);
-				await mouseDrag(setup, [GUTTER_X, 1], [GUTTER_X, 5]);
+				await mouseDrag(setup, [GUTTER_X, 1], [GUTTER_X, 4]);
 				const draggedDown = await awaitFrame(
 					setup,
 					(frame) => frame !== start && !frame.includes("Retry policy for webhooks"),
 					"a thumb drag toward the end",
 				);
 				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(1);
-				await mouseDrag(setup, [GUTTER_X, 5], [GUTTER_X, 1]);
+				await mouseDrag(setup, [GUTTER_X, 4], [GUTTER_X, 1]);
 				await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -193,7 +197,7 @@ describe("native Ticket detail viewport", () => {
 		for (const [name, x, y] of [
 			["content", 45, 3],
 			["gutter", GUTTER_X, 2],
-			["track", GUTTER_X, 8],
+			["track", GUTTER_X, 6],
 			["thumb", GUTTER_X, 1],
 		] as const) {
 			await withApp(
@@ -313,7 +317,7 @@ describe("native Ticket detail viewport", () => {
 				}
 			},
 			SCROLL_WIDTH,
-			6,
+			8,
 		);
 	});
 
@@ -530,11 +534,13 @@ describe("native Ticket detail viewport", () => {
 						setup,
 						(candidate) => {
 							const rows = rowsOf(candidate);
+							// Merged layout: mode line on top, panes, then the
+							// reserved Message line and Action bar.
 							return (
 								rows.length === 18 &&
 								rows.every((row) => row.length === 73) &&
-								rows.at(-2)?.includes("└") === true &&
-								rows.at(-1)?.startsWith("auto: off 0/2") === true
+								rows[0]?.startsWith("auto: off 0/2") === true &&
+								rows.at(-3)?.includes("└") === true
 							);
 						},
 						"the panes to stay above the live mode line after a resize",
@@ -627,7 +633,7 @@ describe("native Ticket detail viewport", () => {
 					expect(clamped).toContain("Detail");
 				},
 				SCROLL_WIDTH,
-				SCROLL_HEIGHT,
+				14,
 				{ config: sourceConfig, state, sources: [source] },
 			);
 		} finally {
@@ -670,24 +676,68 @@ describe("native Ticket detail viewport", () => {
 					(frame) =>
 						rowsOf(frame).length === 8 &&
 						rowsOf(frame).every((row) => row.length === 8) &&
-						frame.includes("┌"),
-					"a tiny resize at the detail end",
+						frame.includes("Termin"),
+					"a tiny resize to the compact frame",
 				);
-				// The one remaining inner detail column still carries text; the
-				// scrollbar has yielded its gutter instead of taking that column.
-				expect(rowsOf(tinyEnd).some((row) => row[6] !== " ")).toBe(true);
 				expect(tinyEnd).not.toMatch(/[▀▄█]/);
 
+				// The compact frame unmounted the panes. The remounted detail
+				// resumes from the offset the unmount saved, clamped to the
+				// wider viewport, instead of restarting at the top.
 				setup.resize(80, 12);
-				const restored = await awaitFrame(
+				await awaitFrame(
 					setup,
 					(frame) =>
 						rowsOf(frame).every((row) => row.length === 80) &&
 						frame.includes("their retries.") &&
 						frame.match(/[▀▄█]/) !== null,
-					"the normal width and scrollbar to return",
+					"the normal width with the restored detail offset",
 				);
-				expect(restored).not.toContain("Retry policy for webhooks");
+			},
+			80,
+			12,
+		);
+	});
+
+	test("restores the detail offset across a round-trip resize below the minimum size", async () => {
+		await withApp(
+			async (setup) => {
+				await focusDetail(setup);
+				// Scroll to a middle offset: the detail title leaves the viewport.
+				let frame = setup.captureCharFrame();
+				for (let step = 0; step < 20 && frame.includes("Retry policy for webhooks"); step += 1) {
+					setup.mockInput.pressKey("j");
+					frame = await settle(setup);
+				}
+				const middle = await awaitFrame(
+					setup,
+					(f) => f.includes("Detail") && !f.includes("Retry policy for webhooks"),
+					"a middle detail offset with the title out of view",
+				);
+				expect(middle).toMatch(/[▀▄█]/);
+
+				// Below the minimum size the compact frame unmounts the panes.
+				setup.resize(39, 12);
+				const compact = await awaitFrame(
+					setup,
+					(f) => f.includes("Terminal too small"),
+					"the compact frame",
+				);
+				expect(compact).not.toMatch(/[▀▄█]/);
+
+				// Back at normal size, the remounted detail resumes from the
+				// offset the unmount saved: the title stays out of view instead
+				// of the viewport restarting at the top.
+				setup.resize(80, 12);
+				await awaitFrame(
+					setup,
+					(f) =>
+						rowsOf(f).every((row) => row.length === 80) &&
+						f.includes("Detail") &&
+						f.match(/[▀▄█]/) !== null &&
+						!f.includes("Retry policy for webhooks"),
+					"the detail offset to resume below the title",
+				);
 			},
 			80,
 			12,

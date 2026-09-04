@@ -1,12 +1,19 @@
 /** The native, scrollable source and factory detail for the selected ticket. */
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { createElement } from "@opentui/react";
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from "react";
+import { createElement, useRenderer } from "@opentui/react";
+import {
+	forwardRef,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useImperativeHandle,
+	useRef,
+} from "react";
 
 import type { ScrollConfig } from "../config.ts";
 import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { usePaneGeometry } from "./geometry.ts";
+import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS, STATE_COLORS, stateBadge, taskTypeColor, ticketTaskType } from "./theme.ts";
@@ -223,6 +230,40 @@ export interface TicketDetailHandle {
 	toEnd(): void;
 }
 
+/**
+ * The columns the detail can draw text in, at one usable width.
+ *
+ * The scrollbar gutter is kept even when the content fits, so a later
+ * overflow cannot reflow the text; at one inner text column it is dropped,
+ * because the control must not consume the last readable cell. The rule
+ * lives here once: `detailScrollRoom` measures with it and the pane draws
+ * with it, so the shell can never promise a scroll the ScrollBox does not
+ * have.
+ */
+function detailTextCols(usableCols: number): number {
+	return Math.max(1, usableCols - (usableCols >= 2 ? 1 : 0));
+}
+
+/**
+ * The rows the detail can still scroll, measured the way the pane measures
+ * its own content.
+ *
+ * The app's Scroll control asks this instead of repeating the pane's
+ * arithmetic: a copy of the gutter rule would let the control promise a
+ * scroll the real ScrollBox does not have.
+ */
+export function detailScrollRoom(
+	ticket: Ticket | undefined,
+	usableCols: number,
+	visibleRows: number,
+	handoffLimit: number,
+): number {
+	return maxScrollOf(
+		detailLines(ticket, detailTextCols(usableCols), handoffLimit).length,
+		visibleRows,
+	);
+}
+
 interface TicketDetailProps {
 	ticket: Ticket | undefined;
 	focused: boolean;
@@ -234,6 +275,12 @@ interface TicketDetailProps {
 	suggestedChoice?: HandoffChoice;
 	scroll: ScrollConfig;
 	onFocus: () => void;
+	/**
+	 * The native offset a remount of the same ticket resumes from. The app
+	 * unmounts this pane below the minimum size; the slot survives that round
+	 * trip, and ScrollBox clamps a stale offset to the new viewport.
+	 */
+	scrollSlot: RefObject<{ identity: string; top: number } | null>;
 }
 
 /**
@@ -242,19 +289,34 @@ interface TicketDetailProps {
  * replaces a React-owned visible-row window.
  */
 export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(function TicketDetail(
-	{ ticket, focused, active, reservedRows, handoffLimit, suggestedChoice, scroll, onFocus },
+	{
+		ticket,
+		focused,
+		active,
+		reservedRows,
+		handoffLimit,
+		suggestedChoice,
+		scroll,
+		onFocus,
+		scrollSlot,
+	},
 	ref,
 ) {
 	const geometry = usePaneGeometry("detail", reservedRows);
-	// The scroll box owns the gutter. Keep it even when content fits so a
-	// later overflow cannot reflow the text. At one inner text column, remove
-	// it so the control never consumes the last readable cell.
-	const reserveGutter = geometry.usableCols >= 2;
-	const textCols = Math.max(1, geometry.usableCols - (reserveGutter ? 1 : 0));
+	// The renderer reports the frame it has laid out, which is when the scroll
+	// box first knows its own content height and viewport.
+	const renderer = useRenderer();
+	// The scroll box owns the gutter; see `detailTextCols`.
+	const textCols = detailTextCols(geometry.usableCols);
+	const reserveGutter = textCols < geometry.usableCols;
 	const lines = detailLines(ticket, textCols, handoffLimit, suggestedChoice);
 	const hasOverflow = lines.length > geometry.visibleRows;
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);
+	// Always the identity the pane currently shows; the unmount cleanup reads
+	// it so it never saves an offset under a switched identity.
+	const identityRef = useRef(ticket?.identity);
+	identityRef.current = ticket?.identity;
 	const activeRef = useRef(active);
 	const scrollRef = useRef(scroll);
 	const burstRef = useRef<WheelBurst>(newWheelBurst());
@@ -312,6 +374,47 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			toStart();
 		}
 	}, [ticket?.identity, toStart]);
+
+	// A below-minimum resize unmounts the pane. On the next mount of the same
+	// ticket, resume from the offset the unmount saved. That offset was taken at
+	// another size, where the same body wrapped to a different number of rows,
+	// so the pane compares it with what the new layout allows and takes the
+	// nearer end. The renderer reports a frame once it has laid the tree out,
+	// which is the first moment the box knows its own content height and
+	// viewport, so the restore waits for that one pass instead of asking on a
+	// timer while the operator watches. This runs on mount only: a plain ticket
+	// switch keeps its own start-at-top behavior.
+	useEffect(() => {
+		const box = scrollboxRef.current;
+		const slot = scrollSlot.current;
+		const identity = identityRef.current;
+		if (box === null || slot === null || identity === undefined) return;
+		if (slot.identity !== identity || slot.top === 0) return;
+		const restore = () => {
+			if (identityRef.current !== identity) return;
+			const live = scrollSlot.current;
+			if (live === null || live.identity !== identity) return;
+			box.scrollTop = Math.min(live.top, maxScrollOf(box.scrollHeight, box.viewport.height));
+			// The pass has run: a later frame must not drag the scroll back to
+			// the offset the operator has since moved on from.
+			scrollSlot.current = null;
+		};
+		renderer.once("frame", restore);
+		return () => {
+			renderer.removeListener("frame", restore);
+		};
+	}, [renderer, scrollSlot]);
+
+	// Save the native offset when the pane unmounts, keyed by the identity it
+	// showed, so a remount of another ticket starts at its own position.
+	useEffect(() => {
+		const box = scrollboxRef.current;
+		return () => {
+			const identity = identityRef.current;
+			if (box === null || identity === undefined) return;
+			scrollSlot.current = { identity, top: box.scrollTop };
+		};
+	}, [scrollSlot]);
 
 	// Slider track clicks stop propagation inside OpenTUI so they can start a
 	// drag. Listen on the slider itself as well, which keeps pane focus in

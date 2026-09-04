@@ -159,16 +159,15 @@ describe("the decision modal's pop-in", () => {
 					if (frame.includes("Decision:")) {
 						const rows = rowsOf(frame);
 						for (const [i, row] of rows.entries()) {
-							// The last column and the last row hold the overlay's
+							// Above the bar, the last column holds the overlay's
 							// background alone: no glyph may land there.
+							if (i === rows.length - 1) continue;
 							expect(row[WIDE - 1], `a glyph reached the last column on row ${i}:\n${row}`).toBe(
 								" ",
 							);
 						}
-						expect(
-							rows[rows.length - 1].trim(),
-							`a glyph reached the last row: ${rows[rows.length - 1]}`,
-						).toBe("");
+						// The last row is the shared Action bar, not empty margin.
+						expect(rows[rows.length - 1]).toContain("Help");
 						frames += 1;
 					}
 					await sleep(5);
@@ -199,16 +198,17 @@ describe("the decision modal's scrollbar", () => {
 			async (setup) => {
 				const settled = await openModal(setup);
 				const body = bodyRowsOf(settled);
-				// The log is six rows; the window holds two. It opens at the
-				// bottom, where the agent's conclusion is.
+				// The modal has no hint row: the log is six rows, and the window
+				// holds the two the box keeps after its own Message line and Action
+				// bar take their rows. It opens at the bottom, where the agent's
+				// conclusion is.
 				expect(body).toHaveLength(2);
 				expect(body[body.length - 1]).toContain("All 142 tests pass.");
 				expectPinnedScrollbar(settled);
-				// The thumb rests on the newest row; the track fills the rest.
-				const thumbAt = body.findIndex((row) => row[SCROLL_COL] === "█");
-				expect(thumbAt).toBe(body.length - 1);
+				// The thumb rests on the newest rows; the track fills the rest.
+				expect(body[body.length - 1][SCROLL_COL]).toBe("█");
 				const rows = rowsOf(settled);
-				expect(cellColors(setup, SCROLL_COL, rows.indexOf(body[thumbAt])).fg).toEqual(
+				expect(cellColors(setup, SCROLL_COL, rows.indexOf(body[body.length - 1])).fg).toEqual(
 					rgb(COLORS.textBright),
 				);
 				const trackAt = body.findIndex((row) => row[SCROLL_COL] === "│");
