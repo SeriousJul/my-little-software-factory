@@ -84,6 +84,14 @@ export interface ControlContext {
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
 	consultationTypesConfigured: boolean;
+	/**
+	 * The decision modal's row under the cursor carries settings to edit.
+	 *
+	 * The modal states it from its own rows; the catalogue stays the single
+	 * gate, the bar stays the single display, and neither special-cases the
+	 * `e` key by control id.
+	 */
+	editableActionSelected?: boolean;
 }
 
 export interface ControlDefinition {
@@ -510,6 +518,22 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 75,
 		modes: ["missing-modal"],
 		availability: available,
+	},
+	{
+		id: "edit-action",
+		label: "Edit handoff",
+		keys: () => ["e"],
+		keyLabel: "e",
+		scope: "modal",
+		actionBar: true,
+		priority: 72,
+		modes: ["decision-modal"],
+		// Only a Handoff row carries settings to edit: Close and Goto decide
+		// about the turn that ended, not about a new Agent.
+		availability: (context) =>
+			context.editableActionSelected === true
+				? available()
+				: unavailable("the selected action has no settings to edit"),
 	},
 	{
 		id: "confirm-action",
