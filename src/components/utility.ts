@@ -9,7 +9,6 @@ import {
 	contextFor,
 	guideControls,
 	guideKeyLabel,
-	type InteractionMode,
 	modeTitle,
 } from "./controls.ts";
 import { type MessageFact, messageColor } from "./messages.ts";
@@ -43,15 +42,22 @@ function useClampedScroll(maxScroll: number) {
  *
  * A refusal stays silent here: an overlay answers only with keys it always
  * holds (its close keys, Help, and Scroll), so there is no refusal worth a
- * Warning. The Message view opens only when a Message exists to read.
+ * Warning. The wiring mirrors the catalogue routing, and nothing else: the
+ * close control outranks the shared keys, so F1 and ? resolve to
+ * guide-close (not to the Help it would only close again) and F2 resolves to
+ * message-close (not to the Message it would only reopen). The guide wires
+ * the one control its mode still dispatches, the Message control on F2, and
+ * the Message view wires the Help control on F1.
  */
 function useUtilityKeys(
-	mode: InteractionMode,
+	mode: "key-guide" | "message-view",
 	context: ControlContext,
 	handlers: {
 		close: () => void;
-		help: () => void;
-		message: () => void;
+		/** The Message control, on the guide's F2. */
+		message?: () => void;
+		/** The Help control, on the Message view's F1. */
+		help?: () => void;
 		scroll: (delta: number) => void;
 		emergencyExit: () => void;
 	},
@@ -63,8 +69,8 @@ function useUtilityKeys(
 		handlers: {
 			"guide-close": handlers.close,
 			"message-close": handlers.close,
-			help: handlers.help,
-			message: handlers.message,
+			...(handlers.message !== undefined ? { message: handlers.message } : {}),
+			...(handlers.help !== undefined ? { help: handlers.help } : {}),
 			"guide-scroll": ({ key }) => handlers.scroll(upKey(key.name) ? -1 : 1),
 			"message-scroll": ({ key }) => handlers.scroll(upKey(key.name) ? -1 : 1),
 		},
@@ -103,7 +109,6 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 
 	useUtilityKeys("key-guide", context, {
 		close: onClose,
-		help: onClose,
 		message: () => onMessage?.(),
 		scroll: scrollBy,
 		emergencyExit: onEmergencyExit,
@@ -171,7 +176,6 @@ export function MessageView({
 	useUtilityKeys("message-view", context, {
 		close: onClose,
 		help: onHelp,
-		message: onHelp,
 		scroll: scrollBy,
 		emergencyExit: onEmergencyExit,
 	});

@@ -122,6 +122,14 @@ export interface ControlDefinition {
 	 * row states one of the control's whole keys instead, and never a slice.
 	 */
 	barAnchor?: boolean;
+	/**
+	 * Whether the hint carries the surface's row-range indicator.
+	 *
+	 * The utility overlays hand their range to the bar, and the bar places it
+	 * behind the hint that owns it: the Scroll hint of the guide and of the
+	 * Message view. A hint without the flag is plain text to the bar.
+	 */
+	rangeAnchor?: boolean;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -616,6 +624,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "↑↓/jk",
 		scope: "utility",
 		actionBar: true,
+		rangeAnchor: true,
 		priority: 70,
 		modes: ["key-guide"],
 		availability: available,
@@ -639,6 +648,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "↑↓/jk",
 		scope: "utility",
 		actionBar: true,
+		rangeAnchor: true,
 		priority: 70,
 		modes: ["message-view"],
 		availability: available,

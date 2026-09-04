@@ -168,10 +168,7 @@ export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor 
 	for (let i = 0; i < packed.left.length; i += 1) {
 		if (i > 0) children.push(createElement("span", { key: `gap-${i}` }, " ".repeat(GAP)));
 		children.push(...hintSpans(packed.left[i], `hint-${i}`));
-		if (
-			packed.range !== undefined &&
-			["guide-scroll", "message-scroll"].includes(packed.left[i].control.id)
-		) {
+		if (packed.range !== undefined && packed.left[i].control.rangeAnchor === true) {
 			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
 			children.push(createElement("span", { key: "range", fg: COLORS.dim }, packed.range));
 			rangePlaced = true;
