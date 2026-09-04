@@ -14,14 +14,17 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
+	checkConsultationStart,
 	closeHandoffEnvironment,
 	type HandoffOutcome,
+	handOffConsultation,
 	handOffStoredWorkspace,
 	handOffTicket,
 	renderPrompt,
 	renderSettingArgs,
 	settingArgs,
 } from "../src/handoff.ts";
+import type { Consultation } from "../src/state.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -70,6 +73,7 @@ const ticket: Ticket = {
 	},
 	state: "open",
 	handoff: null,
+	workCycle: 1,
 	description: "Add a retry policy.",
 	sourceKind: "github-issue",
 	externalKey: "#7",
@@ -83,6 +87,7 @@ const ticket: Ticket = {
 	handoffRecoveryRequired: false,
 	handoffCount: 0,
 	lastCompletion: null,
+	leftover: null,
 };
 
 const defaultChoice = {
@@ -93,8 +98,23 @@ const defaultChoice = {
 	thinking: "",
 };
 
+/** Stub the live-worktree herdr sequence at the convention checkout. */
+function stubLiveWorkspace(runner: FakeRunner): void {
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([{ id: "ws-other" }]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", CHECKOUT, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-new"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-new", "--cwd", CHECKOUT, "--no-focus"], {
+		stdout: tabCreateJson("pane-1"),
+	});
+}
+
 /** The exact prompt the implement task type renders for this ticket. */
 const PROMPT = renderPrompt(DEFAULT_CONFIG.taskTypes.implement.template, ticket);
+const EXPECTED_IMPLEMENT_PROMPT =
+	"Implement the following github-issue.\n\nRepository: acme/billing\n\n" +
+	"#7: Retry policy for webhooks\n\nURL: https://github.com/acme/billing/issues/7\n\n" +
+	"Labels: \n\nDescription:\nAdd a retry policy.";
 const AGENT = "retry-policy-for-webhooks";
 
 /** A git checkout that resolves from the convention path. */
@@ -105,8 +125,50 @@ function conventionCheckout(runner: FakeRunner): void {
 	});
 }
 
+/** A Consultation record, as the state hands it to its own start. */
+function consultationRecord(over: Partial<Consultation> = {}): Consultation {
+	return {
+		id: "consultation-1",
+		typeName: "grill-with-docs",
+		agentType: "pi",
+		environment: "live-worktree",
+		model: "",
+		thinking: "",
+		template: "/grill {input}",
+		initialInput: "review auth",
+		renderedOpeningPrompt: "/grill review auth",
+		repository: {
+			identity: "github.com/acme/billing",
+			displayName: "acme/billing",
+			cloneUrl: "https://github.com/acme/billing.git",
+			path: CHECKOUT,
+		},
+		state: "opening",
+		createdAt: "2026-09-01T00:00:00.000Z",
+		updatedAt: "2026-09-01T00:00:00.000Z",
+		agentName: "consultation-11111111",
+		paneId: null,
+		tabId: null,
+		workspaceId: null,
+		sessionId: null,
+		latestSequence: null,
+		draft: "",
+		draftUpdatedAt: null,
+		draftOld: false,
+		failure: null,
+		warning: null,
+		replacementOf: null,
+		closeResult: null,
+		liveConflictOverride: false,
+		attentionAt: null,
+		pendingResponse: null,
+		resources: [],
+		...over,
+	};
+}
+
 describe("renderSettingArgs", () => {
-	test("substitutes the value and splits on whitespace", () => {
+	test("substitutes the value into the token that asks for it", () => {
 		expect(renderSettingArgs("--model {value}", "gpt-5.6")).toEqual(["--model", "gpt-5.6"]);
 		expect(renderSettingArgs("-c model_reasoning_effort={value}", "high")).toEqual([
 			"-c",
@@ -114,16 +176,48 @@ describe("renderSettingArgs", () => {
 		]);
 	});
 
+	test("one value is always one argument cell", () => {
+		// The rule the Model list is offered against. A value that carries
+		// whitespace (a config value, or text pasted into the free-text row) must
+		// not split into an argument plus a stray positional, because the agent
+		// would start on a model nobody chose.
+		expect(renderSettingArgs("--model {value}", "my corp/model-x")).toEqual([
+			"--model",
+			"my corp/model-x",
+		]);
+		expect(renderSettingArgs("-c model_reasoning_effort={value}", "x y")).toEqual([
+			"-c",
+			"model_reasoning_effort=x y",
+		]);
+	});
+
 	test("dollar patterns in the value stay literal", () => {
 		expect(renderSettingArgs("--model {value}", "$&-$1-model")).toEqual(["--model", "$&-$1-model"]);
+	});
+
+	test("a template with no value to place leaves no empty argument", () => {
+		expect(renderSettingArgs("--model {value}", "")).toEqual(["--model"]);
 	});
 });
 
 describe("renderPrompt", () => {
-	test("fills the three placeholders of the template", () => {
-		const prompt = renderPrompt("Repo: {repository}\nTitle: {title}\n{description}", ticket);
+	test("substitutes every ticket placeholder with its source fact", () => {
+		const detailed: Ticket = {
+			...ticket,
+			sourceKind: "github-pull-request",
+			externalKey: "PR-42",
+			url: "https://example.test/pulls/42",
+			labels: ["ready-for-review", "security"],
+		};
+		const prompt = renderPrompt(
+			"Repo: {repository}\nTitle: {title}\nDescription: {description}\nKind: {source-kind}\n" +
+				"Key: {external-key}\nURL: {source-url}\nLabels: {labels}",
+			detailed,
+		);
 		expect(prompt).toBe(
-			"Repo: acme/billing\nTitle: Retry policy for webhooks\nAdd a retry policy.",
+			"Repo: acme/billing\nTitle: Retry policy for webhooks\nDescription: Add a retry policy.\n" +
+				"Kind: github-pull-request\nKey: PR-42\nURL: https://example.test/pulls/42\n" +
+				"Labels: ready-for-review, security",
 		);
 	});
 
@@ -206,8 +300,21 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 		expect(outcome).toEqual({
 			status: "ok",
-			agent: { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-new" },
+			agent: {
+				name: AGENT,
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-new",
+			},
 		});
+		// This expected value is deliberately literal, not rendered through the
+		// production function. A template or substitution regression changes the
+		// command the Agent receives.
+		expect(
+			runner.calls.find(
+				(call) => call.command === "herdr" && call.args[0] === "agent" && call.args[1] === "prompt",
+			)?.args,
+		).toEqual(["agent", "prompt", AGENT, EXPECTED_IMPLEMENT_PROMPT]);
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
@@ -953,6 +1060,228 @@ describe("handOffTicket: the guard rails", () => {
 		expect(runner.calls).toHaveLength(0);
 	});
 
+	describe("handOffTicket: the setting fit check (ADR 0010)", () => {
+		test("a model the agent does not report fails before its first external change", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "gpt-4o" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toBe(
+				'agent "pi" (pi) has no model "gpt-4o": check the model id and its provider auth',
+			);
+			// Nothing ran: not the repository resolution, not herdr, not the start.
+			expect(runner.calls).toHaveLength(0);
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
+
+		test("a model the agent reports rides on the start", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("ok");
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toEqual([
+				"agent",
+				"start",
+				AGENT,
+				"--kind",
+				"pi",
+				"--pane",
+				"pane-1",
+				"--",
+				"--model",
+				"anthropic/claude-sonnet-4-5",
+			]);
+		});
+
+		test("an unfit thinking level fails the handoff, and no list query is needed to see it", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5", thinking: "ultra" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain('does not support the thinking level "ultra"');
+			expect(runner.calls).toHaveLength(0);
+			// The levels the agent declares are in the config, so the check needs
+			// no query.
+			expect(runner.modelListCalls).toHaveLength(0);
+		});
+
+		test("a model list that cannot be fetched lets the handoff run on", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			// The fake holds no list for the pi kind: the query fails as an
+			// uninstalled or unreadable CLI would, and the agent's own rejection
+			// stands.
+			const outcome = await handOffTicket(
+				ticket,
+				{ ...defaultChoice, model: "gpt-4o" },
+				{ config: DEFAULT_CONFIG, runner, home: HOME },
+			);
+
+			expect(outcome.status).toBe("ok");
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toContain("gpt-4o");
+		});
+
+		test("a restart fails an unfit model before it touches the stored workspace", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffStoredWorkspace({
+				ticket,
+				choice: { ...defaultChoice, model: "gpt-4o" },
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				workspaceId: "ws-stored",
+				environment: "live-worktree",
+				previousTabId: "tab-prev",
+				previousMessage: "settled earlier",
+			});
+
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain('has no model "gpt-4o"');
+			expect(runner.calls).toHaveLength(0);
+		});
+	});
+
+	/**
+	 * A Consultation start on its own, without the launch route around it.
+	 *
+	 * The route runs the pre-flight itself and carries its verdict in, so these
+	 * tests answer for the branch that backs the claim that no path reaches the
+	 * Agent unchecked: a start that carries no verdict is checked here.
+	 */
+	describe("handOffConsultation: the setting fit check", () => {
+		test("a start with no verdict refuses an unfit model before any external change", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ model: "gpt-4o" }),
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+			});
+
+			expect(outcome.status).toBe("failed");
+			if (outcome.status === "ok") throw new Error("expected a refusal");
+			expect(outcome.reason).toContain('has no model "gpt-4o"');
+			// Nothing outside the control plane: not the resolve, not the workspace,
+			// not the start, not the prompt.
+			expect(runner.calls).toHaveLength(0);
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
+
+		test("a start with no verdict refuses an unfit thinking level", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ thinking: "ultra" }),
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+			});
+
+			expect(outcome.status).toBe("failed");
+			if (outcome.status === "ok") throw new Error("expected a refusal");
+			expect(outcome.reason).toContain('does not support the thinking level "ultra"');
+			expect(runner.calls).toHaveLength(0);
+			// The levels an Agent declares are in the config: no query is needed.
+			expect(runner.modelListCalls).toHaveLength(0);
+		});
+
+		test("a start with no verdict runs on a fit model, and asks the CLI once", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ model: "anthropic/claude-sonnet-4-5" }),
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+			});
+
+			expect(outcome.status).toBe("ok");
+			expect(runner.modelListCalls).toEqual(["pi"]);
+			const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+			expect(start?.args).toEqual([
+				"agent",
+				"start",
+				"consultation-11111111",
+				"--kind",
+				"pi",
+				// A live Consultation with no workspace of its own starts in the root
+				// pane of the workspace the launch created.
+				"--pane",
+				"pane-w",
+				"--",
+				"--model",
+				"anthropic/claude-sonnet-4-5",
+			]);
+		});
+
+		test("a start that carries the launch route's verdict does not ask again", async () => {
+			const runner = new FakeRunner();
+			conventionCheckout(runner);
+			stubLiveWorkspace(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const consultation = consultationRecord({ model: "anthropic/claude-sonnet-4-5" });
+			const startCheck = await checkConsultationStart({
+				consultation,
+				config: DEFAULT_CONFIG,
+				runner,
+			});
+			expect(startCheck.ok).toBe(true);
+
+			const outcome = await handOffConsultation({
+				consultation,
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				startCheck,
+			});
+
+			expect(outcome.status).toBe("ok");
+			// One Consultation, one query: the route checked first, and the start read
+			// that verdict instead of asking the agent's CLI a second time.
+			expect(runner.modelListCalls).toEqual(["pi"]);
+		});
+	});
+
 	test("an unknown agent type or task type fails without a command", async () => {
 		const runner = new FakeRunner();
 		const agent = await handOffTicket(
@@ -960,13 +1289,13 @@ describe("handOffTicket: the guard rails", () => {
 			{ ...defaultChoice, agentType: "cursor" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(agent.status).toBe("failed");
+		expect(agent).toEqual({ status: "failed", reason: "unknown agent type: cursor" });
 		const task = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, taskType: "refactor" },
 			{ config: DEFAULT_CONFIG, runner, home: HOME },
 		);
-		expect(task.status).toBe("failed");
+		expect(task).toEqual({ status: "failed", reason: "unknown task type: refactor" });
 		expect(runner.calls).toHaveLength(0);
 	});
 
@@ -1071,6 +1400,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 
 		expect(outcome.status).toBe("ok");
 		expect(outcome.status === "ok" && outcome.agent).toEqual({
+			name: AGENT,
 			paneId: "pane-2",
 			tabId: "tab-1",
 			workspaceId: "ws-stored",
@@ -1083,6 +1413,49 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 			`herdr agent start ${AGENT} --kind pi --pane pane-2`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 			"herdr tab close tab-prev",
+		]);
+	});
+
+	test("a restart repeats its stored agent model and thinking in the start command", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-stored" }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws-stored", "--no-focus"], {
+			stdout: tabCreateJson("pane-restart"),
+		});
+
+		const outcome = await handOffStoredWorkspace({
+			ticket,
+			choice: { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" },
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			workspaceId: "ws-stored",
+			environment: "live-worktree",
+			previousTabId: "tab-interrupted",
+			previousMessage: "the interrupted work",
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(
+			runner.calls.find(
+				(call) => call.command === "herdr" && call.args[0] === "agent" && call.args[1] === "start",
+			)?.args,
+		).toEqual([
+			"agent",
+			"start",
+			AGENT,
+			"--kind",
+			"codex",
+			"--pane",
+			"pane-restart",
+			"--",
+			"--model",
+			"gpt-5.6",
+			"-c",
+			"model_reasoning_effort=high",
 		]);
 	});
 
@@ -1275,6 +1648,329 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 	});
 });
 
+describe("a leftover agent that holds the ticket's name", () => {
+	/** The herdr reason that names the holder of a taken agent name. */
+	function nameTaken(
+		paneId: string,
+		workspaceId: string,
+		tabId: string,
+		name: string = AGENT,
+	): string {
+		return (
+			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
+			`candidates: terminal_id=term_1 pane_id=${paneId} workspace_id=${workspaceId} ` +
+			`tab_id=${tabId} cwd=${WORKTREE_PATH} status=Working"},"id":"cli:agent:start"}\n`
+		);
+	}
+
+	/** The open-worktree sequence, up to the fresh tab the agent starts in. */
+	function openedWorktree(runner: FakeRunner, holderPane: string, holderWorkspace: string): void {
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-wt", "--cwd", WORKTREE_PATH, "--no-focus"],
+			{ stdout: tabCreateJson("pane-tab") },
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-tab"], {
+			code: 1,
+			stderr: nameTaken(holderPane, holderWorkspace, "ws-old:t1"),
+		});
+	}
+
+	test("starts under its cycle name beside its own leftover agent", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-old", "ws-old");
+		const cycle = "retry-policy-for-webhooks-c1";
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		// The leftover workspace is the ticket's own, so the handoff does not
+		// stop on its name: it starts beside it under the cycle name.
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe(cycle);
+		expect(outcome.status === "ok" && outcome.collision).toEqual({
+			stableName: AGENT,
+			startedAs: cycle,
+			holder: {
+				terminalId: "term_1",
+				paneId: "pane-old",
+				workspaceId: "ws-old",
+				tabId: "ws-old:t1",
+			},
+			own: true,
+			reason: expect.stringContaining("agent_name_taken"),
+		});
+		const commands = runner.commands();
+		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-tab`);
+		expect(commands).toContain(`herdr agent start ${cycle} --kind pi --pane pane-tab`);
+		// The prompt goes to the name the agent actually started under.
+		expect(commands.filter((command) => command.startsWith("herdr agent prompt "))).toEqual([
+			expect.stringContaining(`herdr agent prompt ${cycle} `),
+		]);
+		// The tab the first attempt created is not closed: the second name started in it.
+		expect(commands).not.toContain("herdr tab close tab-1");
+	});
+
+	test("takes its cycle name on a known leftover even when herdr names no holder", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-root", {
+					alreadyOpen: false,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set("herdr", ["agent", "start", AGENT, "--kind", "pi", "--pane", "pane-root"], {
+			code: 1,
+			stderr: '{"error":{"code":"agent_name_taken","message":"agent name is already used"}}\n',
+		});
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: [], ownWorkspaceIds: [], leftoverKnown: true },
+			},
+		);
+
+		// The ticket already knows what it left alive, so herdr's unreadable
+		// reason is not the last word: the handoff starts anyway.
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe("retry-policy-for-webhooks-c1");
+	});
+
+	test("fails on a name another agent holds, and says where it is held", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-stranger", "ws-stranger");
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("agent_name_taken");
+		expect(reasonOf(outcome)).toContain("pane pane-stranger in workspace ws-stranger");
+		expect(reasonOf(outcome)).toContain("no agent of this ticket");
+		// A stranger's name is not the handoff's to take: one attempt only,
+		// and the residue of the attempt goes with it.
+		expect(
+			runner.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(1);
+		expect(runner.commands()).toContain("herdr tab close tab-1");
+		expect(outcome.status === "failed" && outcome.collision).toEqual(
+			expect.objectContaining({ stableName: AGENT, startedAs: null, own: false }),
+		);
+	});
+
+	test("gives up with its own name spent, and points at the leftover", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-old", "ws-old");
+		// Every name of this ticket is held by one of its own leftover agents.
+		for (const name of ["retry-policy-for-webhooks-c1", "retry-policy-for-webhooks-c1-1"]) {
+			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
+				code: 1,
+				stderr: nameTaken("pane-old", "ws-old", "ws-old:t1"),
+			});
+		}
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: [], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
+		expect(reasonOf(outcome)).toContain("clear its leftover environment");
+		expect(
+			runner.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(3);
+	});
+
+	test("a refusal that names two holders reports the one the ticket recorded", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-stranger", "ws-stranger");
+		// herdr names the stranger first and the ticket's own leftover pane
+		// after it, on every candidate the handoff asks for. The collision the
+		// operator reads must point at the pane that is the ticket's to clear.
+		const bothHeld = (name: string) =>
+			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
+			`candidates: terminal_id=term_1 pane_id=pane-stranger workspace_id=ws-stranger ` +
+			`tab_id=ws-stranger:t1 cwd=unknown status=Working terminal_id=term_2 pane_id=pane-old ` +
+			`workspace_id=ws-old tab_id=ws-old:t2 cwd=unknown status=Idle"},"id":"cli:agent:start"}\n`;
+		for (const name of [AGENT, "retry-policy-for-webhooks-c1", "retry-policy-for-webhooks-c1-1"]) {
+			runner.set("herdr", ["agent", "start", name, "--kind", "pi", "--pane", "pane-tab"], {
+				code: 1,
+				stderr: bothHeld(name),
+			});
+		}
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		// The collision is the ticket's own, and its holder is the pane the
+		// ticket's handoffs recorded - not the stranger herdr named first.
+		expect(outcome.status === "failed" && outcome.collision).toEqual(
+			expect.objectContaining({
+				stableName: AGENT,
+				startedAs: null,
+				own: true,
+				holder: expect.objectContaining({ paneId: "pane-old", workspaceId: "ws-old" }),
+			}),
+		);
+		expect(reasonOf(outcome)).toContain("pane pane-old in workspace ws-old");
+		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
+	});
+
+	test("asks herdr for each name once, even when its cycle rebuilds the stable one", async () => {
+		const runner = new FakeRunner();
+		// A 32-character slug whose tail already spells the cycle suffix
+		// rebuilds the stable name under the length cut. The handoff drops
+		// that repeat instead of asking herdr for one name twice, and still
+		// has its ordinal name to start under.
+		const stable = `${"a".repeat(29)}-c2`;
+		const ordinal = `${"a".repeat(27)}-c2-2`;
+		const longTicket: Ticket = { ...ticket, title: stable, workCycle: 2, handoffCount: 1 };
+		conventionCheckout(runner);
+		runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws", checkoutPath: CHECKOUT }]),
+		});
+		runner.set("herdr", ["tab", "create", "--workspace", "ws", "--cwd", CHECKOUT, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+		runner.set("herdr", ["agent", "start", stable, "--kind", "pi", "--pane", "pane-1"], {
+			code: 1,
+			stderr: nameTaken("pane-old", "ws-old", "ws-old:t1", stable),
+		});
+
+		const outcome = await handOffTicket(longTicket, defaultChoice, {
+			config: DEFAULT_CONFIG,
+			runner,
+			home: HOME,
+			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+		});
+
+		expect(outcome.status).toBe("ok");
+		expect(outcome.status === "ok" && outcome.agent.name).toBe(ordinal);
+		expect(outcome.status === "ok" && outcome.collision?.startedAs).toBe(ordinal);
+		expect(runner.commands().filter((command) => command.startsWith("herdr agent start"))).toEqual([
+			`herdr agent start ${stable} --kind pi --pane pane-1`,
+			`herdr agent start ${ordinal} --kind pi --pane pane-1`,
+		]);
+	});
+
+	test("reports the failure a later name really met, not the earlier collision", async () => {
+		const runner = new FakeRunner();
+		openedWorktree(runner, "pane-old", "ws-old");
+		// The stable name is the ticket's own leftover; the cycle name then
+		// fails for a reason of its own. The operator reads that reason, not
+		// the collision an earlier candidate met.
+		runner.set(
+			"herdr",
+			["agent", "start", "retry-policy-for-webhooks-c1", "--kind", "pi", "--pane", "pane-tab"],
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"agent_kind_unknown","message":"herdr does not know the agent kind pi"},"id":"cli:agent:start"}\n',
+			},
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{
+				config: DEFAULT_CONFIG,
+				runner,
+				home: HOME,
+				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
+			},
+		);
+
+		expect(outcome.status).toBe("failed");
+		const reason = reasonOf(outcome);
+		expect(reason).toContain("herdr does not know the agent kind pi");
+		expect(reason).toContain("agent_kind_unknown");
+		expect(reason).not.toContain("agent_name_taken");
+		expect(reason).not.toContain("own leftover agent still holds");
+		// The collision the handoff did meet still rides along with the
+		// failure: the caller makes the leftover it names a durable fact.
+		expect(outcome.status === "failed" && outcome.collision).toEqual(
+			expect.objectContaining({ stableName: AGENT, startedAs: null, own: true }),
+		);
+		// The residue of the attempt goes with the failure.
+		expect(runner.commands()).toContain("herdr tab close tab-1");
+	});
+});
+
 describe("closeHandoffEnvironment: the Close cleanup", () => {
 	test("a worktree handoff removes the checkout; herdr closes the workspace with it", async () => {
 		const runner = new FakeRunner();
@@ -1300,7 +1996,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
 			code: 1,
 			stderr:
-				'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree has uncommitted changes, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+				'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
 		});
 
 		const failure = await closeHandoffEnvironment(
@@ -1308,11 +2004,31 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 			runner,
 		);
 
-		// The reason is the command's stderr: the caller reports it on the
-		// Message line with the ticket identity.
-		expect(failure).toContain("dirty_worktree_requires_force");
+		// The reason is herdr's own message with its stable error code: the
+		// caller reports it on the Message line, and the ticket carries it as
+		// the durable reason of its leftover environment.
+		expect(failure).toBe(
+			"fatal: the worktree contains modified or untracked files, use --force to delete it (dirty_worktree_requires_force)",
+		);
 		// The workspace stays: the checkout is still there.
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("the operator's force removes the checkout herdr refused", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+			{ force: true },
+		);
+
+		expect(failure).toBeUndefined();
+		// Force is the only difference, and it is never this module's choice:
+		// only a caller the operator asked passes it. The branch still stays.
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1 --force"]);
+		const joined = runner.commands().join("\n");
+		expect(joined).not.toContain("branch -D");
 	});
 
 	test("a worktree handoff whose workspace is already gone is a clean close", async () => {
@@ -1331,6 +2047,24 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		// The workspace is gone: there is no environment left to clean up.
 		expect(failure).toBeUndefined();
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+	});
+
+	test("a live worktree handoff whose tab is already gone is a clean close", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["tab", "close", "tab-1"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"tab_not_found","message":"tab tab-1 not found"},"id":"cli:tab:close"}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+		);
+
+		// The tab is gone: there is no environment left to clean up.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
 	});
 
 	test("a worktree handoff whose checkout is gone closes the left workspace", async () => {

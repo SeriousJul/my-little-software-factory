@@ -21,6 +21,7 @@ export type InteractionMode =
 	| "ticket-list"
 	| "ticket-detail"
 	| "override-list"
+	| "override-model"
 	| "override-text"
 	| "decision-modal"
 	| "missing-modal"
@@ -56,6 +57,8 @@ type ControlKey =
 	| "m"
 	| "c"
 	| "v"
+	| "w"
+	| "delete"
 	| "f1"
 	| "f2"
 	| "?"
@@ -160,7 +163,10 @@ const completionEligibility = (context: ControlContext): ControlAvailability => 
 		: unavailable("the selected Ticket has no completion to decide");
 };
 const listMove = (context: ControlContext): ControlAvailability =>
-	context.mode === "override-list" || context.mode === "override-text" || context.listCanMove
+	context.mode === "override-list" ||
+	context.mode === "override-model" ||
+	context.mode === "override-text" ||
+	context.listCanMove
 		? available()
 		: unavailable("the Ticket list has nowhere to move");
 const detailScroll = (context: ControlContext): ControlAvailability =>
@@ -178,8 +184,17 @@ const message = (context: ControlContext): ControlAvailability =>
 		? available()
 		: unavailable("the current Message fits on the Message line");
 
+/** The selected Ticket's leftover environment, and the reason one is missing. */
+const leftoverClear = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	if (ticket.leftover === null)
+		return unavailable(`no leftover environment is recorded for ticket ${ticket.identity}`);
+	return available();
+};
+
 const baseModes = ["ticket-list", "ticket-detail"] as const;
-const overrideModes = ["override-list", "override-text"] as const;
+const overrideModes = ["override-list", "override-model", "override-text"] as const;
 const modalModes = ["decision-modal", "missing-modal"] as const;
 const allModes: readonly InteractionMode[] = [
 	...baseModes,
@@ -213,7 +228,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-list", "override-list", "override-text"],
+		modes: ["ticket-list", "override-list", "override-model", "override-text"],
 		availability: listMove,
 	},
 	{
@@ -252,25 +267,28 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "change-override",
 		label: "Change",
-		keys: () => ["left", "right", "h", "l"],
+		// The Model row types its letters, so h and l belong to its text and
+		// only the arrows cycle its value.
+		keys: (mode) => (mode === "override-model" ? ["left", "right"] : ["left", "right", "h", "l"]),
 		keyLabel: "←→/hl",
 		scope: "override",
 		actionBar: true,
 		priority: 80,
-		modes: ["override-list"],
+		modes: ["override-list", "override-model"],
 		availability: available,
 	},
 	{
 		id: "edit-override",
 		label: "Edit",
-		// Display-only: the selected free-text row is a standard input that
-		// owns its typing.
+		// Display-only: a free-text row is a standard input that owns its
+		// typing, and the Model list row types into its type-ahead. Neither
+		// key reaches the panel, so the hint claims none.
 		keys: () => [],
 		keyLabel: "Type",
 		scope: "override",
 		actionBar: true,
 		priority: 80,
-		modes: ["override-text"],
+		modes: ["override-model", "override-text"],
 		availability: available,
 	},
 	{
@@ -284,6 +302,20 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 75,
 		modes: ["override-text"],
+		availability: available,
+	},
+	{
+		id: "clear-override",
+		label: "Clear",
+		// Backspace on a list row gives the setting back to the agent. The
+		// free-text rows are standard inputs that own their own Backspace, so
+		// they keep the display-only Delete hint and never reach this control.
+		keys: () => ["backspace", "delete"],
+		keyLabel: "⌫",
+		scope: "override",
+		actionBar: true,
+		priority: 75,
+		modes: ["override-list", "override-model"],
 		availability: available,
 	},
 	{
@@ -358,6 +390,17 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: refresh,
 	},
 	{
+		id: "leftover",
+		label: "clear leftover",
+		keys: () => ["w"],
+		keyLabel: "w",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 35,
+		modes: [...baseModes],
+		availability: leftoverClear,
+	},
+	{
 		id: "cancel",
 		label: "Cancel",
 		keys: () => ["escape"],
@@ -371,9 +414,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "help",
 		label: "Help",
-		// `?` opens Help wherever the mode does not own printable text. In
-		// the override text row it stays text, and only F1 reaches Help.
-		keys: (mode) => (mode === "override-text" ? ["f1"] : ["f1", "?"]),
+		// `?` opens Help wherever the mode does not own printable text. In the
+		// override text row and on the Model list row, which types its letters,
+		// it stays text, and only F1 reaches Help.
+		keys: (mode) => (mode === "override-text" || mode === "override-model" ? ["f1"] : ["f1", "?"]),
 		keyLabel: "F1/?",
 		scope: "global",
 		actionBar: true,
@@ -627,6 +671,8 @@ const KEY_NAMES: Record<ControlKey, string> = {
 	return: "Enter",
 	escape: "Esc",
 	backspace: "Backspace",
+	delete: "Delete",
+	w: "w",
 	"ctrl+c": "Ctrl+C",
 };
 
@@ -725,6 +771,8 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Ticket detail";
 		case "override-list":
 			return "Override list row";
+		case "override-model":
+			return "Override model row";
 		case "override-text":
 			return "Override text row";
 		case "decision-modal":
@@ -743,9 +791,13 @@ function displayKeyLabel(
 	control: ControlDefinition,
 	includeAllAliases: boolean,
 ): string {
-	if (control.id === "move-list" && mode === "override-text") return "↑↓";
+	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
+		return "↑↓";
+	if (control.id === "change-override" && mode === "override-model") return "←→";
 	if (control.id === "help") {
-		if (mode === "override-text") return "F1";
+		// The Model row types its letters, and `?` is one of them: only F1
+		// opens the guide there.
+		if (mode === "override-text" || mode === "override-model") return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
 		if (mode === "ticket-list" || mode === "ticket-detail") return includeAllAliases ? "F1/?" : "?";
 	}

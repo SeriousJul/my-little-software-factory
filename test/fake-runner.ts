@@ -6,8 +6,18 @@
  * default. Tests pin the exact command sequence a flow must produce and
  * read the responses the flow must parse. No test in the suite can reach a
  * real herdr session or a real repository through it.
+ *
+ * The Model list query (ADR 0010) is recorded apart from the commands: a
+ * query starts nothing, so a test reads `modelListCalls` to see that the
+ * query ran and keeps `commands()` for the external work. A kind with no
+ * canned answer fails, like a real kind whose CLI cannot report a list.
  */
-import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
+import type {
+	CommandOptions,
+	CommandResult,
+	CommandRunner,
+	ModelListResult,
+} from "../src/runner.ts";
 
 export interface RecordedCommand {
 	command: string;
@@ -16,8 +26,15 @@ export interface RecordedCommand {
 
 export class FakeRunner implements CommandRunner {
 	readonly calls: RecordedCommand[] = [];
+	/** The agent kinds this runner was asked for a Model list, in call order. */
+	readonly modelListCalls: string[] = [];
 	private responses = new Map<string, CommandResult>();
 	private sequences = new Map<string, CommandResult[]>();
+	private modelLists = new Map<string, ModelListResult>();
+	// A held Model list query never answers until `releaseModelLists` runs, so a
+	// test can watch the panel's loading state.
+	private modelListGate: Promise<void> = Promise.resolve();
+	private modelListRelease: (() => void) | null = null;
 	private fallback: CommandResult = { code: 0, stdout: "", stderr: "" };
 
 	/** Answer `command args` with a result; exact args match, in order. */
@@ -42,6 +59,16 @@ export class FakeRunner implements CommandRunner {
 		this.fallback = { code: 0, stdout: "", stderr: "", ...result };
 	}
 
+	/** Answer one agent kind's Model list query with these models. */
+	setModelList(kind: string, models: readonly string[]): void {
+		this.modelLists.set(kind, { ok: true, models: [...models] });
+	}
+
+	/** Fail one agent kind's Model list query with a readable reason. */
+	setModelListFailure(kind: string, reason: string): void {
+		this.modelLists.set(kind, { ok: false, reason });
+	}
+
 	/** The commands recorded so far, in order. */
 	commands(): string[] {
 		return this.calls.map((c) => `${c.command} ${c.args.join(" ")}`.trim());
@@ -60,6 +87,38 @@ export class FakeRunner implements CommandRunner {
 		const sequence = this.sequences.get(key);
 		if (sequence !== undefined && sequence.length > 0) return sequence.shift() as CommandResult;
 		return this.responses.get(key) ?? this.fallback;
+	}
+
+	async listModels(kind: string): Promise<ModelListResult> {
+		this.modelListCalls.push(kind);
+		await this.modelListGate;
+		return (
+			this.modelLists.get(kind) ?? {
+				ok: false,
+				reason: `the fake runner holds no model list for kind "${kind}"`,
+			}
+		);
+	}
+
+	/**
+	 * Make every Model list query wait, like an agent CLI that has not answered
+	 * yet, so a test can see the panel's loading state.
+	 */
+	holdModelLists(): void {
+		if (this.modelListRelease !== null) return;
+		let release: (() => void) | null = null;
+		this.modelListGate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		this.modelListRelease = release ?? (() => undefined);
+	}
+
+	/** Let the held Model list queries answer with what the fake holds. */
+	releaseModelLists(): void {
+		const release = this.modelListRelease;
+		this.modelListRelease = null;
+		this.modelListGate = Promise.resolve();
+		release?.();
 	}
 
 	private key(command: string, args: readonly string[]): string {

@@ -1,4 +1,5 @@
 /**
+
  * The handoff through the real UI: Enter starts it, `e` opens the override
  * panel, failures settle the ticket, and the in-flight state refuses a
  * second handoff. A non-open ticket gets the hint instead, a filesystem
@@ -15,12 +16,13 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { panelValueCells } from "../src/components/override-panel.ts";
 import { COLORS } from "../src/components/theme.ts";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
+import type { CommandResult, CommandRunner, ModelListResult } from "../src/runner.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -38,6 +40,7 @@ import {
 	type Setup,
 	settle,
 	showsTicket,
+	spanColors,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -125,12 +128,10 @@ class DelayedRunner implements CommandRunner {
 	private done = false;
 	private inner: FakeRunner;
 	private delayMs: number;
-
 	constructor(inner: FakeRunner, delayMs: number) {
 		this.inner = inner;
 		this.delayMs = delayMs;
 	}
-
 	run(command: string, args: string[]): Promise<CommandResult> {
 		if (this.done) {
 			return this.inner.run(command, args);
@@ -140,9 +141,133 @@ class DelayedRunner implements CommandRunner {
 			setTimeout(() => resolve(this.inner.run(command, args)), this.delayMs),
 		);
 	}
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
+	}
 }
 
 /**
+
+ * Walk the panel selection from its first row down to the Model row.
+ *
+ * The rows come in order, so three moves reach it whatever the agent maps.
+ */
+async function moveToModelRow(setup: Setup): Promise<string> {
+	await press(setup, "j", "the selection to move to the environment", (f) =>
+		f.includes("❯ Environment"),
+	);
+	await press(setup, "j", "the selection to move to the task type", (f) =>
+		f.includes("❯ Task type"),
+	);
+	return press(setup, "j", "the selection to move to the model", (f) => f.includes("❯ Model"));
+}
+
+/** Walk the panel selection down to the Thinking row, below the Model row. */
+async function moveToThinkingRow(setup: Setup): Promise<string> {
+	await moveToModelRow(setup);
+	return pressArrow(setup, "down", "the selection to move to the thinking row", (f) =>
+		f.includes("❯ Thinking"),
+	);
+}
+
+/** One panel size, with the value column its geometry gives. */
+interface PanelSize {
+	width: number;
+	height: number;
+	/** The cells a row's value gets at this size, read off the panel itself. */
+	valueCells: number;
+}
+
+/**
+
+ * The sizes a list row is pinned at.
+ *
+ * 120x30 is the terminal the panel is designed for, where a value gets the
+ * whole 30-cell column it wants. 46x20 is the narrow panel that still holds
+ * its guide row: the value column shrinks to 28 cells, so a real model name
+ * reaches the clip boundary and the guide that carries the loading marker is
+ * still on screen. Below that the guide drops out of the panel, so a hint is
+ * pinned at its own tiny size instead.
+ *
+ * The value column comes from `panelValueCells`, so a geometry change moves the
+ * assertions with it instead of leaving a hand-copied width behind.
+ */
+const PANEL_SIZES: readonly PanelSize[] = [
+	{ width: WIDTH, height: HEIGHT, valueCells: panelValueCells(WIDTH, HEIGHT) },
+	{ width: 46, height: 20, valueCells: panelValueCells(46, 20) },
+];
+
+/** The panel row that shows one label, for a check that runs on one row alone. */
+function rowLineOf(frame: string, label: string): string {
+	const line = rowsOf(frame).find((row) => row.includes(label));
+	if (line === undefined) throw new Error(`no rendered row holds ${label}`);
+	return line;
+}
+
+/**
+
+ * Wait until the renderer paints `text` in exactly `color`.
+ *
+ * A row's colour is what carries its state, and the char frame cannot show it,
+ * so a wait on it reads the styled spans instead of the frame text.
+ */
+async function awaitPaintedIn(
+	setup: Setup,
+	text: string,
+	color: [number, number, number],
+	what: string,
+): Promise<string> {
+	return awaitFrame(setup, () => paintedIn(setup, text, color), what);
+}
+
+/** True when the renderer painted `text` in one color alone, and that color is `color`. */
+function paintedIn(setup: Setup, text: string, color: [number, number, number]): boolean {
+	const colors = spanColors(setup, text);
+	return colors.length === 1 && colors[0].join(",") === color.join(",");
+}
+
+/** Press Backspace, and wait for the effect it should produce. */
+async function pressBackspace(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressBackspace();
+	return awaitFrame(setup, predicate, what);
+}
+
+/** Press forward Delete, and wait for the effect it should produce. */
+async function pressDelete(
+	setup: Setup,
+	what: string,
+	predicate: (frame: string) => boolean,
+): Promise<string> {
+	setup.mockInput.pressKey("DELETE");
+	return awaitFrame(setup, predicate, what);
+}
+
+/**
+
+ * Walk from the task type row to the Model row just below it.
+ *
+ * A task type switch is what the test drives, and the Model row is the value it
+ * must not re-derive, so the two rows are walked between by name.
+ */
+async function moveToModelRowFromTaskType(setup: Setup): Promise<string> {
+	return pressArrow(setup, "down", "the selection to move to the model", (f) =>
+		f.includes("❯ Model"),
+	);
+}
+
+/** Walk from the Model row up to the task type row above it. */
+async function moveToTaskTypeFromModelRow(setup: Setup): Promise<string> {
+	return pressArrow(setup, "up", "the selection to move to the task type", (f) =>
+		f.includes("❯ Task type"),
+	);
+}
+
+/**
+
  * The selected ticket's list row.
  *
  * The sample data already carries a handed-off ticket, so frame checks on
@@ -175,11 +300,9 @@ describe("the Enter handoff", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnterToHandoff(setup);
-
 				// The selected ticket settled in the list...
 				expect(selectedRow(frame)).toContain("[handed-off]");
 				// ...and the detail pane carries the handoff facts.
@@ -194,7 +317,6 @@ describe("the Enter handoff", () => {
 				expect(frame).not.toContain("handing off");
 				expect(messageRowOf(frame).trim()).toBe("");
 				expect(rowsOf(frame)[HEIGHT - 3].startsWith("└")).toBe(true);
-
 				expect(runner.commands()).toEqual([
 					`git -C ${checkout()} rev-parse --git-dir`,
 					`git -C ${checkout()} remote get-url origin`,
@@ -210,7 +332,6 @@ describe("the Enter handoff", () => {
 			props,
 		);
 	});
-
 	test("a failed herdr step leaves the ticket open and shows the reason", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -219,7 +340,6 @@ describe("the Enter handoff", () => {
 			stderr: "error: herdr is not running\n",
 		});
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnter(
@@ -227,7 +347,6 @@ describe("the Enter handoff", () => {
 					"the failure reason to appear",
 					"error: herdr is not running",
 				);
-
 				// The reason sits on the permanent Message line.
 				expect(messageRowOf(frame)).toContain("error: herdr is not running");
 				// The selected ticket never left the open state, and a failed
@@ -243,13 +362,11 @@ describe("the Enter handoff", () => {
 			props,
 		);
 	});
-
 	test("an unreadable workspace list fails with a reason and creates no workspace", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnter(
@@ -257,7 +374,6 @@ describe("the Enter handoff", () => {
 					"the failure reason to appear",
 					"readable workspace list",
 				);
-
 				// The reason sits on the permanent Message line; the Ticket stays open...
 				expect(messageRowOf(frame)).toContain("readable workspace list");
 				expect(selectedRow(frame)).toContain("[open]");
@@ -270,11 +386,9 @@ describe("the Enter handoff", () => {
 			props,
 		);
 	});
-
 	test("a handoff attempt on a non-open ticket shows the hint and issues no command", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				// The second sample ticket is already handed off.
@@ -287,12 +401,10 @@ describe("the Enter handoff", () => {
 					(f) => messageRowOf(f).includes("only an open Ticket can be handed off"),
 					"the non-open hint",
 				);
-
 				// The hint sits on the Message line, the ticket stays where it is.
 				expect(selectedRow(frame)).toContain("[handed-off]");
 				// No command ever ran.
 				expect(runner.calls).toHaveLength(0);
-
 				// The panel is refused the same way: e shows the hint, no panel.
 				// The shared Action bar keeps showing its dimmed Override hint,
 				// so the refusal is read from the panel's row, not the word.
@@ -306,14 +418,12 @@ describe("the Enter handoff", () => {
 			props,
 		);
 	});
-
 	test("a filesystem error on the clone path shows the reason and keeps the app alive", async () => {
 		const runner = new FakeRunner();
 		// A file where ~/src should be: mkdir cannot create the clone parent.
 		rmSync(join(home, "src"), { recursive: true, force: true });
 		writeFileSync(join(home, "src"), "a file");
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				setup.mockInput.pressEnter();
@@ -322,12 +432,10 @@ describe("the Enter handoff", () => {
 					(f) => messageRowOf(f).includes("cannot create"),
 					"the clone failure reason",
 				);
-
 				// The reason sits on the Message line, the ticket stays open,
 				// and no command ran: the failure is before git clone.
 				expect(selectedRow(frame)).toContain("[open]");
 				expect(runner.calls).toHaveLength(0);
-
 				// Repair the filesystem: the clone can succeed now.
 				rmSync(join(home, "src"), { recursive: true, force: true });
 				mkdirSync(join(home, "src"));
@@ -339,7 +447,6 @@ describe("the Enter handoff", () => {
 						code: 0,
 					},
 				);
-
 				// The in-flight guard cleared and the app is alive: a retry on
 				// the same ticket runs the handoff to completion.
 				setup.mockInput.pressEnter();
@@ -355,7 +462,6 @@ describe("the Enter handoff", () => {
 				// A clean handoff clears the Message line: the failure reason
 				// is gone.
 				expect(settled).not.toContain("cannot create");
-
 				// Keys still move the selection.
 				const moved = await press(
 					setup,
@@ -379,15 +485,12 @@ describe("the in-flight guard", () => {
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
 				// The handoff is in flight. Try to start another one.
 				setup.mockInput.pressEnter();
-
 				const frame = await pressEnterToHandoff(setup);
-
 				// Exactly one handoff ran, not two.
 				expect(runner.commands()).toHaveLength(7);
 				// The status cleared after the handoff settled.
@@ -398,14 +501,12 @@ describe("the in-flight guard", () => {
 			props,
 		);
 	});
-
 	test("two Enters in one tick start one handoff", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				// Both Enters are queued before a render: the key parser
@@ -413,9 +514,7 @@ describe("the in-flight guard", () => {
 				// still read the stale value and let both through.
 				setup.mockInput.pressEnter();
 				setup.mockInput.pressEnter();
-
 				await pressEnterToHandoff(setup);
-
 				// Exactly one handoff ran, not two.
 				expect(runner.commands()).toHaveLength(7);
 			},
@@ -424,14 +523,12 @@ describe("the in-flight guard", () => {
 			props,
 		);
 	});
-
 	test("j and k keep moving the selection while a handoff is in flight", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
@@ -466,13 +563,11 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubWorktreeHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const opened = await openPanel(setup);
 				// The panel covers the app: the ticket list is not visible.
 				expect(opened).not.toContain("[open]");
-
 				// The rows show the current choices, starting from the config defaults.
 				expect(opened).toContain("Agent");
 				expect(opened).toContain("Environment");
@@ -483,10 +578,8 @@ describe("the override panel", () => {
 				// pi maps a thinking list and no default is set: the row shows
 				// the unset hint, not a blank.
 				expect(opened).toContain("(unset)");
-
 				// Agent: pi -> codex.
 				await pressArrow(setup, "right", "the agent to become codex", (f) => f.includes("codex"));
-
 				// Environment: live-worktree -> worktree.
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -497,13 +590,11 @@ describe("the override panel", () => {
 					"the environment to become worktree",
 					(f) => !f.includes("live-worktree"),
 				);
-
 				// Confirm.
 				const settled = await pressEnterToHandoff(setup);
 				const detail = detailPaneText(settled);
 				expect(detail).toContain("Agent: codex");
 				expect(detail).toContain("Environment: worktree");
-
 				// The worktree sequence ran, based on the read HEAD, not a default.
 				expect(runner.commands()).toContain(
 					`git -C ${checkout()} branch --list factory/${first.externalKey.slice(1)}-${firstAgent}`,
@@ -521,7 +612,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("an override that differs from the suggestion rides on the handoff", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -534,7 +624,6 @@ describe("the override panel", () => {
 			home,
 			configPath,
 		};
-
 		await withApp(
 			async (setup) => {
 				// The open ticket wears its suggestion, and the detail says so.
@@ -542,7 +631,6 @@ describe("the override panel", () => {
 				expect(detailPaneText(setup.captureCharFrame())).toContain(
 					"Suggested task type: implement",
 				);
-
 				// Override the task type to fix.
 				await openPanel(setup);
 				await press(setup, "j", "the row selection to move to the environment", (f) =>
@@ -554,7 +642,6 @@ describe("the override panel", () => {
 				await pressArrow(setup, "right", "the task type to become fix", (f) =>
 					frameText(f).includes("Task type fix"),
 				);
-
 				// Confirm. The handoff is in flight, but the agent has not
 				// started: the override stays provisional, and the list keeps
 				// showing the suggestion.
@@ -568,7 +655,6 @@ describe("the override panel", () => {
 				expect(row).toContain("[open]");
 				expect(row).toContain("[implement]");
 				expect(detailPaneText(inFlight)).toContain("Suggested task type: implement");
-
 				// Once the handoff settles, the row and the detail wear the
 				// overridden task type, not the suggestion.
 				const settled = await awaitFrame(
@@ -580,7 +666,6 @@ describe("the override panel", () => {
 				expect(settledRow).toContain("[fix]");
 				expect(settledRow).not.toContain("[implement]");
 				expect(detailPaneText(settled)).toContain("Handoff task type: fix");
-
 				// The override drove the prompt too.
 				const fixPrompt = renderPrompt(DEFAULT_CONFIG.taskTypes.fix.template, first);
 				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
@@ -590,7 +675,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a failure after agent start keeps the actual task type on the row", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -601,7 +685,6 @@ describe("the override panel", () => {
 			stderr: "error: the agent is not accepting prompts\n",
 		});
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				// Override the task type to fix, then hand off.
@@ -616,7 +699,6 @@ describe("the override panel", () => {
 					frameText(f).includes("Task type fix"),
 				);
 				const frame = await pressEnterToHandoff(setup);
-
 				// The agent started, so the handoff is recorded even though
 				// the prompt did not get through: the row and the detail keep
 				// the actual overridden task type.
@@ -632,11 +714,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("an unset thinking row cycles to the first option on the first right", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -653,7 +733,7 @@ describe("the override panel", () => {
 					(f) => f.includes("❯ Thinking"),
 				);
 				// The arrow moved the selection; nothing was typed into the row.
-				expect(frameText(frame)).toContain("Model (empty)");
+				expect(frameText(frame)).toContain("Model (empty - query failed)");
 				// The first right lands on the first option, not the second.
 				const cycled = await pressArrow(
 					setup,
@@ -668,7 +748,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a task type thinking default shows in the panel and rides on the start", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -686,14 +765,12 @@ describe("the override panel", () => {
 		};
 		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
 		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
-
 		await withApp(
 			async (setup) => {
 				const opened = await openPanel(setup);
 				// The thinking row shows the task type default, not the unset hint.
 				expect(frameText(opened)).toContain("Thinking low");
 				expect(opened).not.toContain("(unset)");
-
 				const settled = await pressEnterToHandoff(setup);
 				expect(selectedRow(settled)).toContain("[handed-off]");
 				// The default rides on the agent start, where the agent type
@@ -717,7 +794,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("switching the task type re-derives an untouched thinking row", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -735,7 +811,6 @@ describe("the override panel", () => {
 		};
 		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
 		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
-
 		await withApp(
 			async (setup) => {
 				const opened = await openPanel(setup);
@@ -775,7 +850,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a touched thinking row survives a task type switch", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -793,7 +867,6 @@ describe("the override panel", () => {
 		};
 		const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
 		const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
-
 		await withApp(
 			async (setup) => {
 				const opened = await openPanel(setup);
@@ -823,7 +896,6 @@ describe("the override panel", () => {
 				);
 				// The explicit choice rides on, not the new task type's default.
 				expect(frameText(switched)).toContain("Thinking medium");
-
 				const settled = await pressEnterToHandoff(setup);
 				expect(selectedRow(settled)).toContain("[handed-off]");
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
@@ -835,7 +907,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the settings rows hide for an agent that does not map them", async () => {
 		const runner = new FakeRunner();
 		// A fourth agent that maps no setting at all.
@@ -844,7 +915,6 @@ describe("the override panel", () => {
 			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
 		const props = { config, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -871,11 +941,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the task type row cycles through the task types and wraps", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -905,11 +973,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the container environment is never offered", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -933,11 +999,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("escape cancels the panel without a handoff", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -948,7 +1012,6 @@ describe("the override panel", () => {
 					(f) => !f.includes("❯ Agent"),
 					"the override panel to close",
 				);
-
 				expect(closed).toContain("[open]");
 				expect(closed).toContain("e Override");
 				// No command ever ran.
@@ -959,13 +1022,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the free-text model row accepts typed text and confirms the handoff", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -981,7 +1042,6 @@ describe("the override panel", () => {
 				);
 				await setup.mockInput.typeText("gpt-5.6");
 				await pressEnterToHandoff(setup);
-
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
 					"agent",
@@ -1001,11 +1061,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the selected text field has a focused background and bright text", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1018,8 +1076,7 @@ describe("the override panel", () => {
 				const frame = await press(setup, "j", "the row selection to reach the model", (f) =>
 					f.includes("❯ Model"),
 				);
-				expect(frameText(frame)).toContain("Model (empty)");
-
+				expect(frameText(frame)).toContain("Model (empty - query failed)");
 				await setup.mockInput.typeText("gpt");
 				await awaitFrame(setup, (f) => frameText(f).includes("Model gpt"), "the model text");
 				const captured = setup.captureSpans();
@@ -1035,13 +1092,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a non-ASCII model name types into the free-text row and rides on the start", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1062,7 +1117,6 @@ describe("the override panel", () => {
 					"the non-ASCII model to show in the row",
 				);
 				expect(frameText(frame)).toContain("Model gpt-é");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1083,11 +1137,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a move and a cycle in the same tick act on the moved row", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1111,21 +1163,17 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("Tab and Shift+Tab move from list and text rows", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
-
 				// Both directions work on a list row.
 				setup.mockInput.pressTab();
 				await awaitFrame(setup, (f) => f.includes("❯ Environment"), "Tab to move down");
 				setup.mockInput.pressTab({ shift: true });
 				await awaitFrame(setup, (f) => f.includes("❯ Agent"), "Shift+Tab to move up");
-
 				// Both directions also work when the selected row is a text input.
 				await press(setup, "j", "the row selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -1149,7 +1197,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a sibling clone hands off, warns, and writes the mapping back to the config file", async () => {
 		const runner = new FakeRunner();
 		// The convention path holds a different repository.
@@ -1167,11 +1214,9 @@ describe("the override panel", () => {
 			stdout: tabCreateJson("pane-1"),
 		});
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnterToHandoff(setup);
-
 				// The warning sits on the permanent Message line.
 				expect(messageRowOf(frame)).toContain("cloned acme/billing to a sibling");
 				// The mapping was written back to the config file.
@@ -1186,18 +1231,15 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("e while a handoff is in flight is refused on the Message line", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
 		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
-
 				// The panel is refused while the handoff is in flight. The
 				// refusal is an operation Warning, and active progress
 				// outranks it (user story 51), so the Handoff's own Working
@@ -1211,7 +1253,6 @@ describe("the override panel", () => {
 				// The panel never opens: the Action bar's dimmed Override hint is
 				// permanent, so the refusal is read from the panel's row.
 				expect(refused).not.toContain("❯ Agent");
-
 				// The first handoff still settles.
 				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
 			},
@@ -1220,7 +1261,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a failed mapping write-back warns on the Message line", async () => {
 		const runner = new FakeRunner();
 		// The convention path holds a different repository: a sibling clone.
@@ -1240,7 +1280,6 @@ describe("the override panel", () => {
 		// The config file cannot be written: a directory sits at its path.
 		mkdirSync(configPath, { recursive: true });
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnter(
@@ -1248,7 +1287,6 @@ describe("the override panel", () => {
 					"the write-back warning to appear",
 					"could not persist",
 				);
-
 				// The handoff itself succeeded: the ticket is handed off... and
 				// the warning sits on the permanent Message line.
 				expect(selectedRow(frame)).toContain("[handed-off]");
@@ -1259,13 +1297,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("j, k, h, and l type into the selected free-text row", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1278,7 +1314,6 @@ describe("the override panel", () => {
 				await press(setup, "j", "the row selection to move to the model", (f) =>
 					f.includes("❯ Model"),
 				);
-
 				// "claude" carries an l: the movement keys type, they do not
 				// move the selection off the row.
 				await setup.mockInput.typeText("claude");
@@ -1288,7 +1323,6 @@ describe("the override panel", () => {
 					"the model to carry the typed text",
 				);
 				expect(frame).toContain("❯ Model");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1309,13 +1343,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the free-text row moves the caret and inserts at it", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1326,7 +1358,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				// A left arrow moves the caret one cell in, so the next typed
 				// character lands before the last one, not after it.
 				await setup.mockInput.typeText("abcd");
@@ -1338,7 +1369,6 @@ describe("the override panel", () => {
 					"the insert at the moved caret",
 				);
 				expect(frameText(frame)).toContain("Model abcXd");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1359,13 +1389,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the free-text row jumps to the ends with Home and End", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1376,7 +1404,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				await setup.mockInput.typeText("abcd");
 				// Home puts the caret at the start, so the next character lands
 				// before the rest. End puts it back at the tail.
@@ -1390,7 +1417,6 @@ describe("the override panel", () => {
 					"the Home and End inserts",
 				);
 				expect(frameText(frame)).toContain("Model YabcdZ");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1411,13 +1437,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the free-text row deletes with backspace and forward delete", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1428,7 +1452,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				await setup.mockInput.typeText("abcd");
 				// Backspace removes the character before the caret.
 				await setup.mockInput.pressBackspace();
@@ -1446,7 +1469,6 @@ describe("the override panel", () => {
 					"the forward delete to remove the first character",
 				);
 				expect(frameText(frame)).toContain("Model bc ");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1467,13 +1489,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the free-text row deletes a caret selection", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1484,7 +1504,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				await setup.mockInput.typeText("hello");
 				// Shift+left twice selects the last two characters, then
 				// backspace removes the whole selection at once.
@@ -1497,7 +1516,6 @@ describe("the override panel", () => {
 					"the selection to delete the two characters",
 				);
 				expect(frameText(frame)).toContain("Model hel ");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1518,13 +1536,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the free-text row undoes with Ctrl+Z and redoes with Ctrl+Y", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1535,10 +1551,8 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				const isShort = (f: string) =>
 					frameText(f).includes("Model hell ") && !frameText(f).includes("Model hello");
-
 				await setup.mockInput.typeText("hello");
 				// Backspace drops the final o; Ctrl+Z restores it.
 				await setup.mockInput.pressBackspace();
@@ -1559,7 +1573,6 @@ describe("the override panel", () => {
 					"the redo to restore the value",
 				);
 				expect(frameText(frame)).toContain("Model hello");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1580,17 +1593,16 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
-	test("bracketed paste works in a free-text Thinking row", async () => {
+	test("bracketed paste works in the free-text Model row of a kind with no model list", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
-				// codex exposes Thinking as a free-text field rather than a list.
+				// codex is an agent kind that reports no Model list, so its Model row
+				// stays the standard free-text field (ADR 0010).
 				await pressArrow(setup, "right", "the agent to become codex", (f) =>
 					frameText(f).includes("Agent codex"),
 				);
@@ -1600,41 +1612,37 @@ describe("the override panel", () => {
 				await press(setup, "j", "the row selection to move to the task type", (f) =>
 					f.includes("❯ Task type"),
 				);
-				await press(setup, "j", "the row selection to move to the model", (f) =>
-					f.includes("❯ Model"),
-				);
-				const thinking = await pressArrow(
+				const model = await pressArrow(
 					setup,
 					"down",
-					"the row selection to move to free-text Thinking",
-					(f) => f.includes("❯ Thinking"),
+					"the row selection to move to the model",
+					(f) => f.includes("❯ Model"),
 				);
-				expect(frameText(thinking)).toContain("Thinking (empty)");
-
-				await setup.mockInput.pasteBracketedText("med\u001b[31mium\r\n");
+				expect(frameText(model)).toContain("Model (empty - no model list)");
+				// Only the agent the panel opened on was queried: switching to a
+				// kind with no list runs no query of its own.
+				expect(runner.modelListCalls).toEqual(["pi"]);
+				await setup.mockInput.pasteBracketedText("gpt-5.1\u001b[31m-codex\r\n");
 				const frame = await awaitFrame(
 					setup,
-					(f) => frameText(f).includes("Thinking medium"),
-					"the sanitized Thinking paste",
+					(f) => frameText(f).includes("Model gpt-5.1-codex"),
+					"the sanitized Model paste",
 				);
-				expect(frameText(frame)).toContain("Thinking medium");
-
+				expect(frameText(frame)).toContain("Model gpt-5.1-codex");
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-				expect(start?.args).toContain("model_reasoning_effort=medium");
+				expect(start?.args).toContain("gpt-5.1-codex");
 			},
 			WIDTH,
 			HEIGHT,
 			props,
 		);
 	});
-
 	test("a bracketed paste is sanitized of ANSI escapes and line breaks", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1645,7 +1653,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				// The paste carries an ANSI color and a line break. The field
 				// keeps only the plain text: the color and the break are gone.
 				await setup.mockInput.pasteBracketedText("\x1b[31mhello\r\nworld\x1b[0m");
@@ -1656,7 +1663,6 @@ describe("the override panel", () => {
 				);
 				expect(frameText(frame)).toContain("Model helloworld");
 				expect(frameText(frame)).not.toContain("\x1b");
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1677,11 +1683,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1692,21 +1696,17 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				await setup.mockInput.typeText("ab");
 				await setup.mockInput.pressKey("HOME");
 				await setup.mockInput.pasteBracketedText("S");
 				await awaitFrame(setup, (f) => frameText(f).includes("Model Sab"), "the start paste");
-
 				await setup.mockInput.pressKey("END");
 				await setup.mockInput.pasteBracketedText("E");
 				await awaitFrame(setup, (f) => frameText(f).includes("Model SabE"), "the end paste");
-
 				await setup.mockInput.pressKey("HOME");
 				await setup.mockInput.pressArrow("right");
 				await setup.mockInput.pasteBracketedText("M");
 				await awaitFrame(setup, (f) => frameText(f).includes("Model SMabE"), "the middle paste");
-
 				await setup.mockInput.pressKey("HOME");
 				await setup.mockInput.pressArrow("right", { shift: true });
 				await setup.mockInput.pasteBracketedText("X");
@@ -1722,14 +1722,12 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a long free-text value scrolls in its column and hands off whole", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
 		const longValue = "abcdefghijklmnopqrstuv9876543210";
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1740,7 +1738,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				// The value is wider than the column. The row keeps one line and
 				// scrolls the caret into view, showing the tail of the value.
 				await setup.mockInput.typeText(longValue);
@@ -1753,7 +1750,6 @@ describe("the override panel", () => {
 				expect(frameText(frame)).not.toContain("abcdefghijklm");
 				// The row still fits one terminal line: no wrap, no corruption.
 				expect(rowsOf(frame)).toHaveLength(HEIGHT);
-
 				await pressEnterToHandoff(setup);
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toEqual([
@@ -1774,11 +1770,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("word deletion removes a word in either direction", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1789,7 +1783,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				await setup.mockInput.typeText("hello world");
 				await setup.mockInput.pressBackspace({ ctrl: true });
 				await awaitFrame(
@@ -1801,21 +1794,19 @@ describe("the override panel", () => {
 				await setup.mockInput.pressKey("DELETE", { ctrl: true });
 				const frame = await awaitFrame(
 					setup,
-					(f) => frameText(f).includes("Model (empty)"),
+					(f) => frameText(f).includes("Model (empty - query failed)"),
 					"the forward word deletion",
 				);
-				expect(frameText(frame)).toContain("Model (empty)");
+				expect(frameText(frame)).toContain("Model (empty - query failed)");
 			},
 			WIDTH,
 			HEIGHT,
 			props,
 		);
 	});
-
 	test("question mark and m type into a selected free-text row", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1839,13 +1830,11 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("typing and confirming in one tick hands off the complete value", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1856,7 +1845,6 @@ describe("the override panel", () => {
 					f.includes("❯ Task type"),
 				);
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
-
 				await setup.mockInput.typeText("gpt");
 				setup.mockInput.pressEnter();
 				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
@@ -1868,7 +1856,6 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a text draft survives an agent change and terminal resize", async () => {
 		const runner = new FakeRunner();
 		const config = {
@@ -1876,7 +1863,6 @@ describe("the override panel", () => {
 			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
 		const props = { config, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1889,7 +1875,6 @@ describe("the override panel", () => {
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
 				await setup.mockInput.typeText("draft");
 				await awaitFrame(setup, (f) => frameText(f).includes("Model draft"), "the draft text");
-
 				// The cursor agent hides Model. The choice remains the draft, not
 				// the transient set of rows currently visible.
 				await pressArrow(setup, "up", "the task type row", (f) => f.includes("❯ Task type"));
@@ -1905,7 +1890,6 @@ describe("the override panel", () => {
 					frameText(f).includes("Agent cursor"),
 				);
 				expect(frameText(setup.captureCharFrame())).not.toContain("Model");
-
 				await pressArrow(setup, "right", "the agent to return to pi", (f) =>
 					frameText(f).includes("Agent pi"),
 				);
@@ -1918,7 +1902,6 @@ describe("the override panel", () => {
 				await press(setup, "j", "the row selection to reach the restored model", (f) =>
 					frameText(f).includes("Model draft"),
 				);
-
 				setup.resize(24, 8);
 				await awaitFrame(setup, (f) => frameText(f).includes("Model"), "the resized panel");
 				setup.resize(WIDTH, HEIGHT);
@@ -1934,11 +1917,9 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				// A six-row terminal holds the box's two borders, the Action
@@ -1946,7 +1927,6 @@ describe("the override panel", () => {
 				// screen while the first is selected...
 				const open = await openPanel(setup);
 				expect(frameText(open)).not.toContain("Thinking");
-
 				// ...and pressing down to the last row scrolls the viewport to it.
 				await press(setup, "j", "the selection to reach the environment", (f) =>
 					f.includes("❯ Environment"),
@@ -1970,18 +1950,48 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("the shared Action bar documents the list-row controls", async () => {
 		const runner = new FakeRunner();
+		// The canned list makes the Model row a list row, so its guide reads as a
+		// choice row rather than as a text field.
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await openPanel(setup);
 				// The panel has no local hint row. Its shared Action bar shows
 				// the keys the shared control catalogue dispatches.
 				expect(frameText(frame)).toContain(
-					"↑↓/jk Move ←→/hl Change Enter Hand off Esc Cancel F1 Help",
+					"↑↓/jk Move ←→/hl Change ⌫ Clear Enter Hand off Esc Cancel F1 Help",
+				);
+				await press(setup, "j", "the row selection to move to the environment", (f) =>
+					f.includes("❯ Environment"),
+				);
+				await press(setup, "j", "the row selection to move to the task type", (f) =>
+					f.includes("❯ Task type"),
+				);
+				const modelFrame = await press(setup, "j", "the row selection to reach the model", (f) =>
+					f.includes("❯ Model"),
+				);
+				// The Model list row's bar names its controls. The row takes
+				// typed letters, so j and k are not on its Move hint, and it
+				// cycles with the arrows only.
+				expect(frameText(modelFrame)).toContain(
+					"↑↓ Move ←→ Change Type Edit ⌫ Clear Enter Hand off Esc Cancel F1 Help",
+				);
+				expect(frameText(modelFrame)).not.toContain("Backspace Delete");
+				// On the Model row `j` is a letter, not a move: the selection
+				// stays on the row.
+				await press(setup, "j", "the letter that stays a letter", (f) => f.includes("❯ Model"));
+				// Leaving the Model list row takes the arrow, not `j`.
+				const thinkingFrame = await pressArrow(
+					setup,
+					"down",
+					"the row selection to reach Thinking",
+					(f) => f.includes("❯ Thinking"),
+				);
+				expect(frameText(thinkingFrame)).toContain(
+					"↑↓/jk Move ←→/hl Change ⌫ Clear Enter Hand off Esc Cancel F1 Help",
 				);
 			},
 			WIDTH,
@@ -1989,22 +1999,18 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
 		const runner = new FakeRunner();
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				const frame = await openPanel(setup);
-
 				const rows = rowsOf(frame);
 				expect(rows).toHaveLength(12);
 				for (const row of rows) {
 					// No row wraps: every row is exactly one terminal line.
 					expect(row.length).toBe(30);
 				}
-
 				// Every row keeps its columns: the labels stay intact... and the
 				// values truncate to the value column instead of wrapping...
 				for (const label of ["Agent", "Environment", "Task type", "Model", "Thinking"]) {
@@ -2024,17 +2030,14 @@ describe("the override panel", () => {
 			12,
 			props,
 		);
-
 		await withApp(
 			async (setup) => {
 				const frame = await openPanel(setup);
-
 				const rows = rowsOf(frame);
 				expect(rows).toHaveLength(7);
 				for (const row of rows) {
 					expect(row.length).toBe(24);
 				}
-
 				// The height cannot hold every row once the surface owns its
 				// Message line and Action bar: the box gives up its padding first,
 				// then its rows from the bottom, so the last two rows drop. The
@@ -2048,7 +2051,949 @@ describe("the override panel", () => {
 			props,
 		);
 	});
-
+	/**
+	 * The Model list row scenarios, pinned at every panel size (ADR 0010).
+	 *
+	 * The narrow panel is where a list row has to give cells up, so the clipped
+	 * forms, the tail clip, and the guide that carries the loading marker are
+	 * pinned there as well as at the default size.
+	 */
+	function modelListRowScenarios(size: PanelSize): void {
+		test(`the Model row cycles the list the selected agent reported (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			// The panel keeps the order the agent reported: pi sorts the list itself.
+			runner.setModelList("pi", [
+				"anthropic/claude-sonnet-4-5",
+				"openai/gpt-5.1",
+				"openai/gpt-5.1-codex",
+			]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					expect(runner.modelListCalls).toEqual(["pi"]);
+					await moveToModelRow(setup);
+					// The task type names no model, so the row starts unset.
+					expect(frameText(setup.captureCharFrame())).toContain("Model (unset)");
+					await pressArrow(setup, "right", "the first model to be offered", (f) =>
+						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					);
+					const second = await pressArrow(
+						setup,
+						"right",
+						"the next model to be offered",
+						(f) =>
+							frameText(f).includes("Model openai/gpt-5.1 ") ||
+							frameText(f).endsWith("openai/gpt-5.1"),
+					);
+					expect(frameText(second)).toContain("openai/gpt-5.1");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).toEqual([
+						"agent",
+						"start",
+						firstAgent,
+						"--kind",
+						"pi",
+						"--pane",
+						"pane-1",
+						"--",
+						"--model",
+						"openai/gpt-5.1",
+					]);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`typing on the Model row jumps the value to the first model that holds the text (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", [
+				"anthropic/claude-haiku-4-5",
+				"anthropic/claude-sonnet-4-5",
+				"openai/gpt-5.1-codex",
+			]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					// Case does not matter: the operator typed the family in capitals.
+					await setup.mockInput.typeText("SONNET");
+					const jumped = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+						"the value to jump to the model holding the typed text",
+					);
+					// The typed text is never displayed: the jumping value is the feedback.
+					expect(frameText(jumped)).not.toContain("SONNET");
+					// The selection stays on the row: typing never moves it.
+					expect(jumped).toContain("❯ Model");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).toContain("anthropic/claude-sonnet-4-5");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a letter that matches no model leaves the value, and the arrows then take a match (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", [
+				"anthropic/claude-sonnet-4-5",
+				"openai/gpt-5.1",
+				"openai/gpt-5.1-codex",
+			]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					await setup.mockInput.typeText("gpt-5.1");
+					const jumped = await awaitFrame(
+						setup,
+						(f) =>
+							frameText(f).includes("Model openai/gpt-5.1 ") ||
+							frameText(f).endsWith("openai/gpt-5.1"),
+						"the value to jump to the first match",
+					);
+					expect(frameText(jumped)).toContain("openai/gpt-5.1");
+					// A letter no model holds extends the run and changes nothing: the
+					// value stays on the last match rather than jumping away.
+					await setup.mockInput.typeText("q");
+					const held = await settle(setup);
+					expect(frameText(held)).toContain("openai/gpt-5.1");
+					// The arrows select from there, and end the type-ahead run.
+					const next = await pressArrow(setup, "right", "the next model to be offered", (f) =>
+						frameText(f).includes("openai/gpt-5.1-codex"),
+					);
+					expect(frameText(next)).toContain("openai/gpt-5.1-codex");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).toContain("openai/gpt-5.1-codex");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`backspace clears the Model row and leaves the model to the agent (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					await setup.mockInput.typeText("gpt");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("openai/gpt-5.1"),
+						"the jumped model",
+					);
+					const cleared = await pressArrow(setup, "left", "the row to fall back one model", (f) =>
+						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					);
+					expect(frameText(cleared)).toContain("anthropic/claude-sonnet-4-5");
+					const unset = await pressBackspace(setup, "the Model row to clear", (f) =>
+						frameText(f).includes("Model (unset)"),
+					);
+					expect(frameText(unset)).toContain("Model (unset)");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					// A row the operator cleared names no model: the agent starts on its own.
+					expect(start?.args).not.toContain("--model");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`the Model row holds a loading marker while the control plane fetches the list (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			runner.holdModelLists();
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					const opened = await openPanel(setup);
+					expect(frameText(opened)).toContain("Model (loading...)");
+					await moveToModelRow(setup);
+					// The row takes no typing while the list is missing: the letters
+					// cannot be mistaken for a model the operator meant to choose.
+					await setup.mockInput.typeText("sonnet");
+					const held = await settle(setup);
+					expect(frameText(held)).toContain("Model (loading...)");
+					expect(frameText(held)).not.toContain("sonnet");
+					// Only movement keys leave the row.
+					const thinking = await pressArrow(
+						setup,
+						"down",
+						"the selection to move to Thinking",
+						(f) => f.includes("❯ Thinking"),
+					);
+					expect(frameText(thinking)).toContain("❯ Thinking");
+					// The query answers: the row becomes the list it reported.
+					runner.releaseModelLists();
+					const ready = await pressArrow(setup, "up", "the Model row to hold the list", (f) =>
+						f.includes("❯ Model"),
+					);
+					expect(frameText(ready)).toContain("Model (unset)");
+					await pressArrow(setup, "right", "the fetched model to show", (f) =>
+						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`the Model row says so when the agent reports no models (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", []);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					const opened = await openPanel(setup);
+					expect(frameText(opened)).toContain("Model (no models available)");
+					await moveToModelRow(setup);
+					// Nothing to cycle and nothing to type: the row takes the letters
+					// as a run that can never match, so the value stays unset.
+					await setup.mockInput.typeText("gpt");
+					await pressBackspace(setup, "the row to stay cleared", (f) =>
+						frameText(f).includes("Model (no models available)"),
+					);
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).not.toContain("--model");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Model the selected agent cannot run shows in the warning color (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+				},
+			};
+			const props = { config, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					const opened = await openPanel(setup);
+					// The task type names a model the agent's own list does not hold:
+					// the handoff would fail on it, so the row warns before it can.
+					expect(frameText(opened)).toContain("Model gpt-4o");
+					expect(spanColors(setup, "gpt-4o")).toEqual([rgb(COLORS.statusWarning)]);
+					// The thinking level the task type names is supported, so it stays plain.
+					expect(frameText(opened)).toContain("Thinking (unset)");
+					// Cycling to a model the agent does hold clears the warning.
+					await moveToModelRow(setup);
+					await pressArrow(setup, "right", "the row to take a model the agent offers", (f) =>
+						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					);
+					expect(spanColors(setup, "gpt-4o")).toEqual([]);
+					// The selected row reads in the bright color, never the warning one.
+					expect(spanColors(setup, "anthropic/claude-sonnet-4-5")).toEqual([
+						rgb(COLORS.textBright),
+					]);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Model the config prefilled is not judged while its list loads (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
+			runner.holdModelLists();
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "openai/gpt-4o" },
+				},
+			};
+			const props = { config, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					const opened = await openPanel(setup);
+					expect(runner.modelListCalls).toEqual(["pi"]);
+					// The row holds the config's own value. It is not judged: the list it
+					// would be judged against has not arrived, so a model the config
+					// resolved correctly must not read as a handoff that would fail.
+					expect(frameText(opened)).toContain("Model openai/gpt-4o");
+					expect(paintedIn(setup, "openai/gpt-4o", rgb(COLORS.dim))).toBe(true);
+					await moveToModelRow(setup);
+					// The bar still names the row's controls while it waits: the row
+					// holds the config's value, dim, where an empty row shows the
+					// loading marker.
+					expect(frameText(setup.captureCharFrame())).toContain("↑↓/jk Move");
+					// The row takes no input while it waits.
+					await setup.mockInput.typeText("sonnet");
+					const held = await settle(setup);
+					expect(frameText(held)).toContain("Model openai/gpt-4o");
+					expect(frameText(held)).not.toContain("sonnet");
+					// The list arrives: the row can judge its value, and says the agent
+					// offers it.
+					runner.releaseModelLists();
+					await awaitPaintedIn(
+						setup,
+						"openai/gpt-4o",
+						rgb(COLORS.textBright),
+						"the fetched list to confirm the value",
+					);
+					// The bar switches to the Model list row's controls, which take
+					// typed letters instead of j and k.
+					expect(frameText(setup.captureCharFrame())).toContain("Type Edit");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Thinking level the selected agent does not declare shows in the warning color (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				defaultAgent: "claude",
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					implement: { ...DEFAULT_CONFIG.taskTypes.implement, thinking: "xhigh" },
+				},
+			};
+			const props = { config, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					const opened = await openPanel(setup);
+					expect(frameText(opened)).toContain("Thinking xhigh");
+					expect(paintedIn(setup, "xhigh", rgb(COLORS.text))).toBe(true);
+					// The agent row is the one selected on open: cycling it left reaches
+					// codex, which declares no level above high.
+					await pressArrow(setup, "left", "the agent to become codex", (f) =>
+						frameText(f).includes("Agent codex"),
+					);
+					// The level the task type named is one the new agent cannot run, so the
+					// handoff would fail on it: the row says so before the operator can.
+					expect(frameText(setup.captureCharFrame())).toContain("Thinking xhigh");
+					expect(spanColors(setup, "xhigh")).toEqual([rgb(COLORS.statusWarning)]);
+					// The row still takes input: the operator can put a level the new agent
+					// declares on it, and the warning goes with the old value.
+					await moveToThinkingRow(setup);
+					await pressArrow(setup, "right", "a level the agent declares", (f) =>
+						frameText(f).includes("Thinking minimal"),
+					);
+					expect(spanColors(setup, "xhigh")).toEqual([]);
+					expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.textBright)]);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`switching the agent keeps an untouched Model and queries the new agent's list (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+				},
+			};
+			const props = { config, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					// Each setting resolves on its own chain: the agent row is the only
+					// thing cycling it changes, so the task type's model rides on.
+					await pressArrow(setup, "right", "the agent to become codex", (f) =>
+						frameText(f).includes("Agent codex"),
+					);
+					expect(frameText(setup.captureCharFrame())).toContain("Model gpt-4o");
+					// codex reports no list, so no query runs for it.
+					expect(runner.modelListCalls).toEqual(["pi"]);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`switching the task type re-derives an untouched Model row (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					merge: {
+						template: "Merge pull request {external-key}.",
+						model: "openai/gpt-5.1",
+						autoClose: false,
+					},
+				},
+			};
+			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			await withApp(
+				async (setup) => {
+					const opened = await openPanel(setup);
+					expect(frameText(opened)).toContain("Model openai/gpt-5.1");
+					await press(setup, "j", "the selection to move to the environment", (f) =>
+						f.includes("❯ Environment"),
+					);
+					await press(setup, "j", "the selection to move to the task type", (f) =>
+						f.includes("❯ Task type"),
+					);
+					// implement names no model: the untouched row re-derives to unset.
+					const toImplement = await pressArrow(
+						setup,
+						"right",
+						"the task type to become implement",
+						(f) => frameText(f).includes("Task type implement"),
+					);
+					expect(frameText(toImplement)).toContain("Model (unset)");
+					// Cycling back restores the merge profile's model.
+					const back = await pressArrow(setup, "right", "the task type to cycle", (f) =>
+						frameText(f).includes("Task type fix"),
+					);
+					expect(frameText(back)).toContain("Model (unset)");
+					await pressArrow(setup, "right", "the task type to become review", (f) =>
+						frameText(f).includes("Task type review"),
+					);
+					await pressArrow(setup, "right", "the task type to become rework", (f) =>
+						frameText(f).includes("Task type rework"),
+					);
+					const toMerge = await pressArrow(setup, "right", "the task type to become merge", (f) =>
+						frameText(f).includes("Task type merge"),
+					);
+					expect(frameText(toMerge)).toContain("Model openai/gpt-5.1");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).toContain("openai/gpt-5.1");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Model wider than its column shows its end and rides on whole (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			// A real agent list carries one long provider in front of many models:
+			// the head of the value says nothing the neighbour's head does not.
+			const long =
+				"llama-server=http://127.0.0.1:8080/AtomicChat/DeepSeek-V4-Flash-0731-GGUF:IQ1_M_XL";
+			runner.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					const shown = await pressArrow(setup, "right", "the long model to show its tail", (f) =>
+						frameText(f).includes(`…${long.slice(-(size.valueCells - 1))}`),
+					);
+					// The value column holds size.valueCells cells: the cut marker plus
+					// the rest of the end, and nothing of the shared provider
+					// prefix.
+					expect(frameText(shown)).not.toContain("llama-server");
+					expect(frameText(shown)).not.toContain("AtomicChat");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					// The clip is display only: the handoff names the whole value.
+					expect(start?.args).toContain(long);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a failed model list query falls the Model row back to free text (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelListFailure("pi", "network unreachable");
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					const onModel = await moveToModelRow(setup);
+					// The fallback keeps the whole input: the caret and the editing keys,
+					// and the empty field names the cause, so a kind that reports no
+					// list and a query that failed do not read the same.
+					expect(frameText(onModel)).toContain("Model (empty - query failed)");
+					await setup.mockInput.typeText("gpt-4o");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).toContain("gpt-4o");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Model row the agent's kind cannot list names that cause (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			const config: FactoryConfig = { ...DEFAULT_CONFIG, defaultAgent: "codex" };
+			const props = { config, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					const onModel = await moveToModelRow(setup);
+					// The row is free text for the same reason the query failure makes it
+					// free text, and the empty field says which of the two it is.
+					expect(frameText(onModel)).toContain("Model (empty - no model list)");
+					expect(frameText(onModel)).not.toContain("query failed");
+					// No query ran for a kind that has no list command.
+					expect(runner.modelListCalls).toEqual([]);
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a letter that matches nothing restarts the run, so the row keeps answering (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			// The list is shaped so a dead run and a live one cannot be confused:
+			// "codex" is reachable only as its own run, never as the tail of "gpt".
+			runner.setModelList("pi", [
+				"anthropic/claude-sonnet-4-5",
+				"openai/gpt-5.1",
+				"openai/gpt-5.1-codex",
+			]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					await setup.mockInput.typeText("gpt");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("openai/gpt-5.1 "),
+						"the first match",
+					);
+					// "x" ends the run: "gptx" is in no model. The row does not go quiet
+					// on the operator there: the failing letter starts a new run, and the
+					// only model holding an x jumps into the value.
+					const restarted = await setup.mockInput
+						.typeText("x")
+						.then(() =>
+							awaitFrame(
+								setup,
+								(f) => frameText(f).includes("gpt-5.1-codex"),
+								"the run to restart",
+							),
+						);
+					expect(frameText(restarted)).toContain("openai/gpt-5.1-codex");
+					// The new run keeps growing from that letter: "5" cannot follow "x",
+					// so "5" alone picks the first model that holds it.
+					await setup.mockInput.typeText("5");
+					const again = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
+						"the second restart of the run",
+					);
+					expect(frameText(again)).toContain("anthropic/claude-sonnet-4-5");
+					// A letter no model holds at all is the last case: the value stays
+					// where it is, and the row is still answering. "z" starts a run nothing
+					// can extend, and the "x" after it starts the next run on a real model.
+					await setup.mockInput.typeText("z");
+					const held = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
+						"the value to hold on a letter nothing holds",
+					);
+					expect(frameText(held)).toContain("anthropic/claude-sonnet-4-5");
+					await setup.mockInput.typeText("x");
+					const afterDead = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("openai/gpt-5.1-codex"),
+						"the row to answer after a letter nothing holds",
+					);
+					expect(frameText(afterDead)).toContain("openai/gpt-5.1-codex");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					// The value the run left is the value the handoff carries.
+					expect(start?.args).toContain("openai/gpt-5.1-codex");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`leaving the Model row ends its type-ahead run (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			// Only the second model holds "z", and only the first holds "q" ahead of it.
+			runner.setModelList("pi", ["anthropic/qwen-first", "openai/zq-second"]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					await setup.mockInput.typeText("z");
+					await awaitFrame(setup, (f) => frameText(f).includes("openai/zq-second"), "the z match");
+					// Leave the row and come back: the run the operator built is over.
+					await pressArrow(setup, "down", "the selection to reach Thinking", (f) =>
+						f.includes("❯ Thinking"),
+					);
+					await pressArrow(setup, "up", "the selection to return to Model", (f) =>
+						f.includes("❯ Model"),
+					);
+					// "q" alone finds the first model that holds it. Had the run carried
+					// over, "zq" would have held the row on the model it was already on.
+					const back = await setup.mockInput
+						.typeText("q")
+						.then(() =>
+							awaitFrame(
+								setup,
+								(f) => frameText(f).includes("anthropic/qwen-first"),
+								"a fresh run",
+							),
+						);
+					expect(frameText(back)).toContain("anthropic/qwen-first");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`Delete clears a Model row, like Backspace (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			await withApp(
+				async (setup) => {
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					await setup.mockInput.typeText("gpt");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("openai/gpt-5.1"),
+						"the jumped model",
+					);
+					// A list row has no caret, so forward delete is the same decision as
+					// backspace: leave the setting to the agent.
+					const cleared = await pressDelete(setup, "the Model row to clear", (f) =>
+						frameText(f).includes("Model (unset)"),
+					);
+					expect(frameText(cleared)).toContain("Model (unset)");
+					await pressEnterToHandoff(setup);
+					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+					expect(start?.args).not.toContain("--model");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Model the operator typed survives a task type switch (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					merge: {
+						template: "Merge pull request {external-key}.",
+						model: "openai/gpt-5.1",
+						autoClose: false,
+					},
+				},
+			};
+			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			await withApp(
+				async (setup) => {
+					// Story 15 for the Model row: a typed value counts as the operator's
+					// own, because typing is how a list row is chosen.
+					await openPanel(setup);
+					await moveToModelRow(setup);
+					await setup.mockInput.typeText("clau");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
+						"the typed model",
+					);
+					await moveToTaskTypeFromModelRow(setup);
+					// implement names gpt-5.1-2 and merge names gpt-5.1: a row the
+					// operator typed into keeps claude at both stops.
+					const switched = await pressArrow(
+						setup,
+						"right",
+						"the task type to become implement",
+						(f) => frameText(f).includes("Task type implement"),
+					);
+					expect(frameText(switched)).toContain("Model anthropic/claude-sonnet-4-5");
+					await pressArrow(setup, "left", "the task type to become merge", (f) =>
+						frameText(f).includes("Task type merge"),
+					);
+					const backOnModel = await moveToModelRowFromTaskType(setup);
+					expect(frameText(backOnModel)).toContain("Model anthropic/claude-sonnet-4-5");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`a Model the operator cleared survives a task type switch (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+			// A list that arrives late shows why an untouched row alone is not enough:
+			// the clear is the operator's decision either way.
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					merge: {
+						template: "Merge pull request {external-key}.",
+						model: "openai/gpt-5.1",
+						autoClose: false,
+					},
+				},
+			};
+			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			await withApp(
+				async (setup) => {
+					// Story 15 for the Model row, with clearing as the only touch: the
+					// operator who cleared the profile's model to hand off with the
+					// agent's own default must not watch it come back.
+					const opened = await openPanel(setup);
+					expect(frameText(opened)).toContain("Model openai/gpt-5.1");
+					await moveToModelRow(setup);
+					await pressBackspace(setup, "the Model row to clear", (f) =>
+						frameText(f).includes("Model (unset)"),
+					);
+					await moveToTaskTypeFromModelRow(setup);
+					await pressArrow(setup, "right", "the task type to become implement", (f) =>
+						frameText(f).includes("Task type implement"),
+					);
+					await pressArrow(setup, "right", "the task type to become fix", (f) =>
+						frameText(f).includes("Task type fix"),
+					);
+					await pressArrow(setup, "right", "the task type to become review", (f) =>
+						frameText(f).includes("Task type review"),
+					);
+					await pressArrow(setup, "right", "the task type to become rework", (f) =>
+						frameText(f).includes("Task type rework"),
+					);
+					const toMerge = await pressArrow(setup, "right", "the task type to become merge", (f) =>
+						frameText(f).includes("Task type merge"),
+					);
+					// merge names a model, and the row the operator cleared stays cleared.
+					expect(frameText(toMerge)).toContain("Model (unset)");
+					expect(frameText(toMerge)).not.toContain("Model openai/gpt-5.1");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+		test(`switching the task type re-derives an untouched Agent row (${size.width}x${size.height})`, async () => {
+			const runner = new FakeRunner();
+			stubCheckout(runner);
+			stubLiveHandoff(runner);
+			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					merge: {
+						template: "Merge pull request {external-key}.",
+						agent: "claude",
+						autoClose: false,
+					},
+				},
+			};
+			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
+			const props = { config, runner, home, configPath, initialTickets: [mergeTicket] };
+			await withApp(
+				async (setup) => {
+					// The merge profile names claude, so the agent row starts there: the
+					// profile leg of the chain, not `default-agent`.
+					const opened = await openPanel(setup);
+					expect(frameText(opened)).toContain("Agent claude");
+					// claude reports no list, so no query ran for the agent the row opened on.
+					expect(runner.modelListCalls).toEqual([]);
+					await press(setup, "j", "the selection to reach the environment", (f) =>
+						f.includes("❯ Environment"),
+					);
+					await press(setup, "j", "the selection to reach the task type", (f) =>
+						f.includes("❯ Task type"),
+					);
+					// implement names no agent, so the untouched row follows its profile
+					// through the default agent instead of holding claude.
+					const toImplement = await pressArrow(
+						setup,
+						"right",
+						"the task type to become implement",
+						(f) => frameText(f).includes("Task type implement"),
+					);
+					expect(frameText(toImplement)).toContain("Agent pi");
+					// The operator touches the agent row, and a later switch leaves it be.
+					await press(setup, "k", "the selection to reach the environment", (f) =>
+						f.includes("❯ Environment"),
+					);
+					await press(setup, "k", "the selection to reach the agent row", (f) =>
+						f.includes("❯ Agent"),
+					);
+					await pressArrow(setup, "right", "the agent to become codex", (f) =>
+						frameText(f).includes("Agent codex"),
+					);
+					await press(setup, "j", "the selection to reach the environment", (f) =>
+						f.includes("❯ Environment"),
+					);
+					await press(setup, "j", "the selection to reach the task type", (f) =>
+						f.includes("❯ Task type"),
+					);
+					const back = await pressArrow(setup, "right", "the task type to become fix", (f) =>
+						frameText(f).includes("Task type fix"),
+					);
+					expect(frameText(back)).toContain("Agent codex");
+					await pressArrow(setup, "right", "the task type to become review", (f) =>
+						frameText(f).includes("Task type review"),
+					);
+					await pressArrow(setup, "right", "the task type to become rework", (f) =>
+						frameText(f).includes("Task type rework"),
+					);
+					const toMerge = await pressArrow(setup, "right", "the task type to become merge", (f) =>
+						frameText(f).includes("Task type merge"),
+					);
+					// merge names claude, and the row the operator set keeps codex.
+					expect(frameText(toMerge)).toContain("Agent codex");
+				},
+				size.width,
+				size.height,
+				props,
+			);
+		});
+	}
+	for (const size of PANEL_SIZES) modelListRowScenarios(size);
+	test("a hint that does not fit keeps its front, never a cut marker", async () => {
+		// 24 columns leaves a row's value six cells, so every hint is cut. A cut
+		// hint keeps its front: the cut marker says "the end of a longer name",
+		// and a hint is not a name.
+		const none = new FakeRunner();
+		stubCheckout(none);
+		stubLiveHandoff(none);
+		none.setModelList("pi", []);
+		const held = new FakeRunner();
+		stubCheckout(held);
+		stubLiveHandoff(held);
+		held.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		held.holdModelLists();
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				const shown = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model (no mo"),
+					"the empty-list hint to show",
+				);
+				expect(rowLineOf(shown, "Model")).not.toContain("\u2026");
+			},
+			24,
+			8,
+			{ config: DEFAULT_CONFIG, runner: none, home, configPath },
+		);
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				const shown = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model (loadi"),
+					"the loading hint to show",
+				);
+				expect(rowLineOf(shown, "Model")).not.toContain("\u2026");
+			},
+			24,
+			8,
+			{ config: DEFAULT_CONFIG, runner: held, home, configPath },
+		);
+	});
+	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
+		const runner = new FakeRunner();
+		stubCheckout(runner);
+		stubLiveHandoff(runner);
+		const config: FactoryConfig = { ...DEFAULT_CONFIG, defaultAgent: "claude" };
+		const props = { config, runner, home, configPath };
+		await withApp(
+			async (setup) => {
+				await openPanel(setup);
+				await moveToThinkingRow(setup);
+				expect(frameText(setup.captureCharFrame())).toContain("Thinking (unset)");
+				// claude declares low through max, in that order: its row starts on
+				// low and never offers minimal or off.
+				await pressArrow(setup, "right", "the first level the agent supports", (f) =>
+					frameText(f).includes("Thinking low"),
+				);
+				await press(setup, "l", "the next level", (f) => frameText(f).includes("Thinking medium"));
+				await press(setup, "l", "the next level", (f) => frameText(f).includes("Thinking high"));
+				await press(setup, "l", "the next level", (f) => frameText(f).includes("Thinking xhigh"));
+				const last = await press(setup, "l", "the last level the agent supports", (f) =>
+					frameText(f).includes("Thinking max"),
+				);
+				expect(frameText(last)).toContain("Thinking max");
+				expect(frameText(last)).not.toContain("Thinking minimal");
+				await press(setup, "l", "the level to wrap to the first", (f) =>
+					frameText(f).includes("Thinking low"),
+				);
+				const cleared = await pressBackspace(setup, "the Thinking row to clear", (f) =>
+					frameText(f).includes("Thinking (unset)"),
+				);
+				expect(frameText(cleared)).toContain("Thinking (unset)");
+				await pressEnterToHandoff(setup);
+				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
+				expect(start?.args).not.toContain("--effort");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
 	test("a failed worktree handoff removes its residue and keeps the ticket open", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
@@ -2058,7 +3003,6 @@ describe("the override panel", () => {
 			stderr: "agent name is already used\n",
 		});
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2075,11 +3019,9 @@ describe("the override panel", () => {
 					"the failure reason to appear",
 					"agent name is already used",
 				);
-
 				// The reason sits on the permanent Message line; the Ticket stays open.
 				expect(messageRowOf(frame)).toContain("agent name is already used");
 				expect(selectedRow(frame)).toContain("[open]");
-
 				// The residue is removed: the worktree and the branch, so a
 				// retry can run.
 				const commands = runner.commands();

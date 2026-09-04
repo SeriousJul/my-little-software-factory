@@ -3,7 +3,7 @@
  * visible. `callsToDelay` defaults to one; pass `Number.POSITIVE_INFINITY`
  * to delay every call.
  */
-import type { CommandResult, CommandRunner } from "../src/runner.ts";
+import type { CommandResult, CommandRunner, ModelListResult } from "../src/runner.ts";
 
 export class DelayedRunner implements CommandRunner {
 	private remaining: number;
@@ -24,5 +24,10 @@ export class DelayedRunner implements CommandRunner {
 		return new Promise((resolve) =>
 			setTimeout(() => resolve(this.inner.run(command, args)), this.delayMs),
 		);
+	}
+
+	/** The Model list query is not the delayed work: it passes straight through. */
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
 	}
 }

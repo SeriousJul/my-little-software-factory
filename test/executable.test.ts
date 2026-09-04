@@ -6,7 +6,7 @@
  * Ticket controls need mouse reporting for wheel input, track clicks, and
  * thumb drags. This later control decision supersedes host text selection.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -44,36 +44,10 @@ describe("control plane executable, terminal protocol", () => {
 		"enables terminal mouse reporting and quits cleanly",
 		async (ctx) => {
 			dir = mkdtempSync(join(tmpdir(), "factory-exec-"));
-			const statePath = join(dir, "state.sqlite");
-			// An empty bin dir on PATH: the control plane's external commands
-			// (herdr, git, gh) resolve through it, so none of them can run.
-			const emptyBin = join(dir, "bin");
-			mkdirSync(emptyBin, { recursive: true });
 			const configPath = join(dir, "config.toml");
-			writeFileSync(
-				configPath,
-				[
-					'default-agent = "pi"',
-					'default-environment = "live-worktree"',
-					'default-task-type = "implement"',
-					`state-file = "${statePath}"`,
-					"[agents.pi]",
-					'kind = "pi"',
-					"[task-types.implement]",
-					'template = "Implement {title}"',
-					"",
-				].join("\n"),
-				"utf8",
-			);
+			writeFileSync(configPath, configToml(join(dir, "state.sqlite")), "utf8");
 
-			session = await openControlPlanePty(["--config", configPath], {
-				HOME: dir,
-				XDG_CONFIG_HOME: join(dir, ".config"),
-				XDG_STATE_HOME: join(dir, ".state"),
-				XDG_DATA_HOME: join(dir, ".data"),
-				XDG_CACHE_HOME: join(dir, ".cache"),
-				PATH: emptyBin,
-			});
+			session = await openControlPlanePty(["--config", configPath], isolatedEnv(dir));
 			if (session === null) {
 				ctx.skip("cannot open a pseudo-terminal on this platform");
 				return;
@@ -103,6 +77,8 @@ describe("control plane executable, terminal protocol", () => {
 
 				// The startup request remains observable in the full session.
 				expectMouseReportingEnabled(session.output(), "over the whole session");
+				// A config file that exists must not be reported as missing.
+				expect(session.output().toString("utf8")).not.toContain("no config file at");
 			} finally {
 				session.dispose();
 				session = null;
@@ -110,7 +86,285 @@ describe("control plane executable, terminal protocol", () => {
 		},
 		TEST_TIMEOUT_MS,
 	);
+
+	// Every bad startup argument must end in a readable line and a nonzero exit,
+	// with the UI never entered.
+	const startupFailures: Array<{ name: string; argv: (dir: string) => string[]; needle: string }> =
+		[
+			{
+				name: "an unknown argument",
+				argv: () => ["--unknown"],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "a --config flag with no path",
+				argv: () => ["--config"],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "an empty config path",
+				argv: () => ["--config", ""],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "a trailing extra argument",
+				argv: (dir) => ["--config", join(dir, "unused.toml"), "extra"],
+				needle: "usage: factory [--config <path>]",
+			},
+			{
+				name: "an invalid config file",
+				argv: (dir) => {
+					writeFileSync(join(dir, "invalid.toml"), "default-agent = 42\n", "utf8");
+					return ["--config", join(dir, "invalid.toml")];
+				},
+				needle: "default-agent",
+			},
+			{
+				name: "a state file that cannot be opened",
+				argv: (dir) => {
+					// A directory where the state database must be created.
+					mkdirSync(join(dir, "state.sqlite"), { recursive: true });
+					const blocked = join(dir, "blocked.toml");
+					writeFileSync(blocked, configToml(join(dir, "state.sqlite")), "utf8");
+					return ["--config", blocked];
+				},
+				needle: "cannot open factory state",
+			},
+		];
+
+	for (const failure of startupFailures) {
+		it(
+			`exits with a readable error before the UI starts for ${failure.name}`,
+			async (ctx) => {
+				const isolated = mkdtempSync(join(tmpdir(), "factory-exec-failure-"));
+				let bad: PtySession | null = null;
+				try {
+					bad = await openControlPlanePty(failure.argv(isolated), isolatedEnv(isolated));
+					if (bad === null) {
+						ctx.skip("cannot open a pseudo-terminal on this platform");
+						return;
+					}
+					const output = await bad.waitFor(
+						(out) => out.toString("utf8").includes(failure.needle),
+						`the ${failure.name} error`,
+						EXIT_TIMEOUT_MS,
+					);
+					const exit = await withTimeout(
+						bad.exit(),
+						EXIT_TIMEOUT_MS,
+						`the ${failure.name} process to exit`,
+					);
+					expect(exit.code).not.toBe(0);
+					expect(output.toString("utf8")).toContain(failure.needle);
+					expect(output.toString("utf8"), output.toString("utf8")).not.toContain(ALT_SCREEN);
+				} finally {
+					bad?.dispose();
+					rmSync(isolated, { recursive: true, force: true });
+				}
+			},
+			TEST_TIMEOUT_MS,
+		);
+	}
+
+	it(
+		"starts with shipped defaults and a note when the config file is missing",
+		async (ctx) => {
+			const isolated = mkdtempSync(join(tmpdir(), "factory-exec-defaults-"));
+			let defaults: PtySession | null = null;
+			try {
+				const missing = join(isolated, "does-not-exist.toml");
+				defaults = await openControlPlanePty(["--config", missing], isolatedEnv(isolated));
+				if (defaults === null) {
+					ctx.skip("cannot open a pseudo-terminal on this platform");
+					return;
+				}
+				await defaults.waitFor(
+					(out) => out.includes(ALT_SCREEN),
+					"the defaults UI to start",
+					STARTUP_TIMEOUT_MS,
+				);
+				await defaults.waitFor(
+					(out) =>
+						out
+							.toString("utf8")
+							.includes(`no config file at ${missing}, using the shipped defaults`),
+					"the shipped-defaults note",
+					STARTUP_TIMEOUT_MS,
+				);
+				await defaults.waitForStable(500, STABLE_TIMEOUT_MS);
+				defaults.write(QUIT_KEY);
+				const exit = await withTimeout(
+					defaults.exit(),
+					EXIT_TIMEOUT_MS,
+					"the defaults process to exit",
+				);
+				expect(exit.code).toBe(0);
+			} finally {
+				defaults?.dispose();
+				rmSync(isolated, { recursive: true, force: true });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
 });
+
+describe("control plane executable, the startup Model list check", () => {
+	/**
+	 * The config the check reads: one task profile that names a model, against
+	 * one `pi` agent that maps the setting (ADR 0010).
+	 */
+	function modelConfig(statePath: string): string {
+		return [
+			'default-agent = "pi"',
+			'default-environment = "live-worktree"',
+			'default-task-type = "implement"',
+			`state-file = "${statePath}"`,
+			"[agents.pi]",
+			'kind = "pi"',
+			'model = "--model {value}"',
+			"[task-types.implement]",
+			'template = "Implement {title}"',
+			'model = "anthropic/missing-model"',
+			"",
+		].join("\n");
+	}
+
+	/** Put a stand-in `pi` on the PATH the control plane resolves through. */
+	function stubPi(bin: string): void {
+		const path = join(bin, "pi");
+		writeFileSync(
+			path,
+			[
+				"#!/bin/sh",
+				"printf 'provider  model  context  max-out  thinking  images\\n'",
+				"printf 'anthropic  claude-sonnet-4-5  200000  16384  true  true\\n'",
+				"",
+			].join("\n"),
+			"utf8",
+		);
+		chmodSync(path, 0o755);
+	}
+
+	async function boot(
+		dir: string,
+		withPi: boolean,
+	): Promise<{ session: PtySession | null; configPath: string; statePath: string }> {
+		const emptyBin = join(dir, "bin");
+		mkdirSync(emptyBin, { recursive: true });
+		if (withPi) stubPi(emptyBin);
+		const statePath = join(dir, "state.sqlite");
+		const configPath = join(dir, "config.toml");
+		writeFileSync(configPath, modelConfig(statePath), "utf8");
+		const session = await openControlPlanePty(["--config", configPath], {
+			HOME: dir,
+			XDG_CONFIG_HOME: join(dir, ".config"),
+			XDG_STATE_HOME: join(dir, ".state"),
+			XDG_DATA_HOME: join(dir, ".data"),
+			XDG_CACHE_HOME: join(dir, ".cache"),
+			PATH: emptyBin,
+		});
+		return { session, configPath, statePath };
+	}
+
+	it(
+		"a config that names an unavailable model stops the control plane before it opens anything",
+		async (ctx) => {
+			const dir = mkdtempSync(join(tmpdir(), "factory-exec-model-"));
+			const { session, statePath } = await boot(dir, true);
+			if (session === null) {
+				rmSync(dir, { recursive: true, force: true });
+				ctx.skip("cannot open a pseudo-terminal on this platform");
+				return;
+			}
+			try {
+				// The error line the operator reads instead of losing a ticket.
+				const out = await session.waitFor(
+					(o) => o.includes('has no model "anthropic/missing-model"'),
+					"the startup model error",
+					STARTUP_TIMEOUT_MS,
+				);
+				expect(out.toString()).toContain("check the model id and its provider auth");
+				// The boot stops there: no window, and no state file opened behind it.
+				const exit = await withTimeout(session.exit(), EXIT_TIMEOUT_MS, "the process to exit");
+				expect(exit.code, `process exit (signal ${String(exit.signal)})`).toBe(1);
+				expect(session.output().includes(ALT_SCREEN)).toBe(false);
+				expect(existsSync(statePath)).toBe(false);
+			} finally {
+				session.dispose();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"a Model list that cannot be fetched warns and lets the control plane start",
+		async (ctx) => {
+			const dir = mkdtempSync(join(tmpdir(), "factory-exec-model-"));
+			// No `pi` on PATH: the query fails, so the value stays unchecked and the
+			// boot continues. One silent agent kind must not block the control plane.
+			const { session, statePath } = await boot(dir, false);
+			if (session === null) {
+				rmSync(dir, { recursive: true, force: true });
+				ctx.skip("cannot open a pseudo-terminal on this platform");
+				return;
+			}
+			try {
+				await session.waitFor(
+					(o) => o.includes("its model list is unavailable"),
+					"the startup warning",
+					STARTUP_TIMEOUT_MS,
+				);
+				// The boot reached the renderer, and the state file exists: a failed
+				// query warns, it does not stop.
+				await session.waitFor(
+					(o) => o.includes(ALT_SCREEN),
+					"the alternate screen",
+					STARTUP_TIMEOUT_MS,
+				);
+				expect(existsSync(statePath)).toBe(true);
+				expect(session.output().toString()).not.toContain('has no model "anthropic/missing-model"');
+			} finally {
+				session.dispose();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+});
+
+/**
+ * The environment one startup case runs in: a home nothing reads, and an
+ * empty bin dir on PATH so the control plane's external commands (herdr, git,
+ * gh) resolve through it and none of them can run.
+ */
+function isolatedEnv(dir: string): Record<string, string> {
+	const emptyBin = join(dir, "bin");
+	mkdirSync(emptyBin, { recursive: true });
+	return {
+		HOME: dir,
+		XDG_CONFIG_HOME: join(dir, ".config"),
+		XDG_STATE_HOME: join(dir, ".state"),
+		XDG_DATA_HOME: join(dir, ".data"),
+		XDG_CACHE_HOME: join(dir, ".cache"),
+		PATH: emptyBin,
+	};
+}
+
+/** One valid startup config, pointed at the state file the case needs. */
+function configToml(stateFile: string): string {
+	return [
+		'default-agent = "pi"',
+		'default-environment = "live-worktree"',
+		'default-task-type = "implement"',
+		`state-file = "${stateFile}"`,
+		"[agents.pi]",
+		'kind = "pi"',
+		"[task-types.implement]",
+		'template = "Implement {title}"',
+		"",
+	].join("\n");
+}
 
 /** Fail with the names of reporting modes missing from renderer startup. */
 function expectMouseReportingEnabled(out: Buffer, when: string): void {

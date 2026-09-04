@@ -1106,12 +1106,14 @@ describe("the contextual Action bar", () => {
 				// an operation Warning, and active progress outranks it
 				// (user story 51), so the Handoff's own Working keeps the
 				// line: an answer never erases the work in flight.
-				setup.mockInput.pressKey("return");
+				setup.mockInput.pressEnter();
 				await sleep(400);
 				expect(messageRowOf(setup.captureCharFrame())).toContain("handing off");
+				// The clean settle clears the Working line, and the refusal the
+				// operator drew during the flight then takes the line.
 				await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).trim() === "",
+					(f) => messageRowOf(f).includes("a Handoff is active"),
 					"the handoff to settle",
 					8000,
 				);

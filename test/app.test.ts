@@ -1121,6 +1121,50 @@ describe("the control plane", () => {
 		);
 	});
 
+	test("the Key guide the app opens lists the mode's controls above the global ones", async () => {
+		// The operator's own path: the app's key handler opens the guide, and
+		// the ordering the app computes is the ordering on screen. A hint
+		// priority that moves reorders these rows.
+		const state = openFactoryState(":memory:");
+		try {
+			await withApp(
+				async (setup) => {
+					const frame = await press(setup, "?", "the Key guide", (candidate) =>
+						candidate.includes("Key guide"),
+					);
+					// The guide opens on this mode's section, and the sections
+					// keep the catalogue's order on screen. A hint priority
+					// that moves reorders these rows.
+					const rows = rowsOf(frame);
+					const indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
+					const modeIdx = indexOf("Current interaction mode");
+					const globalIdx = indexOf("Global controls");
+					const controlPlaneIdx = indexOf("Control plane controls");
+					expect(modeIdx).toBeGreaterThan(0);
+					expect(globalIdx).toBeGreaterThan(modeIdx);
+					expect(controlPlaneIdx).toBeGreaterThan(globalIdx);
+					const modeSection = rows.slice(modeIdx, globalIdx).join("\n");
+					expect(modeSection).toContain("Move");
+					expect(modeSection).toContain("Hand off");
+					const globalSection = rows.slice(globalIdx, controlPlaneIdx).join("\n");
+					expect(globalSection).toContain("Quit");
+					// Closing the guide returns to the tickets view.
+					setup.mockInput.pressEscape();
+					await awaitFrame(
+						setup,
+						(candidate) => !candidate.includes("Key guide"),
+						"the Key guide to close",
+					);
+				},
+				WIDTH,
+				30,
+				{ state },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("tiny terminals stay intact", async () => {
 		await withApp(
 			async (setup) => {

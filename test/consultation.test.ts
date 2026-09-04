@@ -159,6 +159,7 @@ describe("Agent interaction input queue", () => {
 				active -= 1;
 				return { code: 0, stdout: "", stderr: "" };
 			},
+			listModels: async () => ({ ok: false, reason: "no model list here" }),
 		};
 		const queue = new ConsultationInputQueue(runner);
 		queue.enqueue("pane-1", { kind: "text", text: "one" });
@@ -181,6 +182,7 @@ describe("Agent interaction input queue", () => {
 				settled += 1;
 				return { code: 0, stdout: "", stderr: "" };
 			},
+			listModels: async () => ({ ok: false, reason: "no model list here" }),
 		};
 		const queue = new ConsultationInputQueue(runner);
 		await Promise.all([
@@ -405,6 +407,25 @@ describe("durable Consultation lifecycle", () => {
 		state.close();
 	});
 
+	test("ignores an external turn for a consultation that does not exist", () => {
+		const state = makeState();
+		expect(state.recordExternalConsultationTurn("no-such-consultation", 1)).toBe(false);
+		state.close();
+	});
+
+	test("ignores an external turn while the Agent works on a response", () => {
+		const state = makeState();
+		const consultation = createConsultation(state);
+		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.settleConsultationTurn(consultation.id, 1, "answer");
+		const pending = state.beginConsultationResponse(consultation.id, "second question", 1);
+		if (pending === undefined) throw new Error("pending delivery missing");
+		state.acceptConsultationResponse(consultation.id, pending.id);
+		expect(state.consultation(consultation.id)?.state).toBe("working");
+		expect(state.recordExternalConsultationTurn(consultation.id, 2)).toBe(false);
+		state.close();
+	});
+
 	test("preserves a draft when a pending delivery is rejected", () => {
 		const state = makeState();
 		const consultation = createConsultation(state);
@@ -612,6 +633,12 @@ describe("pending responses across restart and migration", () => {
 		// Downgrade the record to the v4 shape.
 		const db = new DatabaseSync(path);
 		db.exec("DROP TABLE consultation_pending_responses");
+		db.exec(
+			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
+				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
+		);
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);

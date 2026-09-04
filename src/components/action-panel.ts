@@ -14,6 +14,7 @@
  */
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useRef, useState } from "react";
+
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, actionRowSpans, ModalSurface, modalFrame } from "./modal-chrome.ts";
@@ -33,6 +34,19 @@ interface ActionPanelProps {
 
 /** The message column stops at 60 cells: a confirmation line is short. */
 const CONTENT_WIDTH = 60;
+/** The modal chrome: one border and one padding cell on each side. */
+const CHROME = 4;
+
+/**
+ * The columns the panel gives its message.
+ *
+ * The caller that builds the body lines clips to this width, so a line the
+ * panel would have to wrap or drop is cut where the panel really renders it
+ * instead of at a width the panel only has on a wide terminal.
+ */
+export const panelBodyCols = (terminalWidth: number): number =>
+	Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
+
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
 /** The hint row: this panel owns no Action bar, so it names its keys itself. */
@@ -60,10 +74,21 @@ export function ActionPanel({
 		rows: actions.length + 1 + MAX_BODY_ROWS,
 		// Every action row plus one line of the message.
 		minRows: actions.length + 1,
+		// The panel body is the whole terminal width between the borders, so
+		// a fact row cut at the width it renders never wraps inside the box.
+		margin: 0,
 	});
 	const wrapped = wrapBody(body, frame.contentWidth);
+	// The body takes the content rows the actions and the hint leave. When it
+	// is longer, the window's last row becomes the marker that says how many
+	// rows it does not show: rows that only vanish read as a message that
+	// ended, and the operator never learns to scroll.
 	const bodyRows = Math.max(0, frame.contentRows - actions.length - 1);
-	const maxBodyScroll = Math.max(0, wrapped.length - bodyRows);
+	const marksOverflow = wrapped.length > bodyRows;
+	const shownBodyRows = marksOverflow
+		? Math.max(1, Math.min(wrapped.length, bodyRows) - 1)
+		: Math.min(wrapped.length, bodyRows);
+	const maxBodyScroll = Math.max(0, wrapped.length - shownBodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
 	const [selected, setSelected] = useState(0);
 	const selectedRef = useRef(0);
@@ -100,6 +125,11 @@ export function ActionPanel({
 	});
 
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
+	const shownBody = windowOf(wrapped, scroll, shownBodyRows);
+	const hiddenRows = Math.max(0, wrapped.length - (scroll + shownBody.length));
+	const bodyShown =
+		marksOverflow && hiddenRows > 0 ? [...shownBody, `+${hiddenRows} more (j/k)`] : shownBody;
+
 	return createElement(ModalSurface, {
 		frame,
 		width: terminalWidth,
@@ -110,7 +140,7 @@ export function ActionPanel({
 		minContentRows: actions.length + 1,
 		message,
 		children: [
-			...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
+			...bodyShown.map((line, index) =>
 				createElement(
 					"text",
 					{ key: `body-${index}`, fg: COLORS.dim },

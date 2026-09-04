@@ -20,3 +20,19 @@ child.on("exit", (code, signal) => {
 		process.exit(code ?? 1);
 	}
 });
+// The wrapper spawns the entry as its own child. A signal to the wrapper
+// must reach the child, or the child outlives the wrapper as an orphan.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+	process.on(signal, () => {
+		if (child.exitCode === null && child.signalCode === null) {
+			try {
+				child.kill(signal);
+			} catch {
+				// The child exited between the check and the kill.
+			}
+		}
+		// Raise the same signal on the wrapper so it dies from it, as the
+		// child does.
+		process.kill(process.pid, signal);
+	});
+}

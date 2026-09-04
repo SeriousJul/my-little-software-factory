@@ -1,4 +1,5 @@
 /**
+
  * The control plane shell: panes, refresh, selection, handoff, and the
  * herdr observation loop (ADR 0005, ADR 0006).
  *
@@ -36,19 +37,26 @@ import {
 	validateResponseInput,
 } from "../consultation.ts";
 import {
+	type EnvironmentKind,
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
+	type LeftoverEnvironment,
 	type Ticket,
 	type TicketState,
 } from "../domain/ticket.ts";
 import {
 	baseChoice,
+	type CloseCleanupOptions,
+	checkConsultationStart,
+	closeCleanupReach,
 	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
 	handOffConsultation,
 	handOffStoredWorkspace,
 	handOffTicket,
+	type NameCollision,
+	type OwnNameKnowledge,
 	renderConsultationPrompt,
 } from "../handoff.ts";
 import { consultationAgentName } from "../naming.ts";
@@ -62,18 +70,25 @@ import {
 	ObservationCoordinator,
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
+import { type RepositoryMapping, type ResolvedRepository, resolveRepository } from "../repo.ts";
 import {
+	type CommandRunner,
 	commandFailureText,
-	type RepositoryMapping,
-	type ResolvedRepository,
-	resolveRepository,
-} from "../repo.ts";
-import { type CommandRunner, createChildProcessRunner, errorMessage } from "../runner.ts";
+	createChildProcessRunner,
+	errorMessage,
+	supportsModelList,
+} from "../runner.ts";
+import {
+	resolveEnvironment,
+	resolveSettings,
+	type TaskProfileStart,
+	taskProfilesOf,
+} from "../setting-resolution.ts";
 import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
-import { ActionPanel } from "./action-panel.ts";
+import { ActionPanel, panelBodyCols } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
 import {
 	type ActionContext,
@@ -103,10 +118,20 @@ import {
 } from "./messages.ts";
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
-import { type AgentSettings, OverridePanel } from "./override-panel.ts";
-import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import {
+	type AgentModelList,
+	type AgentSettings,
+	type ModelListStatus,
+	OverridePanel,
+} from "./override-panel.ts";
+import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
-import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
+import {
+	detailScrollRoom,
+	leftoverWhere,
+	TicketDetail,
+	type TicketDetailHandle,
+} from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
 
@@ -124,8 +149,9 @@ type Panel =
 	| { kind: "consultation-close"; identity: string }
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
-	| { kind: "consultation-safety"; identity: string };
-/**
+	| { kind: "consultation-safety"; identity: string }
+	| { kind: "leftover"; identity: string }; /**
+
  * The utility overlay open above the panes, if any. Overlays replace one
  * another. The ticket view and the ticket modals use the catalog's guide and
  * the Message view's captured fact, and the consultations view keeps the
@@ -137,7 +163,6 @@ type Utility =
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact }
 	| { kind: "consultation"; utility: ActionUtility };
-
 export interface AppProps {
 	config?: FactoryConfig;
 	runner?: CommandRunner;
@@ -248,7 +273,16 @@ export function App({
 	// so the marker it re-checks reads the latest list through a ref.
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
+	// The herdr seat: one external change to a ticket's environment at a time.
+	// A handoff holds it while herdr builds the environment and starts the
+	// agent. Close cleanups and leftover clears queue behind that work, and a
+	// queued cleanup reserves the seat until every earlier cleanup ends.
 	const inFlightRef = useRef(false);
+	const clearingRef = useRef(false);
+	const cleanupQueuedRef = useRef(false);
+	const cleanupQueueRef = useRef<readonly (() => Promise<void>)[]>([]);
+	/** True while a handoff or a queued environment change owns the seat. */
+	const seatHeld = () => inFlightRef.current || cleanupQueuedRef.current;
 	// Handoffs claimed while another is in flight: they run in claim order
 	// once the running one settles.
 	const queueRef = useRef<
@@ -269,7 +303,6 @@ export function App({
 	// The selected Agent pane's refresh, callable the moment a forwarded
 	// input lands: the operator should not wait out the refresh interval.
 	const outputRefreshRef = useRef<(() => void) | null>(null);
-
 	const commandRunner = runner ?? realRunner();
 	if (interactionInputQueue.current === undefined)
 		interactionInputQueue.current = new ConsultationInputQueue(commandRunner);
@@ -296,7 +329,6 @@ export function App({
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-
 	// The mode line carries the auto-handoff state and the live agent count:
 	// the in-flight tickets whose agent was alive in the latest poll, against
 	// the parallel limit. It exists only when the control plane has state to
@@ -375,6 +407,7 @@ export function App({
 		view,
 		focusedPane,
 		selectedConsultation,
+		selectedLeftover: (tickets[selectedIndex]?.leftover ?? null) !== null,
 		status,
 		launcher,
 		modal: override !== null || panel !== null,
@@ -427,7 +460,6 @@ export function App({
 		detailGeometry.visibleRows,
 	);
 	const consultationDetailScroll = Math.min(consultationScroll, consultationMaxScroll);
-
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
 		const currentConfig = configRef.current;
@@ -444,7 +476,6 @@ export function App({
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
 	}, [state]);
-
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
 		const next = state.consultations(historyFilterRef.current);
@@ -464,7 +495,6 @@ export function App({
 			setLiveOutput(null);
 		}
 	}, [state]);
-
 	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
 		Object.entries(config.agents).map(([name, agent]) => [
 			name,
@@ -475,24 +505,67 @@ export function App({
 			},
 		]),
 	);
-	// The task types' thinking defaults, keyed by task type name, for the
-	// override panel's thinking row.
-	const thinkingDefaults: Record<string, string | undefined> = Object.fromEntries(
-		Object.entries(config.taskTypes).map(([name, type]) => [name, type.thinking]),
+	// The Task profile of every task type (ADR 0009): what the panel prefills,
+	// and what it re-derives when the operator switches the task type row.
+	const profiles: Record<string, TaskProfileStart> = taskProfilesOf(config);
+	// The Model list of the agent the override panel is on (ADR 0010). The panel
+	// asks for it when it opens and whenever the operator switches agents inside
+	// it, so it reflects provider auth changed after startup. There is no cache:
+	// every request runs a fresh query, and a request a newer one overtakes is
+	// dropped.
+	const [modelList, setModelList] = useState<AgentModelList>({
+		agentType: "",
+		status: { status: "loading" },
+	});
+	const modelListRequest = useRef(0);
+	const requestModelList = useCallback(
+		(agentType: string) => {
+			const request = modelListRequest.current + 1;
+			modelListRequest.current = request;
+			const agent = configRef.current.agents[agentType];
+			const settle = (status: ModelListStatus) => {
+				// Only the newest request may show: a stale answer for another
+				// agent must never reach the row.
+				if (modelListRequest.current !== request) return;
+				setModelList({ agentType, status });
+			};
+			if (agent === undefined || agent.model === undefined || !supportsModelList(agent.kind)) {
+				// The kind reports no list: the row keeps the Text field, and no
+				// agent CLI runs for it.
+				settle({ status: "unavailable", cause: "no-list" });
+				return;
+			}
+			settle({ status: "loading" });
+			void commandRunner
+				.listModels(agent.kind)
+				.then((result) =>
+					settle(
+						result.ok
+							? { status: "available", models: result.models }
+							: { status: "unavailable", cause: "query-failed" },
+					),
+				)
+				.catch(() => settle({ status: "unavailable", cause: "query-failed" }));
+		},
+		[commandRunner],
 	);
-	const choiceFor = (ticket: Ticket): HandoffChoice =>
-		baseChoice(
-			config.defaultAgent,
-			config.defaultEnvironment,
+	const choiceFor = (ticket: Ticket): HandoffChoice => {
+		// The resolved Task profile of the ticket's suggested task type: the
+		// panel prefills it, and Enter applies it (ADR 0009). The operator
+		// changes a row in the panel, or clears one to leave the setting to the
+		// agent.
+		const settings = resolveSettings({
+			config: configRef.current,
+			taskType: ticket.suggestedTaskType,
+		});
+		return baseChoice(
+			settings.agentType,
+			configRef.current.defaultEnvironment,
 			ticket.suggestedTaskType,
-			"",
-			// The task type's thinking default: the panel shows it as the
-			// starting value of the thinking row, and Enter applies it. The
-			// operator picks another level in the panel, or clears a free-text
-			// row to leave the level to the agent.
-			config.taskTypes[ticket.suggestedTaskType]?.thinking ?? "",
+			settings.model,
+			settings.thinking,
 		);
-
+	};
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
 		if (ticket.state !== "handed-off" && ticket.state !== "running") return null;
@@ -504,7 +577,6 @@ export function App({
 		if (agent === undefined) return "missing";
 		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
 	};
-
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
@@ -529,29 +601,336 @@ export function App({
 		);
 		return write;
 	};
-
 	/**
 	 * Resolve a handoff operation into the durable Message facts.
 	 *
-	 * The Handoff's own progress ends here: its outcome is the last fact the
-	 * operator should read, and the Working line of a refresh that ran while
-	 * it was in flight stays.
+	 * The Handoff's own progress ends here. A clean handoff ends only that
+	 * progress: an outcome the operator wrote while it ran - a sibling
+	 * operation refused during the flight - surfaces when the Working line
+	 * goes, because the handoff's start already cleared whatever sat on the
+	 * slot before. The Working line of a refresh that ran while it was in
+	 * flight stays.
+	 *
+	 * A handoff that started beside its own leftover agent says so: the name
+	 * the operator knows from herdr is not the one this agent runs under, and
+	 * the leftover is what to clear to get it back. That warning rides along
+	 * with an outcome that did not finish - an agent that started but could
+	 * not be prompted is the error the operator has to act on - and never
+	 * replaces it.
 	 */
 	const finishOutcome = async (outcome: HandoffOutcome): Promise<void> => {
 		const persistWarning =
 			outcome.notes?.mappingToWrite === undefined
 				? undefined
 				: await persistMapping(outcome.notes.mappingToWrite);
+		const nameWarning =
+			outcome.collision !== undefined && outcome.collision.startedAs !== null
+				? `a leftover agent still holds the herdr name ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
+				: undefined;
+		const lines = [
+			...(outcome.status === "ok" ? [] : [outcome.reason]),
+			...(nameWarning === undefined ? [] : [nameWarning]),
+			...(persistWarning === undefined ? [] : [persistWarning]),
+			...(outcome.status === "ok" && outcome.notes?.warning !== undefined
+				? [outcome.notes.warning]
+				: []),
+		];
 		clearWorkingMessage("handoff");
-		if (outcome.status !== "ok")
-			setErrorMessage(
-				persistWarning === undefined ? outcome.reason : `${outcome.reason}; ${persistWarning}`,
-			);
-		else if (persistWarning !== undefined) setWarningMessage(persistWarning);
-		else if (outcome.notes?.warning !== undefined) setWarningMessage(outcome.notes.warning);
-		else clearOperationMessage("handoff");
+		if (outcome.status !== "ok") setErrorMessage(lines.join("; "));
+		else if (lines.length > 0) setWarningMessage(lines.join("; "));
+		// A clean handoff leaves the outcome slot to whatever it holds now, and
+		// what holds now is a fact written during this flight, which the
+		// operator reads once the progress goes.
 	};
-
+	/**
+	 * What the handoff may assume about the herdr agent name it wants.
+	 *
+	 * The control plane recorded the handles of this ticket's own handoffs,
+	 * and it may already hold the durable fact that one of them is left over
+	 * in herdr. A name held by those handles is held by the ticket's own
+	 * leftover agent, and the handoff starts beside it under its cycle name
+	 * instead of failing on it (ADR 0012).
+	 */
+	const nameKnowledgeFor = (identity: string): OwnNameKnowledge | undefined => {
+		if (state === undefined) return undefined;
+		const handles = state.handoffHandles(identity);
+		return {
+			ownPaneIds: handles.paneIds,
+			ownWorkspaceIds: handles.workspaceIds,
+			leftoverKnown: state.leftoverEnvironment(identity) !== null,
+		};
+	};
+	/**
+	 * Make a name collision with the ticket's own leftover agent durable.
+	 *
+	 * The handoff started beside the leftover, so the work runs. The fact
+	 * that the earlier cycle's agent still lives, and still holds the name
+	 * the ticket's stable handoff would want, belongs to the ticket until
+	 * the operator clears it: the detail pane says so, and `w` ends it.
+	 */
+	const recordNameCollision = (identity: string, collision: NameCollision) => {
+		if (state === undefined || !collision.own) return;
+		state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			paneId: collision.holder?.paneId ?? null,
+			reason: `the leftover agent still holds the herdr name ${collision.stableName}: ${collision.reason}`,
+		});
+	};
+	/** Start the next queued cleanup only when the handoff seat is free. */
+	const drainCleanupQueue = (): void => {
+		if (inFlightRef.current || clearingRef.current) return;
+		const cleanup = cleanupQueueRef.current[0];
+		if (cleanup === undefined) {
+			cleanupQueuedRef.current = false;
+			drainQueue();
+			return;
+		}
+		clearingRef.current = true;
+		cleanupQueueRef.current = cleanupQueueRef.current.slice(1);
+		void cleanup().finally(() => {
+			clearingRef.current = false;
+			drainCleanupQueue();
+		});
+	};
+	/** Queue one environment change and reserve the handoff seat for it. */
+	const queueCleanup = <Result>(work: () => Promise<Result>): Promise<Result> => {
+		cleanupQueuedRef.current = true;
+		const queued = new Promise<Result>((resolve, reject) => {
+			cleanupQueueRef.current = [
+				...cleanupQueueRef.current,
+				async () => {
+					try {
+						resolve(await work());
+					} catch (error) {
+						reject(error);
+					}
+				},
+			];
+		});
+		drainCleanupQueue();
+		return queued;
+	};
+	/**
+	 * Queue one Close cleanup behind every earlier environment change.
+	 *
+	 * All four cleanup paths - the operator's Close, an Abandon, the automatic
+	 * close in the observation loop, and the clear action's retry - use this
+	 * queue. A handoff cannot drain between two cleanups, so herdr never builds
+	 * an agent in an environment another cleanup is still taking away.
+	 */
+	const runCleanupWithSeat = (
+		openState: FactoryState,
+		handoff: {
+			ticketIdentity: string;
+			handoffId: string;
+			environment: EnvironmentKind;
+			tabId: string | null;
+			workspaceId: string | null;
+		},
+		options: CloseCleanupOptions = {},
+	): Promise<string | undefined> =>
+		queueCleanup(() => settleCloseCleanup(openState, commandRunner, handoff, options));
+	/**
+	 * The Close cleanup of the handoff a cycle ends, reported on the Message
+	 * line. The durable half of it (record the surviving environment, clear
+	 * what the removal ended) is settleCloseCleanup's.
+	 */
+	const runCloseCleanup = (
+		identity: string,
+		handoff: {
+			handoffId: string;
+			environment: EnvironmentKind;
+			tabId: string | null;
+			workspaceId: string | null;
+		},
+		end: "closed" | "abandoned",
+	) => {
+		if (state === undefined) return;
+		const openState = state;
+		void runCleanupWithSeat(openState, {
+			ticketIdentity: identity,
+			...handoff,
+		}).then(
+			(failure) => {
+				replaceTickets();
+				if (failure === undefined) return;
+				setErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
+			},
+			// The helper records the answer and never throws on a cleanup that
+			// broke; only the reporting here can still fail, and a Message line
+			// that cannot be written must not go unhandled.
+			(error) => {
+				setErrorMessage(
+					`ticket ${identity} ${end}; the close cleanup could not be reported: ${errorMessage(error)}`,
+				);
+			},
+		);
+	};
+	/**
+	 * Clear a ticket's leftover environments: retry the Close cleanup that
+	 * failed, and reach for herdr's force only when the operator chose it.
+	 *
+	 * Every cleanup reaches the environment its handles name: a worktree
+	 * removal takes the whole workspace with the checkout, and a tab close
+	 * takes the tab and the pane inside it. So the action refuses any leftover
+	 * that names a handle the ticket's own live agent works on: the operator
+	 * closes that cycle first, and the leftover goes with it. A reclaimed agent
+	 * shares its pane, tab, and workspace with the handoff that was closed
+	 * around it (ADR 0011), so the guard reads all three handles.
+	 *
+	 * The guard reads the durable state at the moment of the action, not the
+	 * render snapshot, which can miss a handoff that settled after it was
+	 * drawn. The seat holds in both directions: a clear refuses while a
+	 * handoff runs, and the clear takes the seat itself, so a handoff the
+	 * operator starts during a removal waits for it.
+	 */
+	const clearLeftover = (ticket: Ticket, force: boolean) => {
+		if (state === undefined) {
+			setWarningMessage("no factory state is open, so a leftover environment cannot be cleared");
+			return;
+		}
+		if (inFlightRef.current) {
+			setWarningMessage(
+				`a handoff is in flight: wait for it to settle before you clear the leftover environment of ticket ${ticket.identity}`,
+			);
+			return;
+		}
+		if (cleanupQueuedRef.current) {
+			setWarningMessage(
+				`a leftover clear is already in flight: wait for it to settle before you clear ticket ${ticket.identity} again`,
+			);
+			return;
+		}
+		const leftovers = state.leftoverEnvironments(ticket.identity);
+		if (leftovers.length === 0) {
+			setWarningMessage(`no leftover environment is recorded for ticket ${ticket.identity}`);
+			replaceTickets();
+			return;
+		}
+		const live =
+			state.ticketState(ticket.identity) === "open"
+				? null
+				: (state.latestHandoff(ticket.identity) ?? null);
+		const atRisk = live === null ? null : (liveHandleAtRisk(leftovers, live) ?? null);
+		if (atRisk !== null && live !== null) {
+			setWarningMessage(
+				`the agent of ticket ${ticket.identity} runs in ${atRisk.text}: close its work cycle before you clear that ${atRisk.what}`,
+			);
+			return;
+		}
+		const openState = state;
+		// One queue item owns the whole clear loop. A handoff cannot run between
+		// the facts of one ticket while herdr takes their environments away.
+		void queueCleanup(async () => {
+			const failures: string[] = [];
+			for (const leftover of leftovers) {
+				const failure = await settleCloseCleanup(
+					openState,
+					commandRunner,
+					{
+						ticketIdentity: ticket.identity,
+						handoffId: leftover.handoffId,
+						environment: leftover.environment,
+						tabId: leftover.tabId,
+						workspaceId: leftover.workspaceId,
+					},
+					{ force },
+				);
+				if (failure !== undefined) failures.push(failure);
+			}
+			return failures;
+		})
+			.then(
+				(failures) => {
+					if (failures.length === 0)
+						setWarningMessage(`cleared the leftover environment of ticket ${ticket.identity}`);
+					else
+						setErrorMessage(
+							`ticket ${ticket.identity} still holds a leftover environment: ${failures.join("; ")}`,
+						);
+				},
+				(error) => {
+					setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
+				},
+			)
+			.finally(replaceTickets);
+	};
+	/**
+	 * The leftover panel: what still lives in herdr for this ticket, and the
+	 * one action that ends it.
+	 *
+	 * The guidance leads the body, and the rows above the action rows are where
+	 * the variable fact lines scroll, so the meaning of the rows - and the
+	 * branch fact - stays on screen with them however many facts the ticket
+	 * holds. Each fact carries its own reason on the line below its
+	 * environment: one line, cut where the panel really renders it and marked
+	 * with the ellipsis, because the panel is the hint and the detail pane
+	 * carries the whole reason. Rows the window does not hold come back as a
+	 * count from ActionPanel, so nothing leaves the screen silently.
+	 *
+	 * herdr's force is a row of its own, and its guidance stands only while a
+	 * leftover worktree checkout can be discarded: a tab leftover has no
+	 * checkout to force. A forced removal discards the checkout, so the
+	 * control plane never reaches for it on the operator's behalf; the
+	 * operator chooses it with their own hands, and the git branch stays
+	 * either way.
+	 */
+	const createLeftoverPanel = (ticket: Ticket) => {
+		const leftovers = state?.leftoverEnvironments(ticket.identity) ?? [];
+		const forced = leftovers.some((leftover) => leftover.environment === "worktree");
+		const cols = panelBodyCols(terminalWidth);
+		const facts = leftovers.flatMap((leftover) => [
+			// One row per fact and one per reason, with the meaning first: a
+			// long handle list cut at a narrow width loses handles, not the
+			// fact that the environment is still open.
+			truncateWithEllipsis(`still open: ${leftoverWhere(leftover)}`, cols),
+			truncateWithEllipsis(leftover.reason, cols),
+		]);
+		return createElement(ActionPanel, {
+			title: `Leftover environment ${ticket.identity}`,
+			bodyLines: [
+				"Retry runs the Close cleanup again.",
+				...(forced ? ["Force adds --force and discards the checkout."] : []),
+				"The git branch stays either way.",
+				"",
+				...facts,
+			],
+			actions: [
+				{ key: "retry", label: "Retry", detail: "clean the environment up again" },
+				...(forced
+					? [{ key: "force", label: "Force", detail: "remove the checkout by force" }]
+					: []),
+				{ key: "cancel", label: "Cancel", detail: "leave the environment as it is" },
+			],
+			onAction: (key) => {
+				setPanel(null);
+				if (key === "retry" || key === "force") clearLeftover(ticket, key === "force");
+			},
+			onCancel: () => setPanel(null),
+			message: visibleMessage,
+		});
+	};
+	/** Offer the one action that ends a ticket's leftover environment. */
+	const openLeftoverPanel = () => {
+		const ticket = ticketsRef.current[selectedIndexRef.current];
+		if (ticket === undefined) {
+			setWarningMessage("no ticket is selected");
+			return;
+		}
+		if (ticket.leftover === null) {
+			setWarningMessage(`no leftover environment is recorded for ticket ${ticket.identity}`);
+			return;
+		}
+		setPanel({ kind: "leftover", identity: ticket.identity });
+	};
+	// A leftover panel lists the facts it would clear. When the last one is
+	// gone, the panel has nothing to show, and the ticket keys must return at
+	// that moment: the panel closes itself.
+	useEffect(() => {
+		if (panel?.kind !== "leftover") return;
+		const ticket = tickets.find((candidate) => candidate.identity === panel.identity);
+		if (ticket === undefined || ticket.leftover === null) setPanel(null);
+	}, [panel, tickets]);
 	/**
 	 * Run the external work of a claimed handoff, settle it, and refresh.
 	 *
@@ -570,13 +949,14 @@ export function App({
 		previousMessage: string,
 	) => {
 		if (state === undefined) return;
-		if (inFlightRef.current) {
+		if (seatHeld()) {
 			queueRef.current = [...queueRef.current, { ticket, choice, origin, claim, previousMessage }];
 			return;
 		}
 		inFlightRef.current = true;
 		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		const onStage = (stage: string) => state.advanceHandoffAttempt(claim.attemptId, stage);
+		const names = nameKnowledgeFor(ticket.identity);
 		const run =
 			origin === "open"
 				? handOffTicket(ticket, choice, {
@@ -584,6 +964,7 @@ export function App({
 						runner: commandRunner,
 						home: homeDir,
 						onStage,
+						names,
 					})
 				: handOffStoredWorkspace({
 						ticket,
@@ -596,9 +977,14 @@ export function App({
 						previousTabId: ticket.handoff?.tabId ?? null,
 						previousMessage,
 						onStage,
+						names,
 					});
 		void run
 			.then(async (outcome) => {
+				if (outcome.collision !== undefined)
+					recordNameCollision(ticket.identity, outcome.collision);
+				if (outcome.ownCollision !== undefined)
+					recordNameCollision(ticket.identity, outcome.ownCollision);
 				state.settleHandoff(
 					claim.attemptId,
 					outcome.status !== "failed",
@@ -609,6 +995,7 @@ export function App({
 								paneId: outcome.agent.paneId,
 								tabId: outcome.agent.tabId,
 								workspaceId: outcome.agent.workspaceId,
+								agentName: outcome.agent.name,
 							},
 				);
 				// The manual route's decision lands here, on the settled turn's
@@ -630,17 +1017,16 @@ export function App({
 				replaceTickets();
 				await finishOutcome(outcome);
 				inFlightRef.current = false;
-				drainQueue();
+				drainCleanupQueue();
 			})
 			.catch((error) => {
 				state.settleHandoff(claim.attemptId, false, errorMessage(error));
 				replaceTickets();
 				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				inFlightRef.current = false;
-				drainQueue();
+				drainCleanupQueue();
 			});
 	};
-
 	/**
 	 * Drain the handoff queue once the seat is free.
 	 *
@@ -650,10 +1036,12 @@ export function App({
 	 * left the state). A moved-on ticket settles its claim as failed
 	 * instead of running a handoff on a stale snapshot, and the queue
 	 * keeps draining, so a later item still starts when the seat frees.
+	 * A leftover clear holds the seat too, so a queued handoff never
+	 * starts in a workspace herdr is in the middle of taking away.
 	 */
 	const drainQueue = (): void => {
 		if (state === undefined) return;
-		while (queueRef.current.length > 0 && !inFlightRef.current) {
+		while (queueRef.current.length > 0 && !seatHeld()) {
 			const next = queueRef.current[0];
 			queueRef.current = queueRef.current.slice(1);
 			const currentState = state.ticketState(next.ticket.identity);
@@ -682,7 +1070,6 @@ export function App({
 			runClaimedHandoff(snapshot, next.choice, next.origin, next.claim, next.previousMessage);
 		}
 	};
-
 	/**
 	 * The observation loop's handoff path: it decides, the app runs.
 	 *
@@ -706,7 +1093,10 @@ export function App({
 	};
 	const runIntentRef = useRef(runIntent);
 	runIntentRef.current = runIntent;
-
+	// The observation loop outlives the render that built it, so its Close
+	// cleanup runs through this ref: the coordinator never holds a stale seat.
+	const runCleanupRef = useRef(runCleanupWithSeat);
+	runCleanupRef.current = runCleanupWithSeat;
 	const startHandoff = (choice: HandoffChoice) => {
 		const availability = availabilityFor(
 			controlById("handoff"),
@@ -766,7 +1156,6 @@ export function App({
 				inFlightRef.current = false;
 			});
 	};
-
 	const openOverride = () => {
 		const overrideControl = controlById("override");
 		const availability = availabilityFor(overrideControl, controlContextFor(currentBaseMode()));
@@ -775,9 +1164,14 @@ export function App({
 			return;
 		}
 		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket !== undefined) setOverride(choiceFor(ticket));
+		if (ticket === undefined) return;
+		const choice = choiceFor(ticket);
+		// Opening the panel is a point of use for the Model list (ADR 0010): the
+		// list of the agent the panel starts on is fetched fresh, so provider
+		// auth the operator changed after startup shows up here.
+		requestModelList(choice.agentType);
+		setOverride(choice);
 	};
-
 	/**
 	 * Toggle auto-handoff for this session. The config's value is the
 	 * startup default only; the toggle never writes the config.
@@ -787,7 +1181,6 @@ export function App({
 		autoModeRef.current = next;
 		setAutoMode(next);
 	};
-
 	// The decision modal's rows: Close first, selected by default, then a
 	// Goto, then one handoff row per outgoing workflow edge the completed
 	// task type has, in config order: every edge stays reachable, and an
@@ -830,7 +1223,6 @@ export function App({
 			contextLine,
 		};
 	};
-
 	/** The handoff row's detail: the edge's pinning, or the target. */
 	const routeDetail = (edge: WorkflowEdge, target: string): string => {
 		const pin: string[] = [];
@@ -838,7 +1230,6 @@ export function App({
 		if (edge.environment !== undefined) pin.push(`environment ${edge.environment}`);
 		return pin.length > 0 ? pin.join(", ") : target;
 	};
-
 	// Goto: the operator focuses the agent's pane in herdr and the handoff
 	// stays open. The ticket moves awaiting to running; the trace does not
 	// record it, and the next settle refreshes the turn's pending trace.
@@ -866,7 +1257,6 @@ export function App({
 			clearOperationMessage("none");
 		});
 	};
-
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
 	// workflow handoff, or (from the missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
@@ -887,15 +1277,7 @@ export function App({
 			}
 			// The Close cleanup: the environment of the handoff the decision ends.
 			const stored = state.latestHandoff(ticket.identity);
-			if (stored !== null) {
-				void closeHandoffEnvironment(stored, commandRunner).then((failure) => {
-					if (failure !== undefined) {
-						setErrorMessage(
-							`ticket ${ticket.identity} closed; the close cleanup failed: ${failure}`,
-						);
-					}
-				});
-			}
+			if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
 			// The Close action writes no progress line of its own.
 			clearOperationMessage("none");
 			return;
@@ -921,16 +1303,23 @@ export function App({
 		// turn's decision is not recorded here: it lands on the settled
 		// turn's trace in the handoff's settle path, and only when the
 		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working. A Workflow Handoff never
-		// inherits the previous Handoff's Model or Thinking: the model
-		// starts empty, and the thinking starts on the target task type's
-		// own default.
+		// pending, so Close and Goto keep working. A routed handoff resolves
+		// agent, model, and thinking through the target task profile's chain,
+		// with the edge's own pin above the profile (ADR 0009); it never
+		// inherits the previous handoff's model or thinking.
+		const routed = resolveSettings({
+			config: configRef.current,
+			taskType: target,
+			edgeAgent: edge.agent,
+		});
 		const choice = baseChoice(
-			edge.agent ?? configRef.current.defaultAgent,
-			edge.environment ?? configRef.current.defaultEnvironment,
+			routed.agentType,
+			// The same question the panel asks, through the same helper, so a
+			// route that starts without a panel cannot read the pin differently.
+			resolveEnvironment(configRef.current, edge.environment),
 			target,
-			"",
-			configRef.current.taskTypes[target]?.thinking ?? "",
+			routed.model,
+			routed.thinking,
 		);
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
@@ -945,7 +1334,6 @@ export function App({
 			ticket.lastCompletion?.message ?? "",
 		);
 	};
-
 	const beginConsultationLaunch = (consultation: Consultation) => {
 		if (state === undefined || !state.canRecoverConsultationOpening(consultation.id)) return;
 		if (openingLaunches.current.has(consultation.id)) {
@@ -959,6 +1347,17 @@ export function App({
 			consultationOperationQueues.current,
 			consultation.repository.identity,
 			async () => {
+				// The setting fit check (ADR 0010) is this route's first step, before
+				// its first external change: a live consultation resolves its
+				// repository here, and a resolve can clone one. The verdict rides
+				// into the start, so the Agent's Model list answers one query per
+				// Consultation.
+				const startCheck = await checkConsultationStart({
+					consultation,
+					config: configRef.current,
+					runner: commandRunner,
+				});
+				if (!startCheck.ok) return { status: "failed" as const, reason: startCheck.reason };
 				let resolvedRepository: ResolvedRepository | undefined;
 				if (consultation.environment === "live-worktree") {
 					onStage("resolving-repository");
@@ -1002,6 +1401,7 @@ export function App({
 					runner: commandRunner,
 					home: homeDir,
 					onStage,
+					startCheck,
 					resolvedRepository,
 					onRepositoryResolved: (path) =>
 						state.setConsultationRepositoryPath(consultation.id, path),
@@ -1074,7 +1474,6 @@ export function App({
 			})
 			.finally(() => openingLaunches.current.delete(consultation.id));
 	};
-
 	const startConsultation = (
 		typeName: string,
 		repository: ConsultationRepositoryOption,
@@ -1113,7 +1512,6 @@ export function App({
 		setStatus({ kind: "info", text: `opening Consultation ${consultation.id.slice(0, 8)}...` });
 		beginConsultationLaunch(consultation);
 	};
-
 	const recoverConsultationOpening = (consultation: Consultation) => {
 		if (state === undefined || consultation.state !== "opening") return;
 		const current = state.consultation(consultation.id);
@@ -1176,7 +1574,6 @@ export function App({
 				});
 			});
 	};
-
 	const beginResponse = (consultation: Consultation) => {
 		if (consultation.state !== "awaiting-response") {
 			setStatus({ kind: "warning", text: "the Consultation is not awaiting a response" });
@@ -1186,7 +1583,6 @@ export function App({
 		setResponseDraft(consultation.draft);
 		setResponseEditor(true);
 	};
-
 	const submitResponse = () => {
 		if (state === undefined || selectedConsultation === undefined) return;
 		const consultation = selectedConsultation;
@@ -1243,13 +1639,11 @@ export function App({
 				setStatus({ kind: "error", text: `response failed: ${errorMessage(error)}` });
 			});
 	};
-
 	const openConsultations = () => {
 		viewRef.current = "consultations";
 		setView("consultations");
 		setFocusedPane("list");
 	};
-
 	const openAttention = () => {
 		if (state === undefined) return false;
 		const current = state.consultations("open");
@@ -1284,7 +1678,6 @@ export function App({
 		setNewOutput(false);
 		return true;
 	};
-
 	const cycleConsultationHistory = () => {
 		const next =
 			historyFilterRef.current === "open"
@@ -1296,7 +1689,6 @@ export function App({
 		setHistoryFilter(next);
 		replaceConsultations();
 	};
-
 	const closeConsultation = (consultation: Consultation) => {
 		if (state === undefined) return;
 		const current = state.consultation(consultation.id) ?? consultation;
@@ -1403,7 +1795,6 @@ export function App({
 				});
 			});
 	};
-
 	const forceCloseConsultation = (consultation: Consultation) => {
 		if (state === undefined) return;
 		if (consultation.state !== "closing" && !state.beginConsultationClose(consultation.id)) {
@@ -1421,7 +1812,6 @@ export function App({
 			text: `Consultation ${consultation.id.slice(0, 8)} force-closed; recovery resources remain recorded`,
 		});
 	};
-
 	const deleteConsultation = (consultation: Consultation) => {
 		if (state?.deleteConsultation(consultation.id)) {
 			replaceConsultations();
@@ -1431,7 +1821,6 @@ export function App({
 			});
 		}
 	};
-
 	const runMissingAction = (ticket: Ticket, key: string) => {
 		setPanel(null);
 		if (state === undefined) return;
@@ -1448,15 +1837,7 @@ export function App({
 				return;
 			}
 			const stored = state.latestHandoff(ticket.identity);
-			if (stored !== null) {
-				void closeHandoffEnvironment(stored, commandRunner).then((failure) => {
-					if (failure !== undefined) {
-						setErrorMessage(
-							`ticket ${ticket.identity} abandoned; the close cleanup failed: ${failure}`,
-						);
-					}
-				});
-			}
+			if (stored !== null) runCloseCleanup(ticket.identity, stored, "abandoned");
 			setWarningMessage(`ticket ${ticket.identity} abandoned`);
 			return;
 		}
@@ -1479,7 +1860,6 @@ export function App({
 		}
 		runClaimedHandoff(ticket, choice, "restart", claim.claim, ticket.lastCompletion?.message ?? "");
 	};
-
 	const currentBaseMode = (): InteractionMode =>
 		focusedPane === "list" ? "ticket-list" : "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
@@ -1495,7 +1875,6 @@ export function App({
 			messageTruncated,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 		});
-
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
 		setUtility({ kind: "guide", mode });
 	};
@@ -1505,7 +1884,6 @@ export function App({
 		// changes cannot replace the text in a Message view already open.
 		setUtility({ kind: "message", mode, fact: { ...visibleMessage } });
 	};
-
 	const manualRefreshPending = useRef(new Set<string>());
 	/**
 	 * Refresh now, from the `r` control.
@@ -1522,7 +1900,6 @@ export function App({
 		manualRefreshPending.current = new Set(started);
 		setWorkingMessage(`refreshing ${started.length} sources`, "refresh");
 	};
-
 	useKeyboard((key) => {
 		// Overlays own their keys: the launcher, the utility views, the
 		// override panel, and the action modals all handle input in their
@@ -1535,7 +1912,6 @@ export function App({
 			if (key.ctrl === true && key.name === "c") renderer.destroy();
 			return;
 		}
-
 		// The legacy Consultations input paths (the view's key switch, the
 		// response editor, the Agent interaction mode) match keys by name.
 		// The shell owns the emergency exit before any of those matches, so
@@ -1549,7 +1925,6 @@ export function App({
 			renderer.destroy();
 			return;
 		}
-
 		if (interaction) {
 			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
 			const keyName = key.name.toLowerCase();
@@ -1753,7 +2128,6 @@ export function App({
 			}
 			return;
 		}
-
 		// The control catalogue decides the rest, through the same dispatch
 		// hook every modal, panel, and overlay uses. The Consultation paths
 		// above still match keys by name until the port recorded on the
@@ -1797,6 +2171,7 @@ export function App({
 				launch: () => setLauncher(true),
 				override: openOverride,
 				refresh: refreshNow,
+				leftover: openLeftoverPanel,
 				"auto-handoff": () => {
 					if (!openAttention()) toggleAutoHandoff();
 				},
@@ -1805,7 +2180,6 @@ export function App({
 			},
 		})(key);
 	});
-
 	/** The list and detail panes answer the same range of keys by name. */
 	const moveRange = (name: string) => {
 		if (name === "pageup") movePage(-1);
@@ -1814,11 +2188,9 @@ export function App({
 		else if (name === "end") moveEdge("end");
 		else moveVertical(name === "up" || name === "k" ? -1 : 1);
 	};
-
 	/** Whether a Ticket holds an Agent that is not finished with its work. */
 	const isInFlight = (ticket: Ticket) =>
 		ticket.state === "handed-off" || ticket.state === "running";
-
 	/**
 	 * Enter on a settled Ticket: decide its completion, or tell the operator
 	 * why the factory decides it alone.
@@ -1841,7 +2213,6 @@ export function App({
 			observationRef.current?.tick();
 		} else setPanel({ kind: "decision", identity: ticket.identity });
 	};
-
 	// A state may already hold tickets when the app boots: read them once at
 	// mount, before any refresh or observation cycle runs.
 	useEffect(() => {
@@ -1849,7 +2220,6 @@ export function App({
 		replaceTickets();
 		replaceConsultations();
 	}, [state, replaceTickets, replaceConsultations]);
-
 	// Repository choices are validated before the launcher presents them. A
 	// stale mapping stays hidden instead of letting an operator start in an
 	// unrelated checkout.
@@ -1873,7 +2243,6 @@ export function App({
 		// gets a fresh identity on every poll, and re-validating on each poll
 		// would spawn git calls for every repository per tick.
 	}, [commandRunner, homeDir, repositoryCatalogKey]);
-
 	// The selected Agent output refreshes at one-second cadence. Lifecycle
 	// polling remains owned by the shared observation coordinator.
 	useEffect(() => {
@@ -1931,7 +2300,6 @@ export function App({
 			clearInterval(timer);
 		};
 	}, [commandRunner, interaction, replaceConsultations, selectedConsultation, state, view]);
-
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
@@ -1962,7 +2330,6 @@ export function App({
 			coordinatorRef.current = undefined;
 		};
 	}, [state, sources, replaceTickets, replaceConsultations, clearWorkingMessage]);
-
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test
 	// must not race a poll.
@@ -1974,16 +2341,17 @@ export function App({
 			config: () => configRef.current,
 			dispatch: (intent) => runIntentRef.current(intent),
 			// The Close cleanup of an auto-ended cycle: the environment of the
-			// handoff the decision ends.
+			// handoff the decision ends. A cleanup that cannot remove the
+			// checkout leaves a leftover the ticket carries as a fact, so the
+			// operator sees it and has one action to end it (ADR 0012).
 			cleanup: (handoff) =>
-				closeHandoffEnvironment(
-					{
-						environment: handoff.environment,
-						tabId: handoff.tabId,
-						workspaceId: handoff.workspaceId,
-					},
-					commandRunner,
-				),
+				runCleanupRef.current(state, {
+					ticketIdentity: handoff.ticketIdentity,
+					handoffId: handoff.handoffAttemptId,
+					environment: handoff.environment,
+					tabId: handoff.tabId,
+					workspaceId: handoff.workspaceId,
+				}),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
@@ -2039,23 +2407,19 @@ export function App({
 		setWarningMessage,
 		clearOperationMessage,
 	]);
-
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;
 		setFocusedPane(pane);
 	}
-
 	function selectTicket(index: number) {
 		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
 		if (next === selectedIndexRef.current) return;
 		selectedIndexRef.current = next;
 		setSelectedIndex(next);
 	}
-
 	function moveList(delta: number) {
 		selectTicket(selectedIndexRef.current + delta);
 	}
-
 	function moveVertical(delta: number) {
 		if (viewRef.current === "consultations") {
 			if (focusedPaneRef.current === "detail") {
@@ -2077,40 +2441,55 @@ export function App({
 			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
 		else moveList(delta);
 	}
-
 	function movePage(direction: 1 | -1) {
 		if (focusedPaneRef.current === "detail")
 			detailRef.current?.movePage(direction === 1 ? "down" : "up");
 		else moveList(direction * listGeometry.visibleRows);
 	}
-
 	function moveEdge(edge: "start" | "end") {
 		if (focusedPaneRef.current === "detail") {
 			if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
 		} else selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
-
-	const panelTicket =
-		panel === null ||
-		panel.kind === "consultation-close" ||
-		panel.kind === "consultation-delete" ||
-		panel.kind === "consultation-force" ||
-		panel.kind === "consultation-safety"
-			? undefined
-			: ticketsRef.current.find((ticket) => ticket.identity === panel.identity);
-	const panelConsultation =
+	// The ticket panels are the closed set: the decision on a settled turn, the
+	// missing-agent choice, and the leftover environment. Everything that reads
+	// an open panel goes through this list, so a new consultation kind can
+	// never be taken for a ticket panel by falling through the exclusions.
+	const ticketPanel =
 		panel !== null &&
-		(panel.kind === "consultation-close" ||
-			panel.kind === "consultation-delete" ||
-			panel.kind === "consultation-force" ||
-			panel.kind === "consultation-safety")
+		(panel.kind === "decision" || panel.kind === "missing" || panel.kind === "leftover")
+			? panel
+			: null;
+	const panelTicket =
+		ticketPanel === null
+			? undefined
+			: ticketsRef.current.find((ticket) => ticket.identity === ticketPanel.identity);
+	const panelConsultation =
+		panel !== null && ticketPanel === null
 			? consultationsRef.current.find((item) => item.id === panel.identity)
 			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
 			: undefined;
+	/**
+	 * Whether the open ticket panel has nothing left to show.
+	 *
+	 * Each ticket panel kind says which fact of the ticket it is drawn from,
+	 * and that fact is what can run out from under the modal: the decision the
+	 * observation takes, the leftover environment a clear or a Close cleanup
+	 * ends, the ticket that leaves the projection. A panel that is not drawn
+	 * must not keep holding the keys the ticket panels swallow.
+	 */
+	const panelHasNothingToShow =
+		ticketPanel !== null &&
+		(panelTicket === undefined ||
+			(ticketPanel.kind === "decision" && decision === undefined) ||
+			(ticketPanel.kind === "leftover" && panelTicket.leftover === null));
+	useEffect(() => {
+		if (panelHasNothingToShow) setPanel(null);
+	}, [panelHasNothingToShow]);
 	const emptyMessage =
 		state === undefined
 			? undefined
@@ -2381,7 +2760,9 @@ export function App({
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
-				thinkingDefaults,
+				profiles,
+				modelList,
+				onAgentChange: requestModelList,
 				initial: override,
 				context: ticketContext,
 				inputActive: utility === null,
@@ -2396,6 +2777,8 @@ export function App({
 				},
 				onCancel: () => setOverride(null),
 			}),
+		// Each ticket panel kind renders its own modal: a leftover panel is neither
+		// a decision nor a missing-agent choice, and must not fall through to one.
 		panel !== null &&
 			panelTicket !== undefined &&
 			(panel.kind === "decision" && decision !== undefined
@@ -2414,26 +2797,28 @@ export function App({
 						message: visibleMessage,
 						onEmergencyExit: () => renderer.destroy(),
 					})
-				: createElement(MissingModal, {
-						title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
-						bodyLines: [
-							"The agent's pane is not in herdr's agent list.",
-							`Handoffs: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
-						],
-						actions: [
-							{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
-							{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
-						],
-						onAction: (key) => runMissingAction(panelTicket, key),
-						onCancel: () => setPanel(null),
-						context: ticketContext,
-						inputActive: utility === null,
-						onHelp: () => openGuide("missing-modal"),
-						onMessage: () => openMessage("missing-modal"),
-						onUnavailable: setWarningMessage,
-						message: visibleMessage,
-						onEmergencyExit: () => renderer.destroy(),
-					})),
+				: panel.kind === "leftover" && panelTicket.leftover !== null
+					? createLeftoverPanel(panelTicket)
+					: createElement(MissingModal, {
+							title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
+							bodyLines: [
+								"The agent's pane is not in herdr's agent list.",
+								`Handoffs: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
+							],
+							actions: [
+								{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
+								{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
+							],
+							onAction: (key) => runMissingAction(panelTicket, key),
+							onCancel: () => setPanel(null),
+							context: ticketContext,
+							inputActive: utility === null,
+							onHelp: () => openGuide("missing-modal"),
+							onMessage: () => openMessage("missing-modal"),
+							onUnavailable: setWarningMessage,
+							message: visibleMessage,
+							onEmergencyExit: () => renderer.destroy(),
+						})),
 		panel !== null &&
 			panel.kind === "consultation-safety" &&
 			panelConsultation !== undefined &&
@@ -2586,6 +2971,7 @@ export function App({
 }
 
 /**
+
  * What one close operation may take down, judged per level:
  *
  * - workspaceExclusive: no other tab and no other pane anywhere, so the
@@ -2654,6 +3040,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
+
  * The states a handoff origin may still start from when its turn comes.
  *
  * The claim passes in the claim's state, and the queue waits on the seat.
@@ -2668,5 +3055,112 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 			return state === "awaiting";
 		case "restart":
 			return state === "handed-off" || state === "running";
+	}
+}
+
+/**
+
+ * The handle a clear would end that the ticket's own live agent runs on.
+ *
+ * A cleanup reaches the environment its row names: a worktree removal closes a
+ * whole workspace with every agent in it, and a tab close ends the tab and the
+ * panes inside it. So a worktree leftover is refused when it names the live
+ * agent's workspace, and any leftover is refused when it names the live
+ * agent's own tab or pane - the shape a reclaimed agent leaves behind, where
+ * the closed handoff and the running one name the same handles (ADR 0011).
+ * The answer carries the word the operator uses for what was refused.
+ */
+function liveHandleAtRisk(
+	leftovers: readonly LeftoverEnvironment[],
+	live: { paneId: string | null; tabId: string | null; workspaceId: string | null },
+): { text: string; what: string } | null {
+	for (const leftover of leftovers) {
+		if (
+			leftover.environment === "worktree" &&
+			live.workspaceId !== null &&
+			leftover.workspaceId === live.workspaceId
+		)
+			return { text: `herdr workspace ${live.workspaceId}`, what: "workspace" };
+		if (live.tabId !== null && leftover.tabId === live.tabId)
+			return { text: `herdr tab ${live.tabId}`, what: "tab" };
+		if (live.paneId !== null && leftover.paneId === live.paneId)
+			return { text: `herdr pane ${live.paneId}`, what: "pane" };
+	}
+	return null;
+}
+
+/**
+
+ * The Close cleanup of one handoff, with its durable outcome.
+ *
+ * A cleanup that fails leaves the herdr environment alive: the workspace, its
+ * pane, and the agent in it. That is a fact on the ticket, not only a message
+ * line that fades. A cleanup that succeeds clears the leftovers it reached:
+ * the whole workspace it closed, the single tab it closed, or - when it ran no
+ * command at all - only the fact of its own handoff (ADR 0012).
+ *
+ * Every path that runs the cleanup goes through here: the operator's Close, an
+ * Abandon, the automatic close in the observation loop, and the clear action's
+ * retry, so the record and the clear cannot drift apart. `force` reaches herdr
+ * only when the operator chose that row.
+ *
+ * Returns herdr's readable failure, or undefined when the environment is gone.
+ * A cleanup that could not run at all is a failure to record too, so a caller
+ * that only reports the answer never has to guard a throw of its own.
+ */
+async function settleCloseCleanup(
+	state: FactoryState,
+	runner: CommandRunner,
+	handoff: {
+		ticketIdentity: string;
+		handoffId: string;
+		environment: EnvironmentKind;
+		tabId: string | null;
+		workspaceId: string | null;
+	},
+	options: CloseCleanupOptions = {},
+): Promise<string | undefined> {
+	try {
+		const failure = await closeHandoffEnvironment(
+			{
+				environment: handoff.environment,
+				tabId: handoff.tabId,
+				workspaceId: handoff.workspaceId,
+			},
+			runner,
+			options,
+		);
+		if (failure === undefined) {
+			// The cleanup reached as far as herdr let it: the whole workspace it
+			// closed, the one tab it closed, or nothing at all. Facts outside
+			// that reach stand, so a row whose cleanup ran no command cannot
+			// resolve the fact of another row whose environment is still alive.
+			const reach = closeCleanupReach(handoff);
+			state.clearLeftoverEnvironments(
+				handoff.ticketIdentity,
+				reach.scope === "workspace"
+					? { workspaceId: reach.workspaceId }
+					: reach.scope === "tab"
+						? { tabId: reach.tabId }
+						: { handoffId: handoff.handoffId },
+			);
+			return undefined;
+		}
+		state.recordLeftoverEnvironment({
+			ticketIdentity: handoff.ticketIdentity,
+			handoffId: handoff.handoffId,
+			reason: failure,
+		});
+		return failure;
+	} catch (error) {
+		// The cleanup never reached an answer: the environment still stands,
+		// and the ticket still carries the fact of it.
+		const reason = `the close cleanup did not run: ${errorMessage(error)}`;
+		state.recordLeftoverEnvironment({
+			ticketIdentity: handoff.ticketIdentity,
+			handoffId: handoff.handoffId,
+			reason,
+		});
+		return reason;
 	}
 }

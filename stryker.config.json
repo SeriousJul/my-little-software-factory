@@ -4,5 +4,9 @@
 	"mutate": ["src/**/*.ts"],
 	"coverageAnalysis": "perTest",
 	"reporters": ["clear-text", "html", "json"],
-	"tempDirName": ".stryker-tmp"
+	"tempDirName": ".stryker-tmp",
+	"cleanTempDir": "always",
+	"vitest": {
+		"related": false
+	}
 }

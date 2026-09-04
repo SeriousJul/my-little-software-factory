@@ -20,7 +20,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
+import type {
+	CommandOptions,
+	CommandResult,
+	CommandRunner,
+	ModelListResult,
+} from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
 	awaitFrame,
@@ -95,6 +100,7 @@ const selectedTicket: Ticket = {
 	repositoryRef: repository,
 	state: "open",
 	handoff: null,
+	workCycle: 1,
 	handoffCount: 0,
 	lastCompletion: null,
 	description: "Review the authentication design.",
@@ -108,6 +114,7 @@ const selectedTicket: Ticket = {
 	suggestedTaskType: "implement",
 	actionable: true,
 	handoffRecoveryRequired: false,
+	leftover: null,
 };
 
 function configFor(): FactoryConfig {
@@ -267,6 +274,10 @@ class ConsultationRunner implements CommandRunner {
 
 	commands(): string[] {
 		return this.inner.commands();
+	}
+
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
 	}
 
 	async run(
@@ -752,6 +763,54 @@ describe("Consultation responses through the UI", () => {
 				WIDTH,
 				30,
 				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the settled Agent output stays visible until an accepted response opens the next turn", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, RESPONSE_ID);
+		state.settleConsultationTurn(RESPONSE_ID, null, "the design holds", "idle");
+		const paneId = `pane-${RESPONSE_ID.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubPaneReadText(inner, paneId, "Agent: the design holds");
+		const runner = new ConsultationRunner(inner, agentListJson([{ pane: paneId, status: "idle" }]));
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "v", "the consultations view", (f) =>
+						detailPaneText(f).includes("State: awaiting-response"),
+					);
+					// The Agent's last message stays readable until the operator answers.
+					const settled = await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("Agent: the design holds"),
+						"the settled Agent output",
+					);
+					expect(detailPaneText(settled)).toContain("Agent view:");
+					expect(detailPaneText(settled)).toContain("the design holds");
+					expect(frameText(settled)).toContain("Enter respond");
+
+					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					setup.mockInput.typeText("then ship it");
+					await pressEnter(setup, "the accepted response to start a new turn", (f) =>
+						f.includes("State: working"),
+					);
+					await waitForCommands(
+						runner,
+						[`herdr agent prompt ${AGENT} then ship it`],
+						"the operator's response",
+					);
+					expect(state.pendingConsultationResponse(RESPONSE_ID)).toBeNull();
+					const turns = state.consultationTurns(RESPONSE_ID);
+					expect(turns).toHaveLength(2);
+					expect(turns.at(-1)?.input).toBe("then ship it");
+				},
+				WIDTH,
+				30,
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
 			);
 		} finally {
 			state.close();
@@ -1402,6 +1461,75 @@ describe("Consultation live-worktree launch through the UI", () => {
 				WIDTH,
 				30,
 				{ state, runner, config: liveConfigFor(), home },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("an unfit Model fails the launch before it resolves the Repository", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const inner = new FakeRunner();
+		stubLiveCheckout(inner, false);
+		stubLiveLaunchExisting(inner);
+		// pi reports a list the Consultation type's Model is not in.
+		inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const config: FactoryConfig = {
+			...liveConfigFor(),
+			consultationTypes: {
+				"grill-live": {
+					agent: "pi",
+					environment: "live-worktree",
+					model: "openai/gpt-4o",
+					template: "/grill {input}",
+				},
+			},
+		};
+		// The reads that resolve one Repository: the launcher makes them to verify
+		// its option, and a launch route resolves the Repository the same way, which
+		// clones a checkout that is missing.
+		const resolveReads = () =>
+			runner.commands().filter((command) => command.includes("rev-parse --git-dir")).length;
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "c", "the launcher to open", (f) =>
+						f.includes("Consultation launcher"),
+					);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					const readsBeforeLaunch = resolveReads();
+					setup.mockInput.pressTab();
+					setup.mockInput.pressTab();
+					setup.mockInput.typeText("review auth");
+					const failed = await pressEnter(setup, "the fit check to refuse the launch", (f) =>
+						f.includes("State: failed"),
+					);
+					expect(frameText(failed)).toContain('has no model "openai/gpt-4o"');
+					// The check runs ahead of the route's first external change: a
+					// live launch resolves its Repository, and a resolve clones a
+					// missing checkout, records the path, and then drives Herdr.
+					// None of that happened behind an unfit setting.
+					const joined = runner.commands().join("\n");
+					expect(resolveReads()).toBe(readsBeforeLaunch);
+					expect(joined).not.toContain("git clone");
+					expect(joined).not.toContain("herdr workspace");
+					expect(joined).not.toContain("herdr tab create");
+					expect(joined).not.toContain("agent start");
+					expect(joined).not.toContain("agent prompt");
+					// One Consultation start asks the Agent's CLI once, not once per step.
+					expect(inner.modelListCalls).toEqual(["pi"]);
+					const [consultation] = state.consultations("open");
+					expect(consultation.state).toBe("failed");
+					expect(consultation.paneId).toBeNull();
+				},
+				WIDTH,
+				30,
+				{ state, runner, config, home },
 			);
 		} finally {
 			state.close();

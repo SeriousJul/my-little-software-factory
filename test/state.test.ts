@@ -35,6 +35,52 @@ function textLog(message: string): TurnLogEntry[] {
 	return message.split("\n").map((text) => ({ kind: "text", text }));
 }
 
+/** A persisted settled trace that corrupt-cell tests can alter outside the store. */
+function storedTrace(message = "fallback first\nfallback last"): {
+	path: string;
+	identity: string;
+} {
+	const path = statePath();
+	const state = openFactoryState(path);
+	state.initializeSources([sourceA]);
+	state.applyFetch(sourceA, success([fetched()]));
+	const [ticket] = state.visibleTickets([], "implement");
+	const claim = state.claimHandoff(ticket.identity, choice, "open");
+	if (!claim.ok) throw new Error(claim.reason);
+	state.settleHandoff(claim.claim.attemptId, true);
+	state.settleTurn({
+		ticketIdentity: ticket.identity,
+		handoffId: claim.claim.attemptId,
+		taskType: "implement",
+		agentType: "pi",
+		message,
+		turnLog: [{ kind: "text", text: "stored valid entry" }],
+		completedAt: "2026-08-31T11:00:00Z",
+	});
+	state.close();
+	return { path, identity: ticket.identity };
+}
+
+function replaceStoredLog(path: string, identity: string, cell: string | null): void {
+	const db = new DatabaseSync(path);
+	db.prepare("UPDATE completion_traces SET turn_log_json = ? WHERE ticket_identity = ?").run(
+		cell,
+		identity,
+	);
+	db.close();
+}
+
+function readStoredLog(path: string, identity: string): TurnLogEntry[] {
+	const state = openFactoryState(path);
+	try {
+		const trace = state.lastCompletion(identity);
+		if (trace === null) throw new Error("stored trace disappeared");
+		return trace.turnLog;
+	} finally {
+		state.close();
+	}
+}
+
 function fetched(identity = "github:github.com:I_5"): FetchedTicket {
 	return {
 		identity,
@@ -574,6 +620,13 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 		`);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN turn_log_json").run();
+		// The leftover columns belong to v6: a v2 record never heard of them.
+		db.exec(
+			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
+				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
+				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
+		);
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
 
@@ -733,14 +786,18 @@ describe("factory SQLite state", () => {
 	});
 
 	/** A ticket whose one work cycle ran, settled, and closed. */
-	function closedCycle(state: ReturnType<typeof openFactoryState>, identity: string): string {
-		const claim = state.claimHandoff(identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+	function closedCycle(
+		state: ReturnType<typeof openFactoryState>,
+		identity: string,
+		handles: { paneId: string; tabId: string; workspaceId: string } = {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
-		});
+		},
+	): string {
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, handles);
 		state.settleTurn({
 			ticketIdentity: identity,
 			handoffId: claim.claim.attemptId,
@@ -839,6 +896,209 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("records a failed Close cleanup as a leftover environment of the handoff", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const handoffId = closedCycle(state, identity);
+
+		expect(
+			state.recordLeftoverEnvironment({
+				ticketIdentity: identity,
+				handoffId,
+				reason:
+					"fatal: the worktree contains modified or untracked files, use --force to delete it",
+			}),
+		).toEqual({
+			handoffId,
+			environment: "worktree",
+			workspaceId: "ws-1",
+			tabId: "tab-1",
+			paneId: "pane-1",
+			reason: "fatal: the worktree contains modified or untracked files, use --force to delete it",
+			at: expect.any(String),
+		});
+		// The fact rides on the ticket, so the detail pane can name it.
+		expect(state.visibleTickets([], "implement")[0]).toEqual(
+			expect.objectContaining({
+				state: "open",
+				workCycle: 2,
+				leftover: expect.objectContaining({ handoffId, workspaceId: "ws-1", paneId: "pane-1" }),
+			}),
+		);
+
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(1);
+		expect(state.leftoverEnvironment(identity)).toBe(null);
+		expect(state.visibleTickets([], "implement")[0].leftover).toBe(null);
+		// The handoff row keeps why it was left over: the record survives the clear.
+		expect(
+			state.leftoverEnvironments(identity).every((leftover) => leftover.handoffId !== handoffId),
+		).toBe(true);
+		state.close();
+	});
+
+	test("a leftover named by a herdr collision lands on the handoff that holds the name", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		closedCycle(state, identity);
+		// A second closed cycle: the ticket now holds two environments, and the
+		// collision names the older one by its pane.
+		closedCycle(state, identity);
+
+		const recorded = state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			paneId: "pane-1",
+			reason: "agent name persist-source-facts is already used",
+		});
+		expect(recorded?.paneId).toBe("pane-1");
+		expect(state.leftoverEnvironments(identity)).toHaveLength(1);
+		// A ticket with no handoff to carry the fact records nothing.
+		expect(
+			state.recordLeftoverEnvironment({
+				ticketIdentity: "github:github.com:I_9",
+				reason: "nothing",
+			}),
+		).toBe(null);
+		// With no handle to go on, the ticket's latest handoff is the one whose
+		// cycle closed.
+		const latest = state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			reason: "the close cleanup did not run",
+		});
+		expect(latest?.paneId).toBe("pane-1");
+		expect(state.handoffHandles(identity)).toEqual({
+			paneIds: ["pane-1", "pane-1"],
+			workspaceIds: ["ws-1", "ws-1"],
+		});
+		state.close();
+	});
+
+	test("a clearing names only the environment it ended", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const first = closedCycle(state, identity);
+		// The second cycle lived in the same workspace on another tab: the
+		// shape a reclaimed agent leaves, where one workspace holds the tabs of
+		// several cycles (ADR 0011).
+		const second = closedCycle(state, identity, {
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-1",
+		});
+		const record = () => {
+			state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: first, reason: "a" });
+			state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: second, reason: "b" });
+			expect(state.leftoverEnvironments(identity)).toHaveLength(2);
+		};
+
+		// A worktree removal closes the workspace, so it ends both facts: both
+		// handoffs ran in the one workspace herdr could not remove.
+		record();
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(2);
+		expect(state.leftoverEnvironments(identity)).toEqual([]);
+
+		// A tab close reaches one tab with the panes inside it, not the
+		// workspace around it: the fact of the other tab stands.
+		record();
+		expect(state.clearLeftoverEnvironments(identity, { tabId: "tab-1" })).toBe(1);
+		expect(state.leftoverEnvironments(identity)).toEqual([
+			expect.objectContaining({ handoffId: second }),
+		]);
+
+		// A cleanup that ran no command ends nothing herdr can see, so it
+		// resolves only the fact of its own handoff row.
+		record();
+		expect(state.clearLeftoverEnvironments(identity, { handoffId: first })).toBe(1);
+		expect(state.leftoverEnvironments(identity)).toEqual([
+			expect.objectContaining({ handoffId: second }),
+		]);
+
+		// A handle that names no fact clears nothing, so a stale answer cannot
+		// resolve a leftover the operator still has to end.
+		expect(state.clearLeftoverEnvironments(identity, { tabId: "tab-9" })).toBe(0);
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-9" })).toBe(0);
+		expect(state.leftoverEnvironments(identity)).toHaveLength(1);
+		state.close();
+	});
+
+	test("a handoff records the herdr name its agent started under", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			// The stable name was still held by the ticket's own leftover agent.
+			agentName: "persist-source-facts-c2",
+		});
+		// The completion trace of this handoff's turn names the agent herdr
+		// actually runs, not the name the ticket would have wanted.
+		expect(state.agentNameForTicket(identity)).toBe("persist-source-facts-c2");
+		state.close();
+	});
+
+	test("a handoff that stored no herdr name reads the ticket's stable one", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-1" });
+		// A legacy row, and every clean handoff of a free name: the naming
+		// rule gives the same answer herdr took.
+		expect(state.agentNameForTicket(identity)).toBe("persist-source-facts");
+		state.close();
+	});
+
+	test("a failed clear leaves the leftover standing with its new reason", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		const handoffId = claim.claim.attemptId;
+		state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId,
+			reason: "the worktree is dirty",
+			at: "2026-09-02T10:00:00.000Z",
+		});
+		expect(state.clearLeftoverEnvironments(identity, { workspaceId: "ws-1" })).toBe(1);
+		expect(state.leftoverEnvironment(identity)).toBe(null);
+		// The clear's own cleanup failed: the fact the operator can act on
+		// stands again, with the reason herdr gave this time.
+		state.recordLeftoverEnvironment({
+			ticketIdentity: identity,
+			handoffId,
+			reason: "herdr refused the removal again",
+			at: "2026-09-02T10:05:00.000Z",
+		});
+		expect(state.leftoverEnvironment(identity)).toEqual(
+			expect.objectContaining({
+				handoffId,
+				reason: "herdr refused the removal again",
+				at: "2026-09-02T10:05:00.000Z",
+			}),
+		);
+		state.close();
+	});
+
 	test("permits only one live lease for a database", () => {
 		const path = statePath();
 		const first = openFactoryState(path);
@@ -848,5 +1108,84 @@ describe("factory SQLite state", () => {
 		first.close();
 		second.acquireLease();
 		second.close();
+	});
+});
+
+describe("stored completion trace degradation", () => {
+	const fallback = [
+		{ kind: "text", text: "fallback first" },
+		{ kind: "text", text: "fallback last" },
+	];
+
+	test("a null turn-log cell degrades to one entry per last-message line", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, null);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("invalid turn-log JSON degrades to the last-message fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, "not json");
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("a turn-log cell that parses to a non-list degrades to the fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, JSON.stringify({ kind: "text", text: "wrong" }));
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("skips a non-record stored entry while keeping readable entries", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify(["bad", { kind: "text", text: "kept" }]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("skips an unknown stored entry kind while keeping readable entries", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify([
+				{ kind: "future", payload: "skip" },
+				{ kind: "text", text: "kept" },
+			]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("skips a stored tool entry missing a required field", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify([
+				{ kind: "tool", name: "bash", target: "npm test" },
+				{ kind: "text", text: "kept" },
+			]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([{ kind: "text", text: "kept" }]);
+	});
+
+	test("a stored log without valid entries degrades to the last-message fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(trace.path, trace.identity, JSON.stringify([null, { kind: "future" }]));
+		expect(readStoredLog(trace.path, trace.identity)).toEqual(fallback);
+	});
+
+	test("a stored log with a valid entry wins over the last-message fallback", () => {
+		const trace = storedTrace();
+		replaceStoredLog(
+			trace.path,
+			trace.identity,
+			JSON.stringify([{ kind: "text", text: "stored wins" }]),
+		);
+		expect(readStoredLog(trace.path, trace.identity)).toEqual([
+			{ kind: "text", text: "stored wins" },
+		]);
 	});
 });

@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import type { ScrollConfig } from "../config.ts";
-import type { Ticket } from "../domain/ticket.ts";
+import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
@@ -48,6 +48,23 @@ export function detailLines(
 		taskTypeColor(presentation),
 	);
 	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, COLORS.text);
+	// A leftover environment is what a closed cycle still has running in
+	// herdr. The detail names it, says when the control plane learned of it,
+	// and says what the operator can do, so the ticket itself carries the
+	// fact instead of a Message line that fades.
+	const leftover = ticket.leftover;
+	if (leftover !== null) {
+		const at = leftover.at === "" ? "" : ` ${leftover.at.slice(0, 16).replace("T", " ")}`;
+		// The warning color is the block's indent: the wrap drops leading
+		// spaces, and a dim run would read on as one flat line with the rest
+		// of the detail. The block is one warning the operator can act on.
+		pushWrapped(
+			`Leftover: ${leftoverWhere(leftover)} is still open for this ticket`,
+			COLORS.statusWarning,
+		);
+		pushWrapped(`since${at}: ${leftover.reason}`, COLORS.statusWarning);
+		pushWrapped("press w to clear it", COLORS.statusWarning);
+	}
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;
 		// The date is the first minute of the stored completion time; the
@@ -79,6 +96,21 @@ export function detailLines(
 	lines.push({ text: " ", fg: COLORS.dim });
 	pushWrapped(ticket.description, COLORS.dim);
 	return lines.map((line) => ({ text: truncateToWidth(line.text, usableCols), fg: line.fg }));
+}
+
+/**
+ * Where a leftover environment still lives, in the handles herdr gave it.
+ *
+ * The workspace is what the operator looks for in herdr; the pane is what
+ * still holds the ticket's agent name, so a live one is worth naming.
+ */
+export function leftoverWhere(leftover: LeftoverEnvironment): string {
+	const handles: string[] = [];
+	if (leftover.workspaceId !== null) handles.push(`herdr workspace ${leftover.workspaceId}`);
+	if (leftover.tabId !== null) handles.push(`tab ${leftover.tabId}`);
+	if (leftover.paneId !== null) handles.push(`pane ${leftover.paneId}`);
+	if (handles.length > 0) return handles.join(", ");
+	return `the ${leftover.environment} environment of its last handoff`;
 }
 
 /** The pause after which a wheel burst starts with a precise base step. */

@@ -52,6 +52,21 @@ export const messageRowOf = (frame: string) => rowsOf(frame).at(-2) ?? "";
 /** The permanent Action bar is the last terminal row. */
 export const actionBarRowOf = (frame: string) => rowsOf(frame).at(-1) ?? "";
 /**
+ * The content rows of a full-screen overlay, in the order the operator reads them.
+ *
+ * An overlay draws one bordered box, so a content row is a terminal row that
+ * holds the box's left and right border. The border rows, the box's blank
+ * spacers, and the screen around the box drop out. The key column's padding
+ * collapses to one space, because the row text is wrapped on word boundaries
+ * before it reaches the screen.
+ */
+export const overlayRows = (frame: string): string[] =>
+	rowsOf(frame)
+		.map((row) => /^\s*│(.*)│\s*$/.exec(row)?.[1])
+		.filter((row): row is string => row !== undefined)
+		.map((row) => row.trim().replace(/\s+/g, " "))
+		.filter((row) => row !== "");
+/**
  * The list pane's half of a terminal row, with its right border.
  *
  * A terminal row interleaves the two panes row by row, so an exact check
