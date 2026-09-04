@@ -92,6 +92,7 @@ describe("contextual controls", () => {
 				"r refresh",
 				"? help",
 				"q quit",
+				"Live view: j/k scroll, pgup/pgdn page, home/end, enter goto, esc close",
 				"Esc closes this guide. F2 or m opens the full Message view.",
 			]);
 		} finally {
@@ -156,6 +157,21 @@ describe("contextual controls", () => {
 			const frame = frameText(setup.captureCharFrame());
 			expect(frame).toContain("warning:");
 			expect(frame).toContain(warning);
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("the Action bar names the Live view for an in-flight selection", async () => {
+		const setup = await testRender(
+			createElement(ActionBar, { context: { ...ticketContext, selectedInFlight: true } }),
+			{ width: 80, height: 4 },
+		);
+		try {
+			await setup.flush();
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain("Enter live");
+			expect(frame).not.toContain("hand off");
 		} finally {
 			await setup.renderer.destroy();
 		}
