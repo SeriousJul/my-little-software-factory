@@ -150,18 +150,36 @@ const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
 /** What the settled meaning of Enter does, for the guide's current section. */
 const DECIDE_NOTE = "opens the decision on a settled Ticket";
 
-/** The Handoff and Override eligibility rules, with one source for each reason. */
-const handoffEligibility = (context: ControlContext): ControlAvailability => {
-	if (context.handoffActive) return unavailable("a Handoff is active");
-	const ticket = context.selectedTicket;
-	if (ticket === undefined) return unavailable("no Ticket is selected");
-	if (ticket.state !== "open") return unavailable("only an open Ticket can be handed off");
-	if (ticket.handoffRecoveryRequired)
-		return unavailable("Handoff recovery is required before another handoff");
-	if (!ticket.actionable)
-		return unavailable("Ticket is not actionable because source data is stale, removed, or absent");
-	return available();
-};
+/** The panel's own modes: while one is open, the list's selection is inert. */
+const panelMode = (mode: InteractionMode) =>
+	mode === "override-list" || mode === "override-model" || mode === "override-text";
+
+/**
+ * The Handoff and Override eligibility rules, with one source for each
+ * reason. An Override on a settled Ticket misses its Handoff row by one
+ * step, so it names that step instead of the state rule. In the panel's own
+ * modes, Enter confirms the panel's ticket, not the list's selection, so the
+ * state rule belongs to the claim: it re-checks the panel's ticket when the
+ * confirm lands.
+ */
+const handoffEligibility =
+	(awaitingReason?: string) =>
+	(context: ControlContext): ControlAvailability => {
+		if (context.handoffActive) return unavailable("a Handoff is active");
+		if (panelMode(context.mode)) return available();
+		const ticket = context.selectedTicket;
+		if (ticket === undefined) return unavailable("no Ticket is selected");
+		if (ticket.state === "awaiting" && awaitingReason !== undefined)
+			return unavailable(awaitingReason);
+		if (ticket.state !== "open") return unavailable("only an open Ticket can be handed off");
+		if (ticket.handoffRecoveryRequired)
+			return unavailable("Handoff recovery is required before another handoff");
+		if (!ticket.actionable)
+			return unavailable(
+				"Ticket is not actionable because source data is stale, removed, or absent",
+			);
+		return available();
+	};
 
 /** A settled Ticket uses Enter to decide its completed work, not to hand it off. */
 const completionEligibility = (context: ControlContext): ControlAvailability => {
@@ -335,7 +353,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 70,
 		modes: [...baseModes, ...overrideModes],
-		availability: handoffEligibility,
+		availability: handoffEligibility(),
 	},
 	{
 		id: "decide-completion",
@@ -384,7 +402,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 65,
 		modes: [...baseModes],
-		availability: handoffEligibility,
+		availability: handoffEligibility(
+			"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
+		),
 	},
 	{
 		id: "refresh",

@@ -1014,7 +1014,9 @@ describe("the decision modal", () => {
 				const frame = await press(setup, "e", "the hint on the status line", (f) =>
 					frameText(f).includes("press Enter, then e on a Handoff row"),
 				);
-				expect(frame).not.toContain("Override");
+				// The bar carries the e Override hint with its reason; the panel's
+				// box title is the open signal.
+				expect(frame).not.toContain("┌─Override");
 				expect(app.state.ticketState(identity)).toBe("awaiting");
 				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
 			},

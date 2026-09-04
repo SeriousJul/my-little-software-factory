@@ -1026,12 +1026,15 @@ describe("the override panel", () => {
 				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
 				setup.mockInput.pressKey("HOME");
 				for (const _ of "task-model") setup.mockInput.pressKey("DELETE");
+				// The list query the panel opens with has no stub: the empty
+				// field names the failed query, the merged panel's placeholder
+				// carries the cause.
 				const cleared = await awaitFrame(
 					setup,
-					(frame) => frameText(frame).includes("Model (empty)"),
+					(frame) => frameText(frame).includes("Model (empty - query failed)"),
 					"the cleared Model value",
 				);
-				expect(frameText(cleared)).toContain("Model (empty)");
+				expect(frameText(cleared)).toContain("Model (empty - query failed)");
 				await pressEnterToHandoff(setup);
 
 				const start = runner.calls.find(
@@ -1674,7 +1677,7 @@ describe("the override panel", () => {
 					(f) => rowWith(f, "Context").includes("0"),
 					"the row to hold the zero",
 				);
-				expect(rowWith(zero, "Context")).toContain("Context 0");
+				expect(rowWith(zero, "Context")).toMatch(/Context\s+0/u);
 
 				setup.mockInput.pressEnter();
 				const failed = await awaitFrame(
