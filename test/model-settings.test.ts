@@ -147,14 +147,21 @@ describe("validateConfiguredModels", () => {
 		expect(await validateConfiguredModels(config, runner)).toEqual({ errors: [], warnings: [] });
 	});
 
-	test("a default model is not checked for an agent that maps no model setting", async () => {
+	test("a default model that resolves onto an agent that maps no model setting is an error", async () => {
+		// The loud rule stands at startup too: a value that cannot reach its
+		// resolved agent is a config error, not a value to drop quietly. No
+		// list exists to check against, so no query runs either.
 		const runner = new FakeRunner();
 		runner.setModelList("pi", []);
 		const config = configWith({}, {}, { defaultModel: "gpt-4o" });
 
-		expect(await validateConfiguredModels(config, runner)).toEqual({ errors: [], warnings: [] });
-		// No profile can resolve a model onto an agent that maps none, so no
-		// query runs at all.
+		expect(await validateConfiguredModels(config, runner)).toEqual({
+			errors: [
+				'config: default-model, resolved by task type "implement": agent "pilot" defines ' +
+					'no model setting, so "gpt-4o" cannot reach it',
+			],
+			warnings: [],
+		});
 		expect(runner.modelListCalls).toEqual([]);
 	});
 

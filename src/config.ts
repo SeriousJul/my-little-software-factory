@@ -11,6 +11,7 @@ import {
 	thinkingLevelList,
 	unsupportedThinkingLevel,
 } from "./domain/agent.ts";
+import { isTokenCount, TOKEN_COUNT_RULE, tokenCountDigits } from "./domain/settings.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
@@ -19,6 +20,8 @@ export interface AgentTypeConfig {
 	kind: string;
 	model?: string;
 	thinking?: string;
+	/** The template that carries a maximum context window to this agent. */
+	contextWindow?: string;
 	/**
 	 * The Thinking levels this Agent type maps, as a non-empty subset of the
 	 * standard set. An agent that maps thinking must declare it: the override
@@ -36,6 +39,13 @@ export interface TaskTypeConfig {
 	model?: string;
 	/** The thinking level of its handoffs when no explicit choice is made. Omitted leaves the setting to the agent. */
 	thinking?: ThinkingLevel;
+	/**
+	 * The maximum context window, in tokens, its handoffs start on: plain
+	 * digits, the same string the Handoff carries. Omitted leaves the room to
+	 * the agent, and there is no top-level default for it: one number cannot
+	 * fit every model.
+	 */
+	contextWindow?: string;
 	/** Settle turns of this type without an operator decision. */
 	autoClose: boolean;
 }
@@ -52,6 +62,8 @@ export interface ConsultationTypeConfig {
 	model?: string;
 	/** Optional thinking setting passed through the Agent type mapping. */
 	thinking?: ThinkingLevel;
+	/** Optional context window setting passed through the Agent type mapping. */
+	contextWindow?: string;
 }
 
 /** A semantic key used to leave Agent interaction mode. */
@@ -115,16 +127,17 @@ export interface ScrollConfig {
 
 export interface FactoryConfig {
 	defaultAgent: string;
-	defaultEnvironment: EnvironmentKind;
-	defaultTaskType: string;
 	/**
 	 * The model a handoff starts with when the task profile names none and the
-	 * operator overrides none (ADR 0009). Empty leaves the setting to the
-	 * agent. Startup checks it through every task profile that resolves it, so
-	 * a value one agent offers and another does not is still reported per
-	 * agent; the handoff fit check guards it again there.
+	 * operator overrides none (ADR 0009). Startup checks it through every task
+	 * profile that resolves it against the Model list the agent reports
+	 * (ADR 0010), and the handoff fit check guards it again there; a resolved
+	 * agent that maps no model template fails the handoff with a readable
+	 * reason instead of dropping the value.
 	 */
 	defaultModel?: string;
+	defaultEnvironment: EnvironmentKind;
+	defaultTaskType: string;
 	agents: Record<string, AgentTypeConfig>;
 	taskTypes: Record<string, TaskTypeConfig>;
 	/** Optional interactive Consultation patterns. Empty is valid. */
@@ -288,9 +301,9 @@ export function validateConfig(data: unknown): FactoryConfig {
 	}
 	const knownTop = new Set([
 		"default-agent",
+		"default-model",
 		"default-environment",
 		"default-task-type",
-		"default-model",
 		"agents",
 		"task-types",
 		"consultation-types",
@@ -355,9 +368,9 @@ export function validateConfig(data: unknown): FactoryConfig {
 	}
 	return {
 		defaultAgent,
+		...(defaultModel === undefined ? {} : { defaultModel }),
 		defaultEnvironment: defaultEnvironment as EnvironmentKind,
 		defaultTaskType,
-		...(defaultModel === undefined ? {} : { defaultModel }),
 		agents,
 		taskTypes,
 		consultationTypes,
@@ -413,9 +426,12 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 		const agent: AgentTypeConfig = { kind: stringField(raw, "kind", `agents.${name}`) };
 		const model = optionalStringField(raw, "model", `agents.${name}`);
 		const thinking = optionalStringField(raw, "thinking", `agents.${name}`);
+		const contextWindow = optionalStringField(raw, "context-window", `agents.${name}`);
 		if (model !== undefined) agent.model = settingTemplate(model, `agents.${name}.model`);
 		if (thinking !== undefined)
 			agent.thinking = settingTemplate(thinking, `agents.${name}.thinking`);
+		if (contextWindow !== undefined)
+			agent.contextWindow = settingTemplate(contextWindow, `agents.${name}.context-window`);
 		if ("thinking-values" in raw) {
 			agent.thinkingValues = validateThinkingValues(raw["thinking-values"], name);
 		}
@@ -432,7 +448,7 @@ function validateAgents(value: unknown): Record<string, AgentTypeConfig> {
 			);
 		}
 		for (const key of Object.keys(raw)) {
-			if (!new Set(["kind", "model", "thinking", "thinking-values"]).has(key)) {
+			if (!new Set(["kind", "model", "thinking", "thinking-values", "context-window"]).has(key)) {
 				throw new ConfigError(`config: agents.${name}: unknown key "${key}"`);
 			}
 		}
@@ -570,15 +586,24 @@ function validateTaskTypes(
 			agentConfig,
 			`${where}.thinking`,
 		);
+		// The profile's own agent is the one its context window must reach. An
+		// edge can reroute the handoff onto another agent later; that pair is
+		// caught at handoff time, the same way a model is.
+		const contextWindow = tokenCountField(raw, "context-window", where);
+		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
+			throw new ConfigError(
+				`config: ${where}.context-window: agent "${profileAgent}" does not define a context-window setting`,
+			);
 		const autoClose = booleanField(raw, "auto-close", false);
 		for (const key of Object.keys(raw))
-			if (!["template", "agent", "model", "thinking", "auto-close"].includes(key))
+			if (!["template", "agent", "model", "thinking", "context-window", "auto-close"].includes(key))
 				throw new ConfigError(`config: ${where}: unknown key "${key}"`);
 		out[name] = {
 			template,
 			...(agent === undefined ? {} : { agent }),
 			...(model === undefined ? {} : { model }),
 			...(thinking === undefined ? {} : { thinking }),
+			...(contextWindow === undefined ? {} : { contextWindow }),
 			autoClose,
 		};
 	}
@@ -627,7 +652,9 @@ function validateConsultationTypes(
 		if (!isRecord(raw))
 			throw new ConfigError(`config: consultation-types.${name}: must be a table`);
 		for (const key of Object.keys(raw))
-			if (!["agent", "environment", "template", "model", "thinking"].includes(key))
+			if (
+				!["agent", "environment", "template", "model", "thinking", "context-window"].includes(key)
+			)
 				throw new ConfigError(`config: consultation-types.${name}: unknown key "${key}"`);
 		const where = `consultation-types.${name}`;
 		const agent = stringField(raw, "agent", where);
@@ -650,12 +677,18 @@ function validateConsultationTypes(
 			agentConfig,
 			`${where}.thinking`,
 		);
+		const contextWindow = tokenCountField(raw, "context-window", where);
+		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
+			throw new ConfigError(
+				`${where}.context-window: agent "${agent}" does not define a context-window setting`,
+			);
 		out[name] = {
 			agent,
 			environment: environment as EnvironmentKind,
 			template,
 			...(model === undefined ? {} : { model }),
 			...(thinking === undefined ? {} : { thinking }),
+			...(contextWindow === undefined ? {} : { contextWindow }),
 		};
 	}
 	return out;
@@ -905,6 +938,27 @@ function validateTaskRules(value: unknown, taskTypes: Record<string, TaskTypeCon
 	});
 }
 
+/**
+ * A maximum context window: a positive whole token count, written in plain
+ * digits. A quoted digit string reads like the bare number, so the config
+ * writer's quoting never changes what a file says. There is no suffix
+ * parsing and no unit: `200k`, `272 000`, `0`, and a negative all fail.
+ */
+function tokenCountField(
+	record: Record<string, unknown>,
+	key: string,
+	where: string,
+): string | undefined {
+	const value = record[key];
+	if (value === undefined) return undefined;
+	const digits = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
+	if (!isTokenCount(digits))
+		throw new ConfigError(`config: ${where}.${key}: must be ${TOKEN_COUNT_RULE}`);
+	// The digits are the value: a file's count keeps one spelling, the same one
+	// the panel folds a typed count to.
+	return tokenCountDigits(digits);
+}
+
 function settingTemplate(template: string, where: string): string {
 	const placeholders = placeholderNames(template);
 	if (!placeholders.includes("value"))
@@ -1000,9 +1054,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function configToToml(config: FactoryConfig): string {
 	return stringify({
 		"default-agent": config.defaultAgent,
+		...(config.defaultModel === undefined ? {} : { "default-model": config.defaultModel }),
 		"default-environment": config.defaultEnvironment,
 		"default-task-type": config.defaultTaskType,
-		...(config.defaultModel === undefined ? {} : { "default-model": config.defaultModel }),
 		...(config.stateFile === undefined ? {} : { "state-file": config.stateFile }),
 		agents: Object.fromEntries(
 			Object.entries(config.agents).map(([name, agent]) => [
@@ -1011,6 +1065,7 @@ export function configToToml(config: FactoryConfig): string {
 					kind: agent.kind,
 					...(agent.model === undefined ? {} : { model: agent.model }),
 					...(agent.thinking === undefined ? {} : { thinking: agent.thinking }),
+					...(agent.contextWindow === undefined ? {} : { "context-window": agent.contextWindow }),
 					...(agent.thinkingValues === undefined
 						? {}
 						: { "thinking-values": agent.thinkingValues }),
@@ -1025,6 +1080,7 @@ export function configToToml(config: FactoryConfig): string {
 					...(task.agent === undefined ? {} : { agent: task.agent }),
 					...(task.model === undefined ? {} : { model: task.model }),
 					...(task.thinking === undefined ? {} : { thinking: task.thinking }),
+					...(task.contextWindow === undefined ? {} : { "context-window": task.contextWindow }),
 					...(task.autoClose ? { "auto-close": true } : {}),
 				},
 			]),
@@ -1038,6 +1094,9 @@ export function configToToml(config: FactoryConfig): string {
 					template: consultation.template,
 					...(consultation.model === undefined ? {} : { model: consultation.model }),
 					...(consultation.thinking === undefined ? {} : { thinking: consultation.thinking }),
+					...(consultation.contextWindow === undefined
+						? {}
+						: { "context-window": consultation.contextWindow }),
 				},
 			]),
 		),

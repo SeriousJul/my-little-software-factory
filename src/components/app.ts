@@ -1,5 +1,4 @@
 /**
-
  * The control plane shell: panes, refresh, selection, handoff, and the
  * herdr observation loop (ADR 0005, ADR 0006).
  *
@@ -58,6 +57,7 @@ import {
 	type NameCollision,
 	type OwnNameKnowledge,
 	renderConsultationPrompt,
+	resolveHandoffChoice,
 } from "../handoff.ts";
 import { consultationAgentName } from "../naming.ts";
 import {
@@ -78,12 +78,7 @@ import {
 	errorMessage,
 	supportsModelList,
 } from "../runner.ts";
-import {
-	resolveEnvironment,
-	resolveSettings,
-	type TaskProfileStart,
-	taskProfilesOf,
-} from "../setting-resolution.ts";
+import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
@@ -150,8 +145,53 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "leftover"; identity: string }; /**
+	| { kind: "leftover"; identity: string };
 
+/**
+ * The handoff waiting behind the override panel.
+ *
+ * The panel edits one Handoff's settings, wherever its choice came from, so
+ * it carries what the confirm step needs to claim the same handoff: which
+ * Ticket, and which Origin of its dispatch. Only the two routes the panel
+ * opens from appear here: an open Ticket's own handoff, and a workflow route
+ * the operator edited from its decision row. A Restart or an automatic route
+ * never opens the panel, so neither Origin reaches it. The prompt's previous
+ * message is not carried here: the confirm reads it from the Ticket it
+ * claims, so an edit can never send a message another Ticket left behind.
+ */
+interface PendingOverride {
+	ticketIdentity: string;
+	origin: "open" | "workflow";
+	choice: HandoffChoice;
+}
+
+export type AppKey =
+	| "j"
+	| "k"
+	| "h"
+	| "l"
+	| "q"
+	| "e"
+	| "r"
+	| "a"
+	| "c"
+	| "v"
+	| "t"
+	| "f"
+	| "x"
+	| "d"
+	| "w"
+	| "up"
+	| "down"
+	| "left"
+	| "right"
+	| "pageup"
+	| "pagedown"
+	| "home"
+	| "end"
+	| "?"
+	| "m";
+/**
  * The utility overlay open above the panes, if any. Overlays replace one
  * another. The ticket view and the ticket modals use the catalog's guide and
  * the Message view's captured fact, and the consultations view keeps the
@@ -260,7 +300,11 @@ export function App({
 	// of the same ticket resumes from it.
 	const detailScrollSlot = useRef<{ identity: string; top: number } | null>(null);
 	const [status, setStatus] = useState<StatusMessage | null>(null);
-	const [override, setOverride] = useState<HandoffChoice | null>(null);
+	// The handoff the override panel is editing: its ticket, where it came
+	// from, and the settings it resolves to before the operator changes them.
+	const [override, setOverride] = useState<PendingOverride | null>(null);
+	const overrideRef = useRef<PendingOverride | null>(null);
+	overrideRef.current = override;
 	const [utility, setUtility] = useState<Utility>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
@@ -292,6 +336,7 @@ export function App({
 			origin: HandoffOrigin;
 			claim: HandoffClaim;
 			previousMessage: string;
+			onStarted?: (started: DispatchResult) => void;
 		}[]
 	>([]);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
@@ -501,6 +546,7 @@ export function App({
 			{
 				model: agent.model !== undefined,
 				thinking: agent.thinking !== undefined,
+				contextWindow: agent.contextWindow !== undefined,
 				thinkingValues: agent.thinkingValues,
 			},
 		]),
@@ -554,17 +600,7 @@ export function App({
 		// panel prefills it, and Enter applies it (ADR 0009). The operator
 		// changes a row in the panel, or clears one to leave the setting to the
 		// agent.
-		const settings = resolveSettings({
-			config: configRef.current,
-			taskType: ticket.suggestedTaskType,
-		});
-		return baseChoice(
-			settings.agentType,
-			configRef.current.defaultEnvironment,
-			ticket.suggestedTaskType,
-			settings.model,
-			settings.thinking,
-		);
+		return resolveHandoffChoice(configRef.current, ticket.suggestedTaskType);
 	};
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
@@ -940,6 +976,12 @@ export function App({
 	 * claim has already moved the ticket, so only the external work waits.
 	 * When the in-flight handoff settles, the queue drains: the seat is
 	 * free, so the next claimed handoff starts.
+	 *
+	 * `onStarted` hears the one fact the claim cannot state: whether the
+	 * agent started. It fires once, and last, after the attempt settled and
+	 * after the handoff's own status line, so whoever asked for the route can
+	 * decide the turn it came from, and say so on the line. A caller that
+	 * records nothing on a start leaves it out.
 	 */
 	const runClaimedHandoff = (
 		ticket: Ticket,
@@ -947,10 +989,22 @@ export function App({
 		origin: HandoffOrigin,
 		claim: HandoffClaim,
 		previousMessage: string,
+		onStarted?: (started: DispatchResult) => void,
 	) => {
 		if (state === undefined) return;
+		// One report per handoff: the settle path and the error path both end
+		// in it, and a route's decision answers for exactly one start.
+		let reported = false;
+		const reportStarted = (started: DispatchResult): void => {
+			if (reported) return;
+			reported = true;
+			onStarted?.(started);
+		};
 		if (seatHeld()) {
-			queueRef.current = [...queueRef.current, { ticket, choice, origin, claim, previousMessage }];
+			queueRef.current = [
+				...queueRef.current,
+				{ ticket, choice, origin, claim, previousMessage, onStarted },
+			];
 			return;
 		}
 		inFlightRef.current = true;
@@ -998,24 +1052,14 @@ export function App({
 								agentName: outcome.agent.name,
 							},
 				);
-				// The manual route's decision lands here, on the settled turn's
-				// trace, and only when the routed handoff actually started:
-				// the agent's pane is live, so the ticket reads as handed-off
-				// where the agent is. A failed route leaves the trace pending,
-				// so Close and Goto keep working on the awaiting ticket.
-				if (outcome.status !== "failed" && origin === "workflow") {
-					const previousHandoffId = ticket.handoff?.attemptId ?? "";
-					if (previousHandoffId !== "") {
-						state.applyCompletionDecision({
-							ticketIdentity: ticket.identity,
-							handoffId: previousHandoffId,
-							decision: "handed-off",
-							decidedAt: new Date().toISOString(),
-						});
-					}
-				}
+				// The route's own decision is not taken here: whoever asked for
+				// the route hears the start below and records what its start
+				// means for the turn it came from.
 				replaceTickets();
 				await finishOutcome(outcome);
+				reportStarted(
+					outcome.status === "failed" ? { ok: false, reason: outcome.reason } : { ok: true },
+				);
 				inFlightRef.current = false;
 				drainCleanupQueue();
 			})
@@ -1023,6 +1067,7 @@ export function App({
 				state.settleHandoff(claim.attemptId, false, errorMessage(error));
 				replaceTickets();
 				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
+				reportStarted({ ok: false, reason: errorMessage(error) });
 				inFlightRef.current = false;
 				drainCleanupQueue();
 			});
@@ -1059,6 +1104,9 @@ export function App({
 						? `queued handoff for "${next.ticket.title}" was not run: the ticket no longer exists`
 						: `queued handoff for "${next.ticket.title}" was not run: the ticket is now ${currentState}`,
 				);
+				// The route the claim was for never started: the caller decides
+				// nothing on the turn it came from.
+				next.onStarted?.({ ok: false, reason: "the queued handoff was not run" });
 				continue;
 			}
 			// The fresh projection when the ticket is visible, else the claim's
@@ -1067,7 +1115,14 @@ export function App({
 				state
 					.visibleTickets(configRef.current.taskRules, configRef.current.defaultTaskType)
 					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
-			runClaimedHandoff(snapshot, next.choice, next.origin, next.claim, next.previousMessage);
+			runClaimedHandoff(
+				snapshot,
+				next.choice,
+				next.origin,
+				next.claim,
+				next.previousMessage,
+				next.onStarted,
+			);
 		}
 	};
 	/**
@@ -1088,7 +1143,14 @@ export function App({
 			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
 		const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
-		runClaimedHandoff(ticket, intent.choice, intent.origin, claim.claim, intent.previousMessage);
+		runClaimedHandoff(
+			ticket,
+			intent.choice,
+			intent.origin,
+			claim.claim,
+			intent.previousMessage,
+			intent.onStarted,
+		);
 		return Promise.resolve({ ok: true });
 	};
 	const runIntentRef = useRef(runIntent);
@@ -1097,7 +1159,7 @@ export function App({
 	// cleanup runs through this ref: the coordinator never holds a stale seat.
 	const runCleanupRef = useRef(runCleanupWithSeat);
 	runCleanupRef.current = runCleanupWithSeat;
-	const startHandoff = (choice: HandoffChoice) => {
+	const startHandoff = (ticket: Ticket, choice: HandoffChoice) => {
 		const availability = availabilityFor(
 			controlById("handoff"),
 			controlContextFor(currentBaseMode()),
@@ -1108,8 +1170,6 @@ export function App({
 			);
 			return;
 		}
-		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) return;
 		if (state !== undefined) {
 			const claim = state.claimHandoff(ticket.identity, choice, "open");
 			if (!claim.ok) {
@@ -1133,14 +1193,15 @@ export function App({
 						taskType: choice.taskType,
 						model: choice.model,
 						thinking: choice.thinking,
+						contextWindow: choice.contextWindow,
 						attemptId: "manual",
 						paneId: outcome.agent.paneId,
 						tabId: outcome.agent.tabId,
 						workspaceId: outcome.agent.workspaceId,
 					};
 					setTickets((all) => {
-						const next = all.map((candidate, index) =>
-							index === selectedIndexRef.current
+						const next = all.map((candidate) =>
+							candidate.identity === ticket.identity
 								? { ...candidate, state: "handed-off" as const, handoff }
 								: candidate,
 						);
@@ -1170,7 +1231,51 @@ export function App({
 		// list of the agent the panel starts on is fetched fresh, so provider
 		// auth the operator changed after startup shows up here.
 		requestModelList(choice.agentType);
-		setOverride(choice);
+		setOverride({
+			ticketIdentity: ticket.identity,
+			origin: "open",
+			choice,
+		});
+	};
+
+	/**
+	 * Start the handoff the override panel confirmed.
+	 *
+	 * The claim happens here, not when the panel opened: an operator who
+	 * presses Esc leaves the ticket exactly where it was, with no attempt
+	 * recorded.
+	 */
+	const confirmOverride = (choice: HandoffChoice) => {
+		const pending = overrideRef.current;
+		setOverride(null);
+		if (pending === null) return;
+		const ticket = ticketsRef.current.find(
+			(candidate) => candidate.identity === pending.ticketIdentity,
+		);
+		if (ticket === undefined) {
+			setWarningMessage("the ticket no longer exists");
+			return;
+		}
+		if (pending.origin === "workflow") {
+			runRouteHandoff(ticket, choice);
+			return;
+		}
+		startHandoff(ticket, choice);
+	};
+
+	/**
+	 * Leave the override panel with no handoff.
+	 *
+	 * A route edit came out of the decision modal, so Esc returns there: only
+	 * the edit is dropped, the turn is still undecided. An open-ticket edit
+	 * returns to the list, where it started.
+	 */
+	const cancelOverride = () => {
+		const pending = overrideRef.current;
+		setOverride(null);
+		if (pending?.origin === "workflow") {
+			setPanel({ kind: "decision", identity: pending.ticketIdentity });
+		}
 	};
 	/**
 	 * Toggle auto-handoff for this session. The config's value is the
@@ -1185,10 +1290,12 @@ export function App({
 	// Goto, then one handoff row per outgoing workflow edge the completed
 	// task type has, in config order: every edge stays reachable, and an
 	// edge naming several targets offers one row per target. Two edges to
-	// the same target offer two rows, and the row's detail shows the edge's
-	// pinning so the operator can tell them apart. The modal's context row
-	// names the repository, the task type, the agent, and the completion
-	// time, so the operator knows what the log is about.
+	// the same target offer two rows, and a row's detail names the Agent its
+	// route resolves to, beside the edge's Environment pin. Two rows that
+	// read the same start the same handoff: an edge that pins the Agent the
+	// target's own Task profile names has nothing beside it to show. The
+	// modal's context row names the repository, the task type, the agent,
+	// and the completion time, so the operator knows what the log is about.
 	const decisionFor = (
 		ticket: Ticket,
 	): {
@@ -1214,6 +1321,7 @@ export function App({
 					key: `route:${index}:${target}`,
 					label: `Handoff: ${target}`,
 					detail: routeDetail(edge, target),
+					editable: true,
 				});
 			}
 		});
@@ -1223,12 +1331,13 @@ export function App({
 			contextLine,
 		};
 	};
-	/** The handoff row's detail: the edge's pinning, or the target. */
+
+	/** The workflow row states the Agent that will receive its handoff. */
 	const routeDetail = (edge: WorkflowEdge, target: string): string => {
-		const pin: string[] = [];
-		if (edge.agent !== undefined) pin.push(`agent ${edge.agent}`);
-		if (edge.environment !== undefined) pin.push(`environment ${edge.environment}`);
-		return pin.length > 0 ? pin.join(", ") : target;
+		const choice = resolveHandoffChoice(configRef.current, target, edge);
+		const detail = [`agent ${choice.agentType}`];
+		if (edge.environment !== undefined) detail.push(`environment ${edge.environment}`);
+		return detail.join(", ");
 	};
 	// Goto: the operator focuses the agent's pane in herdr and the handoff
 	// stays open. The ticket moves awaiting to running; the trace does not
@@ -1286,9 +1395,19 @@ export function App({
 			runGoto(ticket);
 			return;
 		}
-		// key === `route:<edge index>:<target>`: the row's edge, re-read from
-		// the config, so a runtime config change cannot point the action at a
-		// moved or removed edge.
+		const choice = routeChoiceOf(ticket, key);
+		if (choice === null) return;
+		runRouteHandoff(ticket, choice);
+	};
+
+	/**
+	 * The choice a `route:<edge index>:<target>` row resolves to.
+	 *
+	 * The edge is re-read from the config, so a runtime config change cannot
+	 * point the action at a moved or removed edge. A stale row reports on the
+	 * status line and comes back null.
+	 */
+	const routeChoiceOf = (ticket: Ticket, key: string): HandoffChoice | null => {
 		const rest = key.slice("route:".length);
 		const separator = rest.indexOf(":");
 		const edge = configRef.current.workflows[Number(rest.slice(0, separator))];
@@ -1297,43 +1416,70 @@ export function App({
 			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
 		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
 			setWarningMessage(`no workflow edge from ${taskType} to ${target}`);
-			return;
+			return null;
 		}
+		// A Workflow Handoff resolves a fresh target profile and never
+		// inherits the previous handoff's choice.
+		return resolveHandoffChoice(configRef.current, target, edge);
+	};
+
+	/** Start a workflow handoff with a resolved or overridden choice. */
+	const runRouteHandoff = (ticket: Ticket, choice: HandoffChoice) => {
+		if (state === undefined) return;
 		// Claim first: a refused claim leaves the ticket where it was. The
-		// turn's decision is not recorded here: it lands on the settled
-		// turn's trace in the handoff's settle path, and only when the
-		// routed handoff actually started. A failed route leaves the trace
-		// pending, so Close and Goto keep working. A routed handoff resolves
-		// agent, model, and thinking through the target task profile's chain,
-		// with the edge's own pin above the profile (ADR 0009); it never
-		// inherits the previous handoff's model or thinking.
-		const routed = resolveSettings({
-			config: configRef.current,
-			taskType: target,
-			edgeAgent: edge.agent,
-		});
-		const choice = baseChoice(
-			routed.agentType,
-			// The same question the panel asks, through the same helper, so a
-			// route that starts without a panel cannot read the pin differently.
-			resolveEnvironment(configRef.current, edge.environment),
-			target,
-			routed.model,
-			routed.thinking,
-		);
+		// turn's decision is not recorded here: it lands when the routed
+		// handoff starts, on the settled turn's trace, and a route that never
+		// started leaves the trace pending, so Close and Goto keep working.
 		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
 		if (!claim.ok) {
 			setWarningMessage(claim.reason);
 			return;
 		}
+		const previousHandoffId = ticket.handoff?.attemptId ?? "";
 		runClaimedHandoff(
 			ticket,
 			choice,
 			"workflow",
 			claim.claim,
 			ticket.lastCompletion?.message ?? "",
+			// The routed handoff started: the operator's decision on the turn
+			// it routes from is `handed-off`, and the ticket reads as
+			// handed-off where the agent is.
+			(started) => {
+				if (!started.ok || previousHandoffId === "") return;
+				state.applyCompletionDecision({
+					ticketIdentity: ticket.identity,
+					handoffId: previousHandoffId,
+					decision: "handed-off",
+					decidedAt: new Date().toISOString(),
+				});
+				replaceTickets();
+			},
 		);
 	};
+
+	/**
+	 * The `e` key on a decision row: edit that route's resolved settings
+	 * before it starts, so the operator's override outranks the edge pin,
+	 * the target Task profile, and the config defaults.
+	 */
+	const openRouteOverride = (ticket: Ticket, key: string) => {
+		if (inFlightRef.current) {
+			setWarningMessage("handoff in flight");
+			return;
+		}
+		const choice = routeChoiceOf(ticket, key);
+		if (choice === null) return;
+		// The panel opens on this choice's agent: fetch its Model list (ADR 0010).
+		requestModelList(choice.agentType);
+		setPanel(null);
+		setOverride({
+			ticketIdentity: ticket.identity,
+			origin: "workflow",
+			choice,
+		});
+	};
+
 	const beginConsultationLaunch = (consultation: Consultation) => {
 		if (state === undefined || !state.canRecoverConsultationOpening(consultation.id)) return;
 		if (openingLaunches.current.has(consultation.id)) {
@@ -1496,6 +1642,7 @@ export function App({
 			environment: type.environment,
 			model: type.model,
 			thinking: type.thinking,
+			contextWindow: type.contextWindow,
 			template: type.template,
 			initialInput: input,
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, input),
@@ -1852,6 +1999,7 @@ export function App({
 						stored.taskType,
 						stored.model,
 						stored.thinking,
+						stored.contextWindow,
 					);
 		const claim = state.claimHandoff(ticket.identity, choice, "restart");
 		if (!claim.ok) {
@@ -2151,7 +2299,7 @@ export function App({
 					const ticket = context.selectedTicket;
 					if (ticket === undefined || !isInFlight(ticket)) {
 						if (ticket === undefined) refuse();
-						else startHandoff(choiceFor(ticket));
+						else startHandoff(ticket, choiceFor(ticket));
 						return;
 					}
 					if (markerOf(ticket) === "blocked") runGoto(ticket);
@@ -2634,6 +2782,8 @@ export function App({
 								active: override === null && panel === null && utility === null,
 								reservedRows,
 								handoffLimit: config.maxHandoffsPerTicket,
+								suggestedChoice:
+									selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
 								scroll: config.scroll,
 								onFocus: () => focusPane("detail"),
 								scrollSlot: detailScrollSlot,
@@ -2763,7 +2913,7 @@ export function App({
 				profiles,
 				modelList,
 				onAgentChange: requestModelList,
-				initial: override,
+				initial: override.choice,
 				context: ticketContext,
 				inputActive: utility === null,
 				onHelp: (mode) => openGuide(mode),
@@ -2771,11 +2921,8 @@ export function App({
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
-				onConfirm: (choice) => {
-					setOverride(null);
-					startHandoff(choice);
-				},
-				onCancel: () => setOverride(null),
+				onConfirm: confirmOverride,
+				onCancel: cancelOverride,
 			}),
 		// Each ticket panel kind renders its own modal: a leftover panel is neither
 		// a decision nor a missing-agent choice, and must not fall through to one.
@@ -2788,6 +2935,7 @@ export function App({
 						entries: decision.entries,
 						actions: decision.actions,
 						onAction: (key) => runDecisionAction(panelTicket, key),
+						onEditAction: (key) => openRouteOverride(panelTicket, key),
 						onCancel: () => setPanel(null),
 						context: ticketContext,
 						inputActive: utility === null,
@@ -2971,7 +3119,6 @@ export function App({
 }
 
 /**
-
  * What one close operation may take down, judged per level:
  *
  * - workspaceExclusive: no other tab and no other pane anywhere, so the
@@ -3040,7 +3187,6 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
-
  * The states a handoff origin may still start from when its turn comes.
  *
  * The claim passes in the claim's state, and the queue waits on the seat.
@@ -3059,7 +3205,6 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 }
 
 /**
-
  * The handle a clear would end that the ticket's own live agent runs on.
  *
  * A cleanup reaches the environment its row names: a worktree removal closes a
@@ -3090,7 +3235,6 @@ function liveHandleAtRisk(
 }
 
 /**
-
  * The Close cleanup of one handoff, with its durable outcome.
  *
  * A cleanup that fails leaves the herdr environment alive: the workspace, its

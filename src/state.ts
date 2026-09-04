@@ -26,7 +26,7 @@ import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 8;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -112,6 +112,8 @@ export interface Consultation {
 	environment: EnvironmentKind;
 	model: string;
 	thinking: string;
+	/** The context window in digits; empty leaves the room to the agent. */
+	contextWindow: string;
 	template: string;
 	initialInput: string;
 	renderedOpeningPrompt: string;
@@ -183,6 +185,8 @@ export interface CreateConsultationInput {
 	environment: EnvironmentKind;
 	model?: string;
 	thinking?: string;
+	/** The context window in digits; empty leaves the room to the agent. */
+	contextWindow?: string;
 	template: string;
 	initialInput: string;
 	renderedOpeningPrompt: string;
@@ -235,6 +239,8 @@ export interface HandoffTicket {
 	model: string;
 	/** The thinking level the latest handoff chose; empty leaves it to the agent. */
 	thinking: string;
+	/** The context window the latest handoff chose, in digits; empty leaves it to the agent. */
+	contextWindow: string;
 	paneId: string | null;
 	tabId: string | null;
 	workspaceId: string | null;
@@ -433,6 +439,21 @@ const MIGRATION_V5_TO_V6 = `
 	ALTER TABLE handoffs ADD COLUMN herdr_name TEXT;
 `;
 
+/** The v7 trace records the Model and Thinking level that the turn ran on. */
+const MIGRATION_V6_TO_V7 = `
+	ALTER TABLE completion_traces ADD COLUMN model TEXT NOT NULL DEFAULT '';
+	ALTER TABLE completion_traces ADD COLUMN thinking TEXT NOT NULL DEFAULT '';
+`;
+
+/**
+ * The v8 records carry the maximum context window the turn or Consultation
+ * ran with, as plain digits; empty leaves the room to the Agent.
+ */
+const MIGRATION_V7_TO_V8 = `
+	ALTER TABLE completion_traces ADD COLUMN context_window TEXT NOT NULL DEFAULT '';
+	ALTER TABLE consultations ADD COLUMN context_window TEXT NOT NULL DEFAULT '';
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -539,6 +560,8 @@ export class FactoryState {
 			if (version < 4) this.db.exec(MIGRATION_V3_TO_V4);
 			if (version < 5) this.db.exec(MIGRATION_V4_TO_V5);
 			if (version < 6) this.db.exec(MIGRATION_V5_TO_V6);
+			if (version < 7) this.db.exec(MIGRATION_V6_TO_V7);
+			if (version < 8) this.db.exec(MIGRATION_V7_TO_V8);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -821,6 +844,7 @@ export class FactoryState {
 			taskType: choice.taskType,
 			model: choice.model,
 			thinking: choice.thinking,
+			contextWindow: choice.contextWindow,
 			attemptId: row.attempt_id,
 			paneId: row.pane_id,
 			tabId: row.tab_id,
@@ -840,13 +864,16 @@ export class FactoryState {
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db
 			.prepare(
-				"SELECT task_type, agent_type, agent_name, completed_at, last_message, turn_log_json, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
 					task_type: string;
 					agent_type: string;
 					agent_name: string;
+					model: string;
+					thinking: string;
+					context_window: string;
 					completed_at: string;
 					last_message: string;
 					turn_log_json: string | null;
@@ -858,6 +885,9 @@ export class FactoryState {
 			taskType: row.task_type,
 			agentType: row.agent_type,
 			agentName: row.agent_name,
+			model: row.model,
+			thinking: row.thinking,
+			contextWindow: row.context_window,
 			completedAt: row.completed_at,
 			message: row.last_message,
 			turnLog: turnLogOf(row.turn_log_json, row.last_message),
@@ -1137,6 +1167,7 @@ export class FactoryState {
 				environment: choice.environment,
 				model: choice.model,
 				thinking: choice.thinking,
+				contextWindow: choice.contextWindow,
 				paneId: row.pane_id,
 				tabId: row.tab_id,
 				workspaceId: row.workspace_id,
@@ -1266,12 +1297,13 @@ export class FactoryState {
 				)
 				.run(input.ticketIdentity);
 			const handoff = this.db
-				.prepare("SELECT work_cycle FROM handoffs WHERE attempt_id = ?")
-				.get(input.handoffId) as { work_cycle: number } | undefined;
+				.prepare("SELECT work_cycle, choice_json FROM handoffs WHERE attempt_id = ?")
+				.get(input.handoffId) as { work_cycle: number; choice_json: string } | undefined;
 			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(input.handoffId) as { id: string } | undefined;
 			if (handoff === undefined) return;
+			const choice = jsonChoice(handoff.choice_json);
 			if (pending !== undefined) {
 				this.db
 					.prepare(
@@ -1281,7 +1313,7 @@ export class FactoryState {
 			} else {
 				this.db
 					.prepare(
-						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message, turn_log_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						randomUUID(),
@@ -1291,6 +1323,9 @@ export class FactoryState {
 						input.taskType,
 						input.agentType,
 						this.agentNameForTicket(input.ticketIdentity),
+						choice?.model ?? "",
+						choice?.thinking ?? "",
+						choice?.contextWindow ?? "",
 						input.completedAt,
 						input.message,
 						JSON.stringify(input.turnLog),
@@ -1353,7 +1388,7 @@ export class FactoryState {
 			const choice = jsonChoice(handoff.choice_json);
 			this.db
 				.prepare(
-					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, decision, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					randomUUID(),
@@ -1363,6 +1398,9 @@ export class FactoryState {
 					choice?.taskType ?? "",
 					choice?.agentType ?? "",
 					this.agentNameForTicket(input.ticketIdentity),
+					choice?.model ?? "",
+					choice?.thinking ?? "",
+					choice?.contextWindow ?? "",
 					input.decidedAt,
 					"",
 					input.decision,
@@ -1517,12 +1555,12 @@ export class FactoryState {
 			this.db
 				.prepare(
 					`INSERT INTO consultations(
-						id, type_name, agent_type, environment, model, thinking, template,
+						id, type_name, agent_type, environment, model, thinking, context_window, template,
 						initial_input, rendered_opening_prompt, repository_identity,
 						repository_display_name, repository_clone_url, repository_path,
 						state, created_at, updated_at, agent_name, draft, replacement_of,
 						live_conflict_override, attention_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, ?, NULL)`,
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, ?, NULL)`,
 				)
 				.run(
 					id,
@@ -1531,6 +1569,7 @@ export class FactoryState {
 					input.environment,
 					input.model ?? "",
 					input.thinking ?? "",
+					input.contextWindow ?? "",
 					input.template,
 					input.initialInput,
 					input.renderedOpeningPrompt,
@@ -2192,6 +2231,7 @@ export class FactoryState {
 			environment: row.environment as EnvironmentKind,
 			model: row.model,
 			thinking: row.thinking,
+			contextWindow: row.context_window,
 			template: row.template,
 			initialInput: row.initial_input,
 			renderedOpeningPrompt: row.rendered_opening_prompt,
@@ -2298,6 +2338,7 @@ interface ConsultationRow {
 	environment: string;
 	model: string;
 	thinking: string;
+	context_window: string;
 	template: string;
 	initial_input: string;
 	rendered_opening_prompt: string;
@@ -2492,7 +2533,13 @@ function jsonChoice(value: string): HandoffChoice | undefined {
 			typeof parsed.taskType === "string" &&
 			typeof parsed.model === "string" &&
 			typeof parsed.thinking === "string"
-			? (parsed as HandoffChoice)
+			? {
+					...(parsed as HandoffChoice),
+					// A choice stored before the context window existed carries
+					// none: an empty value leaves the room to the agent, the same
+					// meaning it has everywhere else.
+					contextWindow: typeof parsed.contextWindow === "string" ? parsed.contextWindow : "",
+				}
 			: undefined;
 	} catch {
 		return undefined;

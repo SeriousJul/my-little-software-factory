@@ -51,6 +51,7 @@ function createConsultation(state: FactoryState, id = "consultation-1") {
 		environment: "worktree",
 		model: "",
 		thinking: "",
+		contextWindow: "",
 		template: "/skill:grill-with-docs {input}",
 		initialInput: "Review this repository",
 		renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
@@ -572,6 +573,7 @@ describe("durable Consultation privacy", () => {
 			environment: "worktree",
 			model: "",
 			thinking: "",
+			contextWindow: "",
 			template: "/skill:grill-with-docs {input}",
 			initialInput: `Review ${marker}`,
 			renderedOpeningPrompt: `/skill:grill-with-docs Review ${marker}`,
@@ -633,12 +635,18 @@ describe("pending responses across restart and migration", () => {
 		// Downgrade the record to the v4 shape.
 		const db = new DatabaseSync(path);
 		db.exec("DROP TABLE consultation_pending_responses");
+		// The v6 and later columns go too: a v4 record has no leftover fact,
+		// no trace settings, and no context window anywhere.
 		db.exec(
 			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
 				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
 				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
 				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
 		);
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN model").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
+		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);

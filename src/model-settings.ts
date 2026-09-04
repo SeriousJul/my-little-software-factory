@@ -42,18 +42,23 @@ interface ModelCheck {
  *
  * A profile's resolved model carries the `default-model` leg of the chain, so
  * a default the operator typo-fixes is seen here, against every agent it can
- * land on. A value with no determinate agent at startup is left to the handoff
- * fit check. A kind with no list command is skipped silently: it never offered
- * a list, so there is nothing to report.
+ * land on. A value whose agent maps no model setting at all is an error in
+ * its own right: the handoff would fail it with the same words, and the
+ * config is the place to fix it. A value with no determinate agent at
+ * startup is left to the handoff fit check. A kind with no list command is
+ * skipped silently: it never offered a list, so there is nothing to report.
  */
 export async function validateConfiguredModels(
 	config: FactoryConfig,
 	runner: CommandRunner,
 ): Promise<ModelValidation> {
 	const checks = configuredModelChecks(config);
-	// One fetch per kind, and only for a kind with a value to check.
+	// One fetch per kind, and only for a kind whose agent can receive a model:
+	// an agent that maps no model setting needs no list, and no agent CLI runs.
 	const lists = new Map<string, ModelListResult>();
 	for (const check of checks) {
+		const agent = config.agents[check.agentType];
+		if (agent === undefined || agent.model === undefined) continue;
 		if (!supportsModelList(check.kind) || lists.has(check.kind)) continue;
 		lists.set(check.kind, await runner.listModels(check.kind));
 	}
@@ -61,6 +66,15 @@ export async function validateConfiguredModels(
 	const warnings: string[] = [];
 	const warned = new Set<string>();
 	for (const check of checks) {
+		// An agent that maps no model setting cannot receive the value at all:
+		// say so instead of querying a list the setting never reaches.
+		const agent = config.agents[check.agentType];
+		if (agent === undefined || agent.model === undefined) {
+			errors.push(
+				`config: ${check.key}: agent "${check.agentType}" defines no model setting, so "${check.value}" cannot reach it`,
+			);
+			continue;
+		}
 		const list = lists.get(check.kind);
 		if (list === undefined) continue;
 		if (!list.ok) {
@@ -87,8 +101,10 @@ function configuredModelChecks(config: FactoryConfig): ModelCheck[] {
 	const seen = new Set<string>();
 	const add = (check: ModelCheck) => {
 		// One task type's profile and one consultation type can resolve the same
-		// default onto the same agent: report that value once.
-		const id = `${check.kind}\u0000${check.value}`;
+		// default onto the same agent: report that value once. The agent names
+		// the report, because two agents of one kind can take the same value
+		// differently.
+		const id = `${check.agentType}\u0000${check.value}`;
 		if (seen.has(id)) return;
 		seen.add(id);
 		checks.push(check);
@@ -147,8 +163,9 @@ export function unavailableModelMessage(agentType: string, kind: string, model: 
  *
  * A non-empty model must be in the list the agent's runtime reports, and a
  * non-empty thinking level must be in the levels the agent declares. A setting
- * the agent does not map at all is dropped by the start command, so it is not
- * an unfit setting: the agent never sees it.
+ * the agent does not map at all is not an unfit setting here: the handoff's
+ * own loud check refuses it before this one runs, so a value the agent
+ * cannot take never reaches the start command (ADR 0009).
  *
  * A list that cannot be fetched skips the model check: the handoff proceeds,
  * and the agent's own rejection stands. There is no cache: the list is fresh

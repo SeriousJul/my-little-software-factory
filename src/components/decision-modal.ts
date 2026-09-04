@@ -16,9 +16,10 @@
  *
  * The keys dispatch through the shared control catalogue hook in the
  * decision-modal interaction mode: up and down move the action rows, j/k
- * scroll the log one row with the page and jump keys as aliases, enter
- * confirms the selected action, and esc cancels. While it is open, the keys
- * of the app below are disabled.
+ * scroll the log one row with the page and jump keys as aliases, e edits
+ * the settings of a selected handoff row before it starts, enter confirms
+ * the selected action, and esc cancels. While it is open, the keys of the
+ * app below are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
@@ -50,6 +51,8 @@ interface DecisionModalProps {
 	entries: readonly TurnLogEntry[];
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
+	/** The `e` key on a row flagged editable: change its Handoff's settings. */
+	onEditAction?: (key: string) => void;
 	onCancel: () => void;
 	/** The base control facts, preserved when this modal owns input. */
 	context: ControlContext;
@@ -128,6 +131,7 @@ export function DecisionModal({
 	entries,
 	actions,
 	onAction,
+	onEditAction,
 	onCancel,
 	context,
 	inputActive = true,
@@ -183,6 +187,13 @@ export function DecisionModal({
 	// operator scrolls: the bottom's index moves while the box grows in.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
 	const selection = useActionSelection(actions);
+	// The fact the gate and the bar share: the row under the cursor carries
+	// settings to edit, and this surface can open the panel for them. Close
+	// and Goto decide about the turn that ended, so their rows leave the
+	// control dimmed and say why when it is pressed.
+	const editableActionSelected =
+		onEditAction !== undefined && actions[selection.at]?.editable === true;
+	const modalContext = { ...context, editableActionSelected };
 
 	// Scroll the log by one step of the named key: a page moves one viewport
 	// minus the shared row, and the jump keys take either edge. A null view
@@ -203,7 +214,7 @@ export function DecisionModal({
 
 	useControlDispatch({
 		mode: "decision-modal",
-		context,
+		context: modalContext,
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -212,6 +223,10 @@ export function DecisionModal({
 			message: () => onMessage?.(),
 			"cancel-action": onCancel,
 			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
+			"edit-action": () => {
+				const row = actions[selection.at];
+				if (row !== undefined && editableActionSelected) onEditAction?.(row.key);
+			},
 			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
 			"scroll-turn-log": ({ key }) => scrollLog(key.name),
 		},
@@ -229,7 +244,10 @@ export function DecisionModal({
 		minContentRows: actions.length + CONTEXT_ROWS,
 		opacity: pop,
 		message,
-		bar: { mode: "decision-modal", context: contextFor("decision-modal", context) },
+		bar: {
+			mode: "decision-modal",
+			context: contextFor("decision-modal", modalContext),
+		},
 		children: [
 			createElement(
 				"text",

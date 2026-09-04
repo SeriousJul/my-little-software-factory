@@ -203,7 +203,14 @@ function seedAwaitingTicket(statePath: string): string {
 	});
 	const claim = state.claimHandoff(
 		identity,
-		{ agentType: "pi", environment: "live-worktree", taskType: "rework", model: "", thinking: "" },
+		{
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "rework",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
 		"open",
 	);
 	if (!claim.ok) throw new Error(`claim failed: ${claim.reason}`);

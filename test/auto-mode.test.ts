@@ -31,6 +31,8 @@ import {
 	markerRowOf,
 	press,
 	pressArrow,
+	pressEnterQuiet,
+	pressQuiet,
 	pressScrollKey,
 	rgb,
 	rowsOf,
@@ -136,6 +138,7 @@ function seed(
 	message = "The turn is done.",
 	model = "",
 	thinking = "",
+	contextWindow = "",
 	turnLog: TurnLogEntry[] | undefined = undefined,
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
@@ -152,6 +155,7 @@ function seed(
 				taskType: "implement",
 				model,
 				thinking,
+				contextWindow,
 			},
 			"open",
 		);
@@ -193,9 +197,10 @@ function seededApp(
 	message = "The turn is done.",
 	model = "",
 	thinking = "",
+	contextWindow = "",
 	turnLog: TurnLogEntry[] | undefined = undefined,
 ): SeededApp {
-	const state = seed(shape, outcome, environment, message, model, thinking, turnLog);
+	const state = seed(shape, outcome, environment, message, model, thinking, contextWindow, turnLog);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -469,6 +474,7 @@ describe("the failure markers", () => {
 				taskType: "implement",
 				model: "",
 				thinking: "",
+				contextWindow: "",
 			},
 			"open",
 		);
@@ -757,6 +763,295 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	test("a manual workflow route starts with its target task profile", async () => {
+		const app = seededApp(
+			"awaiting",
+			{
+				taskTypes: {
+					...DEFAULT_CONFIG.taskTypes,
+					review: {
+						...DEFAULT_CONFIG.taskTypes.review,
+						agent: "codex",
+						model: "review-model",
+						thinking: "high",
+					},
+				},
+			},
+			success,
+			"live-worktree",
+			"The turn is done.",
+			"opus-4",
+			"high",
+		);
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision panel", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
+
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain(
+					"--kind codex --pane pane-9 -- --model review-model -c model_reasoning_effort=high",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("e on a workflow row edits the route's settings before it starts", async () => {
+		const app = seededApp("awaiting", {
+			workflows: [{ from: "implement", to: ["review"], agent: "pi" }],
+			agents: {
+				...DEFAULT_CONFIG.agents,
+				pi: {
+					...DEFAULT_CONFIG.agents.pi,
+					contextWindow: "--context {value}",
+				},
+			},
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: {
+					...DEFAULT_CONFIG.taskTypes.review,
+					model: "review-model",
+					contextWindow: "131072",
+				},
+			},
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				// The first row ends the cycle: it has no Handoff settings to
+				// edit, so e there opens nothing.
+				await press(setup, "e", "the decision modal to hold", (f) => f.includes("Decision:"));
+				expect(frameText(await settle(setup))).not.toContain("Override");
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+
+				// e opens the panel on the choice the edge resolved: the pinned
+				// pi agent, and the target profile's model and context window.
+				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("Agent pi");
+				expect(panel).toContain("Model review-model");
+				expect(panel).toContain("Context 131072");
+				// Opening the edit starts nothing: the claim waits for the confirm.
+				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+
+				// The operator replaces the resolved model for this one handoff.
+				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
+				// The row's input takes focus on its own render pass: let that
+				// land, and the frame settle, before the edit keys go in.
+				await settle(setup);
+				setup.mockInput.pressKey("HOME");
+				for (const _ of "review-model") setup.mockInput.pressKey("DELETE");
+				await setup.mockInput.typeText("one-shot-model");
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model one-shot-model"),
+					"the typed model",
+				);
+				await pressReturn(setup, "the routed handoff", (f) =>
+					f.includes("Handoff task type: review"),
+				);
+
+				// The override is the last writer: the agent started on the
+				// operator's model, not the profile's. The context window the
+				// operator never touched still rides on the route's profile value.
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain(
+					"--kind pi --pane pane-9 -- --model one-shot-model --context 131072",
+				);
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a route edit that moves to another Task type follows that profile, not the edge", async () => {
+		// The one place the panel can undo an edge pin without a keystroke on
+		// the Agent row: the edge pins the Agent of the route it triggers, and a
+		// Task type the operator moves to owns its own profile.
+		const app = seededApp("awaiting", {
+			workflows: [{ from: "implement", to: ["review"], agent: "claude" }],
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: { ...DEFAULT_CONFIG.taskTypes.review, model: "review-model" },
+				fix: { ...DEFAULT_CONFIG.taskTypes.fix, agent: "pi", model: "fix-model" },
+			},
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--no-focus"], {
+			stdout: tabCreateJson("pane-9", "tab-9"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				const opened = frameText(await settle(setup));
+				// The panel starts on the route the edge resolved: its pinned Agent,
+				// and the target profile's Model.
+				expect(opened).toContain("Agent claude");
+				expect(opened).toContain("Model review-model");
+
+				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
+				// Left from `review` lands on `fix`, whose profile names its own
+				// Agent and Model. Both rows are untouched, so both follow it, and
+				// the edge's pin is gone with the edge's target.
+				await press(setup, "h", "the fix task type", (f) => frameText(f).includes("Task type fix"));
+				const moved = frameText(await settle(setup));
+				expect(moved).toContain("Agent pi");
+				expect(moved).toContain("Model fix-model");
+
+				await pressReturn(setup, "the routed handoff", (f) => f.includes("Handoff task type: fix"));
+				const start = app.runner
+					.commands()
+					.find((command) => command.startsWith("herdr agent start"));
+				expect(start).toContain("--kind pi --pane pane-9 -- --model fix-model");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("escape in a route edit returns to the decision with no claim", async () => {
+		const app = seededApp("awaiting");
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the handoff row", (f) =>
+					frameText(f).includes("❯ Handoff: review"),
+				);
+				await press(setup, "e", "the route override panel", (f) => f.includes("Override"));
+				await settle(setup);
+				// Esc drops the edit and returns to the decision still being made.
+				const back = await pressEscape(
+					setup,
+					"the decision modal",
+					(f) => !f.includes("Override") && f.includes("Decision:"),
+				);
+				expect(frameText(back)).toContain("❯ Close");
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("e alone on an awaiting ticket points at the decision instead of a panel", async () => {
+		const app = seededApp("awaiting");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				const frame = await press(setup, "e", "the hint on the status line", (f) =>
+					frameText(f).includes("press Enter, then e on a Handoff row"),
+				);
+				expect(frame).not.toContain("Override");
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.runner.commands().join("\n")).not.toContain("herdr agent start");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a workflow row shows the arriving task profile's effective agent", async () => {
+		const app = seededApp("awaiting", {
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				review: { ...DEFAULT_CONFIG.taskTypes.review, agent: "codex" },
+			},
+		});
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(
+					setup,
+					(frame) => ticketRow(frame).includes("[awaiting]"),
+					"the awaiting ticket",
+				);
+				await pressReturn(setup, "the decision modal", (frame) => frame.includes("Decision:"));
+				expect(frameText(await settle(setup))).toContain("Handoff: review agent codex");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("a workflow route resolves the target profile's model", async () => {
 		// Story 26, through the pinned herdr sequence: the route's model comes from
 		// the target task profile's chain, not from the handoff that just settled.
@@ -818,7 +1113,7 @@ describe("the decision modal", () => {
 	test("each outgoing edge offers its own row, and the pinning shows on the row", async () => {
 		const app = seededApp("awaiting", {
 			workflows: [
-				{ from: "implement", to: ["review"] },
+				{ from: "implement", to: ["review"], environment: "worktree" },
 				{ from: "implement", to: ["review"], agent: "codex" },
 			],
 		});
@@ -841,13 +1136,14 @@ describe("the decision modal", () => {
 				// stays reachable. The second row's detail shows the pinning
 				// that tells the rows apart.
 				expect(panel.split("Handoff: review").length - 1).toBe(2);
+				expect(panel).toContain("agent pi, environment worktree");
 				expect(panel).toContain("agent codex");
 
 				// The pinned row is the last one: down three (close, goto,
 				// first edge), confirm.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
 				await pressArrow(setup, "down", "the first edge", (f) =>
-					frameText(f).includes("❯ Handoff: review review"),
+					frameText(f).includes("❯ Handoff: review agent pi"),
 				);
 				await pressArrow(setup, "down", "the pinned edge", (f) =>
 					frameText(f).includes("❯ Handoff: review agent codex"),
@@ -1035,7 +1331,7 @@ describe("the decision modal", () => {
 
 	test("the modal shows the border title, the context line, and the log's notes", async () => {
 		const conclusion = "## Result\n\n**All 142 tests pass.**";
-		const app = seededApp("awaiting", {}, success, "live-worktree", conclusion, "", "", [
+		const app = seededApp("awaiting", {}, success, "live-worktree", conclusion, "", "", "", [
 			{ kind: "text", text: "I will run the tests." },
 			{ kind: "tool", name: "bash", target: "npm test", failed: false },
 			{ kind: "tool", name: "bash", target: "npm run lint", failed: true },
@@ -1047,7 +1343,7 @@ describe("the decision modal", () => {
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
-				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressEnterQuiet(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const modal = frameText(await settle(setup));
 				// The border names the ticket, and the context line names the
 				// repository, the task type, the agent, and the completion time.
@@ -1616,7 +1912,14 @@ describe("the leftover environment", () => {
 		});
 		const claim = app.state.claimHandoff(
 			identity,
-			{ agentType: "pi", environment: "worktree", taskType: "implement", model: "", thinking: "" },
+			{
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
@@ -1787,6 +2090,7 @@ describe("the leftover environment", () => {
 				taskType: "implement",
 				model: "",
 				thinking: "",
+				contextWindow: "",
 			},
 			"open",
 		);
@@ -1973,7 +2277,14 @@ describe("the leftover environment", () => {
 		stubCheckout(app);
 		const second = app.state.claimHandoff(
 			secondIdentity,
-			{ agentType: "pi", environment: "worktree", taskType: "implement", model: "", thinking: "" },
+			{
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
 			"open",
 		);
 		if (!second.ok) throw new Error(second.reason);
@@ -2072,7 +2383,14 @@ describe("the leftover environment", () => {
 		// Close cleanup has nothing to close.
 		const claim = app.state.claimHandoff(
 			identity,
-			{ agentType: "pi", environment: "worktree", taskType: "implement", model: "", thinking: "" },
+			{
+				agentType: "pi",
+				environment: "worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			},
 			"open",
 		);
 		if (!claim.ok) throw new Error(claim.reason);
@@ -2164,6 +2482,7 @@ describe("the leftover environment", () => {
 					taskType: "implement",
 					model: "",
 					thinking: "",
+					contextWindow: "",
 				},
 				"open",
 			);
@@ -2491,7 +2810,7 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto: on 0/2") && f.includes("Agent: pi"),
+					(f) => f.includes("auto: on 0/2") && ticketRow(f).includes("missing"),
 					"the dispatch",
 				);
 				// The new agent's pane is not in the faked list: the row wears
@@ -2537,13 +2856,11 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				// The detail pane names the agent the handoff started on, so the
-				// wait cannot resolve on the mode line alone, before the dispatch.
-				await awaitFrame(
-					setup,
-					(f) => f.includes("auto: on 0/2") && f.includes("Agent: codex"),
-					"the dispatch",
-				);
+				// An open ticket already shows its profile's agent in the detail
+				// pane, so the wait resolves on the handoff itself: the pane's
+				// task type row says `Handoff` only once the ticket is no longer
+				// open, and the start command lands before that claim.
+				await awaitFrame(setup, (f) => f.includes("Handoff task type: implement"), "the dispatch");
 				const start = app.runner
 					.commands()
 					.find((command) => command.startsWith("herdr agent start"));
@@ -2634,6 +2951,43 @@ describe("the auto dispatch", () => {
 					expect(ticket.handoffRecoveryRequired).toBe(false);
 					expect(ticket.state).toBe("handed-off");
 				}
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an open handoff its agent cannot take reports the ticket it failed", async () => {
+		// The same loud rule on the other automatic path: an open Ticket's own
+		// handoff resolves a Model its Agent maps no argument for, so nothing
+		// starts, and the report names the ticket rather than only the reason.
+		const app = seededApp("open", {
+			autoHandoff: true,
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+			},
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const failed = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("auto-handoff for ticket"),
+					"the failed automatic handoff",
+				);
+				expect(frameText(failed)).toContain("no model setting");
+				// Nothing ran, and the ticket stayed the open ticket it was.
+				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(ticketRow(failed)).toContain("[open]");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2790,6 +3144,79 @@ describe("the auto decision", () => {
 		app.state.close();
 	});
 
+	test("an auto route its agent cannot take starts nothing and decides nothing", async () => {
+		// The review's own setup: the flow's one edge routes to a task type whose
+		// profile names an agent that maps no Model setting, beside a configured
+		// default model. The route can only fail, and it fails before any
+		// external step, so it must leave the turn as undecided as it was: the
+		// trace records a route only once an agent runs.
+		const app = seededApp("awaiting", {
+			autoHandoff: true,
+			defaultAgent: "claude",
+			defaultModel: "factory-model",
+			agents: { ...DEFAULT_CONFIG.agents, claude: { kind: "claude" } },
+			workflows: [{ from: "implement", to: ["review"] }],
+		});
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: "ws-1", checkoutPath: Object.values(app.config.repos)[0] }]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The loud reason reaches the status line, and it names the ticket
+				// the route was for.
+				const failed = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("automatic route for ticket"),
+					"the failed automatic route",
+				);
+				expect(frameText(failed)).toContain("no model setting");
+				// Nothing the record claims happened did happen: no agent started,
+				// and the settled turn holds no decision at all.
+				expect(app.runner.commands().some((c) => c.startsWith("herdr agent start"))).toBe(false);
+				expect(app.state.ticketState(identity)).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
+				expect(failed).not.toContain("auto-handed-off");
+
+				// The ticket stayed awaiting, so the live agent that finished the
+				// turn reopens it as it always does, and the undecided trace keeps
+				// Close and Goto offered beside it. A route that consumed its own
+				// decision would leave the operator with a settled turn that could
+				// be neither routed nor closed.
+				app.runner.set("herdr", ["agent", "list"], {
+					stdout: agentListJson([
+						{
+							paneId: "pane-1",
+							tabId: "tab-1",
+							workspaceId: "ws-1",
+							agent: "persist-source-facts",
+							status: "working",
+						},
+					]),
+				});
+				const reopened = await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[running]"),
+					"the reopened turn",
+				);
+				expect(ticketRow(reopened)).toContain("[running]");
+				// And the turn it reopened is the same undecided turn: the record
+				// still holds no decision for a route that never started.
+				expect(app.state.ticketState(identity)).toBe("running");
+				expect(app.state.lastCompletion(identity)?.decision).toBe(null);
+			},
+			WIDTH,
+			HEIGHT,
+			// A short interval keeps the route coming back each cycle: the failed
+			// start must not consume the turn it came from, cycle after cycle.
+			{ ...propsOf(app), pollIntervalMs: 25 },
+		);
+		app.state.close();
+	});
+
 	test("auto mode closes a settled turn with no workflow route", async () => {
 		// The handoff limit equals the ticket's one handoff: the close is the
 		// limit degrade, and it keeps the open ticket from being re-handed.
@@ -2837,6 +3264,7 @@ describe("the auto decision", () => {
 				taskType: "implement",
 				model: "",
 				thinking: "",
+				contextWindow: "",
 			},
 			"open",
 		);
@@ -2908,6 +3336,7 @@ describe("the handoff queue", () => {
 				taskType: "implement",
 				model: "",
 				thinking: "",
+				contextWindow: "",
 			},
 			"open",
 		);
@@ -2968,45 +3397,36 @@ describe("the handoff queue", () => {
 				// updates (the observation tick, the Message line) to go quiet:
 				// a key that lands while they are in flight stalls the test
 				// renderer.
-				const pressQuiet = async (
+				const pressQuietFor = (
 					key: Parameters<typeof press>[1],
 					what: string,
 					predicate: (f: string) => boolean,
-				): Promise<string> => {
-					const frame = await press(setup, key, what, predicate);
-					await sleep(150);
-					return frame;
-				};
-				const pressReturnQuiet = async (
-					what: string,
-					predicate: (f: string) => boolean,
-				): Promise<string> => {
-					const frame = await pressReturn(setup, what, predicate);
-					await sleep(150);
-					return frame;
-				};
+				) => pressQuiet(setup, key, what, predicate);
+				const pressReturnQuietFor = (what: string, predicate: (f: string) => boolean) =>
+					pressEnterQuiet(setup, what, predicate);
 				// Hand off the open ticket: it runs, and it holds the seat.
-				// The list rows sit on frame lines two and three: line one is
-				// the box border, and the list pads a blank line above its
-				// first row. The in-flight ticket is first, and it is the
-				// initial selection, so the move down lands the marker on
-				// line three - a line it was not on, so the key is applied
-				// before the next key is pressed.
-				await pressQuiet("j", "select the open ticket", (f) => markerRowOf(f) === 4);
-				await pressReturnQuiet("the handoff to start", (f) => f.includes("handing off"));
+				// The mode line sits above the list box, so the list rows sit
+				// on frame lines three and four: line one is the box border,
+				// and the list pads a blank line above its first row. The
+				// in-flight ticket is first, and it is the initial selection,
+				// so the move down lands the marker on line four - a line it
+				// was not on, so the key is applied before the next key is
+				// pressed.
+				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 4);
+				await pressReturnQuietFor("the handoff to start", (f) => f.includes("handing off"));
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuiet("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
-				await pressReturnQuiet("the missing modal", (f) => f.includes("Missing:"));
-				await pressReturnQuiet("the restart to queue", (f) => !f.includes("Missing:"));
+				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
+				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
+				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
 				// abandon it.
-				await pressReturnQuiet("the missing modal again", (f) => f.includes("Missing:"));
+				await pressReturnQuietFor("the missing modal again", (f) => f.includes("Missing:"));
 				await pressArrow(setup, "down", "select abandon", (f) =>
 					frameText(f).includes("❯ Abandon"),
 				);
 				await sleep(150);
-				await pressReturnQuiet("the abandonment", (f) =>
+				await pressReturnQuietFor("the abandonment", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);
 				// The handoff settles, and the queue drains: the restart's
@@ -3041,8 +3461,8 @@ describe("the handoff queue", () => {
 				// again on demand. It is the second row (row four: the mode
 				// line and the border sit above the list), and the selection
 				// already holds it, so the move is the boundary no-op.
-				await pressQuiet("j", "the boundary no-op on the open ticket", (f) => markerRowOf(f) === 4);
-				await pressReturnQuiet("the re-handoff", (f) => f.includes("handing off"));
+				await pressQuietFor("j", "the boundary no-op on the open ticket", (f) => markerRowOf(f) === 4);
+				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(
 					setup,
 					() =>

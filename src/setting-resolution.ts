@@ -7,6 +7,7 @@
  * - Agent: operator override, workflow edge pin, task profile, `default-agent`.
  * - Model: operator override, task profile, `default-model`, the agent's own default.
  * - Thinking: operator override, task profile, the agent's own default.
+ * - Context window: operator override, task profile, the agent's own default.
  *
  * Every resolved value is a start value: the override panel prefills it, the
  * operator changes it or clears it, and a cleared setting (an empty value) is
@@ -17,13 +18,15 @@
 import type { FactoryConfig } from "./config.ts";
 import type { EnvironmentKind } from "./domain/ticket.ts";
 
-/** The agent, model, and thinking one task type starts its handoffs on. */
+/** The agent, model, thinking, and context window one task type starts its handoffs on. */
 export interface TaskProfileStart {
 	agentType: string;
 	/** The model, or empty when the setting is left to the agent. */
 	model: string;
 	/** The thinking level, or empty when the level is left to the agent. */
 	thinking: string;
+	/** The maximum context window, or empty when it is left to the agent. */
+	contextWindow: string;
 }
 
 /** The agent a task profile names, or the default agent when it names none. */
@@ -35,19 +38,20 @@ export function profileAgentOf(config: FactoryConfig, taskType: string): string 
  * The Task profile of one task type: the start values the panel prefills and
  * a handoff without an operator override runs on. An omitted profile agent
  * resolves through `default-agent`, an omitted profile model through
- * `default-model`, and an omitted level is left to the agent.
+ * `default-model`, and an omitted level or window is left to the agent.
+ *
+ * A model the resolved agent maps no template for is still a start value:
+ * the panel shows it wearing the warning, because the handoff sends it and
+ * the preflight fails it with a readable reason. Dropping it here would
+ * strand the value where no row can reach it.
  */
 export function taskProfileOf(config: FactoryConfig, taskType: string): TaskProfileStart {
 	const task = config.taskTypes[taskType];
-	const agentType = profileAgentOf(config, taskType);
-	// `default-model` reaches an agent that maps the setting, and nothing else:
-	// a value the resolved agent cannot receive is not a start value, and the
-	// panel would hide a row it had filled in.
-	const mapsModel = config.agents[agentType]?.model !== undefined;
 	return {
-		agentType,
-		model: mapsModel ? (task?.model ?? config.defaultModel ?? "") : "",
+		agentType: profileAgentOf(config, taskType),
+		model: task?.model ?? config.defaultModel ?? "",
 		thinking: task?.thinking ?? "",
+		contextWindow: task?.contextWindow ?? "",
 	};
 }
 
@@ -83,6 +87,7 @@ export function resolveSettings({ config, taskType, edgeAgent }: SettingRequest)
 		// on the empty value the panel returns.
 		model: profile.model,
 		thinking: profile.thinking,
+		contextWindow: profile.contextWindow,
 	};
 }
 

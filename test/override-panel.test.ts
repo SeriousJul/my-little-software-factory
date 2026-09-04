@@ -48,6 +48,7 @@ const INITIAL: HandoffChoice = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /** Tear the renderer down whatever the body asserted. */

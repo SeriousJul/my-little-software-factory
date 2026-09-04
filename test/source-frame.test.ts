@@ -142,6 +142,7 @@ const HANDOFF_CHOICE = {
 	taskType: "implement",
 	model: "",
 	thinking: "",
+	contextWindow: "",
 };
 
 /**
@@ -325,6 +326,55 @@ describe("source-driven frames", () => {
 				WIDTH,
 				HEIGHT,
 				{ config: issuesConfig, state, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the detail follows a label-driven suggested task profile", async () => {
+		const state = freshState();
+		const source = new FakeSource("issues", "github-issues", success([ticket()]));
+		const config: FactoryConfig = {
+			...issuesConfig,
+			defaultModel: "factory-model",
+			taskTypes: {
+				...DEFAULT_CONFIG.taskTypes,
+				implement: {
+					...DEFAULT_CONFIG.taskTypes.implement,
+					agent: "codex",
+					model: "implement-model",
+					thinking: "high",
+				},
+				review: { ...DEFAULT_CONFIG.taskTypes.review, agent: "claude" },
+			},
+			taskRules: [{ taskType: "review", when: { labelsAny: ["ready-for-review"] } }],
+		};
+		try {
+			await withApp(
+				async (setup) => {
+					source.settle(success([ticket()]));
+					await awaitFrame(
+						setup,
+						(frame) => detailPaneText(frame).includes("Agent: codex"),
+						"the implement profile",
+					);
+					setup.mockInput.pressKey("r");
+					await callsReached(source, 2);
+					source.settle(success([{ ...ticket(), labels: ["ready-for-review"] }]));
+					const changed = await awaitFrame(
+						setup,
+						(frame) => detailPaneText(frame).includes("Suggested task type: review"),
+						"the review profile",
+					);
+					const detail = detailPaneText(changed);
+					expect(detail).toContain("Agent: claude");
+					expect(detail).toContain("Model: factory-model");
+					expect(detail).toContain("Thinking: left to agent");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config, state, sources: [source] },
 			);
 		} finally {
 			state.close();
