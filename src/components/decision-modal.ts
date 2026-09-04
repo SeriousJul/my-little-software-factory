@@ -39,7 +39,7 @@ import {
 	scrollbarRows,
 	useActionSelection,
 } from "./modal-chrome.ts";
-import { truncateToWidth } from "./text.ts";
+import { truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
 interface DecisionModalProps {
@@ -74,8 +74,29 @@ const POP_MS = 120;
 const POP_TICK_MS = 16;
 /** The box's size at the pop-in's start, of its final size. */
 const POP_START = 0.94;
+/** The border, the padding, and nothing else: a box's own cells. */
+const CHROME = 4;
 /** The one row under the border that names the context. */
 const CONTEXT_ROWS = 1;
+
+/** The hint of the decision sub-mode: row selection, scroll, confirm, edit.
+ *  The Live view's decision sub-mode reads the same hint from here. */
+export const DECISION_HINT =
+	"up/down select  j/k scroll  pgup/pgdn page  home/end  enter  e edit  esc";
+
+/**
+ * The modal's final box size: the terminal minus one cell of margin on
+ * every side. The Live view sizes its own box from it.
+ */
+export function decisionBoxSize(
+	terminalWidth: number,
+	terminalHeight: number,
+): { width: number; height: number } {
+	return {
+		width: Math.max(1, terminalWidth - MARGIN * 2),
+		height: Math.max(1, terminalHeight - MARGIN * 2),
+	};
+}
 
 /**
  * Fit the log window within a box that holds `contentRows` rows.
@@ -89,12 +110,70 @@ function logRows(contentRows: number, actionRows: number): number {
 }
 
 /**
+ * Fit the log window within a modal of a given box size.
+ *
+ * The context row and the action rows are always kept. The key hint yields
+ * before the log, so the operator can still read at least one log row when
+ * the terminal is short.
+ *
+ * The layout derives from the box, not the terminal, so the pop-in stays
+ * honest: while the box is still growing, lines wrap at its current width
+ * and the body window has its current row count. A line that is wider than
+ * the frame being drawn is what a terminal shows as a smudge.
+ *
+ * The `hint` names the row the layout decides the space for: the Live view
+ * passes its own shorter stream hint in its stream sub-mode.
+ */
+export function decisionLayout(
+	boxWidth: number,
+	boxHeight: number,
+	actionRows: number,
+	hint = DECISION_HINT,
+): { contentWidth: number; bodyRows: number; showHint: boolean } {
+	const contentWidth = Math.max(1, boxWidth - CHROME);
+	const innerRows = Math.max(0, boxHeight - CHROME);
+	// The hint yields its row before the body drops to zero: a too-small
+	// terminal still shows one log line.
+	const showHint = contentWidth >= widthOf(hint) && innerRows >= actionRows + 3;
+	const bodyRows = Math.max(0, innerRows - actionRows - 1 - (showHint ? 1 : 0));
+	return { contentWidth, bodyRows, showHint };
+}
+
+/**
+ * The modal pop-in: a short fade with the box growing to its final size.
+ *
+ * A self-driven progress keeps it deterministic in the test renderer,
+ * where the animation engine never ticks.
+ */
+export function useModalPopIn(
+	finalWidth: number,
+	finalHeight: number,
+): { pop: number; boxWidth: number; boxHeight: number } {
+	const [pop, setPop] = useState(0);
+	useEffect(() => {
+		const startedAt = performance.now();
+		const id = setInterval(() => {
+			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
+			setPop(1 - (1 - t) ** 3);
+			if (t >= 1) clearInterval(id);
+		}, POP_TICK_MS);
+		return () => clearInterval(id);
+	}, []);
+	const popFactor = POP_START + (1 - POP_START) * pop;
+	return {
+		pop,
+		boxWidth: Math.max(1, Math.round(finalWidth * popFactor)),
+		boxHeight: Math.max(1, Math.round(finalHeight * popFactor)),
+	};
+}
+
+/**
  * The turn log's rows at a width: text blocks render with the markdown
  * rules, tool calls are one dim note, "▸ name: target". A blank row stands
  * between two text blocks; a tool note sits close to the text that asked
  * for it. Failed calls wear the warning color.
  */
-function buildBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
+export function turnLogBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
 	const out: MdLine[] = [];
 	let previousWasText = false;
 	for (const entry of entries) {
@@ -172,14 +251,14 @@ export function DecisionModal({
 	// scrollbar can add wrap rows, so determine overflow once at the final
 	// width, then make the final window from the narrower text width.
 	const fullWidthBody = useMemo(
-		() => buildBody(entries, finalFrame.contentWidth),
+		() => turnLogBody(entries, finalFrame.contentWidth),
 		[entries, finalFrame.contentWidth],
 	);
 	const hasScrollbar = fullWidthBody.length > logRows(finalFrame.contentRows, actions.length);
 	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
-	const body = useMemo(() => buildBody(entries, bodyWidth), [entries, bodyWidth]);
+	const body = useMemo(() => turnLogBody(entries, bodyWidth), [entries, bodyWidth]);
 	const bodyRows = Math.min(body.length, logRows(frame.contentRows, actions.length));
 	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the

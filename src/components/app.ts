@@ -6,10 +6,12 @@
  * against the parallel limit. Enter on an open ticket hands it off; Enter
  * on an awaiting ticket opens the decision modal (close, Goto, or a
  * workflow handoff), while the factory does not decide the ticket itself
- * (auto mode, or an auto-close task type);
- * Enter on a blocked ticket Gotos the agent; Enter on an in-flight ticket
- * whose pane herdr no longer lists opens the missing modal (restart or
- * abandon). `a` toggles auto-handoff.
+ * (auto mode, or an auto-close task type); Enter on an in-flight ticket
+ * opens the Live view, which streams the agent's terminal output, offers
+ * the Goto, and becomes the decision modal when the turn settles and the
+ * factory waits for the operator; Enter on an in-flight ticket whose pane
+ * herdr no longer lists opens the missing modal (restart or abandon).
+ * `a` toggles auto-handoff.
  */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
@@ -104,6 +106,7 @@ import {
 } from "./controls.ts";
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
+import { LiveView } from "./live-view.ts";
 import { useMessageFacts } from "./message-facts.ts";
 import {
 	messageColor as colorOfMessage,
@@ -145,7 +148,14 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "leftover"; identity: string };
+	| { kind: "leftover"; identity: string }
+	| { kind: "live"; identity: string };
+
+/**
+ * The dim note under the last stream lines when the latest read failed:
+ * the Stale Agent output, the glossary's name for it.
+ */
+const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
 
 /**
  * The handoff waiting behind the override panel.
@@ -154,16 +164,27 @@ type Panel =
  * it carries what the confirm step needs to claim the same handoff: which
  * Ticket, and which Origin of its dispatch. Only the two routes the panel
  * opens from appear here: an open Ticket's own handoff, and a workflow route
- * the operator edited from its decision row. A Restart or an automatic route
- * never opens the panel, so neither Origin reaches it. The prompt's previous
- * message is not carried here: the confirm reads it from the Ticket it
- * claims, so an edit can never send a message another Ticket left behind.
+ * the operator edited from its decision row, in the decision modal or in the
+ * Live view's decision sub-mode. The workflow route also carries which
+ * ticket panel it opened from, so an Esc and a confirmed route return there
+ * instead of guessing. A Restart or an automatic route never opens the
+ * panel, so neither Origin reaches it. The prompt's previous message is not
+ * carried here: the confirm reads it from the Ticket it claims, so an edit
+ * can never send a message another Ticket left behind.
  */
-interface PendingOverride {
-	ticketIdentity: string;
-	origin: "open" | "workflow";
-	choice: HandoffChoice;
-}
+type PendingOverride =
+	| {
+			ticketIdentity: string;
+			origin: "open";
+			choice: HandoffChoice;
+	  }
+	| {
+			ticketIdentity: string;
+			origin: "workflow";
+			/** The ticket panel the route row was on: Esc and the confirm return there. */
+			from: "decision" | "live";
+			choice: HandoffChoice;
+	  };
 
 export type AppKey =
 	| "j"
@@ -308,6 +329,14 @@ export function App({
 	const [utility, setUtility] = useState<Utility>(null);
 	const [healths, setHealths] = useState(() => state?.sourceHealths() ?? []);
 	const [panel, setPanel] = useState<Panel>(null);
+	/**
+	 * The Live view's stream: the lines of the last pane read, and the stale
+	 * note while the latest read failed. Null while no stream runs.
+	 */
+	const [liveStream, setLiveStream] = useState<{
+		lines: readonly string[];
+		note: string | null;
+	} | null>(null);
 	const [autoMode, setAutoMode] = useState<boolean>(
 		() => (configProp ?? DEFAULT_CONFIG).autoHandoff,
 	);
@@ -451,6 +480,9 @@ export function App({
 	const actionContext: ActionContext = {
 		view,
 		focusedPane,
+		selectedInFlight:
+			(tickets[selectedIndex]?.state ?? null) === "handed-off" ||
+			(tickets[selectedIndex]?.state ?? null) === "running",
 		selectedConsultation,
 		selectedLeftover: (tickets[selectedIndex]?.leftover ?? null) !== null,
 		status,
@@ -1257,6 +1289,13 @@ export function App({
 			return;
 		}
 		if (pending.origin === "workflow") {
+			// A route confirmed from the Live view keeps the screen open, like
+			// the direct route: the stream moves to the new pane on the next
+			// tick. A refused claim comes back to the decision sub-mode, where
+			// the route row still stands.
+			if (pending.from === "live") {
+				setPanel({ kind: "live", identity: pending.ticketIdentity });
+			}
 			runRouteHandoff(ticket, choice);
 			return;
 		}
@@ -1266,15 +1305,16 @@ export function App({
 	/**
 	 * Leave the override panel with no handoff.
 	 *
-	 * A route edit came out of the decision modal, so Esc returns there: only
-	 * the edit is dropped, the turn is still undecided. An open-ticket edit
-	 * returns to the list, where it started.
+	 * A route edit returns to the panel it opened from - the decision modal
+	 * or the Live view's decision sub-mode: only the edit is dropped, the
+	 * turn is still undecided. An open-ticket edit returns to the list, where
+	 * it started.
 	 */
 	const cancelOverride = () => {
 		const pending = overrideRef.current;
 		setOverride(null);
 		if (pending?.origin === "workflow") {
-			setPanel({ kind: "decision", identity: pending.ticketIdentity });
+			setPanel({ kind: pending.from, identity: pending.ticketIdentity });
 		}
 	};
 	/**
@@ -1286,6 +1326,17 @@ export function App({
 		autoModeRef.current = next;
 		setAutoMode(next);
 	};
+
+	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
+	const taskTypeOf = (ticket: Ticket): string =>
+		ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+
+	/** The Live view's context line: repository, task type, agent. No time: the turn has not settled. */
+	const liveContextLine = (ticket: Ticket): string =>
+		[ticket.repository, taskTypeOf(ticket), ticket.handoff?.agentType ?? "?"]
+			.filter((part) => part !== "")
+			.join(" · ");
+
 	// The decision modal's rows: Close first, selected by default, then a
 	// Goto, then one handoff row per outgoing workflow edge the completed
 	// task type has, in config order: every edge stays reachable, and an
@@ -1303,8 +1354,7 @@ export function App({
 		entries: readonly TurnLogEntry[];
 		contextLine: string;
 	} => {
-		const taskType =
-			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const taskType = taskTypeOf(ticket);
 		const completion = ticket.lastCompletion;
 		const time = completion === null ? "" : completion.completedAt.slice(0, 16).replace("T", " ");
 		const contextLine = [ticket.repository, taskType, completion?.agentType ?? "?", time]
@@ -1361,15 +1411,18 @@ export function App({
 				decidedAt: new Date().toISOString(),
 			});
 			replaceTickets();
-			// A Goto writes no progress line of its own: it ends the decision's
-			// outcome and leaves any Handoff or refresh still running alone.
-			clearOperationMessage("none");
+			// The Live view closes on a Goto, so the confirmation stands on the
+			// Message line. The trace does not record a Goto, and a Handoff or
+			// refresh still running stands alone.
+			setNoticeMessage(`focused the agent of ticket ${ticket.identity}`);
 		});
 	};
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
 	// workflow handoff, or (from the missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
-		setPanel(null);
+		// A routed handoff from the Live view keeps the screen open: the
+		// stream resumes for the new agent pane on its next tick.
+		if (!(panel?.kind === "live" && key.startsWith("route:"))) setPanel(null);
 		if (state === undefined) return;
 		const handoffId = ticket.handoff?.attemptId ?? "";
 		if (key === "close") {
@@ -1412,8 +1465,7 @@ export function App({
 		const separator = rest.indexOf(":");
 		const edge = configRef.current.workflows[Number(rest.slice(0, separator))];
 		const target = rest.slice(separator + 1);
-		const taskType =
-			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const taskType = taskTypeOf(ticket);
 		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
 			setWarningMessage(`no workflow edge from ${taskType} to ${target}`);
 			return null;
@@ -1472,10 +1524,14 @@ export function App({
 		if (choice === null) return;
 		// The panel opens on this choice's agent: fetch its Model list (ADR 0010).
 		requestModelList(choice.agentType);
+		// The panel the route row was on is where an Esc and a confirmed route
+		// return: the decision modal, or the Live view's decision sub-mode.
+		const from = panel?.kind === "live" ? ("live" as const) : ("decision" as const);
 		setPanel(null);
 		setOverride({
 			ticketIdentity: ticket.identity,
 			origin: "workflow",
+			from,
 			choice,
 		});
 	};
@@ -1969,7 +2025,9 @@ export function App({
 		}
 	};
 	const runMissingAction = (ticket: Ticket, key: string) => {
-		setPanel(null);
+		// A restart from the Live view's Missing mode keeps the screen open:
+		// it returns to the stream when the restarted agent is back.
+		if (!(panel?.kind === "live" && key === "restart")) setPanel(null);
 		if (state === undefined) return;
 		if (key === "abandon") {
 			const applied = state.applyCompletionDecision({
@@ -2284,7 +2342,7 @@ export function App({
 		createControlDispatch({
 			mode,
 			context: controlContextFor(mode),
-			ungated: ["decide-completion", "handoff"],
+			ungated: ["decide-completion", "handoff", "live-view"],
 			onUnavailable: setWarningMessage,
 			onEmergencyExit: () => renderer.destroy(),
 			handlers: {
@@ -2292,9 +2350,10 @@ export function App({
 				// what Enter does instead of leaving a dimmed Hand off hint
 				// that still opens a panel.
 				"decide-completion": ({ context }) => decideCompletion(context),
-				// A missing or blocked agent has its own recovery action, and
-				// it can queue behind another Handoff, so this route stays
-				// open even while the normal Hand off control is unavailable.
+				// An open Ticket is the only one a Hand off starts, and it can
+				// queue behind nothing: the control stays ungated so a Ticket
+				// with no other Enter meaning still gets the catalogue's own
+				// refusal.
 				handoff: ({ context, refuse }) => {
 					const ticket = context.selectedTicket;
 					if (ticket === undefined || !isInFlight(ticket)) {
@@ -2302,13 +2361,20 @@ export function App({
 						else startHandoff(ticket, choiceFor(ticket));
 						return;
 					}
-					if (markerOf(ticket) === "blocked") runGoto(ticket);
-					else if (markerOf(ticket) === "missing")
+					// An in-flight Ticket answers to the Live view control,
+					// which resolves ahead of this one while it is available.
+					refuse();
+				},
+				// Enter on an in-flight ticket opens the Live view, the
+				// ticket's own screen, which streams the agent's output and
+				// offers the Goto. A missing agent keeps its own recovery
+				// screen: the restart or the abandon, and nothing else.
+				"live-view": ({ context, refuse }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined || !isInFlight(ticket)) return refuse();
+					if (markerOf(ticket) === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
-					// The Ticket is in flight and its agent is neither blocked
-					// nor missing: Enter has no other meaning here, so the
-					// control refuses itself with the catalogue's reason.
-					else refuse();
+					else setPanel({ kind: "live", identity: ticket.identity });
 				},
 				quit: () => renderer.destroy(),
 				detail: () => focusPane("detail"),
@@ -2601,12 +2667,16 @@ export function App({
 		} else selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
-	// missing-agent choice, and the leftover environment. Everything that reads
-	// an open panel goes through this list, so a new consultation kind can
-	// never be taken for a ticket panel by falling through the exclusions.
+	// live view over an in-flight agent, the missing-agent choice, and the
+	// leftover environment. Everything that reads an open panel goes through
+	// this list, so a new consultation kind can never be taken for a ticket
+	// panel by falling through the exclusions.
 	const ticketPanel =
 		panel !== null &&
-		(panel.kind === "decision" || panel.kind === "missing" || panel.kind === "leftover")
+		(panel.kind === "decision" ||
+			panel.kind === "live" ||
+			panel.kind === "missing" ||
+			panel.kind === "leftover")
 			? panel
 			: null;
 	const panelTicket =
@@ -2621,6 +2691,26 @@ export function App({
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
 			: undefined;
+	// The mode the open Live panel shows, re-derived from the ticket's current
+	// facts on every render, so the screen follows the ticket without the
+	// operator asking: the stream while the agent works (a settled turn the
+	// factory decides for itself keeps streaming), the decision body when
+	// the factory waits for the operator, the missing box when the pane is
+	// gone, and closed when the ticket leaves the in-flight states.
+	const liveMode: "stream" | "decision" | "missing" | "closed" =
+		panel?.kind === "live" && panelTicket !== undefined
+			? panelTicket.state === "open"
+				? "closed"
+				: panelTicket.state === "awaiting"
+					? autoMode || configRef.current.taskTypes[taskTypeOf(panelTicket)]?.autoClose === true
+						? "stream"
+						: "decision"
+					: markerOf(panelTicket) === "missing"
+						? "missing"
+						: "stream"
+			: "closed";
+	const liveDecision =
+		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;
 	/**
 	 * Whether the open ticket panel has nothing left to show.
 	 *
@@ -2634,10 +2724,58 @@ export function App({
 		ticketPanel !== null &&
 		(panelTicket === undefined ||
 			(ticketPanel.kind === "decision" && decision === undefined) ||
+			(ticketPanel.kind === "live" && liveMode === "closed") ||
 			(ticketPanel.kind === "leftover" && panelTicket.leftover === null));
 	useEffect(() => {
 		if (panelHasNothingToShow) setPanel(null);
 	}, [panelHasNothingToShow]);
+
+	// The Live view's stream: while the view shows the stream, a dedicated
+	// refresh reads the pane the ticket's current handoff records at the
+	// one-second cadence, the cadence the Consultation agent view uses
+	// outside of interaction. A routed handoff moves the stream to the new
+	// pane on its next tick. A failed read stands the last lines under a
+	// stale note, and the refresh continues.
+	useEffect(() => {
+		if (panel?.kind !== "live" || liveMode !== "stream") {
+			setLiveStream(null);
+			return;
+		}
+		const identity = panel.identity;
+		let active = true;
+		const reader = new HerdrAgentReader(commandRunner);
+		const refresh = async () => {
+			// Re-read the pane the ticket's current handoff records, so a
+			// routed handoff moves the stream to the new pane on the next
+			// tick.
+			const ticket = ticketsRef.current.find((item) => item.identity === identity);
+			const paneId = ticket?.handoff?.paneId ?? null;
+			if (paneId === null) {
+				if (active)
+					setLiveStream({
+						lines: [],
+						note: "no agent pane is recorded for this ticket",
+					});
+				return;
+			}
+			const output = await reader.readPane(paneId, configRef.current.completionMessageLines);
+			if (!active) return;
+			if (output === null) {
+				setLiveStream((previous) => ({
+					lines: previous?.lines ?? [],
+					note: STALE_STREAM_NOTE,
+				}));
+			} else {
+				setLiveStream({ lines: output.split("\n"), note: null });
+			}
+		};
+		void refresh();
+		const timer = setInterval(() => void refresh(), 1000);
+		return () => {
+			active = false;
+			clearInterval(timer);
+		};
+	}, [panel, liveMode, commandRunner]);
 	const emptyMessage =
 		state === undefined
 			? undefined
@@ -2928,45 +3066,86 @@ export function App({
 		// a decision nor a missing-agent choice, and must not fall through to one.
 		panel !== null &&
 			panelTicket !== undefined &&
-			(panel.kind === "decision" && decision !== undefined
-				? createElement(DecisionModal, {
-						title: panelTicket.title,
-						contextLine: decision.contextLine,
-						entries: decision.entries,
-						actions: decision.actions,
-						onAction: (key) => runDecisionAction(panelTicket, key),
-						onEditAction: (key) => openRouteOverride(panelTicket, key),
-						onCancel: () => setPanel(null),
-						context: ticketContext,
-						inputActive: utility === null,
-						onHelp: () => openGuide("decision-modal"),
-						onMessage: () => openMessage("decision-modal"),
-						onUnavailable: setWarningMessage,
-						message: visibleMessage,
-						onEmergencyExit: () => renderer.destroy(),
-					})
-				: panel.kind === "leftover" && panelTicket.leftover !== null
-					? createLeftoverPanel(panelTicket)
-					: createElement(MissingModal, {
-							title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
-							bodyLines: [
-								"The agent's pane is not in herdr's agent list.",
-								`Handoffs: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
+			panel.kind === "decision" &&
+			decision !== undefined &&
+			createElement(DecisionModal, {
+				title: panelTicket.title,
+				contextLine: decision.contextLine,
+				entries: decision.entries,
+				actions: decision.actions,
+				onAction: (key) => runDecisionAction(panelTicket, key),
+				onEditAction: (key) => openRouteOverride(panelTicket, key),
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("decision-modal"),
+				onMessage: () => openMessage("decision-modal"),
+				onUnavailable: setWarningMessage,
+				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
+		// The Live view streams the agent's terminal while the ticket is in
+		// flight. When the turn settles and the factory waits for the
+		// operator, the same box carries the decision sub-mode: the turn
+		// log, the decision's rows, and their keys.
+		panel !== null &&
+			panel.kind === "live" &&
+			panelTicket !== undefined &&
+			liveMode !== "closed" &&
+			liveMode !== "missing" &&
+			createElement(LiveView, {
+				title: panelTicket.title,
+				contextLine: liveContextLine(panelTicket),
+				blocked: markerOf(panelTicket) === "blocked",
+				body:
+					liveDecision !== undefined
+						? { kind: "turn-log" as const, entries: liveDecision.entries }
+						: liveStream === null
+							? { kind: "stream" as const, lines: [], note: null }
+							: { kind: "stream" as const, lines: liveStream.lines, note: liveStream.note },
+				actions:
+					liveDecision !== undefined
+						? liveDecision.actions
+						: [
+								{
+									key: "goto",
+									label: "Goto",
+									detail: "focus the agent's pane; the handoff stays open",
+								},
 							],
-							actions: [
-								{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
-								{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
-							],
-							onAction: (key) => runMissingAction(panelTicket, key),
-							onCancel: () => setPanel(null),
-							context: ticketContext,
-							inputActive: utility === null,
-							onHelp: () => openGuide("missing-modal"),
-							onMessage: () => openMessage("missing-modal"),
-							onUnavailable: setWarningMessage,
-							message: visibleMessage,
-							onEmergencyExit: () => renderer.destroy(),
-						})),
+				decideable: liveDecision !== undefined,
+				onAction: (key) => runDecisionAction(panelTicket, key),
+				onEditAction: (key) => openRouteOverride(panelTicket, key),
+				onCancel: () => setPanel(null),
+			}),
+		panel !== null &&
+			panelTicket !== undefined &&
+			(panel.kind === "missing" || liveMode === "missing") &&
+			createElement(MissingModal, {
+				title: truncateToWidth(`Missing: ${panelTicket.title}`, 40),
+				bodyLines: [
+					"The agent's pane is not in herdr's agent list.",
+					`Handoffs: ${panelTicket.handoffCount} of ${config.maxHandoffsPerTicket}`,
+				],
+				actions: [
+					{ key: "restart", label: "Restart", detail: "same task type, same workspace" },
+					{ key: "abandon", label: "Abandon", detail: "end the work cycle" },
+				],
+				onAction: (key) => runMissingAction(panelTicket, key),
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("missing-modal"),
+				onMessage: () => openMessage("missing-modal"),
+				onUnavailable: setWarningMessage,
+				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
+		panel !== null &&
+			panel.kind === "leftover" &&
+			panelTicket !== undefined &&
+			panelTicket.leftover !== null &&
+			createLeftoverPanel(panelTicket),
 		panel !== null &&
 			panel.kind === "consultation-safety" &&
 			panelConsultation !== undefined &&

@@ -1021,24 +1021,29 @@ describe("the contextual Action bar", () => {
 		);
 	});
 
-	test("a non-open ticket dims Hand off and Override with the reason", async () => {
+	test("a handed-off ticket swaps Hand off for the Live view and dims Override", async () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(COLORS.dim));
+				// The bar names the one meaning Enter runs on this ticket. Hand
+				// off does not stand dimmed beside it: a hint whose key runs
+				// something else would point at the wrong control. Override
+				// keeps its dimmed row with the reason.
+				expect(spanColorAt(setup, barRow, "Live view")).toEqual(rgb(COLORS.text));
+				expect(actionBarRowOf(frame)).not.toContain("Enter Hand off");
 				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(COLORS.dim));
-				await press(setup, "return", "the handoff refusal", (f) =>
-					messageRowOf(f).includes("only an open Ticket can be handed off"),
-				);
-				// The panel is refused the same way: the Action bar keeps its
-				// dimmed Override hint, so the refusal reads from the panel row.
+				// e is refused with the handoff reason, and no panel opens.
 				setup.mockInput.pressKey("e");
 				const refused = await settle(setup);
-				expect(refused).not.toContain("❯ Agent");
+				expect(refused).not.toContain("Live:");
 				expect(messageRowOf(refused)).toContain("only an open Ticket can be handed off");
+				// Enter opens the Live view instead of starting a handoff.
+				await press(setup, "return", "the Live view", (f) =>
+					f.includes("Live: Fix pan drift in split panes"),
+				);
 			},
 			WIDTH,
 			HEIGHT,

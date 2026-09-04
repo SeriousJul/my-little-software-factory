@@ -188,6 +188,23 @@ const completionEligibility = (context: ControlContext): ControlAvailability => 
 		? available()
 		: unavailable("the selected Ticket has no completion to decide");
 };
+/**
+ * An in-flight Ticket uses Enter to watch its work: the Live view streams
+ * the agent's terminal, and the missing screen stands in for it when the
+ * agent is gone. The view runs nothing by itself, so it stays open while a
+ * Handoff is active: the rows it carries own their own gates, and the
+ * operator still needs the missing screen to queue a restart. The claim
+ * inside the handler owns the marker check, so the gate only states the
+ * state rule.
+ */
+const liveViewEligibility = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	if (ticket.state === "handed-off" || ticket.state === "running") return available();
+	return unavailable("only an in-flight Ticket has a Live view");
+};
+/** What the in-flight meaning of Enter does, for the guide's current section. */
+const LIVE_VIEW_NOTE = "opens the Live view on an in-flight Ticket";
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -356,6 +373,21 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: handoffEligibility(),
 	},
 	{
+		id: "live-view",
+		label: "Live view",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: [...baseModes],
+		availability: liveViewEligibility,
+		// Enter means three things in the base modes, and the Key guide names
+		// all of them whatever the selected Ticket runs, so the guide has to
+		// say what this meaning of Enter is for.
+		guideNote: LIVE_VIEW_NOTE,
+	},
+	{
 		id: "decide-completion",
 		label: "Decide",
 		keys: () => ["return"],
@@ -365,9 +397,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 70,
 		modes: [...baseModes],
 		availability: completionEligibility,
-		// Enter means two things in the base modes, and the Key guide names
-		// both whatever the selected Ticket runs, so the guide has to say what
-		// this meaning of Enter is for.
+		// Enter means three things in the base modes, and the Key guide names
+		// all of them whatever the selected Ticket runs, so the guide has to
+		// say what this meaning of Enter is for.
 		guideNote: DECIDE_NOTE,
 	},
 	{

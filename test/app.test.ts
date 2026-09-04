@@ -1162,6 +1162,9 @@ describe("the control plane", () => {
 					const modeSection = rows.slice(modeIdx, globalIdx).join("\n");
 					expect(modeSection).toContain("Move");
 					expect(modeSection).toContain("Hand off");
+					// The three meanings of Enter each keep their own row.
+					expect(modeSection).toContain("Live view");
+					expect(modeSection).toContain("Decide");
 					const globalSection = rows.slice(globalIdx, controlPlaneIdx).join("\n");
 					expect(globalSection).toContain("Quit");
 					// Closing the guide returns to the tickets view.

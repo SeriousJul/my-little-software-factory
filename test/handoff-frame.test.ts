@@ -442,8 +442,24 @@ describe("the Enter handoff", () => {
 			props,
 		);
 	});
-	test("a handoff attempt on a non-open ticket shows the hint and issues no command", async () => {
+
+	test("enter on a non-open ticket opens the Live view and issues no handoff command", async () => {
 		const runner = new FakeRunner();
+		runner.set(
+			"herdr",
+			[
+				"agent",
+				"read",
+				"pane-implement",
+				"--lines",
+				"200",
+				"--source",
+				"recent-unwrapped",
+				"--format",
+				"text",
+			],
+			{ stdout: "the agent is editing the layout math\n" },
+		);
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
@@ -451,19 +467,29 @@ describe("the Enter handoff", () => {
 				await press(setup, "j", "the selection to move to the second ticket", (f) =>
 					showsTicket(f, SAMPLE_TICKETS[1]),
 				);
+				// Enter opens the Live view, which streams the agent's output. No
+				// handoff starts, and nothing focuses before the Goto confirms.
 				setup.mockInput.pressEnter();
-				const frame = await awaitFrame(
+				await awaitFrame(
 					setup,
-					(f) => messageRowOf(f).includes("only an open Ticket can be handed off"),
-					"the non-open hint",
+					(f) => f.includes("Live: Fix pan drift in split panes"),
+					"the Live view",
 				);
-				// The hint sits on the Message line, the ticket stays where it is.
-				expect(selectedRow(frame)).toContain("[handed-off]");
-				// No command ever ran.
-				expect(runner.calls).toHaveLength(0);
-				// The panel is refused the same way: e shows the hint, no panel.
-				// The shared Action bar keeps showing its dimmed Override hint,
-				// so the refusal is read from the panel's row, not the word.
+				expect(runner.commands()).toContain(
+					"herdr agent read pane-implement --lines 200 --source recent-unwrapped --format text",
+				);
+				expect(runner.commands().join("\n")).not.toContain("agent focus");
+				await awaitFrame(
+					setup,
+					(f) => f.includes("the agent is editing the layout math"),
+					"the stream",
+				);
+				// Esc closes the view; the ticket stays where it is.
+				setup.mockInput.pressEscape();
+				const closed = await awaitFrame(setup, (f) => !f.includes("Live:"), "the view to close");
+				expect(selectedRow(closed)).toContain("[handed-off]");
+
+				// The override panel is refused the same way: e shows the hint.
 				setup.mockInput.pressKey("e");
 				const refused = await settle(setup);
 				expect(refused).not.toContain("❯ Agent");
