@@ -57,7 +57,6 @@ import {
 	type NameCollision,
 	type OwnNameKnowledge,
 	resolveHandoffChoice,
-	restoreControlPlaneFocus,
 } from "../handoff.ts";
 import {
 	type DispatchResult,
@@ -674,6 +673,7 @@ export function App({
 			config: () => configRef.current,
 			home: homeDir,
 			tickets: () => ticketsRef.current,
+			controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
 				onStatus: (status) => setStatus(status),
@@ -1585,7 +1585,10 @@ export function App({
 		setHistoryFilter("open");
 		openConsultations();
 		replaceConsultations();
-		if (replaced === undefined) beginConsultationLaunch(consultation);
+		// A Replacement opens like a new Consultation: the module builds the
+		// linked record with its bounded recovery context, then the same launch
+		// route starts it.
+		beginConsultationLaunch(consultation);
 	};
 	const recoverConsultationOpening = (consultation: Consultation) => {
 		if (consultation.state !== "opening") return;
@@ -1795,7 +1798,7 @@ export function App({
 				setInteraction(false);
 				// Settle the queued input before announcing the exit: the last
 				// key the operator sent still belongs to the Agent.
-				void (consultationOperations?.flushInput() ?? Promise.resolve()).then(() =>
+				void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
 					setStatus({ kind: "info", text: "left Agent interaction mode" }),
 				);
 				return;
@@ -1806,7 +1809,7 @@ export function App({
 					? null
 					: translateAgentKey(key, configRef.current.interactionExitKey);
 			if (selected !== undefined && selected.paneId !== null && event !== null) {
-				const queued = consultationOperations?.enqueueInput(selected.paneId, event);
+				const queued = consultationOperations?.enqueue(selected.paneId, event);
 				if (queued === undefined) return;
 				void queued.then(
 					(result) => {

@@ -2,9 +2,10 @@
  * Consultation lifecycle operations.
  *
  * The control plane owns the Consultation screens, but this module owns every
- * external lifecycle change. It keeps the operation queue and the interrupted
- * opening guard private so launch, recovery, response, and close operations
- * cannot race on one Repository.
+ * external lifecycle change. It keeps the operation queue, the interrupted
+ * opening guard, and the live close private so launch, recovery, response, and
+ * close operations cannot race on one Repository, and a Force-close ends a
+ * cleanup instead of queueing another one behind it.
  */
 import { randomUUID } from "node:crypto";
 
@@ -14,7 +15,9 @@ import {
 	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
 	inspectLiveCheckout,
+	isStaleAgentOutputWarning,
 	type LiveCheckoutSafety,
+	STALE_AGENT_OUTPUT_WARNING,
 	serializeRepositoryOperation,
 	validateConsultationInput,
 	validateResponseInput,
@@ -25,11 +28,17 @@ import {
 	checkConsultationStart,
 	handOffConsultation,
 	renderConsultationPrompt,
+	restoreControlPlaneFocus,
 } from "./handoff.ts";
 import { consultationAgentName } from "./naming.ts";
 import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
 import { type RepositoryMapping, type ResolvedRepository, resolveRepository } from "./repo.ts";
-import { type CommandRunner, commandFailureText } from "./runner.ts";
+import {
+	type CommandResult,
+	type CommandRunner,
+	commandFailureText,
+	errorMessage,
+} from "./runner.ts";
 import type { Consultation, ConsultationResource, FactoryState } from "./state.ts";
 
 export interface ConsultationStatus {
@@ -61,6 +70,14 @@ export interface ConsultationOperationsOptions {
 	callbacks: ConsultationOperationCallbacks;
 	/** Persist a sibling-clone mapping, when repository resolution creates one. */
 	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	/**
+	 * The workspace the control plane runs in, when it runs inside herdr.
+	 *
+	 * A workspace close moves herdr's focus off the closed workspace, so the
+	 * cleanup returns it here: the operator worked the close from the control
+	 * plane. Outside herdr there is none, and herdr's own choice stands.
+	 */
+	controlPlaneWorkspaceId?: string | null;
 	textBatchBytes?: number;
 }
 
@@ -78,43 +95,15 @@ export type ConsultationReplacementInput = Omit<
 	initialInput?: string;
 };
 
-/** The small interface of the Consultation lifecycle module. */
-export interface ConsultationOperationsInterface {
-	/** Create a durable opening record without starting external work. */
-	create(input: ConsultationCreateInput): Consultation | undefined;
-	/** Start an existing opening record. */
-	launch(consultation: Consultation): Promise<void>;
-	/** Recover an interrupted opening or verify its surviving Agent. */
-	recover(consultation: Consultation): Promise<void>;
-	/** Create and start a linked Replacement Consultation. */
-	replace(replaced: Consultation, input: ConsultationReplacementInput): Consultation | undefined;
-	/** Build the bounded context shown in the replacement launcher. */
-	replacementInput(consultationId: string): string;
-	/** Deliver a validated response draft to an awaiting Consultation. */
-	respond(consultation: Consultation, draft: string): Promise<void>;
-	/** Close owned resources and finish the Consultation when cleanup is confirmed. */
-	close(consultation: Consultation): Promise<void>;
-	/** Close the record while retaining every unconfirmed owned resource. */
-	forceClose(consultation: Consultation): void;
-	/** Delete closed local history. */
-	delete(consultation: Consultation): boolean;
-	/** Confirm a live checkout conflict once, then continue the launch. */
-	confirmSafetyConflict(consultation: Consultation): void;
-	/** Record whether the latest Agent output read was stale. */
-	recordOutputRead(consultationId: string, output: string | null): void;
-	/** Queue one Agent terminal input event. */
-	enqueue(
-		paneId: string,
-		event: AgentInputEvent,
-	): Promise<ReturnType<CommandRunner["run"]> extends Promise<infer Result> ? Result : never>;
-	/** Flush terminal input before the control plane takes keyboard ownership. */
-	flush(): Promise<void>;
-	/** Explicit aliases used by the view adapter. */
-	enqueueInput(
-		paneId: string,
-		event: AgentInputEvent,
-	): Promise<ReturnType<CommandRunner["run"]> extends Promise<infer Result> ? Result : never>;
-	flushInput(): Promise<void>;
+/**
+ * One Consultation close the module has taken responsibility for.
+ *
+ * A Force-close sets `cancelled` on the live operation, and the cleanup
+ * checks it before every external call: an operator who forced the record
+ * closed must never find a workspace or pane closed behind that decision.
+ */
+interface CloseOperation {
+	cancelled: boolean;
 }
 
 interface LaunchConflict {
@@ -124,7 +113,16 @@ interface LaunchConflict {
 
 type LaunchOutcome = ConsultationHandoffOutcome | LaunchConflict;
 
-const STALE_OUTPUT_WARNING = "Stale Agent output";
+/** The herdr environment one close takes down, and what survives it. */
+interface ClosePlan {
+	/** The one cleanup command, or none when no owned environment remains. */
+	command: readonly string[] | undefined;
+	/** Resources the command confirmed closed. */
+	closes: ConsultationResource[];
+	/** Resources the operator keeps: shared, or a worktree that never closes. */
+	retains: Array<{ kind: string; resourceId: string; details?: string }>;
+}
+
 const WORKTREE_REMAIN = "retained after close: worktree and branch remain";
 
 export function createConsultationOperations(
@@ -133,7 +131,8 @@ export function createConsultationOperations(
 	return new ConsultationOperations(options);
 }
 
-export class ConsultationOperations implements ConsultationOperationsInterface {
+/** The Consultation lifecycle interface: one owner for every external change. */
+export class ConsultationOperations {
 	private readonly state: FactoryState;
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
@@ -143,8 +142,10 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 	private readonly persistRepositoryMapping?: (
 		mapping: RepositoryMapping,
 	) => Promise<string | undefined>;
+	private readonly controlPlaneWorkspaceId: string | null;
 	private readonly operationQueues = new Map<string, Promise<void>>();
 	private readonly openingOperations = new Set<string>();
+	private readonly closeOperations = new Map<string, CloseOperation>();
 	private readonly inputQueue: ConsultationInputQueue;
 
 	constructor(options: ConsultationOperationsOptions) {
@@ -155,6 +156,7 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 		this.tickets = options.tickets;
 		this.callbacks = options.callbacks;
 		this.persistRepositoryMapping = options.persistRepositoryMapping;
+		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId ?? null;
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
 	}
 
@@ -262,14 +264,29 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 			.finally(() => this.openingOperations.delete(current.id));
 	}
 
+	/**
+	 * Build the Replacement record of a Consultation the operator cannot continue.
+	 *
+	 * Only a missing or failed Consultation is replaced: the two Recovery
+	 * required states the view offers `c` for. The new record carries the
+	 * bounded recovery context, and the replaced record keeps its own state, so
+	 * the failed work stays visible beside it. The view starts the replacement
+	 * with `launch`, exactly as it starts a new Consultation.
+	 */
 	replace(replaced: Consultation, input: ConsultationReplacementInput): Consultation | undefined {
-		const replacement = this.create({
+		const current = this.state.consultation(replaced.id) ?? replaced;
+		if (current.state !== "missing" && current.state !== "failed") {
+			this.status(
+				"error",
+				`a Replacement Consultation continues a missing or failed Consultation, not one that is ${current.state}`,
+			);
+			return undefined;
+		}
+		return this.create({
 			...input,
-			initialInput: input.initialInput ?? this.state.replacementInput(replaced.id),
-			replacementOf: replaced.id,
+			initialInput: input.initialInput ?? this.state.replacementInput(current.id),
+			replacementOf: current.id,
 		});
-		if (replacement !== undefined) void this.launch(replacement);
-		return replacement;
 	}
 
 	respond(consultation: Consultation, draft: string): Promise<void> {
@@ -330,14 +347,27 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 		);
 	}
 
+	/**
+	 * Take down the herdr environment a Consultation owns, and nothing else.
+	 *
+	 * The close holds its Repository queue for the whole cleanup, and a
+	 * Force-close that runs while this one is queued or in flight cancels it:
+	 * from that decision on, this cleanup issues no command at all.
+	 */
 	close(consultation: Consultation): Promise<void> {
 		const current = this.state.consultation(consultation.id) ?? consultation;
 		if (current.state === "closed") return Promise.resolve();
+		if (this.closeOperations.has(current.id)) {
+			this.status("warning", "Consultation close is already in progress");
+			return Promise.resolve();
+		}
 		const started = current.state === "closing" || this.state.beginConsultationClose(current.id);
 		if (!started) {
 			this.status("warning", "Consultation is already closing or closed");
 			return Promise.resolve();
 		}
+		// A Consultation recovered by handle can hold a pane the record never
+		// registered: it is still the one this close takes down.
 		if (current.paneId !== null && !current.resources.some((item) => item.kind === "pane"))
 			this.state.recordConsultationResource(current.id, {
 				kind: "pane",
@@ -345,106 +375,169 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 				owned: true,
 				details: "Recovered Consultation Agent pane",
 			});
+		const operation: CloseOperation = { cancelled: false };
+		this.closeOperations.set(current.id, operation);
 		this.callbacks.onConsultationsChanged();
 		this.status("info", `closing Consultation ${current.id.slice(0, 8)}...`);
 		return serializeRepositoryOperation(
 			this.operationQueues,
 			current.repository.identity,
 			async () => {
-				try {
-					const output =
-						current.paneId === null
-							? null
-							: await new HerdrAgentReader(this.runner).readPane(
-									current.paneId,
-									this.config().completionMessageLines,
-								);
-					if (output !== null) this.state.captureConsultationPartial(current.id, output);
-					const refreshed = this.state.consultation(current.id) ?? current;
-					const resources = refreshed.resources.filter(
-						(item) => item.owned && !item.confirmedClosed,
-					);
-					const workspace = resources.find((item) => item.kind === "workspace");
-					const tab = resources.find((item) => item.kind === "tab");
-					const pane = resources.find((item) => item.kind === "pane");
-					const agent = resources.find((item) => item.kind === "agent");
-					const worktrees = resources.filter((item) => item.kind === "worktree");
-					const markWorktreesRetained = () => {
-						for (const resource of worktrees)
-							this.state.markConsultationResourceShared(
-								current.id,
-								resource.kind,
-								resource.resourceId,
-								WORKTREE_REMAIN,
-							);
-					};
-					let command: readonly string[] | undefined;
-					let closes: ConsultationResource[] = [];
-					const workspaceId = workspace?.resourceId ?? current.workspaceId;
-					if (workspaceId !== null && pane !== undefined) {
-						const topology = await workspaceTopology(
-							this.runner,
-							workspaceId,
-							pane.resourceId,
-							tab?.resourceId ?? current.tabId,
-						);
-						if (!topology.known)
-							throw new Error("could not verify the Consultation workspace topology");
-						if (topology.workspaceExclusive && workspace !== undefined) {
-							command = ["workspace", "close", workspace.resourceId];
-							closes = resources.filter((item) => item.kind !== "worktree");
-							markWorktreesRetained();
-						} else if (topology.ownedTabExclusive && tab !== undefined) {
-							command = ["tab", "close", tab.resourceId];
-							closes = [tab, pane, ...(agent === undefined ? [] : [agent])];
-							if (workspace !== undefined)
-								this.state.markConsultationResourceShared(
-									current.id,
-									"workspace",
-									workspace.resourceId,
-								);
-							markWorktreesRetained();
-						} else {
-							command = ["pane", "close", pane.resourceId];
-							closes = [pane, ...(agent === undefined ? [] : [agent])];
-							if (workspace !== undefined)
-								this.state.markConsultationResourceShared(
-									current.id,
-									"workspace",
-									workspace.resourceId,
-								);
-							if (tab !== undefined)
-								this.state.markConsultationResourceShared(current.id, "tab", tab.resourceId);
-							markWorktreesRetained();
-						}
-					} else if (pane !== undefined) {
-						command = ["pane", "close", pane.resourceId];
-						closes = [pane, ...(agent === undefined ? [] : [agent])];
-					}
-					if (command !== undefined) {
-						const result = await this.runner.run("herdr", command);
-						if (result.code !== 0) throw new Error(commandFailureText(result));
-						for (const resource of closes)
-							this.state.markConsultationResourceClosed(
-								current.id,
-								resource.kind,
-								resource.resourceId,
-							);
-					}
-					this.state.finishConsultationClose(current.id);
-					this.callbacks.onConsultationsChanged();
-					this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
-				} catch (error) {
-					this.state.recordConsultationCloseFailure(current.id, errorMessage(error));
-					this.callbacks.onConsultationsChanged();
-					this.status("error", `Consultation close needs recovery: ${errorMessage(error)}`);
-				}
+				await this.runClose(current, operation);
 			},
-		);
+		).finally(() => {
+			this.closeOperations.delete(current.id);
+		});
 	}
 
+	private async runClose(current: Consultation, operation: CloseOperation): Promise<void> {
+		// Cancelled before it reached the head of the queue: the operator forced
+		// this record closed, so herdr is left alone.
+		if (operation.cancelled) return;
+		try {
+			const output =
+				current.paneId === null
+					? null
+					: await new HerdrAgentReader(this.runner).readPane(
+							current.paneId,
+							this.config().completionMessageLines,
+						);
+			if (operation.cancelled) return;
+			// The last lines the control plane can still read become a partial
+			// snapshot, so the history does not end with the opening prompt.
+			if (output !== null) this.state.captureConsultationPartial(current.id, output);
+			const refreshed = this.state.consultation(current.id) ?? current;
+			const resources = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
+			const plan = await this.planCloseCleanup(current, resources);
+			// The last check before the destructive call: a Force-close that ran
+			// during the topology probe stops the cleanup here, not on the next
+			// command.
+			if (operation.cancelled) return;
+			for (const retained of plan.retains)
+				this.state.markConsultationResourceShared(
+					current.id,
+					retained.kind,
+					retained.resourceId,
+					retained.details,
+				);
+			if (plan.command !== undefined) {
+				const result = await this.runner.run("herdr", plan.command);
+				if (result.code !== 0) throw new Error(commandFailureText(result));
+				// A closed workspace moves herdr's focus (a linked worktree
+				// removal lands on the repository's parent, a closed workspace
+				// on a neighbor): return it to the control plane, where the
+				// operator worked the close. A tab or pane close keeps the
+				// workspace, so herdr's focus stands.
+				if (plan.command[0] === "workspace")
+					await restoreControlPlaneFocus(this.runner, this.controlPlaneWorkspaceId);
+				for (const resource of plan.closes)
+					this.state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
+			}
+			if (operation.cancelled) return;
+			this.state.finishConsultationClose(current.id);
+			this.callbacks.onConsultationsChanged();
+			this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
+		} catch (error) {
+			// A force-closed record needs no recovery warning: the operator
+			// already accepted the resources that may remain.
+			if (operation.cancelled) return;
+			this.state.recordConsultationCloseFailure(current.id, errorMessage(error));
+			this.callbacks.onConsultationsChanged();
+			this.status("error", `Consultation close needs recovery: ${errorMessage(error)}`);
+		}
+	}
+
+	/**
+	 * Choose the one command a close may issue, from what it owns alone.
+	 *
+	 * A worktree and its branch never close: the operator's work outlives the
+	 * Consultation. An adopted workspace, and a tab that holds a foreign pane,
+	 * belong to someone else: only what is inside them closes.
+	 */
+	private async planCloseCleanup(
+		current: Consultation,
+		resources: readonly ConsultationResource[],
+	): Promise<ClosePlan> {
+		const workspace = resources.find((item) => item.kind === "workspace");
+		const tab = resources.find((item) => item.kind === "tab");
+		const pane = resources.find((item) => item.kind === "pane");
+		const agent = resources.find((item) => item.kind === "agent");
+		const worktrees = resources
+			.filter((item) => item.kind === "worktree")
+			.map((item) => ({
+				kind: item.kind,
+				resourceId: item.resourceId,
+				details: WORKTREE_REMAIN,
+			}));
+		const withAgent = (closes: ConsultationResource[]): ConsultationResource[] =>
+			agent === undefined ? closes : [...closes, agent];
+		const sharedWorkspace =
+			workspace === undefined ? [] : [{ kind: workspace.kind, resourceId: workspace.resourceId }];
+		const workspaceId = workspace?.resourceId ?? current.workspaceId;
+		// Nothing to take down, so nothing is proved shared: the resources stay
+		// recorded exactly as the launch left them.
+		if (pane === undefined) return { command: undefined, closes: [], retains: [] };
+		if (workspaceId === null)
+			// No workspace handle to probe the topology of: the pane is still the
+			// Consultation's own, and everything else stands as it is.
+			return {
+				command: ["pane", "close", pane.resourceId],
+				closes: withAgent([pane]),
+				retains: [],
+			};
+		const topology = await workspaceTopology(
+			this.runner,
+			workspaceId,
+			pane.resourceId,
+			tab?.resourceId ?? current.tabId,
+		);
+		if (!topology.known) throw new Error("could not verify the Consultation workspace topology");
+		// Only an owned workspace may be closed whole: an adopted workspace
+		// belongs to someone else even while it stands empty.
+		if (topology.workspaceExclusive && workspace !== undefined)
+			return {
+				command: ["workspace", "close", workspace.resourceId],
+				closes: resources.filter((item) => item.kind !== "worktree"),
+				retains: worktrees,
+			};
+		if (topology.ownedTabExclusive && tab !== undefined)
+			return {
+				command: ["tab", "close", tab.resourceId],
+				closes: withAgent([tab, pane]),
+				retains: [...sharedWorkspace, ...worktrees],
+			};
+		// A foreign pane shares the owned tab: close the Consultation's pane
+		// alone, and leave the tab and the workspace beside it.
+		return {
+			command: ["pane", "close", pane.resourceId],
+			closes: withAgent([pane]),
+			retains: [
+				...sharedWorkspace,
+				...(tab === undefined ? [] : [{ kind: tab.kind, resourceId: tab.resourceId }]),
+				...worktrees,
+			],
+		};
+	}
+
+	/**
+	 * Close the record, keep every resource, and stop any cleanup still queued.
+	 *
+	 * A Force-close answers a herdr that cannot confirm its work. It records
+	 * what may remain and runs nothing: it never removes a worktree or a
+	 * branch, so the operator's work survives.
+	 */
 	forceClose(consultation: Consultation): void {
 		const current = this.state.consultation(consultation.id) ?? consultation;
+		// The guard is shared with close: a pending or queued cleanup learns of
+		// this decision before its next external call, so it stops there.
+		const pending = this.closeOperations.get(current.id);
+		if (pending !== undefined) pending.cancelled = true;
+		// A closed record is never opened again by a Force-close: its resources
+		// were confirmed or recorded as remaining when it closed.
+		if (current.state === "closed") {
+			this.status("warning", "Consultation cleanup has already finished");
+			return;
+		}
 		if (current.state !== "closing" && !this.state.beginConsultationClose(current.id)) {
 			this.status("warning", "Consultation cleanup has already finished");
 			return;
@@ -471,6 +564,12 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 		return true;
 	}
 
+	/**
+	 * Approve a live checkout conflict once, and continue the launch.
+	 *
+	 * The override is one-shot and durable: it belongs to this opening, so a
+	 * later launch of another Consultation is checked again.
+	 */
 	confirmSafetyConflict(consultation: Consultation): void {
 		this.state.setConsultationLiveConflictOverride(consultation.id);
 		const current = this.state.consultation(consultation.id);
@@ -481,33 +580,36 @@ export class ConsultationOperations implements ConsultationOperationsInterface {
 		return this.state.replacementInput(consultationId);
 	}
 
+	/**
+	 * Record the Stale Agent output of one display refresh.
+	 *
+	 * A failed read is the only thing that sets it, and a read that returns
+	 * clears it again, whatever wrote it: the observation settles a turn
+	 * without output through the same warning, and a later good read proves
+	 * the view is current again.
+	 */
 	recordOutputRead(consultationId: string, output: string | null): void {
 		const current = this.state.consultation(consultationId);
 		if (current === undefined) return;
-		const stale = output === null;
-		if (stale && current.warning !== STALE_OUTPUT_WARNING) {
-			this.state.setConsultationWarning(consultationId, STALE_OUTPUT_WARNING);
+		if (output === null) {
+			if (isStaleAgentOutputWarning(current.warning)) return;
+			this.state.setConsultationWarning(consultationId, STALE_AGENT_OUTPUT_WARNING);
 			this.callbacks.onConsultationsChanged();
-		} else if (!stale && current.warning === STALE_OUTPUT_WARNING) {
-			this.state.setConsultationWarning(consultationId, null);
-			this.callbacks.onConsultationsChanged();
+			return;
 		}
+		if (!isStaleAgentOutputWarning(current.warning)) return;
+		this.state.setConsultationWarning(consultationId, null);
+		this.callbacks.onConsultationsChanged();
 	}
 
-	enqueue(paneId: string, event: AgentInputEvent): ReturnType<CommandRunner["run"]> {
+	/** Queue one Agent terminal input event, in terminal order. */
+	enqueue(paneId: string, event: AgentInputEvent): Promise<CommandResult> {
 		return this.inputQueue.enqueue(paneId, event);
 	}
 
+	/** Settle queued input before the control plane takes keyboard ownership. */
 	flush(): Promise<void> {
 		return this.inputQueue.flush();
-	}
-
-	enqueueInput(paneId: string, event: AgentInputEvent): ReturnType<CommandRunner["run"]> {
-		return this.enqueue(paneId, event);
-	}
-
-	flushInput(): Promise<void> {
-		return this.flush();
 	}
 
 	private claimOpening(id: string): boolean {
@@ -728,8 +830,4 @@ async function workspaceTopology(
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

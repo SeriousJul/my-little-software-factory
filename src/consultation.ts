@@ -10,6 +10,24 @@ import type { Consultation, ConsultationResource } from "./state.ts";
 export const CONSULTATION_INPUT_LIMIT = 64 * 1024;
 export const CONSULTATION_SNAPSHOT_LIMIT = 1024 * 1024;
 
+/**
+ * The Stale Agent output warning: the glossary's name for the condition
+ * where the latest read of an Agent terminal failed.
+ *
+ * One owner spells it here, so the refresh that records a failed read and
+ * the observation that settles a turn without output leave the same fact on
+ * the record, and one clear path removes it.
+ */
+export const STALE_AGENT_OUTPUT_WARNING = "Stale Agent output";
+
+/** The same fact as an older control plane wrote it, still held by a durable record. */
+const LEGACY_STALE_AGENT_OUTPUT_WARNING = "Agent output is stale";
+
+/** Whether a warning is the Stale Agent output fact, in either spelling. */
+export function isStaleAgentOutputWarning(warning: string | null | undefined): boolean {
+	return warning === STALE_AGENT_OUTPUT_WARNING || warning === LEGACY_STALE_AGENT_OUTPUT_WARNING;
+}
+
 /** Serialize topology and cleanup work per Repository without blocking others. */
 export function serializeRepositoryOperation<T>(
 	queues: Map<string, Promise<void>>,
