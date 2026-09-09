@@ -14,6 +14,14 @@ This TUI.
 It observes the factory and issues work to agents.
 _Avoid_: dashboard, UI
 
+**Main view**:
+The always-present base surface of the control plane that holds the Ticket section and the Consultation section.
+_Avoid_: dashboard, home, screen, primary view
+
+**Section**:
+A collapsible part of the Main view that holds a list pane and a detail pane. One section is expanded, and the other is collapsed to its header row.
+_Avoid_: tab, pane, view, accordion
+
 **Action bar**:
 The persistent guide to controls that are relevant to the operator's current interaction mode.
 The anchor hint holds the row's end cells: the surface's own Close on a utility overlay, and Help wherever a bar can open the Key guide. A frame too narrow for the anchor states one of its whole keys, and never part of one.
@@ -36,7 +44,7 @@ _Avoid_: key map, binding table
 **Key guide**:
 The on-demand catalog of the controls in the control catalogue, with the current interaction mode and global controls shown first.
 It includes controls that the action bar does not show, and every meaning of a key the current mode dispatches: Enter is listed as both Hand off and Decide, each with its own reason.
-The Consultation launcher, Consultation view, response editor, Agent terminal and Consultation confirmation panel still dispatch their own keys, so no control of theirs is in the catalogue and the guide does not list them (issue #9).
+The Consultation launcher, response editor, Agent terminal and Consultation confirmation panel still dispatch their own keys, so no control of theirs is in the catalogue and the guide does not list them (issue #9).
 _Avoid_: help popup, keybinding popin, shortcut window
 
 **Decision modal**:
@@ -54,7 +62,7 @@ The Interaction mode above a ticket whose agent is missing: restart or abandon.
 _Avoid_: missing panel, restart popup
 
 **Interaction mode**:
-The part of the control plane that currently owns keyboard input, such as the ticket list, ticket detail, override panel, Consultation launcher, Consultation view, Agent terminal, Key guide, Decision modal, Live view, Missing modal, or Message view.
+The part of the control plane that currently owns keyboard input, such as the list pane or the detail pane of a section, the override panel, the Consultation launcher, the Agent terminal, the Key guide, the Decision modal, the Live view, the Missing modal, or the Message view.
 _Avoid_: context, screen
 
 **Text field**:
@@ -62,6 +70,11 @@ A single-line control in which the operator enters or edits a free-text value.
 In the override panel, the Model is a Text field when the Agent has no Model list.
 The Context window is a Text field that takes digits only, because its value reaches the Agent as one argument.
 _Avoid_: input, free-text row
+
+**Draft field**:
+A multi-line control in which the operator enters or edits text addressed to an Agent.
+The Consultation launcher's initial input and the response editor are Draft fields.
+_Avoid_: input, textarea, free-text row
 
 **Ticket**:
 An actionable unit of work from an external ticket source, carrying the repository it belongs to.
@@ -166,10 +179,6 @@ _Avoid_: queued response, pending prompt
 **Consultation launcher**:
 The Interaction mode that collects a Consultation type, Repository, and initial operator input before opening a Consultation.
 _Avoid_: new consultation modal, quick prompt
-
-**Consultation view**:
-The Interaction mode that shows Consultations, their Agent output or Captured history, and takes the operator input that continues them.
-_Avoid_: session list, consultation panel
 
 **Replacement Consultation**:
 A new Consultation opened with recovery context and an explicit link to a missing or failed Consultation.

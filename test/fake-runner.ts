@@ -166,6 +166,7 @@ export function emptyAgentRunner(): FakeRunner {
 export interface ListedWorkspace {
 	id: string;
 	checkoutPath?: string;
+	focused?: boolean;
 }
 
 /** A herdr `workspace list` JSON response. */
@@ -174,6 +175,7 @@ export function workspaceListJson(workspaces: ListedWorkspace[]): string {
 		result: {
 			workspaces: workspaces.map((w) => ({
 				workspace_id: w.id,
+				focused: w.focused === true,
 				worktree: w.checkoutPath !== undefined ? { checkout_path: w.checkoutPath } : undefined,
 			})),
 		},

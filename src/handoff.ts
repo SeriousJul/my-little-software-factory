@@ -1550,6 +1550,13 @@ function collisionsAfterPreviousTabClose(
 export interface CloseCleanupOptions {
 	/** Remove the checkout even when herdr says it is dirty. */
 	force?: boolean;
+	/**
+	 * The workspace the control plane itself runs in, when it runs inside
+	 * herdr. A successful cleanup that removes the workspace returns herdr's
+	 * focus there, because the operator worked the close from the control
+	 * plane and herdr moves the focus when a workspace disappears.
+	 */
+	controlPlaneWorkspaceId?: string | null;
 }
 
 /**
@@ -1592,6 +1599,9 @@ export async function closeHandoffEnvironment(
 ): Promise<string | undefined> {
 	const force = options.force === true;
 	const reach = closeCleanupReach(handoff);
+	if (reach.scope === "none") {
+		return undefined;
+	}
 	if (reach.scope === "workspace") {
 		// The checkout on disk and the herdr workspace behind it: herdr
 		// worktree remove closes the workspace with the checkout and never
@@ -1603,11 +1613,13 @@ export async function closeHandoffEnvironment(
 		const removed = await runner.run("herdr", removeArgs);
 		if (removed.code === 0) {
 			// The workspace closed with the checkout: the environment is gone.
+			await restoreControlPlaneFocus(runner, options.controlPlaneWorkspaceId);
 			return undefined;
 		}
 		const code = herdrErrorCode(removed);
 		if (code === "workspace_not_found") {
 			// The workspace is already gone: there is nothing to clean up.
+			await restoreControlPlaneFocus(runner, options.controlPlaneWorkspaceId);
 			return undefined;
 		}
 		if (code === "worktree_remove_failed") {
@@ -1615,6 +1627,7 @@ export async function closeHandoffEnvironment(
 			// what remains, so close it.
 			const closed = await runner.run("herdr", ["workspace", "close", reach.workspaceId]);
 			if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
+				await restoreControlPlaneFocus(runner, options.controlPlaneWorkspaceId);
 				return undefined;
 			}
 			return herdrFailureText(closed);
@@ -1624,6 +1637,9 @@ export async function closeHandoffEnvironment(
 		return herdrFailureText(removed);
 	}
 	if (reach.scope === "tab") {
+		// The tab close keeps the workspace and the tabs beside it, so herdr
+		// leaves its workspace focus where it stood: the cleanup leaves it
+		// there too.
 		const result = await runner.run("herdr", ["tab", "close", reach.tabId]);
 		if (result.code === 0) {
 			// The tab closed: the environment is gone.
@@ -1637,6 +1653,24 @@ export async function closeHandoffEnvironment(
 		return herdrFailureText(result);
 	}
 	return undefined;
+}
+
+/**
+ * Return herdr's workspace focus to the workspace the control plane runs in.
+ *
+ * herdr moves its focus when a workspace disappears: a removed linked
+ * worktree returns to the repository's parent workspace, and a closed
+ * workspace lands on a neighbor. The operator worked the close from the
+ * control plane, so its workspace is where the view returns. Best effort: a
+ * focus failure never fails the close, and herdr's own choice of the focus
+ * stays when there is no control plane workspace to return to.
+ */
+export async function restoreControlPlaneFocus(
+	runner: CommandRunner,
+	controlPlaneWorkspaceId: string | null | undefined,
+): Promise<void> {
+	if (controlPlaneWorkspaceId === null || controlPlaneWorkspaceId === undefined) return;
+	await runner.run("herdr", ["workspace", "focus", controlPlaneWorkspaceId]);
 }
 
 /** A failed herdr call: the ticket stays where the claim left it. */

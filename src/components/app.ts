@@ -60,6 +60,7 @@ import {
 	type OwnNameKnowledge,
 	renderConsultationPrompt,
 	resolveHandoffChoice,
+	restoreControlPlaneFocus,
 } from "../handoff.ts";
 import { consultationAgentName } from "../naming.ts";
 import {
@@ -259,6 +260,13 @@ function realRunner(): CommandRunner {
 	lazyRealRunner ??= createChildProcessRunner();
 	return lazyRealRunner;
 }
+
+// The workspace the control plane runs in, when it runs inside a herdr pane.
+// A close cleanup that removes a workspace returns herdr's focus here,
+// because the operator worked the close from the control plane and herdr
+// moves the focus when a workspace disappears. Outside herdr the id is null
+// and herdr's own choice stands.
+const CONTROL_PLANE_WORKSPACE_ID = process.env.HERDR_WORKSPACE_ID ?? null;
 
 export function App({
 	config: configProp,
@@ -1980,6 +1988,14 @@ export function App({
 				if (command === undefined) return;
 				const result = await commandRunner.run("herdr", command);
 				if (result.code !== 0) throw new Error(commandFailureText(result));
+				// A closed workspace moves herdr's focus (a linked worktree
+				// removal lands on the repository's parent, a closed workspace
+				// on a neighbor): return it to the control plane, where the
+				// operator worked the close. A tab or pane close keeps the
+				// workspace, so herdr's focus stands.
+				if (command[0] === "workspace") {
+					await restoreControlPlaneFocus(commandRunner, CONTROL_PLANE_WORKSPACE_ID);
+				}
 				for (const resource of closes)
 					state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
 			},
@@ -3451,7 +3467,7 @@ async function settleCloseCleanup(
 				workspaceId: handoff.workspaceId,
 			},
 			runner,
-			options,
+			{ ...options, controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID },
 		);
 		if (failure === undefined) {
 			// The cleanup reached as far as herdr let it: the whole workspace it

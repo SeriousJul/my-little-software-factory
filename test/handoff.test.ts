@@ -2298,7 +2298,8 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 
 		expect(failure).toBeUndefined();
 		// worktree remove closes the workspace with the checkout and never
-		// deletes the branch: there is no workspace close after it.
+		// deletes the branch: there is no workspace close after it. No control
+		// plane workspace was named, so the focus restore never runs.
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
 		const joined = runner.commands().join("\n");
 		expect(joined).not.toContain("branch -D");
@@ -2326,7 +2327,8 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		expect(failure).toBe(
 			"fatal: the worktree contains modified or untracked files, use --force to delete it (dirty_worktree_requires_force)",
 		);
-		// The workspace stays: the checkout is still there.
+		// The workspace stays: the checkout is still there, and the operator
+		// may still be working in it, so no focus restore follows.
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
 	});
 
@@ -2466,5 +2468,86 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 
 		expect(failure).toBeUndefined();
 		expect(runner.commands()).toEqual([]);
+	});
+
+	test("a worktree close returns herdr's focus to the control plane's workspace", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+			{ controlPlaneWorkspaceId: "ws-cp" },
+		);
+
+		// herdr moves its focus to the repository's parent workspace when a
+		// linked worktree is removed. The operator worked the close from the
+		// control plane, so its workspace is where the view returns.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace focus ws-cp",
+		]);
+	});
+
+	test("a tab close leaves herdr's focus where it stood", async () => {
+		const runner = new FakeRunner();
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "live-worktree", tabId: "tab-1", workspaceId: "ws-1" },
+			runner,
+			{ controlPlaneWorkspaceId: "ws-cp" },
+		);
+
+		// The tab close keeps the workspace and the tabs beside it, so herdr
+		// leaves its workspace focus where it stood: the cleanup never issues
+		// a focus command.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
+	});
+
+	test("a left workspace close returns herdr's focus to the control plane's workspace", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"worktree_remove_failed","message":"fatal: the path is not a working tree"},"id":"cli:worktree:remove"}\n',
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+			{ controlPlaneWorkspaceId: "ws-home" },
+		);
+
+		// The workspace the fallback closed is gone too: the focus returns to
+		// the control plane.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace close ws-1",
+			"herdr workspace focus ws-home",
+		]);
+	});
+
+	test("a focus failure never fails the close and never retries", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", ["workspace", "focus", "ws-cp"], {
+			code: 1,
+			stderr: "error: the herdr server is down\n",
+		});
+
+		const failure = await closeHandoffEnvironment(
+			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
+			runner,
+			{ controlPlaneWorkspaceId: "ws-cp" },
+		);
+
+		// The environment is gone: the close stands. herdr's own choice of the
+		// focus stands too: the restore gave up after one error.
+		expect(failure).toBeUndefined();
+		expect(runner.commands()).toEqual([
+			"herdr worktree remove --workspace ws-1",
+			"herdr workspace focus ws-cp",
+		]);
 	});
 });
