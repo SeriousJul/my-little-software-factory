@@ -33,6 +33,7 @@ import {
 	confirmPanel,
 	detailPaneText,
 	frameText,
+	messageRowOf,
 	openConsultationPanel,
 	openLauncher,
 	press,
@@ -264,6 +265,29 @@ function stubTopology(
  * Agent name and branch a fresh launch picks, answers `agent list` with a
  * test-controlled list, and pins every other command exactly.
  */
+/**
+ * A runner that holds every command one predicate names, so a test can keep an
+ * operation in flight for as long as it needs.
+ */
+class GatedRunner implements CommandRunner {
+	private readonly inner: CommandRunner;
+	private readonly gate: (command: string, args: readonly string[]) => boolean;
+
+	constructor(inner: CommandRunner, gate: (command: string, args: readonly string[]) => boolean) {
+		this.inner = inner;
+		this.gate = gate;
+	}
+
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
+	}
+
+	run(command: string, args: readonly string[], options?: CommandOptions): Promise<CommandResult> {
+		if (!this.gate(command, args)) return this.inner.run(command, args, options);
+		return new Promise<CommandResult>(() => {});
+	}
+}
+
 class ConsultationRunner implements CommandRunner {
 	private readonly inner: FakeRunner;
 	agentListJson: string;
@@ -1912,6 +1936,101 @@ describe("The full Consultation operator flow", () => {
 				WIDTH,
 				30,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a settling refresh cannot clear the Consultation's progress line", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const ticketSource = { name: "tickets", kind: "github-issues" };
+		const sourceConfig = {
+			name: "tickets",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
+		const outcome = {
+			status: "success" as const,
+			fetchedAt: "2026-09-01T10:00:00.000Z",
+			tickets: [],
+		};
+		state.initializeSources([ticketSource]);
+		state.applyFetch(ticketSource, outcome);
+		const source = new FakeSource(ticketSource.name, ticketSource.kind, outcome);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		// The Consultation's own herdr command never answers, so the Consultation
+		// stays in flight and its progress line holds the Message line. The
+		// source's refresh runs on its own, so the two operations overlap.
+		const runner = new GatedRunner(
+			new ConsultationRunner(inner, agentListJson([])),
+			(command, args) =>
+				command === "herdr" && args.includes("worktree") && args.includes("create"),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					// The mount fetch answers first, so the refresh has an idle
+					// source to start.
+					source.settle(outcome);
+					await settle(setup);
+					await press(setup, "v", "the Consultation section", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await openLauncher(setup);
+					setup.mockInput.pressTab();
+					setup.mockInput.pressTab();
+					setup.mockInput.typeText("review auth");
+					// The opening owns the line: it is the only operation running.
+					await press(
+						setup,
+						"return",
+						"the launch progress",
+						(f) =>
+							messageRowOf(f).startsWith("Working: ") && messageRowOf(f).includes("Consultation"),
+					);
+					// The refresh runs beside it, from the Ticket section, and
+					// covers the one line with its own progress. The Consultation's
+					// progress survives the switch: it is the frame's line.
+					await press(
+						setup,
+						"t",
+						"the Ticket section",
+						(f) => rowsOf(f)[0]?.startsWith("▾ Tickets") === true,
+					);
+					setup.mockInput.pressKey("r");
+					const refreshing = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("refreshing 1 sources"),
+						"the refresh progress",
+					);
+					expect(messageRowOf(refreshing)).toContain("refreshing 1 sources");
+					source.settle(outcome);
+					// Its settle must not leave the line blank: the Consultation
+					// still runs, and the line returns to its progress.
+					const returned = await awaitFrame(
+						setup,
+						(f) =>
+							messageRowOf(f).startsWith("Working: ") && messageRowOf(f).includes("Consultation"),
+						"the Consultation's progress to return",
+					);
+					expect(messageRowOf(returned)).toContain("Working: ");
+					expect(messageRowOf(returned)).not.toContain("refreshing");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), sources: [sourceConfig] },
+					home,
+					sources: [source],
+					pollIntervalMs: 60_000,
+				},
 			);
 		} finally {
 			state.close();

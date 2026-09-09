@@ -115,8 +115,6 @@ export interface ControlContext {
 	consultationTypesConfigured: boolean;
 	/** The configured key that leaves Agent interaction mode. */
 	interactionExitKey?: string;
-	/** Whether the response editor holds the keys. */
-	responseEditor?: boolean;
 	/**
 	 * The decision modal's row under the cursor carries settings to edit.
 	 *
@@ -279,6 +277,16 @@ const consultationMode = (mode: InteractionMode): boolean =>
 	mode === "consultation-list" || mode === "consultation-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
+/**
+ * Why a Ticket-section control answers nothing in the Consultation section.
+ *
+ * The control stays a candidate in both sections so the key the operator
+ * already knows states a readable refusal instead of doing nothing at all.
+ */
+const ticketOnly = (context: ControlContext): ControlAvailability =>
+	ticketBaseMode(context.mode)
+		? available()
+		: unavailable("this control is available only in the Ticket section");
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -646,10 +654,13 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 65,
-		modes: [...ticketBaseModes],
-		availability: handoffEligibility(
-			"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
-		),
+		modes: [...baseModes],
+		availability: (context) =>
+			ticketBaseMode(context.mode)
+				? handoffEligibility(
+						"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
+					)(context)
+				: ticketOnly(context),
 	},
 	{
 		id: "recover",
@@ -686,8 +697,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
-		modes: [...ticketBaseModes],
-		availability: leftoverClear,
+		modes: [...baseModes],
+		availability: (context) =>
+			ticketBaseMode(context.mode) ? leftoverClear(context) : ticketOnly(context),
 	},
 	{
 		// The Agent terminal forwards every key to the Agent. Only the

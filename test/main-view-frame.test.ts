@@ -101,6 +101,12 @@ function seedConsultation(state: FactoryState, id: string): void {
 		agentName: `consultation-${id.slice(0, 8)}`,
 		createdAt: "2026-09-01T10:00:00.000Z",
 	});
+	state.setConsultationAgent(id, {
+		paneId: `pane-${id.slice(0, 8)}`,
+		tabId: `tab-${id.slice(0, 8)}`,
+		workspaceId: `ws-${id.slice(0, 8)}`,
+		sessionId: `sess-${id.slice(0, 8)}`,
+	});
 	state.settleConsultationTurn(id, null, "the design holds", "idle");
 }
 
@@ -333,6 +339,45 @@ describe("the merged Main view", () => {
 		}
 	});
 
+	test("the Consultation panes answer the mouse as the Ticket panes do", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seedConsultation(state, uid("5"));
+		seedConsultation(state, uid("6"));
+		try {
+			await booted(
+				async (setup) => {
+					await press(setup, "v", "the Consultation section", (f) =>
+						f.includes("grill acme/factory"),
+					);
+					// The headers, the mode line, and the pane's border and padding
+					// put the list's second row at frame row 6. One click selects
+					// the Consultation under the pointer and keeps the section's
+					// list focused, as the Ticket list does.
+					await mouseClick(setup, 10, 6);
+					const selected = await awaitFrame(
+						setup,
+						(f) => rowsOf(f)[6]?.includes("❯ ") === true,
+						"the clicked Consultation to become selected",
+					);
+					expect(selected).toContain("┌─❯ Consultations");
+					// A click inside the Agent view moves the pane focus, and the
+					// Action bar follows with the detail's own hints.
+					await mouseClick(setup, 70, 5);
+					const detailed = await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Agent view"),
+						"the Agent view to take focus",
+					);
+					expect(actionBarRowOf(detailed)).toContain("←/h List");
+				},
+				state,
+				undefined,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("a refusal names the state that is missing, in the section that owns it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		try {
@@ -347,14 +392,12 @@ describe("the merged Main view", () => {
 						messageRowOf(f).includes("no Consultation is selected"),
 					);
 					expect(refused).toContain("no open Consultations");
-					// And the Ticket section's controls answer for Tickets.
-					await press(setup, "t", "the Ticket section", (f) =>
-						headerOf(f, "Tickets").startsWith("▾"),
+					// A Ticket-section control answers the same way in the
+					// Consultation section: the key states what is missing.
+					const ticketRefusal = await press(setup, "e", "the override refusal", (f) =>
+						messageRowOf(f).includes("only in the Ticket section"),
 					);
-					const ticketRefusal = await press(setup, "w", "the leftover refusal", (f) =>
-						messageRowOf(f).includes("no Ticket is selected"),
-					);
-					expect(messageRowOf(ticketRefusal)).toContain("no Ticket is selected");
+					expect(messageRowOf(ticketRefusal)).toContain("only in the Ticket section");
 				},
 				state,
 				undefined,

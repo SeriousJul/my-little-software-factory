@@ -70,6 +70,12 @@ as `npm run mutate -- --dryRunOnly`.
 
 ## Controls
 
+The Main view holds two accordion sections, the Ticket section and the
+Consultation section, and one control catalogue, one Action bar, and one
+Message line answer for both. The expanded section owns the pane rows, and the
+mode the bar and the guide state derives from that section and its focused
+pane.
+
 The control plane keeps a contextual Action bar in the last row of the
 terminal. It shows the controls the current interaction mode can run, dims
 one it will not run in the present state, and names the reason on the Message
@@ -78,66 +84,70 @@ line when the operator presses it anyway.
 The in-app Key guide lists the controls of the modes the app dispatches from
 its catalogue. Press `?` or `F1` to open it from anywhere, including the
 panes and the modals. It carries the Ticket list, the Ticket detail, the
-override panel in both of its row kinds, the decision modal, the missing
-modal, the guide and the Message view, the controls that are only reachable
-from another mode, Quit, and the `Ctrl+C` emergency exit, each with what it
-does and, where the app will not run it, why. Press `Esc`, `F1`, or `?` to
-close it.
+Consultation list, the Consultation detail, the Agent terminal, the response
+editor, the override panel in both of its row kinds, the decision modal, the
+missing modal, the guide and the Message view, the controls that are only
+reachable from another mode, Quit, and the `Ctrl+C` emergency exit, each with
+what it does and, where the app will not run it, why. Press `Esc`, `F1`, or
+`?` to close it.
 
 This file does not repeat that list. A table of keys here went stale twice:
 the guide and the Action bar are generated from one control catalogue
 (`src/components/controls.ts`), so what the app shows is what the app runs.
 
-The controls the Consultation surfaces use are listed below. They are the
-part of the app that does not dispatch from the catalogue yet, so the Key
-guide does not list them at all: this file and each surface's own key handling
-are where those keys are stated.
-
 ### Consultation controls
 
-The Consultation surfaces are the part of the app that still handles their
-own keys: the Consultation launcher, the legacy Consultation view, the
-response editor, Agent interaction, and the Consultation confirmation panel
-are not wired to the shared control catalogue yet (issue #9). The keys they
-use are these:
+The Consultation section dispatches from the same catalogue as the Ticket
+section, so its controls appear in the Action bar and the Key guide with their
+availability and reasons. `v` expands the Consultation section on the
+Consultation that needs the operator, if one does: an awaiting response wins,
+and among the recovery items the oldest wins. Once the section is expanded:
 
-- The Consultation view keeps an independent list and Agent view. `v` opens
-	it on the Consultation that needs the operator, if one does: an awaiting
-	response wins, and among the recovery items the oldest wins. In the
-	launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
-	launches, `Shift+Enter` inserts a newline, and `Esc` cancels. A
-	Consultation starts on the agent, environment, model, thinking level, and
-	context window its type names, each one passed through the agent's own
-	template, so the type must name an agent that maps every setting it
-	sets.
-- `Enter` on an awaiting response opens the response editor. The editor
-	stores its draft in SQLite, `Enter` submits it, `Shift+Enter` inserts a
-	newline, and `Esc` leaves the draft in place.
-- `End` follows the latest Agent output after scrolling. Closed history shows
-	cleanup results and retained resources, including resources left by a
-	Force-close.
-- A blocked Agent uses Agent interaction mode instead of the response editor.
-	The default exit key is `F12`; configure `interaction-exit-key` with a
-	function key or `Ctrl` plus one letter.
-Every surface the control plane owns dispatches from the catalogue, so the Key
-guide and the Action bar state its controls: the Ticket list, the Ticket
-detail, the override panel in both of its row kinds, the decision modal, the
-missing modal, and the two utility overlays. The five Consultation surfaces
-named above do not: each keeps its own key handling, and no control of theirs
-is in the catalogue or the guide. The Consultation confirmation panel is the
-one surface of those five that shares the modal chrome and the Message line;
-it shares neither the dispatch nor the catalogue. The Ticket list and detail
-move with the row, page and jump keys, focus the detail with `l` or `Right` and
-the list with `h` or `Left`, hand an open ticket off with `Enter`, open the
-decision modal on an awaiting one, the missing modal on a ticket whose agent
-is gone, and the override panel with `e`. `a` toggles auto-handoff, `r`
-refreshes the sources, `v` and `t` switch views, and `q` quits.
+- `c` launches a Consultation, `f` cycles the history filter through open,
+	closed, and all, `x` closes the selected Consultation, and `d` deletes a
+	closed one.
+- `Enter` answers the selected Consultation: it opens the response editor on
+	an awaiting one and Agent interaction on a working or blocked one. In the
+	Consultation detail, `r` is the same Respond control and `t` the same
+	Interact control; in the Consultation list `r` stays Refresh.
+- `r` recovers a Consultation whose opening was interrupted, and refreshes the
+	Consultation projection and the Ticket sources otherwise.
+- `t` expands the Ticket section again, and `h` or `Left` moves between the
+	section's own list and detail panes.
+
+The Consultation launcher, the response editor, the Agent terminal, and the
+Consultation confirmation panels still handle their own keys (issue #9). The
+Action bar and the Key guide state the response editor and the Agent terminal
+from the catalogue, so the hint an operator sees on those surfaces is the key
+those surfaces really accept. In
+the launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
+launches, `Shift+Enter` inserts a newline, and `Esc` cancels. A Consultation
+starts on the agent, environment, model, thinking level, and context window
+its type names, each one passed through the agent's own template, so the type
+must name an agent that maps every setting it sets. In the response editor the
+draft lives in SQLite, `Enter` submits it, `Shift+Enter` inserts a newline, and
+`Esc` leaves the draft in place. `End` follows the latest Agent output after
+scrolling, and closed history shows cleanup results and retained resources,
+including resources left by a Force-close. A blocked Agent uses Agent
+interaction mode instead of the response editor: every key reaches the Agent
+except the exit key, whose default is `F12` and which the Action bar states
+while the mode holds the keys; configure `interaction-exit-key` with a function
+key or `Ctrl` plus one letter.
+
+The override panel and the leftover clear act only in the Ticket section, so
+an unexpected key cannot fire while the operator works Consultations. The
+Ticket list and detail move with the row, page and jump
+keys, focus the detail with `l` or `Right` and the list with `h` or `Left`, hand
+an open ticket off with `Enter`, open the decision modal on an awaiting one,
+the missing modal on a ticket whose agent is gone, and the override panel with
+`e`. `a` toggles auto-handoff in either section, `r` refreshes, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
-the Action bar reserve the two bottom rows at every terminal size: below the
-smallest useful frame the panes give way to a size message and a compact Help
-control, and a surface that cannot draw its own rows says so instead of
+the Action bar reserve the two bottom rows at every terminal size, and the two
+section headers reserve the two rows above the panes: below the smallest useful
+frame (40 columns by 9 rows) the panes give way to a size message and a compact
+Help control, and a surface that cannot draw its own rows says so instead of
 painting them over its border. One hint holds the row's end cells: Help on a
 bar that can open the Key guide, and the overlay's own Close on a utility
 overlay. A frame too narrow for that hint states one of its whole keys, so the
@@ -369,6 +379,20 @@ builds an agent in a workspace it is taking away.
 
 ## Layout
 
+The Main view is one surface with two accordion sections: the Ticket section
+and the Consultation section. One section is expanded and holds two panes side
+by side; the other is collapsed to its header row. `t` and `v`, or a click on
+a header, expand a section, and the keyboard focus lands on its list pane. A
+collapsed section keeps its list selection and its detail scroll, so a
+re-expand shows the same place. The rows run: the two section headers, the mode
+line (while the control plane has state to observe), the expanded section's
+panes, the Message line, and the Action bar. The Consultation header carries
+that section's attention facts, its awaiting-response and recovery counts, the
+bell marker while the bell rings, and "new output" while the section is
+expanded, so a Consultation that needs the operator is visible in either state
+and no free-standing attention line exists. Below the smallest useful frame the
+compact frame drops the headers with the panes.
+
 Two panes side by side, flex-sized to the terminal.
 The list pane on the left shows every ticket with its state badge, task
 type badge, title, and repository. The task type badge is the type the
@@ -412,7 +436,8 @@ does not reflow as the bar appears. Click or drag the scrollbar, or use the
 wheel or trackpad over any part of the detail. Fast vertical wheel events
 accelerate to the configured limit. Horizontal and Shift-wheel input is
 ignored. A click or wheel action focuses its pane. Clicking a visible Ticket
-selects it, and a list wheel event selects one adjacent Ticket.
+selects it, a list wheel event selects one adjacent Ticket, and a click on a
+collapsed section header expands that section.
 
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.

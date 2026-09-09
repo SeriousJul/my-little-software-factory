@@ -29,22 +29,35 @@ export type ProgressOwner = WorkingKind | "none";
  */
 export function useMessageFacts(sourceHealth: string | undefined) {
 	const [facts, setFacts] = useState<MessageFacts>({});
-	// The kind of the visible working fact, so a settle clears its own
-	// progress and no one else's.
-	const workingKindRef = useRef<WorkingKind | null>(null);
+	// The progress lines of the operations that are running right now, oldest
+	// first. One Message line shows the last one written, and a settle returns
+	// the line to whichever operation still runs.
+	const workingLines = useRef(new Map<WorkingKind, string>());
 
-	/** Whether the progress line named by a caller is the visible one. */
-	const takesWorking = useCallback((owner: ProgressOwner): boolean => {
-		if (workingKindRef.current === null || workingKindRef.current !== owner) return false;
-		workingKindRef.current = null;
+	/** The line a settle leaves on the Message line: the next runner's, if any. */
+	const visibleWorking = useCallback((): string | undefined => {
+		const entries = [...workingLines.current.values()];
+		return entries.at(-1);
+	}, []);
+
+	const dropWorking = useCallback((owner: WorkingKind) => {
+		if (!workingLines.current.has(owner)) return false;
+		workingLines.current.delete(owner);
 		return true;
 	}, []);
 
-	// A new operation replaces the outcome the last one left on the line with
-	// its own Working progress. Source health is not an operation: it
-	// survives so it can return when the progress clears.
+	/**
+	 * Write one operation's progress line.
+	 *
+	 * A new operation replaces the outcome the last one left on the line with
+	 * its own Working progress, and its own line returns when the operation
+	 * that covered it settles. Source health is not an operation: it survives
+	 * so it can return when the progress clears.
+	 */
 	const working = useCallback((text: string, kind: WorkingKind) => {
-		workingKindRef.current = kind;
+		// Rewrite the owner's entry last, so it is the line the Message shows.
+		workingLines.current.delete(kind);
+		workingLines.current.set(kind, text);
 		setFacts((current) => ({ ...current, working: text, operation: undefined }));
 	}, []);
 
@@ -89,30 +102,37 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 	 * End one operation: its outcome, and only the progress line it owns.
 	 *
 	 * A clean success clears its own `Working:` line and reveals any source
-	 * health still under it. The progress of an operation still running,
-	 * which is a different owner, stays on the line, and so does the notice
-	 * that answers the operator's last control.
+	 * health still under it. The progress of an operation still running is
+	 * never erased: a Handoff that settles while a Consultation runs returns
+	 * the line to that Consultation rather than leaving it blank (user
+	 * story 16), and so does the notice that answers the operator's last
+	 * control.
 	 */
 	const clearOperation = useCallback(
 		(owner: ProgressOwner) => {
-			const ownsProgress = takesWorking(owner);
+			const owned = owner === "none" ? false : dropWorking(owner);
 			setFacts((current) => ({
 				...current,
 				operation: undefined,
 				notice: undefined,
-				working: ownsProgress ? undefined : current.working,
+				working: owned ? visibleWorking() : current.working,
 			}));
 		},
-		[takesWorking],
+		[dropWorking, visibleWorking],
 	);
 
 	/** End one operation's progress line, and only that one. */
 	const clearWorking = useCallback(
 		(owner: ProgressOwner) => {
-			if (!takesWorking(owner)) return;
-			setFacts((current) => ({ ...current, working: undefined, notice: undefined }));
+			const owned = owner === "none" ? false : dropWorking(owner);
+			if (!owned) return;
+			setFacts((current) => ({
+				...current,
+				working: visibleWorking(),
+				notice: undefined,
+			}));
 		},
-		[takesWorking],
+		[dropWorking, visibleWorking],
 	);
 
 	const message = useMemo(() => selectMessage({ ...facts, sourceHealth }), [facts, sourceHealth]);
