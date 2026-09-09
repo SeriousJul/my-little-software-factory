@@ -14,7 +14,6 @@
  * `a` toggles auto-handoff. `v` opens the Consultations view on the
  * Consultation that needs the operator, if one does.
  */
-import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,17 +26,19 @@ import {
 	type WorkflowEdge,
 } from "../config.ts";
 import {
-	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
-	inspectLiveCheckout,
 	isLiteralText,
 	type LiveCheckoutSafety,
-	serializeRepositoryOperation,
 	translateAgentKey,
 	validateConsultationRepositoryOptions,
 	validateResponseInput,
 } from "../consultation.ts";
+import {
+	type ConsultationOperations,
+	type ConsultationStatus,
+	createConsultationOperations,
+} from "../consultation-operations.ts";
 import {
 	type EnvironmentKind,
 	HANDOFF_ENVIRONMENT_KINDS,
@@ -49,32 +50,26 @@ import {
 import {
 	baseChoice,
 	type CloseCleanupOptions,
-	checkConsultationStart,
 	closeCleanupReach,
 	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
-	handOffConsultation,
 	handOffStoredWorkspace,
 	handOffTicket,
 	type NameCollision,
 	type OwnNameKnowledge,
-	renderConsultationPrompt,
 	resolveHandoffChoice,
-	restoreControlPlaneFocus,
 } from "../handoff.ts";
-import { consultationAgentName } from "../naming.ts";
 import {
 	type DispatchResult,
 	type HandoffIntent,
 	type HerdrAgent,
 	HerdrAgentReader,
-	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
 } from "../observation.ts";
 import { RefreshCoordinator } from "../refresh.ts";
-import { type RepositoryMapping, type ResolvedRepository, resolveRepository } from "../repo.ts";
+import type { RepositoryMapping } from "../repo.ts";
 import {
 	type CommandRunner,
 	commandFailureText,
@@ -137,10 +132,6 @@ import { KeyGuide, MessageView } from "./utility.ts";
 
 type Pane = "list" | "detail";
 type MainView = "tickets" | "consultations";
-interface StatusMessage {
-	kind: "info" | "warning" | "error";
-	text: string;
-}
 /** The action modal open above the panes, if any. */
 type Panel =
 	| null
@@ -329,7 +320,7 @@ export function App({
 	// unmount through this slot: the pane saves its offset out, and a remount
 	// of the same ticket resumes from it.
 	const detailScrollSlot = useRef<{ identity: string; top: number } | null>(null);
-	const [status, setStatus] = useState<StatusMessage | null>(null);
+	const [status, setStatus] = useState<ConsultationStatus | null>(null);
 	// The handoff the override panel is editing: its ticket, where it came
 	// from, and the settings it resolves to before the operator changes them.
 	const [override, setOverride] = useState<PendingOverride | null>(null);
@@ -379,17 +370,11 @@ export function App({
 	>([]);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
-	const consultationOperationQueues = useRef(new Map<string, Promise<void>>());
-	const openingLaunches = useRef(new Set<string>());
-	const interactionInputQueue = useRef<ConsultationInputQueue | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
 	// The selected Agent pane's refresh, callable the moment a forwarded
 	// input lands: the operator should not wait out the refresh interval.
 	const outputRefreshRef = useRef<(() => void) | null>(null);
 	const commandRunner = runner ?? realRunner();
-	if (interactionInputQueue.current === undefined)
-		interactionInputQueue.current = new ConsultationInputQueue(commandRunner);
-	const inputQueue = interactionInputQueue.current;
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
 	const sourceHealthMessage = healths
@@ -678,6 +663,39 @@ export function App({
 		);
 		return write;
 	};
+	const consultationOperationsRef = useRef<ConsultationOperations | undefined>(undefined);
+	// Capture state, replaceConsultations, and persistMapping once per mount.
+	// FactoryState is created once by factory.ts, and the other callbacks read
+	// the current config and projections through refs.
+	if (consultationOperationsRef.current === undefined && state !== undefined) {
+		consultationOperationsRef.current = createConsultationOperations({
+			state,
+			runner: commandRunner,
+			config: () => configRef.current,
+			home: homeDir,
+			tickets: () => ticketsRef.current,
+			controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
+			persistRepositoryMapping: persistMapping,
+			callbacks: {
+				onStatus: (next) => {
+					setStatus(next);
+					// Consultation outcomes must remain visible on the Message line
+					// when the operator is on the Tickets view. The status row stays
+					// for the Consultation view, while the shared message facts carry
+					// warnings and errors without crossing the Ticket boundary.
+					if (next === null) clearOperationMessage("none");
+					else if (next.kind === "error") setErrorMessage(next.text);
+					else if (next.kind === "warning") setWarningMessage(next.text);
+				},
+				onConsultationsChanged: replaceConsultations,
+				onSafetyConflict: ({ consultationId, safety }) => {
+					setConsultationSafety({ consultationId, safety });
+					setPanel({ kind: "consultation-safety", identity: consultationId });
+				},
+			},
+		});
+	}
+	const consultationOperations = consultationOperationsRef.current;
 	/**
 	 * Resolve a handoff operation into the durable Message facts.
 	 *
@@ -1546,175 +1564,31 @@ export function App({
 	};
 
 	const beginConsultationLaunch = (consultation: Consultation) => {
-		if (state === undefined || !state.canRecoverConsultationOpening(consultation.id)) return;
-		if (openingLaunches.current.has(consultation.id)) {
-			setStatus({ kind: "info", text: "Consultation opening is already in progress" });
-			return;
-		}
-		openingLaunches.current.add(consultation.id);
-		const onStage = (stage: string) =>
-			setStatus({ kind: "info", text: `Consultation ${consultation.id.slice(0, 8)}: ${stage}` });
-		void serializeRepositoryOperation(
-			consultationOperationQueues.current,
-			consultation.repository.identity,
-			async () => {
-				// The setting fit check (ADR 0010) is this route's first step, before
-				// its first external change: a live consultation resolves its
-				// repository here, and a resolve can clone one. The verdict rides
-				// into the start, so the Agent's Model list answers one query per
-				// Consultation.
-				const startCheck = await checkConsultationStart({
-					consultation,
-					config: configRef.current,
-					runner: commandRunner,
-				});
-				if (!startCheck.ok) return { status: "failed" as const, reason: startCheck.reason };
-				let resolvedRepository: ResolvedRepository | undefined;
-				if (consultation.environment === "live-worktree") {
-					onStage("resolving-repository");
-					const resolution = await resolveRepository(
-						{
-							identity: consultation.repository.identity,
-							displayName: consultation.repository.displayName,
-							cloneUrl: consultation.repository.cloneUrl,
-						},
-						configRef.current,
-						{ runner: commandRunner, home: homeDir },
-					);
-					if (!resolution.ok) return { status: "failed" as const, reason: resolution.reason };
-					resolvedRepository = resolution.repository;
-					state.setConsultationRepositoryPath(consultation.id, resolvedRepository.path);
-					onStage("checking-live-checkout-safety");
-					const probe = await new HerdrAgentReader(commandRunner).listAgents();
-					if (probe.kind === "error")
-						return {
-							status: "failed" as const,
-							reason: `cannot verify live checkout safety: ${probe.reason}`,
-						};
-					const safety = await inspectLiveCheckout(
-						resolvedRepository.path,
-						commandRunner,
-						ticketsRef.current,
-						state.consultations("open"),
-						probe.agents,
-					);
-					if (safety.warning !== undefined)
-						state.setConsultationWarning(consultation.id, safety.warning);
-					if (
-						safety.conflicts.length > 0 &&
-						state.consultation(consultation.id)?.liveConflictOverride !== true
-					)
-						return { status: "conflict" as const, safety };
-				}
-				return handOffConsultation({
-					consultation,
-					config: configRef.current,
-					runner: commandRunner,
-					home: homeDir,
-					onStage,
-					startCheck,
-					resolvedRepository,
-					onRepositoryResolved: (path) =>
-						state.setConsultationRepositoryPath(consultation.id, path),
-					onAgentStarted: (agent) => {
-						state.recordConsultationAgentHandles(consultation.id, agent);
-						state.recordConsultationResource(consultation.id, {
-							kind: "pane",
-							resourceId: agent.paneId,
-							owned: true,
-							details: "Consultation Agent pane",
-						});
-						state.recordConsultationResource(consultation.id, {
-							kind: "agent",
-							resourceId: consultation.agentName,
-							owned: true,
-							details: `Agent hosted by pane ${agent.paneId}`,
-						});
-					},
-					onResource: (kind, resourceId, owned, details) =>
-						state.recordConsultationResource(consultation.id, {
-							kind,
-							resourceId,
-							owned,
-							details: details ?? "",
-						}),
-				});
-			},
-		)
-			.then(async (outcome) => {
-				if (outcome.status === "conflict") {
-					setConsultationSafety({ consultationId: consultation.id, safety: outcome.safety });
-					setPanel({ kind: "consultation-safety", identity: consultation.id });
-					setStatus({
-						kind: "warning",
-						text: "live checkout conflict: explicit confirmation is required",
-					});
-					return;
-				}
-				if (outcome.status === "failed") {
-					state.failConsultationOpening(consultation.id, outcome.reason);
-					setStatus({
-						kind: "error",
-						text: `Consultation ${consultation.id.slice(0, 8)} failed: ${outcome.reason}`,
-					});
-				} else {
-					state.setConsultationAgent(consultation.id, {
-						paneId: outcome.agent.paneId,
-						tabId: outcome.agent.tabId,
-						workspaceId: outcome.agent.workspaceId,
-						sessionId: outcome.agent.sessionId,
-					});
-					if (outcome.status === "prompt-failed") {
-						state.setConsultationDraft(consultation.id, consultation.renderedOpeningPrompt);
-						setStatus({ kind: "error", text: outcome.reason });
-					}
-				}
-				await finishOutcome(outcome);
-				const warning = state.consultation(consultation.id)?.warning;
-				if (warning !== null && warning !== undefined)
-					setStatus({ kind: "warning", text: warning });
-				replaceConsultations();
-			})
-			.catch((error) => {
-				state.failConsultationOpening(consultation.id, errorMessage(error));
-				replaceConsultations();
-				setStatus({
-					kind: "error",
-					text: `Consultation ${consultation.id.slice(0, 8)} failed: ${errorMessage(error)}`,
-				});
-			})
-			.finally(() => openingLaunches.current.delete(consultation.id));
+		void consultationOperations?.launch(consultation);
 	};
 	const startConsultation = (
 		typeName: string,
 		repository: ConsultationRepositoryOption,
 		input: string,
 	) => {
-		if (state === undefined) {
+		if (state === undefined || consultationOperations === undefined) {
 			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
 			return;
 		}
-		const type = configRef.current.consultationTypes[typeName];
-		if (type === undefined) {
-			setStatus({ kind: "error", text: `unknown Consultation type ${typeName}` });
-			return;
-		}
-		const id = randomUUID();
-		const consultation = state.createConsultation({
-			id,
-			typeName,
-			agentType: type.agent,
-			environment: type.environment,
-			model: type.model,
-			thinking: type.thinking,
-			contextWindow: type.contextWindow,
-			template: type.template,
-			initialInput: input,
-			renderedOpeningPrompt: renderConsultationPrompt(type.template, input),
-			repository,
-			replacementOf: replacementConsultationId ?? undefined,
-			agentName: consultationAgentName(id),
-		});
+		const replaced =
+			replacementConsultationId === null
+				? undefined
+				: state.consultation(replacementConsultationId);
+		const consultation =
+			replaced === undefined
+				? consultationOperations.create({
+						typeName,
+						repository,
+						initialInput: input,
+						replacementOf: replacementConsultationId,
+					})
+				: consultationOperations.replace(replaced, { typeName, repository, initialInput: input });
+		if (consultation === undefined) return;
 		setLauncher(false);
 		setReplacementConsultationId(null);
 		historyFilterRef.current = "open";
@@ -1723,70 +1597,14 @@ export function App({
 		// launched Consultation when it replaces nothing.
 		openConsultations(consultation.replacementOf ?? consultation.id);
 		replaceConsultations();
-		setStatus({ kind: "info", text: `opening Consultation ${consultation.id.slice(0, 8)}...` });
+		// A Replacement opens like a new Consultation: the module builds the
+		// linked record with its bounded recovery context, then the same launch
+		// route starts it.
 		beginConsultationLaunch(consultation);
 	};
 	const recoverConsultationOpening = (consultation: Consultation) => {
-		if (state === undefined || consultation.state !== "opening") return;
-		const current = state.consultation(consultation.id);
-		if (current === undefined || !state.canRecoverConsultationOpening(current.id)) return;
-		if (current.paneId === null && current.sessionId === null) {
-			setStatus({ kind: "info", text: `recovering Consultation ${current.id.slice(0, 8)}...` });
-			beginConsultationLaunch(current);
-			return;
-		}
-		setStatus({ kind: "info", text: `verifying Consultation ${current.id.slice(0, 8)} Agent...` });
-		void serializeRepositoryOperation(
-			consultationOperationQueues.current,
-			current.repository.identity,
-			async () => {
-				const probe = await new HerdrAgentReader(commandRunner).listAgents();
-				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
-				const agent = matchConsultationAgent(current, probe.agents);
-				return agent === undefined || agent === "ambiguous"
-					? {
-							kind: "missing" as const,
-							reason:
-								agent === "ambiguous" ? "Agent session match is ambiguous" : "Agent is missing",
-						}
-					: { kind: "agent" as const, agent };
-			},
-		)
-			.then((result) => {
-				if (result.kind === "error") {
-					setStatus({ kind: "error", text: `cannot verify Consultation Agent: ${result.reason}` });
-					return;
-				}
-				if (result.kind === "missing") {
-					state.failConsultationOpening(current.id, result.reason);
-					replaceConsultations();
-					setStatus({
-						kind: "error",
-						text: `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`,
-					});
-					return;
-				}
-				state.updateConsultationAgentHandles(current.id, {
-					paneId: result.agent.paneId,
-					tabId: result.agent.tabId,
-					workspaceId: result.agent.workspaceId,
-					sessionId: result.agent.stableSessionId ?? current.sessionId,
-				});
-				state.setConsultationAgent(current.id, {
-					paneId: result.agent.paneId,
-					tabId: result.agent.tabId,
-					workspaceId: result.agent.workspaceId,
-					sessionId: result.agent.stableSessionId ?? current.sessionId,
-				});
-				replaceConsultations();
-				setStatus({ kind: "info", text: `Consultation ${current.id.slice(0, 8)} reconnected` });
-			})
-			.catch((error) => {
-				setStatus({
-					kind: "error",
-					text: `cannot verify Consultation Agent: ${errorMessage(error)}`,
-				});
-			});
+		if (consultation.state !== "opening") return;
+		void consultationOperations?.recover(consultation);
 	};
 	const beginResponse = (consultation: Consultation) => {
 		if (consultation.state !== "awaiting-response") {
@@ -1798,60 +1616,31 @@ export function App({
 		setResponseEditor(true);
 	};
 	const submitResponse = () => {
-		if (state === undefined || selectedConsultation === undefined) return;
+		if (
+			state === undefined ||
+			selectedConsultation === undefined ||
+			consultationOperations === undefined
+		)
+			return;
 		const consultation = selectedConsultation;
 		const draft = responseDraftRef.current;
-		const error = validateResponseInput(draft);
-		if (error !== undefined) {
-			setStatus({ kind: "error", text: error });
-			return;
-		}
-		state.setConsultationDraft(consultation.id, draft);
-		const pending = state.beginConsultationResponse(
-			consultation.id,
-			draft,
-			consultation.latestSequence,
-		);
-		if (pending === undefined) {
-			setStatus({
-				kind: "warning",
-				text: "a response delivery is already pending or the Consultation changed; inspect the Agent before retrying",
-			});
+		// Keep this UI-side check so an invalid draft leaves the editor open;
+		// respond repeats it at the module boundary for non-UI callers.
+		const validation = validateResponseInput(draft);
+		if (validation !== undefined) {
+			setStatus({ kind: "error", text: validation });
 			return;
 		}
 		setResponseEditor(false);
-		setStatus({
-			kind: "info",
-			text: `sending response to Consultation ${consultation.id.slice(0, 8)}...`,
-		});
-		void commandRunner
-			.run("herdr", ["agent", "prompt", consultation.agentName, draft])
-			.then((result) => {
-				if (result.code !== 0) {
-					state.cancelConsultationResponse(consultation.id, pending.id);
-					replaceConsultations();
-					setResponseEditor(true);
-					setStatus({ kind: "error", text: `response failed: ${commandFailureText(result)}` });
-					return;
-				}
-				const accepted = state.acceptConsultationResponse(consultation.id, pending.id);
-				replaceConsultations();
-				if (accepted === undefined) {
-					// The turn may already be settled by an observation poll; the
-					// saved draft survives either way for inspection.
-					setResponseEditor(true);
-					setStatus({
-						kind: "warning",
-						text: "response was delivered; inspect the Agent output and the saved draft",
-					});
-				} else setStatus(null);
-			})
-			.catch((error) => {
-				state.cancelConsultationResponse(consultation.id, pending.id);
-				replaceConsultations();
-				setResponseEditor(true);
-				setStatus({ kind: "error", text: `response failed: ${errorMessage(error)}` });
-			});
+		void consultationOperations.respond(consultation, draft).then(
+			() => {
+				const current = state.consultation(consultation.id);
+				// Keep the editor open when delivery was already pending, or when
+				// a failed delivery left the draft awaiting another attempt.
+				if (current?.state === "awaiting-response") setResponseEditor(true);
+			},
+			() => setResponseEditor(true),
+		);
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1922,144 +1711,13 @@ export function App({
 		replaceConsultations();
 	};
 	const closeConsultation = (consultation: Consultation) => {
-		if (state === undefined) return;
-		const current = state.consultation(consultation.id) ?? consultation;
-		if (current.state === "closed") return;
-		const started = current.state === "closing" || state.beginConsultationClose(current.id);
-		if (!started) {
-			setStatus({ kind: "warning", text: "Consultation is already closing or closed" });
-			return;
-		}
-		if (current.paneId !== null && !current.resources.some((item) => item.kind === "pane"))
-			state.recordConsultationResource(current.id, {
-				kind: "pane",
-				resourceId: current.paneId,
-				owned: true,
-				details: "Recovered Consultation Agent pane",
-			});
-		replaceConsultations();
-		setStatus({ kind: "info", text: `closing Consultation ${current.id.slice(0, 8)}...` });
-		void serializeRepositoryOperation(
-			consultationOperationQueues.current,
-			current.repository.identity,
-			async () => {
-				const output =
-					current.paneId === null
-						? null
-						: await new HerdrAgentReader(commandRunner).readPane(
-								current.paneId,
-								configRef.current.completionMessageLines,
-							);
-				if (output !== null) state.captureConsultationPartial(current.id, output);
-				const refreshed = state.consultation(current.id) ?? current;
-				const resources = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
-				const workspace = resources.find((item) => item.kind === "workspace");
-				const tab = resources.find((item) => item.kind === "tab");
-				const pane = resources.find((item) => item.kind === "pane");
-				const agent = resources.find((item) => item.kind === "agent");
-				const worktrees = resources.filter((item) => item.kind === "worktree");
-				const WORKTREE_REMAIN = "retained after close: worktree and branch remain";
-				const markWorktreesRetained = () => {
-					for (const resource of worktrees)
-						state.markConsultationResourceShared(
-							current.id,
-							resource.kind,
-							resource.resourceId,
-							WORKTREE_REMAIN,
-						);
-				};
-				let command: readonly string[] | undefined;
-				let closes: typeof resources = [];
-				const workspaceId = workspace?.resourceId ?? current.workspaceId;
-				if (workspaceId !== null && pane !== undefined) {
-					const topology = await workspaceTopology(
-						commandRunner,
-						workspaceId,
-						pane.resourceId,
-						tab?.resourceId ?? current.tabId,
-					);
-					if (!topology.known)
-						throw new Error("could not verify the Consultation workspace topology");
-					if (topology.workspaceExclusive && workspace !== undefined) {
-						// Only an owned workspace may be closed whole: an adopted
-						// workspace belongs to someone else even while empty.
-						command = ["workspace", "close", workspace.resourceId];
-						closes = resources.filter((item) => item.kind !== "worktree");
-						markWorktreesRetained();
-					} else if (topology.ownedTabExclusive && tab !== undefined) {
-						command = ["tab", "close", tab.resourceId];
-						closes = [tab, pane, ...(agent === undefined ? [] : [agent])];
-						if (workspace !== undefined)
-							state.markConsultationResourceShared(current.id, "workspace", workspace.resourceId);
-						markWorktreesRetained();
-					} else {
-						// A foreign pane shares the owned tab: close the pane alone.
-						command = ["pane", "close", pane.resourceId];
-						closes = [pane, ...(agent === undefined ? [] : [agent])];
-						if (workspace !== undefined)
-							state.markConsultationResourceShared(current.id, "workspace", workspace.resourceId);
-						if (tab !== undefined)
-							state.markConsultationResourceShared(current.id, "tab", tab.resourceId);
-						markWorktreesRetained();
-					}
-				} else if (pane !== undefined) {
-					command = ["pane", "close", pane.resourceId];
-					closes = [pane, ...(agent === undefined ? [] : [agent])];
-				}
-				if (command === undefined) return;
-				const result = await commandRunner.run("herdr", command);
-				if (result.code !== 0) throw new Error(commandFailureText(result));
-				// A closed workspace moves herdr's focus (a linked worktree
-				// removal lands on the repository's parent, a closed workspace
-				// on a neighbor): return it to the control plane, where the
-				// operator worked the close. A tab or pane close keeps the
-				// workspace, so herdr's focus stands.
-				if (command[0] === "workspace") {
-					await restoreControlPlaneFocus(commandRunner, CONTROL_PLANE_WORKSPACE_ID);
-				}
-				for (const resource of closes)
-					state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
-			},
-		)
-			.then(() => {
-				state.finishConsultationClose(current.id);
-				replaceConsultations();
-				setStatus({ kind: "info", text: `Consultation ${current.id.slice(0, 8)} closed` });
-			})
-			.catch((error) => {
-				state.recordConsultationCloseFailure(current.id, errorMessage(error));
-				replaceConsultations();
-				setStatus({
-					kind: "error",
-					text: `Consultation close needs recovery: ${errorMessage(error)}`,
-				});
-			});
+		void consultationOperations?.close(consultation);
 	};
 	const forceCloseConsultation = (consultation: Consultation) => {
-		if (state === undefined) return;
-		if (consultation.state !== "closing" && !state.beginConsultationClose(consultation.id)) {
-			setStatus({ kind: "warning", text: "Consultation cleanup has already finished" });
-			return;
-		}
-		state.finishConsultationClose(
-			consultation.id,
-			"force-closed by operator; owned resources may remain",
-			true,
-		);
-		replaceConsultations();
-		setStatus({
-			kind: "warning",
-			text: `Consultation ${consultation.id.slice(0, 8)} force-closed; recovery resources remain recorded`,
-		});
+		consultationOperations?.forceClose(consultation);
 	};
 	const deleteConsultation = (consultation: Consultation) => {
-		if (state?.deleteConsultation(consultation.id)) {
-			replaceConsultations();
-			setStatus({
-				kind: "info",
-				text: `Consultation ${consultation.id.slice(0, 8)} deleted; backups may retain data`,
-			});
-		}
+		consultationOperations?.delete(consultation);
 	};
 	const runMissingAction = (ticket: Ticket, key: string) => {
 		// A restart from the Live view's Missing mode keeps the screen open:
@@ -2176,9 +1834,9 @@ export function App({
 				setInteraction(false);
 				// Settle the queued input before announcing the exit: the last
 				// key the operator sent still belongs to the Agent.
-				void inputQueue
-					.flush()
-					.then(() => setStatus({ kind: "info", text: "left Agent interaction mode" }));
+				void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
+					setStatus({ kind: "info", text: "left Agent interaction mode" }),
+				);
 				return;
 			}
 			const selected = consultationsRef.current[consultationIndexRef.current];
@@ -2187,7 +1845,9 @@ export function App({
 					? null
 					: translateAgentKey(key, configRef.current.interactionExitKey);
 			if (selected !== undefined && selected.paneId !== null && event !== null) {
-				void inputQueue.enqueue(selected.paneId, event).then(
+				const queued = consultationOperations?.enqueue(selected.paneId, event);
+				if (queued === undefined) return;
+				void queued.then(
 					(result) => {
 						if (result.code === 0) {
 							setNewOutput(true);
@@ -2218,23 +1878,23 @@ export function App({
 				if (key.shift) {
 					responseDraftRef.current += "\n";
 					setResponseDraft(responseDraftRef.current);
-					if (state !== undefined && selectedConsultation !== undefined)
-						state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+					if (selectedConsultation !== undefined)
+						consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 				} else submitResponse();
 				return;
 			}
 			if (key.name === "backspace") {
 				responseDraftRef.current = responseDraftRef.current.slice(0, -1);
 				setResponseDraft(responseDraftRef.current);
-				if (state !== undefined && selectedConsultation !== undefined)
-					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+				if (selectedConsultation !== undefined)
+					consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 				return;
 			}
 			if ([...key.name].length > 0 && isLiteralText(key.name)) {
 				responseDraftRef.current += key.name === "space" ? " " : key.name;
 				setResponseDraft(responseDraftRef.current);
-				if (state !== undefined && selectedConsultation !== undefined)
-					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+				if (selectedConsultation !== undefined)
+					consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 			}
 			return;
 		}
@@ -2517,19 +2177,8 @@ export function App({
 						configRef.current.completionMessageLines,
 					);
 			if (!active) return;
-			if (output === null) {
-				const current = state.consultation(selectedConsultation.id);
-				if (current !== undefined && current.warning !== "Stale Agent output") {
-					state.setConsultationWarning(current.id, "Stale Agent output");
-					replaceConsultations();
-				}
-				return;
-			}
-			const current = state.consultation(selectedConsultation.id);
-			if (current?.warning === "Stale Agent output") {
-				state.setConsultationWarning(current.id, null);
-				replaceConsultations();
-			}
+			consultationOperations?.recordOutputRead(selectedConsultation.id, output);
+			if (output === null) return;
 			if (consultationFollowRef.current) {
 				setConsultationScroll(999999);
 				setNewOutput(false);
@@ -2548,7 +2197,7 @@ export function App({
 			outputRefreshRef.current = null;
 			clearInterval(timer);
 		};
-	}, [commandRunner, interaction, replaceConsultations, selectedConsultation, state, view]);
+	}, [commandRunner, consultationOperations, interaction, selectedConsultation, state, view]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
@@ -2826,9 +2475,9 @@ export function App({
 	const launcherInitialType =
 		replacementConsultation !== undefined ? replacementConsultation.typeName : undefined;
 	const launcherInitialInput =
-		replacementConsultation === undefined || state === undefined
+		replacementConsultation === undefined || consultationOperations === undefined
 			? ""
-			: state.replacementInput(replacementConsultation.id);
+			: consultationOperations.replacementInput(replacementConsultation.id);
 	const actionMode = currentBaseMode();
 	const ticketContext = controlContextFor(actionMode);
 	const messageColor = colorOfMessage(visibleMessage);
@@ -3203,15 +2852,8 @@ export function App({
 					setPanel(null);
 					setConsultationSafety(null);
 					if (key === "confirm") {
-						state?.setConsultationLiveConflictOverride(panelConsultation.id);
 						const current = state?.consultation(panelConsultation.id);
-						if (current !== undefined) {
-							setStatus({
-								kind: "info",
-								text: `opening Consultation ${current.id.slice(0, 8)}...`,
-							});
-							beginConsultationLaunch(current);
-						}
+						if (current !== undefined) consultationOperations?.confirmSafetyConflict(current);
 					}
 				},
 				onCancel: () => {
@@ -3330,70 +2972,6 @@ export function App({
 				onMessage: () => setUtility({ kind: "consultation", utility: "message" }),
 			}),
 	);
-}
-
-/**
- * What one close operation may take down, judged per level:
- *
- * - workspaceExclusive: no other tab and no other pane anywhere, so the
- *   workspace close takes down exactly the Consultation's own tab and pane.
- * - ownedTabExclusive: the Consultation's tab holds no other pane, so the tab
- *   close takes down exactly the Consultation's own pane, whatever other tabs
- *   share the workspace.
- *
- * Neither holds when a foreign pane sits in the owned tab: then only the
- *   pane close is safe. A foreign pane in another tab of the same workspace
- *   never blocks the tab close, because herdr closes tabs and panes, not
- *   workspaces, at that level.
- */
-async function workspaceTopology(
-	runner: CommandRunner,
-	workspaceId: string,
-	ownedPaneId: string | null,
-	ownedTabId: string | null,
-): Promise<{ known: boolean; workspaceExclusive: boolean; ownedTabExclusive: boolean }> {
-	const [tabs, panes] = await Promise.all([
-		runner.run("herdr", ["tab", "list", "--workspace", workspaceId]),
-		runner.run("herdr", ["pane", "list", "--workspace", workspaceId]),
-	]);
-	if (tabs.code !== 0 || panes.code !== 0)
-		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
-	try {
-		const tabData = JSON.parse(tabs.stdout) as { result?: { tabs?: unknown } };
-		const paneData = JSON.parse(panes.stdout) as { result?: { panes?: unknown } };
-		if (!Array.isArray(tabData.result?.tabs) || !Array.isArray(paneData.result?.panes))
-			return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
-		if (
-			!tabData.result.tabs.every((tab) => isRecordValue(tab) && typeof tab.tab_id === "string") ||
-			!paneData.result.panes.every(
-				(pane) =>
-					isRecordValue(pane) &&
-					typeof pane.pane_id === "string" &&
-					typeof pane.tab_id === "string",
-			)
-		)
-			return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
-		const otherTabs = tabData.result.tabs.filter(
-			(tab) => (tab as { tab_id: string }).tab_id !== ownedTabId,
-		);
-		const panesInOwnedTab = paneData.result.panes.filter(
-			(pane) => (pane as { tab_id: string }).tab_id === ownedTabId,
-		);
-		const foreignPanesInOwnedTab = panesInOwnedTab.filter(
-			(pane) => (pane as { pane_id: string }).pane_id !== ownedPaneId,
-		);
-		return {
-			known: true,
-			workspaceExclusive: otherTabs.length === 0 && foreignPanesInOwnedTab.length === 0,
-			ownedTabExclusive: foreignPanesInOwnedTab.length === 0,
-		};
-	} catch {
-		return { known: false, workspaceExclusive: false, ownedTabExclusive: false };
-	}
-}
-
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function clamp(value: number, min: number, max: number): number {

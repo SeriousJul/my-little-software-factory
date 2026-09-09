@@ -11,6 +11,7 @@ import os from "node:os";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TaskRule } from "./config.ts";
+import { isStaleAgentOutputWarning, STALE_AGENT_OUTPUT_WARNING } from "./consultation.ts";
 import type {
 	Completion,
 	CompletionDecision,
@@ -1875,8 +1876,8 @@ export class FactoryState {
 	): boolean {
 		return this.transaction(() => {
 			const consultation = this.db
-				.prepare("SELECT state FROM consultations WHERE id = ?")
-				.get(id) as { state: ConsultationState } | undefined;
+				.prepare("SELECT state, warning FROM consultations WHERE id = ?")
+				.get(id) as { state: ConsultationState; warning: string | null } | undefined;
 			if (
 				consultation === undefined ||
 				(consultation.state !== "working" && consultation.state !== "opening")
@@ -1913,11 +1914,20 @@ export class FactoryState {
 					.prepare("UPDATE consultation_turns SET snapshot_id = ? WHERE id = ?")
 					.run(snapshotId, turn.id);
 			}
+			// A turn that settled without its output read leaves the Stale Agent
+			// output warning; a turn that settled with output clears only that
+			// warning, so any other fact the operator still needs stays.
+			const warning =
+				output === null
+					? STALE_AGENT_OUTPUT_WARNING
+					: isStaleAgentOutputWarning(consultation.warning)
+						? null
+						: consultation.warning;
 			this.db
 				.prepare(
-					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = CASE WHEN ? IS NULL THEN 'Agent output is stale' WHEN warning = 'Agent output is stale' THEN NULL ELSE warning END WHERE id = ?",
+					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
 				)
-				.run(sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, output, id);
+				.run(sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, warning, id);
 			return true;
 		});
 	}

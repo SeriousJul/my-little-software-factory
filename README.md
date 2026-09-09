@@ -1104,6 +1104,16 @@ review handoffs start on.
 	environment kinds.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
 	command sequence through herdr, starts the agent, and sends the prompt.
+- `src/consultation.ts`: the Consultation rules that need no terminal. The input
+	and snapshot bounds, the per-Repository operation queue, the live checkout
+	safety check, the Replacement context bounds, the Agent interaction key
+	translation and its ordered input queue, and the Stale Agent output warning.
+- `src/consultation-operations.ts`: the Consultation lifecycle. Launch, recovery,
+	response, close, Force-close, Replacement, deletion, the Stale Agent output
+	fact, and the Agent input queue, behind one interface with its dependencies
+	injected. The App renders the Consultation screens and forwards the
+	operator's actions here; the tests drive the lifecycle through this seam,
+	with a fake command runner and a real state file.
 - `src/repo.ts`: the repository resolution and the sibling clone.
 - `src/naming.ts`: the branch names and the herdr agent names.
 - `src/runner.ts`: the single egress for commands.
