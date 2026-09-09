@@ -35,6 +35,7 @@ import {
 } from "../consultation.ts";
 import {
 	type ConsultationOperations,
+	type ConsultationStatus,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
 import {
@@ -130,10 +131,6 @@ import { KeyGuide, MessageView } from "./utility.ts";
 
 type Pane = "list" | "detail";
 type MainView = "tickets" | "consultations";
-interface StatusMessage {
-	kind: "info" | "warning" | "error";
-	text: string;
-}
 /** The action modal open above the panes, if any. */
 type Panel =
 	| null
@@ -322,7 +319,7 @@ export function App({
 	// unmount through this slot: the pane saves its offset out, and a remount
 	// of the same ticket resumes from it.
 	const detailScrollSlot = useRef<{ identity: string; top: number } | null>(null);
-	const [status, setStatus] = useState<StatusMessage | null>(null);
+	const [status, setStatus] = useState<ConsultationStatus | null>(null);
 	// The handoff the override panel is editing: its ticket, where it came
 	// from, and the settings it resolves to before the operator changes them.
 	const [override, setOverride] = useState<PendingOverride | null>(null);
@@ -666,6 +663,9 @@ export function App({
 		return write;
 	};
 	const consultationOperationsRef = useRef<ConsultationOperations | undefined>(undefined);
+	// Capture state, replaceConsultations, and persistMapping once per mount.
+	// FactoryState is created once by factory.ts, and the other callbacks read
+	// the current config and projections through refs.
 	if (consultationOperationsRef.current === undefined && state !== undefined) {
 		consultationOperationsRef.current = createConsultationOperations({
 			state,
@@ -676,7 +676,16 @@ export function App({
 			controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
-				onStatus: (status) => setStatus(status),
+				onStatus: (next) => {
+					setStatus(next);
+					// Consultation outcomes must remain visible on the Message line
+					// when the operator is on the Tickets view. The status row stays
+					// for the Consultation view, while the shared message facts carry
+					// warnings and errors without crossing the Ticket boundary.
+					if (next === null) clearOperationMessage("none");
+					else if (next.kind === "error") setErrorMessage(next.text);
+					else if (next.kind === "warning") setWarningMessage(next.text);
+				},
 				onConsultationsChanged: replaceConsultations,
 				onSafetyConflict: ({ consultationId, safety }) => {
 					setConsultationSafety({ consultationId, safety });
@@ -1612,17 +1621,23 @@ export function App({
 			return;
 		const consultation = selectedConsultation;
 		const draft = responseDraftRef.current;
+		// Keep this UI-side check so an invalid draft leaves the editor open;
+		// respond repeats it at the module boundary for non-UI callers.
 		const validation = validateResponseInput(draft);
 		if (validation !== undefined) {
 			setStatus({ kind: "error", text: validation });
 			return;
 		}
 		setResponseEditor(false);
-		void consultationOperations.respond(consultation, draft).then(() => {
-			const current = state.consultation(consultation.id);
-			if (current?.state === "awaiting-response" && current.pendingResponse === null)
-				setResponseEditor(true);
-		});
+		void consultationOperations.respond(consultation, draft).then(
+			() => {
+				const current = state.consultation(consultation.id);
+				// Keep the editor open when delivery was already pending, or when
+				// a failed delivery left the draft awaiting another attempt.
+				if (current?.state === "awaiting-response") setResponseEditor(true);
+			},
+			() => setResponseEditor(true),
+		);
 	};
 	const openConsultations = () => {
 		viewRef.current = "consultations";
@@ -1842,23 +1857,23 @@ export function App({
 				if (key.shift) {
 					responseDraftRef.current += "\n";
 					setResponseDraft(responseDraftRef.current);
-					if (state !== undefined && selectedConsultation !== undefined)
-						state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+					if (selectedConsultation !== undefined)
+						consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 				} else submitResponse();
 				return;
 			}
 			if (key.name === "backspace") {
 				responseDraftRef.current = responseDraftRef.current.slice(0, -1);
 				setResponseDraft(responseDraftRef.current);
-				if (state !== undefined && selectedConsultation !== undefined)
-					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+				if (selectedConsultation !== undefined)
+					consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 				return;
 			}
 			if ([...key.name].length > 0 && isLiteralText(key.name)) {
 				responseDraftRef.current += key.name === "space" ? " " : key.name;
 				setResponseDraft(responseDraftRef.current);
-				if (state !== undefined && selectedConsultation !== undefined)
-					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
+				if (selectedConsultation !== undefined)
+					consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 			}
 			return;
 		}
@@ -2143,12 +2158,8 @@ export function App({
 						configRef.current.completionMessageLines,
 					);
 			if (!active) return;
-			if (output === null) {
-				consultationOperations?.recordOutputRead(selectedConsultation.id, output);
-
-				return;
-			}
 			consultationOperations?.recordOutputRead(selectedConsultation.id, output);
+			if (output === null) return;
 			if (consultationFollowRef.current) {
 				setConsultationScroll(999999);
 				setNewOutput(false);

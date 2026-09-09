@@ -14,7 +14,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import {
@@ -37,8 +37,10 @@ import { type Consultation, type FactoryState, openFactoryState } from "../src/s
 import { agentListJson, FakeRunner, tabCreateJson, worktreeCreateJson } from "./fake-runner.ts";
 
 const directories: string[] = [];
+const states: FactoryState[] = [];
 
 afterEach(() => {
+	for (const state of states.splice(0)) state.close();
 	for (const directory of directories.splice(0))
 		rmSync(directory, { recursive: true, force: true });
 });
@@ -69,6 +71,8 @@ function makeFixture(model = ""): Fixture {
 	const otherCheckout = join(home, "src", "other");
 	mkdirSync(checkout, { recursive: true });
 	mkdirSync(otherCheckout, { recursive: true });
+	const state = openFactoryState(join(home, "state.sqlite"));
+	states.push(state);
 	const repository = {
 		identity: "github.com/acme/factory",
 		displayName: "acme/factory",
@@ -76,7 +80,7 @@ function makeFixture(model = ""): Fixture {
 		path: checkout,
 	};
 	return {
-		state: openFactoryState(join(home, "state.sqlite")),
+		state,
 		config: {
 			...DEFAULT_CONFIG,
 			repos: {
@@ -411,6 +415,41 @@ function current(state: FactoryState, id: string): Consultation {
 }
 
 describe("Consultation operations: launch", () => {
+	test("refuses an unknown Consultation type through the module interface", () => {
+		const fixture = makeFixture();
+		const harness = makeHarness(fixture, new LifecycleRunner());
+
+		expect(
+			harness.operations.create({
+				typeName: "unknown",
+				repository: fixture.repository,
+				initialInput: "review auth",
+			}),
+		).toBeUndefined();
+		expect(fixture.state.consultations("all")).toHaveLength(0);
+		expect(statusTexts(harness).at(-1)).toBe("unknown Consultation type unknown");
+	});
+
+	test("refuses empty and oversized opening input before creating a record", () => {
+		const fixture = makeFixture();
+		const harness = makeHarness(fixture, new LifecycleRunner());
+
+		for (const initialInput of ["   ", "x".repeat(CONSULTATION_INPUT_LIMIT + 1)])
+			expect(
+				harness.operations.create({
+					typeName: "grill",
+					repository: fixture.repository,
+					initialInput,
+				}),
+			).toBeUndefined();
+
+		expect(fixture.state.consultations("all")).toHaveLength(0);
+		expect(statusTexts(harness)).toEqual([
+			"initial input cannot be empty",
+			"initial input is 65537 UTF-8 bytes; the limit is 65536",
+		]);
+	});
+
 	test("runs the setting fit check before its first external change", async () => {
 		const fixture = makeFixture("gpt-4o");
 		const runner = new LifecycleRunner();
@@ -765,6 +804,23 @@ describe("Consultation operations: response", () => {
 		fixture.state.settleConsultationTurn(id, null, "first answer");
 		return consultation;
 	}
+
+	test("reports a state write failure without rejecting the response operation", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("0");
+		const consultation = seedAwaiting(fixture, id);
+		const harness = makeHarness(fixture, runner);
+		const write = vi.spyOn(fixture.state, "setConsultationDraft").mockImplementation(() => {
+			throw new Error("SQLITE_BUSY");
+		});
+
+		await expect(harness.operations.respond(consultation, "follow up")).resolves.toBeUndefined();
+
+		expect(runner.commands()).toEqual([]);
+		expect(statusTexts(harness).at(-1)).toBe("response failed: SQLITE_BUSY");
+		write.mockRestore();
+	});
 
 	test("opens a turn only after herdr accepts the response", async () => {
 		const fixture = makeFixture();
@@ -1322,6 +1378,18 @@ describe("Consultation operations: stale Agent output", () => {
 		expect(current(fixture.state, id).warning).toBe(STALE_AGENT_OUTPUT_WARNING);
 
 		harness.operations.recordOutputRead(id, "the Agent answered");
+		expect(current(fixture.state, id).warning).toBeNull();
+	});
+
+	test("clears the legacy stale-output spelling", () => {
+		const fixture = makeFixture();
+		const id = uid("9");
+		seed(fixture.state, fixture, id);
+		fixture.state.setConsultationWarning(id, "Agent output is stale");
+		const harness = makeHarness(fixture, new LifecycleRunner());
+
+		harness.operations.recordOutputRead(id, "the Agent answered");
+
 		expect(current(fixture.state, id).warning).toBeNull();
 	});
 

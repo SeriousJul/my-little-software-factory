@@ -39,7 +39,12 @@ import {
 	commandFailureText,
 	errorMessage,
 } from "./runner.ts";
-import type { Consultation, ConsultationResource, FactoryState } from "./state.ts";
+import type {
+	Consultation,
+	ConsultationPendingResponse,
+	ConsultationResource,
+	FactoryState,
+} from "./state.ts";
 
 export interface ConsultationStatus {
 	kind: "info" | "warning" | "error";
@@ -120,7 +125,11 @@ interface ClosePlan {
 	/** Resources the command confirmed closed. */
 	closes: ConsultationResource[];
 	/** Resources the operator keeps: shared, or a worktree that never closes. */
-	retains: Array<{ kind: string; resourceId: string; details?: string }>;
+	retains: Array<{
+		kind: ConsultationResource["kind"];
+		resourceId: string;
+		details?: string;
+	}>;
 }
 
 const WORKTREE_REMAIN = "retained after close: worktree and branch remain";
@@ -289,33 +298,44 @@ export class ConsultationOperations {
 		});
 	}
 
-	respond(consultation: Consultation, draft: string): Promise<void> {
+	/** Persist an editable Response draft without accepting it for delivery. */
+	saveDraft(consultation: Consultation, draft: string): void {
+		this.state.setConsultationDraft(consultation.id, draft);
+	}
+
+	async respond(consultation: Consultation, draft: string): Promise<void> {
 		const validation = validateResponseInput(draft);
 		if (validation !== undefined) {
 			this.status("error", validation);
-			return Promise.resolve();
+			return;
 		}
-		const current = this.state.consultation(consultation.id) ?? consultation;
-		return serializeRepositoryOperation(
+
+		let current: Consultation;
+		try {
+			current = this.state.consultation(consultation.id) ?? consultation;
+		} catch (error) {
+			this.status("error", `response failed: ${errorMessage(error)}`);
+			return;
+		}
+
+		await serializeRepositoryOperation(
 			this.operationQueues,
 			current.repository.identity,
 			async () => {
-				const latest = this.state.consultation(current.id) ?? current;
-				this.state.setConsultationDraft(latest.id, draft);
-				const pending = this.state.beginConsultationResponse(
-					latest.id,
-					draft,
-					latest.latestSequence,
-				);
-				if (pending === undefined) {
-					this.status(
-						"warning",
-						"a response delivery is already pending or the Consultation changed; inspect the Agent before retrying",
-					);
-					return;
-				}
-				this.status("info", `sending response to Consultation ${latest.id.slice(0, 8)}...`);
+				let latest: Consultation | undefined;
+				let pending: ConsultationPendingResponse | undefined;
 				try {
+					latest = this.state.consultation(current.id) ?? current;
+					this.state.setConsultationDraft(latest.id, draft);
+					pending = this.state.beginConsultationResponse(latest.id, draft, latest.latestSequence);
+					if (pending === undefined) {
+						this.status(
+							"warning",
+							"a response delivery is already pending or the Consultation changed; inspect the Agent before retrying",
+						);
+						return;
+					}
+					this.status("info", `sending response to Consultation ${latest.id.slice(0, 8)}...`);
 					const result = await this.runner.run("herdr", [
 						"agent",
 						"prompt",
@@ -339,8 +359,14 @@ export class ConsultationOperations {
 						this.callbacks.onStatus(null);
 					}
 				} catch (error) {
-					this.state.cancelConsultationResponse(latest.id, pending.id);
-					this.callbacks.onConsultationsChanged();
+					if (latest !== undefined && pending !== undefined) {
+						try {
+							this.state.cancelConsultationResponse(latest.id, pending.id);
+						} catch {}
+					}
+					try {
+						this.callbacks.onConsultationsChanged();
+					} catch {}
 					this.status("error", `response failed: ${errorMessage(error)}`);
 				}
 			},
@@ -395,20 +421,21 @@ export class ConsultationOperations {
 		// this record closed, so herdr is left alone.
 		if (operation.cancelled) return;
 		try {
+			const refreshed = this.state.consultation(current.id) ?? current;
 			const output =
-				current.paneId === null
+				refreshed.paneId === null
 					? null
 					: await new HerdrAgentReader(this.runner).readPane(
-							current.paneId,
+							refreshed.paneId,
 							this.config().completionMessageLines,
 						);
 			if (operation.cancelled) return;
 			// The last lines the control plane can still read become a partial
 			// snapshot, so the history does not end with the opening prompt.
 			if (output !== null) this.state.captureConsultationPartial(current.id, output);
-			const refreshed = this.state.consultation(current.id) ?? current;
-			const resources = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
-			const plan = await this.planCloseCleanup(current, resources);
+			const latest = this.state.consultation(current.id) ?? refreshed;
+			const resources = latest.resources.filter((item) => item.owned && !item.confirmedClosed);
+			const plan = await this.planCloseCleanup(latest, resources);
 			// The last check before the destructive call: a Force-close that ran
 			// during the topology probe stops the cleanup here, not on the next
 			// command.
@@ -420,9 +447,13 @@ export class ConsultationOperations {
 					retained.resourceId,
 					retained.details,
 				);
+			// Retaining shared resources is durable work too. Do not let a
+			// Force-close between the loop and the command produce a partial plan.
+			if (operation.cancelled) return;
 			if (plan.command !== undefined) {
 				const result = await this.runner.run("herdr", plan.command);
 				if (result.code !== 0) throw new Error(commandFailureText(result));
+				if (operation.cancelled) return;
 				// A closed workspace moves herdr's focus (a linked worktree
 				// removal lands on the repository's parent, a closed workspace
 				// on a neighbor): return it to the control plane, where the
@@ -430,6 +461,7 @@ export class ConsultationOperations {
 				// workspace, so herdr's focus stands.
 				if (plan.command[0] === "workspace")
 					await restoreControlPlaneFocus(this.runner, this.controlPlaneWorkspaceId);
+				if (operation.cancelled) return;
 				for (const resource of plan.closes)
 					this.state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);
 			}
@@ -623,8 +655,11 @@ export class ConsultationOperations {
 			const outcome = await serializeRepositoryOperation(
 				this.operationQueues,
 				consultation.repository.identity,
-				async (): Promise<LaunchOutcome> => {
+				async (): Promise<LaunchOutcome | undefined> => {
 					const current = this.state.consultation(consultation.id) ?? consultation;
+					// A queued opening can outlive a close or Force-close. Do not start
+					// an Agent after the operator has settled that record.
+					if (current.state !== "opening") return undefined;
 					const onStage = (stage: string) =>
 						this.status("info", `Consultation ${current.id.slice(0, 8)}: ${stage}`);
 					const startCheck = await checkConsultationStart({
@@ -636,11 +671,14 @@ export class ConsultationOperations {
 					let resolvedRepository: ResolvedRepository | undefined;
 					if (current.environment === "live-worktree") {
 						onStage("resolving-repository");
-						const resolution = await resolveConsultationRepository(
-							current,
+						const resolution = await resolveRepository(
+							{
+								identity: current.repository.identity,
+								displayName: current.repository.displayName,
+								cloneUrl: current.repository.cloneUrl,
+							},
 							this.config(),
-							this.runner,
-							this.home,
+							{ runner: this.runner, home: this.home },
 						);
 						if (!resolution.ok) return { status: "failed", reason: resolution.reason };
 						resolvedRepository = resolution.repository;
@@ -702,6 +740,7 @@ export class ConsultationOperations {
 					});
 				},
 			);
+			if (outcome === undefined) return;
 			if (outcome.status === "conflict") {
 				this.callbacks.onSafetyConflict({
 					consultationId: consultation.id,
@@ -763,23 +802,6 @@ export class ConsultationOperations {
 	private status(kind: ConsultationStatus["kind"], text: string): void {
 		this.callbacks.onStatus({ kind, text });
 	}
-}
-
-async function resolveConsultationRepository(
-	consultation: Consultation,
-	config: FactoryConfig,
-	runner: CommandRunner,
-	home: string,
-): Promise<{ ok: true; repository: ResolvedRepository } | { ok: false; reason: string }> {
-	return resolveRepository(
-		{
-			identity: consultation.repository.identity,
-			displayName: consultation.repository.displayName,
-			cloneUrl: consultation.repository.cloneUrl,
-		},
-		config,
-		{ runner, home },
-	);
 }
 
 async function workspaceTopology(
