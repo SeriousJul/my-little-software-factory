@@ -50,10 +50,11 @@
  */
 
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
-import { baseChoice, type HandoffChoice, resolveHandoffChoice } from "./handoff.ts";
+import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
+import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
-import type { Consultation, FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
+import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
 import {
 	lastMessageFromLog,
 	readSessionTurnLog,
@@ -283,30 +284,6 @@ export function stripAnsi(text: string): string {
  *   decision.
  */
 export type AwaitingDecision = "close" | "route" | "wait";
-
-/** The handoff the loop starts on the app's behalf. */
-export interface HandoffIntent {
-	origin: HandoffOrigin;
-	ticketIdentity: string;
-	choice: HandoffChoice;
-	previousMessage: string;
-	/**
-	 * The result of the handoff's own start, reported once when the claimed
-	 * handoff settles: `{ ok: true }` when the agent is live, `{ ok: false,
-	 * reason }` when it never started. The claim says the app took the work;
-	 * only the start says the agent runs, so a route's decision waits for
-	 * this. An intent that records nothing on a start omits it.
-	 */
-	onStarted?: (started: DispatchResult) => void;
-}
-
-/**
- * Whether the app accepted the intent: it claimed the handoff and will run
- * it, now or behind the handoff already in flight. A refused claim leaves
- * the ticket where it was and says why, and no start follows. Whether the
- * agent actually started arrives later, on the intent's `onStarted`.
- */
-export type DispatchResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * A structured topic for an onStatus event. The UI reacts to the topic, never

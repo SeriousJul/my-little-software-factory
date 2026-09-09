@@ -20,7 +20,6 @@ import {
 	type NameCollision,
 	type OwnNameKnowledge,
 } from "./handoff.ts";
-import type { DispatchResult, HandoffIntent } from "./observation.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "./state.ts";
@@ -32,6 +31,30 @@ export interface StoredHandoffFacts {
 	tabId: string | null;
 	workspaceId: string | null;
 }
+
+/** The Handoff request crossing the dispatch seam. */
+export interface HandoffIntent {
+	origin: HandoffOrigin;
+	ticketIdentity: string;
+	choice: HandoffChoice;
+	previousMessage: string;
+	/**
+	 * The result of the handoff's own start, reported once when the claimed
+	 * handoff settles: `{ ok: true }` when the agent is live, `{ ok: false,
+	 * reason }` when it never started. The claim says the dispatch took the
+	 * work; only the start says the agent runs, so a route's decision waits for
+	 * this. An intent that records nothing on a start omits it.
+	 */
+	onStarted?: (started: DispatchResult) => void;
+}
+
+/**
+ * Whether dispatch accepted the intent: it claimed the Handoff and will run
+ * it, now or behind the Handoff already in flight. A refused claim leaves the
+ * ticket where it was and says why, and no start follows. Whether the Agent
+ * actually started arrives later, on the intent's `onStarted`.
+ */
+export type DispatchResult = { ok: true } | { ok: false; reason: string };
 
 /**
  * What the Clear action answers with.

@@ -21,12 +21,12 @@ import { baseChoice, type HandoffChoice, type NameCollision } from "../src/hando
 import type { HandoffDispatchOptions } from "../src/handoff-dispatch.ts";
 import {
 	createHandoffDispatch,
+	type DispatchResult,
 	type HandoffDispatch,
 	type HandoffDispatchReports,
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
-import type { DispatchResult } from "../src/observation.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { FactoryState, type HandoffOrigin } from "../src/state.ts";
 import {
@@ -126,6 +126,16 @@ interface Rig {
 	commands: () => string[];
 }
 
+function recorder(events: string[]): HandoffDispatchReports {
+	return {
+		working: (text) => events.push(`working:${text}`),
+		warning: (text) => events.push(`warning:${text}`),
+		error: (text) => events.push(`error:${text}`),
+		clearWorking: () => events.push("clear-working"),
+		refresh: () => events.push("refresh"),
+	};
+}
+
 const openStates: FactoryState[] = [];
 const homes: string[] = [];
 
@@ -179,19 +189,12 @@ function rig(seeds: readonly Seed[] = [FIRST]): Rig {
 	const gate = gatedRunner(runner, (command) =>
 		prefixes.some((prefix) => command.startsWith(prefix)),
 	);
-	const reports: HandoffDispatchReports = {
-		working: (text) => events.push(`working:${text}`),
-		warning: (text) => events.push(`warning:${text}`),
-		error: (text) => events.push(`error:${text}`),
-		clearWorking: () => events.push("clear-working"),
-		refresh: () => events.push("refresh"),
-	};
 	const dispatch = createHandoffDispatch({
 		state,
 		runner: gate.runner,
 		config: () => config,
 		home,
-		...reports,
+		...recorder(events),
 	});
 	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
 	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
@@ -233,11 +236,7 @@ function withRunner(
 		runner,
 		config: () => rig.config,
 		home: rig.home,
-		working: (text) => rig.events.push(`working:${text}`),
-		warning: (text) => rig.events.push(`warning:${text}`),
-		error: (text) => rig.events.push(`error:${text}`),
-		clearWorking: () => rig.events.push("clear-working"),
-		refresh: () => rig.events.push("refresh"),
+		...recorder(rig.events),
 		...overrides,
 	});
 }
@@ -905,12 +904,15 @@ describe("the claim, the settle, and every origin", () => {
 		expect(rigRef.events.slice(0, failedAt)).toContain("clear-working");
 		// The ticket stays where the claim left it: nothing started.
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
-		expect(rigRef.dispatch.handoffActive()).toBe(false);
 		// And the handoff behind it ran: a throw cannot deadlock the seat.
 		await until(
 			"the queued handoff settled",
 			() => rigRef.state.ticketState(SECOND.identity) === "handed-off",
 		);
+		// The queued handoff settles the second claim before its final drain
+		// releases the seat. Wait for that drain before reading the seat.
+		await seatReleased();
+		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
 
 	test("a handoff reports its start once, even when the queue's next line broke", async () => {

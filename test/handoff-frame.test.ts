@@ -2118,9 +2118,8 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				await pressEnterToHandoff(setup);
-				// The ticket's row and the Message line are two facts, and the
-				// refresh that moves the row runs before the handoff's own report
-				// lands. Wait for the line, or the frame is read mid-flight.
+				// The projection refresh and the handoff report are separate async
+				// facts. Wait for the line, or the frame is read mid-flight.
 				const frame = await awaitFrame(
 					setup,
 					(f) => messageRowOf(f).includes("cloned acme/billing to a sibling"),

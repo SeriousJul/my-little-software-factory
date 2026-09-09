@@ -1173,7 +1173,7 @@ export function App({
 	 * the target Task profile, and the config defaults.
 	 */
 	const openRouteOverride = (ticket: Ticket, key: string) => {
-		if (handoffDispatch?.handoffActive() === true) {
+		if ((handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current) === true) {
 			setWarningMessage("handoff in flight");
 			return;
 		}
