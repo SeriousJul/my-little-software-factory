@@ -37,14 +37,13 @@ The on-demand, read-only presentation of a full message that does not fit on the
 _Avoid_: message modal, error popup
 
 **Control catalogue**:
-The one list of the controls the control plane dispatches, with the keys, interaction modes, availability and reason of each.
-The `src/components/controls.ts` table is the only place that states them: the Action bar, the Key guide and the key dispatch all read it, so what the app shows is what the app runs.
+The complete set of controls owned by the control plane, with each control's keys, Interaction modes, availability, and reason when unavailable.
+It is the common reference for the controls the operator can use and the controls described by the Action bar and Key guide.
 _Avoid_: key map, binding table
 
 **Key guide**:
-The on-demand catalog of the controls in the control catalogue, with the current interaction mode and global controls shown first.
-It includes controls that the action bar does not show, and every meaning of a key the current mode dispatches: Enter is listed as both Hand off and Decide, each with its own reason.
-The Consultation launcher, response editor, Agent terminal and Consultation confirmation panel still dispatch their own keys, so no control of theirs is in the catalogue and the guide does not list them (issue #9).
+The on-demand description of the Control catalogue, with the current Interaction mode and global controls shown first.
+It includes controls omitted from the Action bar and the editing controls of Text fields and Draft fields.
 _Avoid_: help popup, keybinding popin, shortcut window
 
 **Decision modal**:
@@ -146,8 +145,8 @@ One Model list value is one start argument: a value that cannot travel as a sing
 _Avoid_: model catalog, model registry
 
 **Type-ahead**:
-The Model row's search by typing: each letter extends the typed run, and the row jumps to the first Model whose whole value contains that run.
-The run is never displayed; the jumping value is the feedback, and a letter that matches nothing starts a new run.
+The Model row's visible, editable substring search for a Model in the Model list.
+The search retains unmatched text and states when no Model matches.
 _Avoid_: autocomplete, fuzzy filter
 
 **Setting fit check**:

@@ -25,6 +25,11 @@ ends at close, ADR 0006: the control plane polls herdr, ADR 0011: the
 observation reclaims an agent that outlives its work cycle, ADR 0012: a
 leftover environment is a fact the operator can act on).
 
+For changes to controls, follow [the shared control standard](docs/shared-controls.md)
+and [the contributor instructions](AGENTS.md). The standard is the accepted target;
+its migration and screen-reader verification are pending. The controls described
+below remain the current behavior until their migration is complete.
+
 ## Requirements
 
 - node v26.4 or newer (developed on v26.8.1).
