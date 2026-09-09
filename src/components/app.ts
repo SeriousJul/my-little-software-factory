@@ -95,7 +95,7 @@ import {
 	actionBarElement,
 } from "./consultation-actions.ts";
 import { ConsultationDetail, consultationDetailLines } from "./consultation-detail.ts";
-import { ConsultationLauncher } from "./consultation-launcher.ts";
+import { ConsultationLauncher, type LauncherDraft } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
 import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
 import {
@@ -123,6 +123,7 @@ import {
 	type ModelListStatus,
 	OverridePanel,
 } from "./override-panel.ts";
+import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import {
@@ -298,6 +299,13 @@ export function App({
 	const historyFilterRef = useRef<"open" | "closed" | "all">("open");
 	const [launcher, setLauncher] = useState(false);
 	const [replacementConsultationId, setReplacementConsultationId] = useState<string | null>(null);
+	// The launcher's unfinished form, kept for this application run only. A
+	// restart never sees it: closing keeps the operator's work, and Discard is
+	// the one action that deletes it.
+	const [launcherForm, setLauncherForm] = useState<{
+		owner: string;
+		draft: LauncherDraft;
+	} | null>(null);
 	const [consultationSafety, setConsultationSafety] = useState<{
 		consultationId: string;
 		safety: LiveCheckoutSafety;
@@ -1850,6 +1858,41 @@ export function App({
 				setStatus({ kind: "error", text: `response failed: ${errorMessage(error)}` });
 			});
 	};
+	/**
+	 * Take the editor's own text as the draft, then run the send.
+	 *
+	 * The Draft field owns the text while the operator edits it, and the durable
+	 * Response draft is what survives a close, so the two meet here: the send
+	 * stores what the operator last saw and then delivers it.
+	 */
+	const sendResponseText = (text: string) => {
+		responseDraftRef.current = text;
+		setResponseDraft(text);
+		if (state !== undefined && selectedConsultation !== undefined)
+			state.setConsultationDraft(selectedConsultation.id, text);
+		submitResponse();
+	};
+	/** Delete the saved Response draft. Closing the editor never does this. */
+	const discardResponseDraft = () => {
+		responseDraftRef.current = "";
+		setResponseDraft("");
+		if (state !== undefined && selectedConsultation !== undefined)
+			state.setConsultationDraft(selectedConsultation.id, "");
+		setResponseEditor(false);
+		setStatus({ kind: "info", text: "the saved Response draft was discarded" });
+	};
+	/** Close the editor with the draft saved as the operator left it. */
+	const closeResponseEditor = (kept: string) => {
+		responseDraftRef.current = kept;
+		setResponseDraft(kept);
+		if (
+			state !== undefined &&
+			selectedConsultation !== undefined &&
+			kept !== selectedConsultation.draft
+		)
+			state.setConsultationDraft(selectedConsultation.id, kept);
+		setResponseEditor(false);
+	};
 	const openConsultations = () => {
 		viewRef.current = "consultations";
 		setView("consultations");
@@ -2188,35 +2231,9 @@ export function App({
 			}
 			return;
 		}
-		if (responseEditor) {
-			if (key.name === "escape") {
-				setResponseEditor(false);
-				return;
-			}
-			if (key.name === "return") {
-				if (key.shift) {
-					responseDraftRef.current += "\n";
-					setResponseDraft(responseDraftRef.current);
-					if (state !== undefined && selectedConsultation !== undefined)
-						state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
-				} else submitResponse();
-				return;
-			}
-			if (key.name === "backspace") {
-				responseDraftRef.current = responseDraftRef.current.slice(0, -1);
-				setResponseDraft(responseDraftRef.current);
-				if (state !== undefined && selectedConsultation !== undefined)
-					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
-				return;
-			}
-			if ([...key.name].length > 0 && isLiteralText(key.name)) {
-				responseDraftRef.current += key.name === "space" ? " " : key.name;
-				setResponseDraft(responseDraftRef.current);
-				if (state !== undefined && selectedConsultation !== undefined)
-					state.setConsultationDraft(selectedConsultation.id, responseDraftRef.current);
-			}
-			return;
-		}
+		// The response editor is a shared form surface: its fields and actions
+		// answer the keys there, and nothing below may claim them.
+		if (responseEditor) return;
 		// The consultations view keeps its pre-catalogue key switch until
 		// it is ported to the control catalogue.
 		if (viewRef.current === "consultations") {
@@ -2804,12 +2821,27 @@ export function App({
 		replacementConsultationId === null
 			? undefined
 			: consultations.find((item) => item.id === replacementConsultationId);
-	const launcherInitialType =
-		replacementConsultation !== undefined ? replacementConsultation.typeName : undefined;
-	const launcherInitialInput =
-		replacementConsultation === undefined || state === undefined
-			? ""
-			: state.replacementInput(replacementConsultation.id);
+	// The form the launcher opens on: the one the operator left on this screen,
+	// or the Replacement context the durable state holds when nothing was left.
+	const launcherOwner =
+		replacementConsultationId === null ? "launcher" : `replacement:${replacementConsultationId}`;
+	const launcherDraft =
+		launcherForm !== null && launcherForm.owner === launcherOwner
+			? launcherForm.draft
+			: replacementConsultation !== undefined && state !== undefined
+				? // A Replacement starts from the durable recovery context, never from
+					// a draft another screen left behind.
+					{
+						typeName: replacementConsultation.typeName,
+						repositoryIdentity: replacementConsultation.repository.identity,
+						input: state.replacementInput(replacementConsultation.id),
+					}
+				: // A fresh launcher starts on the Repository the operator was looking at.
+					{
+						typeName: Object.keys(config.consultationTypes)[0] ?? "",
+						repositoryIdentity: selectedTicket?.repositoryRef.identity ?? "",
+						input: "",
+					};
 	const actionMode = currentBaseMode();
 	const ticketContext = controlContextFor(actionMode);
 	const messageColor = colorOfMessage(visibleMessage);
@@ -2948,7 +2980,10 @@ export function App({
 								createElement(ConsultationDetail, {
 									lines: consultationLines,
 									ansiLines,
-									visibleRows: Math.max(1, detailGeometry.visibleRows - (responseEditor ? 6 : 0)),
+									visibleRows: Math.max(
+										1,
+										detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+									),
 									scroll: consultationDetailScroll,
 									focused: focusedPane === "detail" && !responseEditor,
 									compactHeading:
@@ -2957,29 +2992,22 @@ export function App({
 											: undefined,
 								}),
 								responseEditor &&
-									createElement(
-										"box",
-										{
-											border: true,
-											borderColor: COLORS.borderFocused,
-											title: "Response",
-											padding: 1,
-											style: { flexDirection: "column" },
-										},
-										createElement(
-											"text",
-											{ fg: COLORS.textBright },
-											truncateToWidth(responseDraft || "(empty)", consultationWidth),
-										),
-										createElement(
-											"text",
-											{ fg: COLORS.dim },
-											truncateToWidth(
-												"enter submit  shift+enter newline  esc keep draft",
-												consultationWidth,
-											),
-										),
-									),
+									createElement(ResponseEditor, {
+										draft: responseDraft,
+										width: consultationWidth,
+										rows: RESPONSE_EDITOR_ROWS,
+										focused: true,
+										context: controlContextFor("form-field"),
+										inputActive: utility === null,
+										onSend: sendResponseText,
+										onDiscard: discardResponseDraft,
+										onClose: (kept: string) => closeResponseEditor(kept),
+										onHelp: () => openGuide("form-field"),
+										onMessage: () => openMessage("form-field"),
+										onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
+										message: visibleMessage,
+										onEmergencyExit: () => renderer.destroy(),
+									}),
 							),
 				),
 		view === "consultations" &&
@@ -3012,19 +3040,33 @@ export function App({
 			createElement(ConsultationLauncher, {
 				types: config.consultationTypes,
 				repositories: repositoryOptions,
-				initialType: launcherInitialType,
-				initialRepository:
-					replacementConsultation?.repository.identity ?? selectedTicket?.repositoryRef.identity,
-				initialInput: launcherInitialInput,
+				draft: launcherDraft,
 				title:
 					replacementConsultation === undefined
 						? "Consultation launcher"
 						: "Replacement Consultation",
-				onLaunch: startConsultation,
-				onCancel: () => {
+				onLaunch: (typeName, repository, text) => {
+					// The form is with the Agent now, so nothing is left to keep.
+					setLauncherForm(null);
+					startConsultation(typeName, repository, text);
+				},
+				onClose: (kept) => {
+					setLauncherForm({ owner: launcherOwner, draft: kept });
 					setLauncher(false);
 					setReplacementConsultationId(null);
 				},
+				onDiscard: () => {
+					setLauncherForm(null);
+					setLauncher(false);
+					setReplacementConsultationId(null);
+				},
+				context: controlContextFor(currentBaseMode()),
+				inputActive: utility === null,
+				onHelp: (mode) => openGuide(mode),
+				onMessage: (mode) => openMessage(mode),
+				onUnavailable: setWarningMessage,
+				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
 			}),
 		view === "consultations" && state !== undefined && actionBarElement(actionContext),
 		view === "consultations" &&

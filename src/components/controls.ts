@@ -23,6 +23,9 @@ export type InteractionMode =
 	| "override-list"
 	| "override-model"
 	| "override-text"
+	| "form-field"
+	| "form-selector"
+	| "form-action"
 	| "decision-modal"
 	| "missing-modal"
 	| "key-guide"
@@ -61,6 +64,7 @@ type ControlKey =
 	| "delete"
 	| "f1"
 	| "f2"
+	| "f3"
 	| "?"
 	| "return"
 	| "escape"
@@ -92,6 +96,23 @@ export interface ControlContext {
 	 * `e` key by control id.
 	 */
 	editableActionSelected?: boolean;
+	/**
+	 * The slot of the active form that holds the focus.
+	 *
+	 * A form owns one keyboard rule per slot: a field takes its own editing
+	 * keys, a selector cycles, an action confirms. The surface states the fact
+	 * from the slot it holds, and the catalogue gates on it, so no mode can
+	 * hand a Draft field's arrows to the form's selection.
+	 */
+	formSlot?: "field" | "selector" | "action";
+	/** The active form has a text selection the Copy control could hand over. */
+	fieldHasSelection?: boolean;
+	/** The Model search row holds text the clear control could remove. */
+	formSearchActive?: boolean;
+	/** How many values the focused selector offers. One of them cycles nowhere. */
+	formCycleCount?: number;
+	/** Why the form's Confirm action cannot run, in the surface's own words. */
+	formRefusal?: string;
 }
 
 export interface ControlDefinition {
@@ -130,6 +151,14 @@ export interface ControlDefinition {
 	 * Message view. A hint without the flag is plain text to the bar.
 	 */
 	rangeAnchor?: boolean;
+	/**
+	 * Whether the control belongs to the Key guide alone.
+	 *
+	 * A field owns its editing keys outright, so the plane dispatches nothing
+	 * for them and the Action bar names none. The guide still lists them: the
+	 * keys an operator uses most must not stay an undocumented exception.
+	 */
+	guideOnly?: boolean;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -246,13 +275,79 @@ const leftoverClear = (context: ControlContext): ControlAvailability => {
 
 const baseModes = ["ticket-list", "ticket-detail"] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
+/**
+ * The modes one shared form surface runs, one per slot kind.
+ *
+ * A form's fields, selectors, and actions are the same controls in every
+ * screen that holds them, so they share these modes instead of each screen
+ * naming its own. A surface picks the mode of the slot under the focus.
+ */
+const formModes = ["form-field", "form-selector", "form-action"] as const;
+/** Every mode in which a field holds the printable keys and edits itself. */
+const fieldModes: readonly InteractionMode[] = ["form-field", "override-text", "override-model"];
 const modalModes = ["decision-modal", "missing-modal"] as const;
 const allModes: readonly InteractionMode[] = [
 	...baseModes,
 	...overrideModes,
+	...formModes,
 	...modalModes,
 	"key-guide",
 	"message-view",
+];
+
+/**
+ * One field editing row: a key the focused field owns outright.
+ *
+ * These controls dispatch nothing, because the field itself runs them. They
+ * exist so the Key guide names field editing instead of leaving the most-used
+ * keys of the plane undocumented, and so the guide stays the one catalog the
+ * plane has: a row here is read the same way as a dispatched control.
+ */
+function editingRow(
+	id: string,
+	label: string,
+	keyLabel: string,
+	modes: readonly InteractionMode[],
+): ControlDefinition {
+	return {
+		id,
+		label,
+		// Display-only: a key the focused field already took claims nothing.
+		keys: () => [],
+		keyLabel,
+		scope: "control-plane",
+		actionBar: false,
+		guideOnly: true,
+		priority: 0,
+		modes,
+		availability: available,
+	};
+}
+
+/**
+ * The editing controls of a Text field and a Draft field, for the Key guide.
+ *
+ * A Draft field adds the newline row: its Enter inserts a line rather than
+ * starting work, and the surface's visible action is what submits it.
+ */
+const FIELD_EDITING_ROWS: readonly ControlDefinition[] = [
+	editingRow("edit-caret", "Move caret", "Left/Right", fieldModes),
+	editingRow("edit-lines", "Move caret by line", "Up/Down", ["form-field"]),
+	editingRow("edit-select", "Select text", "Shift+arrow", fieldModes),
+	editingRow("edit-word", "Word movement", "Ctrl+Left/Right", fieldModes),
+	editingRow("edit-edges", "Line and buffer edges", "Home/End", fieldModes),
+	editingRow("edit-delete", "Delete backward, forward", "Backspace/Delete", fieldModes),
+	editingRow("edit-word-delete", "Delete a word", "Ctrl+Backspace", fieldModes),
+	editingRow("edit-undo", "Undo", "Ctrl+Z", fieldModes),
+	editingRow("edit-redo", "Redo", "Ctrl+Y", fieldModes),
+	editingRow("edit-select-all", "Select all", "Ctrl+A", fieldModes),
+	editingRow("edit-paste", "Paste text", "Terminal paste", fieldModes),
+	editingRow(
+		"edit-newline",
+		"Insert a new line",
+		"Enter",
+		fieldModes.filter((mode) => mode !== "override-text"),
+	),
 ];
 
 /**
@@ -318,28 +413,42 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "change-override",
 		label: "Change",
-		// The Model row types its letters, so h and l belong to its text and
-		// only the arrows cycle its value.
-		keys: (mode) => (mode === "override-model" ? ["left", "right"] : ["left", "right", "h", "l"]),
+		// Only a list row cycles: the Model row is a Text field that owns its
+		// arrows for the caret, and the Model search edits its own text.
+		keys: () => ["left", "right", "h", "l"],
 		keyLabel: "←→/hl",
 		scope: "override",
 		actionBar: true,
 		priority: 80,
-		modes: ["override-list", "override-model"],
+		modes: ["override-list"],
 		availability: available,
 	},
 	{
 		id: "edit-override",
 		label: "Edit",
 		// Display-only: a free-text row is a standard input that owns its
-		// typing, and the Model list row types into its type-ahead. Neither
-		// key reaches the panel, so the hint claims none.
+		// typing, and the Model row types into its visible search. Neither key
+		// reaches the panel, so the hint claims none.
 		keys: () => [],
 		keyLabel: "Type",
 		scope: "override",
 		actionBar: true,
 		priority: 80,
 		modes: ["override-model", "override-text"],
+		availability: available,
+	},
+	{
+		id: "search-override",
+		label: "Search matches",
+		// Display-only: the Model search is a field the operator types into, and
+		// the value the row names is the answer. The row states the selected
+		// Model and the search separately, so a query never becomes a setting.
+		keys: () => [],
+		keyLabel: "Type-ahead",
+		scope: "override",
+		actionBar: true,
+		priority: 78,
+		modes: ["override-model"],
 		availability: available,
 	},
 	{
@@ -359,14 +468,16 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		id: "clear-override",
 		label: "Clear",
 		// Backspace on a list row gives the setting back to the agent. The
-		// free-text rows are standard inputs that own their own Backspace, so
-		// they keep the display-only Delete hint and never reach this control.
+		// free-text rows and the Model search are fields that own their own
+		// Backspace, so they keep the display-only Delete hint and never reach
+		// this control: a search an operator is correcting one character at a
+		// time must not vanish under the key they pressed to shorten it.
 		keys: () => ["backspace", "delete"],
 		keyLabel: "⌫",
 		scope: "override",
 		actionBar: true,
 		priority: 75,
-		modes: ["override-list", "override-model"],
+		modes: ["override-list"],
 		availability: available,
 	},
 	{
@@ -480,12 +591,101 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 	},
 	{
+		id: "move-field",
+		label: "Field",
+		// A field owns Up and Down for its own caret, so Tab is the only key
+		// that leaves one. A selector or an action takes the arrows too, because
+		// nothing there edits text.
+		keys: (mode) => (mode === "form-field" ? ["tab"] : ["up", "down", "tab"]),
+		keyLabel: "Tab",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 82,
+		modes: [...formModes],
+		availability: available,
+	},
+	{
+		id: "cycle-choice",
+		label: "Change",
+		keys: () => ["left", "right"],
+		keyLabel: "←→",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 80,
+		modes: ["form-selector"],
+		availability: (context) =>
+			context.formCycleCount !== undefined && context.formCycleCount > 1
+				? available()
+				: unavailable("this choice has no other value"),
+	},
+	{
+		id: "confirm-choice",
+		label: "Confirm",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: ["form-action"],
+		availability: (context) =>
+			context.formRefusal === undefined ? available() : unavailable(context.formRefusal),
+	},
+	{
+		id: "copy-selection",
+		label: "Copy selection",
+		keys: () => ["f3"],
+		keyLabel: "F3",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 45,
+		modes: [...formModes, "override-text", "override-model"],
+		// Copy is its own control, because Ctrl+C stays the emergency exit even
+		// while a field holds a selection: a text selection may never change what
+		// a safety control means.
+		availability: (context) =>
+			context.fieldHasSelection === true
+				? available()
+				: unavailable("the focused field holds no selection to copy"),
+		showInBar: (context) => context.fieldHasSelection === true,
+	},
+	{
+		id: "clear-search",
+		label: "Clear search",
+		// Backspace belongs to the search text, so the explicit clear is its own
+		// key: an operator who wants the whole query gone presses one key rather
+		// than one per character.
+		keys: () => ["delete"],
+		keyLabel: "Del",
+		scope: "override",
+		actionBar: true,
+		priority: 60,
+		modes: ["override-model"],
+		availability: (context) =>
+			context.formSearchActive === true
+				? available()
+				: unavailable("the Model search holds no text to clear"),
+		showInBar: (context) => context.formSearchActive === true,
+	},
+	{
+		id: "close-form",
+		label: "Close",
+		// Closing a form keeps what the operator typed: discarding is its own
+		// visible action, never a side effect of the way out.
+		keys: () => ["escape"],
+		keyLabel: "Esc",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 90,
+		modes: [...formModes],
+		availability: available,
+	},
+	{
 		id: "help",
 		label: "Help",
 		// `?` opens Help wherever the mode does not own printable text. In the
 		// override text row and on the Model list row, which types its letters,
 		// it stays text, and only F1 reaches Help.
-		keys: (mode) => (mode === "override-text" || mode === "override-model" ? ["f1"] : ["f1", "?"]),
+		keys: (mode) => (fieldModes.includes(mode) ? ["f1"] : ["f1", "?"]),
 		keyLabel: "F1/?",
 		scope: "global",
 		actionBar: true,
@@ -753,6 +953,7 @@ const KEY_NAMES: Record<ControlKey, string> = {
 	v: "v",
 	f1: "F1",
 	f2: "F2",
+	f3: "F3",
 	"?": "?",
 	return: "Enter",
 	escape: "Esc",
@@ -831,8 +1032,15 @@ export function guideControls(
 	// bar shows only the meaning the current state runs; the guide shows both.
 	const current = controlsForMode(mode).filter(
 		(control) =>
-			control.actionBar && control.id !== "emergency-exit" && isCataloguedInMode(mode, control),
+			control.actionBar &&
+			control.guideOnly !== true &&
+			control.id !== "emergency-exit" &&
+			isCataloguedInMode(mode, control),
 	);
+	// A field owns its editing keys, so the plane dispatches none of them. The
+	// guide still names them, and names them with the mode's own controls, so a
+	// field's basic editing is never the undocumented exception again.
+	const editing = FIELD_EDITING_ROWS.filter((control) => control.modes.includes(mode));
 	const seen = new Set(current.map((control) => control.id));
 	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
 		CONTROL_DEFINITIONS.filter(
@@ -843,6 +1051,7 @@ export function guideControls(
 		});
 	return [
 		...current.map((control) => ({ group: "Current interaction mode", control })),
+		...editing.map((control) => ({ group: "Field editing", control })),
 		...append("Global controls", (control) => control.scope === "global"),
 		...append("Control plane controls", (control) => control.scope === "control-plane"),
 		...append("Other interaction modes", () => true),
@@ -861,6 +1070,12 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Override model row";
 		case "override-text":
 			return "Override text row";
+		case "form-field":
+			return "Form field";
+		case "form-selector":
+			return "Form choice";
+		case "form-action":
+			return "Form action";
 		case "decision-modal":
 			return "Decision modal";
 		case "missing-modal":
@@ -879,11 +1094,10 @@ function displayKeyLabel(
 ): string {
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";
-	if (control.id === "change-override" && mode === "override-model") return "←→";
 	if (control.id === "help") {
-		// The Model row types its letters, and `?` is one of them: only F1
-		// opens the guide there.
-		if (mode === "override-text" || mode === "override-model") return "F1";
+		// A field types its letters, and `?` is one of them: only F1 opens the
+		// guide where a field holds the printable keys.
+		if (fieldModes.includes(mode)) return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
 		if (mode === "ticket-list" || mode === "ticket-detail") return includeAllAliases ? "F1/?" : "?";
 	}

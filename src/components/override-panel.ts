@@ -12,23 +12,23 @@
  * start on the settings the resolved task profile names (ADR 0009), so the
  * panel shows what the handoff will run on.
  *
- * The Model row offers the selected agent's Model list (ADR 0010). It is a
- * list row that also takes type-ahead: each typed letter extends the typed
- * text, and the row jumps to the first model whose whole value contains that
- * text, case-insensitive. The typed text is never displayed; the jumping
- * value is the feedback. A run that finds nothing is over, because a longer
- * run can only match less, so the letter that found nothing starts a new run
- * and every letter the operator types is answered. Typing accumulates until
- * the operator selects with the arrows, clears with backspace, or leaves the
- * row. While the control plane fetches the list the row shows a dim loading
- * marker and takes no input; when the agent's kind reports no list, or the
- * fetch failed, the row is the standard single-line Text field: typing, caret
- * movement with the arrows, Home and End, selection, backspace and delete,
- * undo and redo, and bracketed terminal paste, and its guide line names the
- * reason the list is gone. A paste is sanitized by the input before it is
- * inserted, so a pasted model name is plain text. An input scrolls horizontally
- * within its column and never wraps, so it can never corrupt the rows around
- * it.
+ * The Model row offers the selected agent's Model list (ADR 0010). It is the
+ * shared Type-ahead: the row states the Model it stands on, and the line under
+ * it holds the search the operator is typing. Each query matches by substring,
+ * case-insensitive, and the row names the first value that holds it. The query
+ * stays on screen, so a search that matches nothing says so and keeps its text
+ * for the operator to correct; it never restarts from its last character, and an
+ * unmatched query never becomes the setting. Backspace edits the search, and
+ * Delete clears the whole of it.
+ *
+ * While the control plane fetches the list the row shows a dim loading marker
+ * and takes no input. When the agent's kind reports no list, or the fetch
+ * failed, the row is the shared Text field, and its guide line names the reason
+ * the list is gone. Every field row is the shared field, so the editing keys,
+ * the caret, the selection, undo and redo, and paste behave here exactly as they
+ * do in the Consultation launcher and the response editor. An input scrolls
+ * horizontally within its column and never wraps, so it can never corrupt the
+ * rows around it.
  *
  * A list row (the agent, the environment, the task type, the Model list, and
  * the thinking level) cycles its value with left/right, and h and l where
@@ -54,10 +54,10 @@
  * a leading marker for the cut; the whole value still rides on the handoff.
  *
  * The keys: up/down and tab/shift+tab move the row selection. j and k move it
- * too, except on a row that takes typing (a Text field, or the Model list),
- * where they type. left/right move the caret on a Text field and cycle a list
- * row's value; h and l type on a Text field and on the Model list, and cycle
- * every other list row. Switching the task type re-derives the agent, model,
+ * too, except on a row that takes typing (a Text field, or the Model search),
+ * where they type. Left and right move the caret on a field row and on the
+ * Model search, and cycle every other list row's value; h and l type on a field
+ * row and on the Model search, and cycle every other list row. Switching the task type re-derives the agent, model,
  * thinking, and context rows from the new task type's profile while the
  * operator has not touched each row, so the panel keeps showing the true
  * start values; a row the operator touched keeps its value. Switching the
@@ -73,18 +73,20 @@
  * through the shared control catalogue.
  */
 
-import type { InputRenderable } from "@opentui/core";
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, type RefObject, useRef, useState } from "react";
 import type { ThinkingLevel } from "../domain/agent.ts";
 import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
-import { createControlDispatch } from "./control-dispatch.ts";
+import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
+import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
+import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -128,6 +130,8 @@ export interface AgentModelList {
 	status: ModelListStatus;
 }
 
+/** The three modes one override panel runs, one per row kind. */
+export type OverrideMode = "override-list" | "override-model" | "override-text";
 /** The setting one row edits. */
 type RowKey = keyof HandoffChoice;
 /** The rows whose value the operator can clear to leave the setting to the agent. */
@@ -146,11 +150,9 @@ type UnfitSetting = "no-setting" | "no-level" | "no-count";
 interface PanelRow {
 	label: string;
 	key: RowKey;
-	/** "list" cycles, "text" edits, "pending" waits for a list and takes nothing. */
-	kind: "list" | "text" | "pending";
+	/** "list" cycles, "text" edits, "type-ahead" searches, "pending" waits. */
+	kind: "list" | "text" | "type-ahead" | "pending";
 	options?: readonly string[];
-	/** The Model list row: a list row that also takes typed letters. */
-	typeAhead?: boolean;
 	/** Show the end of a value that does not fit, where a model name differs. */
 	clipTail?: boolean;
 	/** The dim marker a row holds while it has no value to show. */
@@ -192,8 +194,8 @@ interface OverridePanelProps {
 	context: ControlContext;
 	/** False while a Key guide or Message view is above this panel. */
 	inputActive?: boolean;
-	onHelp?: (mode: "override-list" | "override-model" | "override-text") => void;
-	onMessage?: (mode: "override-list" | "override-model" | "override-text") => void;
+	onHelp?: (mode: OverrideMode) => void;
+	onMessage?: (mode: OverrideMode) => void;
 	/** Reports the catalogue reason for a refused control on the Message line. */
 	onUnavailable?: (reason: string) => void;
 	/** The Message fact this panel's own Message line shows. */
@@ -214,23 +216,14 @@ const FALLBACK_PLACEHOLDERS: Record<ModelListCause, string> = {
 	"no-list": "(empty - no model list)",
 	"query-failed": "(empty - query failed)",
 };
+/** The Context row's own refusal words: one count, never a stray character. */
+const CONTEXT_REFUSALS = {
+	character: "Context window accepts digits only",
+	paste: "Context window accepts digits only: the pasted text was refused as a whole",
+};
 const UNSET_HINT = "(unset)";
 const LOADING_HINT = "(loading...)";
 const NO_MODELS_HINT = "(no models available)";
-/**
- * The field's undo and redo keys, as a module constant so the input does not
- * rebuild its binding map on every render.
- *
- * OpenTUI's default bindings map undo and redo to the macOS super (Cmd) keys,
- * so on Linux and Windows the field would offer no usual undo or redo. Adding
- * the standard Ctrl+Z and Ctrl+Y makes the editing standard everywhere. These
- * bind to the input's own undo and redo actions.
- */
-const INPUT_KEY_BINDINGS = [
-	{ name: "z", ctrl: true, action: "undo" },
-	{ name: "y", ctrl: true, action: "redo" },
-];
-
 /** The panel's columns, within the rows and width the shared chrome leaves. */
 interface PanelGeometry {
 	markerWidth: number;
@@ -277,38 +270,6 @@ export function panelValueCells(width: number, height: number): number {
 	return panelGeometry(frame.contentWidth, frame.contentRows).valueWidth;
 }
 
-/**
- * The one character a key types, or null when it types nothing.
- *
- * Named keys arrive as their word ("up", "return"), and the arrows and the
- * editing keys as a multi-cell escape sequence, so a single printable cell is
- * the only thing that extends the typed text. The modifier combos belong to
- * the focused input and never reach here.
- */
-function typedChar(key: { name: string; sequence?: string }): string | null {
-	const raw = key.sequence === undefined || key.sequence === "" ? key.name : key.sequence;
-	if (raw.length !== 1) return null;
-	const code = raw.charCodeAt(0);
-	// A space or a control character types nothing the operator meant.
-	return code > 0x20 && code < 0x7f ? raw : null;
-}
-
-/**
- * The first model whose whole value holds the typed text, case-insensitive.
- *
- * A plain substring test, and so stricter than the pattern search `pi
- * --list-models` applies, which lets the matched letters sit apart from each
- * other: `pi --list-models snnet` answers with models that do not hold the
- * substring. The panel keeps the stricter rule because a jump is the only
- * feedback it gives, and a jump must always name a model the typed letters
- * really hold. A run that finds nothing here ends: `typeLetter` starts a new
- * one at the letter that failed.
- */
-function typeAheadMatch(options: readonly string[], typed: string): string | undefined {
-	const needle = typed.toLowerCase();
-	return options.find((option) => option.toLowerCase().includes(needle));
-}
-
 export function OverridePanel({
 	agents,
 	environments,
@@ -352,36 +313,56 @@ export function OverridePanel({
 		thinking: false,
 		contextWindow: false,
 	});
-	// The Model row's accumulated type-ahead text. It is never displayed: the
-	// value jumping to a match is the feedback.
-	const typedRef = useRef("");
-	// The live text fields, one ref each, so a character a row rejects can
-	// go back out of the field that holds it.
-	const inputRefs: Record<TextKey, RefObject<InputRenderable | null>> = {
-		model: useRef<InputRenderable | null>(null),
-		thinking: useRef<InputRenderable | null>(null),
-		contextWindow: useRef<InputRenderable | null>(null),
-	};
+	// The Model row's visible search. The shared row owns its text; this handle
+	// is only how the panel's explicit clear key reaches it.
+	const typeAhead = useRef<TypeAheadHandle | null>(null);
+	// The field that holds the keyboard, for the Copy selection control.
+	const field = useRef<FieldHandle | null>(null);
+	// Whether the field under the cursor holds a selection the Copy control can
+	// hand over. The frame reads it, and the field reports it on every change.
+	const [hasSelection, setHasSelection] = useState(false);
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
 		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
 	const allRows = rowsForChoice(choice);
+	// The Type-ahead row draws its search under its value, so it takes two rows
+	// where every other row takes one. The panel counts them, because a surface
+	// is handed no more rows than it holds and a row that overflowed would
+	// paint through the row below it.
+	const spans = allRows.map((r) => (r.kind === "type-ahead" ? 2 : 1));
+	const rowSpan = (index: number): number => spans[index] ?? 1;
+	const totalRows = spans.reduce((sum, span) => sum + span, 0);
 	// The shared chrome sizes the box: the terminal's rows above the Action
-	// bar, or the rows the panel needs, whichever is fewer. The panel spans
+	// bar, or the rows the panel needs, whichever are fewer. The panel spans
 	// the terminal edge to edge, so its value column keeps every cell it can.
 	const frame = modalFrame(terminalWidth, terminalHeight, {
-		rows: allRows.length,
+		rows: totalRows,
 		margin: 0,
 	});
 	const geometry = panelGeometry(frame.contentWidth, frame.contentRows);
 	// Switching the agent can hide the rows below the selection; clamp it.
 	const safeSelected = Math.min(selected, allRows.length - 1);
-	// The rows the terminal height holds, scrolled to keep the selected row
-	// on screen. A short terminal scrolls the viewport; a row never wraps.
-	const visibleCount = Math.max(1, Math.min(allRows.length, geometry.maxRows));
-	let start = safeSelected >= visibleCount ? safeSelected - visibleCount + 1 : 0;
-	start = Math.max(0, Math.min(start, allRows.length - visibleCount));
-	const rows = allRows.slice(start, start + visibleCount);
+	// The rows the terminal height holds, scrolled to keep the selected row on
+	// screen. A short terminal scrolls the viewport; a row never wraps, and a
+	// two-row row is moved whole.
+	const startAt = (index: number): number =>
+		spans.slice(0, index).reduce((sum, span) => sum + span, 0);
+	// The first row the viewport shows: the earliest one that still leaves the
+	// selected row wholly inside the rows the terminal holds.
+	let start = 0;
+	while (
+		start < safeSelected &&
+		startAt(safeSelected) - startAt(start) + rowSpan(safeSelected) > geometry.maxRows
+	) {
+		start += 1;
+	}
+	let used = 0;
+	let end = start;
+	while (end < allRows.length && used + rowSpan(end) <= geometry.maxRows) {
+		used += rowSpan(end);
+		end += 1;
+	}
+	const rows = allRows.slice(start, Math.max(start + 1, end));
 	const row = rows[Math.max(0, safeSelected - start)];
 	/** Move to another agent: its Model list is the one the row must offer. */
 	const selectAgent = (next: HandoffChoice, previous: HandoffChoice) => {
@@ -399,8 +380,6 @@ export function OverridePanel({
 		return all[Math.min(selectedRef.current, all.length - 1)];
 	};
 	const move = (delta: number) => {
-		// Leaving a row ends its type-ahead run: the next row starts clean.
-		typedRef.current = "";
 		const count = rowsForChoice(choiceRef.current).length;
 		const at = Math.min(selectedRef.current, count - 1);
 		selectedRef.current = (at + delta + count) % count;
@@ -429,8 +408,6 @@ export function OverridePanel({
 		if (target.kind !== "list") return;
 		const options = target.options;
 		if (options === undefined || options.length === 0) return;
-		// Choosing with the arrows ends the type-ahead run.
-		typedRef.current = "";
 		if (target.key !== "environment" && target.key !== "taskType") touch(target.key);
 		commit((current) => {
 			const index = options.indexOf(current[target.key]);
@@ -449,89 +426,73 @@ export function OverridePanel({
 	const touch = (key: DerivedKey) => {
 		touchedRef.current[key] = true;
 	};
-	/** Backspace or Delete on a Model or Thinking row: leave the setting to the agent. */
+	/** Backspace or Delete on a list row: leave that setting to the agent. */
 	const clearRow = () => {
 		const target = cursorRow();
-		// The pending row takes no input at all: it holds no value to clear.
-		if (target.kind === "pending") return;
+		// A field row and the Model search own their own deletion keys, so this
+		// handler never sees them, and the pending row holds no value to clear.
+		if (target.kind !== "list") return;
 		if (target.key !== "model" && target.key !== "thinking") return;
 		const key: ClearKey = target.key;
-		typedRef.current = "";
 		touch(key);
 		commit((current) => (current[key] === "" ? current : { ...current, [key]: "" }));
 	};
-	/** One type-ahead letter on the Model list row. */
-	const typeLetter = (char: string) => {
-		const target = cursorRow();
-		const options = target.options ?? [];
-		const extended = typedRef.current + char;
-		// Containment only gets harder as a run grows, so a run that has found
-		// nothing can never find something again. The letter that ended it
-		// starts a new run instead: every letter is answered, one mistyped one
-		// cannot freeze the row, and the value jumping is the signal that the
-		// run restarted.
-		const match = typeAheadMatch(options, extended) ?? typeAheadMatch(options, char);
-		typedRef.current = match === undefined ? char : extended;
-		touch("model");
-		// A letter no model holds, on its own or in a run, leaves the value where
-		// it is.
-		if (match === undefined) return;
-		commit((current) => (current.model === match ? current : { ...current, model: match }));
-	};
-	// One text field's input callback. The input owns its own caret and text,
-	// so this only mirrors the value into the choice. The guard skips the
-	// no-op echo the input emits, so a re-render never re-commits.
-	const handleInput = (row: PanelRow) => (text: string) => {
-		// A digits row takes digits and nothing else, typed or pasted: one
-		// value must never become two argv elements, and a count cannot carry
-		// a stray character. A count also keeps one spelling: the row folds a
-		// leading zero the same way the config parser does, so what the panel
-		// shows is the count the agent gets. The field owns its text, so a
-		// rejected character goes back out of it: the setter echoes an input
-		// event of its own, which the guard below absorbs.
-		const key = row.key as TextKey;
-		const value = row.digits === true ? tokenCountDigits(text.replace(/[^0-9]/gu, "")) : text;
-		if (value !== text) {
-			// The row's own buffer holds a character the row refuses, so push
-			// the refused text back out of it. The ref is live whenever a key
-			// reached this callback, and a missing one only costs the write-back.
-			const input = inputRefs[key].current;
-			if (input !== null) {
-				// The refused characters all stood inside the run the field just
-				// inserted, so they were all before the caret. The write-back's
-				// setter lands the caret at the row's end, which would move every
-				// later keystroke there, so the caret goes back by their count.
-				const kept = Math.max(0, input.cursorOffset - (text.length - value.length));
-				input.value = value;
-				input.cursorOffset = Math.min(value.length, kept);
-			}
-		}
-		if (choiceRef.current[key] === value) {
+	/** Delete on the Model search: clear the whole query, or the value it named. */
+	const clearSearch = () => {
+		if (typeAhead.current === null) return;
+		if (typeAhead.current.query() !== "") {
+			typeAhead.current.clear();
 			return;
 		}
+		// With no query left to remove, the same key gives the Model back to the
+		// agent, which is what clearing a list row has always done.
+		touch("model");
+		commit((current) => (current.model === "" ? current : { ...current, model: "" }));
+	};
+	/** One shared field's change: mirror the value into the panel's choice. */
+	const fieldChanged = (key: TextKey) => (facts: FieldFacts) => {
+		if (choiceRef.current[key] === facts.value) return;
 		touch(key);
-		commit((current) => ({ ...current, [key]: value }));
+		commit((current) => ({ ...current, [key]: facts.value }));
+	};
+	/** One Type-ahead search's change: the value follows the first match. */
+	const searchChanged = (_query: string, match: TypeAheadMatch) => {
+		if (match.first === undefined || choiceRef.current.model === match.first) return;
+		touch("model");
+		commit((current) => ({ ...current, model: match.first as string }));
 	};
 	// The panel's mode follows the row the cursor is on, so it is read at key
 	// time: one key can move the cursor, and the next belongs to the new row.
-	const currentMode = (): "override-list" | "override-model" | "override-text" => {
+	const currentMode = (): OverrideMode => {
 		const target = cursorRow();
 		if (target.kind === "text") return "override-text";
-		if (target.kind === "list" && target.typeAhead === true) return "override-model";
+		if (target.kind === "type-ahead") return "override-model";
 		return "override-list";
 	};
-	const dispatch = createControlDispatch({
+	// The facts the catalogue gates on, stated by the row the cursor is on. The
+	// Copy control needs the field's own selection, and the clear control needs
+	// to know whether the Model search holds anything to clear.
+	const panelContext = (mode: OverrideMode) =>
+		contextFor(mode, {
+			...context,
+			fieldHasSelection: hasSelection,
+			formSearchActive: typeAhead.current?.query() !== "",
+		});
+	useControlDispatch({
 		mode: currentMode,
-		context,
+		// The Copy and Clear controls are gated on facts only this panel knows,
+		// so the panel states them and the catalogue decides.
+		context: panelContext(currentMode()),
 		active: inputActive,
 		// The Ctrl combos the catalogue does not name (undo, redo, word
-		// delete) belong to the focused input. Ctrl+C is the emergency exit.
+		// movement and word delete) belong to the focused field. Ctrl+C stays
+		// the emergency exit whatever a field holds.
 		skip: (key) => key.ctrl === true && key.name !== "c",
 		onUnavailable,
 		onEmergencyExit,
 		handlers: {
 			"move-list": ({ key }) => {
-				// Tab moves from a list row and a text row alike; Shift+Tab
+				// Tab moves from a list row and a field row alike; Shift+Tab
 				// is the previous row.
 				move(key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1);
 				key.preventDefault?.();
@@ -548,6 +509,11 @@ export function OverridePanel({
 				clearRow();
 				key.preventDefault?.();
 			},
+			"clear-search": () => clearSearch(),
+			"copy-selection": () => {
+				const result = field.current?.copySelection();
+				onUnavailable?.(result?.reason ?? "The panel holds no field to copy from");
+			},
 			cancel: ({ key }) => {
 				onCancel();
 				key.preventDefault?.();
@@ -555,22 +521,6 @@ export function OverridePanel({
 			help: () => onHelp?.(currentMode()),
 			message: () => onMessage?.(currentMode()),
 		},
-	});
-	useKeyboard((key) => {
-		// The Model list row takes typed letters before anything else, so h,
-		// j, k, and l type into it instead of cycling or moving.
-		if (inputActive && key.meta !== true) {
-			const target = cursorRow();
-			if (target.kind === "list" && target.typeAhead === true) {
-				const char = typedChar(key);
-				if (char !== null) {
-					typeLetter(char);
-					key.preventDefault?.();
-					return;
-				}
-			}
-		}
-		dispatch(key);
 	});
 	const mode = currentMode();
 	return createElement(ModalSurface, {
@@ -581,16 +531,19 @@ export function OverridePanel({
 		// One row is enough to be a panel: the rows that do not fit scroll.
 		minContentRows: 1,
 		message,
-		bar: { mode, context: contextFor(mode, context) },
+		bar: { mode, context: panelContext(mode) },
 		children: rows.map((r) =>
 			rowElement(
 				r,
 				choice[r.key],
 				r.key === row.key,
 				geometry,
-				handleInput,
-				inputRefs,
 				inputActive,
+				fieldChanged,
+				searchChanged,
+				typeAhead,
+				field,
+				setHasSelection,
 			),
 		),
 	});
@@ -682,15 +635,14 @@ function modelRow(status: ModelListStatus): PanelRow {
 		return {
 			label: "Model",
 			key: "model",
-			kind: "list",
+			kind: "type-ahead",
 			options: status.models,
-			typeAhead: true,
 			// A real list carries one long provider in front of many models, so
 			// the tail is the part that tells two choices apart.
 			clipTail: true,
 			// An agent that reports no model has nothing to offer, and an empty
-			// value stays the valid unset state.
-			placeholder: status.models.length === 0 ? NO_MODELS_HINT : undefined,
+			// value stays the valid unset state the panel names.
+			placeholder: status.models.length === 0 ? NO_MODELS_HINT : UNSET_HINT,
 		};
 	}
 	return {
@@ -701,63 +653,86 @@ function modelRow(status: ModelListStatus): PanelRow {
 	};
 }
 
-/** One panel row as a marker, a label, and a value or an input. */
+/**
+ * One row of the panel, drawn by the module that owns its behavior.
+ *
+ * A field row is the shared Text field, so its caret, selection, undo history,
+ * and paste rules are the rules every other surface has. The Model row over a
+ * list the agent reported is the shared Type-ahead, so the search the operator
+ * typed is on screen beside the value it names. A list row that takes no typing
+ * states its own value, its unset word, and the warning a value the agent
+ * cannot take carries.
+ */
 function rowElement(
 	r: PanelRow,
 	value: string,
 	selected: boolean,
 	geometry: PanelGeometry,
-	handleInput: (row: PanelRow) => (text: string) => void,
-	inputRefs: Record<TextKey, RefObject<InputRenderable | null>>,
 	inputActive: boolean,
+	fieldChanged: (key: TextKey) => (facts: FieldFacts) => void,
+	searchChanged: (query: string, match: TypeAheadMatch) => void,
+	typeAhead: RefObject<TypeAheadHandle | null>,
+	field: RefObject<FieldHandle | null>,
+	reportSelection: (has: boolean) => void,
 ): ReactElement {
+	const ink = controlInk();
+	if (r.kind === "text") {
+		return createElement(TextField, {
+			key: r.key,
+			label: r.label,
+			value,
+			focused: selected && inputActive,
+			inputActive,
+			width: geometry.valueWidth,
+			labelWidth: geometry.labelWidth,
+			digits: r.digits === true,
+			// A count keeps one spelling: the row folds a leading zero the same
+			// way the config parser does, so what the panel shows is the count the
+			// agent gets. The field owns the caret through the fold.
+			normalize: r.digits === true ? tokenCountDigits : undefined,
+			placeholder:
+				r.fallbackCause === undefined ? EMPTY_HINT : FALLBACK_PLACEHOLDERS[r.fallbackCause],
+			// A value the target cannot take is the field's own news: it is stated
+			// in words, and the warning tone only agrees with them.
+			error: r.unfit === undefined ? null : unfitReason(r.unfit),
+			fieldRef: field,
+			refusals: CONTEXT_REFUSALS,
+			onValueChange: (facts) => {
+				fieldChanged(r.key as TextKey)(facts);
+				reportSelection(facts.selection !== "");
+			},
+		});
+	}
+	if (r.kind === "type-ahead") {
+		return createElement(TypeAheadRow, {
+			key: r.key,
+			label: r.label,
+			value,
+			options: r.options ?? [],
+			focused: selected && inputActive,
+			inputActive,
+			width: geometry.valueWidth,
+			labelWidth: geometry.labelWidth,
+			placeholder: r.placeholder ?? STATE_WORDS.unset,
+			// A model the list does not hold cannot reach the agent, and the row
+			// says so in the warning tone beside the value.
+			warning: r.unfit !== undefined || !optionsOf(r).includes(value),
+			typeAheadRef: typeAhead,
+			onQueryChange: searchChanged,
+		});
+	}
 	const children: ReactElement[] = [
 		createElement(
 			"text",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
+			{ fg: selected ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
 			truncateToWidth(selected ? "❯ " : "  ", geometry.markerWidth),
 		),
 		createElement(
 			"text",
-			{ fg: selected ? COLORS.textBright : COLORS.dim },
+			{ fg: selected ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
 			truncateToWidth(padToWidth(`${r.label} `, geometry.labelWidth), geometry.labelWidth),
 		),
 	];
-	if (r.kind === "text") {
-		// A text row: a standard single-line input. It owns the caret, the
-		// editing keys, and paste, and scrolls horizontally within the value
-		// column. The empty field shows the dim placeholder, like the old
-		// (empty) hint. A value the agent cannot take wears the warning, so
-		// the row shows what the handoff sends and that it will fail on it.
-		children.push(
-			createElement("input", {
-				key: r.key,
-				width: geometry.valueWidth,
-				value,
-				// A Key guide or Message view above the panel takes the keys:
-				// the field blurs so their keys cannot type into it.
-				focused: selected && inputActive,
-				placeholder:
-					r.fallbackCause === undefined ? EMPTY_HINT : FALLBACK_PLACEHOLDERS[r.fallbackCause],
-				placeholderColor: COLORS.dim,
-				textColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.text,
-				focusedTextColor: r.unfit !== undefined ? COLORS.statusWarning : COLORS.textBright,
-				backgroundColor: "transparent",
-				focusedBackgroundColor: COLORS.focusedBackground,
-				keyBindings: INPUT_KEY_BINDINGS,
-				ref: inputRefs[r.key as TextKey],
-				// A digits row refuses a character that is not a digit in the
-				// panel's own input handler, which writes the field back without
-				// it: OpenTUI offers no before-input hook to hold it out.
-				onInput: handleInput(r),
-			}),
-		);
-		return createElement(
-			"box",
-			{ key: r.key, style: { flexDirection: "row", height: 1 } },
-			...children,
-		);
-	}
 	// A list row, or the row that waits for one. An unset value shows a dim
 	// hint, never a blank; a value the current agent cannot run shows the value
 	// itself in the warning color, because the handoff would fail on it.
@@ -767,6 +742,19 @@ function rowElement(
 	// correctly must not read as a handoff that would fail. The row shows that
 	// value in the dim tone the panel uses for a setting it cannot yet confirm.
 	const pending = r.kind === "pending";
+
+	/** The values one row offers, or none when it is not a list row. */
+	function optionsOf(r: PanelRow): readonly string[] {
+		return r.options ?? [];
+	}
+
+	/** Why a row's value cannot reach the agent, in the words the operator reads. */
+	function unfitReason(unfit: UnfitSetting): string {
+		if (unfit === "no-setting") return "the selected agent takes no such setting";
+		if (unfit === "no-level") return "the selected agent does not offer this Thinking level";
+		return "the selected agent takes no count for a Context window";
+	}
+
 	const inList = (r.options ?? []).includes(value);
 	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
 	const color =

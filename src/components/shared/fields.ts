@@ -25,25 +25,18 @@
  */
 import {
 	type ContentChangeEvent,
+	decodePasteBytes,
 	type InputRenderable,
 	type KeyEvent,
 	type PasteEvent,
-	type TextareaRenderable,
-	decodePasteBytes,
 	stripAnsiSequences,
+	type TextareaRenderable,
 } from "@opentui/core";
 import { createElement, useRenderer } from "@opentui/react";
-import {
-	Fragment,
-	type ReactElement,
-	type RefObject,
-	useCallback,
-	useEffect,
-	useRef,
-} from "react";
+import { Fragment, type ReactElement, type RefObject, useCallback, useEffect, useRef } from "react";
 
 import { padToWidth, truncateToWidth, widthOf } from "../text.ts";
-import { type ControlInk, MARKER_WIDTH, controlInk, markerText } from "./presentation.ts";
+import { type ControlInk, controlInk, MARKER_WIDTH, markerText } from "./presentation.ts";
 
 /** The library's own view of the two primitives it wraps. */
 type FieldNode = InputRenderable | TextareaRenderable;
@@ -179,7 +172,10 @@ function foldNodeText(node: FieldNode, folded: string): void {
 	if (folded.slice(start, folded.length - end) !== "") return;
 	node.setSelection(start, before.length - end);
 	node.deleteSelection();
-	node.cursorOffset = Math.min(node.plainText.length, Math.max(0, caret - (before.length - end - start)));
+	node.cursorOffset = Math.min(
+		node.plainText.length,
+		Math.max(0, caret - (before.length - end - start)),
+	);
 	node.requestRender();
 }
 
@@ -194,7 +190,7 @@ function fieldLabelCells(props: SharedFieldProps, ink: ControlInk): ReactElement
 				"text",
 				{
 					key: "marker",
-					fg: props.focused ? ink.focusedText.fg ?? undefined : ink.detail.fg ?? undefined,
+					fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined),
 				},
 				markerText(props.focused),
 			),
@@ -205,7 +201,7 @@ function fieldLabelCells(props: SharedFieldProps, ink: ControlInk): ReactElement
 			"text",
 			{
 				key: "label",
-				fg: props.focused ? ink.focusedText.fg ?? undefined : ink.detail.fg ?? undefined,
+				fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined),
 			},
 			padToWidth(truncateToWidth(`${props.label} `, labelWidth), labelWidth),
 		),
@@ -395,6 +391,10 @@ export function TextField(props: TextFieldProps): ReactElement {
 		onValueChange: props.onValueChange,
 	});
 	if (props.fieldRef !== undefined) props.fieldRef.current = handle.current;
+	// A value the caller cannot use is the field's own news, so the field wears
+	// it: the written error line states the reason, and the tone only agrees with
+	// what is already written beside it.
+	const tint = props.error === null || props.error === undefined ? null : ink.warning.fg;
 	return createElement(
 		Fragment,
 		{},
@@ -409,8 +409,8 @@ export function TextField(props: TextFieldProps): ReactElement {
 				focused: props.focused && props.inputActive !== false,
 				placeholder: props.placeholder ?? "",
 				placeholderColor: ink.detail.fg ?? undefined,
-				textColor: ink.text.fg ?? undefined,
-				focusedTextColor: ink.focusedText.fg ?? undefined,
+				textColor: tint ?? ink.text.fg ?? undefined,
+				focusedTextColor: tint ?? ink.focusedText.fg ?? undefined,
 				backgroundColor: "transparent",
 				focusedBackgroundColor: ink.surface.on === "default" ? "transparent" : ink.surface.on,
 				cursorColor: ink.indicator.fg ?? undefined,
@@ -418,8 +418,8 @@ export function TextField(props: TextFieldProps): ReactElement {
 				// lands, so the field paints a steady one by default.
 				cursorStyle: { style: "line", blinking: false },
 				// A bar cursor and boundary selection agree: one shift-arrow moves
-				// the selection over exactly one grapheme, so the copied text and the
-				// replaced text are the text the operator seeed selected.
+				// the selection over exactly one grapheme, so the text the operator
+				// sees selected is the text a copy or a replacement edit uses.
 				selectionOccupancy: "boundary",
 				maxLength: props.maxLength ?? 1000,
 				keyBindings: FIELD_KEY_BINDINGS,
@@ -454,15 +454,33 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 		onValueChange: props.onValueChange,
 	});
 	if (props.fieldRef !== undefined) props.fieldRef.current = handle.current;
+	// A draft larger than its limit stays editable and says so: the operator has
+	// to shorten it, and a silently cut draft would hand the Agent an
+	// instruction nobody approved.
+	const oversizeReason = props.oversize?.(props.value) ?? null;
+	const tint =
+		(props.error ?? oversizeReason) === null || (props.error ?? oversizeReason) === undefined
+			? null
+			: ink.warning.fg;
 	const reported = useRef(props.value);
-	// A draft the field starts on is the operator's own unfinished text, so the
-	// caret opens at its end: the next key belongs after the last line rather
-	// than in front of everything the operator already wrote.
+	// A draft the field starts on is the operator's own unfinished text. The
+	// caret opens at its end when the whole draft fits the rows the field was
+	// given, because that is where the next line belongs. A draft larger than
+	// the field opens at its start instead: the visible caret and the next edit
+	// must agree, and a caret parked past the field's last row would point at
+	// text the operator cannot see.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the opening caret is a mount decision; the operator's own keys decide where it goes after that, and a resize must never move it
 	useEffect(() => {
 		const field = node.current;
 		if (field === null) return;
-		field.cursorOffset = field.plainText.length;
+		if (field.virtualLineCount <= Math.max(1, props.height)) {
+			field.cursorOffset = field.plainText.length;
+		} else {
+			field.gotoBufferHome();
+		}
 		field.requestRender();
+		// The rows are read once at mount: the operator's own keys decide where
+		// the caret goes after that, and a resize never moves it for them.
 	}, []);
 	const content = useCallback(
 		(_event: ContentChangeEvent) => {
@@ -502,8 +520,8 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 				focused: props.focused && props.inputActive !== false,
 				placeholder: props.placeholder ?? "",
 				placeholderColor: ink.detail.fg ?? undefined,
-				textColor: ink.text.fg ?? undefined,
-				focusedTextColor: ink.focusedText.fg ?? undefined,
+				textColor: tint ?? ink.text.fg ?? undefined,
+				focusedTextColor: tint ?? ink.focusedText.fg ?? undefined,
 				backgroundColor: "transparent",
 				focusedBackgroundColor: ink.surface.on === "default" ? "transparent" : ink.surface.on,
 				cursorColor: ink.indicator.fg ?? undefined,
@@ -522,6 +540,6 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 						: () => props.onSubmit?.(nodeValue(node.current)),
 			}),
 		),
-		...fieldNoteRows(props, ink, props.oversize?.(props.value) ?? null),
+		...fieldNoteRows(props, ink, oversizeReason),
 	);
 }
