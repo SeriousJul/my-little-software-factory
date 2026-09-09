@@ -38,10 +38,8 @@
  * there: it starts under its cycle name, and the leftover environment stays
  * a fact on the ticket for the operator to clear (ADR 0012).
  */
-import type { AgentTypeConfig, FactoryConfig, WorkflowEdge } from "./config.ts";
-import { isTokenCount, TOKEN_COUNT_RULE } from "./domain/settings.ts";
+import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
-import { checkSettingFit } from "./model-settings.ts";
 import {
 	branchNameFor,
 	consultationAgentName,
@@ -55,6 +53,7 @@ import {
 	resolveRepository,
 } from "./repo.ts";
 import { type CommandResult, type CommandRunner, commandFailureText } from "./runner.ts";
+import { fitSettings } from "./setting-fit.ts";
 import { resolveEnvironment, resolveSettings } from "./setting-resolution.ts";
 import type { Consultation } from "./state.ts";
 
@@ -326,67 +325,6 @@ interface HandoffContext {
 }
 
 /**
- * The rule every resolved setting passes: it must be able to reach the Agent
- * the handoff resolved onto.
- *
- * A non-empty setting the Agent maps no template for, a thinking level the
- * Agent does not offer, and a context window that is not a token count all
- * come back as the reason a handoff fails. The rule never drops a value:
- * starting without the setting the operator asked for would absorb a config
- * error silently, and ADR 0009 prefers a loud, readable one. Each reason
- * names the way out, and every way out is in the override panel, because the
- * panel is the last writer on a handoff's settings.
- */
-function settingFailure(agent: AgentTypeConfig, choice: HandoffChoice): string | undefined {
-	if (choice.model !== "" && agent.model === undefined) {
-		return (
-			`agent type "${choice.agentType}" defines no model setting, so model ` +
-			`"${choice.model}" cannot reach it: clear the model in the override panel, ` +
-			`or start an agent type that maps one`
-		);
-	}
-	if (choice.thinking !== "" && agent.thinking === undefined) {
-		return (
-			`agent type "${choice.agentType}" defines no thinking setting, so thinking ` +
-			`level "${choice.thinking}" cannot reach it: clear the thinking level in the ` +
-			`override panel, or start an agent type that maps one`
-		);
-	}
-	// A level the Agent does list is the other way a thinking value cannot
-	// reach it: the config checks a profile's level against the profile's own
-	// agent, and a later reroute onto another agent is checked here.
-	if (
-		choice.thinking !== "" &&
-		agent.thinkingValues !== undefined &&
-		!agent.thinkingValues.some((level) => level === choice.thinking)
-	) {
-		return (
-			`agent type "${choice.agentType}" offers no thinking level "${choice.thinking}" ` +
-			`(it offers: ${agent.thinkingValues.join(", ")}): clear the thinking level in the ` +
-			`override panel, or start an agent type that offers it`
-		);
-	}
-	if (choice.contextWindow !== "") {
-		// A count the control plane cannot spell is refused whatever the Agent
-		// maps, so the typed path and the config path hold one rule.
-		if (!isTokenCount(choice.contextWindow)) {
-			return (
-				`context window "${choice.contextWindow}" is not ${TOKEN_COUNT_RULE}: clear ` +
-				`the context row in the override panel, or type a count such as 272000`
-			);
-		}
-		if (agent.contextWindow === undefined) {
-			return (
-				`agent type "${choice.agentType}" defines no context window setting, so the ` +
-				`count of ${choice.contextWindow} tokens cannot reach it: clear it in the ` +
-				`override panel, or start an agent type that maps one`
-			);
-		}
-	}
-	return undefined;
-}
-
-/**
  * Validate a handoff's choices. A failure comes back as its own outcome;
  * a pass carries the agent and task type records the steps need.
  *
@@ -406,8 +344,6 @@ function validateChoice(
 	if (agent === undefined) {
 		return { status: "failed", reason: `unknown agent type: ${choice.agentType}` };
 	}
-	const failure = settingFailure(agent, choice);
-	if (failure !== undefined) return { status: "failed", reason: failure };
 	const taskType = config.taskTypes[choice.taskType];
 	if (taskType === undefined) {
 		return { status: "failed", reason: `unknown task type: ${choice.taskType}` };
@@ -429,14 +365,18 @@ async function settingFitFailure(
 	agent: FactoryConfig["agents"][string],
 	runner: CommandRunner,
 ): Promise<HandoffOutcome | null> {
-	const fit = await checkSettingFit({
-		agentType: choice.agentType,
+	const fit = await fitSettings(
+		choice.agentType,
 		agent,
-		model: choice.model,
-		thinking: choice.thinking,
+		{
+			model: choice.model,
+			thinking: choice.thinking,
+			contextWindow: choice.contextWindow,
+		},
 		runner,
-	});
-	return fit.ok ? null : { status: "failed", reason: fit.reason };
+	);
+	if (fit === undefined || fit.ok) return null;
+	return { status: "failed", reason: fit.reason };
 }
 
 /** Hand an open ticket off, returning the facts the app records on it. */
@@ -511,14 +451,18 @@ export async function checkConsultationStart({
 		return { ok: false, reason: `unknown agent type: ${consultation.agentType}` };
 	if (consultation.environment === "container")
 		return { ok: false, reason: "the container environment is reserved and not yet built" };
-	const fit = await checkSettingFit({
-		agentType: consultation.agentType,
+	const fit = await fitSettings(
+		consultation.agentType,
 		agent,
-		model: consultation.model,
-		thinking: consultation.thinking,
+		{
+			model: consultation.model,
+			thinking: consultation.thinking,
+			contextWindow: consultation.contextWindow,
+		},
 		runner,
-	});
-	return fit.ok ? { ok: true, agent } : { ok: false, reason: fit.reason };
+	);
+	if (fit === undefined || fit.ok) return { ok: true, agent };
+	return { ok: false, reason: fit.reason };
 }
 
 /** A durable Consultation uses the same Herdr and repository boundary as a Handoff. */
@@ -1679,11 +1623,14 @@ function failed(reason: string, ctx: HandoffContext): HandoffOutcome {
 }
 
 /**
- * The setting arguments of a handoff: each chosen setting the agent type
- * maps is substituted into its argument template into argv. A setting left
- * empty is ignored: no template, no arguments, and the setting is left to
- * the agent. validateChoice already refused a non-empty setting whose
- * template the agent has no mapping for.
+ * The setting arguments of a handoff: each chosen setting the Agent type maps
+ * is substituted into its argument template into argv. A setting left empty is
+ * ignored: no template, no arguments, and the setting is left to the Agent.
+ *
+ * The Setting fit check runs ahead of every start path and refuses a non-empty
+ * setting the resolved Agent maps no template for, so the mapping test here
+ * holds no silent drop: a value the operator named either reaches the Agent or
+ * fails the start with a readable reason (ADR 0009).
  *
  * One setting value is one argv cell, whatever the value holds. That is the
  * invariant the Model list is read against: a value the panel offers, a value

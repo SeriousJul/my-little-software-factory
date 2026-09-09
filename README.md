@@ -102,7 +102,10 @@ use are these:
 	Consultation starts on the agent, environment, model, thinking level, and
 	context window its type names, each one passed through the agent's own
 	template, so the type must name an agent that maps every setting it
-	sets.
+	sets. The start runs the Setting fit check first and fails with a readable
+	reason when its agent cannot take one of them, before it touches herdr or
+	the repository. Recovery re-checks the stored record, so a config change
+	cannot start an opening Consultation without the settings its record names.
 - `Enter` on an awaiting response opens the response editor. The editor
 	stores its draft in SQLite, `Enter` submits it, `Shift+Enter` inserts a
 	newline, and `Esc` leaves the draft in place.
@@ -480,7 +483,12 @@ with a readable reason before anything starts, and the ticket stays where it
 was, when the resolved agent maps no template for a Model, a Thinking level,
 or a context window the chain resolved; when the agent lists the levels it
 offers and the resolved level is not one of them; or when a context window is
-not a whole count of tokens. So a model written for one agent never runs a
+not a whole count of tokens. The same rule ahead of the same start is what a
+Consultation and a Restart run, so no start path keeps its own copy of it. One
+rule and one sentence per unfit cause belong to the Setting fit module
+(`src/setting-fit.ts`), and the config file's field checks, the startup Model
+check, the override panel's warning rows, the handoff, and the Consultation
+start all read it. So a model written for one agent never runs a
 different one quietly, and an edge that reroutes a handoff onto a narrower
 agent is seen as a failure instead of absorbed as a default. One behavior is
 stricter than before: a setting the resolved agent maps no template for used
@@ -1089,9 +1097,12 @@ review handoffs start on.
 - `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
 	profile of each task type, and the agent, model, and thinking one handoff
 	resolves to before an operator override replaces it.
-- `src/model-settings.ts`: the Model list checks (ADR 0010). The startup
-	validation of the config's model values, and the setting fit check every
-	agent start runs before its first external change.
+- `src/setting-fit.ts`: the Setting fit module. It owns the static setting
+	rule, the Model list check, and the one sentence for each unfit cause. Every
+	startup, panel, Handoff, and Consultation path reads it.
+- `src/model-settings.ts`: the Model list startup orchestration (ADR 0010).
+	It checks determinate config values with one list query per Agent kind and
+	warns when a list is unavailable.
 - `src/domain/`: the Ticket type and its state machine, the agent-side facts
 	every Agent type shares (the standard Thinking level set), and the handoff
 	environment kinds.

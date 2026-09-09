@@ -133,6 +133,7 @@ function seed(
 	id: string,
 	agent = true,
 	createdAt = "2026-09-01T10:00:00.000Z",
+	contextWindow = "",
 ): void {
 	state.createConsultation({
 		id,
@@ -141,7 +142,7 @@ function seed(
 		environment: "worktree",
 		model: "",
 		thinking: "",
-		contextWindow: "",
+		contextWindow,
 		template: "/grill {input}",
 		initialInput: "review auth",
 		renderedOpeningPrompt: "/grill review auth",
@@ -609,6 +610,47 @@ describe("Consultation recovery and replacement through the UI", () => {
 						"the recovery launch sequence",
 					);
 					expect(state.consultation(OPENING_ID)?.state).toBe("working");
+				},
+				WIDTH,
+				30,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("recovery re-checks the stored settings before it resumes the Agent", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// The interrupted launch recorded its Agent pane and the count its type
+		// named, and never reached a settled state. Herdr reports no Agent, so the
+		// stored count is the one thing that can refuse this recovery: pi maps no
+		// context window setting.
+		seed(state, OPENING_ID, false, "2026-09-01T10:00:00.000Z", "131072");
+		const short = OPENING_ID.slice(0, 8);
+		state.recordConsultationAgentHandles(OPENING_ID, {
+			paneId: `pane-${short}`,
+			tabId: `tab-${short}`,
+			workspaceId: `ws-${short}`,
+			sessionId: `sess-${short}`,
+		});
+		const inner = new FakeRunner();
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "v", "the consultations view", (f) => f.includes("State: opening"));
+					await press(setup, "r", "the refused recovery", (f) => f.includes("State: failed"));
+					const failed = state.consultation(OPENING_ID);
+					expect(failed?.failure).toContain(
+						'agent type "pi" defines no context window setting, so the count of 131072 tokens cannot reach it',
+					);
+					// A refused recovery starts nothing: the environment waits for the
+					// operator to fix the setting or open a Replacement.
+					const commands = runner.commands().join("\n");
+					expect(commands).not.toContain("worktree create");
+					expect(commands).not.toContain("agent start");
+					expect(commands).not.toContain("agent prompt");
 				},
 				WIDTH,
 				30,

@@ -1,33 +1,25 @@
 /**
- * The Model list checks (ADR 0010).
+ * Startup orchestration for the Model list (ADR 0010).
  *
- * The agent runtime, not the config file, owns the set of models it can run,
- * so the control plane reads that set from the runtime's own CLI and uses it
- * at two boundaries:
- *
- * - Startup: a configured model that its agent does not offer stops the boot
- *   with a readable error, so the operator fixes the config before any
- *   handoff runs. A list that cannot be fetched only warns: one unavailable
- *   agent kind must not block the others.
- * - Handoff: a model or thinking level that does not fit the resolved agent
- *   fails the handoff before its first external change, so the ticket stays
- *   open with a reason instead of dying inside the agent's terminal.
+ * The Setting fit module owns the per-setting rule and wording. This module
+ * keeps only the startup concerns: which configured values are determinate,
+ * one list query per Agent kind, and one warning for an unavailable list.
  */
-import type { AgentTypeConfig, FactoryConfig } from "./config.ts";
-import { unsupportedThinkingLevel } from "./domain/agent.ts";
+import type { FactoryConfig } from "./config.ts";
 import type { CommandRunner, ModelListResult } from "./runner.ts";
 import { supportsModelList } from "./runner.ts";
+import { modelSettingFit, settingFit } from "./setting-fit.ts";
 import { taskProfileOf } from "./setting-resolution.ts";
 
-/** What the startup check found, in readable lines. */
+/** What startup found, in readable lines. */
 export interface ModelValidation {
-	/** A configured model its agent does not offer. The boot stops on these. */
+	/** A configured setting that cannot fit. Boot stops on these. */
 	errors: string[];
 	/** A list that could not be fetched, so those values stayed unchecked. */
 	warnings: string[];
 }
 
-/** One configured model value and the agent it has to fit. */
+/** One configured Model value and the Agent type it has to fit. */
 interface ModelCheck {
 	/** The config key the value came from, for the error message. */
 	key: string;
@@ -37,24 +29,15 @@ interface ModelCheck {
 }
 
 /**
- * Check every configured model value whose agent is determinate at startup:
- * each Task profile's resolved model and each consultation type's model.
- *
- * A profile's resolved model carries the `default-model` leg of the chain, so
- * a default the operator typo-fixes is seen here, against every agent it can
- * land on. A value whose agent maps no model setting at all is an error in
- * its own right: the handoff would fail it with the same words, and the
- * config is the place to fix it. A value with no determinate agent at
- * startup is left to the handoff fit check. A kind with no list command is
- * skipped silently: it never offered a list, so there is nothing to report.
+ * Check every configured Model value whose Agent type is determinate at
+ * startup. Static fit is checked first. Available Model lists are then shared
+ * by kind so startup asks each runtime only once.
  */
 export async function validateConfiguredModels(
 	config: FactoryConfig,
 	runner: CommandRunner,
 ): Promise<ModelValidation> {
 	const checks = configuredModelChecks(config);
-	// One fetch per kind, and only for a kind whose agent can receive a model:
-	// an agent that maps no model setting needs no list, and no agent CLI runs.
 	const lists = new Map<string, ModelListResult>();
 	for (const check of checks) {
 		const agent = config.agents[check.agentType];
@@ -62,19 +45,20 @@ export async function validateConfiguredModels(
 		if (!supportsModelList(check.kind) || lists.has(check.kind)) continue;
 		lists.set(check.kind, await runner.listModels(check.kind));
 	}
+
 	const errors: string[] = [];
 	const warnings: string[] = [];
 	const warned = new Set<string>();
 	for (const check of checks) {
-		// An agent that maps no model setting cannot receive the value at all:
-		// say so instead of querying a list the setting never reaches.
+		// Every check names an Agent the config holds: configuredModelChecks
+		// reads the same record to build it.
 		const agent = config.agents[check.agentType];
-		if (agent === undefined || agent.model === undefined) {
-			errors.push(
-				`config: ${check.key}: agent "${check.agentType}" defines no model setting, so "${check.value}" cannot reach it`,
-			);
+		const staticVerdict = modelSettingFit(agent, check.value, check.agentType);
+		if (!staticVerdict.ok) {
+			errors.push(`config: ${check.key}: ${staticVerdict.reason}`);
 			continue;
 		}
+
 		const list = lists.get(check.kind);
 		if (list === undefined) continue;
 		if (!list.ok) {
@@ -86,24 +70,19 @@ export async function validateConfiguredModels(
 			}
 			continue;
 		}
-		if (!list.models.includes(check.value)) {
-			errors.push(
-				`config: ${check.key}: ${unavailableModelMessage(check.agentType, check.kind, check.value)}`,
-			);
-		}
+		const verdict = settingFit.modelInList(agent, check.value, list.models, check.agentType);
+		if (!verdict.ok) errors.push(`config: ${check.key}: ${verdict.reason}`);
 	}
 	return { errors, warnings };
 }
 
-/** Every model value the config resolves onto a determinate agent. */
+/** Every Model value the config resolves onto a determinate Agent type. */
 function configuredModelChecks(config: FactoryConfig): ModelCheck[] {
 	const checks: ModelCheck[] = [];
 	const seen = new Set<string>();
 	const add = (check: ModelCheck) => {
-		// One task type's profile and one consultation type can resolve the same
-		// default onto the same agent: report that value once. The agent names
-		// the report, because two agents of one kind can take the same value
-		// differently.
+		// One Task profile and one Consultation type can resolve the same value
+		// onto the same Agent type. Report that value once.
 		const id = `${check.agentType}\u0000${check.value}`;
 		if (seen.has(id)) return;
 		seen.add(id);
@@ -114,9 +93,6 @@ function configuredModelChecks(config: FactoryConfig): ModelCheck[] {
 		if (profile.model === "") continue;
 		const agent = config.agents[profile.agentType];
 		if (agent === undefined) continue;
-		// Name the key the value came from, and the profile that resolved it:
-		// a default model is one value, but every profile can land it on a
-		// different agent.
 		const source =
 			config.taskTypes[name]?.model === undefined
 				? `default-model, resolved by task type "${name}"`
@@ -140,65 +116,4 @@ function configuredModelChecks(config: FactoryConfig): ModelCheck[] {
 		});
 	}
 	return checks;
-}
-
-/** The outcome of the handoff fit check: a pass, or the reason it fails. */
-export type SettingFit = { ok: true } | { ok: false; reason: string };
-
-/**
- * The one readable sentence for a Model an Agent does not offer.
- *
- * Startup validation and the handoff fit check refuse the same thing, so they
- * name it with the same words, and one wording change cannot drift them apart.
- * The sentence carries the hint the ticket asks for: a model the runtime does
- * not list is usually a wrong id or a provider nobody is authenticated to.
- */
-export function unavailableModelMessage(agentType: string, kind: string, model: string): string {
-	return `agent "${agentType}" (${kind}) has no model "${model}": check the model id and its provider auth`;
-}
-
-/**
- * Check one handoff's settings against the resolved agent, before the handoff
- * touches anything outside the control plane.
- *
- * A non-empty model must be in the list the agent's runtime reports, and a
- * non-empty thinking level must be in the levels the agent declares. A setting
- * the agent does not map at all is not an unfit setting here: the handoff's
- * own loud check refuses it before this one runs, so a value the agent
- * cannot take never reaches the start command (ADR 0009).
- *
- * A list that cannot be fetched skips the model check: the handoff proceeds,
- * and the agent's own rejection stands. There is no cache: the list is fresh
- * here, at startup, and when the override panel opens.
- */
-export async function checkSettingFit({
-	agentType,
-	agent,
-	model,
-	thinking,
-	runner,
-}: {
-	agentType: string;
-	agent: AgentTypeConfig;
-	model: string;
-	thinking: string;
-	runner: CommandRunner;
-}): Promise<SettingFit> {
-	// Durable state keeps a level a plain string, so an older record can hold
-	// a value the set no longer names: the check reads it as a string.
-	if (thinking !== "" && agent.thinking !== undefined) {
-		const supported: readonly string[] = agent.thinkingValues ?? [];
-		if (!supported.includes(thinking)) {
-			return { ok: false, reason: unsupportedThinkingLevel(agentType, thinking, supported) };
-		}
-	}
-	if (model === "" || agent.model === undefined || !supportsModelList(agent.kind)) {
-		return { ok: true };
-	}
-	const list = await runner.listModels(agent.kind);
-	if (!list.ok) return { ok: true };
-	if (!list.models.includes(model)) {
-		return { ok: false, reason: unavailableModelMessage(agentType, agent.kind, model) };
-	}
-	return { ok: true };
 }

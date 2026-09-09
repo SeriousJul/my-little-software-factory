@@ -80,7 +80,7 @@ describe("task profile configuration", () => {
 				},
 			}),
 		).toThrow(
-			'task-types.implement.thinking: agent "codex" does not support the thinking level "low"; it supports: minimal, high',
+			'config: task-types.implement.thinking: agent type "codex" offers no thinking level "low" (it offers: minimal, high): clear the thinking level in the override panel, or start an agent type that offers it',
 		);
 	});
 
@@ -132,7 +132,8 @@ describe("task profile configuration", () => {
 			...base().agents,
 			codex: { kind: "codex", "context-window": "--context {value}" },
 		};
-		for (const value of ["", "0", "-1", "200k", "272 000", "1.5", "abc", 0, -5, 1.5]) {
+		const invalid = ["0", "-1", "200k", "272 000", "1.5", "abc", 0, -5, 1.5];
+		for (const value of invalid) {
 			expect(() =>
 				validateConfig({
 					...base(),
@@ -142,9 +143,18 @@ describe("task profile configuration", () => {
 					},
 				}),
 			).toThrow(
-				"task-types.implement.context-window: must be a positive whole number of tokens in digits",
+				`task-types.implement.context-window: context window "${String(value)}" is not a positive whole number of tokens in digits`,
 			);
 		}
+		expect(() =>
+			validateConfig({
+				...base(),
+				agents,
+				"task-types": { implement: { template: "x", agent: "codex", "context-window": "" } },
+			}),
+		).toThrow(
+			"task-types.implement.context-window: must be a positive whole number of tokens in digits",
+		);
 	});
 
 	test("rejects a context window its agent does not map", () => {
@@ -155,7 +165,9 @@ describe("task profile configuration", () => {
 				...base(),
 				"task-types": { implement: { template: "x", "context-window": 272000 } },
 			}),
-		).toThrow('task-types.implement.context-window: agent "pi" does not define a');
+		).toThrow(
+			'config: task-types.implement.context-window: agent type "pi" defines no context window setting',
+		);
 		expect(() =>
 			validateConfig({
 				...base(),
@@ -168,7 +180,9 @@ describe("task profile configuration", () => {
 					},
 				},
 			}),
-		).toThrow('consultation-types.grill.context-window: agent "pi" does not define a');
+		).toThrow(
+			'config: consultation-types.grill.context-window: agent type "pi" defines no context window setting',
+		);
 	});
 
 	test("rejects an agent context template that cannot carry a value", () => {

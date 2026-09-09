@@ -116,12 +116,7 @@ import {
 } from "./messages.ts";
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
-import {
-	type AgentModelList,
-	type AgentSettings,
-	type ModelListStatus,
-	OverridePanel,
-} from "./override-panel.ts";
+import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import {
@@ -572,17 +567,6 @@ export function App({
 			setLiveOutput(null);
 		}
 	}, [state]);
-	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
-		Object.entries(config.agents).map(([name, agent]) => [
-			name,
-			{
-				model: agent.model !== undefined,
-				thinking: agent.thinking !== undefined,
-				contextWindow: agent.contextWindow !== undefined,
-				thinkingValues: agent.thinkingValues,
-			},
-		]),
-	);
 	// The Task profile of every task type (ADR 0009): what the panel prefills,
 	// and what it re-derives when the operator switches the task type row.
 	const profiles: Record<string, TaskProfileStart> = taskProfilesOf(config);
@@ -1729,6 +1713,15 @@ export function App({
 			consultationOperationQueues.current,
 			current.repository.identity,
 			async () => {
+				// Recovery is another Consultation start. Re-check the stored
+				// settings before reading Herdr, so a config change cannot let a
+				// stale opening start trimmed.
+				const fit = await checkConsultationStart({
+					consultation: current,
+					config: configRef.current,
+					runner: commandRunner,
+				});
+				if (!fit.ok) return { kind: "fit-failed" as const, reason: fit.reason };
 				const probe = await new HerdrAgentReader(commandRunner).listAgents();
 				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
 				const agent = matchConsultationAgent(current, probe.agents);
@@ -1742,6 +1735,15 @@ export function App({
 			},
 		)
 			.then((result) => {
+				if (result.kind === "fit-failed") {
+					state.failConsultationOpening(current.id, result.reason);
+					replaceConsultations();
+					setStatus({
+						kind: "error",
+						text: `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`,
+					});
+					return;
+				}
 				if (result.kind === "error") {
 					setStatus({ kind: "error", text: `cannot verify Consultation Agent: ${result.reason}` });
 					return;
@@ -3044,10 +3046,9 @@ export function App({
 			}),
 		override !== null &&
 			createElement(OverridePanel, {
-				agents: Object.keys(config.agents),
+				agents: config.agents,
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
-				agentSettings,
 				profiles,
 				modelList,
 				onAgentChange: requestModelList,
