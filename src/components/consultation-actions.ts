@@ -222,8 +222,12 @@ function guideRows(context: ActionContext): string[] {
 	if (context.view === "consultations")
 		rows.push(
 			"",
-			"Launcher: Tab fields, arrows choose, Shift+Enter newline",
-			"Response: Enter submit, Shift+Enter newline, Esc keep draft",
+			// The launcher and the response editor are shared forms: their Enter
+			// belongs to the text, and their actions are what send or discard. The
+			// guide says so in the same words the forms use.
+			"Launcher: Tab fields and actions, arrows choose, Enter new line",
+			"Launch and Discard are actions: Tab reaches them, Enter runs them",
+			"Response: Enter new line, Tab to Send, Esc keeps the draft",
 			`Agent view: End follows output; interaction exits with ${exitKeyLabel(context.interactionExitKey)}`,
 		);
 	else rows.push("", "Live view: j/k scroll, pgup/pgdn page, home/end, enter goto, esc close");

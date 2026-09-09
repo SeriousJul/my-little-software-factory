@@ -1,11 +1,17 @@
 # Shared control standard
 
-Status: accepted design; implementation and acceptance verification are pending.
-Confirmed on 2026-09-09.
+Status: accepted, and the baseline is implemented for every editable field,
+selector, search, form action, and form focus route the control plane owns.
+Confirmed on 2026-09-09; implemented in the shared control library under
+[src/components/shared](../src/components/shared).
 
-This is the required baseline for human and agent contributors. It describes the
-target behavior, not the current application's capabilities. In particular,
-screen-reader support has not been verified.
+What is not verified is stated by [the verification
+record](verification/shared-controls.md): a screen reader has never read this
+application, and no claim of screen-reader support is made here. Keyboard and
+visual behavior are checked by the automated tests named in that record;
+`Ghostty`, `foot`, a tmux path, and GNOME Terminal with Orca are not.
+
+This is the required baseline for human and agent contributors.
 
 See [the glossary](../CONTEXT.md) for domain terms,
 [ADR 0014](adr/0014-shared-modules-own-control-behavior.md) for ownership, and
@@ -142,9 +148,11 @@ show normal, focused, invalid, unavailable, loading, and narrow-size states wher
 applicable. Use those examples in automated tests so examples cannot become a
 separate imitation of the production controls.
 
-Human and agent contributor instructions must link to this standard and the
-gallery. Document its real command when it exists; there is no gallery command
-yet.
+Human and agent contributor instructions link to this standard and to the
+gallery. The gallery command is `npm run gallery`, or
+`node bin/factory-gallery.mjs [example]`, and it draws the production modules.
+The same examples are driven by `test/shared-gallery.test.ts`, so an example
+cannot become an imitation of a control.
 
 Automated checks must reject new separate field implementations and bypasses of
 the shared control modules. Add behavior tests through the modules' public
@@ -189,17 +197,23 @@ skipped or cannot run is not a pass.
 
 1. Reproduce the reported field failures through real application flows with
    isolated state and fake external operations. Record failing regression tests.
+   Done: `test/shared-field-editing.test.ts`,
+   `test/consultation-launcher-editing.test.ts`, and
+   `test/executable-fields.test.ts`.
 2. Test screen-reader feasibility early, before broad migration. Upstream still
    lists screen-reader support as future work. If the current renderer prevents
    the agreed access, return for agreement on a renderer change or an equivalent
    accessible interaction mode. Do not silently remove the requirement.
 3. Build the shared field behavior and real examples. Migrate Text fields and
    Draft fields first, including the override panel, Consultation launcher, and
-   response editor.
+   response editor. Done: the library, the gallery, and all three surfaces,
+   with the replaced local implementations removed.
 4. Migrate selectors and the remaining owned controls in small changes. Remove
    replaced implementations rather than retaining permanent alternatives.
 5. Add and enforce the architecture checks. Update current-behavior documentation
-   and contributor instructions as each migration lands.
+   and contributor instructions as each migration lands. Done: the architecture
+   test, this standard, [the README](../README.md), and
+   [the contributor instructions](../AGENTS.md).
 6. Complete all acceptance checks and record their results.
 
 The migration is complete only when every owned control follows this standard
@@ -207,6 +221,10 @@ and lint, type checks, behavior tests, terminal tests, visual review, and
 screen-reader checks pass. Documentation and a new component directory alone do
 not meet this condition.
 
-Existing verification commands are `npm run lint`, `npm run typecheck`, and
-`npm test`. The gallery, architecture checks, and screen-reader test procedure
-still need implementation; none is claimed to exist by this document.
+The verification commands are `npm run lint`, `npm run typecheck`, `npm test`,
+and `npm run gallery`. The architecture rule is checked by
+`test/shared-control-architecture.test.ts`, which rejects a separate field
+implementation, a hand-edited draft string, and a screen that names a renderer
+field instead of the library. The screen-reader procedure is written down in
+[the verification record](verification/shared-controls.md); it has not been
+run, and no result is claimed for it.

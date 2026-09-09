@@ -109,6 +109,15 @@ export interface PtySession {
 export interface PtyOptions {
 	/** The terminal window size in cells. The renderer draws to it. */
 	size?: { cols: number; rows: number };
+	/**
+	 * The entry to run instead of the control plane's bin.
+	 *
+	 * The shared control gallery is a second production entry: the same renderer
+	 * startup, the same key parser, the same field modules, without a config
+	 * file or an Agent. A check that belongs to the library is run at that
+	 * boundary, so the executable path is proven as well as the frame path.
+	 */
+	entry?: string;
 }
 
 export async function openControlPlanePty(
@@ -145,7 +154,7 @@ export async function openControlPlanePty(
 		}
 	}
 
-	const child = spawn(process.execPath, [CONTROLLER_BIN, ...args], {
+	const child = spawn(process.execPath, [options.entry ?? CONTROLLER_BIN, ...args], {
 		stdio: [slave, slave, slave],
 		env: { ...baseEnv(), ...env },
 	});

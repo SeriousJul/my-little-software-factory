@@ -108,14 +108,16 @@ const contentOf = (row: string): string =>
  */
 const windowContentOf = (rows: string[]): string[] => {
 	const bottom = rows.findIndex((row) => row.includes("└"));
-	return rows
-		.slice(0, bottom < 0 ? rows.length : bottom)
-		.map((row) => /^\s*│(.*)│\s*$/u.exec(row)?.[1])
-		.filter((row): row is string => row !== undefined)
-		.map((row) => norm(row).trim())
-		// The box's padding row is not content: it would be taken for the newest
-		// row of every window and read as an empty guide.
-		.filter((content) => content !== "");
+	return (
+		rows
+			.slice(0, bottom < 0 ? rows.length : bottom)
+			.map((row) => /^\s*│(.*)│\s*$/u.exec(row)?.[1])
+			.filter((row): row is string => row !== undefined)
+			.map((row) => norm(row).trim())
+			// The box's padding row is not content: it would be taken for the newest
+			// row of every window and read as an empty guide.
+			.filter((content) => content !== "")
+	);
 };
 
 /** The guide's visible window, read off its own range indicator. */

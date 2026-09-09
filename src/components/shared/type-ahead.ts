@@ -15,11 +15,9 @@
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-
-import { MARKER_WIDTH, STATE_WORDS, controlInk } from "./presentation.ts";
 import { ChoiceRow } from "./choices.ts";
 import { TextField } from "./fields.ts";
-
+import { controlInk, MARKER_WIDTH, STATE_WORDS } from "./presentation.ts";
 
 /** The search's own label: the row above it already names the value. */
 const SEARCH_LABEL = "Search";
@@ -127,11 +125,7 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 				},
 			}),
 			noMatch
-				? createElement(
-						"text",
-						{ fg: controlInk().error.fg ?? undefined },
-						STATE_WORDS.noMatch,
-					)
+				? createElement("text", { fg: controlInk().error.fg ?? undefined }, STATE_WORDS.noMatch)
 				: null,
 		),
 	);

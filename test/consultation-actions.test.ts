@@ -128,8 +128,9 @@ describe("contextual controls", () => {
 				"r refresh",
 				"? help",
 				"q quit",
-				"Launcher: Tab fields, arrows choose, Shift+Enter newline",
-				"Response: Enter submit, Shift+Enter newline, Esc keep draft",
+				"Launcher: Tab fields and actions, arrows choose, Enter new line",
+				"Launch and Discard are actions: Tab reaches them, Enter runs them",
+				"Response: Enter new line, Tab to Send, Esc keeps the draft",
 				"Agent view: End follows output; interaction exits with F12",
 				"Esc closes this guide. F2 or m opens the full Message view.",
 			]);

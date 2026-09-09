@@ -338,16 +338,21 @@ describe("validateConfig", () => {
 				thinking: "low",
 				autoClose: false,
 			});
-			// The review task type carries a full Task profile: this is the live
-			// development path's own use of the feature, so a review handoff
-			// starts on the agent, model, thinking level, and context window the
-			// profile names rather than on what the agent defaults to.
+			// The review task type exists with its template, and carries no Task
+			// profile: its agent, model, thinking level, and context window are
+			// commented out in the checked-in file, because the profile named a
+			// model the maintainer's codex build did not offer, and a config that
+			// names an unavailable model stops the control plane at startup. The
+			// feature itself is pinned by the profile tests; what this check pins
+			// is the file the developer actually boots with, so restoring those
+			// lines is a visible change rather than one this test hides.
 			expect(config.taskTypes.review).toMatchObject({
-				agent: "codex",
-				model: "gpt-5.6-sol",
-				thinking: "high",
-				contextWindow: "272000",
+				template: expect.stringContaining("Review pull request"),
+				autoClose: false,
 			});
+			expect(config.taskTypes.review.agent).toBeUndefined();
+			expect(config.taskTypes.review.model).toBeUndefined();
+			expect(config.taskTypes.review.contextWindow).toBeUndefined();
 			// Every agent that can take a context window names its own spelling
 			// of the count, so one profile value reaches each of them.
 			expect(config.agents.codex?.contextWindow).toBe("-c model_context_window={value}");

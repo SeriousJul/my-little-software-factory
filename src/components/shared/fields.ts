@@ -33,7 +33,15 @@ import {
 	type TextareaRenderable,
 } from "@opentui/core";
 import { createElement, useRenderer } from "@opentui/react";
-import { Fragment, type ReactElement, type RefObject, useCallback, useEffect, useRef } from "react";
+import {
+	Fragment,
+	type ReactElement,
+	type RefObject,
+	useCallback,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 
 import { padToWidth, truncateToWidth, widthOf } from "../text.ts";
 import { type ControlInk, controlInk, MARKER_WIDTH, markerText } from "./presentation.ts";
@@ -214,9 +222,10 @@ function fieldNoteRows(
 	props: SharedFieldProps,
 	ink: ControlInk,
 	oversize: string | null,
+	refusal: string | null,
 ): ReactElement[] {
 	const noteWidth = MARKER_WIDTH + (props.labelWidth ?? widthOf(props.label) + 1) + props.width;
-	const reason = props.error ?? oversize;
+	const reason = props.error ?? oversize ?? refusal;
 	const rows: ReactElement[] = [];
 	if (reason !== null && reason !== undefined) {
 		rows.push(
@@ -278,6 +287,8 @@ interface SharedFieldProps {
 function useFieldEditing(
 	node: RefObject<FieldNode | null>,
 	props: {
+		/** The text the field starts on, so the first change is read against it. */
+		value: string;
 		digits?: boolean;
 		normalize?: (value: string) => string;
 		refusals?: FieldRefusals;
@@ -288,9 +299,19 @@ function useFieldEditing(
 	keyDown: (key: KeyEvent) => void;
 	paste: (event: PasteEvent) => void;
 	changed: () => void;
+	reportFacts: () => void;
+	refusal: string | null;
 	handle: RefObject<FieldHandle | null>;
 } {
 	const renderer = useRenderer();
+	// The reason of the edit the field just refused. It is the field's own news,
+	// so the field states it: a caller that also puts it on its Message line is
+	// repeating it in its own words, not carrying it instead.
+	const [refusal, setRefusal] = useState<string | null>(null);
+	// The text the field last reported. A refusal is ended by a change that took
+	// different text, not by any event that names the field, so the comparison
+	// starts from the value the field was given rather than from nothing.
+	const lastText = useRef<string>(props.value);
 	const digits = props.digits === true;
 	const normalize = props.normalize;
 	const refuse = props.onRefuse;
@@ -305,6 +326,7 @@ function useFieldEditing(
 			// The refused character never reaches the buffer, so the value, the
 			// caret, the selection, and the undo history all stay as they were.
 			key.preventDefault();
+			setRefusal(words.character);
 			refuse?.(words.character);
 		},
 		[digits, refuse, words],
@@ -317,23 +339,36 @@ function useFieldEditing(
 			if (/^[0-9]*$/u.test(text)) return;
 			// The whole run is refused, so `1e3` can never become `13`.
 			event.preventDefault();
+			setRefusal(words.paste);
 			refuse?.(words.paste);
 		},
 		[digits, refuse, words],
 	);
 
-	const changed = useCallback(() => {
+	const reportFacts = useCallback(() => {
 		const field = node.current;
 		if (field === null) return;
-		const before = field.plainText;
-		const folded = normalize === undefined ? before : normalize(before);
-		if (folded !== before) foldNodeText(field, folded);
 		report?.({
 			value: field.plainText,
 			caret: field.cursorOffset,
 			selection: nodeSelection(field),
 		});
-	}, [normalize, node, report]);
+	}, [node, report]);
+
+	const changed = useCallback(() => {
+		const field = node.current;
+		if (field === null) return;
+		// A change that actually took the text ends the refusal: the reason was
+		// about the run that did not go in, and it must not linger under a field
+		// that has moved on. The comparison is with the text the field last
+		// reported, because an event that changed nothing reports nothing.
+		if (field.plainText !== lastText.current) setRefusal(null);
+		lastText.current = field.plainText;
+		const before = field.plainText;
+		const folded = normalize === undefined ? before : normalize(before);
+		if (folded !== before) foldNodeText(field, folded);
+		reportFacts();
+	}, [normalize, reportFacts]);
 
 	const handle = useRef<FieldHandle | null>(null);
 	handle.current = {
@@ -363,7 +398,7 @@ function useFieldEditing(
 			field.requestRender();
 		},
 	};
-	return { keyDown, paste, changed, handle };
+	return { keyDown, paste, changed, reportFacts, refusal, handle };
 }
 
 export interface TextFieldProps extends SharedFieldProps {
@@ -383,7 +418,8 @@ export interface TextFieldProps extends SharedFieldProps {
 export function TextField(props: TextFieldProps): ReactElement {
 	const ink = controlInk();
 	const node = useRef<InputRenderable | null>(null);
-	const { keyDown, paste, changed, handle } = useFieldEditing(node, {
+	const { keyDown, paste, changed, reportFacts, refusal, handle } = useFieldEditing(node, {
+		value: props.value,
 		digits: props.digits,
 		normalize: props.normalize,
 		refusals: props.refusals,
@@ -427,10 +463,14 @@ export function TextField(props: TextFieldProps): ReactElement {
 				onKeyDown: keyDown,
 				onPaste: paste,
 				onInput: changed,
+				// A caret or selection move changes no text, but it changes what the
+				// surface may offer: the Copy control is available only while the
+				// field holds a selection, so the field reports the selection here.
+				onCursorChange: reportFacts,
 				onSubmit: props.onSubmit,
 			}),
 		),
-		...fieldNoteRows(props, ink, null),
+		...fieldNoteRows(props, ink, null, refusal),
 	);
 }
 
@@ -449,7 +489,8 @@ export interface DraftFieldProps extends SharedFieldProps {
 export function DraftField(props: DraftFieldProps): ReactElement {
 	const ink = controlInk();
 	const node = useRef<TextareaRenderable | null>(null);
-	const { keyDown, paste, changed, handle } = useFieldEditing(node, {
+	const { keyDown, paste, changed, reportFacts, refusal, handle } = useFieldEditing(node, {
+		value: props.value,
 		refusals: props.refusals,
 		onRefuse: props.onRefuse,
 		onValueChange: props.onValueChange,
@@ -536,12 +577,16 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 				onKeyDown: keyDown,
 				onPaste: paste,
 				onContentChange: content,
+				onCursorChange: () => {
+					reportFacts();
+					reported.current = nodeValue(node.current);
+				},
 				onSubmit:
 					props.onSubmit === undefined
 						? undefined
 						: () => props.onSubmit?.(nodeValue(node.current)),
 			}),
 		),
-		...fieldNoteRows(props, ink, oversizeReason),
+		...fieldNoteRows(props, ink, oversizeReason, refusal),
 	);
 }

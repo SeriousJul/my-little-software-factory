@@ -3,7 +3,12 @@ import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { DraftField, type FieldHandle, TextField } from "../src/components/shared/fields.ts";
+import {
+	DraftField,
+	type FieldFacts,
+	type FieldHandle,
+	TextField,
+} from "../src/components/shared/fields.ts";
 import { awaitFrame, frameText } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
@@ -47,7 +52,7 @@ describe("the shared Draft field", () => {
 					setup,
 					() =>
 						onValueChange.mock.calls.some(
-							([facts]) => (facts as { value: string }).value === "review desig\nn",
+							([facts]) => (facts as FieldFacts).value === "review desig\nn",
 						),
 					"Enter to insert a newline at the caret",
 				);
@@ -146,8 +151,38 @@ describe("the shared Text field", () => {
 				expect(onRefuse).toHaveBeenCalledWith(
 					"Context window accepts digits only: the pasted text was refused as a whole",
 				);
-				expect(onValueChange).not.toHaveBeenCalled();
+				// A refusal reports the field's state and never a new value: what the
+				// caller holds is still the count the operator had typed.
+				expect(onValueChange.mock.calls.map(([facts]) => facts.value)).toEqual([
+					"272000",
+					"272000",
+				]);
 				expect(frameText(frame)).toContain("Context 272000");
+			},
+		);
+	});
+
+	test("takes a paste of digits in full, in the same rule that refuses the rest", async () => {
+		const onValueChange = vi.fn();
+		await withField(
+			createElement(TextField, {
+				label: "Context",
+				value: "12",
+				focused: true,
+				width: 16,
+				digits: true,
+				onValueChange,
+			}),
+			40,
+			6,
+			async (setup) => {
+				await setup.mockInput.pasteBracketedText("3456");
+				await awaitFrame(
+					setup,
+					() =>
+						onValueChange.mock.calls.some(([facts]) => (facts as FieldFacts).value === "123456"),
+					"the pasted digits to be taken",
+				);
 			},
 		);
 	});

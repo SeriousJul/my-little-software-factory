@@ -3112,11 +3112,7 @@ describe("the override panel", () => {
 						"the matched model",
 					);
 					setup.mockInput.pressKey("DELETE");
-					await awaitFrame(
-						setup,
-						(f) => searchRowOf(f) === "",
-						"the query to clear",
-					);
+					await awaitFrame(setup, (f) => searchRowOf(f) === "", "the query to clear");
 					// The second Delete has no query left to remove, so it gives the
 					// setting back to the agent: one key, two explicit steps.
 					setup.mockInput.pressKey("DELETE");
@@ -3172,7 +3168,11 @@ describe("the override panel", () => {
 					);
 					expect(frameText(ready)).toContain("Model (unset)");
 					await typeModelSearch(setup, "sonnet");
-					await awaitFrame(setup, (f) => frameText(f).includes("anthropic/claude-sonnet-4-5"), "the match");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
+						"the match",
+					);
 				},
 				size.width,
 				size.height,
