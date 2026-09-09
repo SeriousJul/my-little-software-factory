@@ -536,13 +536,13 @@ describe("native Ticket detail viewport", () => {
 						setup,
 						(candidate) => {
 							const rows = rowsOf(candidate);
-							// One frame: the two section headers, the mode line,
+							// One frame: the mode line, the two section headers,
 							// the panes, then the reserved Message line and the
 							// Action bar.
 							return (
 								rows.length === 18 &&
 								rows.every((row) => row.length === 73) &&
-								rows[HEADER_ROWS]?.startsWith("auto: off 0/2") === true &&
+								rows[0]?.startsWith("auto: off 0/2") === true &&
 								rows.at(-3)?.includes("└") === true
 							);
 						},

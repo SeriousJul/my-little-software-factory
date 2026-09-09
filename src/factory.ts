@@ -91,7 +91,13 @@ const sources = config.sources.map((source) => createTicketSource(source, runner
 // Ticket detail and Ticket list have direct wheel, click, and scrollbar
 // controls. They need terminal mouse reporting, so this intentionally
 // supersedes the old host-owned text-selection setting.
-const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
+const renderer = await createCliRenderer({
+	exitOnCtrlC: false,
+	useMouse: true,
+	// Kitty keyboard names F13-F24, which the shared control catalogue accepts
+	// for configurable Agent interaction exits.
+	useKittyKeyboard: {},
+});
 // The native renderer diffs each frame against its model of the screen and
 // marks a model cell as written while it emits the cell's bytes. If the host
 // terminal loses bytes of a frame, the model and the screen diverge and the

@@ -18,6 +18,7 @@ import type { TicketSource } from "../src/ticket-source.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
+	detailPaneText,
 	frameText,
 	HEADER_ROWS,
 	markerRowOf,
@@ -80,7 +81,11 @@ const sampleOutcome = () => ({
 	})),
 });
 
-function seedConsultation(state: FactoryState, id: string): void {
+function seedConsultation(
+	state: FactoryState,
+	id: string,
+	createdAt = "2026-09-01T10:00:00.000Z",
+): void {
 	state.createConsultation({
 		id,
 		typeName: "grill",
@@ -99,7 +104,7 @@ function seedConsultation(state: FactoryState, id: string): void {
 			path: join(home, "checkout"),
 		},
 		agentName: `consultation-${id.slice(0, 8)}`,
-		createdAt: "2026-09-01T10:00:00.000Z",
+		createdAt,
 	});
 	state.setConsultationAgent(id, {
 		paneId: `pane-${id.slice(0, 8)}`,
@@ -146,8 +151,12 @@ describe("the merged Main view", () => {
 				async (setup) => {
 					source.settle(sampleOutcome());
 					const frame = await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
-					// Both headers stand at the top of one frame, and the Ticket
+					// The mode line comes before both section headers, and the Ticket
 					// header is the expanded one.
+					const rows = rowsOf(frame);
+					expect(rows[0]).toContain("auto: off");
+					expect(rows[1]).toContain("Tickets");
+					expect(rows[2]).toContain("Consultations");
 					expect(headerOf(frame, "Tickets").startsWith("▾")).toBe(true);
 					expect(headerOf(frame, "Consultations").startsWith("▸")).toBe(true);
 					// The collapsed section holds no pane: the frame draws one pair
@@ -203,6 +212,51 @@ describe("the merged Main view", () => {
 		}
 	});
 
+	test("section switches keep selection and focus, and auto-handoff stays Ticket-only", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seedConsultation(state, uid("c"));
+		seedConsultation(state, uid("d"));
+		const source = new FakeSource("issues", "github-issues", sampleOutcome());
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(sampleOutcome());
+					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+					await press(setup, "v", "the Consultation panes", (f) => f.includes("Agent view"));
+					await press(setup, "j", "the second Consultation", (f) =>
+						f.includes("consultation-dddddddd"),
+					);
+					const selected = await settle(setup);
+					setup.mockInput.pressKey("v");
+					const repeated = await settle(setup);
+					// Repeating v is a no-op. It must not jump back to the
+					// attention row selected when the section first opened.
+					expect(detailPaneText(repeated)).toBe(detailPaneText(selected));
+					expect(repeated).toContain("consultation-dddddddd");
+					// a has no meaning in the Consultation section.
+					setup.mockInput.pressKey("a");
+					const afterAuto = await settle(setup);
+					expect(afterAuto).toContain("auto: off");
+					expect(afterAuto).not.toContain("auto: on");
+					// t switches from the Consultation detail as well as its list.
+					await press(setup, "l", "the Consultation detail", (f) => f.includes("┌─❯ Agent view"));
+					const tickets = await press(setup, "t", "the Ticket section", (f) =>
+						f.includes("Retry policy for webhooks"),
+					);
+					// The navigation key after the switch must move the visible Ticket
+					// list, not the hidden Consultation detail.
+					const moved = await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 6);
+					expect(moved).toContain("Fix pan drift");
+					expect(tickets).toContain("Retry policy for webhooks");
+				},
+				state,
+				[source],
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("a click on a collapsed header expands that section", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seedConsultation(state, uid("d"));
@@ -212,8 +266,8 @@ describe("the merged Main view", () => {
 					const before = await settle(setup);
 					expect(paneTopRows(before)).toBe(1);
 					expect(before).not.toContain("Agent view");
-					// The Consultation header is the frame's second row.
-					await mouseClick(setup, 10, 1);
+					// The mode line is first, so the Consultation header is row two.
+					await mouseClick(setup, 10, 2);
 					const frame = await awaitFrame(
 						setup,
 						(candidate) => candidate.includes("Agent view"),
@@ -302,9 +356,9 @@ describe("the merged Main view", () => {
 		try {
 			await booted(
 				async (setup) => {
-					// At the minimum size the two headers, the Message line and the
-					// Action bar stay permanent, the mode line gives way, and the
-					// expanded section still holds one real pane row.
+					// At the minimum size the mode line, two headers, the Message line
+					// and the Action bar stay permanent, and the expanded section still
+					// holds one real pane row.
 					const frame = await settle(setup);
 					expect(rowsOf(frame)).toHaveLength(9);
 					expect(headerOf(frame, "Consultations")).toContain("awaiting 0  recovery 1");
@@ -316,18 +370,19 @@ describe("the merged Main view", () => {
 					);
 					expect(rowsOf(opened)).toHaveLength(9);
 					expect(paneTopRows(opened)).toBe(1);
-					// The frame promises its two bottom rows and its two headers at
-					// the minimum size, and holds one real pane row between them.
-					// The mode line gives way here, so the panes start under the
-					// headers alone.
+					// The frame promises its two bottom rows, its mode line, and its
+					// two headers at the minimum size, and holds one real pane row
+					// between them.
 					const rows = rowsOf(opened);
 					expect(messageRowOf(opened)).not.toBe(actionBarRowOf(opened));
-					expect(rows[HEADER_ROWS]).toContain("┌─");
-					expect(rows).not.toContain("auto: off 0/2");
+					expect(rows[0]).toContain("auto: off 0/2");
+					expect(rows[1]).toContain("Tickets");
+					expect(rows[2]).toContain("Consultations");
+					expect(rows[HEADER_ROWS + 1]).toContain("┌─");
 					expect(rows.at(-3)).toContain("└─");
 					// The Consultation list gives way to the compact heading, and
 					// the Agent view holds the pane row that is left.
-					expect(rows[HEADER_ROWS]).toContain("grill - acme/factory");
+					expect(rows[HEADER_ROWS + 1]).toContain("grill - acme/factory");
 				},
 				state,
 				undefined,
@@ -417,11 +472,13 @@ describe("the merged Main view", () => {
 						f.includes("Agent view"),
 					);
 					const rows = rowsOf(opened);
-					// The headers, then the mode line, then the panes, then the
+					// The mode line, then the headers, then the panes, then the
 					// Message line and the Action bar: one frame, in that order,
 					// in both sections.
 					expect(headerOf(opened, "Tickets")).not.toBe("");
-					expect(rows[HEADER_ROWS]).toContain("auto: off");
+					expect(rows[0]).toContain("auto: off");
+					expect(rows[1]).toContain("Tickets");
+					expect(rows[2]).toContain("Consultations");
 					expect(rows[HEADER_ROWS + 1]).toContain("┌─");
 					expect(rows.at(-3)).toContain("└─");
 					expect(actionBarRowOf(opened)).toContain("Enter Respond");
@@ -431,7 +488,7 @@ describe("the merged Main view", () => {
 						"the Ticket panes",
 						(f) => f.includes("┌─  Detail") || f.includes("┌─❯ Tickets"),
 					);
-					expect(rowsOf(tickets)[HEADER_ROWS]).toContain("auto: off");
+					expect(rowsOf(tickets)[0]).toContain("auto: off");
 					expect(paneTopRows(tickets)).toBe(1);
 				},
 				state,

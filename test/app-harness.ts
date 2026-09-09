@@ -248,6 +248,7 @@ export async function bootApp(
 	props: AppProps = {},
 	width = WIDTH,
 	height = HEIGHT,
+	rendererOptions: { kittyKeyboard?: boolean } = {},
 ): Promise<AppSetup> {
 	// Existing frame tests keep deterministic data at the App seam. A source
 	// or state passed explicitly opts into the real empty/loading behavior.
@@ -268,6 +269,7 @@ export async function bootApp(
 		width,
 		height,
 		exitOnCtrlC: false,
+		...rendererOptions,
 	});
 	await setup.flush();
 	return { ...setup, stopApp: () => stopApp?.() };
@@ -282,8 +284,9 @@ export async function withApp(
 	width = WIDTH,
 	height = HEIGHT,
 	props: AppProps = {},
+	rendererOptions: { kittyKeyboard?: boolean } = {},
 ): Promise<void> {
-	const setup = await bootApp(props, width, height);
+	const setup = await bootApp(props, width, height, rendererOptions);
 	try {
 		await body(setup);
 	} finally {

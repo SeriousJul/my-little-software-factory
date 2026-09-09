@@ -11,7 +11,7 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff in either section. `v` expands the Consultation
+ * `a` toggles auto-handoff in the Ticket section. `v` expands the Consultation
  * section on the Consultation that needs the operator, if one does.
  *
  * The Main view is one surface with two accordion sections (ADR 0013): the
@@ -446,7 +446,7 @@ export function App({
 	// normal layout.
 	// The mode line gives way before the panes' first text row: the minimum
 	// frame holds the headers, one real pane row, and the two permanent rows.
-	const showModeLine = modeLine !== "" && !tooSmall && terminalHeight >= 10;
+	const showModeLine = modeLine !== "" && !tooSmall;
 	const sectionHeaderRows = tooSmall ? 0 : 2;
 	const reservedRows = 2 + sectionHeaderRows + (showModeLine ? 1 : 0);
 	const listGeometry = usePaneGeometry("list", reservedRows);
@@ -1630,7 +1630,7 @@ export function App({
 	const expandSection = (next: MainSection) => {
 		sectionRef.current = next;
 		setSection(next);
-		setFocusedPane("list");
+		focusPane("list");
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1780,6 +1780,7 @@ export function App({
 			consultationRefreshAvailable: state !== undefined,
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
+			interactionExitKey: configRef.current.interactionExitKey,
 		});
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
 		setUtility({ kind: "guide", mode });
@@ -2442,8 +2443,15 @@ export function App({
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
-		// One Main frame: the two section headers stand at the top, and only the
-		// expanded section renders its panes below its own header.
+		// One Main frame: the mode line comes first, then the two section
+		// headers, and only the expanded section renders its panes below its
+		// own header.
+		showModeLine &&
+			createElement(
+				"text",
+				{ style: { width: "100%", height: 1, fg: COLORS.dim } },
+				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
+			),
 		!tooSmall &&
 			createElement(SectionHeader, {
 				section: "tickets",
@@ -2464,12 +2472,6 @@ export function App({
 				active: override === null && panel === null && utility === null && !launcher,
 				onExpand: () => expandSection("consultations"),
 			}),
-		showModeLine &&
-			createElement(
-				"text",
-				{ style: { width: "100%", height: 1, fg: COLORS.dim } },
-				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
-			),
 		tooSmall
 			? createElement(
 					"box",

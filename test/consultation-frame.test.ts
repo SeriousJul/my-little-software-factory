@@ -1261,9 +1261,12 @@ describe("Consultation attention through the UI", () => {
 						f.includes("State: failed"),
 					);
 					expect(frameText(oldest)).toContain("herdr refused the launch");
-					// An awaiting response always wins over the recovery items.
+					// An awaiting response always wins over the recovery items. v is
+					// intentionally a no-op while Consultations is expanded, so return
+					// to Tickets before opening it again.
 					seed(state, AWAITING_ID, true, t(4));
 					state.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+					await press(setup, "t", "the Ticket section", (f) => f.includes("▾ Tickets"));
 					const selected = await press(setup, "v", "the awaiting detail", (f) =>
 						f.includes("State: awaiting-response"),
 					);
@@ -1785,6 +1788,61 @@ describe("Consultation response gating by observed Agent status", () => {
 	});
 });
 
+const interactionExitCases = [
+	{
+		name: "ctrl+e",
+		config: "ctrl+e" as const,
+		label: "Ctrl+E",
+		send: (setup: Setup) => setup.mockInput.pressKey("e", { ctrl: true }),
+	},
+	{
+		name: "f13",
+		config: "f13" as const,
+		label: "F13",
+		// The mock helper exposes F1-F12 only; send Kitty's F13 code through
+		// the same renderer parser used by the production terminal.
+		send: (setup: Setup) => setup.mockInput.pressKey("\u001b[57376u"),
+	},
+] as const;
+
+for (const exitCase of interactionExitCases) {
+	test(`the configured ${exitCase.name} exits Agent interaction end to end`, async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, INTERACTION_ID);
+		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubPaneReadText(inner, paneId, "Agent: working");
+		stubPaneReadAnsi(inner, paneId, "agent: waiting for input");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "v", "the Consultation section", (f) => f.includes("State: working"));
+					await pressEnter(setup, "Agent interaction mode", (f) =>
+						f.includes(`${exitCase.label} Exit interaction`),
+					);
+					exitCase.send(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("left Agent interaction mode"),
+						"the interaction exit",
+					);
+					expect(runner.commands().join("\n")).not.toContain("send-text");
+				},
+				WIDTH,
+				32,
+				{ state, runner, config: { ...configFor(), interactionExitKey: exitCase.config }, home },
+				{ kittyKeyboard: true },
+			);
+		} finally {
+			state.close();
+		}
+	});
+}
+
 describe("The full Consultation operator flow", () => {
 	test("launch, settle, respond, blocked interaction, settle, close, and inspect the history", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
@@ -1827,9 +1885,9 @@ describe("The full Consultation operator flow", () => {
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
-					// a toggles auto-handoff even in the Consultations view: the
-					// launched Consultation is already the selection.
-					await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+					// a is a Ticket-section control, so it is inert in Consultations.
+					setup.mockInput.pressKey("a");
+					expect((await settle(setup)).match(/auto: on/g)).toBeNull();
 					// The Agent is idle: Enter opens the response editor.
 					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
 					setup.mockInput.typeText("answer one");
@@ -2000,7 +2058,7 @@ describe("The full Consultation operator flow", () => {
 						setup,
 						"t",
 						"the Ticket section",
-						(f) => rowsOf(f)[0]?.startsWith("▾ Tickets") === true,
+						(f) => rowsOf(f)[1]?.startsWith("▾ Tickets") === true,
 					);
 					setup.mockInput.pressKey("r");
 					const refreshing = await awaitFrame(

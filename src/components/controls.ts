@@ -84,6 +84,19 @@ type ControlKey =
 	| "f10"
 	| "f11"
 	| "f12"
+	| "f13"
+	| "f14"
+	| "f15"
+	| "f16"
+	| "f17"
+	| "f18"
+	| "f19"
+	| "f20"
+	| "f21"
+	| "f22"
+	| "f23"
+	| "f24"
+	| `ctrl+${string}`
 	| "?"
 	| "return"
 	| "escape"
@@ -257,18 +270,19 @@ const liveViewEligibility = (context: ControlContext): ControlAvailability => {
  * set is a broken Config, and `F12` is what the app falls back to.
  */
 function exitControlKey(exitKey: string | undefined): ControlKey {
-	const normalized = (exitKey ?? "f12").trim().toLowerCase();
-	const functionKey = /^f(?:[1-9]|1[0-2])$/.exec(normalized);
+	const normalized = (exitKey ?? "f12")
+		.trim()
+		.toLowerCase()
+		.replace(/^ctrl-/, "ctrl+");
+	const functionKey = /^f(?:[1-9]|1[0-9]|2[0-4])$/.exec(normalized);
 	if (functionKey !== null) return normalized as ControlKey;
-	const controlLetter = /^ctrl-([a-z])$/.exec(normalized);
-	if (controlLetter !== null) return `ctrl+${controlLetter[1]}` as ControlKey;
+	if (/^ctrl\+[a-z]$/.test(normalized)) return normalized as ControlKey;
 	return "f12";
 }
 
 /** The interaction exit key, as a hint states it. */
 function interactionExitLabel(exitKey: string | undefined): string {
-	const key = exitControlKey(exitKey);
-	return key.startsWith("ctrl+") ? `Ctrl+${key.slice(5).toUpperCase()}` : KEY_NAMES[key];
+	return keyName(exitControlKey(exitKey));
 }
 
 /** What the in-flight meaning of Enter does, for the guide's current section. */
@@ -555,7 +569,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
-		modes: [...baseModes],
+		modes: [...ticketBaseModes],
 		availability: available,
 		guideNote: CONSULTATIONS_NOTE,
 	},
@@ -569,7 +583,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
-		modes: ["consultation-list"],
+		modes: ["consultation-list", "consultation-detail"],
 		availability: available,
 	},
 	{
@@ -789,7 +803,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: false,
 		priority: 10,
-		modes: [...baseModes],
+		modes: [...ticketBaseModes],
 		availability: available,
 	},
 	{
@@ -1002,7 +1016,7 @@ function candidatesForKey(context: ControlContext, key: ControlKey): readonly Co
 }
 
 /** The whole key one accepted binding is called by, as a hint states it. */
-const KEY_NAMES: Record<ControlKey, string> = {
+const KEY_NAMES: Record<string, string> = {
 	up: "↑",
 	down: "↓",
 	left: "←",
@@ -1039,6 +1053,18 @@ const KEY_NAMES: Record<ControlKey, string> = {
 	f10: "F10",
 	f11: "F11",
 	f12: "F12",
+	f13: "F13",
+	f14: "F14",
+	f15: "F15",
+	f16: "F16",
+	f17: "F17",
+	f18: "F18",
+	f19: "F19",
+	f20: "F20",
+	f21: "F21",
+	f22: "F22",
+	f23: "F23",
+	f24: "F24",
 	"?": "?",
 	return: "Enter",
 	escape: "Esc",
@@ -1047,6 +1073,11 @@ const KEY_NAMES: Record<ControlKey, string> = {
 	w: "w",
 	"ctrl+c": "Ctrl+C",
 };
+
+function keyName(key: ControlKey): string {
+	if (key.startsWith("ctrl+")) return `Ctrl+${key.slice(5).toUpperCase()}`;
+	return KEY_NAMES[key] ?? key;
+}
 
 /**
  * The whole keys that still run this control in this mode, best first.
@@ -1064,7 +1095,7 @@ export function compactKeyLabels(
 ): string[] {
 	const ranked = control
 		.keys(mode, context)
-		.map((key) => KEY_NAMES[key])
+		.map(keyName)
 		.map((label) => ({ label, rank: label === KEY_NAMES.escape ? 0 : 1, cells: widthOf(label) }));
 	ranked.sort((a, b) => a.rank - b.rank || a.cells - b.cells);
 	return [...new Set(ranked.map((entry) => entry.label))];
@@ -1190,8 +1221,7 @@ function displayKeyLabel(
 	// accepts.
 	if (control.id === "consultation-respond")
 		return mode === "consultation-detail" ? "Enter/r" : "Enter";
-	if (control.id === "consultation-interact")
-		return mode === "consultation-detail" ? "Enter/t" : "Enter";
+	if (control.id === "consultation-interact") return "Enter";
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";
 	if (control.id === "change-override" && mode === "override-model") return "←→";
