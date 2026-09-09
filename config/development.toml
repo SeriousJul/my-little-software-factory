@@ -78,13 +78,6 @@ Description:
 auto-close = false
 
 [task-types.review]
-# The Task profile sends every review to codex on gpt-5.6-sol, with the whole
-# diff and the whole thread in view. The override panel prefills all four
-# settings on every review handoff.
-agent = "codex"
-model = "gpt-5.6-sol"
-thinking = "high"
-context-window = 272000
 template = '''
 Review pull request {external-key}: {title}.
 

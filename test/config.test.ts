@@ -338,15 +338,14 @@ describe("validateConfig", () => {
 				thinking: "low",
 				autoClose: false,
 			});
-			// The review task type carries a full Task profile: this is the live
-			// development path's own use of the feature, so a review handoff
-			// starts on the agent, model, thinking level, and context window the
-			// profile names rather than on what the agent defaults to.
-			expect(config.taskTypes.review).toMatchObject({
-				agent: "codex",
-				model: "gpt-5.6-sol",
-				thinking: "high",
-				contextWindow: "272000",
+			// The review task type carries a template only: the live development
+			// path pins no Task profile settings in the file. The profile
+			// feature itself is covered by the inline config tests in this file,
+			// which name the agent, model, thinking level, and context window
+			// they set.
+			expect(config.taskTypes.review).toEqual({
+				template: expect.stringContaining("Review pull request"),
+				autoClose: false,
 			});
 			// Every agent that can take a context window names its own spelling
 			// of the count, so one profile value reaches each of them.

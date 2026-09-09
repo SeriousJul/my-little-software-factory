@@ -1069,8 +1069,7 @@ The shipped defaults define the three agent types `pi`, `codex`, and
 and two task rules for `ready-for-review` and `needs-work` pull requests.
 They have no sources and no Consultation types. `config/development.toml`
 in this repository configures the live development path through `--config`;
-it carries the `grill-with-docs` Consultation type and the Task profile the
-review handoffs start on.
+it carries the `grill-with-docs` Consultation type.
 
 ## Shape
 
