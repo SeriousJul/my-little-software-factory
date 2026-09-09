@@ -129,10 +129,12 @@ const PLAIN_REFUSALS: FieldRefusals = {
  */
 function typedCharacter(key: KeyEvent): string | null {
 	const raw = key.sequence === "" ? key.name : key.sequence;
-	if (raw === " ") return " ";
-	if (raw.length !== 1) return null;
-	const code = raw.charCodeAt(0);
-	return code > 0x20 && code < 0x7f ? raw : null;
+	if (raw === " ") return raw;
+	// Named keys have several code points, while a printable Unicode key can
+	// have more than one UTF-16 code unit. Return every one-cell key so a
+	// digits field can refuse it instead of letting the renderer insert it.
+	if ([...raw].length !== 1 || /\p{Cc}/u.test(raw)) return null;
+	return raw;
 }
 
 /** The text a paste event carries, with the terminal's own styling removed. */

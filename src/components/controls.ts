@@ -344,12 +344,7 @@ const FIELD_EDITING_ROWS: readonly ControlDefinition[] = [
 	editingRow("edit-redo", "Redo", "Ctrl+Y", fieldModes),
 	editingRow("edit-select-all", "Select all", "Ctrl+A", fieldModes),
 	editingRow("edit-paste", "Paste text", "Terminal paste", fieldModes),
-	editingRow(
-		"edit-newline",
-		"Insert a new line",
-		"Enter",
-		fieldModes.filter((mode) => mode !== "override-text"),
-	),
+	editingRow("edit-newline", "Insert a new line", "Enter", ["form-field"]),
 ];
 
 /**

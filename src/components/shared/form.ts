@@ -39,8 +39,10 @@ export interface FormFacts {
 
 /** The focus of one form, read the way its key handler needs it. */
 export interface FormFocus {
-	/** The slot that holds the focus. */
+	/** The slot that held the focus at the last rendered frame. */
 	at: number;
+	/** The slot the key handler currently holds, including same-tick moves. */
+	index(): number;
 	/** The kind of the slot that holds the focus. */
 	kind(): FormSlotKind;
 	/** The catalogue mode the form runs, which follows the focused slot. */
@@ -81,6 +83,7 @@ export function useFormSlots(slots: readonly FormSlot[]): FormFocus {
 	const focused = (): FormSlot | undefined => slots[clamp(ref.current)];
 	return {
 		at: clamp(at),
+		index: () => clamp(ref.current),
 		kind: () => focused()?.kind ?? "field",
 		mode: () => slotMode(focused()?.kind ?? "field"),
 		current: focused,

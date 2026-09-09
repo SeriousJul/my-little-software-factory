@@ -221,6 +221,34 @@ describe("the shared Text field", () => {
 		);
 	});
 
+	test("refuses non-ASCII printable characters in a digits field", async () => {
+		const onRefuse = vi.fn();
+		const field = { current: null as FieldHandle | null };
+		await withField(
+			createElement(TextField, {
+				label: "Context",
+				value: "12",
+				focused: true,
+				width: 16,
+				digits: true,
+				fieldRef: field,
+				onRefuse,
+			}),
+			40,
+			6,
+			async (setup) => {
+				await setup.mockInput.typeText("é١");
+				await awaitFrame(
+					setup,
+					() => onRefuse.mock.calls.length === 2,
+					"both non-ASCII typed refusals",
+				);
+				expect(onRefuse).toHaveBeenCalledTimes(2);
+				expect(field.current?.value()).toBe("12");
+			},
+		);
+	});
+
 	test("folds a typed count to one spelling and keeps the caret with it", async () => {
 		const field = { current: null as FieldHandle | null };
 		await withField(

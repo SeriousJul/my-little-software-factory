@@ -141,4 +141,31 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 			},
 		);
 	});
+
+	test("the Model search exposes Copy selection and removes it when the caret collapses it", async () => {
+		await withPanel(
+			{
+				agentType: "pilot",
+				status: { status: "available", models: ["only-for-pilot/model-y"] },
+			},
+			INITIAL,
+			async (setup) => {
+				await moveToModelRow(setup);
+				await setup.mockInput.typeText("model-y");
+				setup.mockInput.pressKey("HOME");
+				setup.mockInput.pressArrow("right", { shift: true });
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("F3 Copy selection"),
+					"Copy selection on the Model search",
+				);
+				setup.mockInput.pressArrow("right");
+				await awaitFrame(
+					setup,
+					(f) => !frameText(f).includes("F3 Copy selection"),
+					"Copy selection to leave the bar when the selection collapses",
+				);
+			},
+		);
+	});
 });

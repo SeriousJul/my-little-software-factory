@@ -40,7 +40,7 @@ import type { ControlContext, InteractionMode } from "./controls.ts";
 import { contextFor } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
-import { ActionItem, ChoiceRow } from "./shared/choices.ts";
+import { ActionItem, ChoiceRow, useChoice } from "./shared/choices.ts";
 import { DraftField, type FieldHandle } from "./shared/fields.ts";
 import { type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
@@ -129,25 +129,19 @@ export function ConsultationLauncher({
 }: ConsultationLauncherProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const names = Object.keys(types);
-	const [indexes, setIndexes] = useState(() => ({
-		type: Math.max(0, names.indexOf(draft?.typeName ?? "")),
-		repository: Math.max(
-			0,
-			repositories.findIndex((item) => item.identity === draft?.repositoryIdentity),
-		),
-	}));
-	// The refs mirror what the key handlers read: the parser can deliver two
-	// keys in one tick, and the second must act on the slot the first landed on.
-	const typeRef = useRef(indexes.type);
-	const repositoryRef = useRef(indexes.repository);
+	const typeChoice = useChoice(names, draft?.typeName);
+	const repositoryChoice = useChoice(
+		repositories,
+		repositories.find((item) => item.identity === draft?.repositoryIdentity),
+	);
 	const inputRef = useRef(draft?.input ?? "");
 	const selectionRef = useRef(false);
 	const field = useRef<FieldHandle | null>(null);
 	const focus: FormFocus = useFormSlots(SLOTS);
 	const [draftSize, setDraftSize] = useState(inputRef.current);
 
-	const currentType = () => names[typeRef.current];
-	const currentRepository = () => repositories[repositoryRef.current];
+	const currentType = () => typeChoice.value();
+	const currentRepository = () => repositoryChoice.value();
 	/** The whole form as it stands, for closing and for launching. */
 	const formOf = (): LauncherDraft => ({
 		typeName: currentType() ?? "",
@@ -156,15 +150,8 @@ export function ConsultationLauncher({
 	});
 	const cycle = (delta: number) => {
 		const slot = focus.current();
-		if (slot?.id === "type" && names.length > 0) {
-			typeRef.current = (typeRef.current + delta + names.length) % names.length;
-		} else if (slot?.id === "repository" && repositories.length > 0) {
-			repositoryRef.current =
-				(repositoryRef.current + delta + repositories.length) % repositories.length;
-		} else {
-			return;
-		}
-		setIndexes({ type: typeRef.current, repository: repositoryRef.current });
+		if (slot?.id === "type") typeChoice.cycle(delta);
+		else if (slot?.id === "repository") repositoryChoice.cycle(delta);
 	};
 	// The launcher's own domain rule decides what it can send: the count and
 	// emptiness rules belong to the Consultation, not to a field.
@@ -186,7 +173,12 @@ export function ConsultationLauncher({
 	const moveField = moveFieldWith(focus);
 	const formContext = focus.context(context, {
 		fieldHasSelection: selectionRef.current,
-		formCycleCount: focus.current()?.id === "type" ? names.length : repositories.length,
+		formCycleCount:
+			focus.current()?.id === "type"
+				? names.length
+				: focus.current()?.id === "repository"
+					? repositories.length
+					: undefined,
 		formRefusal: focus.current()?.id === "launch" ? refusal() : undefined,
 	});
 	useControlDispatch({
@@ -250,7 +242,7 @@ export function ConsultationLauncher({
 		createElement(ChoiceRow, {
 			key: "type",
 			label: "Type",
-			value: names[indexes.type] ?? "",
+			value: currentType() ?? "",
 			focused: focus.at === 0 && inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
@@ -259,7 +251,7 @@ export function ConsultationLauncher({
 		createElement(ChoiceRow, {
 			key: "repository",
 			label: "Repository",
-			value: repositories[indexes.repository]?.displayName ?? "",
+			value: currentRepository()?.displayName ?? "",
 			focused: focus.at === 1 && inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,

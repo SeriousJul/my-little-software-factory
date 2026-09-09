@@ -8,13 +8,65 @@
  * one screen rather than as a set of widgets.
  */
 import { createElement } from "@opentui/react";
-import type { ReactElement } from "react";
+import { Fragment, type ReactElement, useRef, useState } from "react";
 
 import { type ActionRow, actionRowSpans } from "../modal-chrome.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "../text.ts";
 import { controlInk, markerText } from "./presentation.ts";
 
 /** One row of a form that holds no text: its label and its current value. */
+export interface ChoiceHandle<T> {
+	/** The current value, or undefined when the choice has no options. */
+	value(): T | undefined;
+	/** Move by a wrapped step and return the value now selected. */
+	cycle(delta: number): T | undefined;
+}
+
+/**
+ * The wrapped choice behavior shared by every selector row.
+ *
+ * The caller supplies the current options and owns what a selected value does;
+ * this module owns the index, wrapping, and the empty-value rule.
+ */
+export function useChoice<T>(options: readonly T[], initial: T | undefined): ChoiceHandle<T> {
+	const initialIndex = Math.max(0, initial === undefined ? 0 : options.indexOf(initial));
+	const [index, setIndex] = useState(initialIndex);
+	const indexRef = useRef(index);
+	const currentIndex = () =>
+		options.length === 0 ? -1 : Math.min(Math.max(0, indexRef.current), options.length - 1);
+	return {
+		value: () => {
+			const at = currentIndex();
+			return at < 0 ? undefined : options[at];
+		},
+		cycle: (delta: number) => {
+			if (options.length === 0) return undefined;
+			const at = currentIndex();
+			const next = (at + delta + options.length) % options.length;
+			indexRef.current = next;
+			setIndex(next);
+			return options[next];
+		},
+	};
+}
+
+/** Return the wrapped choice after the current value, including an unset value. */
+export function cycleChoice<T>(
+	options: readonly T[],
+	current: T | undefined,
+	delta: number,
+): T | undefined {
+	if (options.length === 0) return undefined;
+	const index = current === undefined ? -1 : options.indexOf(current);
+	const next =
+		index < 0
+			? delta > 0
+				? 0
+				: options.length - 1
+			: (index + delta + options.length) % options.length;
+	return options[next];
+}
+
 export interface ChoiceRowProps {
 	label: string;
 	/** The value the choice stands on now. */
@@ -50,26 +102,45 @@ export function ChoiceRow(props: ChoiceRowProps): ReactElement {
 					: ink.text;
 	const valueWidth = Math.max(1, props.width);
 	const shown = empty ? (props.placeholder ?? "") : props.value;
+	const noteWidth = 2 + props.labelWidth + valueWidth;
 	return createElement(
-		"box",
-		{ key: props.label, style: { flexDirection: "row", height: 1 } },
+		Fragment,
+		{},
 		createElement(
-			"text",
-			{ fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-			markerText(props.focused),
+			"box",
+			{ key: "row", style: { flexDirection: "row", height: 1 } },
+			createElement(
+				"text",
+				{ fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
+				markerText(props.focused),
+			),
+			createElement(
+				"text",
+				{ fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
+				padToWidth(truncateToWidth(`${props.label} `, props.labelWidth), props.labelWidth),
+			),
+			createElement(
+				"text",
+				{ width: valueWidth, fg: color.fg ?? undefined },
+				props.clipTail === true && !empty
+					? truncateTailToWidth(shown, valueWidth)
+					: truncateToWidth(shown, valueWidth),
+			),
 		),
-		createElement(
-			"text",
-			{ fg: props.focused ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-			padToWidth(truncateToWidth(`${props.label} `, props.labelWidth), props.labelWidth),
-		),
-		createElement(
-			"text",
-			{ width: valueWidth, fg: color.fg ?? undefined },
-			props.clipTail === true && !empty
-				? truncateTailToWidth(shown, valueWidth)
-				: truncateToWidth(shown, valueWidth),
-		),
+		props.error === null || props.error === undefined
+			? null
+			: createElement(
+					"text",
+					{ key: "error", style: { width: "100%", height: 1 }, fg: ink.error.fg ?? undefined },
+					truncateToWidth(`Error: ${props.label}: ${props.error}`, noteWidth),
+				),
+		props.hint === null || props.hint === undefined
+			? null
+			: createElement(
+					"text",
+					{ key: "hint", style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
+					truncateToWidth(props.hint, noteWidth),
+				),
 	);
 }
 

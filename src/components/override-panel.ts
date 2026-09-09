@@ -74,7 +74,7 @@
  */
 
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { type ReactElement, type RefObject, useRef, useState } from "react";
+import { type ReactElement, type RefObject, useEffect, useRef, useState } from "react";
 import type { ThinkingLevel } from "../domain/agent.ts";
 import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
@@ -84,7 +84,9 @@ import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { cycleChoice } from "./shared/choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
+import { useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "./text.ts";
@@ -291,17 +293,10 @@ export function OverridePanel({
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
-	// The selection indexes the full row list, not the visible viewport. The
-	// viewport scrolls to keep this row on screen.
-	const [selected, setSelected] = useState(0);
-	// The key parser can deliver several key events in one tick. React batches
-	// their state updates, so a closure that reads `choice` or `selected`
-	// would see the stale value and drop or misaddress an update. The refs
-	// mirror both, so back-to-back keys, a confirm in the same tick, and a
-	// move followed by a cycle in the same tick all act on the values the
-	// previous key left behind.
+	// The shared form route owns the selected row. Its ref keeps two keys in one
+	// renderer tick on the row the first key reached, while its state repaints
+	// the viewport around that row.
 	const choiceRef = useRef<HandoffChoice>(choice);
-	const selectedRef = useRef(0);
 	// An untouched Task-profile setting follows a Task type change. Once an
 	// operator changes or clears it, their one-shot override stays in force.
 	// One record holds every setting the rule covers, so the next profile
@@ -316,8 +311,14 @@ export function OverridePanel({
 	// The Model row's visible search. The shared row owns its text; this handle
 	// is only how the panel's explicit clear key reaches it.
 	const typeAhead = useRef<TypeAheadHandle | null>(null);
-	// The field that holds the keyboard, for the Copy selection control.
-	const field = useRef<FieldHandle | null>(null);
+	// Each field owns its own handle. The active row chooses which one the Copy
+	// control reaches, so another row cannot leave a stale selection on the bar.
+	const fields: Record<TextKey, RefObject<FieldHandle | null>> = {
+		model: useRef<FieldHandle | null>(null),
+		thinking: useRef<FieldHandle | null>(null),
+		contextWindow: useRef<FieldHandle | null>(null),
+	};
+	const searchField = useRef<FieldHandle | null>(null);
 	// Whether the field under the cursor holds a selection the Copy control can
 	// hand over. The frame reads it, and the field reports it on every change.
 	const [hasSelection, setHasSelection] = useState(false);
@@ -325,6 +326,17 @@ export function OverridePanel({
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
 		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
 	const allRows = rowsForChoice(choice);
+	const focus = useFormSlots(
+		allRows.map((item, index) => ({
+			id: `${item.key}-${index}`,
+			kind:
+				item.kind === "text" || item.kind === "type-ahead"
+					? ("field" as const)
+					: ("selector" as const),
+			label: item.label,
+		})),
+	);
+	const selected = focus.at;
 	// The Type-ahead row draws its search under its value, so it takes two rows
 	// where every other row takes one. The panel counts them, because a surface
 	// is handed no more rows than it holds and a row that overflowed would
@@ -377,14 +389,20 @@ export function OverridePanel({
 	// The row under the cursor, clamped the way the render clamps it.
 	const cursorRow = (): PanelRow => {
 		const all = rowsForChoice(choiceRef.current);
-		return all[Math.min(selectedRef.current, all.length - 1)];
+		return all[Math.min(focus.index(), all.length - 1)];
 	};
-	const move = (delta: number) => {
-		const count = rowsForChoice(choiceRef.current).length;
-		const at = Math.min(selectedRef.current, count - 1);
-		selectedRef.current = (at + delta + count) % count;
-		setSelected(selectedRef.current);
+	const activeField = (): FieldHandle | null => {
+		const target = cursorRow();
+		if (target.kind === "type-ahead") return searchField.current;
+		if (target.kind === "text") return fields[target.key as TextKey]?.current ?? null;
+		return null;
 	};
+	// A selection belongs to the focused field only. Re-read it after the shared
+	// route moves focus so an old selection cannot keep F3 on the Action bar.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: activeField is derived from the focused row and stable refs
+	useEffect(() => {
+		setHasSelection(activeField()?.hasSelection() === true);
+	}, [focus.at]);
 	/**
 	 * The rows a task type switch re-derives: every setting the operator has
 	 * not touched, from the new task type's profile (ADR 0009). A touched row
@@ -405,22 +423,13 @@ export function OverridePanel({
 	};
 	const cycle = (delta: number) => {
 		const target = cursorRow();
-		if (target.kind !== "list") return;
-		const options = target.options;
-		if (options === undefined || options.length === 0) return;
+		if (target.kind !== "list" || target.options === undefined) return;
+		const next = cycleChoice(target.options, choiceRef.current[target.key], delta);
+		if (next === undefined) return;
 		if (target.key !== "environment" && target.key !== "taskType") touch(target.key);
-		commit((current) => {
-			const index = options.indexOf(current[target.key]);
-			// An unset value (the empty string a cleared row leaves) is not an
-			// option. The first right lands on the first option, the first left
-			// on the last.
-			const next =
-				index === -1
-					? options[(delta > 0 ? 0 : options.length - 1) % options.length]
-					: options[(index + delta + options.length) % options.length];
-			if (target.key === "taskType") return reDerive(current, next);
-			return { ...current, [target.key]: next };
-		});
+		commit((current) =>
+			target.key === "taskType" ? reDerive(current, next) : { ...current, [target.key]: next },
+		);
 	};
 	/** Record that the operator set one of the rows a task type switch re-derives. */
 	const touch = (key: DerivedKey) => {
@@ -442,6 +451,7 @@ export function OverridePanel({
 		if (typeAhead.current === null) return;
 		if (typeAhead.current.query() !== "") {
 			typeAhead.current.clear();
+			setHasSelection(false);
 			return;
 		}
 		// With no query left to remove, the same key gives the Model back to the
@@ -456,7 +466,8 @@ export function OverridePanel({
 		commit((current) => ({ ...current, [key]: facts.value }));
 	};
 	/** One Type-ahead search's change: the value follows the first match. */
-	const searchChanged = (_query: string, match: TypeAheadMatch) => {
+	const searchChanged = (_query: string, match: TypeAheadMatch, facts: FieldFacts) => {
+		setHasSelection(facts.selection !== "");
 		if (match.first === undefined || choiceRef.current.model === match.first) return;
 		touch("model");
 		commit((current) => ({ ...current, model: match.first as string }));
@@ -492,9 +503,12 @@ export function OverridePanel({
 		onEmergencyExit,
 		handlers: {
 			"move-list": ({ key }) => {
-				// Tab moves from a list row and a field row alike; Shift+Tab
-				// is the previous row.
-				move(key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1);
+				// The shared form route owns Tab and row movement. A selection is
+				// only current while its field still owns the focus.
+				focus.move(
+					key.name === "up" || key.name === "k" || (key.name === "tab" && key.shift) ? -1 : 1,
+				);
+				setHasSelection(false);
 				key.preventDefault?.();
 			},
 			"change-override": ({ key }) => {
@@ -516,7 +530,7 @@ export function OverridePanel({
 				key.preventDefault?.();
 			},
 			"copy-selection": ({ key }) => {
-				const result = field.current?.copySelection();
+				const result = activeField()?.copySelection();
 				onUnavailable?.(result?.reason ?? "The panel holds no field to copy from");
 				key.preventDefault?.();
 			},
@@ -548,7 +562,8 @@ export function OverridePanel({
 				fieldChanged,
 				searchChanged,
 				typeAhead,
-				field,
+				fields,
+				searchField,
 				setHasSelection,
 			),
 		),
@@ -676,9 +691,10 @@ function rowElement(
 	geometry: PanelGeometry,
 	inputActive: boolean,
 	fieldChanged: (key: TextKey) => (facts: FieldFacts) => void,
-	searchChanged: (query: string, match: TypeAheadMatch) => void,
+	searchChanged: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void,
 	typeAhead: RefObject<TypeAheadHandle | null>,
-	field: RefObject<FieldHandle | null>,
+	fields: Record<TextKey, RefObject<FieldHandle | null>>,
+	searchField: RefObject<FieldHandle | null>,
 	reportSelection: (has: boolean) => void,
 ): ReactElement {
 	const ink = controlInk();
@@ -701,11 +717,11 @@ function rowElement(
 			// A value the target cannot take is the field's own news: it is stated
 			// in words, and the warning tone only agrees with them.
 			error: r.unfit === undefined ? null : unfitReason(r.unfit),
-			fieldRef: field,
+			fieldRef: fields[r.key as TextKey],
 			refusals: CONTEXT_REFUSALS,
 			onValueChange: (facts) => {
 				fieldChanged(r.key as TextKey)(facts);
-				reportSelection(facts.selection !== "");
+				reportSelection(selected && facts.selection !== "");
 			},
 		});
 	}
@@ -724,7 +740,11 @@ function rowElement(
 			// says so in the warning tone beside the value.
 			warning: r.unfit !== undefined || !optionsOf(r).includes(value),
 			typeAheadRef: typeAhead,
-			onQueryChange: searchChanged,
+			fieldRef: searchField,
+			onQueryChange: (query, match, facts) => {
+				searchChanged(query, match, facts);
+				reportSelection(selected && facts.selection !== "");
+			},
 		});
 	}
 	const children: ReactElement[] = [

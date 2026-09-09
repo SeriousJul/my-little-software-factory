@@ -16,7 +16,7 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import { ChoiceRow } from "./choices.ts";
-import { TextField } from "./fields.ts";
+import { type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { controlInk, MARKER_WIDTH, STATE_WORDS } from "./presentation.ts";
 
 /** The search's own label: the row above it already names the value. */
@@ -71,8 +71,10 @@ export interface TypeAheadRowProps {
 	inputActive?: boolean;
 	/** The handle a surface uses for the explicit clear and the row's query. */
 	typeAheadRef?: { current: TypeAheadHandle | null };
-	/** Every change of the search text, and the match it answers with. */
-	onQueryChange?: (query: string, match: TypeAheadMatch) => void;
+	/** The field handle for selection and Copy selection. */
+	fieldRef?: { current: FieldHandle | null };
+	/** Every change of the search text, match, caret, and selection. */
+	onQueryChange?: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void;
 }
 
 /** The shared Type-ahead row: the value, and the editable search under it. */
@@ -118,10 +120,11 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 				width: Math.max(1, props.width - (noMatch ? NO_MATCH_CELLS : 0)),
 				labelWidth: props.labelWidth - MARKER_WIDTH,
 				marked: false,
+				fieldRef: props.fieldRef,
 				onValueChange: (facts) => {
 					queryRef.current = facts.value;
 					setQuery(facts.value);
-					props.onQueryChange?.(facts.value, typeAheadMatch(props.options, facts.value));
+					props.onQueryChange?.(facts.value, typeAheadMatch(props.options, facts.value), facts);
 				},
 			}),
 			noMatch
