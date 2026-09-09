@@ -39,30 +39,21 @@ import {
 	type ConsultationStatus,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
-import {
-	type EnvironmentKind,
-	HANDOFF_ENVIRONMENT_KINDS,
-	type Handoff,
-	type LeftoverEnvironment,
-	type Ticket,
-	type TicketState,
-} from "../domain/ticket.ts";
+import { HANDOFF_ENVIRONMENT_KINDS, type Handoff, type Ticket } from "../domain/ticket.ts";
 import {
 	baseChoice,
-	type CloseCleanupOptions,
-	closeCleanupReach,
-	closeHandoffEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
-	handOffStoredWorkspace,
 	handOffTicket,
-	type NameCollision,
-	type OwnNameKnowledge,
 	resolveHandoffChoice,
 } from "../handoff.ts";
 import {
-	type DispatchResult,
-	type HandoffIntent,
+	createHandoffDispatch,
+	type HandoffDispatch,
+	reportHandoffOutcome,
+	type StoredHandoffFacts,
+} from "../handoff-dispatch.ts";
+import {
 	type HerdrAgent,
 	HerdrAgentReader,
 	normalizeAgentStatus,
@@ -78,7 +69,7 @@ import {
 	supportsModelList,
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
-import type { Consultation, FactoryState, HandoffClaim, HandoffOrigin } from "../state.ts";
+import type { Consultation, FactoryState } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
@@ -350,24 +341,12 @@ export function App({
 	// A handoff holds it while herdr builds the environment and starts the
 	// agent. Close cleanups and leftover clears queue behind that work, and a
 	// queued cleanup reserves the seat until every earlier cleanup ends.
-	const inFlightRef = useRef(false);
-	const clearingRef = useRef(false);
-	const cleanupQueuedRef = useRef(false);
-	const cleanupQueueRef = useRef<readonly (() => Promise<void>)[]>([]);
-	/** True while a handoff or a queued environment change owns the seat. */
-	const seatHeld = () => inFlightRef.current || cleanupQueuedRef.current;
-	// Handoffs claimed while another is in flight: they run in claim order
-	// once the running one settles.
-	const queueRef = useRef<
-		readonly {
-			ticket: Ticket;
-			choice: HandoffChoice;
-			origin: HandoffOrigin;
-			claim: HandoffClaim;
-			previousMessage: string;
-			onStarted?: (started: DispatchResult) => void;
-		}[]
-	>([]);
+	// The no-state test projection has no durable claim or queue. The real
+	// dispatch module owns the seat for every state-backed app.
+	const noStateHandoffInFlightRef = useRef(false);
+	const handoffDispatchRef = useRef<{ state: FactoryState; dispatch: HandoffDispatch } | undefined>(
+		undefined,
+	);
 	const coordinatorRef = useRef<RefreshCoordinator | undefined>(undefined);
 	const observationRef = useRef<ObservationCoordinator | undefined>(undefined);
 	const configWriteQueue = useRef(Promise.resolve());
@@ -696,164 +675,45 @@ export function App({
 		});
 	}
 	const consultationOperations = consultationOperationsRef.current;
-	/**
-	 * Resolve a handoff operation into the durable Message facts.
-	 *
-	 * The Handoff's own progress ends here. A clean handoff ends only that
-	 * progress: an outcome the operator wrote while it ran - a sibling
-	 * operation refused during the flight - surfaces when the Working line
-	 * goes, because the handoff's start already cleared whatever sat on the
-	 * slot before. The Working line of a refresh that ran while it was in
-	 * flight stays.
-	 *
-	 * A handoff that started beside its own leftover agent says so: the name
-	 * the operator knows from herdr is not the one this agent runs under, and
-	 * the leftover is what to clear to get it back. That warning rides along
-	 * with an outcome that did not finish - an agent that started but could
-	 * not be prompted is the error the operator has to act on - and never
-	 * replaces it.
-	 */
-	const finishOutcome = async (outcome: HandoffOutcome): Promise<void> => {
-		const persistWarning =
-			outcome.notes?.mappingToWrite === undefined
-				? undefined
-				: await persistMapping(outcome.notes.mappingToWrite);
-		const nameWarning =
-			outcome.collision !== undefined && outcome.collision.startedAs !== null
-				? `a leftover agent still holds the herdr name ${outcome.collision.stableName}; this agent started as ${outcome.collision.startedAs}`
-				: undefined;
-		const lines = [
-			...(outcome.status === "ok" ? [] : [outcome.reason]),
-			...(nameWarning === undefined ? [] : [nameWarning]),
-			...(persistWarning === undefined ? [] : [persistWarning]),
-			...(outcome.status === "ok" && outcome.notes?.warning !== undefined
-				? [outcome.notes.warning]
-				: []),
-		];
-		clearWorkingMessage("handoff");
-		if (outcome.status !== "ok") setErrorMessage(lines.join("; "));
-		else if (lines.length > 0) setWarningMessage(lines.join("; "));
-		// A clean handoff leaves the outcome slot to whatever it holds now, and
-		// what holds now is a fact written during this flight, which the
-		// operator reads once the progress goes.
-	};
-	/**
-	 * What the handoff may assume about the herdr agent name it wants.
-	 *
-	 * The control plane recorded the handles of this ticket's own handoffs,
-	 * and it may already hold the durable fact that one of them is left over
-	 * in herdr. A name held by those handles is held by the ticket's own
-	 * leftover agent, and the handoff starts beside it under its cycle name
-	 * instead of failing on it (ADR 0012).
-	 */
-	const nameKnowledgeFor = (identity: string): OwnNameKnowledge | undefined => {
-		if (state === undefined) return undefined;
-		const handles = state.handoffHandles(identity);
-		return {
-			ownPaneIds: handles.paneIds,
-			ownWorkspaceIds: handles.workspaceIds,
-			leftoverKnown: state.leftoverEnvironment(identity) !== null,
+	if (state === undefined) handoffDispatchRef.current = undefined;
+	else if (handoffDispatchRef.current?.state !== state) {
+		handoffDispatchRef.current = {
+			state,
+			dispatch: createHandoffDispatch({
+				state,
+				runner: commandRunner,
+				config: () => configRef.current,
+				home: homeDir,
+				controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
+				working: (text) => setWorkingMessage(text, "handoff"),
+				warning: setWarningMessage,
+				error: setErrorMessage,
+				clearWorking: () => clearWorkingMessage("handoff"),
+				refresh: replaceTickets,
+				persistMapping,
+			}),
 		};
-	};
+	}
+	const handoffDispatch = handoffDispatchRef.current?.dispatch;
 	/**
-	 * Make a name collision with the ticket's own leftover agent durable.
+	 * Report the Close cleanup of one ended cycle.
 	 *
-	 * The handoff started beside the leftover, so the work runs. The fact
-	 * that the earlier cycle's agent still lives, and still holds the name
-	 * the ticket's stable handoff would want, belongs to the ticket until
-	 * the operator clears it: the detail pane says so, and `w` ends it.
-	 */
-	const recordNameCollision = (identity: string, collision: NameCollision) => {
-		if (state === undefined || !collision.own) return;
-		state.recordLeftoverEnvironment({
-			ticketIdentity: identity,
-			paneId: collision.holder?.paneId ?? null,
-			reason: `the leftover agent still holds the herdr name ${collision.stableName}: ${collision.reason}`,
-		});
-	};
-	/** Start the next queued cleanup only when the handoff seat is free. */
-	const drainCleanupQueue = (): void => {
-		if (inFlightRef.current || clearingRef.current) return;
-		const cleanup = cleanupQueueRef.current[0];
-		if (cleanup === undefined) {
-			cleanupQueuedRef.current = false;
-			drainQueue();
-			return;
-		}
-		clearingRef.current = true;
-		cleanupQueueRef.current = cleanupQueueRef.current.slice(1);
-		void cleanup().finally(() => {
-			clearingRef.current = false;
-			drainCleanupQueue();
-		});
-	};
-	/** Queue one environment change and reserve the handoff seat for it. */
-	const queueCleanup = <Result>(work: () => Promise<Result>): Promise<Result> => {
-		cleanupQueuedRef.current = true;
-		const queued = new Promise<Result>((resolve, reject) => {
-			cleanupQueueRef.current = [
-				...cleanupQueueRef.current,
-				async () => {
-					try {
-						resolve(await work());
-					} catch (error) {
-						reject(error);
-					}
-				},
-			];
-		});
-		drainCleanupQueue();
-		return queued;
-	};
-	/**
-	 * Queue one Close cleanup behind every earlier environment change.
-	 *
-	 * All four cleanup paths - the operator's Close, an Abandon, the automatic
-	 * close in the observation loop, and the clear action's retry - use this
-	 * queue. A handoff cannot drain between two cleanups, so herdr never builds
-	 * an agent in an environment another cleanup is still taking away.
-	 */
-	const runCleanupWithSeat = (
-		openState: FactoryState,
-		handoff: {
-			ticketIdentity: string;
-			handoffId: string;
-			environment: EnvironmentKind;
-			tabId: string | null;
-			workspaceId: string | null;
-		},
-		options: CloseCleanupOptions = {},
-	): Promise<string | undefined> =>
-		queueCleanup(() => settleCloseCleanup(openState, commandRunner, handoff, options));
-	/**
-	 * The Close cleanup of the handoff a cycle ends, reported on the Message
-	 * line. The durable half of it (record the surviving environment, clear
-	 * what the removal ended) is settleCloseCleanup's.
+	 * The module answers with herdr's failure and keeps the durable fact of the
+	 * environment that survived it; the wording of the line is the caller's, so
+	 * the operator's Close, an Abandon, and the automatic close each keep their
+	 * own existing words for the same fact.
 	 */
 	const runCloseCleanup = (
 		identity: string,
-		handoff: {
-			handoffId: string;
-			environment: EnvironmentKind;
-			tabId: string | null;
-			workspaceId: string | null;
-		},
+		handoff: StoredHandoffFacts,
 		end: "closed" | "abandoned",
 	) => {
-		if (state === undefined) return;
-		const openState = state;
-		void runCleanupWithSeat(openState, {
-			ticketIdentity: identity,
-			...handoff,
-		}).then(
+		if (handoffDispatch === undefined) return;
+		void handoffDispatch.closeCleanup(identity, handoff, end).then(
 			(failure) => {
-				replaceTickets();
-				if (failure === undefined) return;
-				setErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
+				if (failure !== undefined)
+					setErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
 			},
-			// The helper records the answer and never throws on a cleanup that
-			// broke; only the reporting here can still fail, and a Message line
-			// that cannot be written must not go unhandled.
 			(error) => {
 				setErrorMessage(
 					`ticket ${identity} ${end}; the close cleanup could not be reported: ${errorMessage(error)}`,
@@ -862,94 +722,36 @@ export function App({
 		);
 	};
 	/**
-	 * Clear a ticket's leftover environments: retry the Close cleanup that
-	 * failed, and reach for herdr's force only when the operator chose it.
-	 *
-	 * Every cleanup reaches the environment its handles name: a worktree
-	 * removal takes the whole workspace with the checkout, and a tab close
-	 * takes the tab and the pane inside it. So the action refuses any leftover
-	 * that names a handle the ticket's own live agent works on: the operator
-	 * closes that cycle first, and the leftover goes with it. A reclaimed agent
-	 * shares its pane, tab, and workspace with the handoff that was closed
-	 * around it (ADR 0011), so the guard reads all three handles.
-	 *
-	 * The guard reads the durable state at the moment of the action, not the
-	 * render snapshot, which can miss a handoff that settled after it was
-	 * drawn. The seat holds in both directions: a clear refuses while a
-	 * handoff runs, and the clear takes the seat itself, so a handoff the
-	 * operator starts during a removal waits for it.
+	 * Start the Clear action. The dispatch module owns its durable work and
+	 * Message-line reports; this caller only handles an unexpected rejection.
 	 */
 	const clearLeftover = (ticket: Ticket, force: boolean) => {
-		if (state === undefined) {
+		if (handoffDispatch === undefined) {
 			setWarningMessage("no factory state is open, so a leftover environment cannot be cleared");
 			return;
 		}
-		if (inFlightRef.current) {
-			setWarningMessage(
-				`a handoff is in flight: wait for it to settle before you clear the leftover environment of ticket ${ticket.identity}`,
-			);
-			return;
-		}
-		if (cleanupQueuedRef.current) {
-			setWarningMessage(
-				`a leftover clear is already in flight: wait for it to settle before you clear ticket ${ticket.identity} again`,
-			);
-			return;
-		}
-		const leftovers = state.leftoverEnvironments(ticket.identity);
-		if (leftovers.length === 0) {
-			setWarningMessage(`no leftover environment is recorded for ticket ${ticket.identity}`);
-			replaceTickets();
-			return;
-		}
-		const live =
-			state.ticketState(ticket.identity) === "open"
-				? null
-				: (state.latestHandoff(ticket.identity) ?? null);
-		const atRisk = live === null ? null : (liveHandleAtRisk(leftovers, live) ?? null);
-		if (atRisk !== null && live !== null) {
-			setWarningMessage(
-				`the agent of ticket ${ticket.identity} runs in ${atRisk.text}: close its work cycle before you clear that ${atRisk.what}`,
-			);
-			return;
-		}
-		const openState = state;
-		// One queue item owns the whole clear loop. A handoff cannot run between
-		// the facts of one ticket while herdr takes their environments away.
-		void queueCleanup(async () => {
-			const failures: string[] = [];
-			for (const leftover of leftovers) {
-				const failure = await settleCloseCleanup(
-					openState,
-					commandRunner,
-					{
-						ticketIdentity: ticket.identity,
-						handoffId: leftover.handoffId,
-						environment: leftover.environment,
-						tabId: leftover.tabId,
-						workspaceId: leftover.workspaceId,
-					},
-					{ force },
-				);
-				if (failure !== undefined) failures.push(failure);
-			}
-			return failures;
-		})
-			.then(
-				(failures) => {
-					if (failures.length === 0)
-						setWarningMessage(`cleared the leftover environment of ticket ${ticket.identity}`);
-					else
-						setErrorMessage(
-							`ticket ${ticket.identity} still holds a leftover environment: ${failures.join("; ")}`,
-						);
-				},
-				(error) => {
-					setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
-				},
-			)
-			.finally(replaceTickets);
+		// The module reports guards and cleanup failures on the same Message line
+		// channel as the handoff. The catch is only for an unexpected module error.
+		void handoffDispatch.clearLeftover(ticket.identity, force).catch((error) => {
+			setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
+		});
 	};
+	/**
+	 * Report the outcome of the handoffs that stayed in the App: the no-state test
+	 * projection. State-backed Ticket handoffs report through the dispatch module,
+	 * and both cross the one shared wording in `reportHandoffOutcome`, so the
+	 * parts of the line and the channel each one belongs on have one owner.
+	 */
+	const finishOutcome = (outcome: HandoffOutcome): Promise<void> =>
+		reportHandoffOutcome(
+			outcome,
+			{
+				clearWorking: () => clearWorkingMessage("handoff"),
+				warning: setWarningMessage,
+				error: setErrorMessage,
+			},
+			persistMapping,
+		);
 	/**
 	 * The leftover panel: what still lives in herdr for this ticket, and the
 	 * one action that ends it.
@@ -1026,198 +828,6 @@ export function App({
 		const ticket = tickets.find((candidate) => candidate.identity === panel.identity);
 		if (ticket === undefined || ticket.leftover === null) setPanel(null);
 	}, [panel, tickets]);
-	/**
-	 * Run the external work of a claimed handoff, settle it, and refresh.
-	 *
-	 * A workflow handoff and a restart run in the workspace of the ticket's
-	 * previous handoff; an open-ticket handoff builds the environment from
-	 * scratch. A handoff claimed while another runs queues behind it: the
-	 * claim has already moved the ticket, so only the external work waits.
-	 * When the in-flight handoff settles, the queue drains: the seat is
-	 * free, so the next claimed handoff starts.
-	 *
-	 * `onStarted` hears the one fact the claim cannot state: whether the
-	 * agent started. It fires once, and last, after the attempt settled and
-	 * after the handoff's own status line, so whoever asked for the route can
-	 * decide the turn it came from, and say so on the line. A caller that
-	 * records nothing on a start leaves it out.
-	 */
-	const runClaimedHandoff = (
-		ticket: Ticket,
-		choice: HandoffChoice,
-		origin: HandoffOrigin,
-		claim: HandoffClaim,
-		previousMessage: string,
-		onStarted?: (started: DispatchResult) => void,
-	) => {
-		if (state === undefined) return;
-		// One report per handoff: the settle path and the error path both end
-		// in it, and a route's decision answers for exactly one start.
-		let reported = false;
-		const reportStarted = (started: DispatchResult): void => {
-			if (reported) return;
-			reported = true;
-			onStarted?.(started);
-		};
-		if (seatHeld()) {
-			queueRef.current = [
-				...queueRef.current,
-				{ ticket, choice, origin, claim, previousMessage, onStarted },
-			];
-			return;
-		}
-		inFlightRef.current = true;
-		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
-		const onStage = (stage: string) => state.advanceHandoffAttempt(claim.attemptId, stage);
-		const names = nameKnowledgeFor(ticket.identity);
-		const run =
-			origin === "open"
-				? handOffTicket(ticket, choice, {
-						config: configRef.current,
-						runner: commandRunner,
-						home: homeDir,
-						onStage,
-						names,
-					})
-				: handOffStoredWorkspace({
-						ticket,
-						choice,
-						config: configRef.current,
-						runner: commandRunner,
-						home: homeDir,
-						workspaceId: ticket.handoff?.workspaceId ?? null,
-						environment: ticket.handoff?.environment ?? configRef.current.defaultEnvironment,
-						previousTabId: ticket.handoff?.tabId ?? null,
-						previousMessage,
-						onStage,
-						names,
-					});
-		void run
-			.then(async (outcome) => {
-				if (outcome.collision !== undefined)
-					recordNameCollision(ticket.identity, outcome.collision);
-				if (outcome.ownCollision !== undefined)
-					recordNameCollision(ticket.identity, outcome.ownCollision);
-				state.settleHandoff(
-					claim.attemptId,
-					outcome.status !== "failed",
-					outcome.status === "failed" ? outcome.reason : undefined,
-					outcome.status === "failed"
-						? undefined
-						: {
-								paneId: outcome.agent.paneId,
-								tabId: outcome.agent.tabId,
-								workspaceId: outcome.agent.workspaceId,
-								agentName: outcome.agent.name,
-							},
-				);
-				// The route's own decision is not taken here: whoever asked for
-				// the route hears the start below and records what its start
-				// means for the turn it came from.
-				replaceTickets();
-				await finishOutcome(outcome);
-				reportStarted(
-					outcome.status === "failed" ? { ok: false, reason: outcome.reason } : { ok: true },
-				);
-				inFlightRef.current = false;
-				drainCleanupQueue();
-			})
-			.catch((error) => {
-				state.settleHandoff(claim.attemptId, false, errorMessage(error));
-				replaceTickets();
-				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
-				reportStarted({ ok: false, reason: errorMessage(error) });
-				inFlightRef.current = false;
-				drainCleanupQueue();
-			});
-	};
-	/**
-	 * Drain the handoff queue once the seat is free.
-	 *
-	 * Every queued handoff re-checks the ticket's durable state before it
-	 * runs: the claim passed when the queue formed, and the ticket may
-	 * have moved on since (the cycle closed, the turn settled, the ticket
-	 * left the state). A moved-on ticket settles its claim as failed
-	 * instead of running a handoff on a stale snapshot, and the queue
-	 * keeps draining, so a later item still starts when the seat frees.
-	 * A leftover clear holds the seat too, so a queued handoff never
-	 * starts in a workspace herdr is in the middle of taking away.
-	 */
-	const drainQueue = (): void => {
-		if (state === undefined) return;
-		while (queueRef.current.length > 0 && !seatHeld()) {
-			const next = queueRef.current[0];
-			queueRef.current = queueRef.current.slice(1);
-			const currentState = state.ticketState(next.ticket.identity);
-			if (currentState === undefined || !handoffAllowsState(next.origin, currentState)) {
-				state.settleHandoff(
-					next.claim.attemptId,
-					false,
-					currentState === undefined
-						? "the ticket no longer exists"
-						: `the ticket is now ${currentState}`,
-				);
-				replaceTickets();
-				setWarningMessage(
-					currentState === undefined
-						? `queued handoff for "${next.ticket.title}" was not run: the ticket no longer exists`
-						: `queued handoff for "${next.ticket.title}" was not run: the ticket is now ${currentState}`,
-				);
-				// The route the claim was for never started: the caller decides
-				// nothing on the turn it came from.
-				next.onStarted?.({ ok: false, reason: "the queued handoff was not run" });
-				continue;
-			}
-			// The fresh projection when the ticket is visible, else the claim's
-			// snapshot: the handoff runs on the ticket it claimed.
-			const snapshot =
-				state
-					.visibleTickets(configRef.current.taskRules, configRef.current.defaultTaskType)
-					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
-			runClaimedHandoff(
-				snapshot,
-				next.choice,
-				next.origin,
-				next.claim,
-				next.previousMessage,
-				next.onStarted,
-			);
-		}
-	};
-	/**
-	 * The observation loop's handoff path: it decides, the app runs.
-	 *
-	 * The coordinator dispatches through a ref, so the loop never restarts
-	 * when a render recreates this function.
-	 */
-	// The intent is claimed now: the ticket moves out of its current state at
-	// once, so a second cycle cannot claim the same work. The external work
-	// runs immediately or behind the handoff already in flight.
-	const runIntent = (intent: HandoffIntent): Promise<DispatchResult> => {
-		if (state === undefined) return Promise.resolve({ ok: false, reason: "the state is not open" });
-		const currentConfig = configRef.current;
-		const all = state.visibleTickets(currentConfig.taskRules, currentConfig.defaultTaskType);
-		const ticket = all.find((candidate) => candidate.identity === intent.ticketIdentity);
-		if (ticket === undefined)
-			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
-		const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
-		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
-		runClaimedHandoff(
-			ticket,
-			intent.choice,
-			intent.origin,
-			claim.claim,
-			intent.previousMessage,
-			intent.onStarted,
-		);
-		return Promise.resolve({ ok: true });
-	};
-	const runIntentRef = useRef(runIntent);
-	runIntentRef.current = runIntent;
-	// The observation loop outlives the render that built it, so its Close
-	// cleanup runs through this ref: the coordinator never holds a stale seat.
-	const runCleanupRef = useRef(runCleanupWithSeat);
-	runCleanupRef.current = runCleanupWithSeat;
 	const startHandoff = (ticket: Ticket, choice: HandoffChoice) => {
 		const availability = availabilityFor(
 			controlById("handoff"),
@@ -1229,19 +839,23 @@ export function App({
 			);
 			return;
 		}
-		if (state !== undefined) {
-			const claim = state.claimHandoff(ticket.identity, choice, "open");
-			if (!claim.ok) {
-				setWarningMessage(claim.reason);
-				return;
-			}
-			runClaimedHandoff(ticket, choice, "open", claim.claim, "");
+		if (handoffDispatch !== undefined) {
+			void handoffDispatch
+				.dispatch({
+					origin: "open",
+					ticketIdentity: ticket.identity,
+					choice,
+					previousMessage: "",
+				})
+				.then((result) => {
+					if (!result.ok) setWarningMessage(result.reason);
+				});
 			return;
 		}
 		// The no-state test projection: no claim, and the settle patches the
 		// ticket list by hand instead of reading it back from SQLite. It has no
 		// queue, so it refuses to run behind a handoff already in flight.
-		inFlightRef.current = true;
+		noStateHandoffInFlightRef.current = true;
 		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
@@ -1269,11 +883,11 @@ export function App({
 					});
 				}
 				await finishOutcome(outcome);
-				inFlightRef.current = false;
+				noStateHandoffInFlightRef.current = false;
 			})
 			.catch((error) => {
 				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
-				inFlightRef.current = false;
+				noStateHandoffInFlightRef.current = false;
 			});
 	};
 	const openOverride = () => {
@@ -1504,37 +1118,35 @@ export function App({
 
 	/** Start a workflow handoff with a resolved or overridden choice. */
 	const runRouteHandoff = (ticket: Ticket, choice: HandoffChoice) => {
-		if (state === undefined) return;
+		if (handoffDispatch === undefined) return;
 		// Claim first: a refused claim leaves the ticket where it was. The
 		// turn's decision is not recorded here: it lands when the routed
 		// handoff starts, on the settled turn's trace, and a route that never
 		// started leaves the trace pending, so Close and Goto keep working.
-		const claim = state.claimHandoff(ticket.identity, choice, "workflow");
-		if (!claim.ok) {
-			setWarningMessage(claim.reason);
-			return;
-		}
 		const previousHandoffId = ticket.handoff?.attemptId ?? "";
-		runClaimedHandoff(
-			ticket,
-			choice,
-			"workflow",
-			claim.claim,
-			ticket.lastCompletion?.message ?? "",
-			// The routed handoff started: the operator's decision on the turn
-			// it routes from is `handed-off`, and the ticket reads as
-			// handed-off where the agent is.
-			(started) => {
-				if (!started.ok || previousHandoffId === "") return;
-				state.applyCompletionDecision({
-					ticketIdentity: ticket.identity,
-					handoffId: previousHandoffId,
-					decision: "handed-off",
-					decidedAt: new Date().toISOString(),
-				});
-				replaceTickets();
-			},
-		);
+		void handoffDispatch
+			.dispatch({
+				origin: "workflow",
+				ticketIdentity: ticket.identity,
+				choice,
+				previousMessage: ticket.lastCompletion?.message ?? "",
+				// The routed handoff started: the operator's decision on the turn
+				// it routes from is `handed-off`, and the ticket reads as
+				// handed-off where the agent is.
+				onStarted: (started) => {
+					if (!started.ok || previousHandoffId === "") return;
+					state?.applyCompletionDecision({
+						ticketIdentity: ticket.identity,
+						handoffId: previousHandoffId,
+						decision: "handed-off",
+						decidedAt: new Date().toISOString(),
+					});
+					replaceTickets();
+				},
+			})
+			.then((result) => {
+				if (!result.ok) setWarningMessage(result.reason);
+			});
 	};
 
 	/**
@@ -1543,7 +1155,7 @@ export function App({
 	 * the target Task profile, and the config defaults.
 	 */
 	const openRouteOverride = (ticket: Ticket, key: string) => {
-		if (inFlightRef.current) {
+		if ((handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current) === true) {
 			setWarningMessage("handoff in flight");
 			return;
 		}
@@ -1754,12 +1366,17 @@ export function App({
 						stored.thinking,
 						stored.contextWindow,
 					);
-		const claim = state.claimHandoff(ticket.identity, choice, "restart");
-		if (!claim.ok) {
-			setWarningMessage(claim.reason);
-			return;
-		}
-		runClaimedHandoff(ticket, choice, "restart", claim.claim, ticket.lastCompletion?.message ?? "");
+		if (handoffDispatch === undefined) return;
+		void handoffDispatch
+			.dispatch({
+				origin: "restart",
+				ticketIdentity: ticket.identity,
+				choice,
+				previousMessage: ticket.lastCompletion?.message ?? "",
+			})
+			.then((result) => {
+				if (!result.ok) setWarningMessage(result.reason);
+			});
 	};
 	const currentBaseMode = (): InteractionMode =>
 		focusedPane === "list" ? "ticket-list" : "ticket-detail";
@@ -1772,7 +1389,7 @@ export function App({
 			refreshingSourceCount: sources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
 			).length,
-			handoffActive: inFlightRef.current,
+			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
 			messageTruncated,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 		});
@@ -2232,24 +1849,28 @@ export function App({
 	// projection has no agents to observe, and a deterministic frame test
 	// must not race a poll.
 	useEffect(() => {
-		if (state === undefined || initialTickets !== undefined) return;
+		const dispatch = handoffDispatch;
+		if (state === undefined || dispatch === undefined || initialTickets !== undefined) return;
 		const coordinator = new ObservationCoordinator({
 			state,
 			herdr: new HerdrAgentReader(commandRunner),
 			config: () => configRef.current,
-			dispatch: (intent) => runIntentRef.current(intent),
+			dispatch: (intent) => dispatch.dispatch(intent),
 			// The Close cleanup of an auto-ended cycle: the environment of the
 			// handoff the decision ends. A cleanup that cannot remove the
 			// checkout leaves a leftover the ticket carries as a fact, so the
 			// operator sees it and has one action to end it (ADR 0012).
-			cleanup: (handoff) =>
-				runCleanupRef.current(state, {
-					ticketIdentity: handoff.ticketIdentity,
-					handoffId: handoff.handoffAttemptId,
-					environment: handoff.environment,
-					tabId: handoff.tabId,
-					workspaceId: handoff.workspaceId,
-				}),
+			cleanup: (handoff, end) =>
+				dispatch.closeCleanup(
+					handoff.ticketIdentity,
+					{
+						handoffId: handoff.handoffAttemptId,
+						environment: handoff.environment,
+						tabId: handoff.tabId,
+						workspaceId: handoff.workspaceId,
+					},
+					end,
+				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
@@ -2295,6 +1916,7 @@ export function App({
 		};
 	}, [
 		state,
+		handoffDispatch,
 		initialTickets,
 		pollIntervalMs,
 		replaceTickets,
@@ -2976,127 +2598,4 @@ export function App({
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(value, max));
-}
-
-/**
- * The states a handoff origin may still start from when its turn comes.
- *
- * The claim passes in the claim's state, and the queue waits on the seat.
- * If the ticket moved on while it waited, its state no longer matches the
- * origin, and the claim settles as failed instead of starting the handoff.
- */
-function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean {
-	switch (origin) {
-		case "open":
-			return state === "open";
-		case "workflow":
-			return state === "awaiting";
-		case "restart":
-			return state === "handed-off" || state === "running";
-	}
-}
-
-/**
- * The handle a clear would end that the ticket's own live agent runs on.
- *
- * A cleanup reaches the environment its row names: a worktree removal closes a
- * whole workspace with every agent in it, and a tab close ends the tab and the
- * panes inside it. So a worktree leftover is refused when it names the live
- * agent's workspace, and any leftover is refused when it names the live
- * agent's own tab or pane - the shape a reclaimed agent leaves behind, where
- * the closed handoff and the running one name the same handles (ADR 0011).
- * The answer carries the word the operator uses for what was refused.
- */
-function liveHandleAtRisk(
-	leftovers: readonly LeftoverEnvironment[],
-	live: { paneId: string | null; tabId: string | null; workspaceId: string | null },
-): { text: string; what: string } | null {
-	for (const leftover of leftovers) {
-		if (
-			leftover.environment === "worktree" &&
-			live.workspaceId !== null &&
-			leftover.workspaceId === live.workspaceId
-		)
-			return { text: `herdr workspace ${live.workspaceId}`, what: "workspace" };
-		if (live.tabId !== null && leftover.tabId === live.tabId)
-			return { text: `herdr tab ${live.tabId}`, what: "tab" };
-		if (live.paneId !== null && leftover.paneId === live.paneId)
-			return { text: `herdr pane ${live.paneId}`, what: "pane" };
-	}
-	return null;
-}
-
-/**
- * The Close cleanup of one handoff, with its durable outcome.
- *
- * A cleanup that fails leaves the herdr environment alive: the workspace, its
- * pane, and the agent in it. That is a fact on the ticket, not only a message
- * line that fades. A cleanup that succeeds clears the leftovers it reached:
- * the whole workspace it closed, the single tab it closed, or - when it ran no
- * command at all - only the fact of its own handoff (ADR 0012).
- *
- * Every path that runs the cleanup goes through here: the operator's Close, an
- * Abandon, the automatic close in the observation loop, and the clear action's
- * retry, so the record and the clear cannot drift apart. `force` reaches herdr
- * only when the operator chose that row.
- *
- * Returns herdr's readable failure, or undefined when the environment is gone.
- * A cleanup that could not run at all is a failure to record too, so a caller
- * that only reports the answer never has to guard a throw of its own.
- */
-async function settleCloseCleanup(
-	state: FactoryState,
-	runner: CommandRunner,
-	handoff: {
-		ticketIdentity: string;
-		handoffId: string;
-		environment: EnvironmentKind;
-		tabId: string | null;
-		workspaceId: string | null;
-	},
-	options: CloseCleanupOptions = {},
-): Promise<string | undefined> {
-	try {
-		const failure = await closeHandoffEnvironment(
-			{
-				environment: handoff.environment,
-				tabId: handoff.tabId,
-				workspaceId: handoff.workspaceId,
-			},
-			runner,
-			{ ...options, controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID },
-		);
-		if (failure === undefined) {
-			// The cleanup reached as far as herdr let it: the whole workspace it
-			// closed, the one tab it closed, or nothing at all. Facts outside
-			// that reach stand, so a row whose cleanup ran no command cannot
-			// resolve the fact of another row whose environment is still alive.
-			const reach = closeCleanupReach(handoff);
-			state.clearLeftoverEnvironments(
-				handoff.ticketIdentity,
-				reach.scope === "workspace"
-					? { workspaceId: reach.workspaceId }
-					: reach.scope === "tab"
-						? { tabId: reach.tabId }
-						: { handoffId: handoff.handoffId },
-			);
-			return undefined;
-		}
-		state.recordLeftoverEnvironment({
-			ticketIdentity: handoff.ticketIdentity,
-			handoffId: handoff.handoffId,
-			reason: failure,
-		});
-		return failure;
-	} catch (error) {
-		// The cleanup never reached an answer: the environment still stands,
-		// and the ticket still carries the fact of it.
-		const reason = `the close cleanup did not run: ${errorMessage(error)}`;
-		state.recordLeftoverEnvironment({
-			ticketIdentity: handoff.ticketIdentity,
-			handoffId: handoff.handoffId,
-			reason,
-		});
-		return reason;
-	}
 }
