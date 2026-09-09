@@ -709,7 +709,7 @@ export function App({
 		end: "closed" | "abandoned",
 	) => {
 		if (handoffDispatch === undefined) return;
-		void handoffDispatch.closeCleanup(identity, handoff).then(
+		void handoffDispatch.closeCleanup(identity, handoff, end).then(
 			(failure) => {
 				if (failure !== undefined)
 					setErrorMessage(`ticket ${identity} ${end}; the close cleanup failed: ${failure}`);
@@ -722,37 +722,19 @@ export function App({
 		);
 	};
 	/**
-	 * Report the one answer the dispatch module does not word itself.
-	 *
-	 * The Clear action is the operator's own choice of Retry or Force, so its
-	 * refusal, its success, and the environments herdr kept alive all read as
-	 * the action that started them.
+	 * Start the Clear action. The dispatch module owns its durable work and
+	 * Message-line reports; this caller only handles an unexpected rejection.
 	 */
 	const clearLeftover = (ticket: Ticket, force: boolean) => {
 		if (handoffDispatch === undefined) {
 			setWarningMessage("no factory state is open, so a leftover environment cannot be cleared");
 			return;
 		}
-		void handoffDispatch.clearLeftover(ticket.identity, force).then(
-			(answer) => {
-				// The module re-reads the projection itself: it owns the durable
-				// facts the action changed, and this caller only says what the
-				// operator asked for.
-				if (answer.status === "refused") {
-					setWarningMessage(answer.reason);
-					return;
-				}
-				if (answer.failures.length === 0)
-					setWarningMessage(`cleared the leftover environment of ticket ${ticket.identity}`);
-				else
-					setErrorMessage(
-						`ticket ${ticket.identity} still holds a leftover environment: ${answer.failures.join("; ")}`,
-					);
-			},
-			(error) => {
-				setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
-			},
-		);
+		// The module reports guards and cleanup failures on the same Message line
+		// channel as the handoff. The catch is only for an unexpected module error.
+		void handoffDispatch.clearLeftover(ticket.identity, force).catch((error) => {
+			setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
+		});
 	};
 	/**
 	 * Report the outcome of the handoffs that stayed in the App: the no-state test
@@ -1878,13 +1860,17 @@ export function App({
 			// handoff the decision ends. A cleanup that cannot remove the
 			// checkout leaves a leftover the ticket carries as a fact, so the
 			// operator sees it and has one action to end it (ADR 0012).
-			cleanup: (handoff) =>
-				dispatch.closeCleanup(handoff.ticketIdentity, {
-					handoffId: handoff.handoffAttemptId,
-					environment: handoff.environment,
-					tabId: handoff.tabId,
-					workspaceId: handoff.workspaceId,
-				}),
+			cleanup: (handoff, end) =>
+				dispatch.closeCleanup(
+					handoff.ticketIdentity,
+					{
+						handoffId: handoff.handoffAttemptId,
+						environment: handoff.environment,
+						tabId: handoff.tabId,
+						workspaceId: handoff.workspaceId,
+					},
+					end,
+				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,

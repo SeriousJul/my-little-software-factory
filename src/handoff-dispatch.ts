@@ -24,6 +24,15 @@ import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type { FactoryState, HandoffClaim, HandoffOrigin } from "./state.ts";
 
+/** A renderer callback must not strand a durable claim or the dispatch seat. */
+function safeReport(report: () => void): void {
+	try {
+		report();
+	} catch {
+		// Reporting is best effort. The durable operation still needs to settle.
+	}
+}
+
 /** The stored handles of the handoff whose environment a cleanup ends. */
 export interface StoredHandoffFacts {
 	handoffId: string;
@@ -55,19 +64,6 @@ export interface HandoffIntent {
  * actually started arrives later, on the intent's `onStarted`.
  */
 export type DispatchResult = { ok: true } | { ok: false; reason: string };
-
-/**
- * What the Clear action answers with.
- *
- * The module keeps one reporting channel for the Clear action: it changes the
- * durable facts and hands the answer back, and the operator's own Retry or
- * Force words the Message line. `refused` is a guard that stopped the action
- * before it reached herdr; `ran` carries what herdr kept alive, empty when
- * every leftover of the ticket went away.
- */
-export type ClearLeftoverResult =
-	| { status: "refused"; reason: string }
-	| { status: "ran"; failures: readonly string[] };
 
 /**
  * The Message and projection callbacks the module may call.
@@ -154,21 +150,20 @@ export interface HandoffDispatch {
 	dispatch(intent: HandoffIntent): Promise<DispatchResult>;
 	/**
 	 * The Close cleanup of one ended cycle. Returns the failure reason, or
-	 * undefined. The caller owns the wording: the operator's Close, an
-	 * Abandon, and the automatic close each report the same fact in their own
-	 * words.
+	 * undefined. `end` stays on the seam so manual and observation callers share
+	 * the same operation shape; the caller owns the wording of the answer.
 	 */
-	closeCleanup(identity: string, handoff: StoredHandoffFacts): Promise<string | undefined>;
+	closeCleanup(
+		identity: string,
+		handoff: StoredHandoffFacts,
+		end: "closed" | "abandoned",
+	): Promise<string | undefined>;
 	/**
-	 * The Clear action, in one queue item.
-	 *
-	 * The guards answer as they refuse: a Handoff in flight, a clear already in
-	 * flight, a ticket that holds no leftover, and a leftover that names a
-	 * handle the ticket's own live agent runs on. `force` reaches herdr only
-	 * through the operator's explicit choice. The answer is the caller's to
-	 * report, and the caller's to word: the module writes no Message line here.
+	 * The Clear action, in one queue item. The returned list contains the
+	 * environments herdr could not remove. Guard refusals are reported as
+	 * warnings by the module and return an empty list because no cleanup ran.
 	 */
-	clearLeftover(identity: string, force: boolean): Promise<ClearLeftoverResult>;
+	clearLeftover(identity: string, force: boolean): Promise<readonly string[]>;
 	/** True while a Handoff holds the seat. The catalogue fact and the route edit guard. */
 	handoffActive(): boolean;
 }
@@ -205,11 +200,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId;
 		this.persistMapping = options.persistMapping;
 		this.reports = {
-			working: options.working,
-			warning: options.warning,
-			error: options.error,
-			clearWorking: options.clearWorking,
-			refresh: options.refresh,
+			working: (text) => safeReport(() => options.working(text)),
+			warning: (text) => safeReport(() => options.warning(text)),
+			error: (text) => safeReport(() => options.error(text)),
+			clearWorking: () => safeReport(options.clearWorking),
+			refresh: () => safeReport(options.refresh),
 		};
 	}
 
@@ -238,7 +233,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		return Promise.resolve({ ok: true });
 	}
 
-	closeCleanup(identity: string, handoff: StoredHandoffFacts): Promise<string | undefined> {
+	closeCleanup(
+		identity: string,
+		handoff: StoredHandoffFacts,
+		_end: "closed" | "abandoned",
+	): Promise<string | undefined> {
 		return this.queueCleanup(async () => {
 			const failure = await this.settleCloseCleanup(identity, handoff);
 			this.reports.refresh();
@@ -246,7 +245,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		});
 	}
 
-	clearLeftover(identity: string, force: boolean): Promise<ClearLeftoverResult> {
+	clearLeftover(identity: string, force: boolean): Promise<readonly string[]> {
 		if (this.inFlight)
 			return Promise.resolve(
 				this.refuseClear(
@@ -301,13 +300,27 @@ class HandoffDispatchModule implements HandoffDispatch {
 			}
 			return failures;
 		})
-			.then((failures): ClearLeftoverResult => ({ status: "ran", failures }))
+			.then((failures) => {
+				if (failures.length === 0)
+					this.reports.warning(`cleared the leftover environment of ticket ${identity}`);
+				else
+					this.reports.error(
+						`ticket ${identity} still holds a leftover environment: ${failures.join("; ")}`,
+					);
+				return failures;
+			})
+			.catch((error): readonly string[] => {
+				const reason = errorMessage(error);
+				this.reports.error(`clearing the leftover environment failed: ${reason}`);
+				return [reason];
+			})
 			.finally(() => this.reports.refresh());
 	}
 
-	/** One guard that stopped the Clear action before it reached herdr. */
-	private refuseClear(reason: string): ClearLeftoverResult {
-		return { status: "refused", reason };
+	/** Report one guard that stopped the Clear action before it reached herdr. */
+	private refuseClear(reason: string): readonly string[] {
+		this.reports.warning(reason);
+		return [];
 	}
 
 	/** True when either a handoff or a queued environment change owns the seat. */
@@ -345,7 +358,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const reportStarted = (started: DispatchResult): void => {
 			if (reported) return;
 			reported = true;
-			onStarted?.(started);
+			if (onStarted !== undefined) safeReport(() => onStarted(started));
 		};
 
 		if (this.seatHeld()) {

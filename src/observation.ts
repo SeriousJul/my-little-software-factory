@@ -305,9 +305,10 @@ interface ObservationOptions {
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	/**
 	 * The Close cleanup of an auto-ended cycle: the worktree workspace is
-	 * removed or the live tab is closed. Returns a failure reason.
+	 * removed or the live tab is closed. Returns a failure reason. The end
+	 * tells the dispatch seam which completion path closed the cycle.
 	 */
-	cleanup: (handoff: HandoffTicket) => Promise<string | undefined>;
+	cleanup: (handoff: HandoffTicket, end: "closed" | "abandoned") => Promise<string | undefined>;
 	now: () => number;
 	/** The auto-handoff mode, read at the start of each cycle. */
 	mode: () => boolean;
@@ -350,7 +351,10 @@ export class ObservationCoordinator {
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
-	private readonly cleanup: (handoff: HandoffTicket) => Promise<string | undefined>;
+	private readonly cleanup: (
+		handoff: HandoffTicket,
+		end: "closed" | "abandoned",
+	) => Promise<string | undefined>;
 	private readonly now: () => number;
 	private readonly mode: () => boolean;
 	private readonly intervalMs: number;
@@ -815,7 +819,7 @@ export class ObservationCoordinator {
 			});
 			this.restarted.delete(ticket.ticketIdentity);
 			if (!applied) return false;
-			const failure = await this.cleanup(ticket);
+			const failure = await this.cleanup(ticket, "abandoned");
 			if (this.stopped) return true;
 			this.onStatus(
 				failure === undefined ? "warning" : "error",
@@ -889,7 +893,7 @@ export class ObservationCoordinator {
 				decidedAt,
 			});
 			if (!applied) return false;
-			const failure = await this.cleanup(ticket);
+			const failure = await this.cleanup(ticket, "closed");
 			if (this.stopped) return true;
 			this.onStatus(
 				failure === undefined ? "info" : "error",

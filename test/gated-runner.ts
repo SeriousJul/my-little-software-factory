@@ -23,6 +23,8 @@ export interface GatedRunner {
 	arrivals: () => number;
 	/** The commands that passed the gate, in arrival order. */
 	heldCommands: () => string[];
+	/** Resolve when at least `count` commands have reached the gate. */
+	waitForArrivals: (count: number) => Promise<void>;
 }
 
 /** Gate every command `matches` until the test releases it. */
@@ -32,13 +34,24 @@ export function gatedRunner(
 ): GatedRunner {
 	const waiting: (() => void)[] = [];
 	const held: string[] = [];
+	const arrivalWaiters: Array<{ count: number; resolve: () => void }> = [];
 	let busyCount = 0;
+	const notifyArrivals = () => {
+		for (let index = arrivalWaiters.length - 1; index >= 0; index -= 1) {
+			const waiter = arrivalWaiters[index];
+			if (waiter !== undefined && held.length >= waiter.count) {
+				arrivalWaiters.splice(index, 1);
+				waiter.resolve();
+			}
+		}
+	};
 	return {
 		runner: {
 			run: async (command, args, options) => {
 				const name = [command, ...args].join(" ").trim();
 				if (matches(name)) {
 					held.push(name);
+					notifyArrivals();
 					busyCount += 1;
 					await new Promise<void>((resolve) => waiting.push(resolve));
 					busyCount -= 1;
@@ -51,5 +64,9 @@ export function gatedRunner(
 		busy: () => busyCount > 0,
 		arrivals: () => held.length,
 		heldCommands: () => [...held],
+		waitForArrivals: (count) =>
+			held.length >= count
+				? Promise.resolve()
+				: new Promise<void>((resolve) => arrivalWaiters.push({ count, resolve })),
 	};
 }

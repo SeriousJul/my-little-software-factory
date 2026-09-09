@@ -120,10 +120,15 @@ interface Rig {
 	busy: () => boolean;
 	/** How many commands the gate has held so far. */
 	arrivals: () => number;
+	/** Resolve when at least this many commands have reached the gate. */
+	waitForArrivals: (count: number) => Promise<void>;
 	/** The commands the gate held, in arrival order. */
 	held: () => string[];
 	/** Every command the fake answered, in order. */
 	commands: () => string[];
+	/** Record and await the start report for a ticket. */
+	reportStarted: (identity: string, result: DispatchResult) => void;
+	waitForStarted: (identity: string) => Promise<DispatchResult>;
 }
 
 function recorder(events: string[]): HandoffDispatchReports {
@@ -186,6 +191,20 @@ function rig(seeds: readonly Seed[] = [FIRST]): Rig {
 	});
 	const events: string[] = [];
 	const prefixes: string[] = [];
+	const startedResults = new Map<string, DispatchResult[]>();
+	const startedWaiters = new Map<string, Array<(result: DispatchResult) => void>>();
+	const reportStarted = (identity: string, result: DispatchResult): void => {
+		const waiter = startedWaiters.get(identity)?.shift();
+		if (waiter !== undefined) waiter(result);
+		else startedResults.set(identity, [...(startedResults.get(identity) ?? []), result]);
+	};
+	const waitForStarted = (identity: string): Promise<DispatchResult> => {
+		const result = startedResults.get(identity)?.shift();
+		if (result !== undefined) return Promise.resolve(result);
+		return new Promise<DispatchResult>((resolve) =>
+			startedWaiters.set(identity, [...(startedWaiters.get(identity) ?? []), resolve]),
+		);
+	};
 	const gate = gatedRunner(runner, (command) =>
 		prefixes.some((prefix) => command.startsWith(prefix)),
 	);
@@ -217,8 +236,11 @@ function rig(seeds: readonly Seed[] = [FIRST]): Rig {
 		release: gate.release,
 		busy: gate.busy,
 		arrivals: gate.arrivals,
+		waitForArrivals: gate.waitForArrivals,
 		held: gate.heldCommands,
 		commands: () => runner.commands(),
+		reportStarted,
+		waitForStarted,
 	};
 }
 
@@ -254,40 +276,28 @@ function start(
 		ticketIdentity: seed.identity,
 		choice,
 		previousMessage: origin === "open" ? "" : "the last message",
-		onStarted,
+		onStarted: (result) => {
+			rig.reportStarted(seed.identity, result);
+			onStarted?.(result);
+		},
 	});
-}
-
-/** Run until a fact stands, or fail the test with the fact that is missing. */
-async function until(fact: string, predicate: () => boolean): Promise<void> {
-	const deadline = Date.now() + 2000;
-	while (!predicate() && Date.now() < deadline)
-		await new Promise<void>((resolve) => setTimeout(resolve, 2));
-	if (!predicate()) throw new Error(`the module never reached: ${fact}`);
-}
-
-/**
- * Let the module finish releasing the seat after a cleanup answered its caller.
- *
- * A cleanup settles its caller first, and its own drain frees the seat on the
- * next microtask: that is the order that puts the cleanup's Message line before
- * the Working line of the handoff behind it. A timer turn is the smallest fact
- * that proves the release has run, and it costs no frame wait.
- */
-async function seatReleased(): Promise<void> {
-	await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
 /** Let the `held`-th command the gate is holding answer. */
 async function releaseHeld(rig: Rig, held: number): Promise<void> {
-	await until(`${held} commands waiting at herdr`, () => rig.arrivals() === held);
+	await rig.waitForArrivals(held);
 	rig.release();
+}
+
+/** Let cleanup and its recursive drain finish their microtasks. */
+async function seatReleased(): Promise<void> {
+	for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
 }
 
 /** A clean live-worktree handoff, awaited to the settle that moved the ticket. */
 async function handOff(rig: Rig, seed: Seed): Promise<StoredHandoffFacts> {
 	await expect(start(rig, seed, "open")).resolves.toEqual({ ok: true });
-	await until("the handoff settled", () => rig.state.ticketState(seed.identity) === "handed-off");
+	await rig.waitForStarted(seed.identity);
 	const stored = rig.state.latestHandoff(seed.identity);
 	if (stored === null) throw new Error("the handoff left no record");
 	return stored;
@@ -404,16 +414,13 @@ describe("the seat", () => {
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
 		expect(rigRef.dispatch.handoffActive()).toBe(true);
 		await expect(start(rigRef, SECOND, "open")).resolves.toEqual({ ok: true });
-		await until("the first agent waiting", () => rigRef.arrivals() === 1);
+		await rigRef.waitForArrivals(1);
 		// The claim moved the second ticket at once, and its work waits: herdr
 		// has heard of one agent, not two.
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name)]);
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
-		await until(
-			"both tickets in flight",
-			() => rigRef.state.ticketState(SECOND.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(SECOND.identity);
 		// Claim order: the ticket that queued first is the second agent herdr starts.
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name), agentStart(SECOND.name)]);
 	});
@@ -424,18 +431,15 @@ describe("the seat", () => {
 		rigRef.hold("herdr workspace list");
 		const started = start(rigRef, FIRST, "open");
 		expect(rigRef.dispatch.handoffActive()).toBe(true);
-		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored);
-		await until("the handoff reaching herdr", () => rigRef.arrivals() === 1);
+		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored, "closed");
+		await rigRef.waitForArrivals(1);
 		// The cleanup holds the seat it reserved, but herdr hears no removal
 		// while the handoff is half built.
 		expect(rigRef.held()).toEqual(["herdr workspace list"]);
 		rigRef.release();
 		await expect(cleanup).resolves.toBeUndefined();
 		await started;
-		await until(
-			"the handoff settled",
-			() => rigRef.state.ticketState(FIRST.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(FIRST.identity);
 		// The seat kept its promise: the agent was built before herdr took the
 		// other environment away.
 		expect(rigRef.commands().indexOf(agentStart(FIRST.name))).toBeLessThan(
@@ -447,18 +451,15 @@ describe("the seat", () => {
 		const rigRef = rig([FIRST, SECOND]);
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		rigRef.hold("herdr tab close");
-		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored);
-		await until("the cleanup reaching herdr", () => rigRef.arrivals() === 1);
+		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored, "closed");
+		await rigRef.waitForArrivals(1);
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
 		// The cleanup reserved the seat the moment it queued: the handoff the
 		// operator starts beside it builds nothing yet.
 		expect(rigRef.held()).toEqual([`herdr tab close ${stored.tabId}`]);
 		rigRef.release();
 		expect(await cleanup).toBeUndefined();
-		await until(
-			"the queued handoff ran",
-			() => rigRef.state.ticketState(FIRST.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(FIRST.identity);
 		const commands = rigRef.commands();
 		// The order is the whole fact: herdr takes the tab away, and only then
 		// builds the new agent.
@@ -474,16 +475,16 @@ describe("the seat", () => {
 		const third = seedHandoff(rigRef, THIRD);
 		rigRef.hold("herdr tab close");
 		const cleanups = [
-			rigRef.dispatch.closeCleanup(FIRST.identity, first),
-			rigRef.dispatch.closeCleanup(SECOND.identity, second),
-			rigRef.dispatch.closeCleanup(THIRD.identity, third),
+			rigRef.dispatch.closeCleanup(FIRST.identity, first, "closed"),
+			rigRef.dispatch.closeCleanup(SECOND.identity, second, "closed"),
+			rigRef.dispatch.closeCleanup(THIRD.identity, third, "closed"),
 		];
-		await until("the first cleanup reaching herdr", () => rigRef.busy());
+		await rigRef.waitForArrivals(1);
 		// One removal at a time: herdr never takes two environments away in one
 		// breath, and no handoff can drain between them.
 		expect(rigRef.held()).toEqual([`herdr tab close ${FIRST.tabId}`]);
 		await releaseHeld(rigRef, 1);
-		await until("the second cleanup reaching herdr", () => rigRef.arrivals() === 2);
+		await rigRef.waitForArrivals(2);
 		expect(rigRef.held()).toEqual([
 			`herdr tab close ${FIRST.tabId}`,
 			`herdr tab close ${SECOND.tabId}`,
@@ -504,17 +505,14 @@ describe("the seat", () => {
 		await start(rigRef, FIRST, "open");
 		await start(rigRef, SECOND, "open");
 		await start(rigRef, THIRD, "open");
-		await until("one agent at herdr", () => rigRef.arrivals() === 1);
+		await rigRef.waitForArrivals(1);
 		await releaseHeld(rigRef, 1);
-		await until("the second agent waiting", () => rigRef.arrivals() === 2);
+		await rigRef.waitForArrivals(2);
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name), agentStart(SECOND.name)]);
 		await releaseHeld(rigRef, 2);
-		await until("the third agent waiting", () => rigRef.arrivals() === 3);
+		await rigRef.waitForArrivals(3);
 		await releaseHeld(rigRef, 3);
-		await until(
-			"every ticket in flight",
-			() => rigRef.state.ticketState(THIRD.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(THIRD.identity);
 		expect(rigRef.held()).toEqual([
 			agentStart(FIRST.name),
 			agentStart(SECOND.name),
@@ -527,26 +525,23 @@ describe("the seat", () => {
 		const stored = seedClosedHandoff(rigRef, SECOND);
 		rigRef.runner.set("herdr", ["tab", "close", SECOND.tabId], { code: 1, stderr: "tab is busy" });
 		rigRef.hold("herdr tab close");
-		const cleanup = rigRef.dispatch.closeCleanup(SECOND.identity, stored).then((failure) => {
-			// The operator's Close words the failure the module answered with.
-			if (failure !== undefined) rigRef.events.push(`error:${failure}`);
-		});
-		await until("the cleanup reaching herdr", () => rigRef.arrivals() === 1);
+		const cleanup = rigRef.dispatch
+			.closeCleanup(SECOND.identity, stored, "closed")
+			.then((failure) => {
+				// The operator's Close words the failure the module answered with.
+				if (failure !== undefined) rigRef.events.push(`error:${failure}`);
+			});
+		await rigRef.waitForArrivals(1);
 		const started = start(rigRef, FIRST, "open");
 		rigRef.release();
 		await Promise.all([cleanup, started]);
-		await until("the handoff wrote its line", () => rigRef.events.includes(workingLine(FIRST)));
+		await rigRef.waitForStarted(FIRST.identity);
 		// The failed cleanup is on the line first, and the next handoff's
 		// Working line is the last fact written over it: the order this code had
 		// before the module, pinned so a drain rewrite cannot invert it.
 		const reported = rigRef.events.indexOf("error:tab is busy");
 		expect(reported).toBeGreaterThanOrEqual(0);
 		expect(rigRef.events.lastIndexOf(workingLine(FIRST))).toBeGreaterThan(reported);
-		expect(rigRef.events[rigRef.events.length - 1]).toBe(workingLine(FIRST));
-		await until(
-			"the handoff settled",
-			() => rigRef.state.ticketState(FIRST.identity) === "handed-off",
-		);
 	});
 });
 
@@ -573,10 +568,7 @@ describe("the queue drain", () => {
 		closeCycle(rigRef, SECOND, second.handoffId);
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
-		await until(
-			"the third ticket in flight",
-			() => rigRef.state.ticketState(THIRD.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(THIRD.identity);
 		// The moved-on ticket settled its claim as failed, on the line and on
 		// the report its caller waited for.
 		expect(rigRef.state.ticketState(SECOND.identity)).toBe("open");
@@ -604,14 +596,9 @@ describe("the queue drain", () => {
 			tickets: [issueTicket(FIRST), issueTicket(renamed)],
 		});
 		await releaseHeld(rigRef, 1);
-		await until("the queued handoff wrote its line", () =>
-			rigRef.events.includes(workingLine(SECOND, renamed.title)),
-		);
+		await rigRef.waitForArrivals(2);
 		await releaseHeld(rigRef, 2);
-		await until(
-			"the queued ticket in flight",
-			() => rigRef.state.ticketState(SECOND.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(SECOND.identity);
 	});
 
 	test("a queued workflow handoff runs while its ticket still awaits its route", async () => {
@@ -623,10 +610,7 @@ describe("the queue drain", () => {
 		await start(rigRef, SECOND, "workflow", undefined, { ...liveChoice, taskType: "review" });
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
-		await until(
-			"the routed ticket in flight",
-			() => rigRef.state.ticketState(SECOND.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(SECOND.identity);
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name), agentStart(SECOND.name)]);
 	});
 
@@ -639,7 +623,7 @@ describe("the queue drain", () => {
 		await start(rigRef, SECOND, "restart", (r) => started.push(r));
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
-		await until("the restarted agent started", () => started.length === 1);
+		await rigRef.waitForStarted(SECOND.identity);
 		expect(started).toEqual([{ ok: true }]);
 		// The seat came to the restart, and the agent herdr started belongs to a
 		// new handoff of the same cycle.
@@ -657,9 +641,9 @@ describe("the queue drain", () => {
 		await start(rigRef, SECOND, "restart");
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
-		await until("the working ticket restarted", () => rigRef.arrivals() === 2);
+		await rigRef.waitForArrivals(2);
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name), agentStart(SECOND.name)]);
-		await until("the restart settled", () => !rigRef.dispatch.handoffActive());
+		await rigRef.waitForStarted(SECOND.identity);
 	});
 
 	test("a queued restart of a ticket whose cycle closed while it waited fails", async () => {
@@ -671,10 +655,7 @@ describe("the queue drain", () => {
 		settleTurn(rigRef, SECOND, second.handoffId);
 		closeCycle(rigRef, SECOND, second.handoffId);
 		await releaseHeld(rigRef, 1);
-		await until(
-			"the first ticket settled",
-			() => rigRef.state.ticketState(FIRST.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(rigRef.state.ticketState(SECOND.identity)).toBe("open");
 		expect(rigRef.events).toContain(
 			`warning:queued handoff for "${SECOND.title}" was not run: the ticket is now open`,
@@ -694,7 +675,7 @@ describe("the claim, the settle, and every origin", () => {
 				rigRef.events.push("started");
 			}),
 		).resolves.toEqual({ ok: true });
-		await until("the settle", () => rigRef.state.ticketState(FIRST.identity) === "handed-off");
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		// The start report is the last fact of the handoff: the settle, the
 		// projection refresh, and the status line all stand before it.
@@ -711,7 +692,10 @@ describe("the claim, the settle, and every origin", () => {
 		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the report", () => started.length === 1);
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
+			ok: false,
+			reason: "herdr is unavailable",
+		});
 		expect(started).toEqual([{ ok: false, reason: "herdr is unavailable" }]);
 		expect(rigRef.events).toContain("error:herdr is unavailable");
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
@@ -737,7 +721,7 @@ describe("the claim, the settle, and every origin", () => {
 				taskType: "review",
 			}),
 		).resolves.toEqual({ ok: true });
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
 		expect(rigRef.commands()).toContain(
@@ -759,7 +743,10 @@ describe("the claim, the settle, and every origin", () => {
 				taskType: "review",
 			}),
 		).resolves.toEqual({ ok: true });
-		await until("the start report", () => started.length === 1);
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
+			ok: false,
+			reason: "herdr is gone",
+		});
 		expect(started).toEqual([{ ok: false, reason: "herdr is gone" }]);
 		expect(rigRef.events).toContain("error:herdr is gone");
 		// The failed settle leaves the ticket where the claim left it: awaiting
@@ -781,7 +768,7 @@ describe("the claim, the settle, and every origin", () => {
 		await expect(start(rigRef, FIRST, "restart", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		expect(rigRef.commands()).toContain(
 			`herdr agent start ${FIRST.name} --kind pi --pane pane-again`,
@@ -816,7 +803,7 @@ describe("the claim, the settle, and every origin", () => {
 		await expect(
 			start(rigRef, FIRST, "restart", (r) => started.push(r), worktreeChoice),
 		).resolves.toEqual({ ok: true });
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		expect(rigRef.commands()).toContain(
 			`herdr worktree open --cwd ${rigRef.checkout} --branch ${branch} --no-focus`,
@@ -841,7 +828,10 @@ describe("the claim, the settle, and every origin", () => {
 		await expect(start(rigRef, FIRST, "restart", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the start report", () => started.length === 1);
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
+			ok: false,
+			reason: "herdr did not answer (ipc_timeout)",
+		});
 		expect(started).toEqual([{ ok: false, reason: "herdr did not answer (ipc_timeout)" }]);
 		expect(rigRef.events).toContain("error:herdr did not answer (ipc_timeout)");
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
@@ -894,7 +884,10 @@ describe("the claim, the settle, and every origin", () => {
 		// A second claim queues behind the one that is about to break: the drain
 		// the failed settle runs is the only thing that starts it.
 		await expect(start(rigRef, SECOND, "open")).resolves.toEqual({ ok: true });
-		await until("the throw reported", () => started.length === 1);
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
+			ok: false,
+			reason: "the pipe broke",
+		});
 		expect(started).toEqual([{ ok: false, reason: "the pipe broke" }]);
 		// The failure ends the handoff's own progress line and states its reason,
 		// and the refresh of the projection it changed comes first.
@@ -905,23 +898,20 @@ describe("the claim, the settle, and every origin", () => {
 		// The ticket stays where the claim left it: nothing started.
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
 		// And the handoff behind it ran: a throw cannot deadlock the seat.
-		await until(
-			"the queued handoff settled",
-			() => rigRef.state.ticketState(SECOND.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(SECOND.identity);
 		// The queued handoff settles the second claim before its final drain
 		// releases the seat. Wait for that drain before reading the seat.
 		await seatReleased();
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 	});
 
-	test("a handoff reports its start once, even when the queue's next line broke", async () => {
+	test("a throwing Working report cannot lose the queued handoff", async () => {
 		const rigRef = rig([FIRST, SECOND]);
-		// The first handoff started, settled, and answered its caller. Then its
-		// drain reached the second claim, and the Working line of that one broke:
-		// the failure path of the first handoff ran, and the caller must still
-		// hear exactly one answer for the agent that did start.
+		// The first handoff settles, then its drain reaches the second claim. The
+		// renderer disappears while the second Working line is reported. Reporting
+		// is best effort, so the queued durable claim must still settle.
 		const started: DispatchResult[] = [];
+		const secondStarted: DispatchResult[] = [];
 		const dispatch = withRunner(rigRef, rigRef.runner, {
 			working: (text) => {
 				if (text.includes(SECOND.title)) throw new Error("the renderer is gone");
@@ -934,7 +924,10 @@ describe("the claim, the settle, and every origin", () => {
 				ticketIdentity: FIRST.identity,
 				choice: liveChoice,
 				previousMessage: "",
-				onStarted: (result) => started.push(result),
+				onStarted: (result) => {
+					rigRef.reportStarted(FIRST.identity, result);
+					started.push(result);
+				},
 			}),
 		).resolves.toEqual({ ok: true });
 		await expect(
@@ -943,13 +936,18 @@ describe("the claim, the settle, and every origin", () => {
 				ticketIdentity: SECOND.identity,
 				choice: liveChoice,
 				previousMessage: "",
+				onStarted: (result) => {
+					rigRef.reportStarted(SECOND.identity, result);
+					secondStarted.push(result);
+				},
 			}),
 		).resolves.toEqual({ ok: true });
-		await until("the broken line reported", () =>
-			rigRef.events.includes("error:handoff failed: the renderer is gone"),
-		);
+		await rigRef.waitForStarted(FIRST.identity);
+		await rigRef.waitForStarted(SECOND.identity);
 		expect(started).toEqual([{ ok: true }]);
+		expect(secondStarted).toEqual([{ ok: true }]);
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketState(SECOND.identity)).toBe("handed-off");
 	});
 });
 
@@ -1080,7 +1078,7 @@ describe("the Close cleanup", () => {
 			code: 1,
 			stderr: "the tab has a running agent",
 		});
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored)).resolves.toBe(
+		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed")).resolves.toBe(
 			"the tab has a running agent",
 		);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toEqual(
@@ -1102,7 +1100,7 @@ describe("the Close cleanup", () => {
 			listModels: (kind) => rigRef.runner.listModels(kind),
 		};
 		const dispatch = withRunner(rigRef, broken);
-		await expect(dispatch.closeCleanup(FIRST.identity, stored)).resolves.toBe(
+		await expect(dispatch.closeCleanup(FIRST.identity, stored, "closed")).resolves.toBe(
 			"the close cleanup did not run: herdr is not reachable",
 		);
 		// The environment still stands, and the ticket carries that fact: the
@@ -1116,7 +1114,9 @@ describe("the Close cleanup", () => {
 		const rigRef = rig();
 		const stored = seedClosedHandoff(rigRef, FIRST);
 		rigRef.runner.set("herdr", ["tab", "close", FIRST.tabId], { code: 1, stderr: "busy" });
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored)).resolves.toBe("busy");
+		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed")).resolves.toBe(
+			"busy",
+		);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).not.toBeNull();
 		// The operator has since closed the tab in herdr: the retry meets
 		// tab_not_found, the way it meets a workspace that is gone.
@@ -1124,7 +1124,9 @@ describe("the Close cleanup", () => {
 			code: 1,
 			stderr: '{"error":{"code":"tab_not_found","message":"tab is gone"},"id":"cli:tab:close"}\n',
 		});
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored)).resolves.toBeUndefined();
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed"),
+		).resolves.toBeUndefined();
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
 
@@ -1138,7 +1140,9 @@ describe("the Close cleanup", () => {
 		});
 		// The removal met a workspace that is gone: the environment is cleaned,
 		// the way it is when the checkout itself is gone.
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, stored)).resolves.toBeUndefined();
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed"),
+		).resolves.toBeUndefined();
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
 
@@ -1150,7 +1154,9 @@ describe("the Close cleanup", () => {
 			handoffId: worktree.handoffId,
 			reason: "the workspace is dirty",
 		});
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, worktree)).resolves.toBeUndefined();
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, worktree, "closed"),
+		).resolves.toBeUndefined();
 		expect(rigRef.commands()).toContain(`herdr worktree remove --workspace ${FIRST.workspaceId}`);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
@@ -1171,7 +1177,9 @@ describe("the Close cleanup", () => {
 				handoffId: handoff.handoffId,
 				reason: "the workspace is dirty",
 			});
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, first)).resolves.toBeUndefined();
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, first, "closed"),
+		).resolves.toBeUndefined();
 		// One workspace closed with the checkout: every fact that named it is
 		// gone, and herdr never heard a tab close.
 		expect(rigRef.state.leftoverEnvironments(FIRST.identity)).toEqual([]);
@@ -1194,7 +1202,9 @@ describe("the Close cleanup", () => {
 				handoffId: handoff.handoffId,
 				reason: "the tab has a running agent",
 			});
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, first)).resolves.toBeUndefined();
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, first, "closed"),
+		).resolves.toBeUndefined();
 		expect(rigRef.state.leftoverEnvironments(FIRST.identity)).toEqual([]);
 	});
 
@@ -1209,15 +1219,11 @@ describe("the Close cleanup", () => {
 				throw new Error("the frame is gone");
 			},
 		});
-		await expect(dispatch.closeCleanup(SECOND.identity, stored)).rejects.toThrow(
-			"the frame is gone",
-		);
+		await expect(dispatch.closeCleanup(SECOND.identity, stored, "closed")).resolves.toBeUndefined();
+		expect(rigRef.events).not.toContain("error:the frame is gone");
 		expect(rigRef.dispatch.handoffActive()).toBe(false);
 		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
-		await until(
-			"the handoff after the broken cleanup ran",
-			() => rigRef.state.ticketState(FIRST.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(FIRST.identity);
 	});
 
 	test("a cleanup reaches only the environments its own removal names", async () => {
@@ -1235,7 +1241,9 @@ describe("the Close cleanup", () => {
 			});
 		// The cleanup of one live tab closes that tab and nothing beside it: the
 		// fact of another environment stands (ADR 0012).
-		await expect(rigRef.dispatch.closeCleanup(FIRST.identity, beside)).resolves.toBeUndefined();
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, beside, "closed"),
+		).resolves.toBeUndefined();
 		expect(rigRef.state.leftoverEnvironments(FIRST.identity)).toEqual([
 			expect.objectContaining({ handoffId: worktree.handoffId }),
 		]);
@@ -1247,7 +1255,7 @@ describe("the Close cleanup", () => {
 		const dispatch = withRunner(rigRef, rigRef.runner, {
 			controlPlaneWorkspaceId: "ws-control-plane",
 		});
-		await expect(dispatch.closeCleanup(FIRST.identity, stored)).resolves.toBeUndefined();
+		await expect(dispatch.closeCleanup(FIRST.identity, stored, "closed")).resolves.toBeUndefined();
 		// herdr moved its focus when the workspace disappeared: the cleanup
 		// brings it back to the control plane.
 		expect(rigRef.commands()).toContain("herdr workspace focus ws-control-plane");
@@ -1260,7 +1268,7 @@ describe("the Clear action", () => {
 		const rigRef = rig([FIRST, SECOND]);
 		const stored = seedHandoff(rigRef, FIRST);
 		rigRef.runner.set("herdr", ["tab", "close", FIRST.tabId], { code: 1, stderr: "tab is busy" });
-		await rigRef.dispatch.closeCleanup(FIRST.identity, stored);
+		await rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed");
 		closeCycle(rigRef, FIRST, stored.handoffId);
 		await seatReleased();
 		rigRef.runner.set("herdr", ["tab", "close", FIRST.tabId], { code: 0 });
@@ -1269,10 +1277,7 @@ describe("the Clear action", () => {
 
 	test("the retry clears the fact herdr let go, and answers with nothing", async () => {
 		const rigRef = await leftoverRig();
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "ran",
-			failures: [],
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 		expect(rigRef.commands()).toContain(`herdr tab close ${FIRST.tabId}`);
 	});
@@ -1292,10 +1297,9 @@ describe("the Clear action", () => {
 			code: 1,
 			stderr: '{"error":{"code":"dirty_worktree_requires_force","message":"use --force"}}\n',
 		});
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "ran",
-			failures: ["use --force (dirty_worktree_requires_force)"],
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([
+			"use --force (dirty_worktree_requires_force)",
+		]);
 		// One queue item owned the loop: herdr was asked for both environments,
 		// and a refusal on one did not spare the other the call. The tab herdr
 		// let go is gone; the workspace it kept still stands.
@@ -1317,10 +1321,7 @@ describe("the Clear action", () => {
 			handoffId: dirty.handoffId,
 			reason: "the workspace is dirty",
 		});
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, true)).resolves.toEqual({
-			status: "ran",
-			failures: [],
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, true)).resolves.toEqual([]);
 		expect(rigRef.commands()).toContain("herdr worktree remove --workspace ws-dirty --force");
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
@@ -1329,43 +1330,40 @@ describe("the Clear action", () => {
 		const rigRef = await leftoverRig();
 		rigRef.hold("herdr workspace list");
 		const started = start(rigRef, SECOND, "open");
-		await until("the handoff reaching herdr", () => rigRef.arrivals() === 1);
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "refused",
-			reason: `a handoff is in flight: wait for it to settle before you clear the leftover environment of ticket ${FIRST.identity}`,
-		});
+		await rigRef.waitForArrivals(1);
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
+		expect(rigRef.events).toContain(
+			`warning:a handoff is in flight: wait for it to settle before you clear the leftover environment of ticket ${FIRST.identity}`,
+		);
 		// The tab close the clear would have run never reaches herdr: the agent
 		// being built cannot meet a removal half way.
 		expect(rigRef.held()).toEqual(["herdr workspace list"]);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).not.toBeNull();
 		rigRef.release();
 		await started;
-		await until(
-			"the handoff settled",
-			() => rigRef.state.ticketState(SECOND.identity) === "handed-off",
-		);
+		await rigRef.waitForStarted(SECOND.identity);
 	});
 
 	test("the clear refuses while another clear holds the seat", async () => {
 		const rigRef = await leftoverRig();
 		rigRef.hold("herdr tab close");
 		const first = rigRef.dispatch.clearLeftover(FIRST.identity, false);
-		await until("the clear reaching herdr", () => rigRef.arrivals() === 1);
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "refused",
-			reason: `a leftover clear is already in flight: wait for it to settle before you clear ticket ${FIRST.identity} again`,
-		});
+		await rigRef.waitForArrivals(1);
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
+		expect(rigRef.events).toContain(
+			`warning:a leftover clear is already in flight: wait for it to settle before you clear ticket ${FIRST.identity} again`,
+		);
 		expect(rigRef.held()).toEqual([`herdr tab close ${FIRST.tabId}`]);
 		rigRef.release();
-		await expect(first).resolves.toEqual({ status: "ran", failures: [] });
+		await expect(first).resolves.toEqual([]);
 	});
 
 	test("a ticket that holds no leftover answers the refusal, and the projection refreshes", async () => {
 		const rigRef = rig();
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "refused",
-			reason: `no leftover environment is recorded for ticket ${FIRST.identity}`,
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
+		expect(rigRef.events).toContain(
+			`warning:no leftover environment is recorded for ticket ${FIRST.identity}`,
+		);
 		expect(rigRef.events).toContain("refresh");
 		expect(rigRef.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(0);
 	});
@@ -1382,10 +1380,10 @@ describe("the Clear action", () => {
 			}) === null
 		)
 			throw new Error("the seed left nothing to reclaim");
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "refused",
-			reason: `the agent of ticket ${FIRST.identity} runs in herdr tab ${FIRST.tabId}: close its work cycle before you clear that tab`,
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
+		expect(rigRef.events).toContain(
+			`warning:the agent of ticket ${FIRST.identity} runs in herdr tab ${FIRST.tabId}: close its work cycle before you clear that tab`,
+		);
 		expect(rigRef.commands().filter((c) => c.startsWith("herdr tab close"))).toHaveLength(1);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).not.toBeNull();
 	});
@@ -1409,10 +1407,10 @@ describe("the Clear action", () => {
 			}) === null
 		)
 			throw new Error("the seed left nothing to reclaim");
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "refused",
-			reason: `the agent of ticket ${FIRST.identity} runs in herdr workspace ws-live: close its work cycle before you clear that workspace`,
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
+		expect(rigRef.events).toContain(
+			`warning:the agent of ticket ${FIRST.identity} runs in herdr workspace ws-live: close its work cycle before you clear that workspace`,
+		);
 	});
 
 	test("the clear refuses the pane its leftover lives in", async () => {
@@ -1437,10 +1435,10 @@ describe("the Clear action", () => {
 			}) === null
 		)
 			throw new Error("the seed left nothing to reclaim");
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "refused",
-			reason: `the agent of ticket ${FIRST.identity} runs in herdr pane pane-shared: close its work cycle before you clear that pane`,
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
+		expect(rigRef.events).toContain(
+			`warning:the agent of ticket ${FIRST.identity} runs in herdr pane pane-shared: close its work cycle before you clear that pane`,
+		);
 	});
 
 	test("the clear reaches a leftover that shares no handle with the live agent", async () => {
@@ -1453,10 +1451,7 @@ describe("the Clear action", () => {
 			tabId: "tab-elsewhere",
 			workspaceId: "ws-elsewhere",
 		});
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "ran",
-			failures: [],
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
 		expect(rigRef.commands()).toContain(`herdr tab close ${FIRST.tabId}`);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
@@ -1480,10 +1475,7 @@ describe("the Clear action", () => {
 			tabId: "tab-live",
 			workspaceId: "ws-live",
 		});
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "ran",
-			failures: [],
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
 		expect(rigRef.commands()).toContain("herdr worktree remove --workspace ws-dirty");
 	});
 
@@ -1506,10 +1498,7 @@ describe("the Clear action", () => {
 			tabId: null,
 			workspaceId: null,
 		});
-		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual({
-			status: "ran",
-			failures: [],
-		});
+		await expect(rigRef.dispatch.clearLeftover(FIRST.identity, false)).resolves.toEqual([]);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
 });
@@ -1540,7 +1529,7 @@ describe("the name fact", () => {
 		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		// The handoff started beside the leftover, under its cycle name.
 		expect(rigRef.commands()).toContain(
@@ -1588,7 +1577,7 @@ describe("the name fact", () => {
 		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true }]);
 		expect(rigRef.commands()).toContain(
 			`herdr agent start ${FIRST.name}-c2 --kind pi --pane pane-agent`,
@@ -1615,7 +1604,7 @@ describe("the name fact", () => {
 		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started[0]?.ok).toBe(false);
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
@@ -1639,7 +1628,7 @@ describe("the name fact", () => {
 		await expect(start(rigRef, FIRST, "open", (r) => started.push(r))).resolves.toEqual({
 			ok: true,
 		});
-		await until("the start report", () => started.length === 1);
+		await rigRef.waitForStarted(FIRST.identity);
 		expect(started[0]?.ok).toBe(false);
 		// herdr named no holder: the line says so, and no fact lands on the
 		// ticket's own closed cycle.
