@@ -16,13 +16,15 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
-import { widthOf } from "../text.ts";
+import { MARKER_WIDTH, STATE_WORDS, controlInk } from "./presentation.ts";
 import { ChoiceRow } from "./choices.ts";
 import { TextField } from "./fields.ts";
-import { STATE_WORDS } from "./presentation.ts";
+
 
 /** The search's own label: the row above it already names the value. */
 const SEARCH_LABEL = "Search";
+/** The cells the no-match word holds beside the search. */
+const NO_MATCH_CELLS = 11;
 
 /** What one query answers about a list. */
 export interface TypeAheadMatch {
@@ -88,9 +90,7 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 			},
 		};
 	}
-	const match = typeAheadMatch(props.options, query);
-	const noMatch = query !== "" && match.count === 0;
-	const feedback = `${match.count} of ${props.options.length} match`;
+	const noMatch = query !== "" && typeAheadMatch(props.options, query).count === 0;
 	return createElement(
 		"box",
 		{ key: props.label, style: { flexDirection: "column" } },
@@ -106,25 +106,33 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 			// the tail of a value wider than its column.
 			clipTail: true,
 		}),
-		createElement(TextField, {
-			label: SEARCH_LABEL,
-			value: query,
-			focused: props.focused && props.inputActive !== false,
-			inputActive: props.inputActive,
-			// The feedback column keeps its cells, so the operator always reads
-			// how much of the list the query still holds.
-			width: Math.max(
-				1,
-				props.width - props.labelWidth - (widthOf(noMatch ? STATE_WORDS.noMatch : feedback) + 2),
-			),
-			labelWidth: props.labelWidth - 2,
-			marked: false,
-			error: noMatch ? STATE_WORDS.noMatch : null,
-			onValueChange: (facts) => {
-				queryRef.current = facts.value;
-				setQuery(facts.value);
-				props.onQueryChange?.(facts.value, typeAheadMatch(props.options, facts.value));
-			},
-		}),
+		createElement(
+			"box",
+			{ key: "search", style: { flexDirection: "row", height: 1 } },
+			createElement(TextField, {
+				label: SEARCH_LABEL,
+				value: query,
+				focused: props.focused && props.inputActive !== false,
+				inputActive: props.inputActive,
+				// The no-match word holds its own cells only while it is the news, so
+				// a query the operator is reading is never cut to make room for a word
+				// that says nothing.
+				width: Math.max(1, props.width - (noMatch ? NO_MATCH_CELLS : 0)),
+				labelWidth: props.labelWidth - MARKER_WIDTH,
+				marked: false,
+				onValueChange: (facts) => {
+					queryRef.current = facts.value;
+					setQuery(facts.value);
+					props.onQueryChange?.(facts.value, typeAheadMatch(props.options, facts.value));
+				},
+			}),
+			noMatch
+				? createElement(
+						"text",
+						{ fg: controlInk().error.fg ?? undefined },
+						STATE_WORDS.noMatch,
+					)
+				: null,
+		),
 	);
 }

@@ -412,7 +412,8 @@ export function TextField(props: TextFieldProps): ReactElement {
 				textColor: tint ?? ink.text.fg ?? undefined,
 				focusedTextColor: tint ?? ink.focusedText.fg ?? undefined,
 				backgroundColor: "transparent",
-				focusedBackgroundColor: ink.surface.on === "default" ? "transparent" : ink.surface.on,
+				focusedBackgroundColor:
+					ink.focusedField.on === "default" ? "transparent" : ink.focusedField.on,
 				cursorColor: ink.indicator.fg ?? undefined,
 				// A blinking caret is never required to see where the next edit
 				// lands, so the field paints a steady one by default.
@@ -523,7 +524,8 @@ export function DraftField(props: DraftFieldProps): ReactElement {
 				textColor: tint ?? ink.text.fg ?? undefined,
 				focusedTextColor: tint ?? ink.focusedText.fg ?? undefined,
 				backgroundColor: "transparent",
-				focusedBackgroundColor: ink.surface.on === "default" ? "transparent" : ink.surface.on,
+				focusedBackgroundColor:
+					ink.focusedField.on === "default" ? "transparent" : ink.focusedField.on,
 				cursorColor: ink.indicator.fg ?? undefined,
 				selectionBg: ink.selectionBackground.fg ?? undefined,
 				selectionFg: ink.selectionText.fg ?? undefined,

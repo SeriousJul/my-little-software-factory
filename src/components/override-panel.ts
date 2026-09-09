@@ -509,10 +509,16 @@ export function OverridePanel({
 				clearRow();
 				key.preventDefault?.();
 			},
-			"clear-search": () => clearSearch(),
-			"copy-selection": () => {
+			"clear-search": ({ key }) => {
+				clearSearch();
+				// The search field would otherwise delete a character with the same
+				// key that clears the whole query.
+				key.preventDefault?.();
+			},
+			"copy-selection": ({ key }) => {
 				const result = field.current?.copySelection();
 				onUnavailable?.(result?.reason ?? "The panel holds no field to copy from");
+				key.preventDefault?.();
 			},
 			cancel: ({ key }) => {
 				onCancel();

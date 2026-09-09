@@ -129,11 +129,13 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 			INITIAL,
 			async (setup) => {
 				await moveToModelRow(setup);
-				await setup.mockInput.pressArrow("right");
+				// The row's list is the agent's own, so its search answers with a
+				// value from that list. Arrows move the caret here, not the value.
+				await setup.mockInput.typeText("model-y");
 				const shown = await awaitFrame(
 					setup,
 					(f) => frameText(f).includes("only-for-pilot/model-y"),
-					"the agent's own model to cycle in",
+					"the agent's own model to match the search",
 				);
 				expect(frameText(shown)).toContain("Model only-for-pilot/model-y");
 			},

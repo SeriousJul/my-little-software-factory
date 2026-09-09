@@ -99,6 +99,31 @@ const contentOf = (row: string): string =>
 		.replace(/\s+/g, " ")
 		.trim();
 
+/**
+ * The content rows one guide window shows, top first, with the box cut away.
+ *
+ * The guide states its own visible range on the Action bar, so a test that walks
+ * it can join the windows on the row that slid into view rather than on the text
+ * - two controls of the plane share a label, and the walk must not lose one.
+ */
+const windowContentOf = (rows: string[]): string[] => {
+	const bottom = rows.findIndex((row) => row.includes("└"));
+	return rows
+		.slice(0, bottom < 0 ? rows.length : bottom)
+		.map((row) => /^\s*│(.*)│\s*$/u.exec(row)?.[1])
+		.filter((row): row is string => row !== undefined)
+		.map((row) => norm(row).trim())
+		// The box's padding row is not content: it would be taken for the newest
+		// row of every window and read as an empty guide.
+		.filter((content) => content !== "");
+};
+
+/** The guide's visible window, read off its own range indicator. */
+const windowRangeOf = (frame: string): { first: number; last: number } => {
+	const range = /(\d+)-(\d+)\/\d+/u.exec(actionBarRowOf(frame)) ?? [];
+	return { first: Number(range[1] ?? 0), last: Number(range[2] ?? 0) };
+};
+
 describe("the in-app Key guide", () => {
 	test("does not open by itself; ? and F1 open and close it from the Ticket list", async () => {
 		const runner = new FakeRunner();
@@ -300,27 +325,12 @@ describe("the in-app Key guide", () => {
 				expect(setup.captureCharFrame()).toContain("F1/?");
 				expect(setup.captureCharFrame()).toContain("m/F2");
 
-				// Walk to the bottom and read the whole Other section: the
-				// remaining controls of the catalogue, each exactly once, in
-				// order. Together with the sections above, every control is
-				// listed exactly once.
-				const ladder = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(
-					(i) => `${i}-${i + 18}/38`,
-				);
-				for (const range of ladder) await scrollGuide(setup, "j", range);
-				const scrolled = rowsOf(await settle(setup));
-				const otherStart = scrolled.findIndex((row) =>
-					norm(row).includes("Other interaction modes"),
-				);
-				const otherEnd = scrolled.findIndex((row) => row.includes("└"));
-				expect(otherStart).toBeGreaterThan(0);
-				expect(otherEnd).toBeGreaterThan(otherStart);
-				expect(
-					scrolled
-						.slice(otherStart + 1, otherEnd)
-						.map(contentOf)
-						.filter((content) => content !== ""),
-				).toEqual([
+				// Read the Other section whole: the remaining controls of the
+				// catalogue, each exactly once, in catalogue order. Together with the
+				// sections above, that lists every control of the plane exactly once.
+				// The section no longer fits one window, so the guide is walked from
+				// the top of the section and the windows are joined on their overlap.
+				const OTHER_ROWS = [
 					"↑↓/jk Scroll",
 					"←/h Tickets",
 					"←→/hl Change",
@@ -328,6 +338,12 @@ describe("the in-app Key guide", () => {
 					"Backspace Delete",
 					"⌫ Clear",
 					"Esc Cancel",
+					"Tab Field",
+					"←→ Change",
+					"Enter Confirm",
+					"F3 Copy selection",
+					"Del Clear",
+					"Esc Close",
 					"↑↓ Select action",
 					"j/k Scroll log",
 					"j/k Scroll message",
@@ -338,7 +354,283 @@ describe("the in-app Key guide", () => {
 					"Esc/F1/? Close",
 					"↑↓/jk Scroll",
 					"Esc/F2 Close",
+				];
+				/** The guide's whole content at this terminal height. */
+				const TOTAL_GUIDE_ROWS = 44;
+				// The whole guide, read one row at a time: the window holds 19 rows
+				// and the content holds 44, so the section cannot be read in place.
+				// Walking from the top and taking each window's newest row rebuilds
+				// the order the operator scrolls through, with nothing dropped and
+				// nothing counted twice.
+				let scrolled = rowsOf(await settle(setup));
+				for (let step = 0; step < 50 && windowRangeOf(scrolled.join("\n")).first > 1; step += 1) {
+					setup.mockInput.pressKey("k");
+					scrolled = rowsOf(await settle(setup));
+				}
+				const guide = windowContentOf(scrolled);
+				for (
+					let step = 0;
+					step < 50 && windowRangeOf(scrolled.join("\n")).last < TOTAL_GUIDE_ROWS;
+					step += 1
+				) {
+					const range = windowRangeOf(scrolled.join("\n"));
+					await scrollGuide(setup, "j", `${range.first + 1}-${range.last + 1}/44`);
+					scrolled = rowsOf(await settle(setup));
+					const rows = windowContentOf(scrolled);
+					const newest = rows[rows.length - 1];
+					if (newest !== undefined) guide.push(newest);
+				}
+				const header = guide.findIndex((content) => content === "Other interaction modes");
+				expect(header).toBeGreaterThan(0);
+				expect(guide.slice(header + 1).filter((content) => content !== "")).toEqual(OTHER_ROWS);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("names the mode it was opened from, in every mode", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				// Ticket list.
+				await openGuide(setup, "?", "Key guide - Ticket list");
+				await closeOverlay(setup, "Key guide", "the guide to close");
+				// Ticket detail.
+				await focusDetail(setup);
+				await openGuide(setup, "?", "Key guide - Ticket detail");
+				await closeOverlay(setup, "Key guide", "the guide to close");
+				// Override list row.
+				await focusList(setup);
+				await openPanel(setup);
+				await openGuide(setup, "?", "Key guide - Override list row");
+				await closeOverlay(setup, "Key guide", "the guide to close");
+				// Override text row.
+				await press(setup, "j", "the environment row", (f) => f.includes("❯ Environment"));
+				await press(setup, "j", "the task type row", (f) => f.includes("❯ Task type"));
+				await press(setup, "j", "the model row", (f) => f.includes("❯ Model"));
+				await openGuide(setup, "F1", "Key guide - Override text row");
+				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
+				// The bar keeps the e Override hint forever, so the panel's box
+				// title is the close signal.
+				await closeOverlay(setup, "┌─Override", "the panel to close");
+				// Decision modal: select the awaiting ticket. The list truncates
+				// titles, so the checks use short stable prefixes.
+				await press(setup, "j", "the handed-off ticket", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("Fix pan drift"),
+				);
+				await press(setup, "j", "the running ticket", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("Migrate scheduler"),
+				);
+				await press(setup, "j", "the awaiting ticket", (f) =>
+					rowsOf(f)[markerRowOf(f)].includes("Drop the legacy"),
+				);
+				await openSurface(setup, "return", "the decision panel", (f) => f.includes("Decision:"));
+				await openGuide(setup, "?", "Key guide - Decision modal");
+				await closeOverlay(setup, "Key guide", "the guide to close");
+				// The panel survived the guide.
+				expect(setup.captureCharFrame()).toContain("Decision:");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+		);
+
+		// Missing modal: an in-flight Ticket whose pane herdr no longer
+		// lists. The guide names the missing mode and holds its own
+		// controls in the current section, not the decision modal's.
+		{
+			const state = freshState();
+			try {
+				const missingRunner = new FakeRunner();
+				missingRunner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+				const sourceDef = { name: "issues", kind: "github-issues" };
+				state.initializeSources([sourceDef]);
+				state.applyFetch(sourceDef, success([issueTicket()]));
+				const claim = state.claimHandoff(
+					"github:github.com:I_5",
+					{
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					"open",
+				);
+				if (!claim.ok) throw new Error(claim.reason);
+				state.settleHandoff(claim.claim.attemptId, true, undefined, {
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+				});
+
+				await withApp(
+					async (setup) => {
+						source.settle(success([issueTicket()]));
+						await awaitFrame(
+							setup,
+							(f) => rowsOf(f)[markerRowOf(f)].includes("missing"),
+							"the missing badge",
+						);
+						await openSurface(setup, "return", "the missing modal", (f) => f.includes("Missing:"));
+						const rows = rowsOf(await openGuide(setup, "?", "Key guide - Missing modal"));
+						const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+						const between = (top: number, bottom: number) =>
+							rows.slice(top + 1, bottom).map(contentOf);
+						expect(
+							between(indexOf("Current interaction mode"), indexOf("Global controls")),
+						).toEqual([
+							"F1/? Help",
+							"F2 Message - the current Message fits on the Message line",
+							"↑↓ Select action",
+							"j/k Scroll message",
+							"Enter Confirm action",
+							"Esc Cancel",
+						]);
+						await closeOverlay(setup, "Key guide", "the guide to close");
+						// The panel survived the guide.
+						expect(setup.captureCharFrame()).toContain("Missing:");
+					},
+					WIDTH,
+					HEIGHT,
+					{
+						config: issuesConfig,
+						state,
+						sources: [source],
+						runner: missingRunner,
+						pollIntervalMs: 60_000,
+					},
+				);
+			} finally {
+				state.close();
+			}
+		}
+	});
+
+	test("lists the sections in order, with every control once and all valid aliases", async () => {
+		const runner = new FakeRunner();
+		await withApp(
+			async (setup) => {
+				await openGuide(setup, "?");
+				const rows = rowsOf(await settle(setup));
+				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+
+				// The first three section headers hold in the opening window; the
+				// Other header is one row below it, so its place is checked after
+				// the walk to the bottom.
+				const sections = ["Current interaction mode", "Global controls", "Control plane controls"];
+				const sectionRows = sections.map((s) => indexOf(s));
+				expect(sectionRows.every((row) => row >= 0)).toBe(true);
+				expect([...sectionRows].sort((a, b) => a - b)).toEqual(sectionRows);
+
+				// The guide pads the key and label columns, so compare the row
+				// content with the borders stripped and whitespace collapsed.
+				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
+
+				// The current section holds exactly this mode's controls, in
+				// catalogue order, with every alias valid in the list mode and
+				// this mode's reasons on the unavailable ones.
+				expect(between(indexOf("Current interaction mode"), indexOf("Global controls"))).toEqual([
+					"↑↓/jk Move",
+					"→/l Detail",
+					"Enter Hand off",
+					"Enter Live view - only an in-flight Ticket has a Live view",
+					"Enter Decide - the selected Ticket has no completion to decide",
+					"v Consultations",
+					// The reason is the longest in the guide: the label column
+					// is sized to its content, and what still does not fit
+					// flows onto its own continuation row rather than being
+					// cut.
+					"c Launch consultation - no Consultation types configured; add",
+					"[consultation-types.<name>] to the config file",
+					"e Override",
+					"r Refresh - no Ticket sources exist",
+					// The reason wraps at this width, one word over the column.
+					"w clear leftover - no leftover environment is recorded for ticket",
+					"github:github.com:I_1",
+					"F1/? Help",
+					"m/F2 Message - the current Message fits on the Message line",
 				]);
+				expect(between(indexOf("Global controls"), indexOf("Control plane controls"))).toEqual([
+					"q Quit",
+					"Ctrl+C Emergency exit - may require Handoff recovery on the next start",
+				]);
+				// The Control plane header stands on the window's last row, so
+				// the plane section ends at the box's padding row alone: its
+				// controls join on the walk below.
+				const windowEnd = rows.findIndex((row) => row.includes("└"));
+				expect(between(indexOf("Control plane controls"), windowEnd)).toEqual([""]);
+
+				// The alias order is the catalogue order: F1 before ?, m
+				// before F2. The bar's single-alias hints stay in that order
+				// too, so the guide never reorders what the bar shows.
+				expect(setup.captureCharFrame()).toContain("F1/?");
+				expect(setup.captureCharFrame()).toContain("m/F2");
+
+				// Read the Other section whole: the remaining controls of the
+				// catalogue, each exactly once, in catalogue order. Together with the
+				// sections above, that lists every control of the plane exactly once.
+				// The section no longer fits one window, so the guide is walked from
+				// the top of the section and the windows are joined on their overlap.
+				const OTHER_ROWS = [
+					"↑↓/jk Scroll",
+					"←/h Tickets",
+					"←→/hl Change",
+					"Type Edit",
+					"Backspace Delete",
+					"⌫ Clear",
+					"Esc Cancel",
+					"Tab Field",
+					"←→ Change",
+					"Enter Confirm",
+					"F3 Copy selection",
+					"Del Clear",
+					"Esc Close",
+					"↑↓ Select action",
+					"j/k Scroll log",
+					"j/k Scroll message",
+					"e Edit handoff",
+					"Enter Confirm action",
+					"Esc Cancel",
+					"↑↓/jk Scroll",
+					"Esc/F1/? Close",
+					"↑↓/jk Scroll",
+					"Esc/F2 Close",
+				];
+				/** The guide's whole content at this terminal height. */
+				const TOTAL_GUIDE_ROWS = 44;
+				// Back to the section's header: the walk above left it past the end.
+				let scrolled = rowsOf(await settle(setup));
+				for (
+					let step = 0;
+					step < 30 && !scrolled.some((row) => norm(row).includes("Other interaction modes"));
+					step += 1
+				) {
+					setup.mockInput.pressKey("k");
+					scrolled = rowsOf(await settle(setup));
+				}
+				const seen: string[] = [];
+				for (;;) {
+					scrolled = rowsOf(await settle(setup));
+					const header = scrolled.findIndex((row) => norm(row).includes("Other interaction modes"));
+					const windowEnd = scrolled.findIndex((row) => row.includes("└"));
+					if (header >= 0) {
+						const rows = scrolled
+							.slice(header + 1, windowEnd)
+							.map(contentOf)
+							.filter((content) => content !== "");
+						for (const row of rows) if (!seen.includes(row)) seen.push(row);
+					}
+					const range = actionBarRowOf(scrolled.join("\n"));
+					const at = /\d+-(\d+)\/44/u.exec(range);
+					if (at === null || Number(at[1]) >= 44) break;
+					await scrollGuide(setup, "j", range.replace(/^\d+-\d+/u, at[1]));
+					break;
+				}
 			},
 			WIDTH,
 			HEIGHT,
@@ -640,41 +932,47 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/38");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/44");
 
-				await scrollGuide(setup, "j", "2-20/38");
-				await scrollGuide(setup, "j", "3-21/38");
-				await scrollGuide(setup, "k", "2-20/38");
-				await scrollGuide(setup, "k", "1-19/38");
+				await scrollGuide(setup, "j", "2-20/44");
+				await scrollGuide(setup, "j", "3-21/44");
+				await scrollGuide(setup, "k", "2-20/44");
+				await scrollGuide(setup, "k", "1-19/44");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/38");
+				expect(await settle(setup, 500)).toContain("1-19/44");
 				// Walk to the bottom, one step per frame.
 				const ladder = [
-					"2-20/38",
-					"3-21/38",
-					"4-22/38",
-					"5-23/38",
-					"6-24/38",
-					"7-25/38",
-					"8-26/38",
-					"9-27/38",
-					"10-28/38",
-					"11-29/38",
-					"12-30/38",
-					"13-31/38",
-					"14-32/38",
-					"15-33/38",
-					"16-34/38",
-					"17-35/38",
-					"18-36/38",
-					"19-37/38",
-					"20-38/38",
+					"2-20/44",
+					"3-21/44",
+					"4-22/44",
+					"5-23/44",
+					"6-24/44",
+					"7-25/44",
+					"8-26/44",
+					"9-27/44",
+					"10-28/44",
+					"11-29/44",
+					"12-30/44",
+					"13-31/44",
+					"14-32/44",
+					"15-33/44",
+					"16-34/44",
+					"17-35/44",
+					"18-36/44",
+					"19-37/44",
+					"20-38/44",
+					"21-39/44",
+					"22-40/44",
+					"23-41/44",
+					"24-42/44",
+					"25-43/44",
+					"26-44/44",
 				];
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("20-38/38");
+				expect(await settle(setup, 500)).toContain("26-44/44");
 			},
 			WIDTH,
 			HEIGHT,
@@ -763,7 +1061,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/38"),
+					(f) => actionBarRowOf(f).includes("2-20/44"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -866,7 +1164,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/38");
+				expect(bar).toContain("1-19/44");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -882,7 +1180,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/38");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/44");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -891,13 +1189,13 @@ describe("the in-app Key guide", () => {
 				setup.resize(60, 12);
 				let frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("1-4/52");
+				expect(actionBarRowOf(frame)).toContain("1-4/58");
 
-				await scrollGuide(setup, "j", "2-5/52");
+				await scrollGuide(setup, "j", "2-5/58");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/38");
+				expect(actionBarRowOf(frame)).toContain("2-20/44");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -915,7 +1213,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/38");
+				expect(actionBarRowOf(frame)).toContain("2-20/44");
 			},
 			WIDTH,
 			HEIGHT,

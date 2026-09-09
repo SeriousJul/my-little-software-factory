@@ -34,6 +34,8 @@ export type InteractionMode =
 type ControlScope =
 	| "global"
 	| "control-plane"
+	/** The controls one shared form runs, on the slots it holds. */
+	| "form"
 	| "ticket-list"
 	| "ticket-detail"
 	| "override"
@@ -438,20 +440,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 	},
 	{
-		id: "search-override",
-		label: "Search matches",
-		// Display-only: the Model search is a field the operator types into, and
-		// the value the row names is the answer. The row states the selected
-		// Model and the search separately, so a query never becomes a setting.
-		keys: () => [],
-		keyLabel: "Type-ahead",
-		scope: "override",
-		actionBar: true,
-		priority: 78,
-		modes: ["override-model"],
-		availability: available,
-	},
-	{
 		id: "delete-override",
 		label: "Delete",
 		// Display-only: the standard input owns Backspace and its caret-aware
@@ -598,7 +586,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// nothing there edits text.
 		keys: (mode) => (mode === "form-field" ? ["tab"] : ["up", "down", "tab"]),
 		keyLabel: "Tab",
-		scope: "control-plane",
+		scope: "form",
 		actionBar: true,
 		priority: 82,
 		modes: [...formModes],
@@ -609,7 +597,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Change",
 		keys: () => ["left", "right"],
 		keyLabel: "←→",
-		scope: "control-plane",
+		scope: "form",
 		actionBar: true,
 		priority: 80,
 		modes: ["form-selector"],
@@ -623,7 +611,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Confirm",
 		keys: () => ["return"],
 		keyLabel: "Enter",
-		scope: "control-plane",
+		scope: "form",
 		actionBar: true,
 		priority: 70,
 		modes: ["form-action"],
@@ -635,7 +623,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Copy selection",
 		keys: () => ["f3"],
 		keyLabel: "F3",
-		scope: "control-plane",
+		scope: "form",
 		actionBar: true,
 		priority: 45,
 		modes: [...formModes, "override-text", "override-model"],
@@ -650,21 +638,19 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	},
 	{
 		id: "clear-search",
-		label: "Clear search",
+		label: "Clear",
 		// Backspace belongs to the search text, so the explicit clear is its own
 		// key: an operator who wants the whole query gone presses one key rather
-		// than one per character.
+		// than one per character. With no query left, the same key gives the
+		// setting back to the agent, which is what clearing a list row does, so
+		// the row is never stuck on a value the operator cannot remove.
 		keys: () => ["delete"],
 		keyLabel: "Del",
 		scope: "override",
 		actionBar: true,
 		priority: 60,
 		modes: ["override-model"],
-		availability: (context) =>
-			context.formSearchActive === true
-				? available()
-				: unavailable("the Model search holds no text to clear"),
-		showInBar: (context) => context.formSearchActive === true,
+		availability: available,
 	},
 	{
 		id: "close-form",
@@ -673,7 +659,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// visible action, never a side effect of the way out.
 		keys: () => ["escape"],
 		keyLabel: "Esc",
-		scope: "control-plane",
+		scope: "form",
 		actionBar: true,
 		priority: 90,
 		modes: [...formModes],

@@ -894,7 +894,7 @@ describe("the contextual Action bar", () => {
 						await press(setup, "v", "the consultations view", (f) =>
 							f.includes("State: awaiting-response"),
 						);
-						await press(setup, "return", "the response editor", (f) => f.includes("enter submit"));
+						await press(setup, "return", "the response editor", (f) => f.includes("Response draft"));
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},

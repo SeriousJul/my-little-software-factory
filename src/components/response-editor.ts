@@ -109,8 +109,12 @@ export function ResponseEditor({
 		onUnavailable,
 		onEmergencyExit,
 		handlers: {
-			"move-field": ({ key }) => moveField(key.name, key.shift === true),
-			"confirm-choice": () => {
+			"move-field": ({ key }) => {
+				moveField(key.name, key.shift === true);
+				key.preventDefault?.();
+			},
+			"confirm-choice": ({ key }) => {
+				key.preventDefault?.();
 				const slot = focus.current();
 				if (slot?.id === "send") {
 					if (refusal === undefined) onSend(text.current);
@@ -118,11 +122,15 @@ export function ResponseEditor({
 				}
 				if (slot?.id === "discard") onDiscard();
 			},
-			"copy-selection": () => {
+			"copy-selection": ({ key }) => {
 				const result = field.current?.copySelection();
 				onUnavailable?.(result?.reason ?? "The response editor holds no field to copy from");
+				key.preventDefault?.();
 			},
-			"close-form": () => onClose(field.current?.value() ?? text.current),
+			"close-form": ({ key }) => {
+				key.preventDefault?.();
+				onClose(field.current?.value() ?? text.current);
+			},
 			help: () => onHelp?.(),
 			message: () => onMessage?.(),
 		},

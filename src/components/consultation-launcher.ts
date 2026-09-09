@@ -198,18 +198,31 @@ export function ConsultationLauncher({
 		// The arrows inside a Draft field belong to its caret, so only the
 		// selector and action slots let the form move.
 		handlers: {
-			"move-field": ({ key }) => moveField(key.name, key.shift === true),
-			"cycle-choice": ({ key }) => cycle(key.name === "left" ? -1 : 1),
-			"confirm-choice": () => {
+			"move-field": ({ key }) => {
+				moveField(key.name, key.shift === true);
+				key.preventDefault?.();
+			},
+			"cycle-choice": ({ key }) => {
+				cycle(key.name === "left" ? -1 : 1);
+				key.preventDefault?.();
+			},
+			"confirm-choice": ({ key }) => {
 				const slot = focus.current();
+				// Enter on the Draft field belongs to the field, and its action only
+				// runs from the row that names it.
+				key.preventDefault?.();
 				if (slot?.id === "launch") launch();
 				else if (slot?.id === "discard") onDiscard();
 			},
-			"copy-selection": () => {
+			"copy-selection": ({ key }) => {
 				const result = field.current?.copySelection();
 				onUnavailable?.(result?.reason ?? "The launcher holds no field to copy from");
+				key.preventDefault?.();
 			},
-			"close-form": () => onClose(formOf()),
+			"close-form": ({ key }) => {
+				key.preventDefault?.();
+				onClose(formOf());
+			},
 			help: () => onHelp?.(formContext.mode),
 			message: () => onMessage?.(formContext.mode),
 		},
