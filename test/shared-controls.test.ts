@@ -17,14 +17,21 @@ afterEach(async () => {
 	renderer = null;
 });
 
-/** Render one field at a fixed size, and hand the test the frame setup. */
+/**
+ * Render one field at a fixed size, and hand the test the frame setup.
+ *
+ * `enhancedKeys` turns on the Kitty keyboard protocol, so the same editing
+ * contract is driven by the sequences an enhanced terminal sends as well as by
+ * the ordinary ones: a terminal's capability must not change what a key means.
+ */
 async function withField(
 	element: Parameters<typeof testRender>[0],
 	width: number,
 	height: number,
 	body: (setup: Awaited<ReturnType<typeof testRender>>) => Promise<void>,
+	enhancedKeys = false,
 ): Promise<void> {
-	const setup = await testRender(element, { width, height });
+	const setup = await testRender(element, { width, height, kittyKeyboard: enhancedKeys });
 	await setup.flush();
 	renderer = setup.renderer;
 	await body(setup);
@@ -238,6 +245,63 @@ describe("the shared Text field", () => {
 				expect(field.current?.value()).toBe("7");
 				expect(field.current?.caret()).toBe(1);
 			},
+		);
+	});
+});
+
+describe("both key protocols", () => {
+	test("an enhanced terminal's sequences mean the same operations", async () => {
+		const onValueChange = vi.fn();
+		await withField(
+			createElement(DraftField, {
+				label: "Initial input",
+				value: "",
+				focused: true,
+				width: 30,
+				height: 3,
+				onValueChange,
+			}),
+			46,
+			8,
+			async (setup) => {
+				await setup.mockInput.typeText("alpha beta");
+				const values = () => onValueChange.mock.calls.map(([facts]) => (facts as FieldFacts).value);
+				// The caret moves one grapheme left, Enter draws a new line there,
+				// and Ctrl+Z takes the new line back: an enhanced terminal changes
+				// how a key is encoded, never what the key does.
+				setup.mockInput.pressArrow("left");
+				setup.mockInput.pressEnter();
+				await awaitFrame(
+					setup,
+					() => values().includes("alpha bet\na"),
+					"the enhanced Enter to add a line",
+				);
+				setup.mockInput.pressKey("z", { ctrl: true });
+				await awaitFrame(setup, () => values().at(-1) === "alpha beta", "the enhanced undo");
+			},
+			true,
+		);
+	});
+
+	test("an enhanced terminal keeps a digits field's refusal", async () => {
+		const onRefuse = vi.fn();
+		await withField(
+			createElement(TextField, {
+				label: "Context",
+				value: "12",
+				focused: true,
+				width: 16,
+				digits: true,
+				onRefuse,
+			}),
+			40,
+			6,
+			async (setup) => {
+				setup.mockInput.pressKey("e");
+				await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the enhanced refusal");
+				expect(onRefuse).toHaveBeenCalledWith("This field takes digits only");
+			},
+			true,
 		);
 	});
 });
