@@ -101,7 +101,9 @@ response editor, Agent interaction, and the Consultation confirmation panel
 are not wired to the shared control catalogue yet (issue #9). The keys they
 use are these:
 
-- The Consultation view keeps an independent list and Agent view. In the
+- The Consultation view keeps an independent list and Agent view. `v` opens
+	it on the Consultation that needs the operator, if one does: an awaiting
+	response wins, and among the recovery items the oldest wins. In the
 	launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
 	launches, `Shift+Enter` inserts a newline, and `Esc` cancels. A
 	Consultation starts on the agent, environment, model, thinking level, and

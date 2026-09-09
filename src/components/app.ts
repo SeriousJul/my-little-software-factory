@@ -11,7 +11,8 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff.
+ * `a` toggles auto-handoff. `v` opens the Consultations view on the
+ * Consultation that needs the operator, if one does.
  */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
@@ -1592,7 +1593,9 @@ export function App({
 		setReplacementConsultationId(null);
 		historyFilterRef.current = "open";
 		setHistoryFilter("open");
-		openConsultations();
+		// Stay on the record the replacement points back at, or on the
+		// launched Consultation when it replaces nothing.
+		openConsultations(consultation.replacementOf ?? consultation.id);
 		replaceConsultations();
 		// A Replacement opens like a new Consultation: the module builds the
 		// linked record with its bounded recovery context, then the same launch
@@ -1639,17 +1642,19 @@ export function App({
 			() => setResponseEditor(true),
 		);
 	};
-	const openConsultations = () => {
-		viewRef.current = "consultations";
-		setView("consultations");
-		setFocusedPane("list");
-	};
-	const openAttention = () => {
-		if (state === undefined) return false;
+	/**
+	 * The index, in the open list, of the Consultation that needs the
+	 * operator, if any.
+	 *
+	 * An awaiting response always wins: the Agent is working and waiting.
+	 * Otherwise attention goes to the oldest unresolved recovery item: it
+	 * has waited the longest for the operator. The list is newest-first, so
+	 * the attention row is usually not the first one, and ties break on
+	 * creation time.
+	 */
+	const attentionIndex = (): number | null => {
+		if (state === undefined) return null;
 		const current = state.consultations("open");
-		// The list is newest-first, but attention goes to the oldest
-		// unresolved recovery item: it has waited the longest for the
-		// operator. Ties break on creation time.
 		const recovery = current
 			.filter(
 				(item) =>
@@ -1665,18 +1670,34 @@ export function App({
 				return oldest;
 			}, null);
 		const target = current.find((item) => item.state === "awaiting-response") ?? recovery;
-		if (target === undefined || target === null) return false;
+		if (target === undefined || target === null) return null;
+		return current.findIndex((item) => item.id === target.id);
+	};
+	const openConsultations = (selectId?: string) => {
+		viewRef.current = "consultations";
+		setView("consultations");
+		setFocusedPane("list");
+		// With an explicit selection the view stays on that Consultation:
+		// a launch keeps the operator on what it just created, or on the
+		// record the replacement points back at. Without one the view opens
+		// on the Consultation that needs the operator, if one does: it must
+		// not hide behind a view switch. Without either the view keeps its
+		// current filter and selection.
+		const index =
+			selectId === undefined
+				? attentionIndex()
+				: state === undefined
+					? null
+					: state.consultations("open").findIndex((item) => item.id === selectId);
+		if (index === undefined || index === null) return;
 		historyFilterRef.current = "open";
 		setHistoryFilter("open");
 		replaceConsultations();
-		openConsultations();
-		const index = current.findIndex((item) => item.id === target.id);
 		consultationIndexRef.current = index;
 		setConsultationIndex(index);
 		consultationFollowRef.current = true;
 		setConsultationScroll(999999);
 		setNewOutput(false);
-		return true;
 	};
 	const cycleConsultationHistory = () => {
 		const next =
@@ -1998,7 +2019,7 @@ export function App({
 					openOverride();
 					break;
 				case "a":
-					if (!openAttention()) toggleAutoHandoff();
+					toggleAutoHandoff();
 					break;
 				case "r":
 					if (viewRef.current === "consultations" && selectedConsultation?.state === "opening")
@@ -2057,14 +2078,12 @@ export function App({
 				tickets: () => focusPane("list"),
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
-				consultations: openConsultations,
+				consultations: () => openConsultations(),
 				launch: () => setLauncher(true),
 				override: openOverride,
 				refresh: refreshNow,
 				leftover: openLeftoverPanel,
-				"auto-handoff": () => {
-					if (!openAttention()) toggleAutoHandoff();
-				},
+				"auto-handoff": () => toggleAutoHandoff(),
 				help: () => openGuide(mode),
 				message: () => openMessage(mode),
 			},
