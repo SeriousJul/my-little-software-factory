@@ -13,11 +13,13 @@ import {
 	cellColors,
 	detailFocused,
 	focusDetail,
+	HEADER_ROWS,
 	listFocused,
 	markerRowOf,
 	mouseClick,
 	mouseDrag,
 	mouseWheel,
+	paneRow,
 	press,
 	pressArrow,
 	rgb,
@@ -29,7 +31,7 @@ import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const SCROLL_WIDTH = 60;
-const SCROLL_HEIGHT = 10;
+const SCROLL_HEIGHT = 12;
 const GUTTER_X = SCROLL_WIDTH - 2;
 const LONG_SCROLL_CONFIG: FactoryConfig = {
 	...DEFAULT_CONFIG,
@@ -61,7 +63,7 @@ async function wheelAt(
 ): Promise<void> {
 	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
 	try {
-		await mouseWheel(setup, 45, 3, direction);
+		await mouseWheel(setup, 45, paneRow(3), direction);
 	} finally {
 		clock.mockRestore();
 	}
@@ -118,20 +120,20 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const initial = setup.captureCharFrame();
 				const thumb = thumbRows(initial);
-				expect(thumb).toEqual([1]);
+				expect(thumb).toEqual([paneRow(1)]);
 				expect(cellColors(setup, GUTTER_X, thumb[0])).toEqual({
 					fg: rgb(COLORS.borderFocused),
 					bg: rgb(COLORS.dim),
 				});
-				expect(cellColors(setup, GUTTER_X, 2).bg).toEqual(rgb(COLORS.dim));
+				expect(cellColors(setup, GUTTER_X, paneRow(2)).bg).toEqual(rgb(COLORS.dim));
 
-				await mouseClick(setup, 45, 3);
+				await mouseClick(setup, 45, paneRow(3));
 				await awaitFrame(setup, detailFocused, "the detail to take click focus");
 				expect(cellColors(setup, GUTTER_X, thumb[0]).fg).toEqual(rgb(COLORS.borderFocused));
 
 				// The panes sit above the Message line and Action bar, so the
 				// track spans content rows one to six.
-				await mouseClick(setup, GUTTER_X, 5);
+				await mouseClick(setup, GUTTER_X, paneRow(5));
 				const end = await awaitFrame(
 					setup,
 					(frame) => frame !== initial && !frame.includes("Retry policy for webhooks"),
@@ -149,7 +151,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
-				await mouseClick(setup, GUTTER_X, 4);
+				await mouseClick(setup, GUTTER_X, paneRow(4));
 				const end = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== initial,
@@ -157,7 +159,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(end).not.toContain("Retry policy for webhooks");
 
-				await mouseClick(setup, GUTTER_X, 1);
+				await mouseClick(setup, GUTTER_X, paneRow(1));
 				const start = await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -165,7 +167,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(start).not.toContain("their retries.");
 
-				await mouseClick(setup, GUTTER_X, 3);
+				await mouseClick(setup, GUTTER_X, paneRow(3));
 				const middle = await awaitFrame(
 					setup,
 					(frame) => frame !== start && frame !== end,
@@ -173,15 +175,15 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(detailFocused(middle)).toBe(true);
 
-				await mouseClick(setup, GUTTER_X, 1);
-				await mouseDrag(setup, [GUTTER_X, 1], [GUTTER_X, 4]);
+				await mouseClick(setup, GUTTER_X, paneRow(1));
+				await mouseDrag(setup, [GUTTER_X, paneRow(1)], [GUTTER_X, paneRow(4)]);
 				const draggedDown = await awaitFrame(
 					setup,
 					(frame) => frame !== start && !frame.includes("Retry policy for webhooks"),
 					"a thumb drag toward the end",
 				);
-				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(1);
-				await mouseDrag(setup, [GUTTER_X, 4], [GUTTER_X, 1]);
+				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(paneRow(1));
+				await mouseDrag(setup, [GUTTER_X, paneRow(4)], [GUTTER_X, paneRow(1)]);
 				await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -189,16 +191,16 @@ describe("native Ticket detail viewport", () => {
 				);
 			},
 			SCROLL_WIDTH,
-			8,
+			10,
 		);
 	});
 
 	test("moves detail state from content, gutter, track, and thumb wheel targets", async () => {
 		for (const [name, x, y] of [
-			["content", 45, 3],
-			["gutter", GUTTER_X, 2],
-			["track", GUTTER_X, 6],
-			["thumb", GUTTER_X, 1],
+			["content", 45, paneRow(3)],
+			["gutter", GUTTER_X, paneRow(2)],
+			["track", GUTTER_X, paneRow(6)],
+			["thumb", GUTTER_X, paneRow(1)],
 		] as const) {
 			await withApp(
 				async (setup) => {
@@ -209,7 +211,7 @@ describe("native Ticket detail viewport", () => {
 						(frame) => detailFocused(frame) && frame !== before,
 						`a detail wheel event over its ${name}`,
 					);
-					expect(markerRowOf(moved)).toBe(2);
+					expect(markerRowOf(moved)).toBe(4);
 				},
 				SCROLL_WIDTH,
 				SCROLL_HEIGHT,
@@ -227,7 +229,7 @@ describe("native Ticket detail viewport", () => {
 					(frame) => detailFocused(frame) && !frame.includes("Retry policy for webhooks"),
 					"a PageDown immediately after detail focus to move the detail",
 				);
-				expect(markerRowOf(page)).toBe(2);
+				expect(markerRowOf(page)).toBe(4);
 			},
 			SCROLL_WIDTH,
 			SCROLL_HEIGHT,
@@ -278,7 +280,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				const top = setup.captureCharFrame();
-				await mouseWheel(setup, 4, 2, "up");
+				await mouseWheel(setup, 4, paneRow(2), "up");
 				expect(await settle(setup)).toBe(top);
 
 				await pressArrow(setup, "down", "Down to select the second Ticket", (frame) =>
@@ -297,14 +299,14 @@ describe("native Ticket detail viewport", () => {
 					selectedRow(frame).includes("Ticket id"),
 				);
 				const bottom = setup.captureCharFrame();
-				await mouseWheel(setup, 4, 3, "down");
+				await mouseWheel(setup, 4, paneRow(3), "down");
 				expect(await settle(setup)).toBe(bottom);
 				await press(setup, "home", "Home to select the first Ticket", (frame) =>
 					selectedRow(frame).includes("Retry polic"),
 				);
 
 				for (const [index, ticket] of SAMPLE_TICKETS.slice(0, 2).entries()) {
-					await mouseClick(setup, 4, index + 2);
+					await mouseClick(setup, 4, paneRow(index + 2));
 					const selected = await awaitFrame(
 						setup,
 						(frame) =>
@@ -317,7 +319,7 @@ describe("native Ticket detail viewport", () => {
 				}
 			},
 			SCROLL_WIDTH,
-			8,
+			10,
 		);
 	});
 
@@ -495,7 +497,7 @@ describe("native Ticket detail viewport", () => {
 				setup.renderer.on(CliRenderEvents.FRAME, record);
 				try {
 					for (let event = 0; event < 10; event += 1) {
-						await mouseWheel(setup, 45, 3, "down");
+						await mouseWheel(setup, 45, paneRow(3), "down");
 					}
 					const final = await awaitFrame(
 						setup,
@@ -534,12 +536,13 @@ describe("native Ticket detail viewport", () => {
 						setup,
 						(candidate) => {
 							const rows = rowsOf(candidate);
-							// Merged layout: mode line on top, panes, then the
-							// reserved Message line and Action bar.
+							// One frame: the two section headers, the mode line,
+							// the panes, then the reserved Message line and the
+							// Action bar.
 							return (
 								rows.length === 18 &&
 								rows.every((row) => row.length === 73) &&
-								rows[0]?.startsWith("auto: off 0/2") === true &&
+								rows[HEADER_ROWS]?.startsWith("auto: off 0/2") === true &&
 								rows.at(-3)?.includes("└") === true
 							);
 						},
@@ -564,7 +567,7 @@ describe("native Ticket detail viewport", () => {
 					frame.includes("their retries."),
 				);
 				await press(setup, "h", "the list to take focus", listFocused);
-				await mouseClick(setup, 4, 3);
+				await mouseClick(setup, 4, paneRow(3));
 				const nextTicket = await awaitFrame(
 					setup,
 					(frame) => frame.includes("Fix pan drift in split"),
@@ -604,7 +607,7 @@ describe("native Ticket detail viewport", () => {
 					// The source field is below this small viewport at the preserved
 					// offset. Grow the terminal only to observe that refresh, then
 					// return to the original viewport to verify the native offset.
-					setup.resize(SCROLL_WIDTH, 18);
+					setup.resize(SCROLL_WIDTH, 20);
 					await awaitFrame(
 						setup,
 						(frame) => frame.includes("External key: #11-refresh"),

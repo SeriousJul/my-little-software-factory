@@ -11,7 +11,7 @@ import { type MessageFacts, selectMessage } from "./messages.ts";
  * the operator started while it ran, and a settled refresh must not erase
  * the Handoff it covers.
  */
-export type WorkingKind = "refresh" | "handoff";
+export type WorkingKind = "refresh" | "handoff" | "consultation";
 
 /**
  * Whose progress line a call may clear.

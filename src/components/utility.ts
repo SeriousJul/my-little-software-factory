@@ -91,7 +91,7 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 	const mode = context.mode;
 	// What the guide lists depends on the mode alone; what each row says about
 	// availability is read from the live context when the row renders.
-	const entries = useMemo(() => guideControls(mode), [mode]);
+	const entries = useMemo(() => guideControls(context), [context]);
 	const frame = modalFrame(width, height, {
 		maxWidth: UTILITY_MAX_WIDTH,
 		maxHeight: UTILITY_MAX_HEIGHT,
@@ -240,7 +240,7 @@ function guideRows(
 		const availability = isCurrent ? availabilityFor(entry.control, context) : { available: true };
 		rows.push({
 			kind: "control",
-			keys: guideKeyLabel(context.mode, entry.control),
+			keys: guideKeyLabel(context.mode, entry.control, context),
 			label: entry.control.label,
 			// A control that is always available carries its guide note; a
 			// current-mode control carries its live unavailable reason. Other

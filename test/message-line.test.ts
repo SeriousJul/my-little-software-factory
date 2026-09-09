@@ -429,7 +429,7 @@ describe("the permanent Message line", () => {
 	test("states an operation notice, and lets a refusal take the line back", async () => {
 		await withApp(
 			async (setup) => {
-				for (const row of [3, 4, 5]) {
+				for (const row of [5, 6, 7]) {
 					await press(setup, "j", "the next ticket", (f) => markerRowOf(f) === row);
 				}
 				// Enter belongs to the factory in auto mode. The fact says so; it

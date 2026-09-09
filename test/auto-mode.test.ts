@@ -3434,11 +3434,11 @@ describe("the handoff queue", () => {
 				// so the move down lands the marker on line four - a line it
 				// was not on, so the key is applied before the next key is
 				// pressed.
-				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 4);
+				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 6);
 				await pressReturnQuietFor("the handoff to start", (f) => f.includes("handing off"));
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 3);
+				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 5);
 				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
@@ -3486,7 +3486,7 @@ describe("the handoff queue", () => {
 				await pressQuietFor(
 					"j",
 					"the boundary no-op on the open ticket",
-					(f) => markerRowOf(f) === 4,
+					(f) => markerRowOf(f) === 6,
 				);
 				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(

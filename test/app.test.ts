@@ -52,6 +52,7 @@ import {
 	mousePress,
 	mouseWheel,
 	openPanel,
+	paneRow,
 	press,
 	pressArrow,
 	rgb,
@@ -193,12 +194,12 @@ describe("the control plane", () => {
 				(frame) => frame.includes("the Ticket detail has nowhere to scroll"),
 				"the unavailable Scroll reason",
 			);
-			expect(markerRowOf(after)).toBe(2);
+			expect(markerRowOf(after)).toBe(4);
 
 			// h moves the focus back to the list pane; the selection is
 			// preserved.
 			frame = await press(setup, "h", "the list pane to take focus", listFocused);
-			expect(markerRowOf(frame)).toBe(2);
+			expect(markerRowOf(frame)).toBe(4);
 			expect(showsTicket(frame, SAMPLE_TICKETS[0])).toBe(true);
 		});
 	});
@@ -211,7 +212,7 @@ describe("the control plane", () => {
 				setup,
 				"j",
 				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 3,
+				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 5,
 			);
 
 			// The right arrow focuses the detail pane. The selection is
@@ -223,13 +224,13 @@ describe("the control plane", () => {
 				"the detail pane to take focus",
 				detailFocused,
 			);
-			expect(markerRowOf(right)).toBe(3);
+			expect(markerRowOf(right)).toBe(5);
 			expect(showsTicket(right, SAMPLE_TICKETS[1])).toBe(true);
 
 			// The left arrow focuses the list pane. The selection is
 			// preserved.
 			const left = await pressArrow(setup, "left", "the list pane to take focus", listFocused);
-			expect(markerRowOf(left)).toBe(3);
+			expect(markerRowOf(left)).toBe(5);
 			expect(showsTicket(left, SAMPLE_TICKETS[1])).toBe(true);
 		});
 	});
@@ -242,19 +243,19 @@ describe("the control plane", () => {
 
 			// Click the detail pane: it takes the app focus and paints its
 			// border with the focused color; the list border relaxes.
-			await mouseClick(setup, detailX + 10, 5);
+			await mouseClick(setup, detailX + 10, paneRow(5));
 			await awaitFrame(setup, detailFocused, "the detail pane to take click focus");
-			expect(cellColors(setup, detailX, 0).fg).toEqual(rgb(COLORS.borderFocused));
-			expect(cellColors(setup, 0, 0).fg).toEqual(rgb(COLORS.border));
+			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(COLORS.borderFocused));
+			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(COLORS.border));
 
 			// Click the list pane: the focus moves and the detail border
 			// follows. The first click also gave the detail's scroll box
 			// OpenTUI's own focus; the deactivated border must not keep the
 			// focused color.
-			await mouseClick(setup, 10, 5);
+			await mouseClick(setup, 10, paneRow(5));
 			await awaitFrame(setup, listFocused, "the list pane to take click focus");
-			expect(cellColors(setup, 0, 0).fg).toEqual(rgb(COLORS.borderFocused));
-			expect(cellColors(setup, detailX, 0).fg).toEqual(rgb(COLORS.border));
+			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(COLORS.borderFocused));
+			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(COLORS.border));
 		});
 	});
 
@@ -264,7 +265,7 @@ describe("the control plane", () => {
 			// policy activates only on a left press or a vertical wheel, so a
 			// right press over the detail changes nothing.
 			const before = setup.captureCharFrame();
-			await mousePress(setup, Math.floor(WIDTH / 2) + 10, 5, MouseButtons.RIGHT);
+			await mousePress(setup, Math.floor(WIDTH / 2) + 10, paneRow(5), MouseButtons.RIGHT);
 			expect(await settle(setup)).toBe(before);
 		});
 	});
@@ -276,7 +277,7 @@ describe("the control plane", () => {
 				await focusDetail(setup);
 				const agentRow = agentRowOf(setup.captureCharFrame());
 				expect(agentRow).toBeGreaterThan(0);
-				expect(markerRowOf(setup.captureCharFrame())).toBe(2);
+				expect(markerRowOf(setup.captureCharFrame())).toBe(4);
 
 				// j translates the native surface one terminal row. The top padding
 				// scrolls away first, and every mounted content row moves together.
@@ -287,7 +288,7 @@ describe("the control plane", () => {
 					(f) => agentRowOf(f) === agentRow - 1 && f.includes("Retry policy for webhooks"),
 				);
 				// The selection did not move.
-				expect(markerRowOf(scrolled)).toBe(2);
+				expect(markerRowOf(scrolled)).toBe(4);
 
 				// k scrolls back to the top. The title is back.
 				const back = await press(
@@ -296,10 +297,10 @@ describe("the control plane", () => {
 					"the detail to scroll back to the top",
 					(f) => agentRowOf(f) === agentRow && f.includes("Retry policy for webhooks"),
 				);
-				expect(markerRowOf(back)).toBe(2);
+				expect(markerRowOf(back)).toBe(4);
 			},
 			60,
-			10,
+			14,
 		);
 	});
 
@@ -334,10 +335,10 @@ describe("the control plane", () => {
 				expect(afterBottom).toBe(atBottom);
 
 				// The selection never moved.
-				expect(markerRowOf(atBottom)).toBe(2);
+				expect(markerRowOf(atBottom)).toBe(4);
 			},
 			60,
-			10,
+			12,
 		);
 	});
 
@@ -371,7 +372,7 @@ describe("the control plane", () => {
 					setup,
 					"j",
 					"the selection to move to the second ticket",
-					(f) => markerRowOf(f) === 3,
+					(f) => markerRowOf(f) === 5,
 				);
 				frame = await press(
 					setup,
@@ -396,7 +397,7 @@ describe("the control plane", () => {
 				expect(rows3.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
 			},
 			WIDTH,
-			8,
+			10,
 		);
 	});
 
@@ -407,7 +408,7 @@ describe("the control plane", () => {
 				setup,
 				"j",
 				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 3,
+				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 5,
 			);
 			// The badge rides on the selected row at this width.
 			expect(setup.captureCharFrame()).toContain("[implement]");
@@ -438,7 +439,7 @@ describe("the control plane", () => {
 			// Both panes and the selection survive the resize.
 			expect(small).toContain("Tickets");
 			expect(small).toContain("Detail");
-			expect(markerRowOf(small)).toBe(3);
+			expect(markerRowOf(small)).toBe(5);
 			// The badge drops at this width; the repository already did.
 			expect(small).not.toContain("[implement]");
 
@@ -473,7 +474,7 @@ describe("the control plane", () => {
 			);
 			expect(large).toContain("Tickets");
 			expect(large).toContain("Detail");
-			expect(markerRowOf(large)).toBe(3);
+			expect(markerRowOf(large)).toBe(5);
 			expect(showsTicket(large, SAMPLE_TICKETS[1])).toBe(true);
 			// The badge comes back, the focus stays, and the detail scroll
 			// clamps to the window that now fits the whole ticket.
@@ -514,12 +515,12 @@ describe("the control plane", () => {
 				expect(rows).toHaveLength(25);
 				for (const row of rows) {
 					expect(row.length).toBe(75);
-				}
-				// The split puts the list box on columns 0-36 and the detail
-				// box on 37-74. At an odd width a "50%" list would take 38
-				// columns, and the shared geometry would then lay text one
-				// cell off the rendered box.
-				for (const row of rows.slice(1, -3)) {
+				} // Rows 0-1 are the section headers and row 2 is the mode line, so the
+				// panes' own rows start below them and stop at the Message line. The
+				// split puts the list box on columns 0-36 and the detail box on
+				// 37-74. At an odd width a "50%" list would take 38 columns, and the
+				// shared geometry would then lay text one cell off the rendered box.
+				for (const row of rows.slice(3, -3)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -928,7 +929,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -936,7 +937,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				// A visible list row is a direct selection target.
-				await mouseClick(setup, 4, 3);
+				await mouseClick(setup, 4, paneRow(3));
 				await awaitFrame(
 					setup,
 					(frame) =>
@@ -946,7 +947,7 @@ describe("the control plane", () => {
 				);
 				// List wheels select exactly one adjacent Ticket. They have no
 				// detail speed profile or acceleration.
-				await mouseWheel(setup, 4, 3, "down");
+				await mouseWheel(setup, 4, paneRow(3), "down");
 				await awaitFrame(
 					setup,
 					(frame) =>
@@ -957,22 +958,22 @@ describe("the control plane", () => {
 
 				// Detail content receives a normal wheel event and takes focus.
 				const before = setup.captureCharFrame();
-				await mouseWheel(setup, 45, 3, "down");
+				await mouseWheel(setup, 45, paneRow(3), "down");
 				const scrolled = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== before,
 					"the detail wheel event to move its surface",
 				);
-				expect(markerRowOf(scrolled)).toBe(4);
+				expect(markerRowOf(scrolled)).toBe(6);
 
 				// Horizontal and Shift-wheel gestures are inert for wrapped detail text.
 				const stable = setup.captureCharFrame();
-				await mouseWheel(setup, 45, 3, "left");
-				await mouseWheel(setup, 45, 3, "down", true);
+				await mouseWheel(setup, 45, paneRow(3), "left");
+				await mouseWheel(setup, 45, paneRow(3), "down", true);
 				expect(await settle(setup)).toBe(stable);
 			},
 			60,
-			10,
+			12,
 		);
 	});
 
@@ -982,7 +983,7 @@ describe("the control plane", () => {
 			expect(frame).not.toMatch(/[▀▄█]/);
 			// The final inner detail column remains blank: text uses the same
 			// width before a later overflow makes the control visible.
-			expect(rowsOf(frame)[2].at(-2)).toBe(" ");
+			expect(rowsOf(frame)[paneRow(2)].at(-2)).toBe(" ");
 		});
 	});
 
@@ -995,15 +996,15 @@ describe("the control plane", () => {
 				expect(initial).toMatch(/[▀▄█]/);
 				// The panes sit above the Message line and Action bar, so the
 				// track spans the pane's inner rows one to four.
-				await mouseClick(setup, 58, 4);
+				await mouseClick(setup, 58, paneRow(4));
 				const trackJump = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== initial,
 					"a scrollbar track click to jump to a proportional detail position",
 				);
-				expect(markerRowOf(trackJump)).toBe(2);
+				expect(markerRowOf(trackJump)).toBe(4);
 				const thumbRow = rowsOf(trackJump).findIndex((row) => /[▀▄█]/.test(row.slice(58, 59)));
-				await mouseDrag(setup, [58, thumbRow], [58, 1]);
+				await mouseDrag(setup, [58, thumbRow], [58, paneRow(1)]);
 				await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -1011,7 +1012,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			8,
+			10,
 		);
 	});
 
@@ -1032,7 +1033,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			10,
+			12,
 			{ config },
 		);
 	});
@@ -1045,7 +1046,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const before = agentRowOf(setup.captureCharFrame());
-				await mouseWheel(setup, 45, 3, "down");
+				await mouseWheel(setup, 45, paneRow(3), "down");
 				await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && agentRowOf(frame) === before - 2,
@@ -1053,7 +1054,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			10,
+			12,
 			{ config },
 		);
 	});
@@ -1064,7 +1065,7 @@ describe("the control plane", () => {
 				const wheelAt = async (now: number) => {
 					const clock = vi.spyOn(Date, "now").mockReturnValue(now);
 					try {
-						await mouseWheel(setup, 45, 3, "down");
+						await mouseWheel(setup, 45, paneRow(3), "down");
 					} finally {
 						clock.mockRestore();
 					}
@@ -1084,7 +1085,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			10,
+			12,
 		);
 	});
 
@@ -1100,7 +1101,7 @@ describe("the control plane", () => {
 				setup.renderer.on(CliRenderEvents.FRAME, record);
 				try {
 					for (let event = 0; event < 10; event += 1) {
-						await mouseWheel(setup, 45, 3, "down");
+						await mouseWheel(setup, 45, paneRow(3), "down");
 					}
 					await sleep(80);
 				} finally {
@@ -1109,16 +1110,16 @@ describe("the control plane", () => {
 				expect(frames.length).toBeGreaterThan(0);
 				for (const frame of frames) {
 					const rows = rowsOf(frame);
-					expect(rows).toHaveLength(10);
+					expect(rows).toHaveLength(12);
 					expect(rows.every((row) => row.length === 60)).toBe(true);
-					expect(rows[0]).toContain("┌");
+					expect(rows[paneRow(0)]).toContain("┌");
 					// The panes sit above the Message line and Action bar.
 					expect(rows.at(-3)).toContain("└");
 					expect(detailPaneText(frame, 60).trim()).not.toBe("");
 				}
 			},
 			60,
-			10,
+			12,
 			{ config },
 		);
 	});
@@ -1128,8 +1129,8 @@ describe("the control plane", () => {
 			async (setup) => {
 				await openPanel(setup);
 				const before = setup.captureCharFrame();
-				await mouseWheel(setup, 45, 3, "down");
-				await mouseClick(setup, 4, 3);
+				await mouseWheel(setup, 45, paneRow(3), "down");
+				await mouseClick(setup, 4, paneRow(3));
 				expect(await settle(setup)).toBe(before);
 			},
 			60,

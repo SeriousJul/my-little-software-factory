@@ -83,7 +83,7 @@ function packActionBar(
 ): PackedBar {
 	const entries = controls.map((control) => ({
 		control,
-		keyLabel: keyLabelFor(context.mode, control),
+		keyLabel: keyLabelFor(context.mode, control, context),
 		availability: availabilityFor(control, context),
 	}));
 	// Where a bar carries two anchors, the one that outranks the rest holds the
@@ -132,10 +132,16 @@ function packActionBar(
  * `?` is one of its keys it is the one-cell form, and where even that does not
  * fit the row states nothing and leaves its width to the frame.
  */
-function fitAnchorHint(anchor: PackedControl, mode: InteractionMode, width: number): string {
+function fitAnchorHint(
+	anchor: PackedControl,
+	mode: InteractionMode,
+	context: ControlContext,
+	width: number,
+): string {
 	const full = `${anchor.keyLabel} ${anchor.control.label}`;
 	if (widthOf(full) <= width) return full;
-	for (const key of compactKeyLabels(mode, anchor.control)) if (widthOf(key) <= width) return key;
+	for (const key of compactKeyLabels(mode, anchor.control, context))
+		if (widthOf(key) <= width) return key;
 	return "";
 }
 
@@ -154,7 +160,7 @@ export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor 
 		return createElement(
 			"text",
 			{ style: { width: "100%", height: 1 } },
-			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, width), width), width),
+			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, context, width), width), width),
 		);
 	// The compact row left-aligns its one hint; a full bar keeps the anchor in
 	// its own cells at the right end of the row.

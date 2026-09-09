@@ -524,7 +524,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(state.pendingConsultationResponse(started[0].id)).toBeNull();
 				},
 				WIDTH,
-				30,
+				32,
 				{
 					...bootProps(state, runner),
 					config: { ...configFor(), repos: {} },
@@ -565,7 +565,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(state.consultationTurns(WORKING_ID)[0].settledAt).not.toBeNull();
 				},
 				WIDTH,
-				30,
+				32,
 				{
 					state,
 					runner,
@@ -596,7 +596,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 						detailPaneText(f).includes("State: "),
 					);
 					// The action bar offers recovery for an opening Consultation.
-					expect(frameText(setup.captureCharFrame())).toContain("r recover");
+					expect(frameText(setup.captureCharFrame())).toContain("r Recover");
 					await press(setup, "r", "the recovered launch to reach working", (f) =>
 						f.includes("State: working"),
 					);
@@ -611,7 +611,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(state.consultation(OPENING_ID)?.state).toBe("working");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -678,7 +678,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(replacements[0].state).toBe("working");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -723,7 +723,7 @@ describe("Consultation responses through the UI", () => {
 					expect(turns[1].input).toBe("follow up");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -762,7 +762,7 @@ describe("Consultation responses through the UI", () => {
 					expect(frameText(setup.captureCharFrame())).toContain("follow up");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -792,7 +792,7 @@ describe("Consultation responses through the UI", () => {
 					);
 					expect(detailPaneText(settled)).toContain("Agent view:");
 					expect(detailPaneText(settled)).toContain("the design holds");
-					expect(frameText(settled)).toContain("Enter respond");
+					expect(frameText(settled)).toContain("Enter Respond");
 
 					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
 					setup.mockInput.typeText("then ship it");
@@ -810,7 +810,7 @@ describe("Consultation responses through the UI", () => {
 					expect(turns.at(-1)?.input).toBe("then ship it");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
 			);
 		} finally {
@@ -835,7 +835,7 @@ describe("Agent interaction through the UI", () => {
 						detailPaneText(f).includes("State: "),
 					);
 					await pressEnter(setup, "interaction mode with its exit key", (f) =>
-						f.includes("F12 exit"),
+						f.includes("F12 Exit interaction"),
 					);
 					const frame = await awaitFrame(
 						setup,
@@ -852,7 +852,7 @@ describe("Agent interaction through the UI", () => {
 					setup.mockInput.pressKey("h");
 					setup.mockInput.pressKey("\u00e9");
 					await pressEnter(setup, "the frame to stay in interaction", (f) =>
-						f.includes("F12 exit"),
+						f.includes("F12 Exit interaction"),
 					);
 					await waitForCommands(
 						runner,
@@ -870,7 +870,7 @@ describe("Agent interaction through the UI", () => {
 					);
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -959,7 +959,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					}
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1031,7 +1031,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(worktrees[0]).toMatchObject({ owned: false });
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1058,7 +1058,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					expect(frameText(frame)).toContain("State: working");
 				},
 				70,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1106,7 +1106,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					expect(state.consultation(CLOSED_ID)).toBeUndefined();
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1164,7 +1164,7 @@ describe("Consultation attention through the UI", () => {
 					expect(bells.count()).toBe(2);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1206,7 +1206,7 @@ describe("Consultation attention through the UI", () => {
 					expect(bells.count()).toBe(1);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1246,7 +1246,7 @@ describe("Consultation attention through the UI", () => {
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1284,7 +1284,7 @@ describe("Consultation attention through the UI", () => {
 					expect(rows.join("\n")).not.toContain("awaiting response");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1343,7 +1343,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.workspaceId).toBe("ws-live");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1409,7 +1409,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.contextWindow).toBe("131072");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config, home },
 			);
 		} finally {
@@ -1457,7 +1457,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.workspaceId).toBe("ws-new");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1526,7 +1526,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					});
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1595,7 +1595,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.paneId).toBeNull();
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config, home },
 			);
 		} finally {
@@ -1631,7 +1631,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.warning).toBe("the live checkout has uncommitted changes");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1663,14 +1663,12 @@ describe("Consultation response gating by observed Agent status", () => {
 					// configured exit key is visible before any input is forwarded.
 					const bar = await awaitFrame(
 						setup,
-						(f) => frameText(f).includes("F12 interact exit"),
+						(f) => frameText(f).includes("Enter Interact"),
 						"the blocked Agent hints",
 					);
-					expect(frameText(bar)).toContain("Enter interact");
-					await pressEnter(
-						setup,
-						"interaction mode, not the response editor",
-						(f) => f.includes("F12 exit") && !f.includes("interact exit"),
+					expect(frameText(bar)).toContain("Enter Interact");
+					await pressEnter(setup, "interaction mode, not the response editor", (f) =>
+						f.includes("F12 Exit interaction"),
 					);
 					// No input is forwarded until the operator sends keys.
 					expect(runner.commands().join("\n")).not.toContain("send-text");
@@ -1680,7 +1678,7 @@ describe("Consultation response gating by observed Agent status", () => {
 					);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1706,13 +1704,13 @@ describe("Consultation response gating by observed Agent status", () => {
 					// The gate is the observed status, not the last settled turn.
 					await awaitFrame(
 						setup,
-						(f) => frameText(f).includes("Enter respond"),
+						(f) => frameText(f).includes("Enter Respond"),
 						"the idle Agent hints",
 					);
 					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1735,10 +1733,8 @@ describe("Consultation response gating by observed Agent status", () => {
 			await withApp(
 				async (setup) => {
 					await press(setup, "v", "the consultations view", (f) => f.includes("State: working"));
-					await pressEnter(
-						setup,
-						"interaction mode with its exit key",
-						(f) => f.includes("F12 exit") && !f.includes("interact exit"),
+					await pressEnter(setup, "interaction mode with its exit key", (f) =>
+						f.includes("F12 Exit interaction"),
 					);
 					const ansiReads = () =>
 						runner.commands().filter((c) => c.includes("--format ansi")).length;
@@ -1756,7 +1752,7 @@ describe("Consultation response gating by observed Agent status", () => {
 					);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1830,10 +1826,8 @@ describe("The full Consultation operator flow", () => {
 					);
 					expect(state.consultationTurns(id).at(-1)?.settledStatus).toBe("blocked");
 					// Enter now opens interaction, not the response editor.
-					await pressEnter(
-						setup,
-						"the blocked interaction mode",
-						(f) => f.includes("F12 exit") && !f.includes("interact exit"),
+					await pressEnter(setup, "the blocked interaction mode", (f) =>
+						f.includes("F12 Exit interaction"),
 					);
 					setup.mockInput.pressKey("h");
 					await waitForCommands(runner, [`herdr pane send-text pane-c1 h`], "the forwarded key");

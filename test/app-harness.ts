@@ -75,6 +75,17 @@ export const overlayRows = (frame: string): string[] =>
  */
 export const listHalfOf = (row: string): string => `${row.split("││")[0]}│`;
 /** The terminal row of the selected ticket in the list pane. */
+/**
+ * The Main view's two section headers: the panes start two rows lower than
+ * they did when one view owned the whole frame.
+ *
+ * Frame tests that point at a pane row or click a pane cell state their
+ * target relative to this constant, so the headers stay one fact instead of
+ * a repeated magic number.
+ */
+export const HEADER_ROWS = 2;
+/** The terminal row a frame-relative pane row holds under the headers. */
+export const paneRow = (row: number): number => HEADER_ROWS + row;
 export const markerRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
 /**
