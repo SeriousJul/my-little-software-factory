@@ -108,12 +108,14 @@ and among the recovery items the oldest wins. Once the section is expanded:
 	closed one.
 - `Enter` answers the selected Consultation: it opens the response editor on
 	an awaiting one and Agent interaction on a working or blocked one. In the
-	Consultation detail, `r` is the same Respond control and `t` the same
-	Interact control; in the Consultation list `r` stays Refresh.
+	Consultation detail, `r` is the same Respond control. `t` always returns
+	to the Ticket section from either Consultation pane, while Enter opens
+	Agent interaction when the selected Consultation permits it; in the
+	Consultation list `r` stays Refresh.
 - `r` recovers a Consultation whose opening was interrupted, and refreshes the
 	Consultation projection and the Ticket sources otherwise.
-- `t` expands the Ticket section again, and `h` or `Left` moves between the
-	section's own list and detail panes.
+- `t` expands the Ticket section again from either Consultation pane, and `h`
+	or `Left` moves between the expanded section's own list and detail panes.
 
 The Consultation launcher, the response editor, the Agent terminal, and the
 Consultation confirmation panels still handle their own keys (issue #9). The
@@ -140,7 +142,8 @@ Ticket list and detail move with the row, page and jump
 keys, focus the detail with `l` or `Right` and the list with `h` or `Left`, hand
 an open ticket off with `Enter`, open the decision modal on an awaiting one,
 the missing modal on a ticket whose agent is gone, and the override panel with
-`e`. `a` toggles auto-handoff in either section, `r` refreshes, and `q` quits.
+`e`. `a` toggles auto-handoff in the Ticket section, `r` refreshes, and `q`
+quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -384,8 +387,8 @@ and the Consultation section. One section is expanded and holds two panes side
 by side; the other is collapsed to its header row. `t` and `v`, or a click on
 a header, expand a section, and the keyboard focus lands on its list pane. A
 collapsed section keeps its list selection and its detail scroll, so a
-re-expand shows the same place. The rows run: the two section headers, the mode
-line (while the control plane has state to observe), the expanded section's
+re-expand shows the same place. The rows run: the mode line (while the control
+plane has state to observe), the two section headers, the expanded section's
 panes, the Message line, and the Action bar. The Consultation header carries
 that section's attention facts, its awaiting-response and recovery counts, the
 bell marker while the bell rings, and "new output" while the section is
@@ -464,7 +467,8 @@ Above the panes sits a mode line. It shows the auto-handoff state and the
 live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
 when no limit is set. The count is the in-flight tickets whose agent was
 alive in the latest herdr poll. The `a` key toggles the mode for the
-session; the config's `auto-handoff` key sets the startup value only.
+session from the Ticket section; the config's `auto-handoff` key sets the
+startup value only.
 
 A blocked agent replaces the state badge in the list row with a `blocked`
 badge: the agent shows an approval or question UI and waits for a human.
@@ -722,7 +726,7 @@ state-file = "factory.sqlite"
 
 # --- Auto-handoff and limits -----------------------------------------
 
-# Start in auto-handoff mode. The a key toggles it per session.
+# Start in auto-handoff mode. The a key toggles it from the Ticket section.
 auto-handoff = false
 
 # The in-flight agents the control plane keeps. 0 means unlimited.
@@ -966,7 +970,7 @@ source-kind = "github-issue"
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
 | `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
-| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it per session. |
+| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it from the Ticket section. |
 | `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |

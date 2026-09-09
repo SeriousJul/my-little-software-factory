@@ -214,8 +214,8 @@ describe("the merged Main view", () => {
 
 	test("section switches keep selection and focus, and auto-handoff stays Ticket-only", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seedConsultation(state, uid("c"));
-		seedConsultation(state, uid("d"));
+		seedConsultation(state, uid("c"), "2026-09-01T10:00:00.000Z");
+		seedConsultation(state, uid("d"), "2026-09-01T10:01:00.000Z");
 		const source = new FakeSource("issues", "github-issues", sampleOutcome());
 		try {
 			await booted(

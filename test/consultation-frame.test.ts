@@ -34,6 +34,7 @@ import {
 	detailPaneText,
 	frameText,
 	messageRowOf,
+	mouseClick,
 	openConsultationPanel,
 	openLauncher,
 	press,
@@ -1697,6 +1698,12 @@ describe("Consultation response gating by observed Agent status", () => {
 					await pressEnter(setup, "interaction mode, not the response editor", (f) =>
 						f.includes("F12 Exit interaction"),
 					);
+					// Agent interaction owns keyboard and mouse input. A header click
+					// must not switch to the hidden Ticket section.
+					await mouseClick(setup, 10, 1);
+					const stillConsultations = await settle(setup);
+					expect(stillConsultations).toContain("▾ Consultations");
+					expect(stillConsultations).not.toContain("▾ Tickets");
 					// No input is forwarded until the operator sends keys.
 					expect(runner.commands().join("\n")).not.toContain("send-text");
 					expect(runner.commands().join("\n")).not.toContain("send-keys");
@@ -1735,6 +1742,18 @@ describe("Consultation response gating by observed Agent status", () => {
 						"the idle Agent hints",
 					);
 					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					// The response editor owns mouse input too. A pane click must not
+					// move focus behind it, which would change the next base mode when
+					// the editor closes.
+					await mouseClick(setup, 80, 5);
+					await settle(setup);
+					const afterEditor = await press(
+						setup,
+						"escape",
+						"the response editor to close",
+						(f) => !f.includes("enter submit"),
+					);
+					expect(afterEditor).toContain("┌─❯ Consultations");
 				},
 				WIDTH,
 				32,

@@ -13,7 +13,6 @@ import {
 	cellColors,
 	detailFocused,
 	focusDetail,
-	HEADER_ROWS,
 	listFocused,
 	markerRowOf,
 	mouseClick,

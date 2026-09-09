@@ -2440,6 +2440,15 @@ export function App({
 		utility?.kind === "guide" || utility?.kind === "message"
 			? controlContextFor(utility.mode)
 			: ticketContext;
+	// Response editing and Agent interaction own all input above the Main
+	// panes. Keep headers and panes mouse-inert until that mode closes.
+	const mainSurfaceActive =
+		override === null &&
+		panel === null &&
+		utility === null &&
+		!launcher &&
+		!responseEditor &&
+		!interaction;
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
@@ -2457,7 +2466,7 @@ export function App({
 				section: "tickets",
 				expanded: section === "tickets",
 				width: terminalWidth,
-				active: override === null && panel === null && utility === null && !launcher,
+				active: mainSurfaceActive,
 				onExpand: () => expandSection("tickets"),
 			}),
 		!tooSmall &&
@@ -2469,7 +2478,7 @@ export function App({
 				recovery: consultationCounts.recovery,
 				bell,
 				newOutput,
-				active: override === null && panel === null && utility === null && !launcher,
+				active: mainSurfaceActive,
 				onExpand: () => expandSection("consultations"),
 			}),
 		tooSmall
@@ -2531,7 +2540,7 @@ export function App({
 								emptyMessage,
 								markerOf,
 								limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
-								active: override === null && panel === null && utility === null,
+								active: mainSurfaceActive,
 								onFocus: () => focusPane("list"),
 								onSelect: selectTicket,
 								onMove: moveList,
@@ -2544,7 +2553,7 @@ export function App({
 							selectedIndex: consultationIndex,
 							focused: focusedPane === "list",
 							reservedRows,
-							active: override === null && panel === null && utility === null,
+							active: mainSurfaceActive,
 							onFocus: () => focusPane("list"),
 							onSelect: selectConsultation,
 							onMove: (delta) => selectConsultation(consultationIndexRef.current + delta),
@@ -2562,7 +2571,7 @@ export function App({
 								ref: detailRef,
 								ticket: selectedTicket,
 								focused: focusedPane === "detail",
-								active: override === null && panel === null && utility === null,
+								active: mainSurfaceActive,
 								reservedRows,
 								handoffLimit: config.maxHandoffsPerTicket,
 								suggestedChoice:
@@ -2582,7 +2591,7 @@ export function App({
 								visibleRows: Math.max(1, detailGeometry.visibleRows - (responseEditor ? 6 : 0)),
 								scroll: consultationDetailScroll,
 								focused: focusedPane === "detail" && !responseEditor,
-								active: override === null && panel === null && utility === null,
+								active: mainSurfaceActive,
 								onFocus: () => focusPane("detail"),
 								onWheel: (delta) => moveVertical(delta),
 								compactHeading:

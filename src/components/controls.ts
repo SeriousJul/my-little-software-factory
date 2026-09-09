@@ -561,9 +561,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultations",
 		label: "Consultations",
-		// In the Ticket section `v` expands the Consultation section; in the
-		// Consultation section it re-reads the projection and lands again on
-		// the Consultation that needs the operator.
+		// `v` expands the Consultation section from the Ticket section. It is
+		// absent from Consultation modes, so repeating it is a no-op. On entry
+		// from Tickets it may select the Consultation that needs the operator.
 		keys: () => ["v"],
 		keyLabel: "v",
 		scope: "control-plane",
@@ -576,8 +576,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "open-tickets",
 		label: "Tickets",
-		// `t` is the Consultation detail's Interact key, where the section is
-		// already open: the row that owns the pane wins.
+		// `t` returns to the Ticket section from either Consultation pane. Agent
+		// interaction uses Enter in the detail, so one key has one meaning.
 		keys: () => ["t"],
 		keyLabel: "t",
 		scope: "control-plane",
@@ -652,8 +652,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultation-interact",
 		label: "Interact",
-		keys: (mode) => (mode === "consultation-detail" ? ["return", "t"] : ["return"]),
-		keyLabel: "Enter/t",
+		keys: () => ["return"],
+		keyLabel: "Enter",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 69,
