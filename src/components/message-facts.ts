@@ -135,6 +135,16 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 		[dropWorking, visibleWorking],
 	);
 
+	/** End progress while preserving the outcome it uncovered. */
+	const clearProgress = useCallback(
+		(owner: ProgressOwner) => {
+			const owned = owner === "none" ? false : dropWorking(owner);
+			if (!owned) return;
+			setFacts((current) => ({ ...current, working: visibleWorking() }));
+		},
+		[dropWorking, visibleWorking],
+	);
+
 	const message = useMemo(() => selectMessage({ ...facts, sourceHealth }), [facts, sourceHealth]);
 
 	return {
@@ -145,5 +155,6 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 		error,
 		clearOperation,
 		clearWorking,
+		clearProgress,
 	};
 }

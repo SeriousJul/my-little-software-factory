@@ -242,6 +242,8 @@ interface Harness {
 	conflicts: ConsultationSafetyConflict[];
 	/** Each time the durable Consultation projection changed. */
 	changes: number;
+	/** The progress lines the module reported, in the order it wrote them. */
+	progress: string[];
 }
 
 /** Wire the module to a fixture, collecting the facts its callbacks report. */
@@ -258,6 +260,7 @@ function makeHarness(
 ): Harness {
 	const reported: (ConsultationStatus | null)[] = [];
 	const statuses: ConsultationStatus[] = [];
+	const progress: string[] = [];
 	const conflicts: ConsultationSafetyConflict[] = [];
 	const harness: Harness = {
 		operations: createConsultationOperations({
@@ -274,6 +277,9 @@ function makeHarness(
 					reported.push(status);
 					if (status !== null) statuses.push(status);
 				},
+				onProgress: (text) => {
+					if (text !== null) progress.push(text);
+				},
 				onConsultationsChanged: () => {
 					harness.changes += 1;
 				},
@@ -286,6 +292,7 @@ function makeHarness(
 		statuses,
 		conflicts,
 		changes: 0,
+		progress,
 	};
 	return harness;
 }
@@ -402,7 +409,7 @@ function statusTexts(harness: Harness): string[] {
 
 /** The stage names a launch reported, in order. */
 function stages(harness: Harness): string[] {
-	return statusTexts(harness)
+	return harness.progress
 		.map((text) => text.match(/: ([a-z-]+)$/)?.[1])
 		.filter((stage): stage is string => stage !== undefined);
 }

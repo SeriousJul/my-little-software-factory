@@ -41,7 +41,6 @@ import {
 } from "../consultation.ts";
 import {
 	type ConsultationOperations,
-	type ConsultationStatus,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
 import {
@@ -392,10 +391,11 @@ export function App({
 		error: setErrorMessage,
 		clearOperation: clearOperationMessage,
 		clearWorking: clearWorkingMessage,
+		clearProgress: clearProgressMessage,
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
 	// Consultation outcomes use the same Message facts as Ticket outcomes. The
-	// compatibility shape keeps operation writers readable while removing the
-	// old standalone Consultation status row.
+	// progress callback ends only the Consultation progress, while the status
+	// callback writes the outcome that progress uncovers.
 	const setStatus = useCallback(
 		(next: StatusMessage | null): void => {
 			if (next === null) clearWorkingMessage("consultation");
@@ -662,14 +662,12 @@ export function App({
 			callbacks: {
 				onStatus: (next) => {
 					setStatus(next);
-					// Consultation outcomes must remain visible on the Message line
-					// when the operator is on the Tickets view. The status row stays
-					// for the Consultation view, while the shared message facts carry
-					// warnings and errors without crossing the Ticket boundary.
 					if (next === null) clearOperationMessage("none");
-					else if (next.kind === "error") setErrorMessage(next.text);
-					else if (next.kind === "warning") setWarningMessage(next.text);
 				},
+				onProgress: (text) =>
+					text === null
+						? clearProgressMessage("consultation")
+						: setWorkingMessage(text, "consultation"),
 				onConsultationsChanged: replaceConsultations,
 				onSafetyConflict: ({ consultationId, safety }) => {
 					setConsultationSafety({ consultationId, safety });
@@ -2122,15 +2120,7 @@ export function App({
 			outputRefreshRef.current = null;
 			clearInterval(timer);
 		};
-	}, [
-		commandRunner,
-		consultationOperations,
-		interaction,
-		replaceConsultations,
-		selectedConsultation,
-		state,
-		section,
-	]);
+	}, [commandRunner, consultationOperations, interaction, selectedConsultation, state, section]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
