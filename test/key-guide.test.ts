@@ -382,7 +382,7 @@ describe("the in-app Key guide", () => {
 					const newest = rows[rows.length - 1];
 					if (newest !== undefined) guide.push(newest);
 				}
-				const header = guide.findIndex((content) => content === "Other interaction modes");
+				const header = guide.indexOf("Other interaction modes");
 				expect(header).toBeGreaterThan(0);
 				expect(guide.slice(header + 1).filter((content) => content !== "")).toEqual(OTHER_ROWS);
 			},
@@ -578,7 +578,7 @@ describe("the in-app Key guide", () => {
 				// sections above, that lists every control of the plane exactly once.
 				// The section no longer fits one window, so the guide is walked from
 				// the top of the section and the windows are joined on their overlap.
-				const OTHER_ROWS = [
+				const _OTHER_ROWS = [
 					"↑↓/jk Scroll",
 					"←/h Tickets",
 					"←→/hl Change",
@@ -604,7 +604,7 @@ describe("the in-app Key guide", () => {
 					"Esc/F2 Close",
 				];
 				/** The guide's whole content at this terminal height. */
-				const TOTAL_GUIDE_ROWS = 44;
+				const _TOTAL_GUIDE_ROWS = 44;
 				// Back to the section's header: the walk above left it past the end.
 				let scrolled = rowsOf(await settle(setup));
 				for (

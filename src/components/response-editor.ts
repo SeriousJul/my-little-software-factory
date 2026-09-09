@@ -18,8 +18,7 @@ import { useRef, useState } from "react";
 import { validateResponseInput } from "../consultation.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import type { ControlContext } from "./controls.ts";
-import { contextFor } from "./controls.ts";
-import type { MessageFact } from "./messages.ts";
+import { type MessageFact, messageRowElement } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { DraftField, type FieldHandle } from "./shared/fields.ts";
@@ -44,11 +43,13 @@ interface ResponseEditorProps {
 	/** Delete the saved Response draft. Closing never does this on its own. */
 	onDiscard: () => void;
 	/** Close the editor with the draft left saved as it stands. */
-	onClose: (kept: string) => void;
+	/** Store the draft as it stands, on every change and again on close. */
+	onDraftChange: (text: string) => void;
+	/** Close the editor. The draft it leaves is the one already stored. */
+	onClose: () => void;
 	onHelp?: () => void;
 	onMessage?: () => void;
 	onUnavailable?: (reason: string) => void;
-	onRefuse?: (reason: string) => void;
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
 }
@@ -68,12 +69,12 @@ const SLOTS = [
  * than it holds, so a row left out of this total would paint through the row
  * below it, and an action the operator cannot see is an action they cannot run.
  */
-const FIXED_ROWS = 10;
+const FIXED_ROWS = 11;
 /** The fewest rows a Draft field is still a Draft field with. */
 const MINIMUM_DRAFT_ROWS = 1;
 
 /** The rows the response editor needs to draw itself at all. */
-export const RESPONSE_EDITOR_ROWS = FIXED_ROWS + 2;
+export const RESPONSE_EDITOR_ROWS = FIXED_ROWS + 1;
 
 export function ResponseEditor({
 	draft,
@@ -84,6 +85,7 @@ export function ResponseEditor({
 	inputActive = true,
 	onSend,
 	onDiscard,
+	onDraftChange,
 	onClose,
 	onHelp,
 	onMessage,
@@ -129,7 +131,10 @@ export function ResponseEditor({
 			},
 			"close-form": ({ key }) => {
 				key.preventDefault?.();
-				onClose(field.current?.value() ?? text.current);
+				// The screen keeps the draft, so closing needs no text of its own:
+				// the field's current value is already mirrored into the size fact
+				// the screen holds.
+				onClose();
 			},
 			help: () => onHelp?.(),
 			message: () => onMessage?.(),
@@ -165,6 +170,7 @@ export function ResponseEditor({
 				text.current = facts.value;
 				selection.current = facts.selection !== "";
 				setSize(facts.value);
+				onDraftChange(facts.value);
 			},
 			onRefuse: (reason: string) => onUnavailable?.(reason),
 		}),
@@ -184,6 +190,10 @@ export function ResponseEditor({
 			{ fg: ink.detail.fg ?? undefined },
 			truncateToWidth("Tab moves between the field and the actions", contentWidth),
 		),
+		// The editor owns a Message line like every other surface, so a refusal
+		// or a delivery result is read here rather than on a line the operator
+		// has to look elsewhere for.
+		messageRowElement(message, contentWidth),
 	);
 }
 

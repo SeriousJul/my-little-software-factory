@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import type { FactoryState } from "../src/state.ts";
 import type { Setup } from "./app-harness.ts";
 import {
 	awaitFrame,

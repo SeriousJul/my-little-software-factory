@@ -230,7 +230,7 @@ describe("the shared Text field", () => {
 			6,
 			async (setup) => {
 				await setup.mockInput.typeText("007");
-				const folded = await awaitFrame(
+				const _folded = await awaitFrame(
 					setup,
 					(f) => frameText(f).includes("Context 7"),
 					"the row to hold one spelling of the count",

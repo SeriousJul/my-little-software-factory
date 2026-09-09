@@ -10,9 +10,9 @@
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
-import { type ActionRow, actionRowSpans, MARKER_WIDTH } from "../modal-chrome.ts";
+import { type ActionRow, actionRowSpans } from "../modal-chrome.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "../text.ts";
-import { type ControlInk, controlInk, markerText } from "./presentation.ts";
+import { controlInk, markerText } from "./presentation.ts";
 
 /** One row of a form that holds no text: its label and its current value. */
 export interface ChoiceRowProps {

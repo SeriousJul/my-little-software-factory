@@ -1,6 +1,10 @@
 # Shared modules own control behavior
 
-Status: accepted; migration pending.
+Status: accepted; implemented for every editable field, selector, search, form
+action, and form focus route the control plane owns. The Consultation view's own
+list and Agent view, Agent interaction mode, and the Consultation confirmation
+panel are still to be migrated, and the acceptance targets in
+[the verification record](../verification/shared-controls.md) are still open.
 
 The control plane has shared modal layout and a Control catalogue, but individual
 screens still implement different editing and focus behavior. All controls owned

@@ -249,17 +249,56 @@ describe("shared fields, real terminal input", () => {
  * A paste refusal is a fact about what the operator reads, so the checks compare
  * the painted screen rather than the escape sequences that produced it.
  */
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+/** The control-character range a terminal never paints as a cell. */
+const CONTROL_START = 0;
+const CONTROL_END = 31;
+const DELETE_CODE = 127;
+
+/**
+ * The screen the bytes drew, with the terminal's own protocol removed.
+ *
+ * A refusal is a fact about what an operator reads, so the checks compare the
+ * painted screen rather than the escape sequences that produced it. The scan
+ * walks the same sequence families the renderer writes - CSI, OSC, and the
+ * device-control strings - because a test that compared raw bytes would pass on
+ * a screen nothing showed.
+ */
 function screenOf(out: Buffer): string {
-	return (
-		out
-			.toString("utf8")
-			// CSI, OSC, and DCS sequences: every byte that is a command, not a cell.
-			.replace(/\x1b\[[0-9;?<=>!]*[A-Za-z]/g, "")
-			.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-			.replace(/\x1b[P_][^\x1b]*(?:\x1b\\)?/g, "")
-			.replace(/\x1b[@-Z\\^_]/g, "")
-			.replace(/[\x00-\x1f\x7f]/g, "")
-	);
+	const text = out.toString("utf8");
+	let screen = "";
+	let index = 0;
+	while (index < text.length) {
+		const character = text[index] as string;
+		if (character !== ESC) {
+			const code = character.codePointAt(0) ?? 0;
+			if (!(code >= CONTROL_START && code <= CONTROL_END) && code !== DELETE_CODE) {
+				screen += character;
+			}
+			index += 1;
+			continue;
+		}
+		const introducer = text[index + 1];
+		let cursor = index + 2;
+		if (introducer === "[") {
+			// A CSI sequence ends at its first alphabetic byte.
+			while (cursor < text.length && !/[A-Za-z]/u.test(text[cursor] as string)) cursor += 1;
+		} else if (introducer === "]" || introducer === "P" || introducer === "_") {
+			// An OSC or device-control string ends at BEL, or at the ST sequence.
+			while (cursor < text.length) {
+				const step = text[cursor] as string;
+				if (step === BEL) break;
+				if (step === ESC && text[cursor + 1] === "\\") {
+					cursor += 1;
+					break;
+				}
+				cursor += 1;
+			}
+		}
+		index = cursor + 1;
+	}
+	return screen;
 }
 
 /** A config with one Consultation type and no Ticket source. */

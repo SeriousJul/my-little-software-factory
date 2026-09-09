@@ -368,7 +368,7 @@ function useFieldEditing(
 		const folded = normalize === undefined ? before : normalize(before);
 		if (folded !== before) foldNodeText(field, folded);
 		reportFacts();
-	}, [normalize, reportFacts]);
+	}, [normalize, reportFacts, node.current]);
 
 	const handle = useRef<FieldHandle | null>(null);
 	handle.current = {

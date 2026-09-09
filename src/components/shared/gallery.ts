@@ -12,7 +12,7 @@
  * example that only looks like the happy path teaches nothing about the edge
  * that made the control worth sharing.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
@@ -129,7 +129,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "states",
 		state: "invalid, unavailable, and loading",
-		render: (columns, holds, inputActive) => [
+		render: (columns, holds, _inputActive) => [
 			createElement(TextField, {
 				key: "invalid",
 				label: "Context",
@@ -188,7 +188,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		id: "narrow",
 		state: "narrow terminal",
 		narrow: true,
-		render: (columns, holds, inputActive) => [
+		render: (columns, holds, _inputActive) => [
 			createElement(TextField, {
 				key: "model",
 				label: "Model",
@@ -274,7 +274,7 @@ export function Gallery({
 		label: entry.state,
 	}));
 	const focus = useFormSlots(slots);
-	const moveField = moveFieldWith(focus);
+	const _moveField = moveFieldWith(focus);
 	const ink = controlInk();
 	// The gallery's own keys come from the same catalogue the application runs,
 	// so a contributor exercises the real dispatch and the real Action bar.

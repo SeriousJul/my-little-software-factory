@@ -30,7 +30,6 @@ import {
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
 	inspectLiveCheckout,
-	isLiteralText,
 	type LiveCheckoutSafety,
 	serializeRepositoryOperation,
 	translateAgentKey,
@@ -1859,17 +1858,25 @@ export function App({
 			});
 	};
 	/**
-	 * Take the editor's own text as the draft, then run the send.
+	 * Keep the durable Response draft equal to what the field holds.
 	 *
-	 * The Draft field owns the text while the operator edits it, and the durable
-	 * Response draft is what survives a close, so the two meet here: the send
-	 * stores what the operator last saw and then delivers it.
+	 * The Draft field owns the text while the operator edits it, and the saved
+	 * draft is what survives a close, a rejection, and a restart, so every change
+	 * is stored as it happens rather than carried out of the editor by hand.
 	 */
-	const sendResponseText = (text: string) => {
+	const storeResponseDraft = (text: string) => {
 		responseDraftRef.current = text;
 		setResponseDraft(text);
-		if (state !== undefined && selectedConsultation !== undefined)
+		if (
+			state !== undefined &&
+			selectedConsultation !== undefined &&
+			text !== selectedConsultation.draft
+		)
 			state.setConsultationDraft(selectedConsultation.id, text);
+	};
+	/** Store what the operator last saw, then run the send. */
+	const sendResponseText = (text: string) => {
+		storeResponseDraft(text);
 		submitResponse();
 	};
 	/** Delete the saved Response draft. Closing the editor never does this. */
@@ -1881,16 +1888,8 @@ export function App({
 		setResponseEditor(false);
 		setStatus({ kind: "info", text: "the saved Response draft was discarded" });
 	};
-	/** Close the editor with the draft saved as the operator left it. */
-	const closeResponseEditor = (kept: string) => {
-		responseDraftRef.current = kept;
-		setResponseDraft(kept);
-		if (
-			state !== undefined &&
-			selectedConsultation !== undefined &&
-			kept !== selectedConsultation.draft
-		)
-			state.setConsultationDraft(selectedConsultation.id, kept);
+	/** Close the editor. The Response draft it leaves is the one already stored. */
+	const closeResponseEditor = () => {
 		setResponseEditor(false);
 	};
 	const openConsultations = () => {
@@ -3001,7 +3000,8 @@ export function App({
 										inputActive: utility === null,
 										onSend: sendResponseText,
 										onDiscard: discardResponseDraft,
-										onClose: (kept: string) => closeResponseEditor(kept),
+										onDraftChange: storeResponseDraft,
+										onClose: closeResponseEditor,
 										onHelp: () => openGuide("form-field"),
 										onMessage: () => openMessage("form-field"),
 										onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),

@@ -150,7 +150,8 @@ describe("shared fields through tmux", () => {
 			tmuxSendKeys(session, "7");
 			const taken = await tmuxWaitFor(
 				session,
-				(screen) => collapse(screen).includes("Context 2720070") && !screen.includes("Error: Context"),
+				(screen) =>
+					collapse(screen).includes("Context 2720070") && !screen.includes("Error: Context"),
 				"the typed digit to join the value and the reason to end",
 			);
 			// The refusal row goes with the edit that was taken: a reason that
