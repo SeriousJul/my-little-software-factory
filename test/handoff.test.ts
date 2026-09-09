@@ -1223,10 +1223,74 @@ describe("handOffTicket: the guard rails", () => {
 
 			expect(outcome.status).toBe("failed");
 			if (outcome.status === "ok") throw new Error("expected a refusal");
-			expect(outcome.reason).toContain('does not support the thinking level "ultra"');
+			expect(outcome.reason).toContain('offers no thinking level "ultra"');
 			expect(runner.calls).toHaveLength(0);
 			// The levels an Agent declares are in the config: no query is needed.
 			expect(runner.modelListCalls).toHaveLength(0);
+		});
+
+		test("a Consultation start refuses every static setting the Agent cannot take", async () => {
+			const cases = [
+				{
+					label: "model",
+					config: {
+						...DEFAULT_CONFIG,
+						agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+					},
+					consultation: { agentType: "cursor", model: "factory-model" },
+					text: 'defines no model setting, so model "factory-model" cannot reach it',
+				},
+				{
+					label: "thinking",
+					config: {
+						...DEFAULT_CONFIG,
+						agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+					},
+					consultation: { agentType: "cursor", thinking: "high" },
+					text: 'defines no thinking setting, so thinking level "high" cannot reach it',
+				},
+				{
+					label: "context window",
+					config: DEFAULT_CONFIG,
+					consultation: { contextWindow: "131072" },
+					text: "defines no context window setting, so the count of 131072 tokens cannot reach it",
+				},
+			];
+			for (const item of cases) {
+				const runner = new FakeRunner();
+				const outcome = await handOffConsultation({
+					consultation: consultationRecord({ ...item.consultation }),
+					config: item.config,
+					runner,
+					home: HOME,
+				});
+				expect(outcome.status, item.label).toBe("failed");
+				expect(reasonOf(outcome)).toContain(item.text);
+				expect(runner.calls, item.label).toHaveLength(0);
+				expect(runner.modelListCalls, item.label).toHaveLength(0);
+			}
+		});
+
+		test("a Consultation start refuses a count that is not positive digits", async () => {
+			const runner = new FakeRunner();
+			const config: FactoryConfig = {
+				...DEFAULT_CONFIG,
+				agents: {
+					...DEFAULT_CONFIG.agents,
+					pi: { ...DEFAULT_CONFIG.agents.pi, contextWindow: "--context {value}" },
+				},
+			};
+			const outcome = await handOffConsultation({
+				consultation: consultationRecord({ contextWindow: "0" }),
+				config,
+				runner,
+				home: HOME,
+			});
+			expect(outcome.status).toBe("failed");
+			expect(reasonOf(outcome)).toContain(
+				'context window "0" is not a positive whole number of tokens in digits',
+			);
+			expect(runner.calls).toHaveLength(0);
 		});
 
 		test("a start with no verdict runs on a fit model, and asks the CLI once", async () => {

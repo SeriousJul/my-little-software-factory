@@ -661,7 +661,7 @@ describe("validateConfig", () => {
 				agents: { pi: { kind: "pi" } },
 				"task-types": { t: { template: "x", model: "gpt-4o" } },
 			},
-			'task-types.t.model: agent "pi" does not define a model setting',
+			'task-types.t.model: agent type "pi" defines no model setting, so model "gpt-4o" cannot reach it',
 		);
 		expectConfigError(
 			{
@@ -699,7 +699,7 @@ describe("validateConfig", () => {
 		).not.toThrow();
 		expectConfigError(
 			{ ...base, "task-types": { t: { template: "x", thinking: "xhigh" } } },
-			'agent "pi" does not support the thinking level "xhigh"',
+			'agent type "pi" offers no thinking level "xhigh"',
 		);
 		// The profile's agent owns the set once the profile names one: the
 		// level that pi supports is unfit for cx.
@@ -708,7 +708,7 @@ describe("validateConfig", () => {
 				...base,
 				"task-types": { t: { template: "x", agent: "cx", thinking: "high" } },
 			},
-			'agent "cx" does not support the thinking level "high"',
+			'agent type "cx" offers no thinking level "high"',
 		);
 	});
 
@@ -1214,6 +1214,41 @@ describe("consultation configuration", () => {
 			model: "--model sonnet",
 			thinking: "high",
 		});
+	});
+
+	test("a setting its agent maps no template for is refused with the shared sentence", () => {
+		// The file path holds the same rule as the panel and the start, with the
+		// config's own key prefix in front of the module's one sentence.
+		expectConfigError(
+			{
+				...base(),
+				agents: { pi: { kind: "pi" } },
+				"consultation-types": {
+					grill: { agent: "pi", environment: "worktree", template: "{input}", model: "gpt-4o" },
+				},
+			},
+			'consultation-types.grill.model: agent type "pi" defines no model setting, so model "gpt-4o" cannot reach it',
+		);
+		expectConfigError(
+			{
+				...base(),
+				"consultation-types": {
+					grill: { agent: "pi", environment: "worktree", template: "{input}", model: 7 },
+				},
+			},
+			"consultation-types.grill.model: must be a non-empty string",
+		);
+		// A type that names no model leaves the field unasked: the same agent that
+		// maps no model setting is a fine start for it.
+		expect(() =>
+			validateConfig({
+				...base(),
+				agents: { pi: { kind: "pi" } },
+				"consultation-types": {
+					grill: { agent: "pi", environment: "worktree", template: "{input}" },
+				},
+			}),
+		).not.toThrow();
 	});
 
 	test("an unknown agent reference is rejected", () => {

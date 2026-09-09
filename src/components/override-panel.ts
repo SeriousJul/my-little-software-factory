@@ -76,10 +76,10 @@
 import type { InputRenderable } from "@opentui/core";
 import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, type RefObject, useRef, useState } from "react";
-import type { ThinkingLevel } from "../domain/agent.ts";
-import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
+import type { AgentTypeConfig } from "../config.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
+import { type FitCause, type FitVerdict, settingFit, tokenCountDigits } from "../setting-fit.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
 import { createControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
@@ -87,16 +87,6 @@ import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
-
-/** Which settings an agent type maps, for the rows it opens. */
-export interface AgentSettings {
-	model: boolean;
-	thinking: boolean;
-	/** Whether a maximum context window can reach this agent type. */
-	contextWindow?: boolean;
-	/** The levels this Agent type supports, in the order the row offers them. */
-	thinkingValues?: readonly ThinkingLevel[];
-}
 
 /**
  * Why a Model row is a Text field instead of the selected agent's list.
@@ -138,10 +128,10 @@ type TextKey = "model" | "thinking" | "contextWindow";
 type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
 
 /**
- * The three ways a drafted value cannot reach the agent it is set on, so the
- * row can wear the warning and name the fix.
+ * The ways a drafted value cannot reach the Agent it is set on, one per Setting
+ * fit cause, so the row can wear the warning the Handoff would fail on.
  */
-type UnfitSetting = "no-setting" | "no-level" | "no-count";
+type UnfitSetting = FitCause;
 
 interface PanelRow {
 	label: string;
@@ -174,10 +164,15 @@ interface PanelRow {
 }
 
 interface OverridePanelProps {
-	agents: readonly string[];
+	/**
+	 * The configured Agent types, by config name, in the order the Agent row
+	 * offers them. The panel reads which settings an Agent maps from the same
+	 * record a Handoff and the Setting fit check read, so it holds no second
+	 * list of capabilities that can disagree with the start.
+	 */
+	agents: Readonly<Record<string, AgentTypeConfig>>;
 	environments: readonly EnvironmentKind[];
 	taskTypes: readonly string[];
-	agentSettings: Readonly<Record<string, AgentSettings>>;
 	/** What each task type's profile starts its handoffs on (ADR 0009). */
 	profiles: Readonly<Record<string, TaskProfileStart>>;
 	/** The Model list of the agent the panel is on. */
@@ -313,7 +308,6 @@ export function OverridePanel({
 	agents,
 	environments,
 	taskTypes,
-	agentSettings,
 	profiles,
 	modelList,
 	onAgentChange,
@@ -364,7 +358,7 @@ export function OverridePanel({
 	};
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
+		rowsFor(value, agents, environments, taskTypes, listFor(value, modelList));
 	const allRows = rowsForChoice(choice);
 	// The shared chrome sizes the box: the terminal's rows above the Action
 	// bar, or the rows the panel needs, whichever is fewer. The panel spans
@@ -612,71 +606,80 @@ function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListSta
 /** The rows the panel offers for the current choice, in order. */
 function rowsFor(
 	choice: HandoffChoice,
-	agents: readonly string[],
+	agents: Readonly<Record<string, AgentTypeConfig>>,
 	environments: readonly string[],
 	taskTypes: readonly string[],
-	agentSettings: Readonly<Record<string, AgentSettings>>,
 	modelStatus: ModelListStatus,
 ): PanelRow[] {
-	const settings = agentSettings[choice.agentType] ?? {
-		model: false,
-		thinking: false,
-		contextWindow: false,
-	};
+	// An Agent type the config no longer names reads as one that maps nothing:
+	// every value the choice carries then shows in its warning row, where the
+	// operator can clear it.
+	const agent: AgentTypeConfig = agents[choice.agentType] ?? { kind: choice.agentType };
+	const staticVerdicts = settingFit.staticFit(agent, choice, choice.agentType);
+	// A fetched list is the only fact beyond static fit. A loading or an
+	// unavailable list leaves the static Model verdict in place: a list that
+	// cannot be fetched skips the Model list question, just as a handoff does.
+	const modelVerdict =
+		modelStatus.status === "available"
+			? settingFit.modelInList(agent, choice.model, modelStatus.models, choice.agentType)
+			: staticVerdicts.model;
 	const rows: PanelRow[] = [
-		{ label: "Agent", key: "agentType", kind: "list", options: agents },
+		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(agents) },
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
 		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
 	];
-	// A row shows when its agent maps the setting. It also shows, wearing the
-	// warning color, while it carries a value the agent cannot take: hiding it
-	// would strand that value where no key can reach it, and the panel must
-	// never show something other than what the handoff sends.
-	if (settings.model) {
-		rows.push(modelRow(modelStatus));
+	// A row shows when its Agent maps the setting. It also shows, wearing the
+	// warning the shared verdict gives, while it carries a value the Agent
+	// cannot take: hiding it would strand that value where no key can reach it,
+	// and the panel must never show something other than what the handoff sends.
+	if (agent.model !== undefined) {
+		rows.push(modelRow(modelStatus, modelVerdict));
 	} else if (choice.model !== "") {
-		rows.push({ label: "Model", key: "model", kind: "text", unfit: "no-setting" });
+		rows.push({ label: "Model", key: "model", kind: "text", unfit: verdictCause(modelVerdict) });
 	}
-	if (settings.thinking) {
-		const values = settings.thinkingValues ?? [];
-		// An agent that maps thinking offers its declared levels, so only a
-		// listed agent can refuse the one the chain resolved.
-		const unlisted = choice.thinking !== "" && !values.some((level) => level === choice.thinking);
+	if (agent.thinking !== undefined) {
 		rows.push({
 			label: "Thinking",
 			key: "thinking",
 			kind: "list",
-			options: values,
-			unfit: unlisted ? "no-level" : undefined,
+			options: agent.thinkingValues ?? [],
+			unfit: verdictCause(staticVerdicts.thinking),
 		});
 	} else if (choice.thinking !== "") {
-		rows.push({ label: "Thinking", key: "thinking", kind: "text", unfit: "no-setting" });
+		rows.push({
+			label: "Thinking",
+			key: "thinking",
+			kind: "text",
+			unfit: verdictCause(staticVerdicts.thinking),
+		});
 	}
-	// The token row reads the same way as the model row: its agent's
-	// capability opens it, and a value the agent cannot take keeps it open so
-	// the operator can clear it.
-	if (settings.contextWindow || choice.contextWindow !== "") {
-		const count = choice.contextWindow === "" || isTokenCount(choice.contextWindow);
+	if (agent.contextWindow !== undefined || choice.contextWindow !== "") {
 		rows.push({
 			label: "Context",
 			key: "contextWindow",
 			kind: "text",
 			digits: true,
-			unfit: settings.contextWindow ? (count ? undefined : "no-count") : "no-setting",
+			unfit: verdictCause(staticVerdicts.contextWindow),
 		});
 	}
 	return rows;
+}
+
+/** The cause a row wears, and nothing when the shared verdict takes the value. */
+function verdictCause(verdict: FitVerdict): FitCause | undefined {
+	return verdict.ok ? undefined : verdict.cause;
 }
 
 /**
  * The Model row for one agent: the agent's own list with type-ahead, a loading
  * marker while the control plane fetches it, the no-models hint when the agent
  * reports none, and the Text field when its kind reports no list or the fetch
- * failed. The Text field's placeholder names the reason the list is gone.
+ * failed. Its warning comes from the shared fit verdict.
  */
-function modelRow(status: ModelListStatus): PanelRow {
+function modelRow(status: ModelListStatus, verdict: FitVerdict): PanelRow {
+	const unfit = verdictCause(verdict);
 	if (status.status === "loading") {
-		return { label: "Model", key: "model", kind: "pending", placeholder: LOADING_HINT };
+		return { label: "Model", key: "model", kind: "pending", placeholder: LOADING_HINT, unfit };
 	}
 	if (status.status === "available") {
 		return {
@@ -691,6 +694,7 @@ function modelRow(status: ModelListStatus): PanelRow {
 			// An agent that reports no model has nothing to offer, and an empty
 			// value stays the valid unset state.
 			placeholder: status.models.length === 0 ? NO_MODELS_HINT : undefined,
+			unfit,
 		};
 	}
 	return {
@@ -698,6 +702,7 @@ function modelRow(status: ModelListStatus): PanelRow {
 		key: "model",
 		kind: "text",
 		fallbackCause: status.cause,
+		unfit,
 	};
 }
 
@@ -767,10 +772,9 @@ function rowElement(
 	// correctly must not read as a handoff that would fail. The row shows that
 	// value in the dim tone the panel uses for a setting it cannot yet confirm.
 	const pending = r.kind === "pending";
-	const inList = (r.options ?? []).includes(value);
 	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
 	const color =
-		r.unfit !== undefined || (!pending && !unset && !inList)
+		r.unfit !== undefined
 			? COLORS.statusWarning
 			: unset || pending
 				? COLORS.dim
