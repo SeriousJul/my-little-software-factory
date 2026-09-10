@@ -28,6 +28,7 @@ import type {
 } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
+	actionBarRowOf,
 	awaitFrame,
 	closeOverlay,
 	confirmPanel,
@@ -817,7 +818,12 @@ describe("Consultation responses through the UI", () => {
 					);
 					expect(detailPaneText(settled)).toContain("Agent view:");
 					expect(detailPaneText(settled)).toContain("the design holds");
-					expect(frameText(settled)).toContain("Enter Respond");
+					expect(actionBarRowOf(settled)).toContain("Enter Respond");
+					expect(actionBarRowOf(settled)).not.toContain("Enter/r Respond");
+					// `r` remains Refresh even when Enter can open the response editor.
+					await press(setup, "r", "refresh instead of response", (f) =>
+						messageRowOf(f).includes("no Ticket sources exist"),
+					);
 
 					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
 					setup.mockInput.typeText("then ship it");
@@ -1080,6 +1086,8 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					const frame = setup.captureCharFrame();
 					expect(frame).not.toContain("\u276f Consultations");
+					expect(actionBarRowOf(frame)).toContain("←/h List");
+					expect(actionBarRowOf(frame)).not.toContain("→/l Detail");
 					expect(frameText(frame)).toContain("State: working");
 				},
 				70,

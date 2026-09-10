@@ -107,13 +107,11 @@ and among the recovery items the oldest wins. Once the section is expanded:
 	closed, and all, `x` closes the selected Consultation, and `d` deletes a
 	closed one.
 - `Enter` answers the selected Consultation: it opens the response editor on
-	an awaiting one and Agent interaction on a working or blocked one. In the
-	Consultation detail, `r` is the same Respond control. `t` always returns
-	to the Ticket section from either Consultation pane, while Enter opens
-	Agent interaction when the selected Consultation permits it; in the
-	Consultation list `r` stays Refresh.
+	an awaiting one and Agent interaction on a working or blocked one. `t` always
+	returns to the Ticket section from either Consultation pane.
 - `r` recovers a Consultation whose opening was interrupted, and refreshes the
-	Consultation projection and the Ticket sources otherwise.
+	Consultation projection and the Ticket sources otherwise. It remains Refresh
+	even when an awaiting Consultation can also be answered with Enter.
 - `t` expands the Ticket section again from either Consultation pane, and `h`
 	or `Left` moves between the expanded section's own list and detail panes.
 
@@ -385,9 +383,10 @@ builds an agent in a workspace it is taking away.
 The Main view is one surface with two accordion sections: the Ticket section
 and the Consultation section. One section is expanded and holds two panes side
 by side; the other is collapsed to its header row. `t` and `v`, or a click on
-a header, expand a section, and the keyboard focus lands on its list pane. A
-collapsed section keeps its list selection and its detail scroll, so a
-re-expand shows the same place. The rows run: the mode line (while the control
+a header, expand a section, and the keyboard focus lands on its list pane. When
+the narrow Consultation layout removes the list pane, focus lands on the visible
+detail pane. A collapsed section keeps its list selection and its detail scroll,
+so a re-expand shows the same place. The rows run: the mode line (while the control
 plane has state to observe), the two section headers, the expanded section's
 panes, the Message line, and the Action bar. The Consultation header carries
 that section's attention facts, its awaiting-response and recovery counts, the

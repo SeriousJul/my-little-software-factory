@@ -638,11 +638,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultation-respond",
 		label: "Respond",
-		// Enter answers an awaiting Consultation from either pane. In the detail,
-		// `r` is the same control: it outranks Refresh by priority, and a
-		// Consultation that is not awaiting leaves `r` as Refresh.
-		keys: (mode) => (mode === "consultation-detail" ? ["return", "r"] : ["return"]),
-		keyLabel: "Enter/r",
+		// Enter answers an awaiting Consultation from either pane. `r` remains
+		// the shared Refresh key, including while a response is available.
+		keys: () => ["return"],
+		keyLabel: "Enter",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 70,
@@ -1216,11 +1215,6 @@ function displayKeyLabel(
 	context: ControlContext,
 ): string {
 	if (control.id === "interact-exit") return interactionExitLabel(context.interactionExitKey);
-	// The Consultation detail answers to its one-letter aliases; the list reaches
-	// the same actions by Enter alone, so the hint states only what the mode
-	// accepts.
-	if (control.id === "consultation-respond")
-		return mode === "consultation-detail" ? "Enter/r" : "Enter";
 	if (control.id === "consultation-interact") return "Enter";
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";

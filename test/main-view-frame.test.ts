@@ -257,6 +257,46 @@ describe("the merged Main view", () => {
 		}
 	});
 
+	test("Consultation refresh reports a readable no-op when no Ticket source exists", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seedConsultation(state, uid("n"));
+		try {
+			await booted(async (setup) => {
+				await press(setup, "v", "the Consultation section", (f) => f.includes("Agent view"));
+				const refreshed = await press(setup, "r", "the no-op refresh", (f) =>
+					messageRowOf(f).includes("no Ticket sources exist"),
+				);
+				expect(messageRowOf(refreshed)).not.toContain("refreshing 0 sources");
+			}, state);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Consultation refresh reports an in-flight Ticket source without fake progress", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seedConsultation(state, uid("o"));
+		const source = new FakeSource("issues", "github-issues", sampleOutcome());
+		try {
+			await booted(
+				async (setup) => {
+					await awaitFrame(setup, () => source.calls === 1, "the Ticket source refresh");
+					await press(setup, "v", "the Consultation section", (f) => f.includes("Agent view"));
+					const refused = await press(setup, "r", "the in-flight refresh refusal", (f) =>
+						messageRowOf(f).includes("every Ticket source is already refreshing"),
+					);
+					expect(messageRowOf(refused)).not.toContain("refreshing 0 sources");
+					source.settle(sampleOutcome());
+				},
+				state,
+				[source],
+			);
+		} finally {
+			source.settle(sampleOutcome());
+			state.close();
+		}
+	});
+
 	test("a click on a collapsed header expands that section", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seedConsultation(state, uid("d"));

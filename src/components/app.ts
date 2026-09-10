@@ -1630,7 +1630,9 @@ export function App({
 	const expandSection = (next: MainSection) => {
 		sectionRef.current = next;
 		setSection(next);
-		focusPane("list");
+		// The narrow Consultation layout removes its list pane, so focus the
+		// visible detail pane instead of leaving navigation on hidden content.
+		focusPane(next === "consultations" && terminalWidth < 80 ? "detail" : "list");
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1805,6 +1807,14 @@ export function App({
 		if (coordinator === undefined) return;
 		const started = coordinator.refreshAll();
 		manualRefreshPending.current = new Set(started);
+		if (started.length === 0) {
+			setWarningMessage(
+				sources.length === 0
+					? "no Ticket sources exist"
+					: "every Ticket source is already refreshing",
+			);
+			return;
+		}
 		setWorkingMessage(`refreshing ${started.length} sources`, "refresh");
 	};
 	useKeyboard((key) => {
@@ -2230,6 +2240,14 @@ export function App({
 		focusedPaneRef.current = pane;
 		setFocusedPane(pane);
 	}
+	// A resize can remove the narrow Consultation list without a section switch.
+	// Keep both focus representations on the visible detail pane in that case.
+	useEffect(() => {
+		if (section === "consultations" && terminalWidth < 80 && focusedPaneRef.current !== "detail") {
+			focusedPaneRef.current = "detail";
+			setFocusedPane("detail");
+		}
+	}, [section, terminalWidth]);
 	function selectTicket(index: number) {
 		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
 		if (next === selectedIndexRef.current) return;
