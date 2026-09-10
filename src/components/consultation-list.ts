@@ -3,8 +3,8 @@ import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { useRef } from "react";
 import type { Consultation } from "../state.ts";
-import { usePaneGeometry, windowOf } from "./geometry.ts";
-import { paneMouse } from "./pane-mouse.ts";
+import { usePaneGeometry } from "./geometry.ts";
+import { listMouse, listWindow } from "./list-pane.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -36,28 +36,16 @@ export function ConsultationList({
 }: ConsultationListProps) {
 	const geometry = usePaneGeometry("list", reservedRows);
 	const rootRef = useRef<BoxRenderable | null>(null);
-	// The list always shows the window around the selection, so the row under
-	// a click is the row whose index follows from the window's start.
-	const start = Math.max(
-		0,
-		Math.min(
-			selectedIndex - geometry.visibleRows + 1,
-			Math.max(0, consultations.length - geometry.visibleRows),
-		),
-	);
-	const visible = windowOf(consultations, start, geometry.visibleRows);
-	const handleMouse = paneMouse({
+	const { start, visible } = listWindow(consultations, selectedIndex, geometry.visibleRows);
+	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
-		onWheel: (direction) => onMove(direction === "up" ? -1 : 1),
-		onPress: (event) => {
-			// One border and one padding row precede the list's first row.
-			const box = (event.currentTarget as BoxRenderable | null) ?? rootRef.current;
-			const row = event.y - (box?.y ?? event.y) - 2;
-			const index = start + row;
-			if (row >= 0 && row < visible.length && index >= 0 && index < consultations.length)
-				onSelect(index);
-		},
+		onMove,
+		onSelect,
+		rootRef,
+		start,
+		visibleRows: visible.length,
+		itemCount: consultations.length,
 	});
 	return createElement(
 		"box",

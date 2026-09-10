@@ -20,8 +20,8 @@ import { createElement } from "@opentui/react";
 import { type ReactElement, useRef } from "react";
 
 import type { Ticket } from "../domain/ticket.ts";
-import { usePaneGeometry, windowOf } from "./geometry.ts";
-import { paneMouse } from "./pane-mouse.ts";
+import { usePaneGeometry } from "./geometry.ts";
+import { listMouse, listWindow } from "./list-pane.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
@@ -79,31 +79,16 @@ export function TicketList({
 	const geometry = usePaneGeometry("list", reservedRows);
 	const rootRef = useRef<BoxRenderable | null>(null);
 
-	// The window starts where the selection sits on the window's last row.
-	// `windowOf` clamps that start, so the window slides only when the
-	// selection would run off the bottom of the pane.
-	const start = Math.max(
-		0,
-		Math.min(
-			selectedIndex - geometry.visibleRows + 1,
-			Math.max(0, tickets.length - geometry.visibleRows),
-		),
-	);
-	const visible = windowOf(tickets, start, geometry.visibleRows);
-	const handleMouse = paneMouse({
+	const { start, visible } = listWindow(tickets, selectedIndex, geometry.visibleRows);
+	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
-		onWheel: (direction) => onMove(direction === "up" ? -1 : 1),
-		onPress: (event) => {
-			// One border and one padding row precede the list's first row.
-			// Use the actual OpenTUI box origin so hit testing stays correct
-			// after a resize, or when the Message line, the mode line or the
-			// Consultation attention line changes the height of the panes.
-			const root = (event.currentTarget as BoxRenderable | null) ?? rootRef.current;
-			const row = event.y - (root?.y ?? event.y) - 2;
-			const index = start + row;
-			if (row >= 0 && row < visible.length && index >= 0 && index < tickets.length) onSelect(index);
-		},
+		onMove,
+		onSelect,
+		rootRef,
+		start,
+		visibleRows: visible.length,
+		itemCount: tickets.length,
 	});
 
 	return createElement(
