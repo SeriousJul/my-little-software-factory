@@ -1086,9 +1086,13 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					const frame = setup.captureCharFrame();
 					expect(frame).not.toContain("\u276f Consultations");
-					expect(actionBarRowOf(frame)).toContain("←/h List");
+					expect(actionBarRowOf(frame)).not.toContain("←/h List");
 					expect(actionBarRowOf(frame)).not.toContain("→/l Detail");
 					expect(frameText(frame)).toContain("State: working");
+					const refused = await press(setup, "h", "the unavailable hidden Consultation list", (f) =>
+						messageRowOf(f).includes("the Consultation list is hidden below 80 columns"),
+					);
+					expect(frameText(refused)).toContain("State: working");
 				},
 				70,
 				32,

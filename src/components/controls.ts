@@ -120,6 +120,8 @@ export interface ControlContext {
 	refreshingSourceCount: number;
 	/** Whether the Consultation section can re-read its durable projection. */
 	consultationRefreshAvailable?: boolean;
+	/** Whether the Consultation list pane is rendered at the current width. */
+	consultationListVisible?: boolean;
 	/** The observed status of the selected Consultation Agent. */
 	consultationAgentStatus?: string | null;
 	handoffActive: boolean;
@@ -301,6 +303,10 @@ const ticketOnly = (context: ControlContext): ControlAvailability =>
 	ticketBaseMode(context.mode)
 		? available()
 		: unavailable("this control is available only in the Ticket section");
+const consultationListNavigation = (context: ControlContext): ControlAvailability =>
+	context.consultationListVisible === false
+		? unavailable("the Consultation list is hidden below 80 columns")
+		: available();
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -461,7 +467,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 75,
 		modes: ["consultation-detail"],
-		availability: available,
+		availability: consultationListNavigation,
+		showInBar: (context) => context.consultationListVisible !== false,
 	},
 	{
 		id: "change-override",
@@ -1120,6 +1127,18 @@ export function availabilityFor(
 	return control.availability(context);
 }
 
+/** Ticket-section controls have no useful meaning in a Consultation guide. */
+function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefinition): boolean {
+	return (
+		consultationMode(mode) &&
+		control.scope !== "global" &&
+		(control.scope === "control-plane" ||
+			control.scope === "ticket-list" ||
+			control.scope === "ticket-detail") &&
+		!control.modes.some(consultationMode)
+	);
+}
+
 /**
  * Whether the Key guide lists this control among the mode's own.
  *
@@ -1164,7 +1183,10 @@ export function guideControls(context: ControlContext): Array<{
 	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
 		CONTROL_DEFINITIONS.filter(
 			(control) =>
-				!seen.has(control.id) && predicate(control) && isCataloguedInMode(mode, control, context),
+				!seen.has(control.id) &&
+				!omitFromConsultationGuide(mode, control) &&
+				predicate(control) &&
+				isCataloguedInMode(mode, control, context),
 		).map((control) => {
 			seen.add(control.id);
 			return { group, control };

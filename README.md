@@ -113,7 +113,9 @@ and among the recovery items the oldest wins. Once the section is expanded:
 	Consultation projection and the Ticket sources otherwise. It remains Refresh
 	even when an awaiting Consultation can also be answered with Enter.
 - `t` expands the Ticket section again from either Consultation pane, and `h`
-	or `Left` moves between the expanded section's own list and detail panes.
+	or `Left` moves between the expanded section's own list and detail panes when
+	the list is visible. Below 80 columns the Consultation list is hidden, the
+	detail keeps focus, and `h`/`Left` is unavailable.
 
 The Consultation launcher, the response editor, the Agent terminal, and the
 Consultation confirmation panels still handle their own keys (issue #9). The

@@ -21,7 +21,7 @@
  */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
 	DEFAULT_CONFIG,
@@ -1757,10 +1757,10 @@ export function App({
 			: responseEditor
 				? "consultation-response"
 				: sectionRef.current === "consultations"
-					? focusedPane === "list"
+					? focusedPaneRef.current === "list"
 						? "consultation-list"
 						: "consultation-detail"
-					: focusedPane === "list"
+					: focusedPaneRef.current === "list"
 						? "ticket-list"
 						: "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
@@ -1780,6 +1780,7 @@ export function App({
 			handoffActive: inFlightRef.current,
 			messageTruncated,
 			consultationRefreshAvailable: state !== undefined,
+			consultationListVisible: !consultationNarrow,
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
@@ -2242,7 +2243,7 @@ export function App({
 	}
 	// A resize can remove the narrow Consultation list without a section switch.
 	// Keep both focus representations on the visible detail pane in that case.
-	useEffect(() => {
+	useLayoutEffect(() => {
 		if (section === "consultations" && terminalWidth < 80 && focusedPaneRef.current !== "detail") {
 			focusedPaneRef.current = "detail";
 			setFocusedPane("detail");

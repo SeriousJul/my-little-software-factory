@@ -257,6 +257,34 @@ describe("the merged Main view", () => {
 		}
 	});
 
+	test("a key after a section switch uses the newly focused list", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seedConsultation(state, uid("c"), "2026-09-01T10:00:00.000Z");
+		seedConsultation(state, uid("d"), "2026-09-01T10:01:00.000Z");
+		const source = new FakeSource("issues", "github-issues", sampleOutcome());
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(sampleOutcome());
+					await awaitFrame(setup, (f) => f.includes("Retry policy"), "the Tickets");
+					await press(setup, "l", "the Ticket detail", (f) => f.includes("┌─❯ Tickets"));
+					setup.mockInput.pressKey("v");
+					setup.mockInput.pressKey("j");
+					const moved = await awaitFrame(
+						setup,
+						(f) => f.includes("consultation-dddddddd"),
+						"the second Consultation after the immediate navigation",
+					);
+					expect(detailPaneText(moved)).toContain("consultation-dddddddd");
+				},
+				state,
+				[source],
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("Consultation refresh reports a readable no-op when no Ticket source exists", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seedConsultation(state, uid("n"));
