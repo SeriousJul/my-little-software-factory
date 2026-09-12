@@ -12,7 +12,7 @@ import { Fragment, type ReactElement, useRef, useState } from "react";
 
 import type { ActionRow } from "../modal-chrome.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "../text.ts";
-import { controlInk, MARKER_WIDTH, markerText } from "./presentation.ts";
+import { controlInk, MARKER_WIDTH, markerText, ownNoteCells } from "./presentation.ts";
 
 /** One row of a form that holds no text: its label and its current value. */
 export interface ChoiceHandle<T> {
@@ -82,12 +82,21 @@ export interface ChoiceRowProps {
 	error?: string | null;
 	/** Whether the value stands for something the target cannot take. */
 	warning?: boolean;
-	/** Whether a value is pending verification and must stay dim. */
+	/**
+	 * Whether the value is still unconfirmed against the target's own list, so
+	 * the row states it in the tone of a value it cannot judge yet.
+	 */
 	muted?: boolean;
 	/** Show the end of a value wider than the column, where lists differ. */
 	clipTail?: boolean;
 	/** The written guide line under the row. */
 	hint?: string | null;
+	/**
+	 * The cells the written lines under the row may use. A surface that has room
+	 * beside its columns states a whole reason instead of cutting it to the value
+	 * column. Defaults to the row's own cells.
+	 */
+	noteWidth?: number;
 }
 
 /** The selector row: a label, a value, and the state word beside them. */
@@ -104,7 +113,7 @@ export function ChoiceRow(props: ChoiceRowProps): ReactElement {
 					: ink.text;
 	const valueWidth = Math.max(1, props.width);
 	const shown = empty ? (props.placeholder ?? "") : props.value;
-	const noteWidth = 2 + props.labelWidth + valueWidth;
+	const noteWidth = props.noteWidth ?? ownNoteCells(props.labelWidth, valueWidth);
 	return createElement(
 		Fragment,
 		{},
