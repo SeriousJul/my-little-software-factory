@@ -267,6 +267,11 @@ The per-ticket cap on started handoffs that stops the close-and-rehandoff loop.
 It gates auto-handoff only; a manual handoff may pass it.
 _Avoid_: turn counter, dispatch budget
 
+**Dispatch pause**:
+The condition in which Auto-handoff mode starts no agent by itself, because a turn settled `failed` and no turn has settled `completed` since.
+It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff.
+_Avoid_: circuit breaker, cooldown, backoff
+
 **Task type**:
 A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and the Task profile its handoffs start on.
 _Avoid_: prompt, template
@@ -305,8 +310,18 @@ The agent's messages of one settled turn, in order: the agent's text, and one sh
 The control plane builds it from the agent's session record when herdr reports one, or from the terminal capture when herdr does not.
 _Avoid_: agent log, transcript, terminal capture
 
+**Turn end cause**:
+Why an agent's settled turn ended: `completed`, `failed`, `aborted`, `truncated`, or `unknown`, with the agent's own text as its detail.
+It is the agent's fact, not herdr's status, and it says nothing about whether the work itself succeeded.
+_Avoid_: done, exit reason, stop reason, agent status
+
+**Held turn**:
+A settled turn whose Turn end cause is not `completed`.
+No automatic decision runs on it: the ticket rests in `awaiting` until the operator decides.
+_Avoid_: stalled turn, blocked turn, failed turn
+
 **Completion trace**:
-The durable record of a settled agent turn: task type, agent, model, thinking level, context window, completion time, turn log, last message, and decision.
+The durable record of a settled agent turn: task type, agent, model, thinking level, context window, completion time, turn log, last message, turn end cause, and decision.
 A cycle holds one trace per settled turn.
 _Avoid_: console dump, session file
 
