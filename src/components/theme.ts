@@ -12,10 +12,11 @@ export const COLORS = {
 	focusedBackground: "#21262d",
 	dim: "#8b949e",
 	/**
-	 * The established dark surface for utility and work overlays.
+	 * The fixed dark surface of the overlays that carry their own color system.
 	 *
-	 * A fixed dark surface by decision: an overlay carries its own background,
-	 * so it stays readable on any terminal background, dark or light. The base
+	 * The shared overlay (one `ModalSurface`) instead paints the presentation's
+	 * own surface role, so the ink it paints is the ink that pair was measured
+	 * against; the no-color presentation keeps this fixed dark box. The base
 	 * panes and Action bar paint no background and follow the terminal's own.
 	 */
 	overlay: "#0d1117",
@@ -24,8 +25,20 @@ export const COLORS = {
 	statusWorking: "#58a6ff",
 } as const;
 
-export function prefixForSeverity(severity: "working" | "warning" | "error"): string {
-	return severity === "working" ? "Working:" : severity === "warning" ? "Warning:" : "Error:";
+/**
+ * The kinds of news the Message line states.
+ *
+ * The severity is the written prefix and the color's role, and the prefix is
+ * the fact: a line that reports what a control did must not wear the word for a
+ * problem, and a line that reports a problem must not wear a neutral word.
+ */
+export type MessageSeverity = "working" | "warning" | "error" | "info";
+
+export function prefixForSeverity(severity: MessageSeverity): string {
+	if (severity === "working") return "Working:";
+	if (severity === "warning") return "Warning:";
+	if (severity === "error") return "Error:";
+	return "Info:";
 }
 
 export const STATE_COLORS: Record<TicketState, string> = {

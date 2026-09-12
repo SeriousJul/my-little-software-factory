@@ -1,9 +1,17 @@
-/** The Consultation launcher rejects invalid input before it can open work. */
+/**
+ * The Consultation launcher on its own, apart from the app that mounts it.
+ *
+ * The app-flow tests cover what the operator walks through; these pin the
+ * launcher's own contract at its interface: a Launch needs a type, a
+ * Repository, and input the Agent can actually take, and the launcher states a
+ * refusal rather than opening work the factory would reject.
+ */
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { describe, expect, test, vi } from "vitest";
 
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
+import type { ControlContext } from "../src/components/controls.ts";
 import { awaitFrame, frameText } from "./app-harness.ts";
 
 const types = {
@@ -18,20 +26,62 @@ const repositories = [
 	},
 ];
 
-async function launcher(initialInput = "") {
+/** The base control facts the launcher is mounted over: the list, idle. */
+const BASE_CONTEXT: ControlContext = {
+	mode: "ticket-list",
+	listCanMove: false,
+	detailCanScroll: false,
+	sourceCount: 1,
+	refreshingSourceCount: 0,
+	handoffActive: false,
+	messageTruncated: false,
+	consultationTypesConfigured: true,
+};
+
+async function launcher(
+	draft?: { typeName: string; repositoryIdentity: string; input: string } | null,
+) {
 	const onLaunch = vi.fn();
 	const setup = await testRender(
 		createElement(ConsultationLauncher, {
 			types,
 			repositories,
-			initialInput,
+			draft,
+			context: BASE_CONTEXT,
+			message: null,
+			onCopy: () => undefined,
 			onLaunch,
-			onCancel: () => undefined,
+			onClose: () => undefined,
+			onDiscard: () => undefined,
+			onEmergencyExit: () => undefined,
 		}),
-		{ width: 100, height: 20 },
+		{ width: 100, height: 24 },
 	);
 	await setup.flush();
 	return { setup, onLaunch };
+}
+
+/** Tab `count` slots forward and wait for the frame to name the new one. */
+async function tabUntil(
+	setup: Awaited<ReturnType<typeof testRender>>,
+	count: number,
+	what: string,
+): Promise<string> {
+	for (let step = 0; step < count; step += 1) setup.mockInput.pressTab();
+	return awaitFrame(setup, (f) => frameText(f).includes(what), `the focus on ${what}`);
+}
+
+/** Tab from the Type choice to the Draft field, waiting for each move. */
+async function focusDraft(setup: Awaited<ReturnType<typeof testRender>>): Promise<void> {
+	await tabUntil(setup, 1, "❯ Repository");
+	await tabUntil(setup, 1, "❯ Initial input");
+}
+
+/** Run the Launch action: Tab from the Draft field to it, then Enter. */
+async function pressLaunch(setup: Awaited<ReturnType<typeof testRender>>): Promise<void> {
+	await tabUntil(setup, 1, "❯ Launch Consultation");
+	setup.mockInput.pressEnter();
+	await setup.flush();
 }
 
 describe("Consultation launcher input", () => {
@@ -41,45 +91,45 @@ describe("Consultation launcher input", () => {
 			const frame = frameText(setup.captureCharFrame());
 			expect(frame).toContain("Type grill");
 			expect(frame).toContain("Repository acme/factory");
-			setup.mockInput.pressTab();
-			setup.mockInput.pressTab();
-			setup.mockInput.typeText("review the design");
-			setup.mockInput.pressEnter();
-			await awaitFrame(setup, () => onLaunch.mock.calls.length === 1, "the launch callback");
+			await focusDraft(setup);
+			await setup.mockInput.typeText("review the design");
+			await pressLaunch(setup);
 			expect(onLaunch).toHaveBeenCalledWith("grill", repositories[0], "review the design");
 		} finally {
 			await setup.renderer.destroy();
 		}
 	});
 
-	test("rejects empty initial input with a readable message", async () => {
+	test("refuses empty initial input on the visible action, and launches nothing", async () => {
 		const { setup, onLaunch } = await launcher();
 		try {
-			setup.mockInput.pressEnter();
-			const frame = await awaitFrame(
-				setup,
-				(candidate) => candidate.includes("initial input cannot be empty"),
-				"the empty-input error",
-			);
-			expect(frame).toContain("Error:");
+			await focusDraft(setup);
+			await pressLaunch(setup);
+			await setup.flush();
 			expect(onLaunch).not.toHaveBeenCalled();
+			const frame = frameText(setup.captureCharFrame());
+			expect(frame).toContain("Unavailable: Launch Consultation: initial input cannot be empty");
 		} finally {
 			await setup.renderer.destroy();
 		}
 	});
 
-	test("rejects oversized initial input with its byte count and limit", async () => {
+	test("refuses oversized initial input with its byte count and limit", async () => {
 		const bytes = 64 * 1024 + 1;
-		const { setup, onLaunch } = await launcher("a".repeat(bytes));
+		const { setup, onLaunch } = await launcher({
+			typeName: "grill",
+			repositoryIdentity: repositories[0].identity,
+			input: "a".repeat(bytes),
+		});
 		try {
-			setup.mockInput.pressEnter();
+			await focusDraft(setup);
+			await pressLaunch(setup);
 			const frame = await awaitFrame(
 				setup,
-				(candidate) =>
-					candidate.includes(`initial input is ${bytes} UTF-8 bytes; the limit is 65536`),
-				"the oversized-input error",
+				(candidate) => frameText(candidate).includes(`initial input is ${bytes} UTF-8 bytes`),
+				"the oversized-input refusal",
 			);
-			expect(frame).toContain(`UTF-8 bytes: ${bytes}/65536`);
+			expect(frameText(frame)).toContain(`UTF-8 bytes: ${bytes}/65536`);
 			expect(onLaunch).not.toHaveBeenCalled();
 		} finally {
 			await setup.renderer.destroy();

@@ -33,6 +33,7 @@ import {
 	confirmPanel,
 	detailPaneText,
 	frameText,
+	launchConsultationDraft,
 	openConsultationPanel,
 	openLauncher,
 	press,
@@ -40,9 +41,11 @@ import {
 	rgb,
 	rowsOf,
 	type Setup,
+	sendResponseDraft,
 	settle,
 	sleep,
 	spanColors,
+	tabUntilSlot,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -494,12 +497,8 @@ describe("Consultation launch and monitoring through the UI", () => {
 						"the verified Repository option",
 					);
 					// Move to the initial input field and type the request.
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					await pressEnter(setup, "the Consultation to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
 						[
@@ -659,8 +658,15 @@ describe("Consultation recovery and replacement through the UI", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					await pressEnter(setup, "the failed detail to record the replacement", (f) =>
-						f.includes("Replaced by:"),
+					// The Replacement launcher opens on the retained context, so the
+					// flow is the same one any launcher takes: Tab to the visible
+					// action and run it there.
+					await tabUntilSlot(setup, "❯ Launch Consultation");
+					setup.mockInput.pressEnter();
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Replaced by:"),
+						"the failed detail to record the replacement",
 					);
 					await waitForCommands(
 						runner,
@@ -702,16 +708,15 @@ describe("Consultation responses through the UI", () => {
 					await press(setup, "v", "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					const editor = await awaitFrame(
 						setup,
 						(f) => f.includes("follow up"),
 						"the saved draft in the editor",
 					);
 					expect(frameText(editor)).toContain("Response draft");
-					await pressEnter(setup, "the accepted response to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await sendResponseDraft(setup);
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} follow up`],
@@ -749,9 +754,12 @@ describe("Consultation responses through the UI", () => {
 					await press(setup, "v", "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
-					await pressEnter(setup, "the failure status and the reopened editor", (f) =>
-						f.includes("response failed: refused"),
+					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
+					await sendResponseDraft(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("response failed: refused"),
+						"the failure status and the reopened editor",
 					);
 					expect(state.consultation(RESPONSE_ID)).toMatchObject({
 						state: "awaiting-response",
@@ -794,11 +802,10 @@ describe("Consultation responses through the UI", () => {
 					expect(detailPaneText(settled)).toContain("the design holds");
 					expect(frameText(settled)).toContain("Enter respond");
 
-					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("then ship it");
-					await pressEnter(setup, "the accepted response to start a new turn", (f) =>
-						f.includes("State: working"),
-					);
+					await sendResponseDraft(setup);
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} then ship it`],
@@ -1310,12 +1317,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					await pressEnter(setup, "the Consultation to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
 						[
@@ -1392,12 +1395,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					await pressEnter(setup, "the Consultation to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
 						[`herdr agent start ${AGENT} --kind pi --pane pane-c1 -- --context 131072`],
@@ -1433,12 +1432,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					await pressEnter(setup, "the Consultation to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					const commands = runner.commands();
 					const listAt = commands.indexOf("herdr workspace list");
 					const createAt = commands.findIndex((c) => c.startsWith("herdr workspace create"));
@@ -1496,11 +1491,11 @@ describe("Consultation live-worktree launch through the UI", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					const panel = await pressEnter(setup, "the live checkout conflict panel", (f) =>
-						f.includes("Live checkout conflict"),
+					await launchConsultationDraft(setup, "review auth");
+					const panel = await awaitFrame(
+						setup,
+						(f) => f.includes("Live checkout conflict"),
+						"the live checkout conflict panel",
 					);
 					expect(frameText(panel)).toContain("Conflict: Herdr Agent pi (pane-herdr)");
 					expect(frameText(panel)).toContain("Confirm once to share this live checkout");
@@ -1570,11 +1565,11 @@ describe("Consultation live-worktree launch through the UI", () => {
 						"the verified Repository option",
 					);
 					const readsBeforeLaunch = resolveReads();
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					const failed = await pressEnter(setup, "the fit check to refuse the launch", (f) =>
-						f.includes("State: failed"),
+					await launchConsultationDraft(setup, "review auth");
+					const failed = await awaitFrame(
+						setup,
+						(f) => f.includes("State: failed"),
+						"the fit check to refuse the launch",
 					);
 					expect(frameText(failed)).toContain('has no model "openai/gpt-4o"');
 					// The check runs ahead of the route's first external change: a
@@ -1619,12 +1614,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					await pressEnter(setup, "the Consultation to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					expect(frameText(setup.captureCharFrame())).not.toContain("Live checkout conflict");
 					const [consultation] = state.consultations("open");
 					expect(consultation.state).toBe("working");
@@ -1709,7 +1700,7 @@ describe("Consultation response gating by observed Agent status", () => {
 						(f) => frameText(f).includes("Enter respond"),
 						"the idle Agent hints",
 					);
-					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 				},
 				WIDTH,
 				30,
@@ -1791,12 +1782,8 @@ describe("The full Consultation operator flow", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					await pressEnter(setup, "the Consultation to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					const id = state.consultations("open")[0].id;
 					// The opening turn settles and rings.
 					runner.agentListJson = agentListJson([{ ...launchedAgent, status: "idle", seq: 1 }]);
@@ -1811,11 +1798,10 @@ describe("The full Consultation operator flow", () => {
 					// launched Consultation is already the selection.
 					await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
 					// The Agent is idle: Enter opens the response editor.
-					await pressEnter(setup, "the response editor", (f) => f.includes("enter submit"));
+					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("answer one");
-					await pressEnter(setup, "the accepted response to reach working", (f) =>
-						f.includes("State: working"),
-					);
+					await sendResponseDraft(setup);
+					await awaitFrame(setup, (f) => f.includes("State: working"), "the working state");
 					await waitForCommands(
 						runner,
 						[`herdr agent prompt ${AGENT} answer one`],
@@ -1906,11 +1892,11 @@ describe("The full Consultation operator flow", () => {
 						(f) => f.includes("acme/factory"),
 						"the verified Repository option",
 					);
-					setup.mockInput.pressTab();
-					setup.mockInput.pressTab();
-					setup.mockInput.typeText("review auth");
-					const frame = await pressEnter(setup, "the launched Consultation working", (f) =>
-						f.includes("State: working"),
+					await launchConsultationDraft(setup, "review auth");
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("State: working"),
+						"the launched Consultation working",
 					);
 					expect(detailPaneText(frame)).toContain("State: working");
 					expect(detailPaneText(frame)).not.toContain("State: missing");
