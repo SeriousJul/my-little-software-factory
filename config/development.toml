@@ -103,8 +103,8 @@ Review pull request {external-key}: {title}.
 ### Outcome
 - Post the output as a comment on the pull request.
 - Remove label 'ready-for-review'.
-- Set label to **`ready-to-ship`** if score is 92 or higher.
-- Set label to **`needs-work`** if score is less than 92.
+- Set label to **`ready-to-ship`** if score is 90 or higher.
+- Set label to **`needs-work`** if score is less than 90.
 
 Repository: {repository}
 Pull request: {source-url}
