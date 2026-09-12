@@ -18,10 +18,24 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
 	test: {
 		/**
-		 * The heaviest test in the suite measured 4804 ms in a full parallel
-		 * run. Six times that is the budget, so a busy machine has room and a
-		 * broken one still fails inside half a minute.
+		 * The heaviest test in the suite measured 4804 ms in a parallel run
+		 * at the fork cap below. Six times that is the budget, so a busy
+		 * machine has room and a broken one still fails inside half a minute.
 		 */
 		testTimeout: 30000,
+		/**
+		 * The frame tests each drive their own rendered terminal, and a
+		 * machine that forks one renderer per core starves its own frames: at
+		 * thirty-two forks the suite's own load pushed a wait past the
+		 * harness's 10000 ms deadline on a machine that passes the same test
+		 * alone. Eight forks hold the suite's load below the worst case the
+		 * budgets above were measured at, on this machine and on the smaller
+		 * ones the cap does not reach.
+		 */
+		poolOptions: {
+			forks: {
+				maxForks: 8,
+			},
+		},
 	},
 });

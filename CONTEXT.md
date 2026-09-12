@@ -150,8 +150,8 @@ The search retains unmatched text and states when no Model matches.
 _Avoid_: autocomplete, fuzzy filter
 
 **Setting fit check**:
-The check one agent start runs against the resolved Agent type before its first external change: the model must be on that agent's Model list, and the thinking level must be one it declares.
-An unfit setting fails the start with a readable reason and leaves the Ticket open. A Model list that cannot be fetched skips the model part of the check, and the Agent's own rejection stands.
+The check one Agent start runs against the resolved Agent type before its first external change: Model, Thinking level, and Context window must each fit the Agent's mapping, and Model must be on its Model list when that list is available.
+The Setting fit module owns the rule and one sentence for each unfit cause. An unfit setting fails the start with a readable reason and leaves the Ticket open. A Model list that cannot be fetched skips the Model list part of the check, and the Agent's own rejection stands.
 _Avoid_: preflight, validation gate
 
 **Consultation**:

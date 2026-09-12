@@ -590,7 +590,7 @@ describe("the written reason a control states", () => {
 					focused: false,
 					width: 24,
 					labelWidth: 10,
-					pending: true,
+					muted: true,
 				}),
 				createElement(ChoiceRow, {
 					key: "confirmed",

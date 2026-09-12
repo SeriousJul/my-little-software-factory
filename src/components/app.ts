@@ -97,12 +97,7 @@ import {
 } from "./messages.ts";
 import { MissingModal } from "./missing-modal.ts";
 import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts";
-import {
-	type AgentModelList,
-	type AgentSettings,
-	type ModelListStatus,
-	OverridePanel,
-} from "./override-panel.ts";
+import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -530,17 +525,6 @@ export function App({
 			setLiveOutput(null);
 		}
 	}, [state]);
-	const agentSettings: Record<string, AgentSettings> = Object.fromEntries(
-		Object.entries(config.agents).map(([name, agent]) => [
-			name,
-			{
-				model: agent.model !== undefined,
-				thinking: agent.thinking !== undefined,
-				contextWindow: agent.contextWindow !== undefined,
-				thinkingValues: agent.thinkingValues,
-			},
-		]),
-	);
 	// The Task profile of every task type (ADR 0009): what the panel prefills,
 	// and what it re-derives when the operator switches the task type row.
 	const profiles: Record<string, TaskProfileStart> = taskProfilesOf(config);
@@ -2395,10 +2379,9 @@ export function App({
 			}),
 		override !== null &&
 			createElement(OverridePanel, {
-				agents: Object.keys(config.agents),
+				agents: config.agents,
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
-				agentSettings,
 				profiles,
 				modelList,
 				onAgentChange: requestModelList,

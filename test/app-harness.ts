@@ -13,6 +13,7 @@ import { testRender } from "@opentui/react/test-utils";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { App, type AppProps } from "../src/components/app.ts";
+import { COLORS } from "../src/components/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -199,6 +200,25 @@ export function cellColors(
 	}
 	throw new Error(`frame row ${y} has no column ${x}`);
 }
+
+/**
+ * True when the frame marks the override panel row labelled `label` as the
+ * selected one.
+ */
+export const rowSelected = (frame: string, label: string): boolean =>
+	frame.includes(`\u276f ${label}`);
+
+/**
+ * The tones of a row whose value cannot reach its Agent.
+ *
+ * The value wears the warning tone and the reason written under it wears the
+ * error tone, so a test that asks for a warning row asks for both: a row that
+ * carried its meaning on a tone alone would paint only the first.
+ */
+export const unfitTones = (): [number, number, number][] => [
+	rgb(COLORS.statusWarning),
+	rgb(COLORS.statusError),
+];
 
 /** Frame predicate: the detail pane holds the focus. */
 export const detailFocused = (frame: string) =>
