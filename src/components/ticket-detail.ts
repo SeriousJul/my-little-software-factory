@@ -108,19 +108,20 @@ export function detailLines(
 		// The held-turn warning (ADR 0016): the turn ended without completing
 		// and now blocks the automatic decisions. It stands above the
 		// last-completion line, so the warning reads before the fact it
-		// warns on. The cause and the agent's own text stand out in the error
-		// color, and the last line states what the control plane refuses to
-		// do. It only shows while the ticket rests in awaiting: a held turn
-		// whose agent works again is retried, not held, and the pane says so
-		// without a warning.
+		// warns on, and it wears the warning color of the Leftover block above:
+		// the turn needs the operator, and red stays reserved for a pane that
+		// is gone. The last line states what the control plane refuses to do.
+		// It only shows while the ticket rests in awaiting: a held turn whose
+		// agent works again is retried, not held, and the pane says so without
+		// a warning.
 		if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion)) {
 			const causeLine =
 				completion.detail === ""
 					? `Turn ended ${completion.cause}`
 					: `Turn ended ${completion.cause}: ${completion.detail}`;
 			for (const wrapped of wrapToWidth(causeLine, usableCols))
-				lines.push({ text: wrapped, fg: COLORS.statusError });
-			pushWrapped("no automatic decision runs on this turn", COLORS.statusError);
+				lines.push({ text: wrapped, fg: COLORS.statusWarning });
+			pushWrapped("no automatic decision runs on this turn", COLORS.statusWarning);
 		}
 		// The date is the first minute of the stored completion time; the
 		// decision is `pending` until one is made on the turn.

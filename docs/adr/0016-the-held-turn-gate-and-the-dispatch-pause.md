@@ -63,8 +63,17 @@ moment the operator decides the held turn that started it.
 
 The pause holds only the three automatic origins: the open handoff, the
 workflow route, and the restart of a missing agent. It never blocks a manual
-handoff, and it never touches manual mode: manual mode does not auto-dispatch,
-so there is nothing for it to pause.
+handoff, and it never blocks the operator's explicit close, goto, or route.
+
+The pause is a state fact, not an auto-mode state. The open handoff and the
+restart exist only in auto-handoff mode, where the pause holds all three
+origins. In manual mode the one automatic start that still runs is the
+auto-close types' route, and the pause holds it there too, exactly as the
+Parallel limit already does: a full limit waits in awaiting in both modes,
+because the auto-close type routes without the operator. A completed turn
+that cannot route during a pause rests in awaiting with its trace undecided,
+the way a full Parallel limit already leaves it, and the next cycle routes
+it once the pause ends.
 
 **Why hold rather than retry.** The control plane does not re-run a failed
 turn. A failed build or a rejected request will fail again on a blind retry,
@@ -98,8 +107,10 @@ The considered alternatives:
   and its cause and detail named in the decision modal. The operator decides
   it instead of the control plane deciding for them.
 - A `failed` turn with no `completed` settle since pauses the automatic open
-  handoff, the workflow route, and the restart, in auto-handoff mode only. A
-  manual handoff always starts, and manual mode is untouched.
+  handoff, the workflow route, and the restart. The open handoff and the
+  restart run only in auto-handoff mode; the route block applies in manual
+  mode too, because the auto-close types route there. A manual handoff
+  always starts.
 - A turn the control plane could not read is never held: `unknown` fails open
   (ADR 0015), so a runtime that changes its record format holds nothing.
 - The pause is never stored. It is recomputed from the completion traces each

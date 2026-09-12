@@ -670,8 +670,10 @@ itself. The pause is derived from the completion traces on every cycle and
 never stored, so it survives a restart. It holds only the automatic origins -
 the open handoff, the workflow route, and the restart of a missing agent - and
 it ends at the next `completed` settle, or when the operator decides the held
-turn that started it. It never blocks a manual handoff, and it never touches
-manual mode. A Consultation never contributes to the pause.
+turn that started it. It never blocks a manual handoff. The open handoff and
+the restart run only in auto mode; the route block applies in manual mode
+too, where the auto-close types still route without the operator, exactly
+like the Parallel limit. A Consultation never contributes to the pause.
 
 A missing agent in auto mode restarts the handoff once, with the last
 message as the previous message. At the per-ticket handoff limit, the

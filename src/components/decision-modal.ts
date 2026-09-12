@@ -359,7 +359,7 @@ export function DecisionModal({
 				? [
 						createElement(
 							"text",
-							{ key: "held", fg: COLORS.statusError },
+							{ key: "held", fg: COLORS.statusWarning },
 							truncateToWidth(
 								detail === "" ? `Turn ended ${cause}` : `Turn ended ${cause}: ${detail}`,
 								frame.contentWidth,

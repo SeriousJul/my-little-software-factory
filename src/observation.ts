@@ -593,9 +593,10 @@ export class ObservationCoordinator {
 		// The Dispatch pause is derived from the traces each cycle and never
 		// stored (ADR 0016). The Message line reports it when it trips and when
 		// it clears, so the operator hears about the factory stopping and
-		// resuming dispatch on the line it already watches. It is an auto-mode
-		// state: the same condition the mode line wears `paused` for.
-		const effectivePause = autoOn && this.state.dispatchPauseActive();
+		// resuming dispatch on the line it already watches, in any mode: the
+		// pause holds the auto-close types' routes in manual mode too. The
+		// mode line wears it `paused` in auto mode, the state it names.
+		const effectivePause = this.state.dispatchPauseActive();
 		if (effectivePause !== this.pauseActive) {
 			this.pauseActive = effectivePause;
 			this.onStatus(
@@ -1008,8 +1009,12 @@ export class ObservationCoordinator {
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
 		// A Dispatch pause holds the automatic route, not the close: it stops
-		// new work from starting, not a cycle from ending (ADR 0016).
-		if (autoOn && this.state.dispatchPauseActive()) return false;
+		// new work from starting, not a cycle from ending (ADR 0016). It holds
+		// the route in auto and manual mode alike, exactly like the Parallel
+		// limit: the auto-close types route even without the operator, so a
+		// pause that let their route through would start an agent into the
+		// wall it exists to stop.
+		if (this.state.dispatchPauseActive()) return false;
 		const target = edge.to[0];
 		const previousMessage = this.promptPreviousMessage(completion);
 		// A Workflow Handoff resolves a fresh target profile and never

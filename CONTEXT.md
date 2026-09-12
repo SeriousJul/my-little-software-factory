@@ -269,7 +269,7 @@ _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
 The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed` and no turn has settled `completed` since it.
-It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow route, and the restart.
+It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow route, and the restart. The route block applies in manual mode too, because auto-close types route there, exactly like the Parallel limit.
 _Avoid_: circuit breaker, cooldown, backoff
 
 **Task type**:
