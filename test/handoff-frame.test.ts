@@ -14,7 +14,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { panelValueCells } from "../src/components/override-panel.ts";
 import { COLORS } from "../src/components/theme.ts";
 
@@ -40,6 +40,7 @@ import {
 	settle,
 	showsTicket,
 	spanColors,
+	unfitTones,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -343,7 +344,26 @@ async function typeText(setup: Setup, text: string): Promise<void> {
 	await setup.mockInput.typeText(text);
 }
 
-/** A profile that names a context window, on an agent that maps one. */
+/** A profile that names all three values on an Agent that maps none of them. */
+const textFieldConfig: FactoryConfig = {
+	...DEFAULT_CONFIG,
+	defaultAgent: "text",
+	agents: {
+		...DEFAULT_CONFIG.agents,
+		text: { kind: "text" },
+	},
+	taskTypes: {
+		...DEFAULT_CONFIG.taskTypes,
+		implement: {
+			...DEFAULT_CONFIG.taskTypes.implement,
+			agent: "text",
+			model: "model-value",
+			thinking: "high",
+			contextWindow: "272000",
+		},
+	},
+};
+
 const contextProfileConfig: FactoryConfig = {
 	...DEFAULT_CONFIG,
 	agents: {
@@ -1194,9 +1214,14 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				const opened = await openPanel(setup);
-				// The row is not hidden: the value needs a row to be cleared in.
+				// The row is not hidden: the value needs a row to be cleared in, and
+				// it states in words why the Agent cannot take it, so the warning
+				// never rides on the tone alone.
 				expect(frameText(opened)).toContain("Model factory-model");
-				expect(spanColors(setup, "factory-model")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(frameText(opened)).toContain(
+					'Error: Model: agent type "cursor" defines no model setting',
+				);
+				expect(spanColors(setup, "factory-model")).toEqual(unfitTones());
 				await press(setup, "j", "the Environment row", (f) => f.includes("❯ Environment"));
 				await press(setup, "j", "the Task type row", (f) => f.includes("❯ Task type"));
 				await press(setup, "j", "the Model row", (f) => f.includes("❯ Model"));
@@ -1205,8 +1230,7 @@ describe("the override panel", () => {
 				await settle(setup);
 				// The warning holds while the row is selected: the value is
 				// still unfit, and the handoff would still fail on it.
-				expect(spanColors(setup, "factory-model")).toEqual([rgb(COLORS.statusWarning)]);
-				expect(spanColors(setup, "factory-model")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "factory-model")).toEqual(unfitTones());
 
 				setup.mockInput.pressKey("HOME");
 				for (const _ of "factory-model") setup.mockInput.pressKey("DELETE");
@@ -1733,8 +1757,10 @@ describe("the override panel", () => {
 				setup.mockInput.pressEnter();
 				const failed = await awaitFrame(
 					setup,
-					(f) => f.includes("is not a positive whole number of tokens"),
-					"the count reason",
+					(f) =>
+						f.includes("is not a positive whole number of tokens") &&
+						selectedRow(f).includes("[open]"),
+					"the count refusal and the ticket returning open",
 				);
 				expect(selectedRow(failed)).toContain("[open]");
 				expect(runner.calls).toHaveLength(0);
@@ -1770,7 +1796,10 @@ describe("the override panel", () => {
 				// The row is there because the value needs a row to be cleared in,
 				// and it warns because the chosen agent cannot carry the count.
 				expect(frameText(opened)).toContain("Context 272000");
-				expect(spanColors(setup, "272000")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(frameText(opened)).toContain(
+					'Error: Context: agent type "pi" defines no context window setting',
+				);
+				expect(spanColors(setup, "272000")).toEqual(unfitTones());
 
 				await selectRow(setup, "down", "Environment");
 				await selectRow(setup, "down", "Task type");
@@ -1778,7 +1807,7 @@ describe("the override panel", () => {
 				await selectRow(setup, "down", "Thinking");
 				await selectRow(setup, "down", "Context");
 				await settle(setup);
-				expect(spanColors(setup, "272000")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "272000")).toEqual(unfitTones());
 
 				// Up onto the Agent row, then right onto the agent that maps the
 				// count: the draft keeps its value, and the row goes plain.
@@ -1795,7 +1824,7 @@ describe("the override panel", () => {
 					(f) => rowWith(f, "Agent").includes("codex") && frameText(f).includes("Context 272000"),
 					"the Context row to return with an agent that maps it",
 				);
-				expect(spanColors(setup, "272000")).not.toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "272000")).not.toEqual(unfitTones());
 
 				// Back onto the agent that cannot map it, then clear the row: the
 				// handoff starts and leaves the room to the agent.
@@ -1813,7 +1842,7 @@ describe("the override panel", () => {
 					(f) => frameText(f).includes("Context 272000"),
 					"the Context row to come back",
 				);
-				expect(spanColors(setup, "272000")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "272000")).toEqual(unfitTones());
 				setup.mockInput.pressKey("HOME");
 				for (const _ of "272000") setup.mockInput.pressKey("DELETE");
 				const cleared = await awaitFrame(
@@ -1893,13 +1922,16 @@ describe("the override panel", () => {
 					"the Thinking row to keep the level",
 				);
 				expect(frameText(warned)).not.toContain("Thinking (unset)");
-				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(frameText(warned)).toContain(
+					'Error: Thinking: agent type "zed" offers no thinking level "minimal"',
+				);
+				expect(spanColors(setup, "minimal")).toEqual(unfitTones());
 
 				// The warning holds while the row is selected: the value is
 				// still unfit, and the handoff would still fail on it.
 				await selectThinking();
 				await settle(setup);
-				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "minimal")).toEqual(unfitTones());
 
 				// Confirming a value the Agent does not offer fails the handoff
 				// with a readable reason: what the row showed is what the agent
@@ -1907,8 +1939,9 @@ describe("the override panel", () => {
 				setup.mockInput.pressEnter();
 				const failed = await awaitFrame(
 					setup,
-					(f) => f.includes('offers no thinking level "minimal"'),
-					"the mismatch reason",
+					(f) =>
+						f.includes('offers no thinking level "minimal"') && selectedRow(f).includes("[open]"),
+					"the mismatch refusal and the ticket returning open",
 				);
 				expect(selectedRow(failed)).toContain("[open]");
 				expect(runner.calls).toHaveLength(0);
@@ -2117,6 +2150,92 @@ describe("the override panel", () => {
 				);
 				setup.mockInput.pressTab();
 				await awaitFrame(setup, (f) => f.includes("❯ Thinking"), "Tab from a text row");
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+	test("F3 copies from the focused Model, Thinking, and Context fields", async () => {
+		const runner = new FakeRunner();
+		const props = { config: textFieldConfig, runner, home, configPath };
+		await withApp(
+			async (setup) => {
+				const copied: string[] = [];
+				vi.spyOn(setup.renderer, "copyToClipboardOSC52").mockImplementation((text: string) => {
+					copied.push(text);
+					return true;
+				});
+				await openPanel(setup);
+				await selectRow(setup, "down", "Environment");
+				await selectRow(setup, "down", "Task type");
+				await selectRow(setup, "down", "Model");
+				for (const [label, value] of [
+					["Model", "m"],
+					["Thinking", "h"],
+					["Context", "2"],
+				] as const) {
+					if (label === "Thinking" || label === "Context") {
+						const moved = await selectRow(setup, "down", label);
+						// A selection belongs to the field that just lost focus. The
+						// next field must not advertise Copy until it reports its own
+						// selection.
+						expect(actionBarRowOf(moved)).not.toContain("F3 Copy selection");
+					}
+					setup.mockInput.pressKey("HOME");
+					setup.mockInput.pressArrow("right", { shift: true });
+					await awaitFrame(
+						setup,
+						(f) => actionBarRowOf(f).includes("F3 Copy selection"),
+						`F3 to become available on the ${label} selection`,
+					);
+					setup.mockInput.pressKey("F3");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("Copied 1 cells"),
+						`the ${label} selection to be copied`,
+					);
+					expect(copied.at(-1)).toBe(value);
+				}
+			},
+			WIDTH,
+			HEIGHT,
+			props,
+		);
+	});
+	test("F3 copies a selected Model search", async () => {
+		const runner = new FakeRunner();
+		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
+		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		await withApp(
+			async (setup) => {
+				const copied: string[] = [];
+				vi.spyOn(setup.renderer, "copyToClipboardOSC52").mockImplementation((text: string) => {
+					copied.push(text);
+					return true;
+				});
+				await openPanel(setup);
+				await moveToModelRow(setup);
+				await typeModelSearch(setup, "gpt");
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Search gpt"),
+					"the Model search text",
+				);
+				setup.mockInput.pressKey("HOME");
+				setup.mockInput.pressArrow("right", { shift: true });
+				await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("F3 Copy selection"),
+					"F3 to become available for the Model search selection",
+				);
+				setup.mockInput.pressKey("F3");
+				await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("Copied 1 cells"),
+					"the selected Model search to be copied",
+				);
+				expect(copied).toEqual(["g"]);
 			},
 			WIDTH,
 			HEIGHT,
@@ -2820,7 +2939,7 @@ describe("the override panel", () => {
 					frameText(f).includes("Agent cursor"),
 				);
 				expect(frameText(unmapped)).toContain("Model draft");
-				expect(spanColors(setup, "draft")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "draft")).toEqual(unfitTones());
 
 				await pressArrow(setup, "right", "the agent to return to pi", (f) =>
 					frameText(f).includes("Agent pi"),
@@ -3132,6 +3251,32 @@ describe("the override panel", () => {
 				props,
 			);
 		});
+		test(`an unset Model is not a warning with any available list (${size.width}x${size.height})`, async () => {
+			for (const models of [["anthropic/claude-sonnet-4-5"], []] as const) {
+				const runner = new FakeRunner();
+				stubCheckout(runner);
+				stubLiveHandoff(runner);
+				runner.setModelList("pi", [...models]);
+				const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+				await withApp(
+					async (setup) => {
+						await openPanel(setup);
+						const placeholder = models.length > 0 ? "(unset)" : "(no models available)";
+						const expected = `Model ${placeholder}`;
+						const frame = await awaitFrame(
+							setup,
+							(f) => frameText(f).includes(expected),
+							`the unset Model row for ${models.length === 0 ? "an empty" : "a non-empty"} list`,
+						);
+						expect(frameText(frame)).toContain(expected);
+						expect(spanColors(setup, placeholder)).not.toContainEqual(rgb(COLORS.statusWarning));
+					},
+					size.width,
+					size.height,
+					props,
+				);
+			}
+		});
 		test(`the Model row holds a loading marker while the control plane fetches the list (${size.width}x${size.height})`, async () => {
 			const runner = new FakeRunner();
 			stubCheckout(runner);
@@ -3222,9 +3367,11 @@ describe("the override panel", () => {
 				async (setup) => {
 					const opened = await openPanel(setup);
 					// The task type names a model the agent's own list does not hold:
-					// the handoff would fail on it, so the row warns before it can.
+					// the handoff would fail on it, so the row warns before it can, and
+					// states why in words at every size the panel renders at.
 					expect(frameText(opened)).toContain("Model gpt-4o");
-					expect(spanColors(setup, "gpt-4o")).toEqual([rgb(COLORS.statusWarning)]);
+					expect(frameText(opened)).toContain("Error: Model:");
+					expect(spanColors(setup, "gpt-4o")).toContainEqual(rgb(COLORS.statusWarning));
 					// The thinking level the task type names is supported, so it stays plain.
 					expect(frameText(opened)).toContain("Thinking (unset)");
 					// A search that names a model the agent does hold clears the
@@ -3323,9 +3470,12 @@ describe("the override panel", () => {
 						frameText(f).includes("Agent codex"),
 					);
 					// The level the task type named is one the new agent cannot run, so the
-					// handoff would fail on it: the row says so before the operator can.
-					expect(frameText(setup.captureCharFrame())).toContain("Thinking xhigh");
-					expect(spanColors(setup, "xhigh")).toEqual([rgb(COLORS.statusWarning)]);
+					// handoff would fail on it: the row says so before the operator can,
+					// in words at every size the panel renders at.
+					const warned = setup.captureCharFrame();
+					expect(frameText(warned)).toContain("Thinking xhigh");
+					expect(frameText(warned)).toContain("Error: Thinking:");
+					expect(spanColors(setup, "xhigh")).toContainEqual(rgb(COLORS.statusWarning));
 					// The row still takes input: the operator can put a level the new agent
 					// declares on it, and the warning goes with the old value.
 					await moveToThinkingRow(setup);

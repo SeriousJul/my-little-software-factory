@@ -174,7 +174,7 @@ interface ModalSurfaceProps {
 	 */
 	width: number;
 	title: string;
-	borderColor: string;
+	borderColor?: string;
 	/** The rows this surface must draw to be itself. */
 	minContentRows: number;
 	children: ReactElement[];

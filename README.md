@@ -125,7 +125,10 @@ Consultation confirmation panel still handle their keys directly (issue #9).
 	A Consultation starts on the agent, environment, model, thinking level, and
 	context window its type names, each one passed through the agent's own
 	template, so the type must name an agent that maps every setting it
-	sets.
+	sets. The start runs the Setting fit check first and fails with a readable
+	reason when its agent cannot take one of them, before it touches herdr or
+	the repository. Recovery re-checks the stored record, so a config change
+	cannot start an opening Consultation without the settings its record names.
 - `Enter` on an awaiting response opens the response editor. The editor
 	stores its draft in SQLite, `Tab` reaches `Send response` and `Enter` runs
 	it, `Enter` inside the field adds a line, `Esc` closes it with the draft
@@ -216,36 +219,44 @@ cleared row stays a one-shot override. Switching the agent never re-derives
 the model: every setting resolves on its own chain. Clearing a Model,
 Thinking, or Context row hands that setting back to the agent.
 
-The Context row holds a count of tokens, so it takes digits and nothing
-else: a comma, a space, or a letter typed or pasted into it never reaches
-the value, and the caret stays where the operator left it. A count also keeps
-one spelling: the row folds a leading zero the way a config file's count is
-folded, so `007` and `7` reach the agent as `7`. Digits alone are not yet a
-count: a row that holds none, `0` for example, warns and fails its handoff,
-the way a config file that sets one fails at startup.
+The Context row holds a count of tokens, so it takes digits and nothing else: a
+comma, a space, or a letter typed or pasted into it is refused before it reaches
+the field, so the value, the caret, and any selection stand exactly where they
+were and the row states under itself what it turned away. A paste is refused
+whole, never picked over for the digits that sit inside it, so a pasted `1e3`
+never becomes `13`. An entry the row took ends that reason, so it never lingers
+under a count that has moved on. A count also keeps one spelling: the row folds
+a leading zero the way a config file's count is folded, so `007` and `7` reach
+the agent as `7`. Digits alone are not yet a count: a row that holds none, `0`
+for example, warns and fails its handoff, the way a config file that sets one
+fails at startup.
 
-A setting the chosen agent type does not map has no row, so an agent without
-a `model` template shows no Model row. One exception keeps a value in reach:
-when a row carries a value the selected agent cannot take, its row stays on
-screen in the warning color, so a handoff that would fail is visible before
-it is confirmed. A value cannot be taken when the agent maps no setting for
-it, when it lists the thinking levels it offers and the row holds another
-one, or when the Context row holds digits no count makes, `0` among them. A
-model the agent's own CLI does not report shows the same warning the fit
-check will fail on (ADR 0010); a waiting Model row is not judged, because
-its list has not arrived to judge it against. The panel never shows
-something other than what the handoff sends, and the row is the only place
-the operator can clear the value, so it stays: the handoff fails on it until
-they clear it or choose an agent that takes it.
+A setting the chosen agent type does not map has no row, so an agent without a
+`model` template shows no Model row. One exception keeps a value in reach: when a
+row carries a value the selected agent cannot take, its row stays on screen in
+the warning tone and writes the Handoff's own sentence on the row under it, so a
+handoff that would fail is visible and readable before it is confirmed. That
+sentence is characters, not a color, so a panel that paints no color keeps all
+of it and a panel too narrow for it states the part that fits. A value cannot
+be taken when the agent maps no setting for it, when it lists the thinking
+levels it offers and the row holds another one, or when the Context row holds
+digits no count makes, `0` among them. A model the
+agent's own CLI does not report shows the same warning the fit check will fail on
+(ADR 0010); a waiting Model row is not judged, because its list has not arrived
+to judge it against. The panel never shows something other than what the handoff
+sends, and the row is the only place the operator can clear the value, so it
+stays: the handoff fails on it until they clear it or choose an agent that takes
+it.
 
 The container environment is a future kind and is not offered by the panel.
 
 The panel sizes itself to the terminal. When the rows do not fit, the value
-column shrinks first, then the label column, then the marker. The rows
-scroll within the viewport when the height cannot hold them all, and the
-selected row stays visible. A row never wraps: it carries less, not broken
-text. The shared Action bar sits at the terminal bottom and names the
-controls the panel dispatches.
+column shrinks first, then the label column, then the marker. A row that states
+a reason takes the row it writes it on, so the panel counts it and the viewport
+still keeps the selected row whole. The rows scroll within the viewport when
+the height cannot hold them all, and the selected row stays visible. A row
+never wraps: it carries less, not broken text. The shared Action bar sits at
+the terminal bottom and names the controls the panel dispatches.
 
 ### Decision modal
 
@@ -505,9 +516,14 @@ with a readable reason before anything starts, and the ticket stays where it
 was, when the resolved agent maps no template for a Model, a Thinking level,
 or a context window the chain resolved; when the agent lists the levels it
 offers and the resolved level is not one of them; or when a context window is
-not a whole count of tokens. So a model written for one agent never runs a
-different one quietly, and an edge that reroutes a handoff onto a narrower
-agent is seen as a failure instead of absorbed as a default. One behavior is
+not a whole count of tokens. The same rule ahead of the same start is what a
+Consultation and a Restart run, so no start path keeps its own copy of it. One
+rule and one sentence per unfit cause belong to the Setting fit module
+(`src/setting-fit.ts`), and the config file's field checks, the startup Model
+check, the override panel's warning rows, the handoff, and the Consultation
+start all read it. So a model written for one agent never runs a different one
+quietly, and an edge that reroutes a handoff onto a narrower agent is seen as a
+failure instead of absorbed as a default. One behavior is
 stricter than before: a setting the resolved agent maps no template for used
 to be dropped quietly, and the agent started on its own default. It now fails
 the handoff with a readable reason, so a value the config or the panel names
@@ -1114,9 +1130,12 @@ review handoffs start on.
 - `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
 	profile of each task type, and the agent, model, and thinking one handoff
 	resolves to before an operator override replaces it.
-- `src/model-settings.ts`: the Model list checks (ADR 0010). The startup
-	validation of the config's model values, and the setting fit check every
-	agent start runs before its first external change.
+- `src/setting-fit.ts`: the Setting fit module. It owns the static setting
+	rule, the Model list check, and the one sentence for each unfit cause. Every
+	startup, panel, Handoff, and Consultation path reads it.
+- `src/model-settings.ts`: the Model list startup orchestration (ADR 0010).
+	It checks determinate config values with one list query per Agent kind and
+	warns when a list is unavailable.
 - `src/domain/`: the Ticket type and its state machine, the agent-side facts
 	every Agent type shares (the standard Thinking level set), and the handoff
 	environment kinds.

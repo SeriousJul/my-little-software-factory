@@ -578,33 +578,6 @@ describe("the in-app Key guide", () => {
 				// sections above, that lists every control of the plane exactly once.
 				// The section no longer fits one window, so the guide is walked from
 				// the top of the section and the windows are joined on their overlap.
-				const _OTHER_ROWS = [
-					"↑↓/jk Scroll",
-					"←/h Tickets",
-					"←→/hl Change",
-					"Type Edit",
-					"Backspace Delete",
-					"⌫ Clear",
-					"Esc Cancel",
-					"Tab Field",
-					"←→ Change",
-					"Enter Confirm",
-					"F3 Copy selection",
-					"Del Clear",
-					"Esc Close",
-					"↑↓ Select action",
-					"j/k Scroll log",
-					"j/k Scroll message",
-					"e Edit handoff",
-					"Enter Confirm action",
-					"Esc Cancel",
-					"↑↓/jk Scroll",
-					"Esc/F1/? Close",
-					"↑↓/jk Scroll",
-					"Esc/F2 Close",
-				];
-				/** The guide's whole content at this terminal height. */
-				const _TOTAL_GUIDE_ROWS = 44;
 				// Back to the section's header: the walk above left it past the end.
 				let scrolled = rowsOf(await settle(setup));
 				for (

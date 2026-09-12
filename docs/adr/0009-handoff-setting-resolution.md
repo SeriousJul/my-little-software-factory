@@ -103,10 +103,12 @@ The considered alternatives:
   that maps no model would strand the value where no key can clear it, and a
   row that hid a value it still sends would tell the operator something false
   about the handoff they are confirming.
-- Known limitation: a Consultation dispatch does not carry the handoff-time
-  rule. A setting its resolved agent cannot map is still dropped there, so a
-  Consultation can start without the model, level, or count its type names.
-  Its own ticket retires that drop.
+- A Consultation start carries the same setting fit rule as a Handoff. Its
+  pre-flight checks the stored Model, Thinking level, and Context window before
+  it resolves a Repository or changes Herdr. A stale opening Consultation is
+  checked again during recovery, so a config change cannot start it trimmed.
+  A refused opening records the same reason on the Consultation and leaves its
+  external environment unchanged.
 - Known limitation: in auto-handoff mode a profile setting its Agent cannot
   take fails every pass, and each pass records a failed handoff attempt: the
   loop retries the route on every poll, with no backoff and no limit, because

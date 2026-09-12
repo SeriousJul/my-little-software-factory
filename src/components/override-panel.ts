@@ -6,9 +6,10 @@
  * It is a centered modal with one row per setting: the agent type, the
  * environment kind, the task type, the model, the thinking level, and the
  * maximum context window. A row shows when its agent maps the setting. It
- * also shows, in the warning color, while it carries a value the agent cannot
- * take: hiding it would strand that value where no key can reach it, and the
- * panel must never show anything other than what the handoff sends. The rows
+ * also shows, wearing the warning tone and its written reason, while it
+ * carries a value the agent cannot take: hiding it would strand that value
+ * where no key can reach it, and the panel must never show anything other
+ * than what the handoff sends. The rows
  * start on the settings the resolved task profile names (ADR 0009), so the
  * panel shows what the handoff will run on.
  *
@@ -41,17 +42,18 @@
  * way the config parser does, so what the panel shows is the count the agent
  * gets.
  *
- * A value that is set but cannot reach the current agent renders in the
- * warning color, and its guide names the way out: a row whose agent maps no
- * template for the setting clears with backspace, a listed row that holds a
- * level the agent does not offer cycles or clears, and a context row that
- * holds no count takes digits. The panel's own check is the same one the
- * handoff's preflight runs, so a handoff the panel shows as doomed is the one
- * the preflight refuses. A row whose list has not arrived is not judged at
- * all: it holds its value in the dim tone the panel uses for a setting it
- * cannot confirm, and its guide names the wait. A model value wider than the
- * column shows its end, where a real agent list tells its models apart, with
- * a leading marker for the cut; the whole value still rides on the handoff.
+ * A value that is set but cannot reach the current agent is one Setting fit
+ * verdict, read from the module that owns the rule: the row writes the exact
+ * sentence the handoff's preflight would answer with, and the warning tone
+ * only agrees with what is already written. The sentence names the way out: a
+ * row whose agent maps no template for the setting clears with backspace, a
+ * listed row that holds a level the agent does not offer cycles or clears, and
+ * a context row that holds no count takes digits. A row whose list has not
+ * arrived is not judged at all: it holds its value in the dim tone the panel
+ * uses for a setting it cannot confirm, and its guide names the wait. A model
+ * value wider than the column shows its end, where a real agent list tells its
+ * models apart, with a leading marker for the cut; the whole value still rides
+ * on the handoff.
  *
  * The keys: up/down and tab/shift+tab move the row selection. j and k move it
  * too, except on a row that takes typing (a Text field, or the Model search),
@@ -75,32 +77,26 @@
 
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { type ReactElement, type RefObject, useEffect, useRef, useState } from "react";
-import type { ThinkingLevel } from "../domain/agent.ts";
-import { isTokenCount, tokenCountDigits } from "../domain/settings.ts";
+import type { AgentTypeConfig } from "../config.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
+import {
+	type FitVerdict,
+	type ResolvedAgentType,
+	settingFit,
+	tokenCountDigits,
+	type UnfitVerdict,
+} from "../setting-fit.ts";
 import type { TaskProfileStart } from "../setting-resolution.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
-import { cycleChoice } from "./shared/choices.ts";
+import { ChoiceRow, cycleChoice } from "./shared/choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
 import { useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
-import { padToWidth, truncateTailToWidth, truncateToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
-
-/** Which settings an agent type maps, for the rows it opens. */
-export interface AgentSettings {
-	model: boolean;
-	thinking: boolean;
-	/** Whether a maximum context window can reach this agent type. */
-	contextWindow?: boolean;
-	/** The levels this Agent type supports, in the order the row offers them. */
-	thinkingValues?: readonly ThinkingLevel[];
-}
 
 /**
  * Why a Model row is a Text field instead of the selected agent's list.
@@ -144,10 +140,10 @@ type TextKey = "model" | "thinking" | "contextWindow";
 type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
 
 /**
- * The three ways a drafted value cannot reach the agent it is set on, so the
- * row can wear the warning and name the fix.
+ * The ways a drafted value cannot reach the Agent it is set on, one per Setting
+ * fit cause, so the row can wear the warning the Handoff would fail on.
  */
-type UnfitSetting = "no-setting" | "no-level" | "no-count";
+type UnfitSetting = UnfitVerdict;
 
 interface PanelRow {
 	label: string;
@@ -169,19 +165,20 @@ interface PanelRow {
 	 * survive a handoff. Undefined means the agent takes the value as it is.
 	 */
 	unfit?: UnfitSetting;
-	/**
-	 * True when the row is a text field that takes digits and nothing else.
-	 * The input callback sanitizes on the flag, so a row declares its own
-	 * input rule.
-	 */
+	/** True when the row is a text field that takes digits and nothing else. */
 	digits?: boolean;
 }
 
 interface OverridePanelProps {
-	agents: readonly string[];
+	/**
+	 * The configured Agent types, by config name, in the order the Agent row
+	 * offers them. The panel reads which settings an Agent maps from the same
+	 * record a Handoff and the Setting fit check read, so it holds no second
+	 * list of capabilities that can disagree with the start.
+	 */
+	agents: Readonly<Record<string, AgentTypeConfig>>;
 	environments: readonly EnvironmentKind[];
 	taskTypes: readonly string[];
-	agentSettings: Readonly<Record<string, AgentSettings>>;
 	/** What each task type's profile starts its handoffs on (ADR 0009). */
 	profiles: Readonly<Record<string, TaskProfileStart>>;
 	/** The Model list of the agent the panel is on. */
@@ -231,6 +228,8 @@ interface PanelGeometry {
 	markerWidth: number;
 	labelWidth: number;
 	valueWidth: number;
+	/** The cells a row's written note holds: the whole width the box leaves. */
+	noteWidth: number;
 	maxRows: number;
 }
 
@@ -254,7 +253,16 @@ function panelGeometry(contentWidth: number, maxRows: number): PanelGeometry {
 		valueWidth = Math.min(VALUE_WIDTH, Math.max(1, room - LABEL_WIDTH));
 		labelWidth = Math.min(LABEL_WIDTH, room - valueWidth);
 	}
-	return { markerWidth, labelWidth, valueWidth, maxRows: Math.max(1, maxRows) };
+	return {
+		markerWidth,
+		labelWidth,
+		valueWidth,
+		// A row's reason is written under it, on the width the box leaves, so a
+		// sentence is cut by the panel the operator reads and not by the value
+		// column beside it.
+		noteWidth: Math.max(0, contentWidth),
+		maxRows: Math.max(1, maxRows),
+	};
 }
 
 /** The rows a full panel offers: agent, environment, task type, model, thinking, context. */
@@ -272,11 +280,22 @@ export function panelValueCells(width: number, height: number): number {
 	return panelGeometry(frame.contentWidth, frame.contentRows).valueWidth;
 }
 
+/**
+ * The cells one terminal size gives a row's written note.
+ *
+ * A note states why a value cannot reach its Agent, so a test that checks how
+ * much of a sentence the panel can state asks the panel for the width instead
+ * of mirroring the box's arithmetic by hand.
+ */
+export function panelNoteCells(width: number, height: number): number {
+	const frame = modalFrame(width, height, { rows: PANEL_ROW_COUNT, margin: 0 });
+	return panelGeometry(frame.contentWidth, frame.contentRows).noteWidth;
+}
+
 export function OverridePanel({
 	agents,
 	environments,
 	taskTypes,
-	agentSettings,
 	profiles,
 	modelList,
 	onAgentChange,
@@ -292,6 +311,7 @@ export function OverridePanel({
 	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
+	const ink = controlInk();
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
 	// The shared form route owns the selected row. Its ref keeps two keys in one
 	// renderer tick on the row the first key reached, while its state repaints
@@ -324,7 +344,7 @@ export function OverridePanel({
 	const [hasSelection, setHasSelection] = useState(false);
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(value, agents, environments, taskTypes, agentSettings, listFor(value, modelList));
+		rowsFor(value, agents, environments, taskTypes, listFor(value, modelList));
 	const allRows = rowsForChoice(choice);
 	const focus = useFormSlots(
 		allRows.map((item, index) => ({
@@ -337,11 +357,12 @@ export function OverridePanel({
 		})),
 	);
 	const selected = focus.at;
-	// The Type-ahead row draws its search under its value, so it takes two rows
-	// where every other row takes one. The panel counts them, because a surface
-	// is handed no more rows than it holds and a row that overflowed would
-	// paint through the row below it.
-	const spans = allRows.map((r) => (r.kind === "type-ahead" ? 2 : 1));
+	// The Type-ahead row draws its search under its value, and a row that
+	// carries a Setting fit reason draws that sentence under itself, so a row
+	// takes the rows it paints. The panel counts them, because a surface is
+	// handed no more rows than it holds and a row that overflowed would paint
+	// through the row below it.
+	const spans = allRows.map((r) => rowCells(r));
 	const rowSpan = (index: number): number => spans[index] ?? 1;
 	const totalRows = spans.reduce((sum, span) => sum + span, 0);
 	// The shared chrome sizes the box: the terminal's rows above the Action
@@ -547,7 +568,7 @@ export function OverridePanel({
 		frame,
 		width: terminalWidth,
 		title: "Override",
-		borderColor: COLORS.borderFocused,
+		borderColor: ink.indicator.fg ?? undefined,
 		// One row is enough to be a panel: the rows that do not fit scroll.
 		minContentRows: 1,
 		message,
@@ -583,74 +604,95 @@ function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListSta
 	return modelList.agentType === choice.agentType ? modelList.status : { status: "loading" };
 }
 
+/** The rows one panel row paints: its value, its search, and its reason. */
+function rowCells(row: PanelRow): number {
+	return (row.kind === "type-ahead" ? 2 : 1) + (row.unfit === undefined ? 0 : 1);
+}
+
 /** The rows the panel offers for the current choice, in order. */
 function rowsFor(
 	choice: HandoffChoice,
-	agents: readonly string[],
+	agents: Readonly<Record<string, AgentTypeConfig>>,
 	environments: readonly string[],
 	taskTypes: readonly string[],
-	agentSettings: Readonly<Record<string, AgentSettings>>,
 	modelStatus: ModelListStatus,
 ): PanelRow[] {
-	const settings = agentSettings[choice.agentType] ?? {
-		model: false,
-		thinking: false,
-		contextWindow: false,
+	// An Agent type the config no longer names reads as one that maps nothing:
+	// every value the choice carries then shows in its warning row, where the
+	// operator can clear it.
+	const agent: ResolvedAgentType = {
+		agentType: choice.agentType,
+		agent: agents[choice.agentType] ?? { kind: choice.agentType },
 	};
+	const staticVerdicts = settingFit.staticFit(agent, choice);
+	// A fetched list is the only fact beyond static fit. A loading or an
+	// unavailable list leaves the static Model verdict in place: a list that
+	// cannot be fetched skips the Model list question, just as a handoff does.
+	const modelVerdict =
+		modelStatus.status === "available"
+			? settingFit.modelInList(agent, choice.model, modelStatus.models)
+			: staticVerdicts.model;
 	const rows: PanelRow[] = [
-		{ label: "Agent", key: "agentType", kind: "list", options: agents },
+		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(agents) },
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
 		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
 	];
-	// A row shows when its agent maps the setting. It also shows, wearing the
-	// warning color, while it carries a value the agent cannot take: hiding it
-	// would strand that value where no key can reach it, and the panel must
-	// never show something other than what the handoff sends.
-	if (settings.model) {
-		rows.push(modelRow(modelStatus));
+	// A row shows when its Agent maps the setting. It also shows, wearing the
+	// warning the shared verdict gives, while it carries a value the Agent
+	// cannot take: hiding it would strand that value where no key can reach it,
+	// and the panel must never show something other than what the handoff sends.
+	if (agent.agent.model !== undefined) {
+		rows.push(modelRow(modelStatus, modelVerdict));
 	} else if (choice.model !== "") {
-		rows.push({ label: "Model", key: "model", kind: "text", unfit: "no-setting" });
+		rows.push({ label: "Model", key: "model", kind: "text", unfit: unfitVerdict(modelVerdict) });
 	}
-	if (settings.thinking) {
-		const values = settings.thinkingValues ?? [];
-		// An agent that maps thinking offers its declared levels, so only a
-		// listed agent can refuse the one the chain resolved.
-		const unlisted = choice.thinking !== "" && !values.some((level) => level === choice.thinking);
+	if (agent.agent.thinking !== undefined) {
 		rows.push({
 			label: "Thinking",
 			key: "thinking",
 			kind: "list",
-			options: values,
-			unfit: unlisted ? "no-level" : undefined,
+			options: agent.agent.thinkingValues ?? [],
+			unfit: unfitVerdict(staticVerdicts.thinking),
 		});
 	} else if (choice.thinking !== "") {
-		rows.push({ label: "Thinking", key: "thinking", kind: "text", unfit: "no-setting" });
+		rows.push({
+			label: "Thinking",
+			key: "thinking",
+			kind: "text",
+			unfit: unfitVerdict(staticVerdicts.thinking),
+		});
 	}
-	// The token row reads the same way as the model row: its agent's
-	// capability opens it, and a value the agent cannot take keeps it open so
+	// The token row reads the same way as the model row: its Agent's
+	// capability opens it, and a value the Agent cannot take keeps it open so
 	// the operator can clear it.
-	if (settings.contextWindow || choice.contextWindow !== "") {
-		const count = choice.contextWindow === "" || isTokenCount(choice.contextWindow);
+	if (agent.agent.contextWindow !== undefined || choice.contextWindow !== "") {
 		rows.push({
 			label: "Context",
 			key: "contextWindow",
 			kind: "text",
 			digits: true,
-			unfit: settings.contextWindow ? (count ? undefined : "no-count") : "no-setting",
+			unfit: unfitVerdict(staticVerdicts.contextWindow),
 		});
 	}
 	return rows;
+}
+
+/** The failing verdict a row carries, or nothing when the value fits. */
+function unfitVerdict(verdict: FitVerdict): UnfitVerdict | undefined {
+	return verdict.ok ? undefined : verdict;
 }
 
 /**
  * The Model row for one agent: the agent's own list with type-ahead, a loading
  * marker while the control plane fetches it, the no-models hint when the agent
  * reports none, and the Text field when its kind reports no list or the fetch
- * failed. The Text field's placeholder names the reason the list is gone.
+ * failed. The Text field's placeholder names the reason the list is gone, and
+ * every branch carries the shared fit verdict for the value on the row.
  */
-function modelRow(status: ModelListStatus): PanelRow {
+function modelRow(status: ModelListStatus, verdict: FitVerdict): PanelRow {
+	const unfit = unfitVerdict(verdict);
 	if (status.status === "loading") {
-		return { label: "Model", key: "model", kind: "pending", placeholder: LOADING_HINT };
+		return { label: "Model", key: "model", kind: "pending", placeholder: LOADING_HINT, unfit };
 	}
 	if (status.status === "available") {
 		return {
@@ -664,6 +706,7 @@ function modelRow(status: ModelListStatus): PanelRow {
 			// An agent that reports no model has nothing to offer, and an empty
 			// value stays the valid unset state the panel names.
 			placeholder: status.models.length === 0 ? NO_MODELS_HINT : UNSET_HINT,
+			unfit,
 		};
 	}
 	return {
@@ -671,6 +714,7 @@ function modelRow(status: ModelListStatus): PanelRow {
 		key: "model",
 		kind: "text",
 		fallbackCause: status.cause,
+		unfit,
 	};
 }
 
@@ -681,8 +725,8 @@ function modelRow(status: ModelListStatus): PanelRow {
  * and paste rules are the rules every other surface has. The Model row over a
  * list the agent reported is the shared Type-ahead, so the search the operator
  * typed is on screen beside the value it names. A list row that takes no typing
- * states its own value, its unset word, and the warning a value the agent
- * cannot take carries.
+ * is the shared selector row: it states its own value, its unset word, and the
+ * written reason of a value the Agent cannot take.
  */
 function rowElement(
 	r: PanelRow,
@@ -697,7 +741,6 @@ function rowElement(
 	searchField: RefObject<FieldHandle | null>,
 	reportSelection: (has: boolean) => void,
 ): ReactElement {
-	const ink = controlInk();
 	if (r.kind === "text") {
 		return createElement(TextField, {
 			key: r.key,
@@ -714,9 +757,11 @@ function rowElement(
 			normalize: r.digits === true ? tokenCountDigits : undefined,
 			placeholder:
 				r.fallbackCause === undefined ? EMPTY_HINT : FALLBACK_PLACEHOLDERS[r.fallbackCause],
-			// A value the target cannot take is the field's own news: it is stated
-			// in words, and the warning tone only agrees with them.
-			error: r.unfit === undefined ? null : unfitReason(r.unfit),
+			// A value the target cannot take is the field's own news: the shared
+			// field writes the exact sentence the start will answer with, and the
+			// warning tone only agrees with it.
+			error: r.unfit?.reason ?? null,
+			noteWidth: geometry.noteWidth,
 			fieldRef: fields[r.key as TextKey],
 			refusals: CONTEXT_REFUSALS,
 			onValueChange: (facts) => {
@@ -736,9 +781,12 @@ function rowElement(
 			width: geometry.valueWidth,
 			labelWidth: geometry.labelWidth,
 			placeholder: r.placeholder ?? STATE_WORDS.unset,
-			// A model the list does not hold cannot reach the agent, and the row
-			// says so in the warning tone beside the value.
-			warning: r.unfit !== undefined || !optionsOf(r).includes(value),
+			// The shared verdict owns whether the Model reaches the Agent, so an
+			// empty value is fit even when the runtime reports no Models, and the
+			// row writes the sentence the Handoff would answer with.
+			warning: r.unfit !== undefined,
+			error: r.unfit?.reason ?? null,
+			noteWidth: geometry.noteWidth,
 			typeAheadRef: typeAhead,
 			fieldRef: searchField,
 			onQueryChange: (query, match, facts) => {
@@ -747,66 +795,28 @@ function rowElement(
 			},
 		});
 	}
-	const children: ReactElement[] = [
-		createElement(
-			"text",
-			{ fg: selected ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-			truncateToWidth(selected ? "❯ " : "  ", geometry.markerWidth),
-		),
-		createElement(
-			"text",
-			{ fg: selected ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-			truncateToWidth(padToWidth(`${r.label} `, geometry.labelWidth), geometry.labelWidth),
-		),
-	];
-	// A list row, or the row that waits for one. An unset value shows a dim
-	// hint, never a blank; a value the current agent cannot run shows the value
-	// itself in the warning color, because the handoff would fail on it.
-	const unset = value === "";
-	// The waiting row is decided before the availability check: it holds no
-	// list to compare the value against, so a model the config resolved
-	// correctly must not read as a handoff that would fail. The row shows that
-	// value in the dim tone the panel uses for a setting it cannot yet confirm.
-	const pending = r.kind === "pending";
-
-	/** The values one row offers, or none when it is not a list row. */
-	function optionsOf(r: PanelRow): readonly string[] {
-		return r.options ?? [];
-	}
-
-	/** Why a row's value cannot reach the agent, in the words the operator reads. */
-	function unfitReason(unfit: UnfitSetting): string {
-		if (unfit === "no-setting") return "the selected agent takes no such setting";
-		if (unfit === "no-level") return "the selected agent does not offer this Thinking level";
-		return "the selected agent takes no count for a Context window";
-	}
-
-	const inList = (r.options ?? []).includes(value);
-	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
-	const color =
-		r.unfit !== undefined || (!pending && !unset && !inList)
-			? COLORS.statusWarning
-			: unset || pending
-				? COLORS.dim
-				: selected
-					? COLORS.textBright
-					: COLORS.text;
-	// The tail clip marks a cut-off value with "…", so it belongs to a value
-	// alone. A hint that does not fit keeps its front like every other row
-	// text, and never carries a marker that claims it is a truncated name.
-	const clipValue = r.clipTail === true && !unset;
-	children.push(
-		createElement(
-			"text",
-			{ width: geometry.valueWidth, fg: color },
-			clipValue
-				? truncateTailToWidth(text, geometry.valueWidth)
-				: truncateToWidth(text, geometry.valueWidth),
-		),
-	);
-	return createElement(
-		"box",
-		{ key: r.key, style: { flexDirection: "row", height: 1 } },
-		...children,
-	);
+	// A list row, or the row that waits for a list, is the shared selector row:
+	// its marker, its tones, its unset word, and the written reason of a value
+	// the Agent cannot take are the ones every other form row uses.
+	return createElement(ChoiceRow, {
+		key: r.key,
+		label: r.label,
+		value,
+		focused: selected,
+		width: geometry.valueWidth,
+		labelWidth: geometry.labelWidth,
+		// The tail clip marks a cut-off value with "…", so it belongs to a value
+		// alone. A hint that does not fit keeps its front like every other row
+		// text, and never carries a marker that claims it is a truncated name.
+		clipTail: r.clipTail === true,
+		placeholder: r.placeholder ?? UNSET_HINT,
+		// The waiting row is decided before the availability check: it holds no
+		// list to compare the value against, so a model the config resolved
+		// correctly must not read as a handoff that would fail. The row shows
+		// that value in the tone the panel uses for a setting it cannot confirm.
+		pending: r.kind === "pending" && value !== "",
+		warning: r.unfit !== undefined,
+		error: r.unfit?.reason ?? null,
+		noteWidth: geometry.noteWidth,
+	});
 }
