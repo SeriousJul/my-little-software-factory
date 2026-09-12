@@ -8,9 +8,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
+	codexAbortCause,
 	lastMessageFromLog,
-	readSessionTurnLog,
+	readSessionTurnEnd,
+	TURN_END_DETAIL_CAP,
 	toolTarget,
+	turnEndFromClaudeSession,
+	turnEndFromCodexSession,
+	turnEndFromPiSession,
 	turnLogFromCapture,
 	turnLogFromPiSession,
 } from "../src/turn-log.ts";
@@ -93,6 +98,7 @@ function sessionJsonl(): string {
 			message: {
 				role: "assistant",
 				content: [{ type: "text", text: "## Result\n\nAll 142 tests pass." }],
+				stopReason: "stop",
 			},
 		}),
 		line({ type: "model_change", model: "claude-opus-4-8" }),
@@ -391,13 +397,339 @@ describe("turnLogFromCapture", () => {
 	});
 });
 
-describe("readSessionTurnLog", () => {
+/** A pi record whose last assistant message ended with the given stop reason. */
+function piStop(stopReason: string, extra: Record<string, unknown> = {}): string {
+	return line({
+		type: "message",
+		timestamp: "2026-01-01T12:00:00Z",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text: "the final words" }],
+			stopReason,
+			...extra,
+		},
+	});
+}
+
+describe("turnEndFromPiSession cause", () => {
+	test("a stop reason of stop is completed", () => {
+		expect(turnEndFromPiSession(piStop("stop"), null)?.cause).toBe("completed");
+	});
+
+	test("an error is failed, with the message's error text as the detail", () => {
+		const end = turnEndFromPiSession(
+			piStop("error", { errorMessage: "400: the context is too large" }),
+			null,
+		);
+		expect(end?.cause).toBe("failed");
+		expect(end?.detail).toBe("400: the context is too large");
+	});
+
+	test("an abort is aborted", () => {
+		expect(turnEndFromPiSession(piStop("aborted"), null)?.cause).toBe("aborted");
+	});
+
+	test("a turn that ends on a tool call is aborted: it never gave its final words", () => {
+		expect(turnEndFromPiSession(piStop("toolUse"), null)?.cause).toBe("aborted");
+	});
+
+	test("a length stop is truncated", () => {
+		expect(turnEndFromPiSession(piStop("length"), null)?.cause).toBe("truncated");
+	});
+
+	test("an unrecognized stop reason is unknown", () => {
+		expect(turnEndFromPiSession(piStop("something-else"), null)?.cause).toBe("unknown");
+	});
+
+	test("a record without messages yields null", () => {
+		expect(turnEndFromPiSession(line({ type: "session", id: "s1" }), null)).toBeNull();
+	});
+
+	test("the log and the cause come from one read: the log still carries the text", () => {
+		const end = turnEndFromPiSession(piStop("stop"), null);
+		expect(end?.log).toEqual([{ kind: "text", text: "the final words" }]);
+		expect(end?.cause).toBe("completed");
+	});
+});
+
+/** A codex record line. */
+function codexLine(record: unknown): string {
+	return JSON.stringify(record);
+}
+
+/** A codex turn that ends with the named event, preceded by one agent message. */
+function codexJsonl(end: Record<string, unknown>): string {
+	return [
+		codexLine({
+			timestamp: "2026-01-01T12:00:00Z",
+			type: "event_msg",
+			payload: { type: "agent_message", message: "I finished the work." },
+		}),
+		codexLine(end),
+	].join("\n");
+}
+
+describe("turnEndFromCodexSession", () => {
+	test("a task_complete without an error is completed", () => {
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "task_complete" },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("completed");
+		expect(end?.log).toEqual([{ kind: "text", text: "I finished the work." }]);
+	});
+
+	test("a task_complete that carries an error is failed, with the error's message", () => {
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "task_complete", error: { message: "401 Unauthorized" } },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("failed");
+		expect(end?.detail).toBe("401 Unauthorized");
+	});
+
+	test("a stream_error is failed, with the error text", () => {
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "stream_error", error: { message: "the stream broke" } },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("failed");
+		expect(end?.detail).toBe("the stream broke");
+	});
+
+	test("a context abort is truncated", () => {
+		expect(
+			turnEndFromCodexSession(
+				codexJsonl({
+					timestamp: "2026-01-01T12:01:00Z",
+					type: "event_msg",
+					payload: { type: "turn_aborted", reason: "context_window_exceeded" },
+				}),
+				null,
+			)?.cause,
+		).toBe("truncated");
+	});
+
+	test("an interrupted abort is aborted", () => {
+		expect(
+			turnEndFromCodexSession(
+				codexJsonl({
+					timestamp: "2026-01-01T12:01:00Z",
+					type: "event_msg",
+					payload: { type: "turn_aborted", reason: "interrupted" },
+				}),
+				null,
+			)?.cause,
+		).toBe("aborted");
+	});
+
+	test("an abort the factory does not name is failed", () => {
+		expect(
+			turnEndFromCodexSession(
+				codexJsonl({
+					timestamp: "2026-01-01T12:01:00Z",
+					type: "event_msg",
+					payload: { type: "turn_aborted", reason: "usage_limit_exceeded" },
+				}),
+				null,
+			)?.cause,
+		).toBe("failed");
+	});
+
+	test("a record without a turn-end event yields null", () => {
+		expect(
+			turnEndFromCodexSession(
+				codexLine({
+					timestamp: "2026-01-01T12:00:00Z",
+					type: "event_msg",
+					payload: { type: "agent_message", message: "still working" },
+				}),
+				null,
+			),
+		).toBeNull();
+	});
+
+	test("a malformed line yields null", () => {
+		expect(
+			turnEndFromCodexSession(
+				`${codexJsonl({ type: "event_msg", payload: { type: "task_complete" } })}\nnot json`,
+				null,
+			),
+		).toBeNull();
+	});
+});
+
+/** A claude record line. */
+function claudeLine(record: unknown): string {
+	return JSON.stringify(record);
+}
+
+/** A claude turn: one assistant message that ended with the given stop reason. */
+function claudeJsonl(stopReason: string, extra: Record<string, unknown> = {}): string {
+	return claudeLine({
+		type: "assistant",
+		timestamp: "2026-01-01T12:00:00Z",
+		message: {
+			role: "assistant",
+			content: [{ type: "text", text: "the final words" }],
+			stop_reason: stopReason,
+			...extra,
+		},
+	});
+}
+
+describe("turnEndFromClaudeSession", () => {
+	test("an end_turn is completed", () => {
+		expect(turnEndFromClaudeSession(claudeJsonl("end_turn"), null)?.cause).toBe("completed");
+	});
+
+	test("a stop_sequence is completed", () => {
+		expect(turnEndFromClaudeSession(claudeJsonl("stop_sequence"), null)?.cause).toBe("completed");
+	});
+
+	test("a max_tokens stop is truncated", () => {
+		expect(turnEndFromClaudeSession(claudeJsonl("max_tokens"), null)?.cause).toBe("truncated");
+	});
+
+	test("a tool_use stop is mid-turn, not a turn end: it yields null alone", () => {
+		expect(turnEndFromClaudeSession(claudeJsonl("tool_use"), null)).toBeNull();
+	});
+
+	test("an API error message is failed, with the message's own text as the detail", () => {
+		const end = turnEndFromClaudeSession(
+			claudeLine({
+				type: "assistant",
+				timestamp: "2026-01-01T12:00:00Z",
+				isApiErrorMessage: true,
+				error: "rate_limit",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "API Error: rate limited" }],
+				},
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("failed");
+		expect(end?.detail).toBe("API Error: rate limited");
+	});
+
+	test("the log carries the assistant's text", () => {
+		expect(turnEndFromClaudeSession(claudeJsonl("end_turn"), null)?.log).toEqual([
+			{ kind: "text", text: "the final words" },
+		]);
+	});
+
+	test("a record without a turn end yields null", () => {
+		expect(turnEndFromClaudeSession(line({ type: "session" }), null)).toBeNull();
+	});
+});
+
+describe("codexAbortCause", () => {
+	test("a context reason is truncated", () => {
+		expect(codexAbortCause("context_window_exceeded")).toBe("truncated");
+	});
+
+	test("an interrupt or timeout reason is aborted", () => {
+		expect(codexAbortCause("interrupted")).toBe("aborted");
+		expect(codexAbortCause("timed_out")).toBe("aborted");
+	});
+
+	test("another reason is failed", () => {
+		expect(codexAbortCause("usage_limit_exceeded")).toBe("failed");
+	});
+
+	test("an empty or missing reason is unknown", () => {
+		expect(codexAbortCause("")).toBe("unknown");
+		expect(codexAbortCause(undefined)).toBe("unknown");
+	});
+});
+
+describe("the staleness guard", () => {
+	test("a pi turn-end older than the handoff is unknown, never completed", () => {
+		expect(turnEndFromPiSession(piStop("stop"), "2026-06-01T00:00:00Z")?.cause).toBe("unknown");
+	});
+
+	test("a pi turn-end at or after the handoff keeps its cause", () => {
+		expect(turnEndFromPiSession(piStop("stop"), "2026-01-01T12:00:00Z")?.cause).toBe("completed");
+	});
+
+	test("a codex turn-end older than the handoff is unknown", () => {
+		expect(
+			turnEndFromCodexSession(
+				codexJsonl({
+					timestamp: "2026-01-01T12:01:00Z",
+					type: "event_msg",
+					payload: { type: "task_complete" },
+				}),
+				"2026-06-01T00:00:00Z",
+			)?.cause,
+		).toBe("unknown");
+	});
+
+	test("a claude turn-end older than the handoff is unknown", () => {
+		expect(turnEndFromClaudeSession(claudeJsonl("end_turn"), "2026-06-01T00:00:00Z")?.cause).toBe(
+			"unknown",
+		);
+	});
+
+	test("an unparseable handoff time fails open: the cause is kept", () => {
+		expect(turnEndFromPiSession(piStop("stop"), "not a time")?.cause).toBe("completed");
+	});
+});
+
+describe("the detail cap", () => {
+	test("a pi error detail longer than the cap is cut to it", () => {
+		const longError = "x".repeat(TURN_END_DETAIL_CAP + 500);
+		const end = turnEndFromPiSession(piStop("error", { errorMessage: longError }), null);
+		expect(end?.detail).toHaveLength(TURN_END_DETAIL_CAP);
+	});
+});
+
+describe("readSessionTurnEnd", () => {
 	test("reads a pi session file", () => {
 		const directory = mkdtempSync(join(tmpdir(), "factory-turn-log-"));
 		paths.push(directory);
 		const file = join(directory, "session.jsonl");
 		writeFileSync(file, sessionJsonl(), "utf8");
-		expect(readSessionTurnLog("pi", file)).toHaveLength(4);
+		const end = readSessionTurnEnd("pi", file, null);
+		expect(end?.log).toHaveLength(4);
+		expect(end?.cause).toBe("completed");
+	});
+
+	test("reads a codex session file", () => {
+		const directory = mkdtempSync(join(tmpdir(), "factory-turn-log-"));
+		paths.push(directory);
+		const file = join(directory, "rollout.jsonl");
+		writeFileSync(
+			file,
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "task_complete" },
+			}),
+			"utf8",
+		);
+		expect(readSessionTurnEnd("codex", file, null)?.cause).toBe("completed");
+	});
+
+	test("reads a claude session file", () => {
+		const directory = mkdtempSync(join(tmpdir(), "factory-turn-log-"));
+		paths.push(directory);
+		const file = join(directory, "session.jsonl");
+		writeFileSync(file, claudeJsonl("end_turn"), "utf8");
+		expect(readSessionTurnEnd("claude", file, null)?.cause).toBe("completed");
 	});
 
 	test("a kind without a reader yields null", () => {
@@ -405,18 +737,17 @@ describe("readSessionTurnLog", () => {
 		paths.push(directory);
 		const file = join(directory, "session.jsonl");
 		writeFileSync(file, sessionJsonl(), "utf8");
-		expect(readSessionTurnLog("codex", file)).toBeNull();
-		expect(readSessionTurnLog("claude", file)).toBeNull();
+		expect(readSessionTurnEnd("gemini", file, null)).toBeNull();
 	});
 
 	test("a missing file yields null", () => {
-		expect(readSessionTurnLog("pi", join(tmpdir(), "no-such-session.jsonl"))).toBeNull();
+		expect(readSessionTurnEnd("pi", join(tmpdir(), "no-such-session.jsonl"), null)).toBeNull();
 	});
 
 	test("an unreadable path yields null", () => {
 		const directory = mkdtempSync(join(tmpdir(), "factory-turn-log-"));
 		paths.push(directory);
 		// A directory is not a readable session file.
-		expect(readSessionTurnLog("pi", directory)).toBeNull();
+		expect(readSessionTurnEnd("pi", directory, null)).toBeNull();
 	});
 });

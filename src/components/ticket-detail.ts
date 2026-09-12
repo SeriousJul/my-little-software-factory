@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import type { ScrollConfig } from "../config.ts";
-import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
+import { isHeldCompletion, type LeftoverEnvironment, type Ticket } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
@@ -113,6 +113,21 @@ export function detailLines(
 			`Last completion: ${date} ${completion.taskType} by ${completion.agentName} (${completion.agentType}) ${decision}`,
 			COLORS.text,
 		);
+		// The held-turn warning (ADR 0016): the turn ended without completing
+		// and now blocks the automatic decisions. The cause and the agent's
+		// own text stand out in the error color, and the last line says what
+		// the operator must do to clear it. It only shows while the ticket
+		// rests in awaiting: a held turn whose agent works again is retried,
+		// not held, and the pane says so without a warning.
+		if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion)) {
+			const causeLine =
+				completion.detail === ""
+					? `Turn ended ${completion.cause}`
+					: `Turn ended ${completion.cause}: ${completion.detail}`;
+			for (const wrapped of wrapToWidth(causeLine, usableCols))
+				lines.push({ text: wrapped, fg: COLORS.statusError });
+			pushWrapped("the turn is held; decide it to continue", COLORS.statusError);
+		}
 		for (const line of completion.message.split("\n")) {
 			for (const wrapped of wrapToWidth(line, usableCols))
 				lines.push({ text: wrapped, fg: COLORS.dim });

@@ -23,7 +23,9 @@ meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and
 TypeScript, ADR 0002: handoffs run through herdr, ADR 0005: a work cycle
 ends at close, ADR 0006: the control plane polls herdr, ADR 0011: the
 observation reclaims an agent that outlives its work cycle, ADR 0012: a
-leftover environment is a fact the operator can act on).
+leftover environment is a fact the operator can act on, ADR 0015: the turn end
+cause comes from the agent's session record, ADR 0016: the held turn gate and
+the Dispatch pause).
 
 For changes to controls, follow [the shared control standard](docs/shared-controls.md)
 and [the contributor instructions](AGENTS.md). The standard is the accepted target;
@@ -603,8 +605,8 @@ When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The
 completion trace records the task type, the agent, the Model, Thinking level,
 and context window that handoff started with, the completion time, the last
-message, and the decision that ends the awaiting state. A workflow
-handoff that follows an awaiting ticket renders its prompt with the
+message, the turn end cause, and the decision that ends the awaiting state. A
+workflow handoff that follows an awaiting ticket renders its prompt with the
 `{previous-message}` placeholder filled from that last message, so the next
 agent reads what the previous one left behind.
 
@@ -637,6 +639,39 @@ limits:
 ticket reaches it, auto-handoff leaves it open. A manual handoff may pass
 	the limit.
 Both limits gate auto-handoff only. A manual handoff is always allowed.
+
+### Held turns and the Dispatch pause
+
+The completion trace records the turn end cause beside the last message, read
+from the agent's session record in the same read that gives the turn log
+(ADR 0015): `completed`, `failed`, `aborted`, `truncated`, or `unknown`. The
+readers know three kinds: `pi`, `codex`, and `claude`. Every other kind, a
+missing or unreadable record, and a malformed record settle `unknown`, which
+fails open and auto-decides exactly as it did before: the absence of evidence
+is not evidence of failure. A record whose last turn-end event predates the
+handoff is not this turn's end: it settles `unknown`, never `completed`.
+
+An upgrade holds nothing. A trace that settled before the upgrade carries no
+cause and reads `unknown`, so the factory does not freeze on install. The
+accepted consequence: a turn that failed before the upgrade and is still
+`awaiting` after it can still be closed automatically, because the control
+plane holds no cause for it.
+
+A turn that settled `failed`, `aborted`, or `truncated`, and that no decision
+has landed on, is held (ADR 0016). No automatic decision runs on a held turn:
+the control plane does not close its cycle and does not route it, in auto mode
+or manual mode. The ticket rests in `awaiting`, shown held in the ticket list,
+in the detail pane, and in the attention line, until the operator decides it.
+Once the operator decides the held turn, it is no longer held.
+
+A held turn that settled `failed`, with no `completed` settle since it, also
+pauses the dispatch: while the pause is on, auto mode starts no agent by
+itself. The pause is derived from the completion traces on every cycle and
+never stored, so it survives a restart. It holds only the automatic origins -
+the open handoff, the workflow route, and the restart of a missing agent - and
+it ends at the next `completed` settle, or when the operator decides the held
+turn that started it. It never blocks a manual handoff, and it never touches
+manual mode. A Consultation never contributes to the pause.
 
 A missing agent in auto mode restarts the handoff once, with the last
 message as the previous message. At the per-ticket handoff limit, the

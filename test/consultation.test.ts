@@ -534,6 +534,69 @@ describe("durable Consultation lifecycle", () => {
 		expect(state.consultationRemainingResources(other.id)).toEqual([]);
 		state.close();
 	});
+
+	describe("the Consultation turn end cause", () => {
+		function working(state: FactoryState, id = "consultation-1") {
+			const consultation = createConsultation(state, id);
+			state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+			return consultation.id;
+		}
+
+		test("a failed turn ends the Consultation failed, for recovery", () => {
+			const state = makeState();
+			const id = working(state);
+			expect(
+				state.settleConsultationTurn(
+					id,
+					1,
+					"boom",
+					"idle",
+					"2026-09-01T00:01:00Z",
+					"failed",
+					"the API rejected the request",
+				),
+			).toBe(true);
+			expect(state.consultation(id)?.state).toBe("failed");
+			const turn = state.consultationTurns(id)[0];
+			expect(turn.cause).toBe("failed");
+			expect(turn.detail).toBe("the API rejected the request");
+			state.close();
+		});
+
+		test("an aborted turn ends the Consultation failed too", () => {
+			const state = makeState();
+			const id = working(state);
+			expect(
+				state.settleConsultationTurn(id, 1, "", "idle", "2026-09-01T00:01:00Z", "aborted"),
+			).toBe(true);
+			expect(state.consultation(id)?.state).toBe("failed");
+			expect(state.consultationTurns(id)[0].cause).toBe("aborted");
+			state.close();
+		});
+
+		test("a completed, truncated, or unknown turn leaves it awaiting the response", () => {
+			for (const cause of ["completed", "truncated", "unknown"] as const) {
+				const state = makeState();
+				const id = working(state, `consultation-${cause}`);
+				expect(
+					state.settleConsultationTurn(id, 1, "answer", "idle", "2026-09-01T00:01:00Z", cause),
+				).toBe(true);
+				expect(state.consultation(id)?.state).toBe("awaiting-response");
+				expect(state.consultationTurns(id)[0].cause).toBe(cause);
+				state.close();
+			}
+		});
+
+		test("a settle without a cause defaults to unknown and stays awaiting", () => {
+			const state = makeState();
+			const id = working(state);
+			expect(state.settleConsultationTurn(id, 1, "answer", "idle")).toBe(true);
+			expect(state.consultationTurns(id)[0].cause).toBe("unknown");
+			expect(state.consultationTurns(id)[0].detail).toBe("");
+			expect(state.consultation(id)?.state).toBe("awaiting-response");
+			state.close();
+		});
+	});
 });
 
 describe("durable Consultation privacy", () => {
@@ -647,6 +710,12 @@ describe("pending responses across restart and migration", () => {
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN thinking").run();
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
 		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
+		// The v9 columns belong to the run after this record: a v4 trace never
+		// stored a cause, and neither did its consultation turns.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN cause").run();
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
+		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
+		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);

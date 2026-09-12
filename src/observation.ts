@@ -50,14 +50,18 @@
  */
 
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
+import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
 import {
+	isHeldCause,
 	lastMessageFromLog,
-	readSessionTurnLog,
+	readSessionTurnEnd,
+	type TurnEnd,
+	type TurnEndCause,
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
@@ -103,19 +107,23 @@ export interface AgentReader {
 }
 
 /**
- * The settled turn's log, read from the agent's session record.
+ * The settled turn, read from the agent's session record: its log, its end
+ * cause, and the cause's detail, in one read (ADR 0015).
  *
  * The kind is the agent type's kind from the config, the sessionId the path
- * herdr reported. Null yields the terminal capture fallback. The real
- * source reads the file (ADR 0008); tests inject a fake.
+ * herdr reported, and startedAt the handoff's started time that feeds the
+ * staleness guard. Null yields the terminal capture fallback with an
+ * `unknown` cause. The real source reads the file (ADR 0008); tests inject a
+ * fake.
  */
 export interface TurnLogSource {
-	read(kind: string, sessionId: string): Promise<TurnLogEntry[] | null>;
+	read(kind: string, sessionId: string, startedAt: string | null): Promise<TurnEnd | null>;
 }
 
-/** The real turn log source: the per-agent-type session record readers. */
+/** The real turn source: the per-agent-type session record readers. */
 export const SESSION_TURN_LOGS: TurnLogSource = {
-	read: (kind, sessionId) => Promise.resolve(readSessionTurnLog(kind, sessionId)),
+	read: (kind, sessionId, startedAt) =>
+		Promise.resolve(readSessionTurnEnd(kind, sessionId, startedAt)),
 };
 
 /** A record guard for the herdr agent list items. */
@@ -378,6 +386,13 @@ export class ObservationCoordinator {
 	private cycleInFlight = false;
 	private holdingHerdrError = false;
 	/**
+	 * Whether the Dispatch pause was active last cycle, so the Message line can
+	 * report it when it trips and when it clears. The pause itself is derived
+	 * each cycle and never stored (ADR 0016); this only remembers the last
+	 * report.
+	 */
+	private pauseActive = false;
+	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
 	 * pane is missing".
@@ -535,9 +550,15 @@ export class ObservationCoordinator {
 			if (status === "working" && this.state.markTicketRunning(ticket.ticketIdentity)) {
 				changed = true;
 			}
-			if ((status === "done" || status === "idle") && this.turnSettles(ticket)) {
-				changed = (await this.settle(ticket, agent)) || changed;
-				if (this.stopped) return;
+			if (status === "done" || status === "idle") {
+				// One read serves the decision and the trace: the same session
+				// read that settles the turn supplies its log, cause, and
+				// detail (ADR 0015).
+				const turnEnd = await this.maybeReadTurnEnd(ticket, agent);
+				if (this.maybeSettles(ticket, turnEnd)) {
+					changed = (await this.settle(ticket, agent, turnEnd)) || changed;
+					if (this.stopped) return;
+				}
 			}
 		}
 
@@ -569,13 +590,48 @@ export class ObservationCoordinator {
 		// A Consultation never enters the Ticket parallel count above.
 		const consultationChanged = await this.observeConsultations(probe.agents);
 		changed = consultationChanged || changed;
+		// The Dispatch pause is derived from the traces each cycle and never
+		// stored (ADR 0016). The Message line reports it when it trips and when
+		// it clears, so the operator hears about the factory stopping and
+		// resuming dispatch on the line it already watches. It is an auto-mode
+		// state: the same condition the mode line wears `paused` for.
+		const effectivePause = autoOn && this.state.dispatchPauseActive();
+		if (effectivePause !== this.pauseActive) {
+			this.pauseActive = effectivePause;
+			this.onStatus(
+				effectivePause ? "warning" : "info",
+				effectivePause
+					? "Dispatch pause: a held failed turn is blocking automatic dispatch"
+					: "Dispatch pause cleared: automatic dispatch resumes",
+			);
+		}
 		if (changed) this.onChanged();
 		this.onAgents?.(probe.agents);
 	}
 
-	/** Whether a done or idle agent settles the ticket's turn. */
-	private turnSettles(ticket: HandoffTicket): boolean {
+	/**
+	 * The settled turn, read once from the agent's session record.
+	 *
+	 * Null when herdr reports no session, the agent type has no known kind,
+	 * or the reader cannot read the record: the settle then falls back to the
+	 * terminal capture with an `unknown` cause.
+	 */
+	private async maybeReadTurnEnd(
+		ticket: { ticketIdentity: string; agentType: string; startedAt: string },
+		agent: HerdrAgent,
+	): Promise<TurnEnd | null> {
+		const kind = this.config().agents[ticket.agentType]?.kind;
+		if (kind === undefined || agent.sessionId === "") return null;
+		return await this.turnLogs.read(kind, agent.sessionId, ticket.startedAt);
+	}
+
+	/** Whether a done or idle agent settles the ticket's turn now. */
+	private maybeSettles(ticket: HandoffTicket, turnEnd: TurnEnd | null): boolean {
 		if (ticket.state === "running") return true;
+		// A held turn settles at once: the startup grace waits for a turn that
+		// may still be starting, and a turn that demonstrably failed, aborted,
+		// or was truncated is done (ADR 0016).
+		if (turnEnd !== null && isHeldCause(turnEnd.cause)) return true;
 		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
 	}
 
@@ -738,12 +794,26 @@ export class ObservationCoordinator {
 			if (current?.state !== "working" || status === "working") continue;
 			const output = await this.herdr.readPane(match.paneId, this.config().completionMessageLines);
 			if (this.stopped) return changed;
+			// The turn's end cause comes from the agent's session record, the
+			// same reader the ticket settle uses (ADR 0015). The pending turn's
+			// accepted time feeds the staleness guard.
+			const kind = this.config().agents[consultation.agentType]?.kind;
+			const pendingTurn = this.state
+				.consultationTurns(consultation.id)
+				.filter((turn) => turn.settledAt === null)
+				.at(-1);
+			const turnEnd =
+				kind !== undefined && match.sessionId !== ""
+					? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
+					: null;
 			const settled = this.state.settleConsultationTurn(
 				consultation.id,
 				match.sequence ?? null,
 				output,
 				status,
 				new Date(this.now()).toISOString(),
+				turnEnd?.cause ?? "unknown",
+				turnEnd?.detail ?? "",
 			);
 			if (!settled) continue;
 			changed = true;
@@ -754,7 +824,17 @@ export class ObservationCoordinator {
 		return changed;
 	}
 
-	/** A settled turn: read the log, rest the ticket in awaiting. */
+	/**
+	 * A settled turn: store its log, cause, and detail, rest the ticket in
+	 * awaiting.
+	 *
+	 * The log and the cause come from the session record that was read once
+	 * before the settle was decided (ADR 0015). The terminal capture is the
+	 * fallback: no session reported, the reader knows no such kind, or the
+	 * record is missing or unreadable. A record with no agent text keeps its
+	 * cause - a failed turn with no words is still a failed turn - and the
+	 * capture stands in for the display only.
+	 */
 	private async settle(
 		ticket: {
 			ticketIdentity: string;
@@ -763,17 +843,13 @@ export class ObservationCoordinator {
 			agentType: string;
 		},
 		agent: HerdrAgent,
+		turnEnd: TurnEnd | null,
 	): Promise<boolean> {
-		// The log comes from the session record first (ADR 0008). The
-		// terminal capture is the fallback: no session reported, the reader
-		// knows no such kind, or the record is missing or unreadable.
-		const kind = this.config().agents[ticket.agentType]?.kind;
-		let turnLog: TurnLogEntry[] | null =
-			kind !== undefined && agent.sessionId !== ""
-				? await this.turnLogs.read(kind, agent.sessionId)
-				: null;
-		let message = turnLog !== null ? lastMessageFromLog(turnLog) : "";
-		if (turnLog === null || turnLog.length === 0) {
+		let turnLog: TurnLogEntry[] = turnEnd?.log ?? [];
+		const cause: TurnEndCause = turnEnd?.cause ?? "unknown";
+		const detail: string = turnEnd?.detail ?? "";
+		let message = lastMessageFromLog(turnLog);
+		if (turnLog.length === 0) {
 			const capture =
 				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
 			turnLog = turnLogFromCapture(capture);
@@ -792,9 +868,23 @@ export class ObservationCoordinator {
 			agentType: ticket.agentType,
 			message,
 			turnLog,
+			cause,
+			detail,
 			completedAt: new Date(this.now()).toISOString(),
 		});
-		this.onStatus("info", `agent settled a turn on ticket ${ticket.ticketIdentity}`);
+		// The Message line reports the hold at the moment it happens (user story
+		// 29): a held settle is a warning that names the ticket and the cause,
+		// with the detail truncated to the line and readable in full in the
+		// detail pane. A completed or unknown settle stays the quiet info fact it
+		// always was.
+		if (isHeldCause(cause)) {
+			this.onStatus(
+				"warning",
+				`ticket ${ticket.ticketIdentity} held (${cause})${detail === "" ? "" : `: ${detail}`}`,
+			);
+		} else {
+			this.onStatus("info", `agent settled a turn on ticket ${ticket.ticketIdentity}`);
+		}
 		return true;
 	}
 
@@ -834,8 +924,13 @@ export class ObservationCoordinator {
 			return false;
 		}
 		if (this.restarted.has(ticket.ticketIdentity)) return false;
+		// A Dispatch pause holds the restart: a held failed turn in the factory
+		// stops automatic work until it is decided or a turn completes (ADR
+		// 0016). The ticket is not marked restarted, so it retries next cycle.
+		if (this.state.dispatchPauseActive()) return false;
 		this.restarted.add(ticket.ticketIdentity);
-		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
+		const previous = this.state.lastCompletion(ticket.ticketIdentity);
+		const previousMessage = this.promptPreviousMessage(previous);
 		// The same choices the previous handoff ran with: the operator's
 		// restart keeps the model, thinking level, and context window, and the
 		// auto one matches it.
@@ -884,6 +979,12 @@ export class ObservationCoordinator {
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
 		const decision = this.decideAwaiting(ticket.taskType, liveCount, handoffCount, autoOn);
 		if (decision === "wait") return false;
+		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
+		// truncated is held. No automatic decision runs on it, in auto or
+		// manual mode; the operator's explicit close, goto, or route still
+		// works. The ticket rests in awaiting until then.
+		const completion = this.state.lastCompletion(ticket.ticketIdentity);
+		if (isHeldCompletion(completion)) return false;
 		const decidedAt = new Date(this.now()).toISOString();
 		if (decision === "close") {
 			const applied = this.state.applyCompletionDecision({
@@ -906,8 +1007,11 @@ export class ObservationCoordinator {
 		// `route` is only returned with exactly one edge and one target.
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
+		// A Dispatch pause holds the automatic route, not the close: it stops
+		// new work from starting, not a cycle from ending (ADR 0016).
+		if (autoOn && this.state.dispatchPauseActive()) return false;
 		const target = edge.to[0];
-		const previousMessage = this.state.lastCompletion(ticket.ticketIdentity)?.message ?? "";
+		const previousMessage = this.promptPreviousMessage(completion);
 		// A Workflow Handoff resolves a fresh target profile and never
 		// inherits the previous Handoff's model, thinking, or context window.
 		const result = await this.dispatch({
@@ -1005,10 +1109,34 @@ export class ObservationCoordinator {
 	}
 
 	/**
+	 * The `{previous-message}` slot of the restart and route prompts.
+	 *
+	 * When a held turn leaves no agent text, the slot carries the cause and
+	 * its detail instead, so the agent that takes over reads the wall it hit
+	 * rather than an empty message (ADR 0015). A completed or unknown turn
+	 * with no text leaves the slot empty, exactly as before.
+	 */
+	private promptPreviousMessage(completion: Completion | null): string {
+		if (completion === null) return "";
+		if (completion.message !== "") return completion.message;
+		if (isHeldCause(completion.cause)) {
+			return completion.detail === ""
+				? `previous turn ended ${completion.cause}`
+				: `previous turn ended ${completion.cause}: ${completion.detail}`;
+		}
+		return "";
+	}
+
+	/**
 	 * With auto-handoff on, hand off each eligible open ticket: actionable,
 	 * under the parallel limit, and under the handoff limit.
 	 */
 	private dispatchOpen(liveCount: number): boolean {
+		// The Dispatch pause holds every automatic handoff of an open ticket:
+		// a held failed turn stops new work from starting until it is decided
+		// or a turn completes (ADR 0016). It is checked once per cycle, so a
+		// held turn does not spam the status line.
+		if (this.state.dispatchPauseActive()) return false;
 		const config = this.config();
 		const limit = config.maxParallelAgents;
 		const tickets = this.state.visibleTickets(config.taskRules, config.defaultTaskType);

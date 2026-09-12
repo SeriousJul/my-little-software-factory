@@ -58,6 +58,17 @@ export function failureBadge(marker: TicketMarker): string {
 }
 
 /**
+ * The held badge: a held turn in place of the state badge, padded to the
+ * badge width so the row columns stay aligned (ADR 0016).
+ */
+export function heldBadge(): string {
+	return "held".padEnd(BADGE_WIDTH);
+}
+
+/** The foreground of the held badge: the warning color, like the other markers. */
+export const HELD_COLOR = "#d29922";
+
+/**
  * The task type a ticket presents in its list row and its detail pane.
  *
  * One shared choice between the two existing domain facts: an `open`
