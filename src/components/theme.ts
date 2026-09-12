@@ -59,14 +59,13 @@ export function failureBadge(marker: TicketMarker): string {
 
 /**
  * The held badge: a held turn in place of the state badge, padded to the
- * badge width so the row columns stay aligned (ADR 0016).
+ * badge width so the row columns stay aligned (ADR 0016). It wears the
+ * warning color of the other markers, so a turn that needs the operator
+ * looks like a turn that needs the operator (see `COLORS.statusWarning`).
  */
 export function heldBadge(): string {
 	return "held".padEnd(BADGE_WIDTH);
 }
-
-/** The foreground of the held badge: the warning color, like the other markers. */
-export const HELD_COLOR = "#d29922";
 
 /**
  * The task type a ticket presents in its list row and its detail pane.

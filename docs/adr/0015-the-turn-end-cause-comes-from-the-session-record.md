@@ -43,7 +43,8 @@ causes:
 - codex reads the task event: a clean `task_complete` is `completed`, one with
   an error, and a `stream_error`, are `failed`, and `turn_aborted` is read
   from its own text (`truncated` when it names the context, `aborted` when it
-  names an interrupt or a timeout, `failed` otherwise).
+  names an interrupt or a timeout, `failed` otherwise), and its reason stays
+  the detail verbatim, so the operator reads codex's own words.
 - claude reads the last assistant message: an API error is `failed`, a
   `max_tokens` stop is `truncated`, and `end_turn` or `stop_sequence` is
   `completed`; a `tool_use` stop is a turn still mid-work, not an end.

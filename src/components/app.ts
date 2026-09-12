@@ -423,7 +423,7 @@ export function App({
 	const attentionLine =
 		state === undefined || (view === "tickets" && attentionEmpty)
 			? ""
-			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${heldCount > 0 ? `  held: ${heldCount}` : ""}${bell ? "  !!!" : ""}${heldBell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
+			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${heldCount > 0 ? `  held: ${heldCount}` : ""}${bell || heldBell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
 	// The held count the bell compares against: a rise rings the terminal
 	// bell and flashes the attention line, a fall or a steady count does not.
 	useEffect(() => {

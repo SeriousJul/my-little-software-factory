@@ -27,7 +27,6 @@ import {
 	BADGE_WIDTH,
 	COLORS,
 	failureBadge,
-	HELD_COLOR,
 	heldBadge,
 	MARKER_COLORS,
 	STATE_COLORS,
@@ -200,7 +199,7 @@ function rowSpans(
 		if (marker !== null)
 			spans.push(createElement("span", { fg: MARKER_COLORS[marker] }, failureBadge(marker)));
 		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
-			spans.push(createElement("span", { fg: HELD_COLOR }, heldBadge()));
+			spans.push(createElement("span", { fg: COLORS.statusWarning }, heldBadge()));
 		else
 			spans.push(
 				createElement("span", { fg: STATE_COLORS[ticket.state] }, stateBadge(ticket.state)),

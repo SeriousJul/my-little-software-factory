@@ -234,7 +234,9 @@ export function codexAbortCause(reason: string | undefined): TurnEndCause {
  * the log. The turn end is the last of the turn-end events: `task_complete`
  * is `completed` unless it carries an error (the provider rejected the
  * request), in which case it is `failed` with the error's message as the
- * detail; `stream_error` is `failed`; `turn_aborted` maps by its own reason.
+ * detail; `stream_error` is `failed`; `turn_aborted` maps by its own reason,
+ * and its reason is the detail: the agent's own text of why the turn died,
+ * kept verbatim so the operator reads it instead of a category label.
  * A record without a turn-end event yields null.
  */
 export function turnEndFromCodexSession(jsonl: string, startedAt: string | null): TurnEnd | null {
@@ -286,8 +288,9 @@ export function turnEndFromCodexSession(jsonl: string, startedAt: string | null)
 		} else if (payload.type === "turn_aborted") {
 			sawTurnEnd = true;
 			lastTs = ts ?? lastTs;
-			cause = codexAbortCause(typeof payload.reason === "string" ? payload.reason : undefined);
-			detail = "";
+			const reason = typeof payload.reason === "string" ? payload.reason : undefined;
+			cause = codexAbortCause(reason);
+			detail = reason ?? "";
 		}
 	}
 	if (!sawTurnEnd) return null;

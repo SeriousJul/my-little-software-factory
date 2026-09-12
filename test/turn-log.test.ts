@@ -548,6 +548,60 @@ describe("turnEndFromCodexSession", () => {
 		).toBe("failed");
 	});
 
+	test("a quota abort is failed, with the reason kept verbatim as the detail", () => {
+		const reason =
+			"usage_limit_exceeded: You have hit your ChatGPT usage limit (plus plan). Try again in ~261 min";
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "turn_aborted", reason },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("failed");
+		expect(end?.detail).toBe(reason);
+	});
+
+	test("an interrupted abort keeps its reason as the detail", () => {
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "turn_aborted", reason: "interrupted" },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("aborted");
+		expect(end?.detail).toBe("interrupted");
+	});
+
+	test("a context abort keeps its reason as the detail", () => {
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "turn_aborted", reason: "context_window_exceeded" },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("truncated");
+		expect(end?.detail).toBe("context_window_exceeded");
+	});
+
+	test("an abort without a reason is unknown with no detail", () => {
+		const end = turnEndFromCodexSession(
+			codexJsonl({
+				timestamp: "2026-01-01T12:01:00Z",
+				type: "event_msg",
+				payload: { type: "turn_aborted" },
+			}),
+			null,
+		);
+		expect(end?.cause).toBe("unknown");
+		expect(end?.detail).toBe("");
+	});
+
 	test("a record without a turn-end event yields null", () => {
 		expect(
 			turnEndFromCodexSession(
