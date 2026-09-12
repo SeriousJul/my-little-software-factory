@@ -1143,6 +1143,13 @@ it carries the `grill-with-docs` Consultation type.
 	injected. The App renders the Consultation screens and forwards the
 	operator's actions here; the tests drive the lifecycle through this seam,
 	with a fake command runner and a real state file.
+- `src/handoff-dispatch.ts`: the Handoff dispatch module (ADR 0012). The one
+	seat a handoff or a herdr environment change holds, the handoff queue and
+	its claim order, the durable claim and settle of every origin, the Close
+	cleanup with the leftover fact it leaves, the Clear action and its guards,
+	and the name fact of a leftover agent. It reports through plain callbacks,
+	so a test drives it with the fake runner and an in-memory state, and the
+	App and the observation loop cross the same interface.
 - `src/repo.ts`: the repository resolution and the sibling clone.
 - `src/naming.ts`: the branch names and the herdr agent names.
 - `src/runner.ts`: the single egress for commands.
