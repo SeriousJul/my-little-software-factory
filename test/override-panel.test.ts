@@ -30,6 +30,7 @@ import {
 	rowSelected,
 	rowsOf,
 	settle,
+	spanColorAt,
 	spanColors,
 	WIDTH,
 } from "./app-harness.ts";
@@ -77,10 +78,21 @@ const NO_LIST = { status: "unavailable", cause: "no-list" } as const;
  * The color one shared palette role paints in the presentation these tests run
  * in. A panel that painted a color of its own would not match it.
  */
-function tone(role: "warning" | "error"): [number, number, number] {
+function tone(
+	role: "warning" | "error" | "detail" | "text" | "focusedText" | "indicator",
+): [number, number, number] {
 	const foreground = inkFor("dark")[role].fg;
 	if (foreground === null) throw new Error(`the dark palette paints no ${role}`);
 	return rgb(foreground);
+}
+
+/** The color the panel's box border paints, read off the frame's top row. */
+function borderColorOf(
+	setup: Awaited<ReturnType<typeof testRender>>,
+	frame: string,
+): [number, number, number] | null {
+	const at = rowsOf(frame).findIndex((row) => row.includes("┌"));
+	return spanColorAt(setup, at, "─");
 }
 
 /** Read the exact refusal sentence from a verdict. */
@@ -470,6 +482,82 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 					expectUnfit(setup, "Model", "factory-model");
 				},
 			);
+		}
+	});
+
+	test("an Agent type the config no longer names keeps every value in reach", async () => {
+		// A stored or typed choice can name an Agent type the config dropped: the
+		// record reads as one that maps nothing, so every carried value shows on
+		// its warning row instead of vanishing where no key can clear it.
+		await withPanel(
+			{ agentType: "gone", status: { status: "available", models: ["factory-model"] } },
+			{
+				...INITIAL,
+				agentType: "gone",
+				model: "factory-model",
+				thinking: "low",
+				contextWindow: "131072",
+			},
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(f) =>
+						frameText(f).includes("Model factory-model") &&
+						frameText(f).includes("Thinking low") &&
+						frameText(f).includes("Context 131072"),
+					"the three warning rows of a record the config no longer names",
+				);
+				expect(frameText(frame)).toContain("Agent gone");
+				expectUnfit(setup, "Model", "factory-model");
+				expectUnfit(setup, "Thinking", "low");
+				expectUnfit(setup, "Context", "131072");
+			},
+		);
+	});
+
+	test("a waiting Model row keeps its value dim while a confirmed row stays plain", async () => {
+		// The row that waits for its list holds a value no list has judged yet, so
+		// it wears the tone of a hint; the Agent row beside it, whose value needs
+		// no list at all, keeps the tone of a value.
+		await withPanel(
+			{ agentType: "pilot", status: { status: "loading" } },
+			{ ...INITIAL, model: "factory-model" },
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("Model factory-model"),
+					"the waiting row to hold its value",
+				);
+				expect(frameText(frame)).toContain("Model factory-model");
+				expect(spanColors(setup, "factory-model")).toEqual([tone("detail")]);
+				expect(spanColors(setup, "pilot")).toEqual([tone("focusedText")]);
+			},
+		);
+	});
+
+	test("the panel's border is the shared indicator tone, and no tone at all in mono", async () => {
+		await withPanel(
+			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
+			INITIAL,
+			async (setup) => {
+				const frame = await settle(setup);
+				expect(borderColorOf(setup, frame)).toEqual(tone("indicator"));
+			},
+		);
+		const previous = process.env.FACTORY_PRESENTATION;
+		process.env.FACTORY_PRESENTATION = "mono";
+		try {
+			await withPanel(
+				{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
+				INITIAL,
+				async (setup) => {
+					const frame = await settle(setup);
+					expect(borderColorOf(setup, frame)).not.toEqual(tone("indicator"));
+				},
+			);
+		} finally {
+			if (previous === undefined) delete process.env.FACTORY_PRESENTATION;
+			else process.env.FACTORY_PRESENTATION = previous;
 		}
 	});
 });

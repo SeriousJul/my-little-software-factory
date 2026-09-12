@@ -41,12 +41,16 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | Small and narrow frames keep the focused control and the way out; below a usable size the surface states its size and how to leave | `test/reserved-rows.test.ts`, `test/handoff-frame.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The shared library is required: no screen builds its own field, names a renderer field, or hand-edits a draft string | `test/shared-control-architecture.test.ts` | Passed |
 | The gallery's examples are the production modules | `test/shared-gallery.test.ts` | Passed |
+| A control's written reason uses the width its surface names, and is cut to its own cells when the surface names none | `test/shared-controls.test.ts`, `test/override-panel.test.ts` | Passed |
+| A row whose value cannot reach its Agent wears the warning tone and writes the Setting fit sentence under itself, at every width the panel renders at | `test/override-panel.test.ts`, `test/handoff-frame.test.ts` | Passed |
+| A row that waits for the list its value would be judged against keeps that value in the tone of a setting it cannot confirm | `test/shared-controls.test.ts`, `test/handoff-frame.test.ts` | Passed |
+| The override panel's state tones come from the shared palette, and the no-color presentation keeps a warning row's value and its whole sentence | `test/override-panel.test.ts` | Passed |
 
 ## Environment these checks ran in
 
 | Part | Version |
 | --- | --- |
-| OS | Arch Linux, kernel 7.1.9-arch1-2 |
+| OS | Arch Linux, kernel 7.2.3-arch1-3 |
 | Node | v26.8.1 (the pinned minimum is 26.4.0) |
 | Renderer | OpenTUI `@opentui/core` 0.5.9, `@opentui/react` 0.5.9 |
 | Test runner | vitest 4.1.11 |

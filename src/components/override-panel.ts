@@ -151,8 +151,6 @@ interface PanelRow {
 	/** "list" cycles, "text" edits, "type-ahead" searches, "pending" waits. */
 	kind: "list" | "text" | "type-ahead" | "pending";
 	options?: readonly string[];
-	/** Show the end of a value that does not fit, where a model name differs. */
-	clipTail?: boolean;
 	/** The dim marker a row holds while it has no value to show. */
 	placeholder?: string;
 	/**
@@ -700,9 +698,6 @@ function modelRow(status: ModelListStatus, verdict: FitVerdict): PanelRow {
 			key: "model",
 			kind: "type-ahead",
 			options: status.models,
-			// A real list carries one long provider in front of many models, so
-			// the tail is the part that tells two choices apart.
-			clipTail: true,
 			// An agent that reports no model has nothing to offer, and an empty
 			// value stays the valid unset state the panel names.
 			placeholder: status.models.length === 0 ? NO_MODELS_HINT : UNSET_HINT,
@@ -805,10 +800,6 @@ function rowElement(
 		focused: selected,
 		width: geometry.valueWidth,
 		labelWidth: geometry.labelWidth,
-		// The tail clip marks a cut-off value with "…", so it belongs to a value
-		// alone. A hint that does not fit keeps its front like every other row
-		// text, and never carries a marker that claims it is a truncated name.
-		clipTail: r.clipTail === true,
 		placeholder: r.placeholder ?? UNSET_HINT,
 		// The waiting row is decided before the availability check: it holds no
 		// list to compare the value against, so a model the config resolved
