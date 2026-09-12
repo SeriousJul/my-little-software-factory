@@ -1222,7 +1222,7 @@ describe("Consultation attention through the UI", () => {
 		}
 	});
 
-	test("a opens the oldest recovery item, and awaiting response wins", async () => {
+	test("v opens the oldest recovery item, and awaiting response wins", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		// Creation order is future-dated so the wall-clock stamps of the state
 		// transitions (now) stay older than every seeded created_at.
@@ -1238,16 +1238,16 @@ describe("Consultation attention through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					await press(setup, "v", "the consultations view", (f) => f.includes("State: "));
-					// a goes to the item that has waited longest: the failed one.
-					const oldest = await press(setup, "a", "the oldest recovery detail", (f) =>
+					// v opens the view on the item that has waited longest: the
+					// failed one.
+					const oldest = await press(setup, "v", "the oldest recovery detail", (f) =>
 						f.includes("State: failed"),
 					);
 					expect(frameText(oldest)).toContain("herdr refused the launch");
 					// An awaiting response always wins over the recovery items.
 					seed(state, AWAITING_ID, true, t(4));
 					state.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
-					const selected = await press(setup, "a", "the awaiting detail", (f) =>
+					const selected = await press(setup, "v", "the awaiting detail", (f) =>
 						f.includes("State: awaiting-response"),
 					);
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
@@ -1794,10 +1794,9 @@ describe("The full Consultation operator flow", () => {
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
-					// a selects it for attention.
-					await press(setup, "a", "the attention selection", (f) =>
-						f.includes("State: awaiting-response"),
-					);
+					// a toggles auto-handoff even in the Consultations view: the
+					// launched Consultation is already the selection.
+					await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
 					// The Agent is idle: Enter opens the response editor.
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("answer one");
@@ -1863,6 +1862,50 @@ describe("The full Consultation operator flow", () => {
 			);
 		} finally {
 			bells.restore();
+			state.close();
+		}
+	});
+
+	test("a launch stays on the launched Consultation, not on older attention", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// An older Consultation already needs the operator. The launch must
+		// not jump the view onto it: the operator is watching the one it
+		// just created.
+		const t = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+		seed(state, MISSING_ID, true, t(1));
+		state.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: answer one");
+		inner.set("herdr", ["agent", "prompt", AGENT, "answer one"], { code: 0 });
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ ...launchedAgent, status: "working", seq: 1 }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					const frame = await awaitFrame(
+						setup,
+						(f) => f.includes("State: working"),
+						"the launched Consultation working",
+					);
+					expect(detailPaneText(frame)).toContain("State: working");
+					expect(detailPaneText(frame)).not.toContain("State: missing");
+				},
+				WIDTH,
+				30,
+				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+			);
+		} finally {
 			state.close();
 		}
 	});

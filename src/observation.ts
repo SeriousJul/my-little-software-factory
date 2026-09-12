@@ -50,10 +50,11 @@
  */
 
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
-import { baseChoice, type HandoffChoice, resolveHandoffChoice } from "./handoff.ts";
+import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
+import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
-import type { Consultation, FactoryState, HandoffOrigin, HandoffTicket } from "./state.ts";
+import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
 import {
 	lastMessageFromLog,
 	readSessionTurnLog,
@@ -284,30 +285,6 @@ export function stripAnsi(text: string): string {
  */
 export type AwaitingDecision = "close" | "route" | "wait";
 
-/** The handoff the loop starts on the app's behalf. */
-export interface HandoffIntent {
-	origin: HandoffOrigin;
-	ticketIdentity: string;
-	choice: HandoffChoice;
-	previousMessage: string;
-	/**
-	 * The result of the handoff's own start, reported once when the claimed
-	 * handoff settles: `{ ok: true }` when the agent is live, `{ ok: false,
-	 * reason }` when it never started. The claim says the app took the work;
-	 * only the start says the agent runs, so a route's decision waits for
-	 * this. An intent that records nothing on a start omits it.
-	 */
-	onStarted?: (started: DispatchResult) => void;
-}
-
-/**
- * Whether the app accepted the intent: it claimed the handoff and will run
- * it, now or behind the handoff already in flight. A refused claim leaves
- * the ticket where it was and says why, and no start follows. Whether the
- * agent actually started arrives later, on the intent's `onStarted`.
- */
-export type DispatchResult = { ok: true } | { ok: false; reason: string };
-
 /**
  * A structured topic for an onStatus event. The UI reacts to the topic, never
  * to the human-facing text: the text may be reworded without breaking the
@@ -328,9 +305,10 @@ interface ObservationOptions {
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	/**
 	 * The Close cleanup of an auto-ended cycle: the worktree workspace is
-	 * removed or the live tab is closed. Returns a failure reason.
+	 * removed or the live tab is closed. Returns a failure reason. The end
+	 * tells the dispatch seam which completion path closed the cycle.
 	 */
-	cleanup: (handoff: HandoffTicket) => Promise<string | undefined>;
+	cleanup: (handoff: HandoffTicket, end: "closed" | "abandoned") => Promise<string | undefined>;
 	now: () => number;
 	/** The auto-handoff mode, read at the start of each cycle. */
 	mode: () => boolean;
@@ -373,7 +351,10 @@ export class ObservationCoordinator {
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
-	private readonly cleanup: (handoff: HandoffTicket) => Promise<string | undefined>;
+	private readonly cleanup: (
+		handoff: HandoffTicket,
+		end: "closed" | "abandoned",
+	) => Promise<string | undefined>;
 	private readonly now: () => number;
 	private readonly mode: () => boolean;
 	private readonly intervalMs: number;
@@ -838,7 +819,7 @@ export class ObservationCoordinator {
 			});
 			this.restarted.delete(ticket.ticketIdentity);
 			if (!applied) return false;
-			const failure = await this.cleanup(ticket);
+			const failure = await this.cleanup(ticket, "abandoned");
 			if (this.stopped) return true;
 			this.onStatus(
 				failure === undefined ? "warning" : "error",
@@ -912,7 +893,7 @@ export class ObservationCoordinator {
 				decidedAt,
 			});
 			if (!applied) return false;
-			const failure = await this.cleanup(ticket);
+			const failure = await this.cleanup(ticket, "closed");
 			if (this.stopped) return true;
 			this.onStatus(
 				failure === undefined ? "info" : "error",

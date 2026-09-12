@@ -217,6 +217,8 @@ const CONSULTATION_TYPES_MISSING =
 const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
 /** What the settled meaning of Enter does, for the guide's current section. */
 const DECIDE_NOTE = "opens the decision on a settled Ticket";
+/** What the Consultations view does when a Consultation needs the operator. */
+const CONSULTATIONS_NOTE = "opens on the Consultation that needs the operator, if one does";
 
 /** The panel's own modes: while one is open, the list's selection is inert. */
 const panelMode = (mode: InteractionMode) =>
@@ -613,8 +615,11 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
-		modes: [...baseModes],
+		// `v` re-opens the view on the Consultation that needs the operator
+		// from inside the view as well: it must not hide behind the selection.
+		modes: [...baseModes, ...consultationModes],
 		availability: available,
+		guideNote: CONSULTATIONS_NOTE,
 	},
 	{
 		id: "launch",

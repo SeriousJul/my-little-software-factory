@@ -2,10 +2,9 @@ import { describe, expect, test, vi } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
 import {
 	type AgentReader,
-	type DispatchResult,
-	type HandoffIntent,
 	type HerdrAgent,
 	HerdrAgentReader,
 	normalizeAgentStatus,

@@ -114,7 +114,9 @@ and detail, the Agent interaction mode, and the Consultation confirmation
 panel dispatch from the catalogue as well, and take their Action bar, Key
 guide, and Message view from the shared modules.
 
-- The Consultation view keeps an independent list and Agent view. In the
+- The Consultation view keeps an independent list and Agent view. `v` opens
+	it on the Consultation that needs the operator, if one does: an awaiting
+	response wins, and among the recovery items the oldest wins. In the
 	launcher, `Tab` and `Shift+Tab` move between the two choices, the Draft
 	field, and the two actions; `←→` choose a type or Repository and move the
 	caret in the field; `Enter` adds a line inside the field and runs the action
@@ -1087,8 +1089,7 @@ The shipped defaults define the three agent types `pi`, `codex`, and
 and two task rules for `ready-for-review` and `needs-work` pull requests.
 They have no sources and no Consultation types. `config/development.toml`
 in this repository configures the live development path through `--config`;
-it carries the `grill-with-docs` Consultation type and the Task profile the
-review handoffs start on.
+it carries the `grill-with-docs` Consultation type.
 
 ## Shape
 
@@ -1122,6 +1123,23 @@ review handoffs start on.
 	environment kinds.
 - `src/handoff.ts`: the handoff. Resolves the repository, runs the pinned
 	command sequence through herdr, starts the agent, and sends the prompt.
+- `src/consultation.ts`: the Consultation rules that need no terminal. The input
+	and snapshot bounds, the per-Repository operation queue, the live checkout
+	safety check, the Replacement context bounds, the Agent interaction key
+	translation and its ordered input queue, and the Stale Agent output warning.
+- `src/consultation-operations.ts`: the Consultation lifecycle. Launch, recovery,
+	response, close, Force-close, Replacement, deletion, the Stale Agent output
+	fact, and the Agent input queue, behind one interface with its dependencies
+	injected. The App renders the Consultation screens and forwards the
+	operator's actions here; the tests drive the lifecycle through this seam,
+	with a fake command runner and a real state file.
+- `src/handoff-dispatch.ts`: the Handoff dispatch module (ADR 0012). The one
+	seat a handoff or a herdr environment change holds, the handoff queue and
+	its claim order, the durable claim and settle of every origin, the Close
+	cleanup with the leftover fact it leaves, the Clear action and its guards,
+	and the name fact of a leftover agent. It reports through plain callbacks,
+	so a test drives it with the fake runner and an in-memory state, and the
+	App and the observation loop cross the same interface.
 - `src/repo.ts`: the repository resolution and the sibling clone.
 - `src/naming.ts`: the branch names and the herdr agent names.
 - `src/runner.ts`: the single egress for commands.

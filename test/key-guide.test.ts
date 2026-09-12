@@ -301,7 +301,7 @@ describe("the in-app Key guide", () => {
 					"Enter Hand off",
 					"Enter Live view - only an in-flight Ticket has a Live view",
 					"Enter Decide - the selected Ticket has no completion to decide",
-					"v Consultations",
+					"v Consultations - opens on the Consultation that needs the operator, if one does",
 					// The reason is the longest in the guide: the label column
 					// is sized to its content, and what still does not fit
 					// flows onto its own continuation row rather than being
@@ -547,7 +547,7 @@ describe("the in-app Key guide", () => {
 					"Enter Hand off",
 					"Enter Live view - only an in-flight Ticket has a Live view",
 					"Enter Decide - the selected Ticket has no completion to decide",
-					"v Consultations",
+					"v Consultations - opens on the Consultation that needs the operator, if one does",
 					// The reason is the longest in the guide: the label column
 					// is sized to its content, and what still does not fit
 					// flows onto its own continuation row rather than being
@@ -1231,9 +1231,9 @@ describe("the in-app Key guide", () => {
 				setup.resize(60, 12);
 				let frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("1-4/58");
+				expect(actionBarRowOf(frame)).toContain("1-4/61");
 
-				await scrollGuide(setup, "j", "2-5/58");
+				await scrollGuide(setup, "j", "2-5/61");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);

@@ -338,15 +338,12 @@ describe("validateConfig", () => {
 				thinking: "low",
 				autoClose: false,
 			});
-			// The review task type exists with its template, and carries no Task
-			// profile: its agent, model, thinking level, and context window are
-			// commented out in the checked-in file, because the profile named a
-			// model the maintainer's codex build did not offer, and a config that
-			// names an unavailable model stops the control plane at startup. The
-			// feature itself is pinned by the profile tests; what this check pins
-			// is the file the developer actually boots with, so restoring those
-			// lines is a visible change rather than one this test hides.
-			expect(config.taskTypes.review).toMatchObject({
+			// The review task type carries a template only: the live development
+			// path pins no Task profile settings in the file. The profile
+			// feature itself is covered by the inline config tests in this file,
+			// which name the agent, model, thinking level, and context window
+			// they set.
+			expect(config.taskTypes.review).toEqual({
 				template: expect.stringContaining("Review pull request"),
 				autoClose: false,
 			});

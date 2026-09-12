@@ -50,6 +50,7 @@ import {
 	workspaceListJson,
 } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
+import { type GatedRunner, gatedRunner as gateOnRunner } from "./gated-runner.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -2585,33 +2586,11 @@ describe("the leftover environment", () => {
 	 *
 	 * A seat test cannot race a timer: the command must stay in flight while
 	 * the operator works the keys behind it, and answer as soon as the test
-	 * says so.
+	 * says so. The shared gate is the one the Handoff dispatch module tests use,
+	 * so the seat rule is driven by one runner double everywhere.
 	 */
-	function gatedRunner(
-		app: SeededApp,
-		matches: (command: string) => boolean,
-	): { runner: CommandRunner; release: () => void; busy: () => boolean; arrivals: () => number } {
-		const waiting: (() => void)[] = [];
-		let held = 0;
-		let arrivals = 0;
-		return {
-			runner: {
-				run: async (name, args, options) => {
-					const command = [name, ...args].join(" ").trim();
-					if (matches(command)) {
-						arrivals += 1;
-						held += 1;
-						await new Promise<void>((resolve) => waiting.push(resolve));
-						held -= 1;
-					}
-					return app.runner.run(name, args, options);
-				},
-				listModels: (kind) => app.runner.listModels(kind),
-			},
-			release: () => waiting.shift()?.(),
-			busy: () => held > 0,
-			arrivals: () => arrivals,
-		};
+	function gatedRunner(app: SeededApp, matches: (command: string) => boolean): GatedRunner {
+		return gateOnRunner(app.runner, matches);
 	}
 
 	/**

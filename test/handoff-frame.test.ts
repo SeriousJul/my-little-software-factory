@@ -2142,7 +2142,14 @@ describe("the override panel", () => {
 		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
-				const frame = await pressEnterToHandoff(setup);
+				await pressEnterToHandoff(setup);
+				// The projection refresh and the handoff report are separate async
+				// facts. Wait for the line, or the frame is read mid-flight.
+				const frame = await awaitFrame(
+					setup,
+					(f) => messageRowOf(f).includes("cloned acme/billing to a sibling"),
+					"the mapping warning on the Message line",
+				);
 				// The warning sits on the permanent Message line.
 				expect(messageRowOf(frame)).toContain("cloned acme/billing to a sibling");
 				// The mapping was written back to the config file.
