@@ -9,8 +9,9 @@
  */
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
+import { controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth } from "./text.ts";
-import { COLORS, prefixForSeverity } from "./theme.ts";
+import { prefixForSeverity } from "./theme.ts";
 
 export type MessageSeverity = "working" | "warning" | "error";
 
@@ -63,14 +64,24 @@ export function formatMessage(fact: MessageFact): string {
 	return `${prefixForSeverity(fact.severity)} ${fact.text}`;
 }
 
-/** The color of one Message fact: its severity, never the color alone. */
-export function messageColor(fact: MessageFact | null): string {
-	if (fact === null) return COLORS.text;
-	return fact.severity === "error"
-		? COLORS.statusError
-		: fact.severity === "warning"
-			? COLORS.statusWarning
-			: COLORS.statusWorking;
+/**
+ * The color of one Message fact: its severity, never the color alone.
+ *
+ * The pair is the presentation's own for the severity, so a Message reads the
+ * way every other control reads in the pinned presentation. The no-color
+ * presentation states no color at all: the written prefix is the whole marker.
+ */
+export function messageColor(fact: MessageFact | null): string | undefined {
+	const ink = controlInk();
+	const role =
+		fact === null
+			? ink.text
+			: fact.severity === "error"
+				? ink.error
+				: fact.severity === "warning"
+					? ink.warning
+					: ink.indicator;
+	return role.fg ?? undefined;
 }
 
 /**

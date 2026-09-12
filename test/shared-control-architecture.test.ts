@@ -87,6 +87,20 @@ describe("the shared control library is the only control implementation", () => 
 		expect(offenders).toEqual([]);
 	});
 
+	test("no screen paints an action row outside the shared row", () => {
+		// `actionRowSpans` is the raw paint of one action row: the marker, the
+		// label column, and the detail, in the shared presentation. A screen
+		// that reaches it paints its own action row, and a row painted outside
+		// the shared ink cannot take the light or the no-color presentation.
+		// The shared `ActionItem` is the one caller.
+		const offenders: string[] = [];
+		for (const file of screens) {
+			const source = readFileSync(file, "utf8");
+			if (/\bactionRowSpans\b/u.test(source)) offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
+	});
+
 	test("the library wraps its primitives in exactly one place", () => {
 		// The rule is not only "outside the library, no fields" but "inside the
 		// library, one field each": a second Text field inside the library would
@@ -110,6 +124,49 @@ describe("the shared control library is the only control implementation", () => 
 			const source = readFileSync(file, "utf8");
 			expect(source, `${file} must use the shared control library`).toMatch(
 				/from "\.\/shared\/(fields|form|choices|type-ahead|presentation)\.ts"/u,
+			);
+		}
+	});
+
+	test("selector screens take their rows and cycling from the library", () => {
+		// A selector row and its wrapped cycle are shared behavior: the index,
+		// the wrap, and the empty-value rule live in one module, and a screen
+		// that owns the cycle owns a second selector. The two surfaces that
+		// offer a selector must take the row and the shared helper from the
+		// choice module, so neither can drift back to a local row or wrap.
+		const required = [
+			"src/components/override-panel.ts",
+			"src/components/consultation-launcher.ts",
+		];
+		for (const file of required) {
+			const source = readFileSync(file, "utf8");
+			expect(source, `${file} must take its selector row from the shared choice module`).toMatch(
+				/from "\.\/shared\/(choices|type-ahead)\.ts"/u,
+			);
+			expect(
+				source,
+				`${file} must take its selector cycling from the shared choice module`,
+			).toMatch(/\b(useChoice|cycleChoice)\b/u);
+		}
+	});
+
+	test("every action surface takes its rows from the library", () => {
+		// An action row is shared presentation: the marker, the label, the
+		// refusal word, and the ink all come from one place. Each surface that
+		// offers actions must draw them through the shared `ActionItem`, so a
+		// row cannot paint itself in a palette the presentation does not own.
+		const required = [
+			"src/components/action-panel.ts",
+			"src/components/decision-modal.ts",
+			"src/components/missing-modal.ts",
+			"src/components/response-editor.ts",
+			"src/components/live-view.ts",
+			"src/components/consultation-launcher.ts",
+		];
+		for (const file of required) {
+			const source = readFileSync(file, "utf8");
+			expect(source, `${file} must draw its action rows through the shared row`).toContain(
+				"ActionItem",
 			);
 		}
 	});

@@ -12,10 +12,11 @@ export const COLORS = {
 	focusedBackground: "#21262d",
 	dim: "#8b949e",
 	/**
-	 * The established dark surface for utility and work overlays.
+	 * The fixed dark surface of the overlays that carry their own color system.
 	 *
-	 * A fixed dark surface by decision: an overlay carries its own background,
-	 * so it stays readable on any terminal background, dark or light. The base
+	 * The shared overlay (one `ModalSurface`) instead paints the presentation's
+	 * own surface role, so the ink it paints is the ink that pair was measured
+	 * against; the no-color presentation keeps this fixed dark box. The base
 	 * panes and Action bar paint no background and follow the terminal's own.
 	 */
 	overlay: "#0d1117",

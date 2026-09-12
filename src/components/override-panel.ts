@@ -84,13 +84,11 @@ import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
-import { cycleChoice } from "./shared/choices.ts";
+import { ChoiceRow, cycleChoice } from "./shared/choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
 import { useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
-import { padToWidth, truncateTailToWidth, truncateToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
 
 /** Which settings an agent type maps, for the rows it opens. */
 export interface AgentSettings {
@@ -341,7 +339,7 @@ export function OverridePanel({
 	// where every other row takes one. The panel counts them, because a surface
 	// is handed no more rows than it holds and a row that overflowed would
 	// paint through the row below it.
-	const spans = allRows.map((r) => (r.kind === "type-ahead" ? 2 : 1));
+	const spans = allRows.map((r) => (r.kind === "type-ahead" ? 2 : r.unfit === undefined ? 1 : 2));
 	const rowSpan = (index: number): number => spans[index] ?? 1;
 	const totalRows = spans.reduce((sum, span) => sum + span, 0);
 	// The shared chrome sizes the box: the terminal's rows above the Action
@@ -547,7 +545,7 @@ export function OverridePanel({
 		frame,
 		width: terminalWidth,
 		title: "Override",
-		borderColor: COLORS.borderFocused,
+		borderColor: controlInk().indicator.fg ?? undefined,
 		// One row is enough to be a panel: the rows that do not fit scroll.
 		minContentRows: 1,
 		message,
@@ -697,7 +695,6 @@ function rowElement(
 	searchField: RefObject<FieldHandle | null>,
 	reportSelection: (has: boolean) => void,
 ): ReactElement {
-	const ink = controlInk();
 	if (r.kind === "text") {
 		return createElement(TextField, {
 			key: r.key,
@@ -747,31 +744,9 @@ function rowElement(
 			},
 		});
 	}
-	const children: ReactElement[] = [
-		createElement(
-			"text",
-			{ fg: selected ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-			truncateToWidth(selected ? "❯ " : "  ", geometry.markerWidth),
-		),
-		createElement(
-			"text",
-			{ fg: selected ? (ink.focusedText.fg ?? undefined) : (ink.detail.fg ?? undefined) },
-			truncateToWidth(padToWidth(`${r.label} `, geometry.labelWidth), geometry.labelWidth),
-		),
-	];
-	// A list row, or the row that waits for one. An unset value shows a dim
-	// hint, never a blank; a value the current agent cannot run shows the value
-	// itself in the warning color, because the handoff would fail on it.
-	const unset = value === "";
-	// The waiting row is decided before the availability check: it holds no
-	// list to compare the value against, so a model the config resolved
-	// correctly must not read as a handoff that would fail. The row shows that
-	// value in the dim tone the panel uses for a setting it cannot yet confirm.
-	const pending = r.kind === "pending";
-
 	/** The values one row offers, or none when it is not a list row. */
-	function optionsOf(r: PanelRow): readonly string[] {
-		return r.options ?? [];
+	function optionsOf(row: PanelRow): readonly string[] {
+		return row.options ?? [];
 	}
 
 	/** Why a row's value cannot reach the agent, in the words the operator reads. */
@@ -781,32 +756,20 @@ function rowElement(
 		return "the selected agent takes no count for a Context window";
 	}
 
-	const inList = (r.options ?? []).includes(value);
-	const text = unset ? (r.placeholder ?? UNSET_HINT) : value;
-	const color =
-		r.unfit !== undefined || (!pending && !unset && !inList)
-			? COLORS.statusWarning
-			: unset || pending
-				? COLORS.dim
-				: selected
-					? COLORS.textBright
-					: COLORS.text;
-	// The tail clip marks a cut-off value with "…", so it belongs to a value
-	// alone. A hint that does not fit keeps its front like every other row
-	// text, and never carries a marker that claims it is a truncated name.
-	const clipValue = r.clipTail === true && !unset;
-	children.push(
-		createElement(
-			"text",
-			{ width: geometry.valueWidth, fg: color },
-			clipValue
-				? truncateTailToWidth(text, geometry.valueWidth)
-				: truncateToWidth(text, geometry.valueWidth),
-		),
-	);
-	return createElement(
-		"box",
-		{ key: r.key, style: { flexDirection: "row", height: 1 } },
-		...children,
-	);
+	const pending = r.kind === "pending";
+	const unset = value === "";
+	const inList = optionsOf(r).includes(value);
+	return createElement(ChoiceRow, {
+		key: r.key,
+		label: r.label,
+		value,
+		focused: selected && inputActive,
+		width: geometry.valueWidth,
+		labelWidth: geometry.labelWidth,
+		placeholder: r.placeholder ?? UNSET_HINT,
+		warning: r.unfit !== undefined || (!pending && !unset && !inList),
+		muted: pending,
+		clipTail: r.clipTail === true,
+		error: r.unfit === undefined ? null : unfitReason(r.unfit),
+	});
 }

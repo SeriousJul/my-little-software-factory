@@ -12,7 +12,17 @@ import { testRender } from "@opentui/react/test-utils";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
-import { awaitFrame, frameText } from "./app-harness.ts";
+import {
+	contrastRatio,
+	inkFor,
+	MIN_INDICATOR_CONTRAST,
+	MIN_TEXT_CONTRAST,
+} from "../src/components/shared/presentation.ts";
+import { awaitFrame, cellColors, frameText, settle } from "./app-harness.ts";
+
+/** A `[r, g, b]` triplet as the `#rrggbb` the contrast formula reads. */
+const hexOf = (channels: readonly number[]): string =>
+	`#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -21,11 +31,16 @@ afterEach(async () => {
 });
 
 /** Open the gallery on one example, at one terminal size. */
-async function gallery(example: string, width = 80, height = 20) {
-	const setup = await testRender(
-		createElement(Gallery, { example, onEmergencyExit: () => undefined }),
-		{ width, height },
-	);
+async function gallery(
+	example: string,
+	width = 80,
+	height = 20,
+	onEmergencyExit: () => void = () => undefined,
+) {
+	const setup = await testRender(createElement(Gallery, { example, onEmergencyExit }), {
+		width,
+		height,
+	});
 	await setup.flush();
 	renderer = setup.renderer;
 	return setup;
@@ -114,6 +129,125 @@ describe("the shared control gallery", () => {
 			"the field to take an edit",
 		);
 		expect(frameText(edited)).toContain("Context 27200");
+	});
+
+	test("Copy selection works on the Type-ahead search, the other fields' way", async () => {
+		const setup = await gallery("search");
+		// The search is a Text field: a selection in it offers the same Copy
+		// control a selection in any other shared field offers.
+		await setup.mockInput.typeText("copy me");
+		setup.mockInput.pressKey("HOME");
+		for (let step = 0; step < 4; step += 1) {
+			setup.mockInput.pressArrow("right", { shift: true });
+			await settle(setup);
+		}
+		expect(frameText(setup.captureCharFrame())).toContain("F3 Copy selection");
+		setup.mockInput.pressKey("F3");
+		const told = await awaitFrame(
+			setup,
+			(f) => /Copied|refused|Nothing is selected/u.test(frameText(f)),
+			"the copy result on the Message line",
+		);
+		expect(frameText(told)).toMatch(/Copied 4 cells|refused the copied text/u);
+		// A plain arrow collapses the selection, and the control leaves the bar:
+		// the bar never names a Copy that would find nothing to copy.
+		setup.mockInput.pressArrow("right");
+		const collapsed = await awaitFrame(
+			setup,
+			(f) => !frameText(f).includes("F3 Copy selection"),
+			"the Copy control to leave the bar",
+		);
+		expect(frameText(collapsed)).not.toContain("F3 Copy selection");
+	});
+
+	test("F1 opens the Key guide the bar names, and closing returns the same field", async () => {
+		const setup = await gallery("fields");
+		// Leave an edit and a selection in the focused field first: closing the
+		// guide must return exactly this field, not a fresh one.
+		await setup.mockInput.typeText("5");
+		await settle(setup);
+		setup.mockInput.pressKey("F1");
+		const guide = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes("Key guide"),
+			"the Key guide",
+		);
+		const guideText = frameText(guide);
+		expect(guideText).toContain("Form field");
+		// The guide lists the field's own editing keys, not only the bar's.
+		expect(guideText).toContain("Move caret by line");
+		expect(guideText).toContain("Copy selection");
+		expect(guideText).toContain("Esc/F1/? Close");
+		// F1 in the guide closes it: the close control outranks the Help that
+		// would only reopen it.
+		setup.mockInput.pressKey("F1");
+		const back = await awaitFrame(
+			setup,
+			(f) => !frameText(f).includes("Key guide"),
+			"the example under the guide",
+		);
+		const backText = frameText(back);
+		expect(backText).toContain("Context 2720005");
+		expect(backText).toContain(stateLine("fields"));
+	});
+
+	test("the light presentation carries its own pair on the overlay surface", async () => {
+		const saved = process.env.FACTORY_PRESENTATION;
+		process.env.FACTORY_PRESENTATION = "light";
+		try {
+			const setup = await gallery("fields");
+			const ink = inkFor("light");
+			// The surface behind the box is the light pair's own background:
+			// an overlay that kept a dark box would unread its own ink.
+			expect(hexOf(cellColors(setup, 1, 0).bg)).toBe(ink.surface.on);
+			// Every text the surface paints clears the standard's contrast on
+			// the background it actually landed on, not on one it was only
+			// described against.
+			const required = new Map<string, number>();
+			const textRoles = [
+				ink.text,
+				ink.focusedText,
+				ink.detail,
+				ink.error,
+				ink.warning,
+				ink.selectionText,
+				ink.surface,
+			];
+			const indicatorRoles = [ink.indicator, ink.selectionBackground, ink.focusedField];
+			for (const role of [...textRoles, ...indicatorRoles]) {
+				const fg = role.fg;
+				if (fg === null) continue;
+				const need = textRoles.includes(role) ? MIN_TEXT_CONTRAST : MIN_INDICATOR_CONTRAST;
+				required.set(fg, Math.max(required.get(fg) ?? 0, need));
+			}
+			let measured = 0;
+			const lines = setup.captureSpans().lines;
+			for (let y = 0; y < lines.length; y += 1) {
+				for (const span of lines[y].spans) {
+					if (span.text.trim() === "") continue;
+					const fg = hexOf(span.fg.toInts().slice(0, 3));
+					const need = required.get(fg);
+					if (need === undefined) continue;
+					const bg = hexOf(span.bg.toInts().slice(0, 3));
+					expect(contrastRatio(fg, bg), `${fg} on ${bg} at row ${y}`).toBeGreaterThanOrEqual(need);
+					measured += 1;
+				}
+			}
+			expect(measured).toBeGreaterThan(0);
+		} finally {
+			if (saved === undefined) delete process.env.FACTORY_PRESENTATION;
+			else process.env.FACTORY_PRESENTATION = saved;
+		}
+	});
+
+	test("Esc leaves the gallery, the way its bar says", async () => {
+		let closed = 0;
+		const setup = await gallery("fields", 80, 20, () => {
+			closed += 1;
+		});
+		setup.mockInput.pressEscape();
+		await settle(setup);
+		expect(closed).toBe(1);
 	});
 
 	test("the narrow example holds its columns without painting through them", async () => {

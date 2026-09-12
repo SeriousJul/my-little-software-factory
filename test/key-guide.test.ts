@@ -14,6 +14,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { inkFor } from "../src/components/shared/presentation.ts";
 import { widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
@@ -91,6 +92,10 @@ const modelValueOf = (frame: string): string => {
 
 /** Collapse the guide's padded key and label columns into single spaces. */
 const norm = (row: string): string => row.replace(/\s+/g, " ").trim();
+
+/** A `[r, g, b]` triplet as the `#rrggbb` the palette states. */
+const hexOf = (channels: readonly number[]): string =>
+	`#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 
 /** A row's content with the modal's box borders stripped, or "" for a blank row. */
 const contentOf = (row: string): string =>
@@ -880,6 +885,41 @@ describe("the in-app Key guide", () => {
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
+	});
+
+	test("paints its rows with the light pair when the light presentation is pinned", async () => {
+		const runner = new FakeRunner();
+		const saved = process.env.FACTORY_PRESENTATION;
+		process.env.FACTORY_PRESENTATION = "light";
+		try {
+			await withApp(
+				async (setup) => {
+					await openGuide(setup, "?");
+					await settle(setup);
+					const ink = inkFor("light");
+					const rows = rowsOf(setup.captureCharFrame());
+					const rowOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+					// The overlay carries the light pair's own surface...
+					const surface = setup.captureSpans().lines[0]?.spans[0];
+					if (surface !== undefined)
+						expect(hexOf(surface.bg.toInts().slice(0, 3))).toBe(ink.surface.on);
+					// ...and the rows wear the light ink, not the dark palette's tones.
+					const moveRow = rowOf("Move");
+					expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(ink.indicator.fg ?? ""));
+					expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(ink.text.fg ?? ""));
+					const groupRow = rowOf("Global controls");
+					expect(spanColorAt(setup, groupRow, "Global controls")).toEqual(
+						rgb(ink.focusedText.fg ?? ""),
+					);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			);
+		} finally {
+			if (saved === undefined) delete process.env.FACTORY_PRESENTATION;
+			else process.env.FACTORY_PRESENTATION = saved;
+		}
 	});
 
 	test("updates availability live while open", async () => {

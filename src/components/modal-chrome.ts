@@ -25,6 +25,7 @@ import { ActionBar } from "./action-bar.ts";
 import type { ControlContext, InteractionMode } from "./controls.ts";
 import { maxScrollOf } from "./geometry.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
+import { controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -42,8 +43,6 @@ const BORDERS = 2;
 const PADDING = 1;
 /** The marker column: "❯ " when the row is selected, two spaces otherwise. */
 export const MARKER_WIDTH = 2;
-/** The label column: enough for the usual "Handoff: <type>" action. */
-const ACTION_LABEL_WIDTH = 20;
 /** One confirmable action, with its label and an optional detail. */
 export interface ActionRow {
 	key: string;
@@ -174,7 +173,7 @@ interface ModalSurfaceProps {
 	 */
 	width: number;
 	title: string;
-	borderColor: string;
+	borderColor?: string;
 	/** The rows this surface must draw to be itself. */
 	minContentRows: number;
 	children: ReactElement[];
@@ -282,8 +281,17 @@ function messageLineRow(
 	return messageRowElement(message, width);
 }
 
-/** The dark full-screen surface every modal and overlay paints on. */
+/**
+ * The full-screen surface every modal and overlay paints on.
+ *
+ * The surface is the presentation's own surface role, so the ink a surface
+ * paints on it is the ink that pair was measured against: the dark ink on the
+ * dark surface, the light ink on the light surface. The no-color presentation
+ * states no surface of its own and keeps the established dark box, so its
+ * terminal-default text stays readable wherever the terminal is.
+ */
 function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
+	const surface = controlInk().surface;
 	return {
 		position: "absolute",
 		top: 0,
@@ -291,16 +299,19 @@ function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
 		width: "100%",
 		height: "100%",
 		zIndex,
-		backgroundColor: COLORS.overlay,
+		backgroundColor: surface.on === "default" ? COLORS.overlay : surface.on,
 		flexDirection: "column",
 	};
 }
 
 /** The lines a held-back surface paints in place of its own content. */
-const SIZE_NOTICE_LINES: readonly { text: string; fg: string }[] = [
-	{ text: TOO_SMALL_TEXT, fg: COLORS.statusWarning },
-	{ text: "This surface cannot be drawn here: Esc closes it.", fg: COLORS.dim },
-];
+function sizeNoticeLines(): readonly { text: string; fg: string | undefined }[] {
+	const ink = controlInk();
+	return [
+		{ text: TOO_SMALL_TEXT, fg: ink.warning.fg ?? undefined },
+		{ text: "This surface cannot be drawn here: Esc closes it.", fg: ink.detail.fg ?? undefined },
+	];
+}
 
 /**
  * The notice a surface that cannot draw itself paints instead: the size it
@@ -314,17 +325,19 @@ function sizeNoticeElement(width: number, rows: number): ReactElement {
 	return createElement(
 		Fragment,
 		{},
-		...SIZE_NOTICE_LINES.slice(0, Math.max(0, rows)).map((line, index) =>
-			createElement(
-				"text",
-				{
-					key: `too-small-${index}`,
-					fg: line.fg,
-					style: { width: "100%", height: 1 },
-				},
-				padToWidth(truncateToWidth(line.text, width), width),
+		...sizeNoticeLines()
+			.slice(0, Math.max(0, rows))
+			.map((line, index) =>
+				createElement(
+					"text",
+					{
+						key: `too-small-${index}`,
+						fg: line.fg,
+						style: { width: "100%", height: 1 },
+					},
+					padToWidth(truncateToWidth(line.text, width), width),
+				),
 			),
-		),
 	);
 }
 
@@ -387,35 +400,6 @@ export function bodyRowSpans(
 		);
 	}
 	return spans;
-}
-
-/** One action row as spans: the marker, the label, and the dim detail. */
-export function actionRowSpans(
-	row: ActionRow,
-	selected: boolean,
-	contentWidth: number,
-): ReactElement[] {
-	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
-	const labelWidth = Math.min(ACTION_LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
-	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
-	const detail = row.detail ?? "";
-	return [
-		createElement(
-			"span",
-			{ key: "marker", fg: selected ? COLORS.textBright : COLORS.dim },
-			truncateToWidth(selected ? "❯ " : "  ", markerWidth),
-		),
-		createElement(
-			"span",
-			{ key: "label", fg: selected ? COLORS.textBright : COLORS.text },
-			truncateToWidth(padToWidth(`${row.label} `, labelWidth), labelWidth),
-		),
-		createElement(
-			"span",
-			{ key: "detail", fg: COLORS.dim },
-			detailWidth > 0 ? truncateToWidth(detail, detailWidth) : "",
-		),
-	];
 }
 
 /**

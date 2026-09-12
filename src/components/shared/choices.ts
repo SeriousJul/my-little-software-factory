@@ -10,9 +10,9 @@
 import { createElement } from "@opentui/react";
 import { Fragment, type ReactElement, useRef, useState } from "react";
 
-import { type ActionRow, actionRowSpans } from "../modal-chrome.ts";
+import type { ActionRow } from "../modal-chrome.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "../text.ts";
-import { controlInk, markerText } from "./presentation.ts";
+import { controlInk, MARKER_WIDTH, markerText } from "./presentation.ts";
 
 /** One row of a form that holds no text: its label and its current value. */
 export interface ChoiceHandle<T> {
@@ -82,6 +82,8 @@ export interface ChoiceRowProps {
 	error?: string | null;
 	/** Whether the value stands for something the target cannot take. */
 	warning?: boolean;
+	/** Whether a value is pending verification and must stay dim. */
+	muted?: boolean;
 	/** Show the end of a value wider than the column, where lists differ. */
 	clipTail?: boolean;
 	/** The written guide line under the row. */
@@ -95,7 +97,7 @@ export function ChoiceRow(props: ChoiceRowProps): ReactElement {
 	const color =
 		props.warning === true
 			? ink.warning
-			: empty
+			: props.muted === true || empty
 				? ink.detail
 				: props.focused
 					? ink.focusedText
@@ -142,6 +144,38 @@ export function ChoiceRow(props: ChoiceRowProps): ReactElement {
 					truncateToWidth(props.hint, noteWidth),
 				),
 	);
+}
+
+/** The largest label column used by the shared action rows. */
+const ACTION_LABEL_WIDTH = 20;
+
+/** Render one action row with the active shared presentation. */
+export function actionRowSpans(
+	row: ActionRow,
+	selected: boolean,
+	contentWidth: number,
+): ReactElement[] {
+	const ink = controlInk();
+	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
+	const labelWidth = Math.min(ACTION_LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
+	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
+	return [
+		createElement(
+			"span",
+			{ key: "marker", fg: (selected ? ink.focusedText : ink.detail).fg ?? undefined },
+			truncateToWidth(selected ? "❯ " : "  ", markerWidth),
+		),
+		createElement(
+			"span",
+			{ key: "label", fg: (selected ? ink.focusedText : ink.text).fg ?? undefined },
+			truncateToWidth(padToWidth(`${row.label} `, labelWidth), labelWidth),
+		),
+		createElement(
+			"span",
+			{ key: "detail", fg: ink.detail.fg ?? undefined },
+			detailWidth > 0 ? truncateToWidth(row.detail ?? "", detailWidth) : "",
+		),
+	];
 }
 
 /**

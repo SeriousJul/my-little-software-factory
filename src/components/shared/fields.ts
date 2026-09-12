@@ -127,13 +127,38 @@ const PLAIN_REFUSALS: FieldRefusals = {
  * A named key arrives as its word or as a multi-cell escape sequence, so a
  * single printed cell is the only thing a field's own rule has to judge.
  */
+const NON_PRINTABLE_KEY_NAMES = new Set([
+	"up",
+	"down",
+	"left",
+	"right",
+	"pageup",
+	"pagedown",
+	"home",
+	"end",
+	"tab",
+	"return",
+	"escape",
+	"backspace",
+	"delete",
+	"insert",
+	"spacebar",
+]);
+
 function typedCharacter(key: KeyEvent): string | null {
 	const raw = key.sequence === "" ? key.name : key.sequence;
 	if (raw === " ") return raw;
-	// Named keys have several code points, while a printable Unicode key can
-	// have more than one UTF-16 code unit. Return every one-cell key so a
-	// digits field can refuse it instead of letting the renderer insert it.
-	if ([...raw].length !== 1 || /\p{Cc}/u.test(raw)) return null;
+	// Named navigation keys and terminal escape sequences do not type. Every
+	// other non-control key is printable, including a non-ASCII key. Returning
+	// the complete grapheme lets the digits rule refuse it instead of silently
+	// allowing the renderer to insert it.
+	if (
+		raw === "" ||
+		(key.sequence === "" && (NON_PRINTABLE_KEY_NAMES.has(raw) || /^f\d+$/u.test(raw))) ||
+		raw.startsWith("\u001b") ||
+		/\p{Cc}/u.test(raw)
+	)
+		return null;
 	return raw;
 }
 

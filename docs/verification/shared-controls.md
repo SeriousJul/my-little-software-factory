@@ -1,7 +1,8 @@
 # Shared control verification
 
-Status: the automated checks pass. The keyboard and visual acceptance targets are
-partly verified; the screen-reader target is not verified at all.
+Status: the automated checks pass. The keyboard and visual acceptance targets
+are verified in Ghostty and foot, in the dark, light, and no-color
+presentations. The screen-reader target is not verified at all.
 
 This record states what was measured, on what, and what was not measured. A
 required check that could not run is recorded as incomplete. It is not a pass,
@@ -34,9 +35,13 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | Closing keeps the launcher's whole form, and it comes back on the same Repository and Consultation type; Discard is the only delete | `test/consultation-launcher-editing.test.ts` | Passed |
 | A Response draft stays saved through the existing persistence path | `test/consultation-frame.test.ts`, `test/consultation.test.ts`, `test/state.test.ts` | Passed |
 | Type-ahead shows its search, matches by substring, keeps an unmatched query with `no match`, edits with Backspace, clears with one key, and keeps query and value distinct | `test/shared-gallery.test.ts`, `test/handoff-frame.test.ts`, `test/override-panel.test.ts` | Passed |
-| The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts` | Passed |
+| The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
+| Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue | `test/consultation-frame.test.ts` | Passed |
+| Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
+| The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Contrast of the shared palette's text and indicator pairs, measured with the WCAG formula | `test/shared-presentation.test.ts` | Passed |
-| The light and no-color presentations draw their own pairs; labels, the focus marker, and state words survive without color | `test/shared-presentation.test.ts` | Passed |
+| The light and no-color presentations draw their own pairs; labels, the focus marker, and state words survive without color | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The overlay surface paints the presentation's own surface role, and every text the surface paints clears the measured contrast on the background it landed on, in dark and light | `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed |
 | Decorative animation and caret blinking are off by default, and no check depends on a blink or a timer | `test/shared-presentation.test.ts`, the frame suite's bounded waits | Passed |
 | Small and narrow frames keep the focused control and the way out; below a usable size the surface states its size and how to leave | `test/reserved-rows.test.ts`, `test/handoff-frame.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The shared library is required: no screen builds its own field, names a renderer field, or hand-edits a draft string | `test/shared-control-architecture.test.ts` | Passed |
@@ -56,8 +61,9 @@ Every check below runs in `npm test`, which is `npm run lint`,
 
 | Environment | Required checks | Result |
 | --- | --- | --- |
-| Linux with Ghostty | Keyboard and visual checks | Not verified. Ghostty 1.x is installed on this machine; the check was not run, because driving a new GUI window and judging its pixels was not attempted here. |
-| Linux with foot | Keyboard and visual checks | Not verified. `foot` is installed; the same reason applies. |
+| Linux with Ghostty | Keyboard and visual checks | **Verified** on Ghostty 1.3.1-arch2 under Hyprland 0.56.2 on this machine. All four gallery examples walked: typing, caret movement, selection shading, F3 copy (the terminal confirmed the clipboard), a paste refused as a whole with its reason, a taken paste, undo and redo, the F1 Key guide opening and closing, and Esc leaving the gallery. |
+| Linux with foot | Keyboard and visual checks | **Verified** on foot 1.28.0: the same walk, with paste driven by foot's clipboard-paste key; the refused paste kept its value and stated why, the taken paste landed at the caret, the F1 Key guide opened and closed, and Esc left the gallery. `FACTORY_PRESENTATION=mono` on the same window: labels, the focus marker, and the state words survived with the colors off. |
+| A light terminal with the light presentation | Visual checks | **Verified after a fix.** On Ghostty over a light terminal, the first check found the shared overlays unreadable: the light ink painted on a fixed dark surface. The overlays now paint the presentation's own surface role, and the Key guide, the Message line, and the size notice take their ink from the presentation. The gallery's surface and every text it paints are checked span by span in the suite, and the desktop re-check showed the gallery readable on the light terminal. |
 | A tmux path on Linux | Keyboard, paste, focus, and rendering checks | **Verified** by `test/tmux-fields.test.ts` on tmux 3.7c: the production gallery on a real pane, keys sent as terminal bytes, the screen read back with `capture-pane`. |
 | Separate GNOME Terminal and Orca environment | Screen-reader operation | **Not verified.** Neither GNOME Terminal nor Orca is installed here, and the standard forbids changing an operator's desktop configuration as an unannounced setup step. No screen-reader claim is made anywhere in this repository. |
 
@@ -112,15 +118,12 @@ requirement to keyboard-only support, and do not claim the baseline complete.
 
 ## What the implementation still leaves open
 
-The library, and every field, selector, search, form action, and form focus
-route the control plane owns, are on it. These surfaces still handle their own
-keys and are not yet wired to the Control catalogue, so the baseline is not
-complete until they are:
-
-- the Consultation view's own list and Agent view,
-- Agent interaction mode's key forwarding (issue #9 keeps its own contract),
-- the Consultation confirmation panel's dispatch.
-
-Each needs the same treatment as the fields: shared controls at the interface,
-the replaced local handling removed, and the catalogue, Action bar, and Key
-guide agreeing with it.
+The library, and every field, selector, search, form action, form focus route,
+Consultation view, Agent interaction mode, and Consultation confirmation panel
+the control plane owns, are wired to the shared Control catalogue. The
+remaining gaps: the screen-reader path has not been measured (see above), and
+the base panes no shared module owns (the Consultation list and detail panes,
+the Agent pane, and the Live view) still paint the fixed dark color system, so
+a pinned light presentation reads its shared controls and overlays, but not
+those panes, on a light terminal. The full light migration of the base panes
+is the next step.

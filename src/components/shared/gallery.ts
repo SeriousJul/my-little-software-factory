@@ -18,11 +18,13 @@ import { useRef, useState } from "react";
 
 import { useControlDispatch } from "../control-dispatch.ts";
 import { contextFor } from "../controls.ts";
+import type { MessageFact } from "../messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "../modal-chrome.ts";
 import { truncateToWidth } from "../text.ts";
 import { COLORS } from "../theme.ts";
+import { KeyGuide } from "../utility.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
-import { DraftField, type FieldHandle, TextField } from "./fields.ts";
+import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { moveFieldWith, useFormSlots } from "./form.ts";
 import { controlInk, STATE_WORDS } from "./presentation.ts";
 import { TypeAheadRow } from "./type-ahead.ts";
@@ -40,9 +42,28 @@ export interface GalleryExample {
 	 * `inputActive` is whether the gallery's own surface holds the keys, so a
 	 * test can draw the focused-capture case without a second implementation.
 	 */
-	render: (columns: GalleryColumns, holds: string, inputActive: boolean) => ReactElement[];
+	render: (
+		columns: GalleryColumns,
+		holds: string,
+		inputActive: boolean,
+		wiring: GalleryFieldWiring,
+	) => ReactElement[];
 	/** Whether this example is drawn at a narrow terminal. */
 	narrow?: boolean;
+}
+
+/**
+ * What the gallery hands a field example.
+ *
+ * One example shows one focused control, as a form holds: the focused field
+ * gets the gallery's handle, so Copy selection reaches it, and its fact
+ * reports keep the Action bar's Copy control honest.
+ */
+export interface GalleryFieldWiring {
+	/** The gallery's field handle: the focused field's selection and copy. */
+	fieldRef: { current: FieldHandle | null };
+	/** Every fact report from the focused field: the bar tracks its selection. */
+	report: (facts: FieldFacts) => void;
 }
 
 /** The columns one example lays its controls out in. */
@@ -87,7 +108,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "fields",
 		state: "normal and focused",
-		render: (columns, holds, inputActive) => [
+		render: (columns, holds, inputActive, wiring) => [
 			createElement(TextField, {
 				key: "model",
 				label: "Model",
@@ -112,6 +133,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					paste: "This field takes digits only: the pasted text was refused as a whole",
 				},
 				hint: "the focused field: digits only, a paste is refused whole",
+				...(holds === "context" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
 			}),
 			createElement(DraftField, {
 				key: "draft",
@@ -123,13 +145,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				labelWidth: columns.labelWidth,
 				height: 3,
 				hint: "a Draft field: Enter adds a line, an action sends it",
+				...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
 			}),
 		],
 	},
 	{
 		id: "states",
 		state: "invalid, unavailable, and loading",
-		render: (columns, holds, _inputActive) => [
+		render: (columns, holds, _inputActive, _wiring) => [
 			createElement(TextField, {
 				key: "invalid",
 				label: "Context",
@@ -173,12 +196,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "search",
 		state: "Type-ahead search",
-		render: (columns, holds, inputActive) => [
+		render: (columns, holds, inputActive, wiring) => [
 			createElement(GalleryTypeAhead, {
 				key: "type-ahead",
 				initial: "openai/gpt-5.1",
 				focused: holds === "type-ahead",
 				inputActive,
+				fieldRef: wiring.fieldRef,
+				onFieldFacts: wiring.report,
 				width: columns.valueWidth,
 				labelWidth: columns.labelWidth,
 			}),
@@ -188,7 +213,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		id: "narrow",
 		state: "narrow terminal",
 		narrow: true,
-		render: (columns, holds, _inputActive) => [
+		render: (columns, holds, _inputActive, wiring) => [
 			createElement(TextField, {
 				key: "model",
 				label: "Model",
@@ -205,6 +230,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				width: columns.valueWidth,
 				labelWidth: columns.labelWidth,
 				height: 2,
+				...(holds === "draft" ? { fieldRef: wiring.fieldRef, onValueChange: wiring.report } : {}),
 			}),
 		],
 	},
@@ -222,6 +248,9 @@ function GalleryTypeAhead(props: {
 	initial: string;
 	focused: boolean;
 	inputActive: boolean;
+	fieldRef?: { current: FieldHandle | null };
+	/** The focused field's fact reports, for the Action bar's Copy control. */
+	onFieldFacts?: (facts: FieldFacts) => void;
 	width: number;
 	labelWidth: number;
 }): ReactElement {
@@ -234,11 +263,13 @@ function GalleryTypeAhead(props: {
 		options: GALLERY_MODELS,
 		focused: props.focused && props.inputActive,
 		inputActive: props.inputActive,
+		fieldRef: props.fieldRef,
 		width: props.width,
 		labelWidth: props.labelWidth,
 		placeholder: STATE_WORDS.unset,
-		onQueryChange: (_query, match) => {
+		onQueryChange: (_query, match, facts) => {
 			if (match.first !== undefined) setValue(match.first);
+			props.onFieldFacts?.(facts);
 		},
 	});
 }
@@ -268,6 +299,16 @@ export function Gallery({
 	const [index, setIndex] = useState(Math.max(0, ids.indexOf(example ?? ids[0])));
 	const indexRef = useRef(index);
 	const field = useRef<FieldHandle | null>(null);
+	// The focused field's selection, tracked from its own fact reports: the
+	// bar's Copy control is available only while a selection exists, and a
+	// plain arrow that collapses it must take the control off the bar.
+	const [hasSelection, setHasSelection] = useState(false);
+	// The outcome of the last Copy selection the operator ran.
+	const [message, setMessage] = useState<MessageFact | null>(null);
+	const wiring: GalleryFieldWiring = {
+		fieldRef: field,
+		report: (facts: FieldFacts) => setHasSelection(facts.selection !== ""),
+	};
 	const slots = GALLERY_EXAMPLES.map((entry) => ({
 		id: entry.id,
 		kind: "field" as const,
@@ -276,32 +317,53 @@ export function Gallery({
 	const focus = useFormSlots(slots);
 	const _moveField = moveFieldWith(focus);
 	const ink = controlInk();
+	// The Key guide, the shared overlay the Application's F1 opens. While it
+	// is open, it owns the keys: the gallery's own dispatch stands down, and
+	// the example's fields stay mounted, so closing returns the same field,
+	// caret, and selection the operator left.
+	const [guideOpen, setGuideOpen] = useState(false);
+	const barContext = contextFor("form-field", {
+		listCanMove: false,
+		detailCanScroll: false,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+		fieldHasSelection: hasSelection,
+	});
 	// The gallery's own keys come from the same catalogue the application runs,
 	// so a contributor exercises the real dispatch and the real Action bar.
 	useControlDispatch({
 		mode: "form-field",
-		context: contextFor("form-field", {
-			listCanMove: false,
-			detailCanScroll: false,
-			sourceCount: 0,
-			refreshingSourceCount: 0,
-			handoffActive: false,
-			messageTruncated: false,
-			consultationTypesConfigured: true,
-			fieldHasSelection: field.current?.hasSelection() === true,
-		}),
+		context: barContext,
 		onEmergencyExit,
+		active: guideOpen === false,
 		handlers: {
+			help: () => setGuideOpen(true),
+			// The gallery is the surface here, so closing its form leaves it the
+			// way the application leaves a terminal.
+			"close-form": () => onEmergencyExit(),
 			"move-field": ({ key }) => {
 				const next = (indexRef.current + (key.shift === true ? -1 : 1) + ids.length) % ids.length;
 				indexRef.current = next;
 				setIndex(next);
 				focus.move(key.shift === true ? -1 : 1);
+				setHasSelection(false);
+				setMessage(null);
 				key.preventDefault?.();
 			},
-			"copy-selection": ({ key }) => {
+			"copy-selection": ({ key, refuse }) => {
 				const result = field.current?.copySelection();
-				if (result !== undefined) key.preventDefault?.();
+				if (result === undefined) {
+					refuse();
+					return;
+				}
+				key.preventDefault?.();
+				setMessage({
+					severity: result.kind === "copied" ? "working" : "warning",
+					text: result.reason,
+				});
 			},
 		},
 	});
@@ -309,36 +371,35 @@ export function Gallery({
 	const narrow = shown.narrow === true;
 	const frame = modalFrame(narrow ? 28 : width, height, { rows: 12, margin: 1 });
 	const columns = galleryColumns(frame.contentWidth);
-	return createElement(ModalSurface, {
-		frame,
-		width: narrow ? 28 : width,
-		title: `Shared controls - ${shown.state}`,
-		borderColor: ink.indicator.fg ?? COLORS.borderFocused,
-		minContentRows: 3,
-		message: null,
-		bar: {
-			mode: "form-field",
-			context: contextFor("form-field", {
-				listCanMove: false,
-				detailCanScroll: false,
-				sourceCount: 0,
-				refreshingSourceCount: 0,
-				handoffActive: false,
-				messageTruncated: false,
-				consultationTypesConfigured: true,
-				fieldHasSelection: false,
-			}),
-		},
-		children: [
-			createElement(
-				"text",
-				{ key: "state", fg: ink.detail.fg ?? undefined },
-				truncateToWidth(
-					`state: ${shown.state}  (Tab shows the next example; ${ids.length} in all)`,
-					frame.contentWidth,
+	return createElement(
+		"box",
+		{ style: { width: "100%", height: "100%" } },
+		createElement(ModalSurface, {
+			frame,
+			width: narrow ? 28 : width,
+			title: `Shared controls - ${shown.state}`,
+			borderColor: ink.indicator.fg ?? COLORS.borderFocused,
+			minContentRows: 3,
+			message,
+			bar: { mode: "form-field", context: barContext },
+			children: [
+				createElement(
+					"text",
+					{ key: "state", fg: ink.detail.fg ?? undefined },
+					truncateToWidth(
+						`state: ${shown.state}  (Tab shows the next example; ${ids.length} in all)`,
+						frame.contentWidth,
+					),
 				),
-			),
-			...shown.render(columns, FOCUSED_CONTROL[shown.id] ?? shown.id, inputActive),
-		],
-	});
+				...shown.render(columns, FOCUSED_CONTROL[shown.id] ?? shown.id, inputActive, wiring),
+			],
+		}),
+		guideOpen &&
+			createElement(KeyGuide, {
+				message,
+				context: barContext,
+				onClose: () => setGuideOpen(false),
+				onEmergencyExit,
+			}),
+	);
 }

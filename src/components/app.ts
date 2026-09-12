@@ -87,12 +87,6 @@ import type { TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, panelBodyCols } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
-import {
-	type ActionContext,
-	ActionGuide,
-	type ActionUtility,
-	actionBarElement,
-} from "./consultation-actions.ts";
 import { ConsultationDetail, consultationDetailLines } from "./consultation-detail.ts";
 import { ConsultationLauncher, type LauncherDraft } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
@@ -216,15 +210,12 @@ export type AppKey =
 /**
  * The utility overlay open above the panes, if any. Overlays replace one
  * another. The ticket view and the ticket modals use the catalog's guide and
- * the Message view's captured fact, and the consultations view keeps the
- * pre-catalog Action guide and message view until it is ported to the
- * control catalog.
+ * the Message view's captured fact.
  */
 type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
-	| { kind: "message"; mode: InteractionMode; fact: MessageFact }
-	| { kind: "consultation"; utility: ActionUtility };
+	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
 export interface AppProps {
 	config?: FactoryConfig;
 	runner?: CommandRunner;
@@ -492,22 +483,6 @@ export function App({
 			: normalizeAgentStatus(
 					agents.find((agent) => agent.paneId === selectedConsultation.paneId)?.status ?? "unknown",
 				);
-	const actionContext: ActionContext = {
-		view,
-		focusedPane,
-		selectedInFlight:
-			(tickets[selectedIndex]?.state ?? null) === "handed-off" ||
-			(tickets[selectedIndex]?.state ?? null) === "running",
-		selectedConsultation,
-		selectedLeftover: (tickets[selectedIndex]?.leftover ?? null) !== null,
-		status,
-		launcher,
-		modal: override !== null || panel !== null,
-		responseEditor,
-		interaction,
-		interactionExitKey: config.interactionExitKey,
-		agentStatus: selectedConsultationAgentStatus,
-	};
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
@@ -2139,6 +2114,25 @@ export function App({
 			messageTruncated,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 		});
+	const consultationContextFor = (mode: InteractionMode) =>
+		contextFor(mode, {
+			selectedTicket: ticketsRef.current[selectedIndexRef.current],
+			listCanMove: false,
+			detailCanScroll: false,
+			sourceCount: sources.length,
+			refreshingSourceCount: sources.filter(
+				(source) => coordinatorRef.current?.isFetching(source.name) === true,
+			).length,
+			handoffActive: inFlightRef.current,
+			messageTruncated,
+			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
+			selectedConsultation: consultationsRef.current[consultationIndexRef.current],
+			consultationAgentStatus: selectedConsultationAgentStatus,
+			consultationCanMove: consultationsRef.current.length > 1,
+			consultationDetailCanScroll: consultationMaxScroll > 0,
+			consultationHistory: historyFilterRef.current,
+			interactionExitKey: configRef.current.interactionExitKey,
+		});
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
 		setUtility({ kind: "guide", mode });
 	};
@@ -2176,200 +2170,133 @@ export function App({
 			if (key.ctrl === true && key.name === "c") renderer.destroy();
 			return;
 		}
-		// The legacy Consultations input paths (the view's key switch, the
-		// response editor, the Agent interaction mode) match keys by name.
-		// The shell owns the emergency exit before any of those matches, so
-		// Ctrl+C cannot open the launcher or reach an Agent. The base tickets
-		// panes dispatch Ctrl+C through the control catalogue below.
-		if (
-			(interaction || responseEditor || viewRef.current === "consultations") &&
-			key.ctrl === true &&
-			key.name === "c"
-		) {
-			renderer.destroy();
-			return;
-		}
 		if (interaction) {
-			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
-			const keyName = key.name.toLowerCase();
-			const isExit = keyName === exit || (key.ctrl === true && exit === `ctrl+${keyName}`);
-			if (isExit) {
-				setInteraction(false);
-				// Settle the queued input before announcing the exit: the last
-				// key the operator sent still belongs to the Agent.
-				void inputQueue
-					.flush()
-					.then(() => setStatus({ kind: "info", text: "left Agent interaction mode" }));
-				return;
-			}
-			const selected = consultationsRef.current[consultationIndexRef.current];
-			const event =
-				selected?.paneId === null || selected?.paneId === undefined
-					? null
-					: translateAgentKey(key, configRef.current.interactionExitKey);
-			if (selected !== undefined && selected.paneId !== null && event !== null) {
-				void inputQueue.enqueue(selected.paneId, event).then(
-					(result) => {
-						if (result.code === 0) {
-							setNewOutput(true);
-							// The key may have produced output already: re-read
-							// the pane now, not on the next interval tick.
-							outputRefreshRef.current?.();
-						} else
+			createControlDispatch({
+				mode: "consultation-interaction",
+				context: consultationContextFor("consultation-interaction"),
+				onUnavailable: (reason) => setStatus({ kind: "warning", text: reason }),
+				onEmergencyExit: () => renderer.destroy(),
+				handlers: {
+					"interaction-exit": () => {
+						setInteraction(false);
+						// Settle the queued input before announcing the exit: the last
+						// key the operator sent still belongs to the Agent.
+						void inputQueue
+							.flush()
+							.then(() => setStatus({ kind: "info", text: "left Agent interaction mode" }));
+					},
+				},
+				onUnclaimed: (key) => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					const event =
+						selected?.paneId === null || selected?.paneId === undefined
+							? null
+							: translateAgentKey(key, configRef.current.interactionExitKey);
+					if (selected === undefined || selected.paneId === null || event === null) return false;
+					void inputQueue.enqueue(selected.paneId, event).then(
+						(result) => {
+							if (result.code === 0) {
+								setNewOutput(true);
+								outputRefreshRef.current?.();
+							} else
+								setStatus({
+									kind: "error",
+									text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
+								});
+						},
+						(error) =>
 							setStatus({
 								kind: "error",
-								text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
-							});
-					},
-					(error) =>
-						setStatus({
-							kind: "error",
-							text: `Agent interaction failed: ${errorMessage(error)}`,
-						}),
-				);
-			}
+								text: `Agent interaction failed: ${errorMessage(error)}`,
+							}),
+					);
+					return true;
+				},
+			})(key);
 			return;
 		}
 		// The response editor is a shared form surface: its fields and actions
 		// answer the keys there, and nothing below may claim them.
 		if (responseEditor) return;
-		// The consultations view keeps its pre-catalogue key switch until
-		// it is ported to the control catalogue.
 		if (viewRef.current === "consultations") {
-			switch (key.name) {
-				case "q":
-					renderer.destroy();
-					break;
-				case "?":
-					setUtility({ kind: "consultation", utility: "guide" });
-					break;
-				case "m":
-					if (status !== null) setUtility({ kind: "consultation", utility: "message" });
-					break;
-				case "t":
-					viewRef.current = "tickets";
-					setView("tickets");
-					setFocusedPane("list");
-					break;
-				case "v":
-					openConsultations();
-					break;
-				case "c":
-					if (Object.keys(configRef.current.consultationTypes).length === 0)
-						setStatus({
-							kind: "warning",
-							text: "no Consultation types configured; add [consultation-types.<name>] to the config file",
-						});
-					else if (
-						viewRef.current === "consultations" &&
-						(selectedConsultation?.state === "missing" || selectedConsultation?.state === "failed")
-					) {
-						setReplacementConsultationId(selectedConsultation.id);
+			const consultationMode =
+				focusedPaneRef.current === "detail" ? "consultation-detail" : "consultation-list";
+			createControlDispatch({
+				mode: consultationMode,
+				context: consultationContextFor(consultationMode),
+				onUnavailable: setWarningMessage,
+				onEmergencyExit: () => renderer.destroy(),
+				ungated: ["consultation-respond"],
+				handlers: {
+					quit: () => renderer.destroy(),
+					"move-list": ({ key }) => moveRange(key.name),
+					"scroll-consultation": ({ key }) => moveRange(key.name),
+					detail: () => focusPane("detail"),
+					"consultation-focus-list": () => focusPane("list"),
+					tickets: () => {
+						viewRef.current = "tickets";
+						setView("tickets");
+						setFocusedPane("list");
+					},
+					consultations: openConsultations,
+					launch: () => {
+						if (
+							selectedConsultation?.state === "missing" ||
+							selectedConsultation?.state === "failed"
+						)
+							setReplacementConsultationId(selectedConsultation.id);
 						setLauncher(true);
-					} else setLauncher(true);
-					break;
-				case "f":
-					if (viewRef.current === "consultations") cycleConsultationHistory();
-					break;
-				case "x":
-					if (viewRef.current === "consultations" && selectedConsultation !== undefined) {
+					},
+					"consultation-history": cycleConsultationHistory,
+					"consultation-close": () => {
+						if (selectedConsultation === undefined) return;
 						if (
 							selectedConsultation.state === "opening" ||
-							selectedConsultation.state === "working"
+							selectedConsultation.state === "working" ||
+							selectedConsultation.state === "closing"
 						)
 							setPanel({ kind: "consultation-close", identity: selectedConsultation.id });
-						else if (
-							selectedConsultation.state === "awaiting-response" ||
+						else closeConsultation(selectedConsultation);
+					},
+					"consultation-delete": () => {
+						if (selectedConsultation !== undefined)
+							setPanel({ kind: "consultation-delete", identity: selectedConsultation.id });
+					},
+					"consultation-respond": ({ refuse }) => {
+						if (selectedConsultation === undefined) return refuse();
+						if (selectedConsultation.state === "awaiting-response") {
+							beginResponse(selectedConsultation);
+							return;
+						}
+						if (
 							selectedConsultation.state === "missing" ||
 							selectedConsultation.state === "failed"
-						)
-							closeConsultation(selectedConsultation);
-						else if (selectedConsultation.state === "closing")
-							setPanel({ kind: "consultation-close", identity: selectedConsultation.id });
-					}
-					break;
-				case "d":
-					if (viewRef.current === "consultations" && selectedConsultation?.state === "closed")
-						setPanel({ kind: "consultation-delete", identity: selectedConsultation.id });
-					break;
-				case "h":
-				case "left":
-					focusPane("list");
-					break;
-				case "l":
-				case "right":
-					focusPane("detail");
-					break;
-				case "j":
-				case "down":
-					moveVertical(1);
-					break;
-				case "k":
-				case "up":
-					moveVertical(-1);
-					break;
-				case "pagedown":
-					movePage(1);
-					break;
-				case "pageup":
-					movePage(-1);
-					break;
-				case "home":
-					moveEdge("start");
-					break;
-				case "end":
-					if (viewRef.current === "consultations" && focusedPaneRef.current === "detail") {
-						consultationFollowRef.current = true;
-						setConsultationScroll(999999);
-						setNewOutput(false);
-					} else moveEdge("end");
-					break;
-				case "return": {
-					if (selectedConsultation === undefined) break;
-					if (selectedConsultation.state === "awaiting-response") {
-						// The editor opens on the Agent's observed status, not on
-						// the last settled turn: a blocked Agent takes the keys
-						// until it stops blocking.
-						if (
-							selectedConsultationAgentStatus === "blocked" &&
-							selectedConsultation.paneId !== null
-						)
-							setInteraction(true);
-						else beginResponse(selectedConsultation);
-					} else if (
-						selectedConsultation.state === "missing" ||
-						selectedConsultation.state === "failed"
-					)
-						setStatus({ kind: "warning", text: "use c to open a Replacement Consultation" });
-					else if (selectedConsultation.state === "working" && selectedConsultation.paneId !== null)
-						setInteraction(true);
-					else
+						) {
+							setStatus({ kind: "warning", text: "use c to open a Replacement Consultation" });
+							return;
+						}
 						setStatus({
 							kind: "info",
 							text: `Consultation ${selectedConsultation.id.slice(0, 8)} is ${selectedConsultation.state}`,
 						});
-					break;
-				}
-				case "e":
-					openOverride();
-					break;
-				case "a":
-					if (!openAttention()) toggleAutoHandoff();
-					break;
-				case "r":
-					if (viewRef.current === "consultations" && selectedConsultation?.state === "opening")
-						recoverConsultationOpening(selectedConsultation);
-					else coordinatorRef.current?.refreshAll();
-					break;
-				default:
-					break;
-			}
+					},
+					"consultation-interact": () => setInteraction(true),
+					"consultation-refresh": () => {
+						if (selectedConsultation?.state === "opening")
+							recoverConsultationOpening(selectedConsultation);
+						else coordinatorRef.current?.refreshAll();
+					},
+					"auto-handoff": () => {
+						if (!openAttention()) toggleAutoHandoff();
+					},
+					help: () => openGuide(consultationMode),
+					message: () => openMessage(consultationMode),
+				},
+			})(key);
 			return;
 		}
 		// The control catalogue decides the rest, through the same dispatch
-		// hook every modal, panel, and overlay uses. The Consultation paths
-		// above still match keys by name until the port recorded on the
-		// Consultations issue lands.
+		// hook every modal, panel, and overlay uses.
 		const mode = currentBaseMode();
 		createControlDispatch({
 			mode,
@@ -2688,11 +2615,48 @@ export function App({
 		else moveList(delta);
 	}
 	function movePage(direction: 1 | -1) {
+		if (viewRef.current === "consultations") {
+			if (focusedPaneRef.current === "detail") {
+				consultationFollowRef.current = false;
+				setConsultationScroll((current) =>
+					clamp(current + direction * detailGeometry.visibleRows, 0, consultationMaxScroll),
+				);
+			} else {
+				setConsultationIndex((index) => {
+					const next = clamp(
+						index + direction * listGeometry.visibleRows,
+						0,
+						Math.max(0, consultationsRef.current.length - 1),
+					);
+					consultationIndexRef.current = next;
+					return next;
+				});
+				setConsultationScroll(0);
+				consultationFollowRef.current = true;
+				setNewOutput(false);
+			}
+			return;
+		}
 		if (focusedPaneRef.current === "detail")
 			detailRef.current?.movePage(direction === 1 ? "down" : "up");
 		else moveList(direction * listGeometry.visibleRows);
 	}
 	function moveEdge(edge: "start" | "end") {
+		if (viewRef.current === "consultations") {
+			if (focusedPaneRef.current === "detail") {
+				consultationFollowRef.current = edge === "end";
+				setConsultationScroll(edge === "start" ? 0 : consultationMaxScroll);
+				setNewOutput(false);
+			} else {
+				const next = edge === "start" ? 0 : Math.max(0, consultationsRef.current.length - 1);
+				consultationIndexRef.current = next;
+				setConsultationIndex(next);
+				setConsultationScroll(0);
+				consultationFollowRef.current = true;
+				setNewOutput(false);
+			}
+			return;
+		}
 		if (focusedPaneRef.current === "detail") {
 			if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
@@ -2841,7 +2805,14 @@ export function App({
 						repositoryIdentity: selectedTicket?.repositoryRef.identity ?? "",
 						input: "",
 					};
-	const actionMode = currentBaseMode();
+	const actionMode =
+		view === "consultations"
+			? interaction
+				? "consultation-interaction"
+				: focusedPane === "list"
+					? "consultation-list"
+					: "consultation-detail"
+			: currentBaseMode();
 	const ticketContext = controlContextFor(actionMode);
 	const messageColor = colorOfMessage(visibleMessage);
 	const statusColor =
@@ -2867,7 +2838,9 @@ export function App({
 	).slice(0, compactLineCount);
 	const utilityContext =
 		utility?.kind === "guide" || utility?.kind === "message"
-			? controlContextFor(utility.mode)
+			? utility.mode.startsWith("consultation")
+				? consultationContextFor(utility.mode)
+				: controlContextFor(utility.mode)
 			: ticketContext;
 	return createElement(
 		"box",
@@ -3068,7 +3041,14 @@ export function App({
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
-		view === "consultations" && state !== undefined && actionBarElement(actionContext),
+		view === "consultations" &&
+			state !== undefined &&
+			createElement(ActionBar, {
+				mode: actionMode,
+				context: consultationContextFor(actionMode),
+				width: terminalWidth,
+				compactAnchor: tooSmall,
+			}),
 		view === "consultations" &&
 			status !== null &&
 			createElement(
@@ -3344,13 +3324,6 @@ export function App({
 				onClose: () => setUtility(null),
 				onHelp: () => openGuide(utilityContext.mode),
 				onEmergencyExit: () => renderer.destroy(),
-			}),
-		utility?.kind === "consultation" &&
-			createElement(ActionGuide, {
-				context: actionContext,
-				utility: utility.utility,
-				onClose: () => setUtility(null),
-				onMessage: () => setUtility({ kind: "consultation", utility: "message" }),
 			}),
 	);
 }

@@ -32,13 +32,13 @@ import { type MdLine, renderMarkdown } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
-	actionRowSpans,
 	bodyRowSpans,
 	ModalSurface,
 	modalFrame,
 	scrollbarRows,
 	useActionSelection,
 } from "./modal-chrome.ts";
+import { ActionItem } from "./shared/choices.ts";
 import { truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -341,11 +341,12 @@ export function DecisionModal({
 				),
 			),
 			...actions.map((row, index) =>
-				createElement(
-					"text",
-					{ key: row.key },
-					...actionRowSpans(row, index === selection.at, frame.contentWidth),
-				),
+				createElement(ActionItem, {
+					key: row.key,
+					row,
+					focused: index === selection.at,
+					width: frame.contentWidth,
+				}),
 			),
 		],
 	});

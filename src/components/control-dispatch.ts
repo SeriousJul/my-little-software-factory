@@ -81,6 +81,8 @@ interface ControlDispatchSpec {
 	active?: boolean;
 	/** Keys this surface must not touch, checked before the catalogue. */
 	skip?: (key: KeyEvent) => boolean;
+	/** Handles keys not claimed by the catalogue, such as Agent input. */
+	onUnclaimed?: (key: KeyEvent) => boolean | undefined;
 }
 
 /**
@@ -100,7 +102,7 @@ export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent
 		const mode = typeof spec.mode === "function" ? spec.mode() : spec.mode;
 		const context = contextFor(mode, spec.context);
 		const control = controlForKey(mode, key, context);
-		if (control === undefined) return false;
+		if (control === undefined) return spec.onUnclaimed?.(key) === true;
 		const availability = availabilityFor(control, context);
 		if (!availability.available && !spec.ungated?.includes(control.id)) {
 			spec.onUnavailable?.(refusalReason(control, context));
