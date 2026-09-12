@@ -67,6 +67,10 @@ export interface TypeAheadRowProps {
 	placeholder?: string;
 	/** Whether the value the row stands on cannot reach its target. */
 	warning?: boolean;
+	/** Why the value the row stands on cannot reach its target, in words. */
+	error?: string | null;
+	/** The cells the value row's written note may use. Defaults to its own. */
+	noteWidth?: number;
 	/** False while a surface above this row owns the keys. Default: true. */
 	inputActive?: boolean;
 	/** The handle a surface uses for the explicit clear and the row's query. */
@@ -102,6 +106,8 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 			labelWidth: props.labelWidth,
 			placeholder: props.placeholder,
 			warning: props.warning === true,
+			error: props.error,
+			noteWidth: props.noteWidth,
 			// A model list tells its members apart at their end, so the row keeps
 			// the tail of a value wider than its column.
 			clipTail: true,

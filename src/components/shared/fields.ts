@@ -44,7 +44,7 @@ import {
 } from "react";
 
 import { padToWidth, truncateToWidth, widthOf } from "../text.ts";
-import { type ControlInk, controlInk, MARKER_WIDTH, markerText } from "./presentation.ts";
+import { type ControlInk, controlInk, markerText, ownNoteCells } from "./presentation.ts";
 
 /** The library's own view of the two primitives it wraps. */
 type FieldNode = InputRenderable | TextareaRenderable;
@@ -226,7 +226,8 @@ function fieldNoteRows(
 	oversize: string | null,
 	refusal: string | null,
 ): ReactElement[] {
-	const noteWidth = MARKER_WIDTH + (props.labelWidth ?? widthOf(props.label) + 1) + props.width;
+	const noteWidth =
+		props.noteWidth ?? ownNoteCells(props.labelWidth ?? widthOf(props.label) + 1, props.width);
 	const reason = props.error ?? oversize ?? refusal;
 	const rows: ReactElement[] = [];
 	if (reason !== null && reason !== undefined) {
@@ -267,6 +268,12 @@ interface SharedFieldProps {
 	hint?: string | null;
 	/** Why the field's current value cannot be used, in the caller's words. */
 	error?: string | null;
+	/**
+	 * The cells the written lines under the field may use. A surface that has
+	 * room beside its columns states a whole reason instead of cutting it to the
+	 * value column. Defaults to the field's own cells.
+	 */
+	noteWidth?: number;
 	/** False while a surface above this field owns the keys. Default: true. */
 	inputActive?: boolean;
 	/** The rule this field refuses edits against, and the words it says. */

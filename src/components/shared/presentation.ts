@@ -142,6 +142,18 @@ export function markerText(focused: boolean): string {
 	return focused ? FOCUS_MARKER : " ".repeat(MARKER_WIDTH);
 }
 
+/**
+ * The cells a control's own written note holds: its marker, its label column,
+ * and its value column.
+ *
+ * A surface with room beside those columns names a wider note instead, so a
+ * reason is cut by the box the operator reads and not by the column the value
+ * happens to need.
+ */
+export function ownNoteCells(labelWidth: number, valueWidth: number): number {
+	return MARKER_WIDTH + labelWidth + valueWidth;
+}
+
 /** One sRGB channel's linear value, as the WCAG relative luminance defines it. */
 function linearChannel(byte: number): number {
 	const channel = byte / 255;

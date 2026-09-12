@@ -3,13 +3,17 @@ import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { ChoiceRow } from "../src/components/shared/choices.ts";
 import {
 	DraftField,
 	type FieldFacts,
 	type FieldHandle,
 	TextField,
 } from "../src/components/shared/fields.ts";
-import { awaitFrame, frameText } from "./app-harness.ts";
+import { ownNoteCells } from "../src/components/shared/presentation.ts";
+import { TypeAheadRow } from "../src/components/shared/type-ahead.ts";
+import { COLORS } from "../src/components/theme.ts";
+import { awaitFrame, frameText, rgb, rowsOf, spanColors } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -330,6 +334,134 @@ describe("both key protocols", () => {
 				expect(onRefuse).toHaveBeenCalledWith("This field takes digits only");
 			},
 			true,
+		);
+	});
+});
+
+describe("the written reason a control states", () => {
+	/** A reason longer than any value column, as the Setting fit module writes it. */
+	const REASON =
+		'agent type "pilot" defines no context window setting, so the count of 272000 tokens cannot reach it';
+	/** The rendered row a control wrote its reason on. */
+	function reasonRow(frame: string): string {
+		const row = rowsOf(frame).find((candidate) => candidate.includes("Error:"));
+		if (row === undefined) throw new Error("no rendered row states a reason");
+		return row;
+	}
+
+	test("a Text field states a whole reason on the width its surface names", async () => {
+		await withField(
+			createElement(TextField, {
+				label: "Context",
+				value: "272000",
+				focused: true,
+				width: 16,
+				labelWidth: 10,
+				error: REASON,
+				noteWidth: 116,
+			}),
+			120,
+			6,
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes(REASON),
+					"the whole reason under the field",
+				);
+				expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Context: ${REASON}`);
+			},
+		);
+	});
+
+	test("a Text field cuts a reason to its own cells when its surface names no width", async () => {
+		const cells = ownNoteCells(10, 16);
+		await withField(
+			createElement(TextField, {
+				label: "Context",
+				value: "272000",
+				focused: true,
+				width: 16,
+				labelWidth: 10,
+				error: REASON,
+			}),
+			120,
+			6,
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes("Error: Context:"),
+					"the reason under the field",
+				);
+				expect(frameText(reasonRow(frame)).trim()).toBe(
+					`Error: Context: ${REASON}`.slice(0, cells).trim(),
+				);
+			},
+		);
+	});
+
+	test("a Type-ahead row writes the reason its surface gives it", async () => {
+		await withField(
+			createElement(TypeAheadRow, {
+				label: "Model",
+				value: "gpt-4o",
+				options: ["anthropic/claude-sonnet-4-5"],
+				focused: true,
+				width: 20,
+				labelWidth: 10,
+				warning: true,
+				error: REASON,
+				noteWidth: 116,
+			}),
+			120,
+			8,
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes(REASON),
+					"the reason under the value the row stands on",
+				);
+				expect(frameText(reasonRow(frame)).trim()).toBe(`Error: Model: ${REASON}`);
+			},
+		);
+	});
+
+	test("a selector row keeps an unconfirmed value in the tone it cannot judge", async () => {
+		await withField(
+			createElement(
+				"box",
+				{ style: { flexDirection: "column" } },
+				createElement(ChoiceRow, {
+					key: "waiting",
+					label: "Model",
+					value: "openai/gpt-4o",
+					focused: false,
+					width: 24,
+					labelWidth: 10,
+					pending: true,
+				}),
+				createElement(ChoiceRow, {
+					key: "confirmed",
+					label: "Model",
+					value: "openai/gpt-5",
+					focused: false,
+					width: 24,
+					labelWidth: 10,
+				}),
+			),
+			60,
+			6,
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes("openai/gpt-4o") && candidate.includes("openai/gpt-5"),
+					"both rows of the pair",
+				);
+				expect(frameText(frame)).toContain("Model openai/gpt-4o");
+				// A value the row cannot yet judge keeps the tone of a hint, while
+				// the confirmed one beside it keeps the tone of a value.
+				expect(spanColors(setup, "openai/gpt-4o")).toEqual([rgb(COLORS.dim)]);
+				expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(COLORS.text)]);
+			},
 		);
 	});
 });
