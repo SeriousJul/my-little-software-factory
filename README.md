@@ -100,19 +100,19 @@ This file does not repeat that list. A table of keys here went stale twice:
 the guide and the Action bar are generated from one control catalogue
 (`src/components/controls.ts`), so what the app shows is what the app runs.
 
-The controls the Consultation surfaces use are listed below. They are the
-part of the app that does not dispatch from the catalogue yet, so the Key
-guide does not list them at all: this file and each surface's own key handling
-are where those keys are stated.
+The controls the Consultation surfaces use are listed below. They dispatch
+from the catalogue like the rest of the plane, so the Key guide and the Action
+bar state them as well; this file is where their behavior is stated.
 
 ### Consultation controls
 
 The Consultation launcher and the response editor are shared-control forms:
 their fields, choices, and actions are the modules in
 [src/components/shared](src/components/shared), so the keys they answer with
-are the keys the override panel answers with, and the Action bar and Key guide
-state them. The Consultation view's own list, Agent interaction, and the
-Consultation confirmation panel still handle their keys directly (issue #9).
+are the keys the override panel answers with. The Consultation view's own list
+and detail, the Agent interaction mode, and the Consultation confirmation
+panel dispatch from the catalogue as well, and take their Action bar, Key
+guide, and Message view from the shared modules.
 
 - The Consultation view keeps an independent list and Agent view. In the
 	launcher, `Tab` and `Shift+Tab` move between the two choices, the Draft
@@ -139,9 +139,9 @@ Consultation confirmation panel still handle their keys directly (issue #9).
 Every surface the control plane owns dispatches from the catalogue, so the Key
 guide and the Action bar state its controls: the Ticket list, the Ticket
 detail, the override panel in each of its row kinds, the Consultation launcher
-and the response editor, the decision modal, the missing modal, and the two
-utility overlays. The Consultation view's own list, Agent interaction, and the
-Consultation confirmation panel do not yet: each keeps its own key handling.
+and the response editor, the Consultation view's list and detail, the Agent
+interaction mode, and the Consultation confirmation panel, the decision modal,
+the missing modal, and the two utility overlays.
 Where a focused field owns a key, the guide names that key under Field editing
 and the Action bar stays off it, so a hint never claims a key the field already
 took. The Ticket list and detail

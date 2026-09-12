@@ -98,13 +98,16 @@ describe("the shared control palette", () => {
 		}
 	});
 
-	test("a terminal that reports a light scheme gets the light pairs", () => {
+	test("the light presentation is the pin's, and never automatic", () => {
+		// The terminal's scheme is not consulted: until the base panes take
+		// their ink from the presentation, a light terminal keeps the dark
+		// pairs, and the light pairs run only under the explicit pin.
 		delete process.env.FACTORY_PRESENTATION;
-		expect(currentPresentation("light")).toBe("light");
-		expect(currentPresentation("dark")).toBe("dark");
-		expect(currentPresentation(null)).toBe("dark");
+		expect(currentPresentation()).toBe("dark");
+		process.env.FACTORY_PRESENTATION = "light";
+		expect(currentPresentation()).toBe("light");
 		process.env.FACTORY_PRESENTATION = "mono";
-		expect(currentPresentation("light")).toBe("mono");
+		expect(currentPresentation()).toBe("mono");
 	});
 
 	test("the drawn text keeps its measured contrast on the overlay surface", async () => {

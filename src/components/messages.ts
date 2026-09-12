@@ -11,9 +11,9 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 import { controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth } from "./text.ts";
-import { prefixForSeverity } from "./theme.ts";
+import { type MessageSeverity, prefixForSeverity } from "./theme.ts";
 
-export type MessageSeverity = "working" | "warning" | "error";
+export type { MessageSeverity };
 
 export interface MessageFact {
 	severity: MessageSeverity;
@@ -27,13 +27,16 @@ export interface MessageFact {
  * `working` is progress an operation is making right now, and only that
  * operation clears it. `operation` is the outcome of the last operation the
  * operator started, including the reason a control refused to start one.
- * `notice` answers a control the app will decide without the operator, so it
- * never outranks a fact an operation wrote. `sourceHealth` is a standing
- * condition of the Ticket sources rather than the result of a request.
+ * `news` is the result of a control that ran and has nothing to warn about, so
+ * it states what it did rather than wearing a problem's word. `notice` answers
+ * a control the app will decide without the operator, so it never outranks a
+ * fact an operation wrote. `sourceHealth` is a standing condition of the Ticket
+ * sources rather than the result of a request.
  */
 export interface MessageFacts {
 	working?: string;
 	operation?: { severity: "warning" | "error"; text: string };
+	news?: string;
 	notice?: string;
 	sourceHealth?: string;
 }
@@ -53,6 +56,10 @@ export function selectMessage(facts: MessageFacts): MessageFact | null {
 	if (facts.working !== undefined) return { severity: "working", text: facts.working };
 	if (facts.operation?.severity === "warning")
 		return { severity: "warning", text: facts.operation.text };
+	// A control's own result answers the key the operator just pressed, so it
+	// outranks a standing notice and the source health, and yields to every
+	// fact an operation wrote.
+	if (facts.news !== undefined) return { severity: "info", text: facts.news };
 	// A notice states that the app will decide without the operator, which is
 	// the same fact a refusal states, so it wears the same prefix.
 	if (facts.notice !== undefined) return { severity: "warning", text: facts.notice };
@@ -80,7 +87,9 @@ export function messageColor(fact: MessageFact | null): string | undefined {
 				? ink.error
 				: fact.severity === "warning"
 					? ink.warning
-					: ink.indicator;
+					: fact.severity === "working"
+						? ink.indicator
+						: ink.text;
 	return role.fg ?? undefined;
 }
 

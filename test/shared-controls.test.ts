@@ -126,6 +126,66 @@ describe("the shared Draft field", () => {
 			},
 		);
 	});
+
+	test("Ctrl+A selects the whole text, the key the Key guide names for it", async () => {
+		// The Draft field: the selection the key claims is a real one, because a
+		// typed character replaces it.
+		const draft = { current: null as FieldHandle | null };
+		await withField(
+			createElement(DraftField, {
+				label: "Initial input",
+				value: "copy this part",
+				focused: true,
+				width: 32,
+				height: 3,
+				fieldRef: draft,
+			}),
+			50,
+			10,
+			async (setup) => {
+				setup.mockInput.pressKey("a", { ctrl: true });
+				await awaitFrame(
+					setup,
+					() => draft.current?.selection() === "copy this part",
+					"the whole draft selected",
+				);
+				setup.mockInput.pressKey("q");
+				await awaitFrame(
+					setup,
+					() => draft.current?.value() === "q",
+					"the typed character to replace the selection",
+				);
+			},
+		);
+		// The Text field, where Home still means line start and Ctrl+A means
+		// select all: the two keys no longer fight over the same key.
+		const text = { current: null as FieldHandle | null };
+		await withField(
+			createElement(TextField, {
+				label: "Model",
+				value: "openai/gpt-5.1",
+				focused: true,
+				width: 24,
+				fieldRef: text,
+			}),
+			50,
+			10,
+			async (setup) => {
+				setup.mockInput.pressKey("a", { ctrl: true });
+				await awaitFrame(
+					setup,
+					() => text.current?.selection() === "openai/gpt-5.1",
+					"the whole value selected",
+				);
+				setup.mockInput.pressKey("q");
+				await awaitFrame(
+					setup,
+					() => text.current?.value() === "q",
+					"the typed character to replace the selection",
+				);
+			},
+		);
+	});
 });
 
 describe("the shared Text field", () => {
@@ -245,6 +305,99 @@ describe("the shared Text field", () => {
 				);
 				expect(onRefuse).toHaveBeenCalledTimes(2);
 				expect(field.current?.value()).toBe("12");
+			},
+		);
+	});
+
+	test("refuses a non-digit paste while a selection is held, and keeps the value, the caret, and the selection", async () => {
+		const onRefuse = vi.fn();
+		const field = { current: null as FieldHandle | null };
+		await withField(
+			createElement(TextField, {
+				label: "Context",
+				value: "272000",
+				focused: true,
+				width: 16,
+				digits: true,
+				fieldRef: field,
+				refusals: {
+					character: "This field takes digits only",
+					paste: "This field takes digits only: the pasted text was refused as a whole",
+				},
+				onRefuse,
+			}),
+			40,
+			6,
+			async (setup) => {
+				// Hold a two-cell selection from the start of the value.
+				setup.mockInput.pressKey("HOME");
+				setup.mockInput.pressArrow("right", { shift: true });
+				setup.mockInput.pressArrow("right", { shift: true });
+				await awaitFrame(setup, () => field.current?.selection() === "27", "the held selection");
+				await setup.mockInput.pasteBracketedText("1e3");
+				await awaitFrame(setup, () => onRefuse.mock.calls.length > 0, "the paste refusal");
+				expect(onRefuse).toHaveBeenCalledWith(
+					"This field takes digits only: the pasted text was refused as a whole",
+				);
+				// The refusal was whole: the value, the caret, and the selection all stand.
+				expect(field.current?.value()).toBe("272000");
+				expect(field.current?.caret()).toBe(2);
+				expect(field.current?.selection()).toBe("27");
+			},
+		);
+	});
+
+	test("enforces a stated character limit, and refuses the crossing edit as a whole", async () => {
+		const onRefuse = vi.fn();
+		const field = { current: null as FieldHandle | null };
+		await withField(
+			createElement(TextField, {
+				label: "Model",
+				value: "abc",
+				focused: true,
+				width: 88,
+				maxLength: 5,
+				fieldRef: field,
+				onRefuse,
+			}),
+			100,
+			6,
+			async (setup) => {
+				// A paste that would cross the limit is refused whole, and the row
+				// states the limit in the field's own words.
+				await setup.mockInput.pasteBracketedText("12345");
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("the pasted text was refused as a whole"),
+					"the limit refusal to be stated on the screen",
+				);
+				expect(onRefuse).toHaveBeenCalledWith(
+					"This field holds at most 5 characters: the pasted text was refused as a whole",
+				);
+				expect(field.current?.value()).toBe("abc");
+				// Edits that stay inside the limit are taken...
+				setup.mockInput.pressKey("d");
+				await awaitFrame(
+					setup,
+					() => field.current?.value() === "abcd",
+					"the edit inside the limit",
+				);
+				setup.mockInput.pressKey("e");
+				await awaitFrame(
+					setup,
+					() => field.current?.value() === "abcde",
+					"the edit that fills the limit",
+				);
+				// ...and the one that crosses it is refused, with the limit stated.
+				setup.mockInput.pressKey("f");
+				await awaitFrame(setup, () => onRefuse.mock.calls.length === 2, "the second refusal");
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("This field holds at most 5 characters"),
+					"the second refusal to be stated on the screen",
+				);
+				expect(onRefuse).toHaveBeenLastCalledWith("This field holds at most 5 characters");
+				expect(field.current?.value()).toBe("abcde");
 			},
 		);
 	});

@@ -11,6 +11,11 @@
  * test may run: the isolated environment leaves an empty PATH, so a launch that
  * reached for a binary would fail on the spot, and the checks below read only
  * what the screen does with the operator's keys.
+ *
+ * The check reports itself incomplete rather than passing quietly: a platform
+ * that cannot open a pseudo-terminal fails these tests and says why, because
+ * this file is the seam that verifies the executable boundary, and a skipped
+ * required check is not a pass.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +57,12 @@ describe("shared fields, real terminal input", () => {
 		const opened = await openControlPlanePty(["--config", configPath], isolatedEnv(dir), {
 			size: { cols: 100, rows: 30 },
 		});
-		if (opened === null) throw new Error("cannot open a pseudo-terminal on this platform");
+		if (opened === null) {
+			throw new Error(
+				"cannot open a pseudo-terminal on this platform: the real terminal input " +
+					"boundary cannot be verified here",
+			);
+		}
 		session = opened;
 		await opened.waitFor(
 			(out) => out.includes(ALT_SCREEN),
@@ -65,14 +75,10 @@ describe("shared fields, real terminal input", () => {
 
 	it(
 		"opens the launcher, keeps Enter a new line, and launches from the visible action",
-		async (ctx) => {
-			let opened: PtySession;
-			try {
-				opened = await boot();
-			} catch (error) {
-				ctx.skip(String(error));
-				return;
-			}
+		async () => {
+			// If the platform cannot open a pseudo-terminal, boot throws and the
+			// check fails loudly: the boundary this file verifies went unverified.
+			const opened = await boot();
 			try {
 				opened.write(LAUNCH_KEY);
 				await opened.waitFor(
@@ -116,14 +122,8 @@ describe("shared fields, real terminal input", () => {
 
 	it(
 		"refuses a non-digit paste in the Context window row and states why",
-		async (ctx) => {
-			let opened: PtySession;
-			try {
-				opened = await boot();
-			} catch (error) {
-				ctx.skip(String(error));
-				return;
-			}
+		async () => {
+			const opened = await boot();
 			try {
 				// `e` on an open Ticket opens the override panel; this plane has no
 				// Ticket source, so the panel is reached from the launcher's own
@@ -158,7 +158,7 @@ describe("shared fields, real terminal input", () => {
 
 	it(
 		"refuses a non-digit paste in a digits field as one operation",
-		async (ctx) => {
+		async () => {
 			dir = mkdtempSync(join(tmpdir(), "factory-gallery-pty-"));
 			const opened = await openControlPlanePty(
 				["fields"],
@@ -169,8 +169,10 @@ describe("shared fields, real terminal input", () => {
 				},
 			);
 			if (opened === null) {
-				ctx.skip("cannot open a pseudo-terminal on this platform");
-				return;
+				throw new Error(
+					"cannot open a pseudo-terminal on this platform: the real terminal input " +
+						"boundary cannot be verified here",
+				);
 			}
 			session = opened;
 			try {
@@ -206,14 +208,8 @@ describe("shared fields, real terminal input", () => {
 
 	it(
 		"treats Ctrl+C as the emergency exit while a field holds a selection",
-		async (ctx) => {
-			let opened: PtySession;
-			try {
-				opened = await boot();
-			} catch (error) {
-				ctx.skip(String(error));
-				return;
-			}
+		async () => {
+			const opened = await boot();
 			try {
 				opened.write(LAUNCH_KEY);
 				await opened.waitFor((out) => out.includes("Consultation launcher"), "the launcher");

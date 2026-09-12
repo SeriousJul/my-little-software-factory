@@ -19,11 +19,16 @@
 - Run `npm run gallery` to see a control, and add the state a reviewer must see
   to the gallery's examples rather than to a private sketch; the gallery's
   examples are exercised by the suite, so a preview cannot drift from a control.
-- The library migration is not finished. The Consultation view's own list and
-  Agent view, Agent interaction mode, and the Consultation confirmation panel
-  still handle their keys directly. Build missing behavior at the shared module
-  interface, not as another local implementation, and read the open items and the
-  unverified acceptance targets in [the verification record](docs/verification/shared-controls.md).
+- Every control the control plane owns dispatches from the shared Control
+  catalogue: the fields, selectors, searches, form actions, and form focus
+  routes, and the Consultation view's list and detail, the Agent interaction
+  mode, and the Consultation confirmation panel. Build missing behavior at the
+  shared module interface, never as another local implementation, and read the
+  open items and the unverified acceptance targets in
+  [the verification record](docs/verification/shared-controls.md): the
+  screen-reader path is not verified, and the base panes no shared module owns
+  still paint the fixed dark color system, so the light presentation stays an
+  explicit `FACTORY_PRESENTATION=light` pin until those panes follow it.
 - Start bug fixes with a reproduction through the real application flow. Use
   isolated test state and fake external operations, not live Agent work.
 - Check `npm run lint`, `npm run typecheck`, and `npm test` for implementation

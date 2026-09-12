@@ -86,7 +86,7 @@ import type { MessageFact } from "./messages.ts";
 import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ChoiceRow, cycleChoice } from "./shared/choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
-import { useFormSlots } from "./shared/form.ts";
+import { copySelectionWith, useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
 
@@ -198,6 +198,8 @@ interface OverridePanelProps {
 	onMessage?: (mode: OverrideMode) => void;
 	/** Reports the catalogue reason for a refused control on the Message line. */
 	onUnavailable?: (reason: string) => void;
+	/** Report what a control that ran did, on the surface's own news line. */
+	onCopy: (news: MessageFact) => void;
 	/** The Message fact this panel's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
@@ -286,6 +288,7 @@ export function OverridePanel({
 	onHelp,
 	onMessage,
 	onUnavailable,
+	onCopy,
 	message,
 	onEmergencyExit,
 }: OverridePanelProps) {
@@ -527,11 +530,7 @@ export function OverridePanel({
 				// key that clears the whole query.
 				key.preventDefault?.();
 			},
-			"copy-selection": ({ key }) => {
-				const result = activeField()?.copySelection();
-				onUnavailable?.(result?.reason ?? "The panel holds no field to copy from");
-				key.preventDefault?.();
-			},
+			"copy-selection": copySelectionWith(() => activeField(), onCopy),
 			cancel: ({ key }) => {
 				onCancel();
 				key.preventDefault?.();

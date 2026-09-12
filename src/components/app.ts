@@ -406,6 +406,9 @@ export function App({
 		error: setErrorMessage,
 		clearOperation: clearOperationMessage,
 		clearWorking: clearWorkingMessage,
+		// What a control that ran did, routed by the severity it named: a copy
+		// that took is news, and a copy the terminal refused is a warning.
+		report: reportMessage,
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
@@ -2163,10 +2166,10 @@ export function App({
 		// override panel, and the action modals all handle input in their
 		// own keyboard hooks.
 		if (utility !== null || override !== null || panel !== null || launcher) {
-			// The legacy Consultations surfaces keep their pre-catalogue key
-			// switches, and none of them may claim the emergency exit. The
-			// catalogue-driven surfaces destroy through that same control
-			// anyway; the shell owns the exit for the rest.
+			// Every overlay drives its own keys through the Control catalogue and
+			// none of them may claim the emergency exit, so the shell keeps the
+			// exit for them: the catalogue's own exit control would destroy
+			// through this same renderer call anyway.
 			if (key.ctrl === true && key.name === "c") renderer.destroy();
 			return;
 		}
@@ -2417,13 +2420,17 @@ export function App({
 		// would spawn git calls for every repository per tick.
 	}, [commandRunner, homeDir, repositoryCatalogKey]);
 	// The selected Agent output refreshes at one-second cadence. Lifecycle
-	// polling remains owned by the shared observation coordinator.
+	// polling remains owned by the shared observation coordinator. A closed
+	// Consultation has no live Agent: its pane is gone, and polling it would
+	// re-pin the follow scroll onto the captured history and flag a closed
+	// Consultation with a stale-output warning.
 	useEffect(() => {
 		if (
 			state === undefined ||
 			view !== "consultations" ||
-			selectedConsultation?.paneId === null ||
-			selectedConsultation === undefined
+			selectedConsultation === undefined ||
+			selectedConsultation.state === "closed" ||
+			selectedConsultation.paneId === null
 		) {
 			setLiveOutput(null);
 			return;
@@ -2473,6 +2480,20 @@ export function App({
 			clearInterval(timer);
 		};
 	}, [commandRunner, interaction, replaceConsultations, selectedConsultation, state, view]);
+	// A Consultation that closes while selected flips its detail from the live
+	// Agent view to the captured history. The follow scroll had pinned the
+	// detail to the bottom while the Agent ran; the history is read from the
+	// top, where the header lines (state, close result) live, so the close
+	// returns the reading position to the top and re-arms the follow.
+	const closedConsultationId =
+		selectedConsultation !== undefined && selectedConsultation.state === "closed"
+			? selectedConsultation.id
+			: null;
+	useEffect(() => {
+		if (closedConsultationId === null) return;
+		consultationFollowRef.current = true;
+		setConsultationScroll(0);
+	}, [closedConsultationId]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
@@ -2978,6 +2999,7 @@ export function App({
 										onHelp: () => openGuide("form-field"),
 										onMessage: () => openMessage("form-field"),
 										onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
+										onCopy: reportMessage,
 										message: visibleMessage,
 										onEmergencyExit: () => renderer.destroy(),
 									}),
@@ -3038,6 +3060,7 @@ export function App({
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
 				onUnavailable: setWarningMessage,
+				onCopy: reportMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
@@ -3095,6 +3118,7 @@ export function App({
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
 				onUnavailable: setWarningMessage,
+				onCopy: reportMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 				onConfirm: confirmOverride,

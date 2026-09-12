@@ -1,10 +1,11 @@
 # Shared modules own control behavior
 
-Status: accepted; implemented for every editable field, selector, search, form
-action, and form focus route the control plane owns. The Consultation view's own
-list and Agent view, Agent interaction mode, and the Consultation confirmation
-panel are still to be migrated, and the acceptance targets in
-[the verification record](../verification/shared-controls.md) are still open.
+Status: accepted; implemented for every control the control plane owns: the
+editable fields, selectors, searches, form actions, and form focus routes, and
+the Consultation view's list and detail, the Agent interaction mode, and the
+Consultation confirmation panel. The acceptance targets that remain open are
+the screen-reader path and the full light migration of the base panes, stated
+in [the verification record](../verification/shared-controls.md).
 
 The control plane has shared modal layout and a Control catalogue, but individual
 screens still implement different editing and focus behavior. All controls owned

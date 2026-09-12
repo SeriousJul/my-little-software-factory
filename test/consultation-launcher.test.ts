@@ -49,6 +49,7 @@ async function launcher(
 			draft,
 			context: BASE_CONTEXT,
 			message: null,
+			onCopy: () => undefined,
 			onLaunch,
 			onClose: () => undefined,
 			onDiscard: () => undefined,

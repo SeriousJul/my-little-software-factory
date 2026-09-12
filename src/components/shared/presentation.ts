@@ -10,11 +10,16 @@
  * pairs with the WCAG formula; the numbers below are what the library paints,
  * not what the check trusts.
  *
- * The palette is one fact the control plane reads at startup. A terminal that
- * reports a light color scheme gets the light pairs; the rest keep the dark
- * pairs the plane has always used. `FACTORY_PRESENTATION` pins the choice for
- * a visual check or an automated test, and `mono` drops color for an operator
- * who wants the written information alone.
+ * The palette is one fact the control plane reads at startup. The dark pairs
+ * are the default the plane has always used. `FACTORY_PRESENTATION` pins the
+ * choice for a visual check or an automated test, and `mono` drops color for
+ * an operator who wants the written information alone.
+ *
+ * The light presentation is reachable only through that pin, never through the
+ * terminal's own scheme: the base panes no shared module owns still paint the
+ * fixed dark color system, so an automatic switch would paint a half-light
+ * plane. The switch stays gated until those panes take their ink from the
+ * presentation; the pin keeps the light pairs exercised in the meantime.
  */
 
 /** The presentations the shared controls draw. */
@@ -210,11 +215,16 @@ export function contrastFailures(
 	return failures;
 }
 
-/** The presentation the control plane draws in. */
-export function currentPresentation(themeMode: "dark" | "light" | null): Presentation {
+/**
+ * The presentation the control plane draws in.
+ *
+ * The terminal's own scheme is never consulted: the light presentation is a
+ * pin, not an automatic switch, until the base panes follow it.
+ */
+export function currentPresentation(): Presentation {
 	const pinned = process.env.FACTORY_PRESENTATION;
 	if (pinned === "dark" || pinned === "light" || pinned === "mono") return pinned;
-	return themeMode === "light" ? "light" : "dark";
+	return "dark";
 }
 
 /** The palette of one presentation. */
@@ -223,6 +233,6 @@ export function inkFor(presentation: Presentation): ControlInk {
 }
 
 /** The palette in force for a surface. */
-export function controlInk(themeMode: "dark" | "light" | null = null): ControlInk {
-	return inkFor(currentPresentation(themeMode));
+export function controlInk(): ControlInk {
+	return inkFor(currentPresentation());
 }

@@ -69,34 +69,6 @@ interface PackedBar {
 
 const GAP = 2;
 
-function actionBarLabel(
-	mode: InteractionMode,
-	id: string,
-	context: ControlContext,
-	defaultLabel: string,
-): string {
-	if (mode === "consultation-list" || mode === "consultation-detail") {
-		const labels: Record<string, string> = {
-			launch: "launch",
-			"consultation-respond": "respond",
-			"consultation-interact": "interact",
-			"consultation-history": "history",
-			"consultation-close": "close",
-			"consultation-delete": "delete",
-			"consultation-refresh":
-				context.selectedConsultation?.state === "opening" ? "recover" : "refresh",
-			"move-list": "Move",
-			"scroll-consultation": "Scroll",
-			detail: "Detail",
-			tickets: "Tickets",
-			"interaction-exit": "interact exit",
-		};
-		return labels[id] ?? (id === "help" ? "help" : defaultLabel);
-	}
-	if (mode === "consultation-interaction" && id === "interaction-exit") return "exit";
-	return defaultLabel;
-}
-
 /**
  * Pack complete hints. A hint is removed as a unit, starting with the lowest
  * priority. The original order of every remaining hint is unchanged.
@@ -112,7 +84,9 @@ function packActionBar(
 ): PackedBar {
 	const entries = controls.map((control) => ({
 		control,
-		label: actionBarLabel(context.mode, control.id, context, control.label),
+		// The hint's wording rides on the control that owns it, so the bar
+		// packs the catalogue and no second map restates a label.
+		label: control.barLabel?.(context) ?? control.label,
 		keyLabel: keyLabelFor(context.mode, control, context),
 		availability: availabilityFor(control, context),
 	}));

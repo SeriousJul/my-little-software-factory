@@ -5,11 +5,11 @@ selector, search, form action, and form focus route the control plane owns.
 Confirmed on 2026-09-09; implemented in the shared control library under
 [src/components/shared](../src/components/shared).
 
-What is not verified is stated by [the verification
-record](verification/shared-controls.md): a screen reader has never read this
-application, and no claim of screen-reader support is made here. Keyboard and
-visual behavior are checked by the automated tests named in that record;
-`Ghostty`, `foot`, a tmux path, and GNOME Terminal with Orca are not.
+The current results for every acceptance target, with their versions, are in
+[the verification record](verification/shared-controls.md): the keyboard and
+visual targets ran in Ghostty and foot, and a tmux path runs in the suite; a
+screen reader has never read this application, and no claim of screen-reader
+support is made anywhere in this repository.
 
 This is the required baseline for human and agent contributors.
 
@@ -165,13 +165,16 @@ The initial acceptance targets are:
 
 | Environment | Required checks | Current result |
 | --- | --- | --- |
-| Linux with Ghostty | Keyboard and visual checks | Not verified |
-| Linux with foot | Keyboard and visual checks | Not verified |
-| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | Not verified |
+| Linux with Ghostty | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
+| Linux with foot | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
+| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | [The verification record](verification/shared-controls.md) |
 | Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified |
 
-Record the exact OS, terminal, multiplexer, renderer, and screen-reader versions
-used, as applicable. Other platforms remain unverified, not implicitly supported.
+The results live in [the verification record](verification/shared-controls.md),
+which states what was measured, on what, and what was not measured: the
+screen-reader path is the target that has never run. Record the exact OS,
+terminal, multiplexer, renderer, and screen-reader versions used, as
+applicable. Other platforms remain unverified, not implicitly supported.
 
 The checks must cover:
 

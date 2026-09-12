@@ -14,7 +14,7 @@
  */
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChoiceRow } from "./choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { controlInk, MARKER_WIDTH, STATE_WORDS } from "./presentation.ts";
@@ -81,15 +81,28 @@ export interface TypeAheadRowProps {
 export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 	const [query, setQuery] = useState("");
 	const queryRef = useRef("");
-	if (props.typeAheadRef !== undefined) {
-		props.typeAheadRef.current = {
+	// The handle is one stable object, and it is published after the render
+	// commits: a render React discards would otherwise hand a surface a search
+	// that was never painted, and a surface that reached it would clear text
+	// nobody can see.
+	const handle = useMemo<TypeAheadHandle>(
+		() => ({
 			query: () => queryRef.current,
 			clear: () => {
 				queryRef.current = "";
 				setQuery("");
 			},
+		}),
+		[],
+	);
+	const typeAheadRef = props.typeAheadRef;
+	useEffect(() => {
+		if (typeAheadRef === undefined) return;
+		typeAheadRef.current = handle;
+		return () => {
+			typeAheadRef.current = null;
 		};
-	}
+	}, [typeAheadRef, handle]);
 	const noMatch = query !== "" && typeAheadMatch(props.options, query).count === 0;
 	return createElement(
 		"box",

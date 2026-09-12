@@ -41,10 +41,25 @@ function tmuxSpawn(session: string, command: string[], cols: number, rows: numbe
 /** Collapse a captured screen's runs of spaces, so column padding is not asserted. */
 const collapse = (screen: string): string => screen.replace(/[ \t]{2,}/g, " ");
 
-/** Read the pane after it has stopped changing, so a key has landed. */
-async function settle(session: string, ms: number): Promise<string> {
-	await new Promise((resolve) => setTimeout(resolve, ms));
-	return tmuxCapture(session);
+/**
+ * Read the pane after it has stopped changing, so a key has landed.
+ *
+ * The wait is bounded by the pane's own state: two captures in a row must
+ * agree before the key is proven landed. A fixed sleep would instead bet the
+ * check on a machine speed, and pass on a pane that had not finished redrawing.
+ */
+async function settle(session: string): Promise<string> {
+	const deadline = Date.now() + SETTLE_MS;
+	let last = tmuxCapture(session);
+	for (;;) {
+		const screen = tmuxCapture(session);
+		if (screen === last) return screen;
+		last = screen;
+		if (Date.now() >= deadline) {
+			throw new Error(`the pane never stopped changing\nlast screen:\n${screen}`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
 }
 
 /**
@@ -128,7 +143,7 @@ describe("shared fields through tmux", () => {
 			// caret touched keeps its text: the key belongs to the field, and the
 			// application below it sees nothing.
 			tmuxSendKeys(session, "\x1b[D");
-			const held = await settle(session, 400);
+			const held = await settle(session);
 			expect(collapse(held)).toContain("Context 272000");
 
 			// A bracketed paste that carries a letter is refused as one operation:

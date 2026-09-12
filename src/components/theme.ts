@@ -25,8 +25,20 @@ export const COLORS = {
 	statusWorking: "#58a6ff",
 } as const;
 
-export function prefixForSeverity(severity: "working" | "warning" | "error"): string {
-	return severity === "working" ? "Working:" : severity === "warning" ? "Warning:" : "Error:";
+/**
+ * The kinds of news the Message line states.
+ *
+ * The severity is the written prefix and the color's role, and the prefix is
+ * the fact: a line that reports what a control did must not wear the word for a
+ * problem, and a line that reports a problem must not wear a neutral word.
+ */
+export type MessageSeverity = "working" | "warning" | "error" | "info";
+
+export function prefixForSeverity(severity: MessageSeverity): string {
+	if (severity === "working") return "Working:";
+	if (severity === "warning") return "Warning:";
+	if (severity === "error") return "Error:";
+	return "Info:";
 }
 
 export const STATE_COLORS: Record<TicketState, string> = {

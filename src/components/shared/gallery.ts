@@ -25,7 +25,7 @@ import { COLORS } from "../theme.ts";
 import { KeyGuide } from "../utility.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
-import { moveFieldWith, useFormSlots } from "./form.ts";
+import { copySelectionWith } from "./form.ts";
 import { controlInk, STATE_WORDS } from "./presentation.ts";
 import { TypeAheadRow } from "./type-ahead.ts";
 
@@ -309,13 +309,6 @@ export function Gallery({
 		fieldRef: field,
 		report: (facts: FieldFacts) => setHasSelection(facts.selection !== ""),
 	};
-	const slots = GALLERY_EXAMPLES.map((entry) => ({
-		id: entry.id,
-		kind: "field" as const,
-		label: entry.state,
-	}));
-	const focus = useFormSlots(slots);
-	const _moveField = moveFieldWith(focus);
 	const ink = controlInk();
 	// The Key guide, the shared overlay the Application's F1 opens. While it
 	// is open, it owns the keys: the gallery's own dispatch stands down, and
@@ -348,23 +341,16 @@ export function Gallery({
 				const next = (indexRef.current + (key.shift === true ? -1 : 1) + ids.length) % ids.length;
 				indexRef.current = next;
 				setIndex(next);
-				focus.move(key.shift === true ? -1 : 1);
 				setHasSelection(false);
 				setMessage(null);
 				key.preventDefault?.();
 			},
-			"copy-selection": ({ key, refuse }) => {
-				const result = field.current?.copySelection();
-				if (result === undefined) {
-					refuse();
-					return;
-				}
-				key.preventDefault?.();
-				setMessage({
-					severity: result.kind === "copied" ? "working" : "warning",
-					text: result.reason,
-				});
-			},
+			// The same shared handler the application's forms run: the gallery's own
+			// line is the news line it reports to.
+			"copy-selection": copySelectionWith(
+				() => field.current,
+				(news) => setMessage(news),
+			),
 		},
 	});
 	const shown = GALLERY_EXAMPLES[index] ?? GALLERY_EXAMPLES[0];

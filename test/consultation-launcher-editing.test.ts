@@ -159,7 +159,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			await openLauncher(setup);
 			await focusDraft(setup);
 			await setup.mockInput.typeText("text worth keeping");
-			tabUntil(setup, 2, "❯ Discard");
+			await tabUntil(setup, 2, "❯ Discard");
 			setup.mockInput.pressEnter();
 			await awaitFrame(setup, (f) => !frameText(f).includes("Consultation launcher"), "closed");
 			const reopened = await press(setup, "c", "the launcher to reopen", (f) =>
@@ -221,6 +221,27 @@ describe("the Consultation launcher's editing baseline", () => {
 		});
 	});
 
+	test("Ctrl+A selects the whole draft, and F3 copies it as news on the Message line", async () => {
+		await withLauncher(async (setup) => {
+			await openLauncher(setup);
+			await focusDraft(setup);
+			await setup.mockInput.typeText("copy this part");
+			// The Key guide names Ctrl+A for Select all, and the field obeys the key
+			// the guide names: the bar offers the copy while a selection is held.
+			setup.mockInput.pressKey("a", { ctrl: true });
+			await awaitFrame(setup, (f) => f.includes("F3 Copy selection"), "the bar to name the copy");
+			setup.mockInput.pressKey("F3");
+			const frame = await awaitFrame(
+				setup,
+				(f) => f.includes("Copied 14 cells of selected text"),
+				"the copy result on the Message line",
+			);
+			// The success is news the field reports, not a refusal wearing a warning.
+			expect(frameText(frame)).toContain("Info: Copied 14 cells of selected text");
+			expect(frameText(frame)).not.toContain("Warning:");
+		});
+	});
+
 	test("an oversized draft stays editable and states its size and limit", async () => {
 		await withLauncher(async (setup) => {
 			await openLauncher(setup);
@@ -257,7 +278,7 @@ describe("the Consultation launcher's editing baseline", () => {
 			await openLauncher(setup);
 			// An empty draft is not a Consultation: the visible action refuses, and
 			// states why instead of failing in silence.
-			tabUntil(setup, 3, "❯ Launch Consultation");
+			await tabUntil(setup, 3, "❯ Launch Consultation");
 			setup.mockInput.pressEnter();
 			const refused = await awaitFrame(
 				setup,

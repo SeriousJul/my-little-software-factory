@@ -25,7 +25,7 @@ import {
 
 /** What a control's behavior is called with: one object, so a handler names
  *  only the parts it uses. */
-interface ControlCall {
+export interface ControlCall {
 	/** The facts the control was gated on. */
 	context: ControlContext;
 	/** The raw key event: some behaviors need its name, and some must call
@@ -38,7 +38,7 @@ interface ControlCall {
 }
 
 /** The behavior of one control. */
-type ControlHandler = (call: ControlCall) => void;
+export type ControlHandler = (call: ControlCall) => void;
 
 /**
  * What a refusal says.

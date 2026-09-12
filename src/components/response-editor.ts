@@ -15,14 +15,14 @@ import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
-import { validateResponseInput } from "../consultation.ts";
+import { responseOversize, validateResponseInput } from "../consultation.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import type { ControlContext } from "./controls.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { DraftField, type FieldHandle } from "./shared/fields.ts";
-import { type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
+import { copySelectionWith, type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -42,7 +42,6 @@ interface ResponseEditorProps {
 	onSend: (text: string) => void;
 	/** Delete the saved Response draft. Closing never does this on its own. */
 	onDiscard: () => void;
-	/** Close the editor with the draft left saved as it stands. */
 	/** Store the draft as it stands, on every change and again on close. */
 	onDraftChange: (text: string) => void;
 	/** Close the editor. The draft it leaves is the one already stored. */
@@ -50,6 +49,8 @@ interface ResponseEditorProps {
 	onHelp?: () => void;
 	onMessage?: () => void;
 	onUnavailable?: (reason: string) => void;
+	/** Report what a control that ran did, on the surface's own news line. */
+	onCopy: (news: MessageFact) => void;
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
 }
@@ -90,6 +91,7 @@ export function ResponseEditor({
 	onHelp,
 	onMessage,
 	onUnavailable,
+	onCopy,
 	message,
 	onEmergencyExit,
 }: ResponseEditorProps): ReactElement {
@@ -102,7 +104,7 @@ export function ResponseEditor({
 	const refusal = validateResponseInput(size);
 	const formContext = focus.context(context, {
 		fieldHasSelection: selection.current,
-		formRefusal: focus.current()?.id === "send" ? refusal : undefined,
+		formRefusal: focus.holds("send") ? refusal : undefined,
 	});
 	useControlDispatch({
 		mode: focus.mode,
@@ -124,11 +126,7 @@ export function ResponseEditor({
 				}
 				if (slot?.id === "discard") onDiscard();
 			},
-			"copy-selection": ({ key }) => {
-				const result = field.current?.copySelection();
-				onUnavailable?.(result?.reason ?? "The response editor holds no field to copy from");
-				key.preventDefault?.();
-			},
+			"copy-selection": copySelectionWith(() => field.current, onCopy),
 			"close-form": ({ key }) => {
 				key.preventDefault?.();
 				// The screen keeps the draft, so closing needs no text of its own:
@@ -157,15 +155,14 @@ export function ResponseEditor({
 		createElement(DraftField, {
 			label: "Response draft",
 			value: draft,
-			focused: focused && inputActive && focus.at === 0,
+			focused: focused && inputActive && focus.paints("draft"),
 			inputActive: focused && inputActive,
 			width: Math.max(1, contentWidth - MARKER_WIDTH),
 			height: draftHeight,
 			fieldRef: field,
 			error: null,
 			hint: "Closing keeps the draft saved; Discard deletes it",
-			oversize: (value: string) =>
-				validateResponseInput(value)?.includes("UTF-8 bytes") ? valueReason(value) : null,
+			oversize: (value: string) => responseOversize(value) ?? null,
 			onValueChange: (facts) => {
 				text.current = facts.value;
 				selection.current = facts.selection !== "";
@@ -176,13 +173,13 @@ export function ResponseEditor({
 		}),
 		createElement(ActionItem, {
 			row: { key: "send", label: "Send response" } satisfies ActionRow,
-			focused: focused && inputActive && focus.at === 1,
+			focused: focused && inputActive && focus.paints("send"),
 			width: contentWidth,
-			refusal: focus.at === 1 ? (refusal ?? null) : null,
+			refusal: focus.paints("send") ? (refusal ?? null) : null,
 		}),
 		createElement(ActionItem, {
 			row: { key: "discard", label: "Discard draft" } satisfies ActionRow,
-			focused: focused && inputActive && focus.at === 2,
+			focused: focused && inputActive && focus.paints("discard"),
 			width: contentWidth,
 		}),
 		createElement(
@@ -195,9 +192,4 @@ export function ResponseEditor({
 		// has to look elsewhere for.
 		messageRowElement(message, contentWidth),
 	);
-}
-
-/** The size reason alone, because an empty reply is the Send action's news. */
-function valueReason(value: string): string | null {
-	return validateResponseInput(value) ?? null;
 }

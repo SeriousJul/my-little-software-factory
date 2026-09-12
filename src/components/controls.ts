@@ -172,6 +172,17 @@ export interface ControlDefinition {
 	 */
 	rangeAnchor?: boolean;
 	/**
+	 * The wording of the control's hint on the Action bar. Default: `label`.
+	 *
+	 * A hint is a word an operator reads at the bottom of the screen, and for a
+	 * few controls it is not the control's own name: a bar that already lives in
+	 * the Consultation section does not restate "consultation", and a Refresh
+	 * that recovers a Consultation names the recovery. The wording rides on the
+	 * control that owns it, so the bar packs the catalogue and no second map has
+	 * to remember which hint went with which id.
+	 */
+	barLabel?: (context: ControlContext) => string | undefined;
+	/**
 	 * Whether the control belongs to the Key guide alone.
 	 *
 	 * A field owns its editing keys outright, so the plane dispatches nothing
@@ -616,6 +627,11 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...baseModes, ...consultationModes],
 		availability: (context) =>
 			context.consultationTypesConfigured ? available() : unavailable(CONSULTATION_TYPES_MISSING),
+		// The Consultation section's bar already says where the operator is.
+		barLabel: (context) =>
+			context.mode === "consultation-list" || context.mode === "consultation-detail"
+				? "launch"
+				: undefined,
 	},
 	{
 		id: "override",
@@ -662,6 +678,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 71,
 		modes: [...consultationModes],
 		availability: consultationResponse,
+		barLabel: () => "respond",
 	},
 	{
 		id: "consultation-interact",
@@ -673,6 +690,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 72,
 		modes: [...consultationModes],
 		availability: consultationInteraction,
+		barLabel: () => "interact",
 	},
 	{
 		id: "consultation-history",
@@ -684,6 +702,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 60,
 		modes: [...consultationModes],
 		availability: available,
+		barLabel: () => "history",
 	},
 	{
 		id: "consultation-close",
@@ -695,6 +714,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 50,
 		modes: [...consultationModes],
 		availability: consultationClose,
+		barLabel: () => "close",
 	},
 	{
 		id: "consultation-delete",
@@ -707,6 +727,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...consultationModes],
 		availability: consultationDelete,
 		showInBar: (context) => consultationDelete(context).available,
+		barLabel: () => "delete",
 	},
 	{
 		id: "consultation-refresh",
@@ -718,6 +739,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 35,
 		modes: [...consultationModes],
 		availability: available,
+		// A Consultation stuck in opening is not a refresh: the same key brings
+		// the pane back, so the hint names the recovery the operator is asking for.
+		barLabel: (context) =>
+			context.selectedConsultation?.state === "opening" ? "recover" : "refresh",
 	},
 	{
 		id: "cancel",
@@ -903,6 +928,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 			context.mode === "consultation-interaction" ||
 			(context.selectedConsultation?.state === "awaiting-response" &&
 				context.consultationAgentStatus === "blocked"),
+		// The hint names the key the exit waits on, which is the configured
+		// return key in interaction mode and the word for it on the section bar.
+		barLabel: (context) => (context.mode === "consultation-interaction" ? "exit" : "interact exit"),
 	},
 	{
 		id: "select-action",

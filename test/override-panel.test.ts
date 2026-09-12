@@ -78,6 +78,7 @@ async function withPanel(
 			onCancel: () => undefined,
 			context: BASE_CONTEXT,
 			message: null,
+			onCopy: () => undefined,
 			onEmergencyExit: () => undefined,
 		}),
 		{ width: WIDTH, height: HEIGHT },

@@ -42,7 +42,7 @@ import type { MessageFact } from "./messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ActionItem, ChoiceRow, useChoice } from "./shared/choices.ts";
 import { DraftField, type FieldHandle } from "./shared/fields.ts";
-import { type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
+import { copySelectionWith, type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { truncateToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -74,6 +74,8 @@ interface ConsultationLauncherProps {
 	onMessage?: (mode: InteractionMode) => void;
 	/** Reports the catalogue reason for a refused control on the Message line. */
 	onUnavailable?: (reason: string) => void;
+	/** Report what a control that ran did, on the surface's own news line. */
+	onCopy: (news: MessageFact) => void;
 	/** The Message fact this surface's own Message line shows. */
 	message: MessageFact | null;
 	onEmergencyExit: () => void;
@@ -124,6 +126,7 @@ export function ConsultationLauncher({
 	onHelp,
 	onMessage,
 	onUnavailable,
+	onCopy,
 	message,
 	onEmergencyExit,
 }: ConsultationLauncherProps) {
@@ -173,13 +176,12 @@ export function ConsultationLauncher({
 	const moveField = moveFieldWith(focus);
 	const formContext = focus.context(context, {
 		fieldHasSelection: selectionRef.current,
-		formCycleCount:
-			focus.current()?.id === "type"
-				? names.length
-				: focus.current()?.id === "repository"
-					? repositories.length
-					: undefined,
-		formRefusal: focus.current()?.id === "launch" ? refusal() : undefined,
+		formCycleCount: focus.holds("type")
+			? names.length
+			: focus.holds("repository")
+				? repositories.length
+				: undefined,
+		formRefusal: focus.holds("launch") ? refusal() : undefined,
 	});
 	useControlDispatch({
 		mode: focus.mode,
@@ -206,11 +208,7 @@ export function ConsultationLauncher({
 				if (slot?.id === "launch") launch();
 				else if (slot?.id === "discard") onDiscard();
 			},
-			"copy-selection": ({ key }) => {
-				const result = field.current?.copySelection();
-				onUnavailable?.(result?.reason ?? "The launcher holds no field to copy from");
-				key.preventDefault?.();
-			},
+			"copy-selection": copySelectionWith(() => field.current, onCopy),
 			"close-form": ({ key }) => {
 				key.preventDefault?.();
 				onClose(formOf());
@@ -229,7 +227,7 @@ export function ConsultationLauncher({
 		utf8ByteLength(draftSize) > CONSULTATION_INPUT_LIMIT
 			? validateConsultationInput(draftSize)
 			: undefined;
-	const actionError = focus.at === 3 && inputActive ? refusal() : undefined;
+	const actionError = focus.paints("launch") && inputActive ? refusal() : undefined;
 	const noteRows = (draftError === undefined ? 0 : 1) + (actionError === undefined ? 0 : 1);
 	const frame = modalFrame(terminalWidth, terminalHeight, {
 		rows: FIXED_ROWS + PREFERRED_DRAFT_ROWS + noteRows,
@@ -243,7 +241,7 @@ export function ConsultationLauncher({
 			key: "type",
 			label: "Type",
 			value: currentType() ?? "",
-			focused: focus.at === 0 && inputActive,
+			focused: focus.paints("type") && inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
 			placeholder: "(none)",
@@ -252,7 +250,7 @@ export function ConsultationLauncher({
 			key: "repository",
 			label: "Repository",
 			value: currentRepository()?.displayName ?? "",
-			focused: focus.at === 1 && inputActive,
+			focused: focus.paints("repository") && inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
 			placeholder: STATE_WORDS.unavailable,
@@ -261,7 +259,7 @@ export function ConsultationLauncher({
 			key: "input",
 			label: "Initial input",
 			value: draft?.input ?? "",
-			focused: focus.at === 2 && inputActive,
+			focused: focus.paints("input") && inputActive,
 			inputActive,
 			width: columns.valueWidth,
 			labelWidth: columns.labelWidth,
@@ -284,13 +282,13 @@ export function ConsultationLauncher({
 			{ key: "actions", style: { flexDirection: "column" } },
 			createElement(ActionItem, {
 				row: { key: "launch", label: "Launch Consultation" } satisfies ActionRow,
-				focused: focus.at === 3 && inputActive,
+				focused: focus.paints("launch") && inputActive,
 				width: frame.contentWidth,
 				refusal: actionError ?? null,
 			}),
 			createElement(ActionItem, {
 				row: { key: "discard", label: "Discard draft text" } satisfies ActionRow,
-				focused: focus.at === 4 && inputActive,
+				focused: focus.paints("discard") && inputActive,
 				width: frame.contentWidth,
 			}),
 		),
