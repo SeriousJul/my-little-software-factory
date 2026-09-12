@@ -19,6 +19,7 @@ import {
 	actionBarRowOf,
 	awaitFrame,
 	detailPaneText,
+	focusDetail,
 	frameText,
 	HEADER_ROWS,
 	markerRowOf,
@@ -26,12 +27,13 @@ import {
 	mouseClick,
 	overlayRows,
 	press,
+	pressScrollKey,
 	rowsOf,
 	settle,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { emptyAgentRunner } from "./fake-runner.ts";
+import { emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -116,6 +118,96 @@ function seedConsultation(
 }
 
 const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
+
+/**
+ * Seed a Consultation whose Agent the observation finds working.
+ *
+ * A working Consultation needs no operator, so `v` expands its section
+ * without moving the selection: the section keeps the place the operator
+ * left, which is what a scroll test has to observe.
+ */
+function seedWorking(state: FactoryState, id: string): { paneId: string; sessionId: string } {
+	const short = id.slice(0, 8);
+	state.createConsultation({
+		id,
+		typeName: "grill",
+		agentType: "pi",
+		environment: "worktree",
+		model: "",
+		thinking: "",
+		contextWindow: "",
+		template: "/grill {input}",
+		initialInput: "review the design",
+		renderedOpeningPrompt: "/grill review the design",
+		repository: {
+			identity: "github.com/acme/factory",
+			displayName: "acme/factory",
+			cloneUrl: "https://github.com/acme/factory.git",
+			path: join(home, "checkout"),
+		},
+		agentName: `consultation-${short}`,
+		createdAt: "2026-09-01T10:00:00.000Z",
+	});
+	const handles = {
+		paneId: `pane-${short}`,
+		tabId: `tab-${short}`,
+		workspaceId: `ws-${short}`,
+		sessionId: `sess-${short}`,
+	};
+	state.setConsultationAgent(id, handles);
+	return { paneId: handles.paneId, sessionId: handles.sessionId };
+}
+
+/** One herdr `agent list` entry, with the sequence the observation settles on. */
+interface ListedTestAgent {
+	pane: string;
+	status: string;
+	sess: string;
+	seq?: number;
+}
+
+/** A herdr `agent list` answer the observation matches by pane and session. */
+const agentList = (agents: readonly ListedTestAgent[]): string =>
+	JSON.stringify({
+		result: {
+			agents: agents.map((agent) => ({
+				pane_id: agent.pane,
+				tab_id: `tab-${agent.pane.slice(5)}`,
+				workspace_id: `ws-${agent.pane.slice(5)}`,
+				agent: `consultation-${agent.pane.slice(5)}`,
+				agent_status: agent.status,
+				session_id: agent.sess,
+				...(agent.seq === undefined ? {} : { sequence: agent.seq }),
+			})),
+		},
+	});
+
+/** The plain-text pane read the output refresh timer issues. */
+const paneReadArgs = (paneId: string): readonly string[] => [
+	"agent",
+	"read",
+	paneId,
+	"--lines",
+	"200",
+	"--source",
+	"recent-unwrapped",
+	"--format",
+	"text",
+];
+
+/** An Agent output taller than any pane the tests boot, so the detail scrolls. */
+const paneOutput = (lead: string): string =>
+	Array.from({ length: 30 }, (_, index) => `${lead} output line ${index + 1}`).join("\n");
+
+/** A runner whose Agent list and pane output the test rewrites mid-flight. */
+function observationRunner(paneId: string, sessionId: string, output: string): FakeRunner {
+	const runner = new FakeRunner();
+	runner.set("herdr", ["agent", "list"], {
+		stdout: agentList([{ pane: paneId, status: "working", sess: sessionId, seq: 1 }]),
+	});
+	runner.set("herdr", paneReadArgs(paneId), { stdout: output });
+	return runner;
+}
 
 /** One section header row, as the frame draws it. */
 const headerOf = (frame: string, section: "Tickets" | "Consultations"): string =>
@@ -632,6 +724,217 @@ describe("the merged Main view", () => {
 			);
 		} finally {
 			source.settle(sampleOutcome());
+			state.close();
+		}
+	});
+
+	test("the Ticket detail keeps its scroll across a section switch", async () => {
+		await withApp(
+			async (setup) => {
+				// The completion-carrying Ticket is the tallest detail here, so it
+				// overflows the pane and can be scrolled off its own title.
+				for (let step = 1; step <= 3; step += 1)
+					await press(setup, "j", "the next Ticket", (f) => markerRowOf(f) === 4 + step);
+				await focusDetail(setup);
+				const scrolled = await pressScrollKey(
+					setup,
+					"end",
+					"the detail past its title",
+					(f) => !detailPaneText(f).includes("Drop the legacy auth shim"),
+				);
+				expect(detailPaneText(scrolled)).toContain("docs/auth.md");
+				// Leave the section, and come back to the same place: the pane
+				// unmounted with it, and its offset came back with the pane.
+				await press(setup, "v", "the Consultation section", (f) =>
+					headerOf(f, "Consultations").startsWith("▾"),
+				);
+				await press(setup, "t", "the Ticket section", (f) =>
+					headerOf(f, "Tickets").startsWith("▾"),
+				);
+				await focusDetail(setup);
+				await awaitFrame(
+					setup,
+					(f) => detailPaneText(f) === detailPaneText(scrolled),
+					"the detail to resume at its scrolled position",
+				);
+			},
+			WIDTH,
+			24,
+			{ config: DEFAULT_CONFIG, runner: emptyAgentRunner(), initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("the Consultation detail keeps its scroll across a section switch", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { paneId, sessionId } = seedWorking(state, uid("s"));
+		const source = new FakeSource("issues", "github-issues", sampleOutcome());
+		try {
+			await withApp(
+				async (setup) => {
+					source.settle(sampleOutcome());
+					await press(setup, "v", "the Consultation section", (f) =>
+						headerOf(f, "Consultations").startsWith("▾"),
+					);
+					await press(setup, "l", "the Agent view to take focus", (f) =>
+						f.includes("┌─❯ Agent view"),
+					);
+					// The Agent output is taller than the pane, so the detail
+					// follows it to its end, where the last line is visible.
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("delta output line 30"),
+						"the Agent output at the follow end",
+					);
+					// Back to the top, then a fixed number of lines down: a position
+					// that is neither the top nor the end, so a reset to either shows.
+					await pressScrollKey(setup, "home", "the detail at its top", (f) =>
+						detailPaneText(f).includes("grill - acme/factory"),
+					);
+					for (let step = 0; step < 5; step += 1) {
+						setup.mockInput.pressKey("j");
+						await settle(setup);
+					}
+					const scrolled = await settle(setup);
+					// Leave the section, and come back to the same place.
+					await press(setup, "t", "the Ticket section", (f) =>
+						headerOf(f, "Tickets").startsWith("▾"),
+					);
+					await press(setup, "v", "the Consultation section", (f) =>
+						headerOf(f, "Consultations").startsWith("▾"),
+					);
+					await press(setup, "l", "the Agent view to take focus", (f) =>
+						f.includes("┌─❯ Agent view"),
+					);
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f) === detailPaneText(scrolled),
+						"the Agent view to resume at its scrolled position",
+					);
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					config,
+					home,
+					runner: observationRunner(paneId, sessionId, paneOutput("delta")),
+					sources: [source],
+				},
+			);
+		} finally {
+			source.settle(sampleOutcome());
+			state.close();
+		}
+	});
+
+	test("the Consultation header carries the attention bell, collapsed and expanded", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const a = seedWorking(state, uid("q"));
+		const b = seedWorking(state, uid("r"));
+		const runner = new FakeRunner();
+		// Both Agents work until the test moves one of them off `working`,
+		// which is what settles a Consultation and rings its bell.
+		const agents = (aStatus: string, aSeq: number, bStatus: string, bSeq: number) =>
+			agentList([
+				{ pane: a.paneId, status: aStatus, sess: a.sessionId, seq: aSeq },
+				{ pane: b.paneId, status: bStatus, sess: b.sessionId, seq: bSeq },
+			]);
+		runner.set("herdr", ["agent", "list"], { stdout: agents("working", 1, "working", 1) });
+		runner.set("herdr", paneReadArgs(a.paneId), { stdout: paneOutput("alpha") });
+		runner.set("herdr", paneReadArgs(b.paneId), { stdout: paneOutput("beta") });
+		try {
+			await withApp(
+				async (setup) => {
+					const booted = await settle(setup);
+					expect(headerOf(booted, "Consultations")).not.toContain("!!!");
+					// A settles while its section is collapsed: the collapsed header
+					// is the section's only row, and the bell rides on it.
+					runner.set("herdr", ["agent", "list"], { stdout: agents("idle", 2, "working", 1) });
+					const collapsedBell = await awaitFrame(
+						setup,
+						(f) => headerOf(f, "Consultations").includes("!!!"),
+						"the bell on the collapsed header",
+					);
+					expect(headerOf(collapsedBell, "Consultations").startsWith("▸")).toBe(true);
+					expect(messageRowOf(collapsedBell)).toContain("awaits a response");
+					// Let A's bell expire, so the next one belongs to B.
+					await awaitFrame(
+						setup,
+						(f) => !headerOf(f, "Consultations").includes("!!!"),
+						"the first bell to expire",
+					);
+					// The same fact on the expanded header: B settles while the
+					// section it belongs to is open.
+					await press(setup, "v", "the Consultation section", (f) =>
+						headerOf(f, "Consultations").startsWith("▾"),
+					);
+					runner.set("herdr", ["agent", "list"], { stdout: agents("idle", 2, "idle", 2) });
+					const expandedBell = await awaitFrame(
+						setup,
+						(f) => headerOf(f, "Consultations").includes("!!!"),
+						"the bell on the expanded header",
+					);
+					expect(headerOf(expandedBell, "Consultations").startsWith("▾")).toBe(true);
+				},
+				WIDTH,
+				32,
+				{ state, config, home, runner, pollIntervalMs: 50 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the new output fact shows on the Consultation header, and only while expanded", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { paneId, sessionId } = seedWorking(state, uid("u"));
+		const runner = observationRunner(paneId, sessionId, paneOutput("gamma"));
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "v", "the Consultation section", (f) =>
+						headerOf(f, "Consultations").startsWith("▾"),
+					);
+					await press(setup, "l", "the Agent view to take focus", (f) =>
+						f.includes("┌─❯ Agent view"),
+					);
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("gamma output line 30"),
+						"the Agent output at the follow end",
+					);
+					// Scroll off the follow: the detail keeps its place, so new
+					// output can no longer pull it down.
+					await pressScrollKey(
+						setup,
+						"home",
+						"the Agent view at its start",
+						(f) =>
+							detailPaneText(f).includes("State: working") &&
+							!detailPaneText(f).includes("gamma output line 30"),
+					);
+					// The next refresh reads different output while the detail is
+					// not following: the header states the fact.
+					runner.set("herdr", paneReadArgs(paneId), { stdout: paneOutput("delta") });
+					const newOutput = await awaitFrame(
+						setup,
+						(f) => headerOf(f, "Consultations").includes("new output"),
+						"the new output fact on the header",
+						5000,
+					);
+					expect(headerOf(newOutput, "Consultations").startsWith("▾")).toBe(true);
+					// The collapsed header states no new output: the fact is the
+					// expanded section's.
+					const collapsed = await press(setup, "t", "the Ticket section", (f) =>
+						headerOf(f, "Tickets").startsWith("▾"),
+					);
+					expect(headerOf(collapsed, "Consultations")).not.toContain("new output");
+				},
+				WIDTH,
+				32,
+				{ state, config, home, runner },
+			);
+		} finally {
 			state.close();
 		}
 	});

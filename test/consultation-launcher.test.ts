@@ -85,4 +85,41 @@ describe("Consultation launcher input", () => {
 			await setup.renderer.destroy();
 		}
 	});
+
+	test("takes a bracketed paste into the draft, sanitized of terminal sequences", async () => {
+		const { setup, onLaunch } = await launcher();
+		try {
+			setup.mockInput.pressTab();
+			setup.mockInput.pressTab();
+			setup.mockInput.typeText("review");
+			// The paste carries a newline the draft keeps, a CSI color
+			// sequence, and a carriage return, which it does not.
+			setup.mockInput.pasteBracketedText(" the\ndraft\u001b[31mtext\r");
+			const frame = await awaitFrame(
+				setup,
+				(candidate) => candidate.includes("UTF-8 bytes: 20/65536"),
+				"the sanitized draft paste",
+			);
+			expect(frame).toContain("   review the");
+			expect(frame).toContain("   drafttext");
+			expect(frame).not.toContain("[31m");
+			expect(onLaunch).not.toHaveBeenCalled();
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+
+	test("ignores a bracketed paste while a selector field is focused", async () => {
+		const { setup, onLaunch } = await launcher();
+		try {
+			setup.mockInput.pasteBracketedText("not a draft\n");
+			await setup.flush();
+			const text = frameText(setup.captureCharFrame());
+			expect(text).toContain("UTF-8 bytes: 0/65536");
+			expect(text).toContain("(empty)");
+			expect(onLaunch).not.toHaveBeenCalled();
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
 });

@@ -231,6 +231,12 @@ class LifecycleRunner implements CommandRunner {
 	}
 }
 
+/** A progress line with the Consultation id the module named as its owner. */
+interface ProgressReport {
+	text: string;
+	owner: string;
+}
+
 /** What the module reported to the view, collected for the assertions. */
 interface Harness {
 	operations: ConsultationOperations;
@@ -242,8 +248,8 @@ interface Harness {
 	conflicts: ConsultationSafetyConflict[];
 	/** Each time the durable Consultation projection changed. */
 	changes: number;
-	/** The progress lines the module reported, in the order it wrote them. */
-	progress: string[];
+	/** Each progress line the module reported, with its owning Consultation id. */
+	progress: ProgressReport[];
 }
 
 /** Wire the module to a fixture, collecting the facts its callbacks report. */
@@ -260,7 +266,7 @@ function makeHarness(
 ): Harness {
 	const reported: (ConsultationStatus | null)[] = [];
 	const statuses: ConsultationStatus[] = [];
-	const progress: string[] = [];
+	const progress: ProgressReport[] = [];
 	const conflicts: ConsultationSafetyConflict[] = [];
 	const harness: Harness = {
 		operations: createConsultationOperations({
@@ -277,8 +283,8 @@ function makeHarness(
 					reported.push(status);
 					if (status !== null) statuses.push(status);
 				},
-				onProgress: (text) => {
-					if (text !== null) progress.push(text);
+				onProgress: (text, owner) => {
+					if (text !== null) progress.push({ text, owner });
 				},
 				onConsultationsChanged: () => {
 					harness.changes += 1;
@@ -408,9 +414,9 @@ function statusTexts(harness: Harness): string[] {
 }
 
 /** The stage names a launch reported, in order. */
-function stages(harness: Harness): string[] {
-	return harness.progress
-		.map((text) => text.match(/: ([a-z-]+)$/)?.[1])
+function stages(progress: readonly ProgressReport[]): string[] {
+	return progress
+		.map((entry) => entry.text.match(/: ([a-z-]+)$/)?.[1])
 		.filter((stage): stage is string => stage !== undefined);
 }
 
@@ -493,7 +499,7 @@ describe("Consultation operations: launch", () => {
 			tabId: LAUNCH.tabId,
 			workspaceId: LAUNCH.workspaceId,
 		});
-		expect(stages(harness)).toEqual([
+		expect(stages(harness.progress)).toEqual([
 			"resolving-repository",
 			"creating-environment",
 			"starting-agent",
@@ -1541,6 +1547,57 @@ describe("Consultation operations: Repository serialization", () => {
 		);
 		expect(current(fixture.state, launchId).state).toBe("working");
 		expect(current(fixture.state, closeId).state).toBe("closed");
+	});
+
+	test("reports concurrent progress under each Consultation's own owner", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const firstId = uid("g");
+		const secondId = uid("h");
+		const first = seed(fixture.state, fixture, firstId);
+		const second = seed(fixture.state, fixture, secondId, {
+			repository: fixture.otherRepository,
+		});
+		stubWorktreeLaunch(runner.inner, fixture.checkout, firstId);
+		stubWorktreeLaunch(runner.inner, fixture.otherCheckout, secondId, LAUNCH, "other");
+		runner.holdWhile(
+			(command) =>
+				command.startsWith("herdr worktree create") && command.includes(fixture.checkout),
+		);
+		const harness = makeHarness(fixture, runner);
+
+		const firstLaunch = harness.operations.launch(first);
+		const secondLaunch = harness.operations.launch(second);
+		// The first launch is held on its Repository; the second runs on its
+		// own. While both are in flight, each line must carry its own id.
+		await until(
+			() =>
+				harness.progress.some(
+					(entry) => entry.owner === secondId && entry.text.endsWith(": starting-agent"),
+				),
+			"the second Consultation to reach its Agent",
+		);
+		// The held launch has reported only its own open stages so far.
+		expect(stages(harness.progress.filter((entry) => entry.owner === firstId))).toEqual([
+			"resolving-repository",
+			"creating-environment",
+		]);
+		// The second has run ahead under its own id, never under the first's.
+		expect(
+			stages(harness.progress.filter((entry) => entry.owner === secondId)).slice(0, 3),
+		).toEqual(["resolving-repository", "creating-environment", "starting-agent"]);
+		runner.release();
+		await Promise.all([firstLaunch, secondLaunch]);
+
+		// Every line names the Consultation that produced it, and each
+		// Consultation reports its own full stage sequence under its own id.
+		for (const id of [firstId, secondId])
+			expect(stages(harness.progress.filter((entry) => entry.owner === id))).toEqual([
+				"resolving-repository",
+				"creating-environment",
+				"starting-agent",
+				"sending-prompt",
+			]);
 	});
 
 	test("lets a second Repository work while the first is held", async () => {

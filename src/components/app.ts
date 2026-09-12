@@ -93,7 +93,7 @@ import {
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { LiveView } from "./live-view.ts";
-import { useMessageFacts } from "./message-facts.ts";
+import { consultationProgressOwner, useMessageFacts } from "./message-facts.ts";
 import {
 	messageColor as colorOfMessage,
 	formatMessage,
@@ -372,17 +372,22 @@ export function App({
 		clearWorking: clearWorkingMessage,
 		clearProgress: clearProgressMessage,
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
-	// Consultation outcomes use the same Message facts as Ticket outcomes. The
-	// progress callback ends only the Consultation progress, while the status
-	// callback writes the outcome that progress uncovers.
+	/**
+	 * Write one Consultation outcome onto the shared Message facts.
+	 *
+	 * A `null` outcome ends the fact a previous operation left and leaves every
+	 * progress line alone: only the operation that owns a line ends it, and it
+	 * says so through `onProgress`. Info becomes a notice, warning a warning,
+	 * and error an error, so Consultation results read like Ticket results.
+	 */
 	const setStatus = useCallback(
 		(next: StatusMessage | null): void => {
-			if (next === null) clearWorkingMessage("consultation");
+			if (next === null) clearOperationMessage("none");
 			else if (next.kind === "info") setNoticeMessage(next.text);
 			else if (next.kind === "warning") setWarningMessage(next.text);
 			else setErrorMessage(next.text);
 		},
-		[clearWorkingMessage, setNoticeMessage, setWarningMessage, setErrorMessage],
+		[clearOperationMessage, setNoticeMessage, setWarningMessage, setErrorMessage],
 	);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
@@ -418,11 +423,10 @@ export function App({
 	const compactPadding = compactRows >= 3 ? 1 : 0;
 	const compactTextWidth = Math.max(1, terminalWidth - 2 * compactPadding);
 	const compactLineCount = Math.max(0, compactRows - 2 * compactPadding);
-	// The tickets view keeps the permanent Message line and Action bar. The
-	// mode line is above its panes, and the attention line joins the bottom
-	// rows when a Consultation needs the operator. Keep the compact size
-	// frame focused on its size and Help controls when it cannot show the
-	// normal layout.
+	// The Main view keeps the permanent Message line and Action bar in both
+	// sections. The mode line and the two section headers sit above the
+	// expanded section's panes. Keep the compact size frame focused on its
+	// size and Help controls when it cannot show the normal layout.
 	// The mode line gives way before the panes' first text row: the minimum
 	// frame holds the headers, one real pane row, and the two permanent rows.
 	const showModeLine = modeLine !== "" && !tooSmall;
@@ -639,14 +643,13 @@ export function App({
 			controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
-				onStatus: (next) => {
-					setStatus(next);
-					if (next === null) clearOperationMessage("none");
-				},
-				onProgress: (text) =>
+				onStatus: setStatus,
+				// Each Consultation operation owns its progress line, so two
+				// operations in two repositories never erase one another.
+				onProgress: (text, owner) =>
 					text === null
-						? clearProgressMessage("consultation")
-						: setWorkingMessage(text, "consultation"),
+						? clearProgressMessage(consultationProgressOwner(owner))
+						: setWorkingMessage(text, consultationProgressOwner(owner)),
 				onConsultationsChanged: replaceConsultations,
 				onSafetyConflict: ({ consultationId, safety }) => {
 					setConsultationSafety({ consultationId, safety });
@@ -1629,9 +1632,11 @@ export function App({
 					refreshNow();
 				},
 				leftover: openLeftoverPanel,
-				// `a` answers for the switch itself, in either section: reaching
-				// the state must never depend on whether a Consultation needs the
-				// operator.
+				// `a` answers for the switch itself in the Ticket section, where
+				// the catalog binds it: reaching the state must never depend on
+				// whether a Consultation needs the operator. The Consultation
+				// section does not bind the key, so `a` there is the catalog's
+				// refusal, not this action.
 				"auto-handoff": () => toggleAutoHandoff(),
 				help: () => openGuide(mode),
 				message: () => openMessage(mode),
@@ -1823,8 +1828,10 @@ export function App({
 			onStatus: (kind, text, topic) => {
 				// Both sections read the same observation events: an outcome is
 				// a fact for the one Message line, whichever section is expanded.
-				// Other informational events stay out of the Message line: it is
-				// for active work and operational facts, not a log.
+				// `setStatus` maps the observation's kinds onto that line: info
+				// becomes a notice, warning a warning, and error an error. The
+				// observation sends only the facts an operator acts on, so the
+				// Message line stays a statement of the plane and not a log.
 				setStatus({ kind, text });
 				// The recovery topic is the structured signal that a stale
 				// operation fact can clear; the text stays human-facing. The

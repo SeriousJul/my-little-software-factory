@@ -1,10 +1,15 @@
 /** The Consultation launcher. It is deliberately a small modal, not a Ticket override. */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { createElement, useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import { useRef, useState } from "react";
 
 import type { ConsultationTypeConfig } from "../config.ts";
 import type { ConsultationRepositoryOption } from "../consultation.ts";
-import { isLiteralText, utf8ByteLength, validateConsultationInput } from "../consultation.ts";
+import {
+	isLiteralText,
+	sanitizePastedText,
+	utf8ByteLength,
+	validateConsultationInput,
+} from "../consultation.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -123,6 +128,15 @@ export function ConsultationLauncher({
 		}
 		if (fieldRef.current === 2 && [...key.name].length > 0 && isLiteralText(key.name))
 			setInputValue(inputRef.current + (key.name === "space" ? " " : key.name));
+	});
+	// Bracketed paste is a paste event, not keystrokes, so the key handler
+	// never sees it. The draft field takes a paste the same way it takes
+	// typing: character by character against the literal rule, so newlines
+	// and tabs survive while terminal controls are dropped.
+	usePaste((event) => {
+		if (fieldRef.current !== 2) return;
+		const clean = sanitizePastedText(new TextDecoder().decode(event.bytes));
+		if (clean !== "") setInputValue(inputRef.current + clean);
 	});
 	const innerWidth = Math.max(1, width - 6);
 	const currentType = names[typeIndex];

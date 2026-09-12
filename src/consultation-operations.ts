@@ -61,13 +61,14 @@ export interface ConsultationOperationCallbacks {
 	onStatus: (status: ConsultationStatus | null) => void;
 	/**
 	 * The progress of a running operation, apart from its outcome. `null` ends
-	 * the progress owned by the operation that just reported its outcome.
+	 * the progress `owner` wrote.
 	 *
-	 * The Main view shows this on the Message line as Working progress, under
-	 * the Consultation's own owner kind, so the line a settle leaves behind
-	 * answers for whichever operation still runs.
+	 * The owner is the identity of the Consultation the operation works on, so
+	 * two operations that run at the same time in different repositories own
+	 * two lines and the settle of the earlier one cannot erase the later one's.
+	 * The Main view shows the text on the Message line as Working progress.
 	 */
-	onProgress: (text: string | null) => void;
+	onProgress: (text: string | null, owner: string) => void;
 	/** The durable Consultation projection changed. */
 	onConsultationsChanged: () => void;
 	/** A live checkout needs the view to show its one-shot confirmation panel. */
@@ -215,10 +216,10 @@ export class ConsultationOperations {
 			this.status("info", "Consultation opening is already in progress");
 			return Promise.resolve();
 		}
-		this.progress(`opening Consultation ${consultation.id.slice(0, 8)}...`);
+		this.progress(consultation.id, `opening Consultation ${consultation.id.slice(0, 8)}...`);
 		return this.runOpening(consultation).finally(() => {
 			this.openingOperations.delete(consultation.id);
-			this.endProgress();
+			this.endProgress(consultation.id);
 		});
 	}
 
@@ -227,14 +228,14 @@ export class ConsultationOperations {
 		if (current === undefined || !this.state.canRecoverConsultationOpening(current.id))
 			return Promise.resolve();
 		if (current.paneId === null && current.sessionId === null) {
-			this.progress(`recovering Consultation ${current.id.slice(0, 8)}...`);
+			this.progress(current.id, `recovering Consultation ${current.id.slice(0, 8)}...`);
 			return this.launch(current);
 		}
 		if (!this.claimOpening(current.id)) {
 			this.status("info", "Consultation opening is already in progress");
 			return Promise.resolve();
 		}
-		this.progress(`verifying Consultation ${current.id.slice(0, 8)} Agent...`);
+		this.progress(current.id, `verifying Consultation ${current.id.slice(0, 8)} Agent...`);
 		return serializeRepositoryOperation(
 			this.operationQueues,
 			current.repository.identity,
@@ -282,7 +283,7 @@ export class ConsultationOperations {
 			})
 			.finally(() => {
 				this.openingOperations.delete(current.id);
-				this.endProgress();
+				this.endProgress(current.id);
 			});
 	}
 
@@ -349,7 +350,7 @@ export class ConsultationOperations {
 						);
 						return;
 					}
-					this.progress(`sending response to Consultation ${latest.id.slice(0, 8)}...`);
+					this.progress(current.id, `sending response to Consultation ${latest.id.slice(0, 8)}...`);
 					progressStarted = true;
 					const result = await this.runner.run("herdr", [
 						"agent",
@@ -384,7 +385,7 @@ export class ConsultationOperations {
 					} catch {}
 					this.status("error", `response failed: ${errorMessage(error)}`);
 				} finally {
-					if (progressStarted) this.endProgress();
+					if (progressStarted) this.endProgress(current.id);
 				}
 			},
 		);
@@ -421,7 +422,7 @@ export class ConsultationOperations {
 		const operation: CloseOperation = { cancelled: false };
 		this.closeOperations.set(current.id, operation);
 		this.callbacks.onConsultationsChanged();
-		this.progress(`closing Consultation ${current.id.slice(0, 8)}...`);
+		this.progress(current.id, `closing Consultation ${current.id.slice(0, 8)}...`);
 		return serializeRepositoryOperation(
 			this.operationQueues,
 			current.repository.identity,
@@ -430,7 +431,7 @@ export class ConsultationOperations {
 			},
 		).finally(() => {
 			this.closeOperations.delete(current.id);
-			this.endProgress();
+			this.endProgress(current.id);
 		});
 	}
 
@@ -679,7 +680,7 @@ export class ConsultationOperations {
 					// an Agent after the operator has settled that record.
 					if (current.state !== "opening") return undefined;
 					const onStage = (stage: string) =>
-						this.progress(`Consultation ${current.id.slice(0, 8)}: ${stage}`);
+						this.progress(current.id, `Consultation ${current.id.slice(0, 8)}: ${stage}`);
 					const startCheck = await checkConsultationStart({
 						consultation: current,
 						config: this.config(),
@@ -824,18 +825,19 @@ export class ConsultationOperations {
 	/**
 	 * One step of a running operation: progress, not an outcome.
 	 *
-	 * The shell shows it on the Message line as Working progress, under the
-	 * Consultation's own owner kind. An outcome the operator must read - a
-	 * closed Consultation, a refused launch - is never a step: it goes through
+	 * The shell shows it on the Message line as Working progress under the
+	 * Consultation's own owner, so a sibling operation in another repository
+	 * keeps its line. An outcome the operator must read - a closed
+	 * Consultation, a refused launch - is never a step: it goes through
 	 * `status`, so it outranks nothing and survives the operation that ended.
 	 */
-	private progress(text: string): void {
-		this.callbacks.onProgress(text);
+	private progress(owner: string, text: string): void {
+		this.callbacks.onProgress(text, owner);
 	}
 
-	/** End the progress line owned by the operation that just settled. */
-	private endProgress(): void {
-		this.callbacks.onProgress(null);
+	/** End the progress line the settled operation owns, and only that one. */
+	private endProgress(owner: string): void {
+		this.callbacks.onProgress(null, owner);
 	}
 }
 

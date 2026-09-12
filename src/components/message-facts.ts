@@ -6,12 +6,20 @@ import { type MessageFacts, selectMessage } from "./messages.ts";
 /**
  * Which operation owns a progress line.
  *
- * Only one operation of a kind runs at a time, and each clears the progress
- * it wrote when it settles. A Handoff's completion must not erase a refresh
- * the operator started while it ran, and a settled refresh must not erase
- * the Handoff it covers.
+ * The owner is the operation's own identity, never its kind. Only one refresh
+ * and one Handoff run at a time, so their names are enough for them, but any
+ * number of Consultation operations run at once - one per Repository - so each
+ * carries the Consultation it works on. Each owner clears the progress it
+ * wrote when it settles: a Handoff's completion must not erase a refresh the
+ * operator started while it ran, a settled refresh must not erase the Handoff
+ * it covers, and the settle of one Consultation operation must not erase the
+ * progress of the one still running beside it.
  */
-export type WorkingKind = "refresh" | "handoff" | "consultation";
+export type WorkingOwner = "refresh" | "handoff" | `consultation:${string}`;
+
+/** The progress owner of one Consultation operation. */
+export const consultationProgressOwner = (consultationId: string): WorkingOwner =>
+	`consultation:${consultationId}`;
 
 /**
  * Whose progress line a call may clear.
@@ -20,7 +28,7 @@ export type WorkingKind = "refresh" | "handoff" | "consultation";
  * that ends the outcome it left on the Message line and leaves whatever
  * progress is running alone.
  */
-export type ProgressOwner = WorkingKind | "none";
+export type ProgressOwner = WorkingOwner | "none";
 
 /**
  * The working, operation, and source-health facts behind the Message line,
@@ -32,7 +40,7 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 	// The progress lines of the operations that are running right now, oldest
 	// first. One Message line shows the last one written, and a settle returns
 	// the line to whichever operation still runs.
-	const workingLines = useRef(new Map<WorkingKind, string>());
+	const workingLines = useRef(new Map<WorkingOwner, string>());
 
 	/** The line a settle leaves on the Message line: the next runner's, if any. */
 	const visibleWorking = useCallback((): string | undefined => {
@@ -40,7 +48,7 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 		return entries.at(-1);
 	}, []);
 
-	const dropWorking = useCallback((owner: WorkingKind) => {
+	const dropWorking = useCallback((owner: WorkingOwner) => {
 		if (!workingLines.current.has(owner)) return false;
 		workingLines.current.delete(owner);
 		return true;
@@ -50,14 +58,14 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 	 * Write one operation's progress line.
 	 *
 	 * A new operation replaces the outcome the last one left on the line with
-	 * its own Working progress, and its own line returns when the operation
-	 * that covered it settles. Source health is not an operation: it survives
-	 * so it can return when the progress clears.
+	 * its own Working progress, and the covered operation's own line returns
+	 * when it settles. Source health is not an operation: it survives so it can
+	 * return when the progress clears.
 	 */
-	const working = useCallback((text: string, kind: WorkingKind) => {
+	const working = useCallback((text: string, owner: WorkingOwner) => {
 		// Rewrite the owner's entry last, so it is the line the Message shows.
-		workingLines.current.delete(kind);
-		workingLines.current.set(kind, text);
+		workingLines.current.delete(owner);
+		workingLines.current.set(owner, text);
 		setFacts((current) => ({ ...current, working: text, operation: undefined }));
 	}, []);
 

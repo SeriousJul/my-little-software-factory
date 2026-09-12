@@ -157,13 +157,37 @@ The initial acceptance targets are:
 
 | Environment | Required checks | Current result |
 | --- | --- | --- |
-| Linux with Ghostty | Keyboard and visual checks | Not verified |
-| Linux with foot | Keyboard and visual checks | Not verified |
-| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | Not verified |
-| Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified |
+| Linux with Ghostty | Keyboard and visual checks | Keyboard, rendering, and paste verified 2026-07-11; pixel review blocked by the session's compositor surface |
+| Linux with foot | Keyboard and visual checks | Keyboard, rendering, and paste verified 2026-07-11; pixel review blocked by the session's compositor surface |
+| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | 25/25 checks passed twice in a row on 2026-07-11 |
+| Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified (Orca not installed in the acceptance environment) |
 
 Record the exact OS, terminal, multiplexer, renderer, and screen-reader versions
 used, as applicable. Other platforms remain unverified, not implicitly supported.
+
+Recorded on 2026-07-11 on Arch Linux, node v26.8.1, tmux 3.7c, Hyprland 0.56.2
+(Wayland), Ghostty 1.3.1-arch2, foot 1.28.0, grim 1.5.0. The tmux-path checks
+are repeatable with `test/acceptance/main-view-acceptance.sh`, which needs a
+valid config file with a live source and prints one PASS or FAIL line per
+check. The real-terminal
+checks ran the production executable (`node src/factory.ts --config`) with a
+real state database, a shadowed `herdr` so the observation loop holds, and the
+live github-issues source. Inside Ghostty and foot the app ran in a tmux
+session attached to the emulator's own pty, so keystrokes and bracketed paste
+traveled through the real emulator. The tmux-path checks covered both sections
+and the action bar, section, list, and detail movement, the F1 key guide and
+Escape, launcher opening, tab order, the ticket Override modal and its Escape
+restoration, bracketed paste into the draft field with Unicode and a correct
+byte count, multi-line paste, ignored paste on a selector field, an oversized
+draft, narrow single-pane rendering, and clean Ctrl+C exit. In Ghostty and
+foot the same rendering, keyboard, paste, and exit checks passed. The pixel
+capture of the emulator window could not be reviewed in that session: the
+compositor displayed a standby surface (the captured region showed the desktop
+wallpaper, and workspace focus did not make the window visible), so the visual
+review is recorded as blocked, not passed. The no-color check ran only through
+tmux, which passed 24 SGR sequences through with `TERM=vt100`; a no-color
+verdict needs a raw pty without a multiplexer. Orca was not installed, so
+screen-reader operation remains unverified.
 
 The checks must cover:
 
