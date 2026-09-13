@@ -19,7 +19,7 @@ import {
 	MIN_INDICATOR_CONTRAST,
 	MIN_TEXT_CONTRAST,
 } from "../src/components/shared/presentation.ts";
-import { awaitFrame, cellColors, frameText, settle, type Setup } from "./app-harness.ts";
+import { awaitFrame, cellColors, frameText, type Setup, settle } from "./app-harness.ts";
 
 /** A `[r, g, b]` triplet as the `#rrggbb` the contrast formula reads. */
 const hexOf = (channels: readonly number[]): string =>
