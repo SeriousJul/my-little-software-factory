@@ -54,6 +54,10 @@ The on-demand description of the Control catalogue, with the current Interaction
 It includes controls omitted from the Action bar and the editing controls of Text fields and Draft fields.
 _Avoid_: help popup, keybinding popin, shortcut window
 
+**Auto copy**:
+The control plane copies a mouse selection to the clipboard when the operator releases the drag. A click that does not drag copies nothing.
+_Avoid_: copy-on-select, select-to-copy, clipboard selection
+
 **Decision modal**:
 The near-fullscreen Interaction mode above an awaiting ticket: the turn log, and the rows the operator confirms: close, goto, and the workflow handoffs.
 `e` on a handoff row edits that route's settings before it starts.

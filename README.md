@@ -475,6 +475,14 @@ ignored. A click or wheel action focuses its pane. Clicking a visible Ticket
 selects it, a list wheel event selects one adjacent Ticket, and a click on a
 collapsed section header expands that section.
 
+Mouse reporting takes the host terminal's native text selection with it, so the
+control plane gives it back as Auto copy: drag with the mouse over any surface
+and the text highlights, and releasing the drag copies the selection to the
+system clipboard. A click that does not drag copies nothing, a copy the terminal
+refuses warns on the Message line, and a copy that takes is silent. Auto copy is
+always on, over every surface, with no setting. The keyboard Copy control on a
+field selection keeps its own path.
+
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.
 The repository drops before the title does, and the task type badge is

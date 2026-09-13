@@ -70,15 +70,37 @@ letters that act as shortcuts outside that field. Support terminal paste.
 Essential actions must remain available with ordinary terminal key sequences,
 without an enhanced keyboard protocol.
 
-Keyboard field selection and Copy do not decide global host mouse ownership.
-Do not enable mouse reporting merely to implement keyboard editing or replace
-host selection and clipboard policy. Coordinate with
-[the host-selection issue](https://github.com/SeriousJul/my-little-software-factory/issues/10)
-without treating field Copy as a replacement for host copy of visible output.
-
 A modal keeps focus inside itself and restores the previous focus when closed.
 Opening and closing Help must preserve the draft, caret, selection, and undo
 history. Input must not reach a field or screen behind an active modal.
+
+## Auto copy
+
+The control plane turns on terminal mouse reporting for its click, wheel, and
+scrollbar controls, which takes the host terminal's native text selection away
+from the operator. Auto copy is the replacement for what that gives up, and it
+is a global mouse control: it runs over every surface the control plane paints,
+with no per-surface exception and no setting to turn it on or off. It is owned
+by the shell as one subscription to the renderer's ended-selection event, not by
+any surface. See [the host-selection issue it resolves](https://github.com/SeriousJul/my-little-software-factory/issues/10).
+
+Required behavior:
+
+- The operator drags with the mouse over any surface and the selection
+  highlights while the drag runs; releasing the drag copies the selected text
+  to the system clipboard through the renderer's OSC 52 write, the same write
+  the field's keyboard Copy control uses.
+- A click that does not drag ends an empty selection and copies nothing, so
+  selecting a row never clobbers the clipboard.
+- A copy the terminal refused warns on the Message line with the shared refusal
+  wording; a copy that takes is silent and leaves the Message line alone.
+- A drag release over a list row fires no row action beyond the press that
+  started the drag, so copying text does not move the row selection.
+- Text fields and Draft fields keep their own in-field selection and their
+  keyboard Copy control unchanged; the shared form route is untouched.
+
+The field's keyboard Copy control keeps working exactly as it does, so field
+editing keeps its own copy path beside Auto copy.
 
 ## Values, validation, and paste
 
@@ -210,6 +232,10 @@ The checks must cover:
 - Draft retention, explicit discard, and Repository/type identity on reopening.
 - Type-ahead feedback and correction, including no-match searches.
 - Light, dark, and no-color output, contrast, resize, and narrow/short terminals.
+- Auto copy: a drag release over a surface ends with the selected text on the
+  clipboard, a click that did not drag copies nothing, a refused write warns on
+  the Message line while a copy that takes is silent, and a drag release over a
+  list row leaves the row selection as the press set it.
 - A real screen reader's access to labels, values, focus and caret location,
   selection, errors, modal changes, and progress feedback.
 - Agreement between available actions, dispatched keys, the Action bar, and the

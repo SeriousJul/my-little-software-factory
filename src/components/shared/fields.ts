@@ -128,7 +128,14 @@ export interface FieldFacts {
 
 /** The reason a Copy action says what it says. */
 const COPY_EMPTY_REASON = "Nothing is selected to copy";
-const COPY_UNSET_REASON = "The terminal refused the copied text";
+/**
+ * The shared warning a copy the terminal refused states.
+ *
+ * The keyboard Copy control on a field selection and Auto copy on a mouse
+ * selection both refuse through the renderer's OSC 52 write, so the one
+ * refusal that means "the text did not reach the clipboard" has one sentence.
+ */
+export const COPY_REFUSED_REASON = "The terminal refused the copied text";
 
 /** The refusal a field states when its caller names none. */
 const PLAIN_REFUSALS: FieldRefusals = {
@@ -475,7 +482,7 @@ function useFieldEditing(
 				const text = nodeSelection(node.current);
 				if (text === "") return { kind: "empty", reason: COPY_EMPTY_REASON };
 				if (!renderer.copyToClipboardOSC52(text)) {
-					return { kind: "unsupported", text, reason: COPY_UNSET_REASON };
+					return { kind: "unsupported", text, reason: COPY_REFUSED_REASON };
 				}
 				return {
 					kind: "copied",
