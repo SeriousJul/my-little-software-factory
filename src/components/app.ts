@@ -20,6 +20,7 @@
  * for both.
  */
 import os from "node:os";
+import type { Selection } from "@opentui/core";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -109,6 +110,7 @@ import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts"
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
+import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import {
@@ -409,6 +411,28 @@ export function App({
 		},
 		[clearOperationMessage, setNoticeMessage, setWarningMessage, setErrorMessage],
 	);
+	/**
+	 * Auto copy: the renderer runs the mouse selection the operator drags (left
+	 * press starts it, the drag extends it, the release ends it), and it names
+	 * the ended selection on one event. The shell copies the ended selection's
+	 * text through the renderer's OSC 52 write - the same write a field's
+	 * keyboard Copy control uses - so a drag release over any surface reaches
+	 * the system clipboard without a setting. A click that did not drag ends an
+	 * empty selection and runs nothing, and a copy that takes is silent: only a
+	 * write the terminal refused states the shared warning on the Message line.
+	 */
+	useEffect(() => {
+		const onSelection = (selection: Selection | null): void => {
+			if (selection === null) return;
+			const text = selection.getSelectedText();
+			if (text === "") return;
+			if (!renderer.copyToClipboardOSC52(text)) setWarningMessage(COPY_REFUSED_REASON);
+		};
+		renderer.on("selection", onSelection);
+		return () => {
+			renderer.off("selection", onSelection);
+		};
+	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
 	// The mode line carries the auto-handoff state and the live agent count:
