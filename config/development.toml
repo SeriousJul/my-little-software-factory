@@ -13,6 +13,7 @@ max-handoffs-per-ticket = 20
 workflows = []
 
 [repos]
+"github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
 "github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
 
 [scroll]
