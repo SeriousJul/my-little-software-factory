@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 /** A valid config body, pointed at the state file the case names. */
-function configBody(stateFile?: string): string {
+function configBody(stateFile?: string, sources?: boolean): string {
 	return [
 		'default-agent = "pi"',
 		'default-environment = "live-worktree"',
@@ -53,6 +53,15 @@ function configBody(stateFile?: string): string {
 		'model = "--model {value}"',
 		"[task-types.implement]",
 		'template = "Implement {title}"',
+		...(sources
+			? [
+					"[[sources]]",
+					'name = "issues"',
+					'kind = "github-issues"',
+					"refresh-interval-seconds = 60",
+					'repositories = ["owner/name"]',
+				]
+			: []),
 		"",
 	].join("\n");
 }
@@ -73,6 +82,7 @@ describe("the startup argument handling", () => {
 		["an unknown argument", ["--unknown"]],
 		["a --config flag with no path", ["--config"]],
 		["an empty config path", ["--config", ""]],
+		["a different flag with a value", ["--other", "/tmp/one/config.toml"]],
 		["a trailing extra argument", ["--config", "/tmp/one/config.toml", "extra"]],
 	])("any other argument list yields the usage line: %s", (_name, args) => {
 		expect(configPathFromArgs(args)).toEqual({ ok: false, reason: USAGE });
@@ -125,6 +135,11 @@ describe("the startup state open", () => {
 		expect(opened.ok).toBe(true);
 		if (!opened.ok) return;
 		expect(existsSync(path)).toBe(true);
+		// The lease is taken: a second control plane on the same state
+		// database is refused while the first one holds it.
+		const second = openStartupState(path);
+		expect(second.ok).toBe(false);
+		if (!second.ok) expect(second.reason).toContain("already in use by process");
 		opened.state.close();
 	});
 
@@ -173,14 +188,14 @@ describe("the whole startup", () => {
 	test("a valid config opens the state and carries the renderer inputs", async () => {
 		const statePath = inTempDir("run-ready")("state.sqlite");
 		const configPath = inTempDir("run-ready")("config.toml");
-		writeFileSync(configPath, configBody(statePath), "utf8");
+		writeFileSync(configPath, configBody(statePath, true), "utf8");
 		const result = await runStartup(["--config", configPath]);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.configPath).toBe(configPath);
 		expect(result.statePath).toBe(statePath);
 		expect(result.notes).toEqual([]);
-		expect(result.sources).toEqual([]);
+		expect(result.sources.map((source) => source.name)).toEqual(["issues"]);
 		expect(typeof result.runner.run).toBe("function");
 		expect(existsSync(statePath)).toBe(true);
 		result.state.close();
