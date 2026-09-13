@@ -22,14 +22,23 @@ branch, on 2026-09-14.
 | --- | --- | --- |
 | The build publishes the published subset: the home page, the 18 ADRs, and the two top-level standards pages | `npm run docs:build`, then the file list of `docs/.vitepress/dist` | Passed |
 | The excluded folders (agents, research, verification) are absent from the built site | The file list of `docs/.vitepress/dist` contains none of them | Passed |
-| A broken internal link fails the build with a readable error naming the page and the link | A temporary page with a dead link was built: `Found dead link ./does-not-exist in file sample-guide/intro.md`, build failed | Passed |
+| A broken internal link fails the build with a readable error naming the page and the link, for a link in the same folder and for a link into a parent folder | A temporary guide page was built with each shape: `[x](./does-not-exist.md)` fails with `Found dead link ./does-not-exist in file temp-guide/intro.md`, and `[x](../does-not-exist.md)` fails with `Found dead link ./../does-not-exist in file temp-guide/intro.md`; both builds exit nonzero | Passed |
 | A newly written guide folder appears in the sidebar without a config edit | A temporary guide folder was built: its pages appeared as a new sidebar group, and the build needed no config change | Passed |
 | The sidebar groups every published page by folder, in name order | The rendered sidebar of a built page shows the Standards group and the ADR group, in name order | Passed |
 | Links from published pages into repository-only content keep working | The built HTML of the shared control standard points at the repository for the verification record, the research page, the glossary, the README, the contributor instructions, and the source folder | Passed |
+| An absolute link into an excluded folder is rewritten to the repository, and an absolute link to a published page stays a site link | A temporary guide page linked `[x](/verification/shared-controls.md)` and `[y](/adr/0001-open-tui-typescript.md)`: the built HTML points the first at the repository file, and the second at the built page under the project base; the build passes | Passed |
 | The dev server and the preview server serve the site under the project base | `npm run docs:dev` and `npm run docs:preview`; the home page and an ADR page returned HTTP 200 under `/my-little-software-factory/` | Passed |
 
-The temporary pages used for the last two rows were removed after the check,
-and the final build was rerun clean.
+The dead-link check needs no exemptions: the repo-only-links markdown rule
+rewrites every repository-only target to an external repository URL before
+VitePress checks links, so only internal links are checked, and an internal
+link that does not resolve to a built page fails the build in any relative or
+absolute shape. Before this fix, the cross-folder shape above passed the
+build; the fix removed the `ignoreDeadLinks` exemption that exempted every raw
+link starting with `..` without resolving it against the page.
+
+The temporary guide pages used for the dead-link and rewrite rows were removed
+after the checks, and the final build was rerun clean.
 
 ## What has not been measured
 

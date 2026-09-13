@@ -33,6 +33,5 @@ features:
 
 ## Guides
 
-A guide is a subfolder of the docs root, and every guide folder appears in the
-sidebar automatically. No guides are published yet. When one lands, its pages
-appear in the sidebar and on this site with no configuration edit.
+A guide is a subfolder of the docs root. Every guide folder's pages appear in
+the sidebar and on this site automatically, with no configuration edit.

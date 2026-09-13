@@ -11,9 +11,9 @@ type LinkToken = {
 	attrSet(name: string, value: string): void;
 };
 type BlockToken = LinkToken & { children?: LinkToken[] };
-type PushRule = (state: { tokens: BlockToken[]; env: Record<string, unknown> }) => void;
+type CoreState = { tokens: BlockToken[]; env: Record<string, unknown> };
 type Markdown = {
-	core: { ruler: { push(name: string, fn: PushRule): void } };
+	core: { ruler: { push(name: string, fn: (state: CoreState) => void): void } };
 	use(plugin: (md: Markdown) => void): void;
 };
 
@@ -31,15 +31,20 @@ const GITHUB = "https://github.com/SeriousJul/my-little-software-factory/blob/ma
 
 // Returns a replacement for a markdown link target, or the original target
 // when nothing changes. pagePath is the absolute path of the rendered page.
+// A relative target resolves against the page; an absolute target (a leading
+// "/") is a site path that resolves against the docs root. Either way, a
+// target that reaches an excluded folder, or that leaves the docs folder,
+// names repository-only content and is rewritten to the repository.
 function rewriteLink(to: string, pagePath: string): string {
-	if (to.startsWith("#") || to.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(to)) {
+	if (to.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(to)) {
 		return to;
 	}
 	const separator = to.indexOf("#");
 	const hash = separator >= 0 ? to.slice(separator) : "";
 	const target = separator >= 0 ? to.slice(0, separator) : to;
-	const resolved = posix.normalize(posix.join(posix.dirname(pagePath), target));
-	const relative = posix.relative(srcDirPosix, resolved);
+	const relative = to.startsWith("/")
+		? posix.normalize(target.slice(1))
+		: posix.relative(srcDirPosix, posix.normalize(posix.join(posix.dirname(pagePath), target)));
 	if (relative.startsWith("..")) {
 		return `${GITHUB}/${relative.replace(/^\.+\//, "")}${hash}`;
 	}
@@ -51,28 +56,26 @@ function rewriteLink(to: string, pagePath: string): string {
 
 // VitePress renders links on its own, so a core rule rewrites the link
 // targets before rendering.
-function repoOnlyLinks() {
-	return (md: Markdown) => {
-		md.core.ruler.push("repo-only-links", (state) => {
-			const env = state.env as MarkdownEnv & { path?: string };
-			const pagePath = env.path ?? "";
-			// Link tokens sit inside the children of inline tokens.
-			const inline = state.tokens.flatMap((token) => token.children ?? []);
-			for (const token of inline) {
-				if (token.type !== "link_open") {
-					continue;
-				}
-				const raw = token.attrGet("href");
-				if (raw === null) {
-					continue;
-				}
-				const rewritten = rewriteLink(raw, pagePath);
-				if (rewritten !== raw) {
-					token.attrSet("href", rewritten);
-				}
+function repoOnlyLinks(md: Markdown): void {
+	md.core.ruler.push("repo-only-links", (state) => {
+		const env = state.env as MarkdownEnv & { path?: string };
+		const pagePath = env.path ?? "";
+		// Link tokens sit inside the children of inline tokens.
+		const inline = state.tokens.flatMap((token) => token.children ?? []);
+		for (const token of inline) {
+			if (token.type !== "link_open") {
+				continue;
 			}
-		});
-	};
+			const raw = token.attrGet("href");
+			if (raw === null) {
+				continue;
+			}
+			const rewritten = rewriteLink(raw, pagePath);
+			if (rewritten !== raw) {
+				token.attrSet("href", rewritten);
+			}
+		}
+	});
 }
 
 function pageTitle(file: string): string {
@@ -132,20 +135,15 @@ export default defineConfig({
 	description:
 		"Documentation for my little software factory: architecture decisions, standards, and guides.",
 	srcExclude: [...EXCLUDED.map((folder) => `${folder}/**`), "**/.*/**"],
-	// Links from published pages into repository-only content are rewritten to
-	// the repository by the repo-only-links markdown rule. The dead-link check
-	// still sees the raw link, so exactly those targets are exempt: a link
-	// into an excluded folder, or a link that resolves outside the docs
-	// folder. Every other broken internal link still fails the build.
-	ignoreDeadLinks: [
-		(raw) => {
-			const url = raw.replace(/^\.\//, "");
-			return EXCLUDED.includes(url.split("/")[0]) || url.startsWith("..");
-		},
-	],
+	// No dead-link exemptions. The repo-only-links markdown rule rewrites
+	// every repository-only target (an excluded folder, or a file outside the
+	// docs folder) to an external repository URL before VitePress checks
+	// links, so the check never sees them. Every internal link that does not
+	// resolve to a built page - in any relative or absolute shape - fails the
+	// build.
 	markdown: {
 		config: (md) => {
-			md.use(repoOnlyLinks() as unknown as Parameters<typeof md.use>[0]);
+			repoOnlyLinks(md as Markdown);
 		},
 	},
 	themeConfig: {

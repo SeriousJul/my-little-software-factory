@@ -32,7 +32,12 @@ ever needed for a new page.
   [`[the standard](../shared-controls.md)`](../shared-controls.md). A link from
   a published page into repository-only content (an excluded folder, or a file
   outside `docs/`) is rewritten to the repository on the site, so it keeps
-  working in both places.
+  working in both places. The rewrite covers relative targets in any depth and
+  absolute targets into an excluded folder, like
+  `[the record](/verification/shared-controls.md)`. An absolute target that is
+  not into an excluded folder is a site path, so it must name a published
+  page or the build fails; a file outside `docs/` is not a site path, so link
+  to it with a relative path instead.
 - Do not write pages into `agents/`, `verification/`, or `research/` expecting
   them to appear on the site.
 
