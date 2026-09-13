@@ -15,15 +15,15 @@ It observes the factory and issues work to agents.
 _Avoid_: dashboard, UI
 
 **Main view**:
-The always-present base surface of the control plane that holds the Ticket section and the Consultation section.
+The always-present base surface of the control plane. It holds two list sections (Ticket and Consultation) on the left, and one context-dependent detail pane on the right that shows the detail of the currently selected item.
 _Avoid_: dashboard, home, screen, primary view
 
 **Section**:
-A collapsible part of the Main view that holds a list pane and a detail pane. One section is expanded, and the other is collapsed to its header row.
+An independently collapsable list in the Main view. The Ticket section holds the ticket list; the Consultation section holds the Consultation list. Both can be expanded at the same time. A collapsed section shrinks to its header row and its rows are skipped by navigation.
 _Avoid_: tab, pane, view, accordion
 
 **Section header**:
-The row that names one section of the Main view. The expanded section's header stands directly above its panes; a collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery).
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle
 
 **Response editor**:
@@ -55,7 +55,7 @@ It includes controls omitted from the Action bar and the editing controls of Tex
 _Avoid_: help popup, keybinding popin, shortcut window
 
 **Auto copy**:
-The control plane copies a mouse selection to the clipboard when the operator releases the drag. A click that does not drag copies nothing.
+The control plane copies a mouse selection to the clipboard when the operator releases the drag, and the ended selection clears its own highlight. A click that does not drag copies nothing.
 _Avoid_: copy-on-select, select-to-copy, clipboard selection
 
 **Decision modal**:
@@ -366,7 +366,7 @@ A forced removal is its own explicit choice within the action, because it discar
 _Avoid_: force delete, cleanup retry
 
 **Auto copy**:
-The control plane copies a mouse selection to the clipboard when the operator releases the drag. A click that does not drag copies nothing.
+The control plane copies a mouse selection to the clipboard when the operator releases the drag, and the ended selection clears its own highlight. A click that does not drag copies nothing.
 _Avoid_: copy-on-select, clipboard mode
 
 **Override**:
