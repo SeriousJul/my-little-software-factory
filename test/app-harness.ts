@@ -373,6 +373,11 @@ export async function press(
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<string> {
+	// Settle before the key lands: a press right after a surface closed or
+	// opened can fall in the window where the intended handler is not live
+	// yet, and the key is dropped. On a slow host that window is wide.
+	// settle is bounded, so a frame that never settles still gets the key.
+	await settle(setup);
 	if (key === "return") setup.mockInput.pressEnter();
 	else if (key === "escape") setup.mockInput.pressEscape();
 	else if (key === "backspace") setup.mockInput.pressBackspace();
