@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { TicketSource } from "../src/ticket-source.ts";
 import {
@@ -209,6 +210,30 @@ function observationRunner(paneId: string, sessionId: string, output: string): F
 	return runner;
 }
 
+/**
+ * The herdr answer that keeps the seeded Consultations' Agents alive.
+ *
+ * The observation loop must not move a seeded Consultation into a recovery
+ * state while the test is still in the Ticket section: a Consultation that
+ * needs the operator becomes the row a section switch selects, and which row
+ * that is depends on which poll caught the missing Agent first. A live Agent
+ * leaves every seeded state in place, so the switch and the navigation keys
+ * answer the rows the test seeds, on any machine and at any poll speed.
+ */
+function liveConsultationAgents(ids: readonly string[]): FakeRunner {
+	const runner = new FakeRunner();
+	runner.set("herdr", ["agent", "list"], {
+		stdout: agentList(
+			ids.map((id) => ({
+				pane: `pane-${id.slice(0, 8)}`,
+				status: "working",
+				sess: `sess-${id.slice(0, 8)}`,
+			})),
+		),
+	});
+	return runner;
+}
+
 /** One section header row, as the frame draws it. */
 const headerOf = (frame: string, section: "Tickets" | "Consultations"): string =>
 	(rowsOf(frame).find((row) => row.includes(section)) ?? "").trim();
@@ -224,12 +249,13 @@ const booted = (
 	sources?: readonly TicketSource[],
 	width = WIDTH,
 	height = 32,
+	runner: CommandRunner = emptyAgentRunner(),
 ): Promise<void> =>
 	withApp(body, width, height, {
 		state,
 		config,
 		home,
-		runner: emptyAgentRunner(),
+		runner,
 		...(sources === undefined ? {} : { sources }),
 	});
 
@@ -306,8 +332,9 @@ describe("the merged Main view", () => {
 
 	test("section switches keep selection and focus, and auto-handoff stays Ticket-only", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seedConsultation(state, uid("c"), "2026-09-01T10:00:00.000Z");
-		seedConsultation(state, uid("d"), "2026-09-01T10:01:00.000Z");
+		const ids = [uid("c"), uid("d")];
+		seedConsultation(state, ids[0], "2026-09-01T10:00:00.000Z");
+		seedConsultation(state, ids[1], "2026-09-01T10:01:00.000Z");
 		const source = new FakeSource("issues", "github-issues", sampleOutcome());
 		try {
 			await booted(
@@ -343,6 +370,9 @@ describe("the merged Main view", () => {
 				},
 				state,
 				[source],
+				WIDTH,
+				32,
+				liveConsultationAgents(ids),
 			);
 		} finally {
 			state.close();
@@ -351,8 +381,9 @@ describe("the merged Main view", () => {
 
 	test("a key after a section switch uses the newly focused list", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		seedConsultation(state, uid("c"), "2026-09-01T10:00:00.000Z");
-		seedConsultation(state, uid("d"), "2026-09-01T10:01:00.000Z");
+		const ids = [uid("c"), uid("d")];
+		seedConsultation(state, ids[0], "2026-09-01T10:00:00.000Z");
+		seedConsultation(state, ids[1], "2026-09-01T10:01:00.000Z");
 		const source = new FakeSource("issues", "github-issues", sampleOutcome());
 		try {
 			await booted(
@@ -371,6 +402,9 @@ describe("the merged Main view", () => {
 				},
 				state,
 				[source],
+				WIDTH,
+				32,
+				liveConsultationAgents(ids),
 			);
 		} finally {
 			state.close();
