@@ -323,7 +323,15 @@ The control plane builds it from the agent's session record when herdr reports o
 _Avoid_: agent log, transcript, terminal capture
 
 **Turn end cause**:
-Why an agent's settled turn ended: `completed`, `failed`, `aborted`, `truncated`, `no-turn`, or `unknown`, with the agent's own text as its detail.
+Why an agent's settled turn ended: `completed`, `failed`, `aborted`, `truncated`, `quota`, `no-turn`, or `unknown`, with the agent's own text as its detail.
+`quota` is the cause of a turn the provider refused because the model's usage limit or quota was reached, read from the agent's own error text.
+_Avoid_: rate limit, usage limit, throttle
+
+**Model tier**:
+A named, ordered group of models of one agent kind.
+A work configured on a tier runs on one of its models and, on a `quota` turn end in Auto-handoff mode, falls back to the next model of the same tier.
+It never falls to a different tier: a work configured on one tier stays on that tier.
+_Avoid_: model chain, model pool, fallback list, Model list
 `no-turn` is the cause of a settle whose session record is readable and holds no turn: the turn never started. `unknown` is the fail-open cause of a record that cannot be read. It is the agent's fact, not herdr's status, and it says nothing about whether the work itself succeeded.
 _Avoid_: done, exit reason, stop reason, agent status
 
