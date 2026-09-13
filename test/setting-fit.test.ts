@@ -113,7 +113,8 @@ describe("Setting fit", () => {
 
 	test("staticFit refuses a level when an Agent maps thinking but declares no level", () => {
 		// A stored choice can name a level for an Agent whose config declares no
-		// `thinking-values`, so the empty set is what the sentence lists.
+		// `thinking-values`. The Agent offers nothing, so the sentence lists
+		// nothing instead of an empty pair.
 		expect(
 			reason(
 				settingFit.staticFit(
@@ -125,7 +126,7 @@ describe("Setting fit", () => {
 				).thinking,
 			),
 		).toBe(
-			'agent type "pilot" offers no thinking level "low" (it offers: ): clear the thinking level in the ' +
+			'agent type "pilot" offers no thinking level "low": clear the thinking level in the ' +
 				"override panel, or start an agent type that offers it",
 		);
 	});
@@ -181,6 +182,19 @@ describe("Setting fit", () => {
 			cause: "not-in-list",
 			reason:
 				'agent "pilot" (pi) has no model "missing/model": check the model id and its provider auth',
+		});
+		// An Agent type whose runtime kind is not known, as for one the config
+		// no longer names, does not read a kind it does not have.
+		expect(
+			settingFit.modelInList(
+				{ agentType: "gone", agent: { kind: "", model: "--model {value}" } },
+				"missing/model",
+				["openai/gpt-5.1"],
+			),
+		).toEqual({
+			ok: false,
+			cause: "not-in-list",
+			reason: 'agent "gone" has no model "missing/model": check the model id and its provider auth',
 		});
 		expect(await settingFit.modelFit(PILOT, "missing/model", runner)).toEqual({
 			ok: false,

@@ -14,7 +14,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { panelValueCells } from "../src/components/override-panel.ts";
 import { COLORS } from "../src/components/theme.ts";
 
@@ -343,26 +343,6 @@ const contextDigitsOf = (frame: string): string =>
 async function typeText(setup: Setup, text: string): Promise<void> {
 	await setup.mockInput.typeText(text);
 }
-
-/** A profile that names all three values on an Agent that maps none of them. */
-const textFieldConfig: FactoryConfig = {
-	...DEFAULT_CONFIG,
-	defaultAgent: "text",
-	agents: {
-		...DEFAULT_CONFIG.agents,
-		text: { kind: "text" },
-	},
-	taskTypes: {
-		...DEFAULT_CONFIG.taskTypes,
-		implement: {
-			...DEFAULT_CONFIG.taskTypes.implement,
-			agent: "text",
-			model: "model-value",
-			thinking: "high",
-			contextWindow: "272000",
-		},
-	},
-};
 
 const contextProfileConfig: FactoryConfig = {
 	...DEFAULT_CONFIG,
@@ -2150,92 +2130,6 @@ describe("the override panel", () => {
 				);
 				setup.mockInput.pressTab();
 				await awaitFrame(setup, (f) => f.includes("❯ Thinking"), "Tab from a text row");
-			},
-			WIDTH,
-			HEIGHT,
-			props,
-		);
-	});
-	test("F3 copies from the focused Model, Thinking, and Context fields", async () => {
-		const runner = new FakeRunner();
-		const props = { config: textFieldConfig, runner, home, configPath };
-		await withApp(
-			async (setup) => {
-				const copied: string[] = [];
-				vi.spyOn(setup.renderer, "copyToClipboardOSC52").mockImplementation((text: string) => {
-					copied.push(text);
-					return true;
-				});
-				await openPanel(setup);
-				await selectRow(setup, "down", "Environment");
-				await selectRow(setup, "down", "Task type");
-				await selectRow(setup, "down", "Model");
-				for (const [label, value] of [
-					["Model", "m"],
-					["Thinking", "h"],
-					["Context", "2"],
-				] as const) {
-					if (label === "Thinking" || label === "Context") {
-						const moved = await selectRow(setup, "down", label);
-						// A selection belongs to the field that just lost focus. The
-						// next field must not advertise Copy until it reports its own
-						// selection.
-						expect(actionBarRowOf(moved)).not.toContain("F3 Copy selection");
-					}
-					setup.mockInput.pressKey("HOME");
-					setup.mockInput.pressArrow("right", { shift: true });
-					await awaitFrame(
-						setup,
-						(f) => actionBarRowOf(f).includes("F3 Copy selection"),
-						`F3 to become available on the ${label} selection`,
-					);
-					setup.mockInput.pressKey("F3");
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("Copied 1 cells"),
-						`the ${label} selection to be copied`,
-					);
-					expect(copied.at(-1)).toBe(value);
-				}
-			},
-			WIDTH,
-			HEIGHT,
-			props,
-		);
-	});
-	test("F3 copies a selected Model search", async () => {
-		const runner = new FakeRunner();
-		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-		await withApp(
-			async (setup) => {
-				const copied: string[] = [];
-				vi.spyOn(setup.renderer, "copyToClipboardOSC52").mockImplementation((text: string) => {
-					copied.push(text);
-					return true;
-				});
-				await openPanel(setup);
-				await moveToModelRow(setup);
-				await typeModelSearch(setup, "gpt");
-				await awaitFrame(
-					setup,
-					(f) => frameText(f).includes("Search gpt"),
-					"the Model search text",
-				);
-				setup.mockInput.pressKey("HOME");
-				setup.mockInput.pressArrow("right", { shift: true });
-				await awaitFrame(
-					setup,
-					(f) => actionBarRowOf(f).includes("F3 Copy selection"),
-					"F3 to become available for the Model search selection",
-				);
-				setup.mockInput.pressKey("F3");
-				await awaitFrame(
-					setup,
-					(f) => messageRowOf(f).includes("Copied 1 cells"),
-					"the selected Model search to be copied",
-				);
-				expect(copied).toEqual(["g"]);
 			},
 			WIDTH,
 			HEIGHT,

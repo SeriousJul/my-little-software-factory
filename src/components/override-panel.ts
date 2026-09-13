@@ -98,7 +98,6 @@ import { copySelectionWith, useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
 
-
 /**
  * Why a Model row is a Text field instead of the selected agent's list.
  *
@@ -619,10 +618,12 @@ function rowsFor(
 ): PanelRow[] {
 	// An Agent type the config no longer names reads as one that maps nothing:
 	// every value the choice carries then shows in its warning row, where the
-	// operator can clear it.
+	// operator can clear it. The record is gone, so its runtime kind is not
+	// known either: the kind stays empty, and no sentence reads a kind that is
+	// not known.
 	const agent: ResolvedAgentType = {
 		agentType: choice.agentType,
-		agent: agents[choice.agentType] ?? { kind: choice.agentType },
+		agent: agents[choice.agentType] ?? { kind: "" },
 	};
 	const staticVerdicts = settingFit.staticFit(agent, choice);
 	// A fetched list is the only fact beyond static fit. A loading or an
@@ -812,6 +813,5 @@ function rowElement(
 		warning: r.unfit !== undefined,
 		error: r.unfit?.reason ?? null,
 		noteWidth: geometry.noteWidth,
-
 	});
 }

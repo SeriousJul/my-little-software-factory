@@ -98,8 +98,12 @@ export function tokenCountDigits(value: string): string {
 }
 
 /** The one sentence for a Model the Agent runtime does not report. */
-export function unavailableModelMessage(agentType: string, kind: string, model: string): string {
-	return `agent "${agentType}" (${kind}) has no model "${model}": check the model id and its provider auth`;
+function unavailableModelMessage(agentType: string, kind: string, model: string): string {
+	// An empty kind is an Agent type whose runtime kind is not known, as for
+	// one the config no longer names: the sentence does not read a kind it
+	// does not have.
+	const known = kind === "" ? "" : ` (${kind})`;
+	return `agent "${agentType}"${known} has no model "${model}": check the model id and its provider auth`;
 }
 
 /** The one sentence for an Agent type that does not map a setting. */
@@ -129,8 +133,11 @@ function noSettingMessage(
 
 /** The one sentence for a Thinking level outside the Agent type's declared set. */
 function noLevelMessage(agentType: string, value: string, supported: readonly string[]): string {
+	// An Agent that maps thinking but declares no level offers nothing, so the
+	// sentence leaves no empty list to read.
+	const offered = supported.length === 0 ? "" : ` (it offers: ${supported.join(", ")})`;
 	return (
-		`agent type "${agentType}" offers no thinking level "${value}" (it offers: ${supported.join(", ")}): ` +
+		`agent type "${agentType}" offers no thinking level "${value}"${offered}: ` +
 		`clear the thinking level in the override panel, or start an agent type that offers it`
 	);
 }
@@ -212,10 +219,12 @@ export const settingFit: SettingFit = {
 	},
 
 	modelInList(agent, model, list): FitVerdict {
-		if (model === "" || agent.agent.model === undefined) {
-			return model === "" ? pass() : noSetting(agent.agentType, "model", model);
-		}
-		if (list.includes(model)) return pass();
+		// The no-setting half of the rule stands in one place: an Agent that
+		// maps no model setting gets the static answer, not a second spelling
+		// of the same rule.
+		const staticModel = modelSettingFit(agent, model);
+		if (!staticModel.ok) return staticModel;
+		if (model === "" || list.includes(model)) return pass();
 		return {
 			ok: false,
 			cause: "not-in-list",
