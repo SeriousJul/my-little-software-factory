@@ -414,3 +414,8 @@ _Avoid_: fallback clone, mirror
 The single egress for external commands: the control plane runs every herdr, git, GitHub CLI, and agent model list command through it.
 The automated tests inject a fake runner that records safe command facts, so no test touches a real herdr session, repository, ticket source, or agent runtime.
 _Avoid_: executor, spawner
+
+**Documentation site**:
+The static site that GitHub Pages publishes from the `docs/` folder.
+It shows the published subset (the ADRs, the standards, and the guides) and keeps the agent instruction, verification, and research folders out of the build.
+_Avoid_: website, docs site, blog
