@@ -46,10 +46,11 @@ interface SectionHeaderProps {
 	 */
 	newOutput?: boolean;
 	/**
-	 * A click on a collapsed header expands the section and lands the cursor
-	 * on its list. A click on an expanded header does nothing.
+	 * A click on the header toggles the section (user story 9). Expanding
+	 * lands the cursor on the section's list; collapsing keeps its selection
+	 * and detail, the same action `x` takes for the cursor.
 	 */
-	onExpand: (section: MainSection) => void;
+	onToggle: (section: MainSection) => void;
 }
 
 /**
@@ -62,8 +63,9 @@ interface SectionHeaderProps {
  * their bell and the new-output fact (user stories 11 through 16). The row
  * truncates at the end rather than wrapping: the Main view's rows are fixed,
  * and a truncation must never hide the section name at the row's start. A
- * click on a collapsed header expands the section, the same action `x` takes
- * for the cursor (user stories 6 and 20).
+ * click on a header toggles the section, the same action `x` takes for the
+ * cursor: expanding lands the cursor on the section's list, and collapsing
+ * keeps its selection and detail (user stories 6, 9, and 20).
  */
 export function SectionHeader({
 	section,
@@ -80,7 +82,7 @@ export function SectionHeader({
 	bell = false,
 	heldBell = false,
 	newOutput = false,
-	onExpand,
+	onToggle,
 }: SectionHeaderProps) {
 	// The terminal's width chooses the form; the row's own width only sets
 	// where a too-long count truncates, so the section name stays readable.
@@ -104,8 +106,8 @@ export function SectionHeader({
 			: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
 	const text = `${expanded ? "▾" : "▸"} ${section === "tickets" ? "Tickets" : "Consultations"}${facts}`;
 	const handleMouse = (event: MouseEvent) => {
-		if (expanded || !active) return;
-		if (event.type === "down" && event.button === 0) onExpand(section);
+		if (!active) return;
+		if (event.type === "down" && event.button === 0) onToggle(section);
 	};
 	return createElement(
 		"box",

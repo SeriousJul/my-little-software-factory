@@ -1,7 +1,7 @@
 /**
  * The merged Main view: one surface, two sections, one shared detail pane.
  *
- * These frame tests hold the product decisions of ADR 0018 (which supersedes
+ * These frame tests hold the product decisions of ADR 0019 (which supersedes
  * the one-expanded-section layout of ADR 0013): both the Ticket and the
  * Consultation section are visible at the same time, each with its own
  * header row and list box, and one detail pane on the right answers for the
@@ -507,7 +507,7 @@ describe("the merged Main view", () => {
 		}
 	});
 
-	test("a click on a collapsed header expands that section, and a click on an expanded one does nothing", async () => {
+	test("a click on a section header toggles that section", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seedConsultation(state, uid("d"));
 		try {
@@ -527,12 +527,16 @@ describe("the merged Main view", () => {
 				// The click lands the cursor back on the expanded section's
 				// own list.
 				expect(frame).toContain("┌─❯ Tickets");
-				// A click on the Consultation header, whose section is
-				// already expanded, leaves the frame as it is: the operator's
-				// place in the other section is never lost to a stray click.
-				const stable = await settle(setup);
+				// A click on the expanded Consultation header collapses the
+				// section, and the cursor stays on the row it held.
 				await mouseClick(setup, 10, 22);
-				expect(await settle(setup)).toBe(stable);
+				const collapsed = await awaitFrame(
+					setup,
+					(candidate) => headerOf(candidate, "Consultations").startsWith("▸"),
+					"the Consultation section to collapse on click",
+				);
+				expect(collapsed).toContain("▸ Consultations");
+				expect(collapsed).toContain("┌─❯ Tickets");
 			}, state);
 		} finally {
 			state.close();

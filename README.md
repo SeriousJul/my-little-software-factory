@@ -429,7 +429,7 @@ builds an agent in a workspace it is taking away.
 
 The Main view is one surface with two list sections, the Ticket section on
 top and the Consultation section below, and one context-dependent detail pane
-on the right (ADR 0018). Both sections start expanded, and the detail pane
+on the right (ADR 0019). Both sections start expanded, and the detail pane
 shows the detail of whichever item the cursor holds: the ticket detail on a
 ticket, the Consultation detail on a Consultation. `x` or a click on a header
 toggles the section under the cursor: it shrinks to its header row and its

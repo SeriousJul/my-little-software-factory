@@ -173,7 +173,7 @@ not re-verified for that view, not as a pass.
 
 ## The dual-list Main view (issue #49)
 
-ADR 0018 replaces the accordion with two stacked list sections and one
+ADR 0019 replaces the accordion with two stacked list sections and one
 context-dependent detail pane: `t` and `v` are gone, `x` toggles the section
 under the cursor, the Consultation close moved to `z`, and up and down cross
 the section boundary. The automatic suite covers the headers, the steady

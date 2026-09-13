@@ -1,4 +1,4 @@
-# ADR 0018: The Main view holds two lists and one detail pane
+# ADR 0019: The Main view holds two lists and one detail pane
 
 Status: accepted
 Date: 2026-09-14

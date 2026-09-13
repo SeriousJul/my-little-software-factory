@@ -30,7 +30,7 @@ import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const SCROLL_WIDTH = 60;
-// The minimum terminal that holds the dual-list frame (ADR 0018): the scroll
+// The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
 // tests boot the smallest frame the detail viewport can take.
 const SCROLL_HEIGHT = 19;
 const GUTTER_X = SCROLL_WIDTH - 2;

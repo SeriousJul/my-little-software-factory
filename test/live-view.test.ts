@@ -221,7 +221,7 @@ async function pressReturn(
 /**
  * The ticket's list row, by its title.
  *
- * The dual-list frame (ADR 0018) truncates the list row's title, so the row
+ * The dual-list frame (ADR 0019) truncates the list row's title, so the row
  * is found by the selection marker and the title's leading cells, with the
  * full-title row (the detail pane, the modal's title) as the fallback a
  * modal frame offers.

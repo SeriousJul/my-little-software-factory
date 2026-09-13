@@ -82,7 +82,7 @@ export const overlayRows = (frame: string): string[] =>
 export const listHalfOf = (row: string): string => `${row.split("││")[0]}│`;
 /**
  * The Ticket section header: the Ticket list box starts one row lower than
- * it did when the section owned the whole frame (ADR 0018). The Consultation
+ * it did when the section owned the whole frame (ADR 0019). The Consultation
  * section header sits between the two list boxes, so it is not part of this
  * offset.
  *
@@ -852,7 +852,7 @@ export async function openConsultationPanel(
  *
  * The Main view is one visible flow: the Ticket rows, then the Consultation
  * rows. `j` from the last visible Ticket crosses the boundary and lands on
- * the first Consultation row (ADR 0018). The walk presses `j` until the
+ * the first Consultation row (ADR 0019). The walk presses `j` until the
  * Consultation list shows the focus marker, so a test states that it is
  * across instead of counting the Ticket rows it crossed.
  */
@@ -881,7 +881,7 @@ export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise
  * Walk the unified cursor back to the Ticket list, and wait for it there.
  *
  * `k` from the first visible Consultation crosses the boundary to the last
- * Ticket row, the same walk in reverse (ADR 0018).
+ * Ticket row, the same walk in reverse (ADR 0019).
  *
  * The frame shows the marker on two boxes at once: the Ticket box while the
  * cursor holds the Consultation list (its retained row), and the

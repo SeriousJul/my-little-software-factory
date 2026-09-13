@@ -14,7 +14,7 @@
  * `a` toggles auto-handoff in the Ticket section.
  *
  * The Main view is one surface with two independently collapsable sections
- * (ADR 0018): both lists stay in the left column, both expanded by default,
+ * (ADR 0019): both lists stay in the left column, both expanded by default,
  * and one detail pane on the right renders the selected item, whatever
  * section it comes from. `x` toggles the section under the cursor, and one
  * Message line, one Action bar, and one control catalog answer for both.
@@ -268,7 +268,7 @@ export function App({
 	// the empty SQLite projection while configured sources refresh.
 	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
 	const ticketsRef = useRef(tickets);
-	// The two Main sections expand independently (ADR 0018): both stay open by
+	// The two Main sections expand independently (ADR 0019): both stay open by
 	// default, and `x` collapses the one under the cursor to free rows for
 	// the other. The unified selection is the item the shared detail pane
 	// renders, whatever section its row comes from.
@@ -512,7 +512,7 @@ export function App({
 	// normal layout.
 	const showModeLine = modeLine !== "" && !tooSmall;
 	// The body holds every row between the (optional) mode line and the two
-	// permanent bottom rows (ADR 0018). Its left column stacks the two section
+	// permanent bottom rows (ADR 0019). Its left column stacks the two section
 	// headers and their list boxes; its right column holds the one detail
 	// pane for the selected item, at the full body height.
 	const bodyRows = terminalHeight - (showModeLine ? 1 : 0) - 2;
@@ -1418,24 +1418,25 @@ export function App({
 		setResponseEditor(false);
 	};
 	/**
-	 * A click on a collapsed section's header: expand the section, move the
-	 * cursor into it, and focus its list. A click on the expanded section's
-	 * header does nothing, so the operator's place in the other section is
-	 * never lost to a stray click.
+	 * A click on a section's header toggles that section (user story 9), the
+	 * same action `x` takes for the cursor. Expanding moves the cursor into
+	 * the section's list and focuses it. Collapsing keeps the selection and
+	 * its detail with the section, so the operator's place is never lost to
+	 * a stray click (user stories 19 and 20).
 	 */
-	const expandSection = (next: MainSection) => {
+	const clickSection = (next: MainSection) => {
 		if (next === "tickets") {
-			if (ticketsExpandedRef.current) return;
-			ticketsExpandedRef.current = true;
-			setTicketsExpanded(true);
+			ticketsExpandedRef.current = !ticketsExpandedRef.current;
+			setTicketsExpanded(ticketsExpandedRef.current);
 		} else {
-			if (consultationsExpandedRef.current) return;
-			consultationsExpandedRef.current = true;
-			setConsultationsExpanded(true);
+			consultationsExpandedRef.current = !consultationsExpandedRef.current;
+			setConsultationsExpanded(consultationsExpandedRef.current);
 		}
-		selectionRef.current = next === "tickets" ? "ticket" : "consultation";
-		setSelection(selectionRef.current);
-		focusPane("list");
+		if (next === "tickets" ? ticketsExpandedRef.current : consultationsExpandedRef.current) {
+			selectionRef.current = next === "tickets" ? "ticket" : "consultation";
+			setSelection(selectionRef.current);
+			focusPane("list");
+		}
 	};
 	/**
 	 * Put the unified cursor on one Consultation by id, from the launch
@@ -1912,14 +1913,7 @@ export function App({
 			outputRefreshRef.current = null;
 			clearInterval(timer);
 		};
-	}, [
-		commandRunner,
-		consultationOperations,
-		interaction,
-		selectedConsultation,
-		selection,
-		state,
-	]);
+	}, [commandRunner, consultationOperations, interaction, selectedConsultation, selection, state]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
@@ -2372,7 +2366,7 @@ export function App({
 		// permanent bottom rows. The body's left column stacks the two
 		// sections - each header row, and its list box while the section is
 		// expanded - and its right column holds the one detail pane for the
-		// selected item (ADR 0018).
+		// selected item (ADR 0019).
 		showModeLine &&
 			createElement(
 				"text",
@@ -2456,7 +2450,7 @@ export function App({
 							held: heldCount,
 							heldBell,
 							active: mainSurfaceActive,
-							onExpand: () => expandSection("tickets"),
+							onToggle: () => clickSection("tickets"),
 						}),
 						ticketsExpanded &&
 							createElement(TicketList, {
@@ -2474,10 +2468,9 @@ export function App({
 									selectTicket(index);
 								},
 								onMove: (delta) => {
-									if (selectionRef.current !== "ticket") {
-										focusListSection("ticket");
-										return;
-									}
+									// The first wheel spin into a section both moves the cursor
+									// there and selects one adjacent row.
+									focusListSection("ticket");
 									moveList(delta);
 								},
 							}),
@@ -2491,7 +2484,7 @@ export function App({
 							bell,
 							newOutput,
 							active: mainSurfaceActive,
-							onExpand: () => expandSection("consultations"),
+							onToggle: () => clickSection("consultations"),
 						}),
 						consultationsExpanded &&
 							createElement(ConsultationList, {
@@ -2506,10 +2499,9 @@ export function App({
 									selectConsultation(index);
 								},
 								onMove: (delta) => {
-									if (selectionRef.current !== "consultation") {
-										focusListSection("consultation");
-										return;
-									}
+									// The first wheel spin into a section both moves the cursor
+									// there and selects one adjacent row.
+									focusListSection("consultation");
 									selectConsultation(consultationIndexRef.current + delta);
 								},
 								emptyMessage:
