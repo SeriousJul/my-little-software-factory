@@ -1805,7 +1805,8 @@ export function App({
 			state === undefined ||
 			section !== "consultations" ||
 			selectedConsultation?.paneId === null ||
-			selectedConsultation === undefined
+			selectedConsultation === undefined ||
+			selectedConsultation.state === "closed"
 		) {
 			setLiveOutput(null);
 			return;
@@ -1844,6 +1845,20 @@ export function App({
 			clearInterval(timer);
 		};
 	}, [commandRunner, consultationOperations, interaction, selectedConsultation, state, section]);
+	// A Consultation that closes while selected flips its detail from the live
+	// Agent view to the captured history. The follow scroll had pinned the
+	// detail to the bottom while the Agent ran; the history is read from the
+	// top, where the header lines (state, close result) live, so the close
+	// returns the reading position to the top and re-arms the follow.
+	const closedConsultationId =
+		selectedConsultation !== undefined && selectedConsultation.state === "closed"
+			? selectedConsultation.id
+			: null;
+	useEffect(() => {
+		if (closedConsultationId === null) return;
+		consultationFollowRef.current = true;
+		setConsultationScroll(0);
+	}, [closedConsultationId]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
