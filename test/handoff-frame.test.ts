@@ -574,7 +574,7 @@ describe("the Enter handoff", () => {
 					setup,
 					"j",
 					"the selection to move on",
-					(f) => markerRowOf(f) === 3,
+					(f) => markerRowOf(f) === 5,
 				);
 				expect(selectedRow(moved)).toContain("Fix pan drift");
 			},
@@ -645,14 +645,14 @@ describe("the in-flight guard", () => {
 					setup,
 					"j",
 					"the selection to move while in flight",
-					(f) => markerRowOf(f) === 3,
+					(f) => markerRowOf(f) === 5,
 				);
 				// ...and moves back.
 				await press(
 					setup,
 					"k",
 					"the selection to move back while in flight",
-					(f) => markerRowOf(f) === 2,
+					(f) => markerRowOf(f) === 4,
 				);
 				// The first handoff still settles, on the ticket it started on.
 				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");

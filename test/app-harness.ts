@@ -74,7 +74,18 @@ export const overlayRows = (frame: string): string[] =>
  * pane-divider substring, so it holds for wide-character rows too.
  */
 export const listHalfOf = (row: string): string => `${row.split("││")[0]}│`;
-/** The terminal row of the selected ticket in the list pane. */
+/**
+ * The Main view's two section headers: the panes start two rows lower than
+ * they did when one view owned the whole frame.
+ *
+ * Frame tests that point at a pane row or click a pane cell state their
+ * target relative to this constant, so the headers stay one fact instead of
+ * a repeated magic number.
+ */
+export const HEADER_ROWS = 2;
+/** The terminal row a frame-relative pane row holds under the headers. */
+export const paneRow = (row: number): number => HEADER_ROWS + row;
+/** The terminal row of the selected entry in the list pane. */
 export const markerRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
 /**
@@ -237,6 +248,7 @@ export async function bootApp(
 	props: AppProps = {},
 	width = WIDTH,
 	height = HEIGHT,
+	rendererOptions: { kittyKeyboard?: boolean } = {},
 ): Promise<AppSetup> {
 	// Existing frame tests keep deterministic data at the App seam. A source
 	// or state passed explicitly opts into the real empty/loading behavior.
@@ -257,6 +269,7 @@ export async function bootApp(
 		width,
 		height,
 		exitOnCtrlC: false,
+		...rendererOptions,
 	});
 	await setup.flush();
 	return { ...setup, stopApp: () => stopApp?.() };
@@ -271,8 +284,9 @@ export async function withApp(
 	width = WIDTH,
 	height = HEIGHT,
 	props: AppProps = {},
+	rendererOptions: { kittyKeyboard?: boolean } = {},
 ): Promise<void> {
-	const setup = await bootApp(props, width, height);
+	const setup = await bootApp(props, width, height, rendererOptions);
 	try {
 		await body(setup);
 	} finally {

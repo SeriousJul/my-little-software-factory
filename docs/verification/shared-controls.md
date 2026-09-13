@@ -147,3 +147,14 @@ their state and task badges) still paint the fixed dark color system, so a
 pinned light presentation reads its shared controls and overlays, but not those
 panes, on a light terminal. The automatic light switch is gated until the full
 light migration lands (decision recorded above).
+
+## The merged Main view (PR 42)
+
+The merged Main view keeps the Consultation launcher and the response editor
+on these same shared modules, so the checks above cover the fields, choices,
+actions, and focus routes those two surfaces now run. The section
+architecture around them - the section headers, the pane switch, and the
+Catalogue rows the Ticket and Consultation sections add - is covered by the
+automatic suite, which passed in full on the merged branch. The terminal
+walks above were not re-run on the merged Main view: they are recorded as
+not re-verified for that view, not as a pass.

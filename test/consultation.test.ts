@@ -12,6 +12,7 @@ import {
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
 	isLiteralText,
+	sanitizePastedText,
 	serializeRepositoryOperation,
 	translateAgentKey,
 	validateConsultationInput,
@@ -74,6 +75,16 @@ describe("Consultation input and interaction rules", () => {
 		expect(validateResponseInput("   ")).toBe("response cannot be empty");
 		expect(isLiteralText("é😀\n\t")).toBe(true);
 		expect(isLiteralText("safe\u001b[31m")).toBe(false);
+	});
+
+	test("sanitizes a bracketed paste of terminal sequences to its literal text", () => {
+		// A color sequence, a title sequence, and a stray carriage return
+		// are removed; the newline and the Unicode survive.
+		expect(sanitizePastedText("a\u001b[31mred\u001b[0m\r\n\ttabé")).toBe("ared\n\ttabé");
+		expect(sanitizePastedText("title\u001b]0;name\u0007end")).toBe("titleend");
+		expect(sanitizePastedText("title\u001b]0;name\u001b\\end")).toBe("titleend");
+		expect(sanitizePastedText("plain")).toBe("plain");
+		expect(sanitizePastedText("\u001b[31m\u001b[0m")).toBe("");
 	});
 
 	test("refuses input over the 64 KiB default limit by UTF-8 bytes", () => {

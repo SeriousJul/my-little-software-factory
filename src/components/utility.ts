@@ -92,7 +92,7 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 	const mode = context.mode;
 	// What the guide lists depends on the mode alone; what each row says about
 	// availability is read from the live context when the row renders.
-	const entries = useMemo(() => guideControls(mode), [mode]);
+	const entries = useMemo(() => guideControls(context), [context]);
 	const frame = modalFrame(width, height, {
 		maxWidth: UTILITY_MAX_WIDTH,
 		maxHeight: UTILITY_MAX_HEIGHT,
