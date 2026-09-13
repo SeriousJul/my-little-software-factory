@@ -166,6 +166,13 @@ export interface HandoffDispatch {
 	clearLeftover(identity: string, force: boolean): Promise<readonly string[]>;
 	/** True while a Handoff holds the seat. The catalogue fact and the route edit guard. */
 	handoffActive(): boolean;
+	/**
+	 * Stop the module. A handoff run still in flight settles neither state nor
+	 * reports after this, and no new work starts. The app calls it on teardown,
+	 * before it closes the state the module writes to: without it the run's
+	 * settlement reads a closed database.
+	 */
+	stop(): void;
 }
 
 /** Build one Handoff dispatch module for one durable state database. */
@@ -185,6 +192,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/** True while external handoff work holds the seat. */
 	private inFlight = false;
+	/**
+	 * True after `stop`. A run that finishes after the stop must not settle the
+	 * state the app has already closed or report into an unmounted UI, so every
+	 * settlement checks this first.
+	 */
+	private stopped = false;
 	/** True while one cleanup is executing. */
 	private clearing = false;
 	/** True from the moment any cleanup queues until the cleanup queue drains. */
@@ -212,7 +225,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 		return this.inFlight;
 	}
 
+	stop(): void {
+		this.stopped = true;
+	}
+
 	dispatch(intent: HandoffIntent): Promise<DispatchResult> {
+		if (this.stopped)
+			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
 		const config = this.config();
 		const ticket = this.state
 			.visibleTickets(config.taskRules, config.defaultTaskType)
@@ -410,6 +429,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		reportStarted: (started: DispatchResult) => void,
 		error: unknown,
 	): void {
+		if (this.stopped) return;
 		const reason = errorMessage(error);
 		this.state.settleHandoff(claim.attemptId, false, reason);
 		this.reports.refresh();
@@ -426,6 +446,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		outcome: HandoffOutcome,
 		reportStarted: (started: DispatchResult) => void,
 	): Promise<void> {
+		if (this.stopped) return;
 		if (outcome.collision !== undefined) this.recordNameCollision(identity, outcome.collision);
 		if (outcome.ownCollision !== undefined)
 			this.recordNameCollision(identity, outcome.ownCollision);

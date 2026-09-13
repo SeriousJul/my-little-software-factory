@@ -1966,10 +1966,15 @@ export function App({
 			stop: () => {
 				coordinatorRef.current?.stop();
 				observationRef.current?.stop();
+				// The handoff dispatch is the one background loop that outlives the
+				// state: its run settles asynchronously, so stop it before the
+				// owner closes the state, or the settlement reads a closed database.
+				handoffDispatchRef.current?.dispatch.stop();
 			},
 		});
 		return () => {
 			coordinator.stop();
+			handoffDispatch?.stop();
 			observationRef.current = undefined;
 		};
 	}, [
