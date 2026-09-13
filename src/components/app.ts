@@ -511,7 +511,8 @@ export function App({
 					.consultations("all")
 					.filter((item) => item.replacementOf === selectedConsultation.id)
 					.map((item) => item.id);
-	const consultationNarrow = section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
+	const consultationNarrow =
+		section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
 	const consultationWidth = consultationNarrow
 		? Math.max(1, terminalWidth - 4)
 		: detailGeometry.usableCols;
@@ -1318,7 +1319,9 @@ export function App({
 		setSection(next);
 		// The narrow Consultation layout removes its list pane, so focus the
 		// visible detail pane instead of leaving navigation on hidden content.
-		focusPane(next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list");
+		focusPane(
+			next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list",
+		);
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1924,7 +1927,11 @@ export function App({
 	// A resize can remove the narrow Consultation list without a section switch.
 	// Keep both focus representations on the visible detail pane in that case.
 	useLayoutEffect(() => {
-		if (section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH && focusedPaneRef.current !== "detail") {
+		if (
+			section === "consultations" &&
+			terminalWidth < CONSULTATION_PANES_MIN_WIDTH &&
+			focusedPaneRef.current !== "detail"
+		) {
 			focusedPaneRef.current = "detail";
 			setFocusedPane("detail");
 		}

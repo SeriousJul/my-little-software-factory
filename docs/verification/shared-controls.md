@@ -47,9 +47,9 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | Small and narrow frames keep the focused control and the way out; below a usable size the surface states its size and how to leave | `test/reserved-rows.test.ts`, `test/handoff-frame.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The shared library is required: no screen builds its own field, names a renderer field, or hand-edits a draft string | `test/shared-control-architecture.test.ts` | Passed |
 | The gallery's examples are the production modules | `test/shared-gallery.test.ts` | Passed |
-| A control's written reason uses the width its surface names, and is cut to its own cells when the surface names none | `test/shared-controls.test.ts`, `test/override-panel.test.ts` | Passed |
+| A control's written reason uses the width its surface names, and is cut to its own cells when the surface names none | `test/shared-controls.test.ts`, `test/override-panel.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | A row whose value cannot reach its Agent wears the warning tone and writes the Setting fit sentence under itself, at every width the panel renders at | `test/override-panel.test.ts`, `test/handoff-frame.test.ts` | Passed |
-| A row that waits for the list its value would be judged against keeps that value in the tone of a setting it cannot confirm | `test/shared-controls.test.ts`, `test/handoff-frame.test.ts` | Passed |
+| A row that waits for the list its value would be judged against keeps that value in the tone of a setting it cannot confirm | `test/shared-controls.test.ts`, `test/handoff-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The override panel's state tones come from the shared palette, and the no-color presentation keeps a warning row's value and its whole sentence | `test/override-panel.test.ts` | Passed |
 
 ## Environment these checks ran in
@@ -77,7 +77,7 @@ Every check below runs in `npm test`, which is `npm run lint`,
 Run it on a machine with a desktop session, then record the versions and results
 in this file. Do not mark the row verified from the automated suite.
 
-1. `npm run gallery` and walk all four examples with `Tab`.
+1. `npm run gallery` and walk all five examples with `Tab`.
 2. In the `fields` example: type into the focused Context field, press Left,
    Right, Home, End, Shift+Arrow, Ctrl+Arrow, Ctrl+Backspace, Ctrl+Z, Ctrl+Y;
    paste `1e3` and then `42`; paste a long single line and a multi-line draft.
@@ -120,6 +120,13 @@ none of it.
 If the renderer cannot give Orca any of this, stop and return for agreement on a
 renderer change or an equivalent accessible interaction mode. Do not lower the
 requirement to keyboard-only support, and do not claim the baseline complete.
+
+## The gallery's `notes` example (this PR)
+
+The gallery's `notes` example - the written reason at the width the surface
+names, and the waiting row's dim tone - is new in this PR. The terminal walks
+above were run before it existed: they are recorded as not re-verified for
+that example, not as a pass for it.
 
 ## The light presentation: the decision
 
