@@ -41,12 +41,14 @@ export default defineConfig({
 		 * own parallelism.
 		 *
 		 * A CI host runs the same suite on a shared runner that also hosts other
-		 * jobs, so its cores are not all its own: forking one renderer per core
-		 * oversubscribes the runner, and a key the test sends into a surface
-		 * transition is dropped while the render is starved. Two workers leave
-		 * the runner headroom the frame waits and the key-handler waits hold;
-		 * the suite runs about twice as long, still well under the job budget.
+		 * jobs, so its cores are not all its own. The frame tests each drive a
+		 * real-time renderer, and two of them starve each other: a key a test
+		 * sends into a surface transition is dropped, and a resize reflow lands
+		 * late enough to paint a stale frame. The waits are tuned to hold when a
+		 * renderer is not competing for its own cores, so the CI host runs the
+		 * suite serially, one worker, giving every renderer the cores it needs.
+		 * The suite takes a few extra minutes, well inside the job's budget.
 		 */
-		maxWorkers: ON_CI ? 2 : Math.max(1, Math.min(8, availableParallelism())),
+		maxWorkers: ON_CI ? 1 : Math.max(1, Math.min(8, availableParallelism())),
 	},
 });

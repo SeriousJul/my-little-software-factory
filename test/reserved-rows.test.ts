@@ -18,6 +18,7 @@ import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	actionBarRowOf,
 	cellColors,
+	FRAME_DEADLINE_MS,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
@@ -26,6 +27,7 @@ import {
 	rowsOf,
 	type Setup,
 	settle,
+	sleep,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -52,13 +54,29 @@ const BASE_BG: [number, number, number] = [0, 0, 0];
  * cells with a border.
  */
 async function expectReservedRows(setup: Setup, width: number, height: number): Promise<string> {
-	// A resize lands on the buffer at once, but the reflow of the layout
-	// renders through the renderer's scheduler. On a slow host that commit
-	// can outlive settle's grace, and the frame is at the new size while the
-	// layout is still the old one. Drain the scheduler before the frame is
-	// trusted.
-	await setup.flush();
-	const frame = await settle(setup);
+	// A resize lands on the buffer at once, but the reflow of the layout is a
+	// later render. Until it commits, the frame still holds the old layout: a
+	// box is drawn for the size the terminal had before, so a box that fit the
+	// old size can carry a border through a reserved row. On a slow host that
+	// stale frame is stable for longer than settle's grace, so one settle
+	// returns it. Settle again until the reserved rows are clean, the reflow's
+	// own mark of having been drawn for the new size. A layout that never
+	// reflows to the new size fails the assertions at the deadline.
+	const clean = (f: string): boolean => {
+		const rows = rowsOf(f);
+		if (rows.length !== height) return false;
+		if (!rows.every((row) => widthOf(row) === width)) return false;
+		if (height >= 1 && BORDER_GLYPHS.test(actionBarRowOf(f))) return false;
+		if (height >= 2 && BORDER_GLYPHS.test(messageRowOf(f))) return false;
+		return true;
+	};
+	const deadline = Date.now() + FRAME_DEADLINE_MS;
+	let frame = await settle(setup);
+	while (!clean(frame)) {
+		if (Date.now() >= deadline) break;
+		await sleep(25);
+		frame = await settle(setup);
+	}
 	const rows = rowsOf(frame);
 	expect(rows).toHaveLength(height);
 	for (const row of rows) expect(widthOf(row)).toBe(width);
