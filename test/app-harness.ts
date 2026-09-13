@@ -840,7 +840,25 @@ export async function openConsultationPanel(
 }
 
 /**
- * Confirm an open confirmation panel on Enter, and wait until the panel
+ * "w" opens the leftover panel above the selected Ticket, and waits until
+ * the panel owns the keys.
+ *
+ * The panel's key handler subscribes after the open commit, and the next key
+ * in the test is the panel's own, so wait for the panel's subscription the
+ * same way. Returns the settled frame the panel is drawn in.
+ */
+export async function openLeftoverPanel(
+	setup: Setup,
+	what = "the leftover panel",
+): Promise<string> {
+	const before = keyHandlerListeners(setup);
+	await press(setup, "w", what, (f) => f.includes("Leftover environment"));
+	await awaitNewKeyHandler(setup, before, `${what} to take the keys`);
+	return settle(setup);
+}
+
+/**
+ * Confirm an open action panel on Enter, and wait until the panel
  * releases the keys. A key sent while the panel's unsubscribe is still
  * pending reaches the stale handler, which would run the panel's own action
  * again on the same key.
