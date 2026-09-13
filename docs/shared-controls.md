@@ -1,11 +1,17 @@
 # Shared control standard
 
-Status: accepted design; implementation and acceptance verification are pending.
-Confirmed on 2026-09-09.
+Status: accepted, and the baseline is implemented for every editable field,
+selector, search, form action, and form focus route the control plane owns.
+Confirmed on 2026-09-09; implemented in the shared control library under
+[src/components/shared](../src/components/shared).
 
-This is the required baseline for human and agent contributors. It describes the
-target behavior, not the current application's capabilities. In particular,
-screen-reader support has not been verified.
+The current results for every acceptance target, with their versions, are in
+[the verification record](verification/shared-controls.md): the keyboard and
+visual targets ran in Ghostty and foot, and a tmux path runs in the suite; a
+screen reader has never read this application, and no claim of screen-reader
+support is made anywhere in this repository.
+
+This is the required baseline for human and agent contributors.
 
 See [the glossary](../CONTEXT.md) for domain terms,
 [ADR 0014](adr/0014-shared-modules-own-control-behavior.md) for ownership, and
@@ -142,9 +148,11 @@ show normal, focused, invalid, unavailable, loading, and narrow-size states wher
 applicable. Use those examples in automated tests so examples cannot become a
 separate imitation of the production controls.
 
-Human and agent contributor instructions must link to this standard and the
-gallery. Document its real command when it exists; there is no gallery command
-yet.
+Human and agent contributor instructions link to this standard and to the
+gallery. The gallery command is `npm run gallery`, or
+`node bin/factory-gallery.mjs [example]`, and it draws the production modules.
+The same examples are driven by `test/shared-gallery.test.ts`, so an example
+cannot become an imitation of a control.
 
 Automated checks must reject new separate field implementations and bypasses of
 the shared control modules. Add behavior tests through the modules' public
@@ -157,13 +165,16 @@ The initial acceptance targets are:
 
 | Environment | Required checks | Current result |
 | --- | --- | --- |
-| Linux with Ghostty | Keyboard and visual checks | Keyboard, rendering, and paste verified 2026-07-11; pixel review blocked by the session's compositor surface |
-| Linux with foot | Keyboard and visual checks | Keyboard, rendering, and paste verified 2026-07-11; pixel review blocked by the session's compositor surface |
-| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | 25/25 checks passed twice in a row on 2026-07-11 |
-| Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified (Orca not installed in the acceptance environment) |
+| Linux with Ghostty | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
+| Linux with foot | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
+| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | [The verification record](verification/shared-controls.md) |
+| Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified |
 
-Record the exact OS, terminal, multiplexer, renderer, and screen-reader versions
-used, as applicable. Other platforms remain unverified, not implicitly supported.
+The results live in [the verification record](verification/shared-controls.md),
+which states what was measured, on what, and what was not measured: the
+screen-reader path is the target that has never run. Record the exact OS,
+terminal, multiplexer, renderer, and screen-reader versions used, as
+applicable. Other platforms remain unverified, not implicitly supported.
 
 Recorded on 2026-07-11 on Arch Linux, node v26.8.1, tmux 3.7c, Hyprland 0.56.2
 (Wayland), Ghostty 1.3.1-arch2, foot 1.28.0, grim 1.5.0. The tmux-path checks
@@ -213,17 +224,23 @@ skipped or cannot run is not a pass.
 
 1. Reproduce the reported field failures through real application flows with
    isolated state and fake external operations. Record failing regression tests.
+   Done: `test/shared-field-editing.test.ts`,
+   `test/consultation-launcher-editing.test.ts`, and
+   `test/executable-fields.test.ts`.
 2. Test screen-reader feasibility early, before broad migration. Upstream still
    lists screen-reader support as future work. If the current renderer prevents
    the agreed access, return for agreement on a renderer change or an equivalent
    accessible interaction mode. Do not silently remove the requirement.
 3. Build the shared field behavior and real examples. Migrate Text fields and
    Draft fields first, including the override panel, Consultation launcher, and
-   response editor.
+   response editor. Done: the library, the gallery, and all three surfaces,
+   with the replaced local implementations removed.
 4. Migrate selectors and the remaining owned controls in small changes. Remove
    replaced implementations rather than retaining permanent alternatives.
 5. Add and enforce the architecture checks. Update current-behavior documentation
-   and contributor instructions as each migration lands.
+   and contributor instructions as each migration lands. Done: the architecture
+   test, this standard, [the README](../README.md), and
+   [the contributor instructions](../AGENTS.md).
 6. Complete all acceptance checks and record their results.
 
 The migration is complete only when every owned control follows this standard
@@ -231,6 +248,10 @@ and lint, type checks, behavior tests, terminal tests, visual review, and
 screen-reader checks pass. Documentation and a new component directory alone do
 not meet this condition.
 
-Existing verification commands are `npm run lint`, `npm run typecheck`, and
-`npm test`. The gallery, architecture checks, and screen-reader test procedure
-still need implementation; none is claimed to exist by this document.
+The verification commands are `npm run lint`, `npm run typecheck`, `npm test`,
+and `npm run gallery`. The architecture rule is checked by
+`test/shared-control-architecture.test.ts`, which rejects a separate field
+implementation, a hand-edited draft string, and a screen that names a renderer
+field instead of the library. The screen-reader procedure is written down in
+[the verification record](verification/shared-controls.md); it has not been
+run, and no result is claimed for it.

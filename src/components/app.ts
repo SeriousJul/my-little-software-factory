@@ -33,7 +33,6 @@ import {
 import {
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
-	isLiteralText,
 	type LiveCheckoutSafety,
 	translateAgentKey,
 	validateConsultationRepositoryOptions,
@@ -43,7 +42,12 @@ import {
 	type ConsultationOperations,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
-import { HANDOFF_ENVIRONMENT_KINDS, type Handoff, type Ticket } from "../domain/ticket.ts";
+import {
+	HANDOFF_ENVIRONMENT_KINDS,
+	type Handoff,
+	isHeldCompletion,
+	type Ticket,
+} from "../domain/ticket.ts";
 import {
 	baseChoice,
 	type HandoffChoice,
@@ -75,12 +79,12 @@ import {
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type { Consultation, FactoryState } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
-import type { TurnLogEntry } from "../turn-log.ts";
+import type { TurnEndCause, TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, panelBodyCols } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
 import { ConsultationDetail, consultationDetailLines } from "./consultation-detail.ts";
-import { ConsultationLauncher } from "./consultation-launcher.ts";
+import { ConsultationLauncher, type LauncherDraft } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
 import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
 import {
@@ -108,6 +112,7 @@ import {
 	type ModelListStatus,
 	OverridePanel,
 } from "./override-panel.ts";
+import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -142,6 +147,12 @@ type Panel =
  * the Stale Agent output, the glossary's name for it.
  */
 const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
+/**
+ * Below this width the Consultation list hides and the detail keeps focus: a
+ * two-pane section this narrow cannot hold both panes, so the pane switch and
+ * the list keys that walk it stay unavailable.
+ */
+const CONSULTATION_PANES_MIN_WIDTH = 80;
 
 /**
  * The handoff waiting behind the override panel.
@@ -280,6 +291,13 @@ export function App({
 	const historyFilterRef = useRef<"open" | "closed" | "all">("open");
 	const [launcher, setLauncher] = useState(false);
 	const [replacementConsultationId, setReplacementConsultationId] = useState<string | null>(null);
+	// The launcher's unfinished form, kept for this application run only. A
+	// restart never sees it: closing keeps the operator's work, and Discard is
+	// the one action that deletes it.
+	const [launcherForm, setLauncherForm] = useState<{
+		owner: string;
+		draft: LauncherDraft;
+	} | null>(null);
 	const [consultationSafety, setConsultationSafety] = useState<{
 		consultationId: string;
 		safety: LiveCheckoutSafety;
@@ -294,6 +312,10 @@ export function App({
 	const consultationFollowRef = useRef(true);
 	const [newOutput, setNewOutput] = useState(false);
 	const [bell, setBell] = useState(false);
+	// The held-turn bell: it rings the moment a held count rises, so a turn
+	// that failed while the operator looked away gets their attention.
+	const [heldBell, setHeldBell] = useState(false);
+	const heldCountRef = useRef(-1);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const selectedIndexRef = useRef(0);
 	const configRef = useRef(config);
@@ -371,6 +393,9 @@ export function App({
 		clearOperation: clearOperationMessage,
 		clearWorking: clearWorkingMessage,
 		clearProgress: clearProgressMessage,
+		// What a control that ran did, routed by the severity it named: a copy
+		// that took is news, and a copy the terminal refused is a warning.
+		report: reportMessage,
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
 	/**
 	 * Write one Consultation outcome onto the shared Message facts.
@@ -404,13 +429,36 @@ export function App({
 						(ticket.handoff?.paneId ?? null) !== null &&
 						agents.some((agent) => agent.paneId === ticket.handoff?.paneId),
 				).length;
+	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
+	// handoffs, routes, and restarts until it is decided or a turn completes.
+	const dispatchPause = state?.dispatchPauseActive() ?? false;
+	// The held turns (ADR 0016): the awaiting tickets whose last turn ended
+	// failed, aborted, or truncated with no decision. They rest in awaiting,
+	// held against every automatic decision, until the operator acts. A ticket
+	// whose agent works again has left awaiting and is no longer held (its
+	// next settle overwrites the trace).
+	const heldCount = tickets.filter(
+		(ticket) => ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion),
+	).length;
 	const modeLine =
 		state === undefined
 			? ""
 			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
-				}`;
+				}${autoMode && dispatchPause ? " paused" : ""}`;
 	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
+	// The held count the bell compares against: a rise rings the terminal bell
+	// and flashes the Tickets header, a fall or a steady count does not.
+	useEffect(() => {
+		if (heldCountRef.current >= 0 && heldCount > heldCountRef.current) {
+			if (configRef.current.attentionBell) {
+				setHeldBell(true);
+				setTimeout(() => setHeldBell(false), 250);
+				process.stdout.write("\u0007");
+			}
+		}
+		heldCountRef.current = heldCount;
+	}, [heldCount]);
 
 	const tooSmall = belowMinimum(terminalWidth, terminalHeight);
 	// The compact frame's own arithmetic. One row holds the Action bar at any
@@ -468,7 +516,7 @@ export function App({
 					.consultations("all")
 					.filter((item) => item.replacementOf === selectedConsultation.id)
 					.map((item) => item.id);
-	const consultationNarrow = section === "consultations" && terminalWidth < 80;
+	const consultationNarrow = section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
 	const consultationWidth = consultationNarrow
 		? Math.max(1, terminalWidth - 4)
 		: detailGeometry.usableCols;
@@ -978,6 +1026,10 @@ export function App({
 		actions: ActionRow[];
 		entries: readonly TurnLogEntry[];
 		contextLine: string;
+		/** The turn's end cause, or null when the turn has no settled record. */
+		cause: TurnEndCause | null;
+		/** The agent's or provider's text for the cause; empty when none. */
+		detail: string;
 	} => {
 		const taskType = taskTypeOf(ticket);
 		const completion = ticket.lastCompletion;
@@ -1004,6 +1056,8 @@ export function App({
 			actions,
 			entries: completion?.turnLog ?? [],
 			contextLine,
+			cause: completion?.cause ?? null,
+			detail: completion?.detail ?? "",
 		};
 	};
 
@@ -1239,12 +1293,48 @@ export function App({
 			() => setResponseEditor(true),
 		);
 	};
+	/**
+	 * Keep the durable Response draft equal to what the field holds.
+	 *
+	 * The Draft field owns the text while the operator edits it, and the saved
+	 * draft is what survives a close, a rejection, and a restart, so every
+	 * change is stored as it happens rather than carried out of the editor by
+	 * hand.
+	 */
+	const storeResponseDraft = (text: string) => {
+		responseDraftRef.current = text;
+		setResponseDraft(text);
+		if (
+			state !== undefined &&
+			selectedConsultation !== undefined &&
+			text !== selectedConsultation.draft
+		)
+			state.setConsultationDraft(selectedConsultation.id, text);
+	};
+	/** Store what the operator last saw, then run the send. */
+	const sendResponseText = (text: string) => {
+		storeResponseDraft(text);
+		submitResponse();
+	};
+	/** Delete the saved Response draft. Closing the editor never does this. */
+	const discardResponseDraft = () => {
+		responseDraftRef.current = "";
+		setResponseDraft("");
+		if (state !== undefined && selectedConsultation !== undefined)
+			state.setConsultationDraft(selectedConsultation.id, "");
+		setResponseEditor(false);
+		setStatus({ kind: "info", text: "the saved Response draft was discarded" });
+	};
+	/** Close the editor. The Response draft it leaves is the one already stored. */
+	const closeResponseEditor = () => {
+		setResponseEditor(false);
+	};
 	const expandSection = (next: MainSection) => {
 		sectionRef.current = next;
 		setSection(next);
 		// The narrow Consultation layout removes its list pane, so focus the
 		// visible detail pane instead of leaving navigation on hidden content.
-		focusPane(next === "consultations" && terminalWidth < 80 ? "detail" : "list");
+		focusPane(next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list");
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1372,7 +1462,7 @@ export function App({
 		interaction
 			? "consultation-interaction"
 			: responseEditor
-				? "consultation-response"
+				? "form-field"
 				: sectionRef.current === "consultations"
 					? focusedPaneRef.current === "list"
 						? "consultation-list"
@@ -1447,13 +1537,22 @@ export function App({
 			if (key.ctrl === true && key.name === "c") renderer.destroy();
 			return;
 		}
-		// The shell owns the emergency exit before those two surfaces match a
+		// The shell owns the emergency exit before the Agent terminal matches a
 		// key, so Ctrl+C cannot reach an Agent. Every other surface dispatches
 		// Ctrl+C through the control catalogue below.
-		if ((interaction || responseEditor) && key.ctrl === true && key.name === "c") {
+		if (interaction && key.ctrl === true && key.name === "c") {
 			renderer.destroy();
 			return;
 		}
+		// The response editor is a shared form surface: its field and actions
+		// answer the keys there, and nothing below may claim them. The shell
+		// keeps the emergency exit, because the field takes every other Ctrl key
+		// as text editing.
+		if (responseEditor && key.ctrl === true && key.name === "c") {
+			renderer.destroy();
+			return;
+		}
+		if (responseEditor) return;
 		if (interaction) {
 			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
 			const keyName = key.name.toLowerCase();
@@ -1494,35 +1593,6 @@ export function App({
 							text: `Agent interaction failed: ${errorMessage(error)}`,
 						}),
 				);
-			}
-			return;
-		}
-		if (responseEditor) {
-			if (key.name === "escape") {
-				setResponseEditor(false);
-				return;
-			}
-			if (key.name === "return") {
-				if (key.shift) {
-					responseDraftRef.current += "\n";
-					setResponseDraft(responseDraftRef.current);
-					if (selectedConsultation !== undefined)
-						consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
-				} else submitResponse();
-				return;
-			}
-			if (key.name === "backspace") {
-				responseDraftRef.current = responseDraftRef.current.slice(0, -1);
-				setResponseDraft(responseDraftRef.current);
-				if (selectedConsultation !== undefined)
-					consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
-				return;
-			}
-			if ([...key.name].length > 0 && isLiteralText(key.name)) {
-				responseDraftRef.current += key.name === "space" ? " " : key.name;
-				setResponseDraft(responseDraftRef.current);
-				if (selectedConsultation !== undefined)
-					consultationOperations?.saveDraft(selectedConsultation, responseDraftRef.current);
 			}
 			return;
 		}
@@ -1870,7 +1940,7 @@ export function App({
 	// A resize can remove the narrow Consultation list without a section switch.
 	// Keep both focus representations on the visible detail pane in that case.
 	useLayoutEffect(() => {
-		if (section === "consultations" && terminalWidth < 80 && focusedPaneRef.current !== "detail") {
+		if (section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH && focusedPaneRef.current !== "detail") {
 			focusedPaneRef.current = "detail";
 			setFocusedPane("detail");
 		}
@@ -2057,12 +2127,27 @@ export function App({
 		replacementConsultationId === null
 			? undefined
 			: consultations.find((item) => item.id === replacementConsultationId);
-	const launcherInitialType =
-		replacementConsultation !== undefined ? replacementConsultation.typeName : undefined;
-	const launcherInitialInput =
-		replacementConsultation === undefined || consultationOperations === undefined
-			? ""
-			: consultationOperations.replacementInput(replacementConsultation.id);
+	// The form the launcher opens on: the one the operator left on this screen,
+	// or the Replacement context the durable state holds when nothing was left.
+	const launcherOwner =
+		replacementConsultationId === null ? "launcher" : `replacement:${replacementConsultationId}`;
+	const launcherDraft =
+		launcherForm !== null && launcherForm.owner === launcherOwner
+			? launcherForm.draft
+			: replacementConsultation !== undefined && state !== undefined
+				? // A Replacement starts from the durable recovery context, never from
+					// a draft another screen left behind.
+					{
+						typeName: replacementConsultation.typeName,
+						repositoryIdentity: replacementConsultation.repository.identity,
+						input: state.replacementInput(replacementConsultation.id),
+					}
+				: // A fresh launcher starts on the Repository the operator was looking at.
+					{
+						typeName: Object.keys(config.consultationTypes)[0] ?? "",
+						repositoryIdentity: selectedTicket?.repositoryRef.identity ?? "",
+						input: "",
+					};
 	const actionMode = currentBaseMode();
 	const ticketContext = controlContextFor(actionMode);
 	const messageColor = colorOfMessage(visibleMessage);
@@ -2111,6 +2196,8 @@ export function App({
 				section: "tickets",
 				expanded: section === "tickets",
 				width: terminalWidth,
+				held: heldCount,
+				heldBell,
 				active: mainSurfaceActive,
 				onExpand: () => expandSection("tickets"),
 			}),
@@ -2233,7 +2320,10 @@ export function App({
 							createElement(ConsultationDetail, {
 								lines: consultationLines,
 								ansiLines,
-								visibleRows: Math.max(1, detailGeometry.visibleRows - (responseEditor ? 6 : 0)),
+								visibleRows: Math.max(
+									1,
+									detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+								),
 								scroll: consultationDetailScroll,
 								focused: focusedPane === "detail" && !responseEditor,
 								active: mainSurfaceActive,
@@ -2245,48 +2335,58 @@ export function App({
 										: undefined,
 							}),
 							responseEditor &&
-								createElement(
-									"box",
-									{
-										border: true,
-										borderColor: COLORS.borderFocused,
-										title: "Response",
-										padding: 1,
-										style: { flexDirection: "column" },
-									},
-									createElement(
-										"text",
-										{ fg: COLORS.textBright },
-										truncateToWidth(responseDraft || "(empty)", consultationWidth),
-									),
-									createElement(
-										"text",
-										{ fg: COLORS.dim },
-										truncateToWidth(
-											"enter submit  shift+enter newline  esc keep draft",
-											consultationWidth,
-										),
-									),
-								),
+								createElement(ResponseEditor, {
+									draft: responseDraft,
+									width: consultationWidth,
+									rows: RESPONSE_EDITOR_ROWS,
+									focused: true,
+									context: controlContextFor("form-field"),
+									inputActive: utility === null,
+									onSend: sendResponseText,
+									onDiscard: discardResponseDraft,
+									onDraftChange: storeResponseDraft,
+									onClose: closeResponseEditor,
+									onHelp: () => openGuide("form-field"),
+									onMessage: () => openMessage("form-field"),
+									onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
+									onCopy: reportMessage,
+									message: visibleMessage,
+									onEmergencyExit: () => renderer.destroy(),
+								}),
 						),
 				),
 		launcher &&
 			createElement(ConsultationLauncher, {
 				types: config.consultationTypes,
 				repositories: repositoryOptions,
-				initialType: launcherInitialType,
-				initialRepository:
-					replacementConsultation?.repository.identity ?? selectedTicket?.repositoryRef.identity,
-				initialInput: launcherInitialInput,
+				draft: launcherDraft,
 				title:
 					replacementConsultation === undefined
 						? "Consultation launcher"
 						: "Replacement Consultation",
-				onLaunch: startConsultation,
-				onCancel: () => {
+				onLaunch: (typeName, repository, text) => {
+					// The form is with the Agent now, so nothing is left to keep.
+					setLauncherForm(null);
+					startConsultation(typeName, repository, text);
+				},
+				onClose: (kept) => {
+					setLauncherForm({ owner: launcherOwner, draft: kept });
 					setLauncher(false);
 					setReplacementConsultationId(null);
 				},
+				onDiscard: () => {
+					setLauncherForm(null);
+					setLauncher(false);
+					setReplacementConsultationId(null);
+				},
+				context: controlContextFor(currentBaseMode()),
+				inputActive: utility === null,
+				onHelp: (mode) => openGuide(mode),
+				onMessage: (mode) => openMessage(mode),
+				onUnavailable: setWarningMessage,
+				onCopy: reportMessage,
+				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
 			}),
 		terminalHeight >= 2 && messageRowElement(visibleMessage, terminalWidth),
 		createElement(ActionBar, {
@@ -2302,6 +2402,7 @@ export function App({
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
 				profiles,
+				onCopy: reportMessage,
 				modelList,
 				onAgentChange: requestModelList,
 				initial: override.choice,
@@ -2326,6 +2427,8 @@ export function App({
 				contextLine: decision.contextLine,
 				entries: decision.entries,
 				actions: decision.actions,
+				cause: decision.cause,
+				detail: decision.detail,
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
 				onCancel: () => setPanel(null),

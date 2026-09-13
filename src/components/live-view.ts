@@ -33,7 +33,8 @@ import {
 } from "./decision-modal.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
-import { type ActionRow, actionRowSpans, bodyRowSpans, scrollbarRows } from "./modal-chrome.ts";
+import { type ActionRow, bodyRowSpans, scrollbarRows } from "./modal-chrome.ts";
+import { ActionItem } from "./shared/choices.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -250,11 +251,12 @@ export function LiveView({
 				),
 			),
 			...actions.map((row, index) =>
-				createElement(
-					"text",
-					{ key: row.key },
-					...actionRowSpans(row, index === selected, geometry.contentWidth),
-				),
+				createElement(ActionItem, {
+					key: row.key,
+					row,
+					focused: index === selected,
+					width: geometry.contentWidth,
+				}),
 			),
 			finalLayout.showHint &&
 				createElement("text", { fg: COLORS.dim }, truncateToWidth(hint, geometry.contentWidth)),

@@ -25,7 +25,7 @@ import {
 
 /** What a control's behavior is called with: one object, so a handler names
  *  only the parts it uses. */
-interface ControlCall {
+export interface ControlCall {
 	/** The facts the control was gated on. */
 	context: ControlContext;
 	/** The raw key event: some behaviors need its name, and some must call
@@ -38,7 +38,7 @@ interface ControlCall {
 }
 
 /** The behavior of one control. */
-type ControlHandler = (call: ControlCall) => void;
+export type ControlHandler = (call: ControlCall) => void;
 
 /**
  * What a refusal says.
@@ -81,6 +81,8 @@ interface ControlDispatchSpec {
 	active?: boolean;
 	/** Keys this surface must not touch, checked before the catalogue. */
 	skip?: (key: KeyEvent) => boolean;
+	/** Handles keys not claimed by the catalogue, such as Agent input. */
+	onUnclaimed?: (key: KeyEvent) => boolean | undefined;
 }
 
 /**
@@ -100,7 +102,7 @@ export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent
 		const mode = typeof spec.mode === "function" ? spec.mode() : spec.mode;
 		const context = contextFor(mode, spec.context);
 		const control = controlForKey(key, context);
-		if (control === undefined) return false;
+		if (control === undefined) return spec.onUnclaimed?.(key) === true;
 		const availability = availabilityFor(control, context);
 		if (!availability.available && !spec.ungated?.includes(control.id)) {
 			spec.onUnavailable?.(refusalReason(control, context));

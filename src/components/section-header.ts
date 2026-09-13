@@ -15,6 +15,10 @@ interface SectionHeaderProps {
 	recovery?: number;
 	bell?: boolean;
 	newOutput?: boolean;
+	/** The Tickets section's held turns, held against automatic decisions. */
+	held?: number;
+	/** The held count rose since the last render: flash the header like a bell. */
+	heldBell?: boolean;
 	active: boolean;
 	onExpand: () => void;
 }
@@ -34,6 +38,8 @@ export function SectionHeader({
 	recovery = 0,
 	bell = false,
 	newOutput = false,
+	held = 0,
+	heldBell = false,
 	active,
 	onExpand,
 }: SectionHeaderProps) {
@@ -46,10 +52,14 @@ export function SectionHeader({
 		width >= 60
 			? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
 			: `awaiting ${awaitingResponse}  recovery ${recovery}`;
+	// A held turn is a fact about the Ticket section, and its count answers
+	// for the collapsed section the same way the Consultation counts do.
 	const facts =
 		section === "consultations"
 			? `  ${counts}${bell ? "  !!!" : ""}${expanded && newOutput ? "  new output" : ""}`
-			: "";
+			: held > 0
+				? `  held: ${held}${heldBell ? "  !!!" : ""}`
+				: "";
 	const text = `${marker}${name}${facts}`;
 	const handleMouse = (event: MouseEvent) => {
 		if (active && event.type === "down" && event.button === 0) onExpand();

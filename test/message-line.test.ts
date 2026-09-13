@@ -23,6 +23,7 @@ import {
 	markerRowOf,
 	messageRowOf,
 	openGuide,
+	openLauncher,
 	openMessageView,
 	press,
 	pressF2,
@@ -392,6 +393,49 @@ describe("the permanent Message line", () => {
 			WIDTH,
 			HEIGHT,
 			{ config: DEFAULT_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+		);
+	});
+
+	test("F2 opens the view from inside a field, and the field keeps its work", async () => {
+		await withApp(
+			async (setup) => {
+				// A truncated error on the line: the view has text to hold.
+				await press(setup, "return", "the error", (f) => messageRowOf(f).startsWith("Error: "));
+				// The launcher's Draft field holds the keys, and F2 is the field mode's
+				// own alias: the view opens from inside the field, not only from the
+				// base panes.
+				await openLauncher(setup);
+				setup.mockInput.pressTab();
+				setup.mockInput.pressTab();
+				await awaitFrame(setup, (f) => f.includes("❯ Initial input"), "the draft field");
+				await setup.mockInput.typeText("draft before the view");
+				setup.mockInput.pressKey("HOME");
+				setup.mockInput.pressArrow("right", { shift: true });
+				setup.mockInput.pressArrow("right", { shift: true });
+				const view = await openMessageView(setup, "F2", "Message view - Error");
+				expect(view).toContain("the daemon refused the request after the outage");
+				await closeOverlay(setup, "Message view", "the view to close");
+				// The field kept the text, the caret, and the selection: asking to read
+				// a Message changed nothing about the operator's work.
+				setup.mockInput.pressKey("q");
+				await awaitFrame(
+					setup,
+					(f) => f.includes("qaft before the view"),
+					"the typed character to replace the selection",
+				);
+			},
+			WIDTH,
+			HEIGHT,
+			{
+				config: {
+					...DEFAULT_CONFIG,
+					consultationTypes: {
+						grill: { agent: "claude", environment: "live-worktree", template: "/grill {input}" },
+					},
+				},
+				runner: longLineHandoffRunner(),
+				initialTickets: SAMPLE_TICKETS,
+			},
 		);
 	});
 

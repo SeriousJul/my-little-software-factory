@@ -347,6 +347,9 @@ describe("validateConfig", () => {
 				template: expect.stringContaining("Review pull request"),
 				autoClose: false,
 			});
+			expect(config.taskTypes.review.agent).toBeUndefined();
+			expect(config.taskTypes.review.model).toBeUndefined();
+			expect(config.taskTypes.review.contextWindow).toBeUndefined();
 			// Every agent that can take a context window names its own spelling
 			// of the count, so one profile value reaches each of them.
 			expect(config.agents.codex?.contextWindow).toBe("-c model_context_window={value}");

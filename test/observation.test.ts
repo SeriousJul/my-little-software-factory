@@ -14,7 +14,7 @@ import {
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import type { TurnLogEntry } from "../src/turn-log.ts";
+import type { TurnEnd, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -134,7 +134,7 @@ function rig(options: {
 	agents?: HerdrAgent[];
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
 	/** The turn log the fake session reader returns. Null: no session log. */
-	turnLogs?: (kind: string, sessionId: string) => Promise<TurnLogEntry[] | null>;
+	turnLogs?: (kind: string, sessionId: string, startedAt: string | null) => Promise<TurnEnd | null>;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = [...(options.agents ?? [])];
@@ -221,6 +221,29 @@ function settleFor(state: FactoryState, identity: string, taskType: string): str
 		message: "settled the turn",
 		turnLog: [{ kind: "text", text: "settled the turn" }],
 		completedAt: "2026-08-31T11:00:00Z",
+	});
+	return attempt;
+}
+
+/** Hand a ticket out and settle its turn with an explicit cause, so it can rest held. */
+function settleForCause(
+	state: FactoryState,
+	identity: string,
+	taskType: string,
+	cause: TurnEndCause,
+	detail = "",
+): string {
+	const attempt = handOut(state, identity, taskType);
+	state.settleTurn({
+		ticketIdentity: identity,
+		handoffId: attempt,
+		taskType,
+		agentType: "pi",
+		message: "settled the turn",
+		turnLog: [{ kind: "text", text: "settled the turn" }],
+		completedAt: "2026-08-31T11:00:00Z",
+		cause,
+		detail,
 	});
 	return attempt;
 }
@@ -567,7 +590,7 @@ describe("the observation cycle", () => {
 			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
 			turnLogs: async (kind, sessionId) => {
 				calls.push({ kind, sessionId });
-				return entries;
+				return { log: entries, cause: "completed", detail: "" };
 			},
 			readPane: async (paneId) => {
 				paneReads.push(paneId);
@@ -621,7 +644,7 @@ describe("the observation cycle", () => {
 			agents: [agent("pane-implement", "done")],
 			turnLogs: async () => {
 				asked = true;
-				return [{ kind: "text", text: "a log" }];
+				return { log: [{ kind: "text", text: "a log" }], cause: "completed", detail: "" };
 			},
 		});
 		handOut(state, "github:github.com:I_5");
@@ -696,6 +719,33 @@ describe("the observation cycle", () => {
 		setAgents([agent("pane-implement", "idle")]);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
+		state.close();
+	});
+
+	test("a held turn settles at once: the startup grace does not guard a failure", async () => {
+		const { state, coordinator } = rig({
+			agents: [agent("pane-implement", "done", "session-1")],
+			turnLogs: async () => ({
+				log: [{ kind: "text", text: "the turn failed" }],
+				cause: "failed",
+				detail: "the build broke",
+			}),
+		});
+		handOut(state, "github:github.com:I_5");
+		// No advance: the handoff is still inside the startup window. A turn that
+		// demonstrably failed does not wait it out; it settles now, and is held.
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({
+					cause: "failed",
+					detail: "the build broke",
+					decision: null,
+				}),
+			}),
+		);
 		state.close();
 	});
 
@@ -1415,6 +1465,370 @@ describe("the open dispatch", () => {
 		}
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
+		state.close();
+	});
+});
+
+describe("the held turn and the Dispatch pause", () => {
+	test("auto mode holds a failed route instead of routing it", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleForCause(state, "github:github.com:I_5", "route", "failed", "the build broke");
+		await coordinator.tick();
+		// The held gate stops the automatic route: nothing is dispatched.
+		expect(intents).toHaveLength(0);
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({
+					cause: "failed",
+					detail: "the build broke",
+					decision: null,
+				}),
+			}),
+		);
+		state.close();
+	});
+
+	test("auto mode holds a failed review instead of auto-closing it", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ cause: "failed", decision: null }),
+			}),
+		);
+		state.close();
+	});
+
+	test("auto mode holds a truncated and an aborted turn, not just a failed one", async () => {
+		for (const cause of ["truncated", "aborted"] as const) {
+			const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+			settleForCause(state, "github:github.com:I_5", "review", cause);
+			await coordinator.tick();
+			expect(intents).toHaveLength(0);
+			const [ticket] = state.visibleTickets([], "implement");
+			expect(ticket.state).toBe("awaiting");
+			expect(ticket.lastCompletion?.decision).toBe(null);
+			state.close();
+		}
+	});
+
+	test("manual mode holds an auto-close type's held turn: no close, no route", async () => {
+		for (const taskType of ["review", "route"]) {
+			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+			settleForCause(state, "github:github.com:I_5", taskType, "failed", "the build broke");
+			await coordinator.tick();
+			// The gate holds the auto-close type's automatic decision without the
+			// operator too: no close, no route, and the turn rests held with its
+			// trace undecided.
+			expect(intents).toHaveLength(0);
+			const [ticket] = state.visibleTickets([], "implement");
+			expect(ticket).toEqual(
+				expect.objectContaining({
+					state: "awaiting",
+					lastCompletion: expect.objectContaining({
+						cause: "failed",
+						detail: "the build broke",
+						decision: null,
+					}),
+				}),
+			);
+			state.close();
+		}
+	});
+
+	test("auto mode still decides an unknown turn, which fails open", async () => {
+		const { state, coordinator } = rig({ autoOn: true, agents: [] });
+		settleForCause(state, "github:github.com:I_5", "review", "unknown");
+		await coordinator.tick();
+		// unknown is not held: the review auto-closes as it normally would, then
+		// the loop re-dispatches the now-open ticket. It never rests as held.
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket.lastCompletion?.decision).toBe("auto-closed");
+		state.close();
+	});
+
+	test("auto mode still closes a completed route's turn and routes it", async () => {
+		const { state, intents, reportStart, coordinator } = rig({ autoOn: true, agents: [] });
+		settleForCause(state, "github:github.com:I_5", "route", "completed");
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		reportStart();
+		const [decided] = state.visibleTickets([], "implement");
+		expect(decided.lastCompletion?.decision).toBe("auto-handed-off");
+		state.close();
+	});
+
+	test("a decided held turn is no longer held and no longer pauses", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const attempt = settleForCause(state, "github:github.com:I_5", "route", "failed");
+		expect(state.dispatchPauseActive()).toBe(true);
+		// The operator decides the held turn: it is no longer held, and the
+		// pause ends.
+		state.applyCompletionDecision({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:01:00Z",
+		});
+		expect(state.dispatchPauseActive()).toBe(false);
+		await coordinator.tick();
+		// The pause is gone: the now-open ticket dispatches as open.
+		expect(intents).toHaveLength(1);
+		expect(intents[0].origin).toBe("open");
+		state.close();
+	});
+
+	test("auto mode's Dispatch pause holds a new open ticket", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		// A held failed trace sits on one ticket. The pause is global, so the
+		// fresh open ticket the loop would otherwise dispatch is held too.
+		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		state.applyFetch(source, success([fetched("github:github.com:I_6")]));
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		expect(state.ticketState("github:github.com:I_6")).toBe("open");
+		state.close();
+	});
+
+	test("manual mode never dispatches an open ticket, pause or no", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		state.applyFetch(source, success([fetched("github:github.com:I_6")]));
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		// Manual mode does not auto-dispatch open tickets at all, pause or no:
+		// the ticket stays open for the operator. The pause's one effect in
+		// manual mode is the auto-close route, covered by its own test.
+		expect(state.ticketState("github:github.com:I_6")).toBe("open");
+		state.close();
+	});
+
+	test("the pause holds an auto-close type's route in manual mode, like the Parallel limit", async () => {
+		const { state, intents, statuses, coordinator } = rig({ autoOn: false, agents: [] });
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		// I_6's completed route predates I_5's held failure, so the pause is on
+		// while the completed turn waits for its route. Manual mode never
+		// dispatches the open tickets, but the auto-close route still runs
+		// there - and the pause holds it, exactly as a full Parallel limit
+		// would.
+		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		const claim = state.claimHandoff(
+			"github:github.com:I_6",
+			{ ...choice, taskType: "route" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-route",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: "github:github.com:I_6",
+			handoffId: claim.claim.attemptId,
+			taskType: "route",
+			agentType: "pi",
+			message: "settled the turn",
+			turnLog: [{ kind: "text", text: "settled the turn" }],
+			completedAt: "2026-08-31T10:00:00Z",
+			cause: "completed",
+		});
+		expect(state.dispatchPauseActive()).toBe(true);
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		const resting = state
+			.visibleTickets([], "implement")
+			.find((ticket) => ticket.identity === "github:github.com:I_6");
+		expect(resting).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ cause: "completed", decision: null }),
+			}),
+		);
+		// The pause is a state fact, not an auto-mode state: the Message line
+		// names it in manual mode too, where it holds the auto-close route.
+		expect(statuses.some((s) => s.kind === "warning" && s.text.startsWith("Dispatch pause:"))).toBe(
+			true,
+		);
+		state.close();
+	});
+
+	test("a completed turn that cannot route during a pause stays awaiting and routes next cycle", async () => {
+		const { state, intents, reportStart, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		// I_5's held failure trips the pause after I_6's completed turn waited
+		// for its route: the pause holds the route, the trace stays undecided,
+		// and the turn rests in awaiting - the way a full Parallel limit
+		// leaves it.
+		const heldAttempt = settleForCause(state, "github:github.com:I_5", "review", "failed");
+		const claim = state.claimHandoff(
+			"github:github.com:I_6",
+			{ ...choice, taskType: "route" },
+			"open",
+		);
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-route",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: "github:github.com:I_6",
+			handoffId: claim.claim.attemptId,
+			taskType: "route",
+			agentType: "pi",
+			message: "settled the turn",
+			turnLog: [{ kind: "text", text: "settled the turn" }],
+			completedAt: "2026-08-31T10:00:00Z",
+			cause: "completed",
+		});
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		const resting = state
+			.visibleTickets([], "implement")
+			.find((ticket) => ticket.identity === "github:github.com:I_6");
+		expect(resting).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ cause: "completed", decision: null }),
+			}),
+		);
+		// The operator decides the held turn that started the pause: the route
+		// is not lost, and the next cycle takes it.
+		state.applyCompletionDecision({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: heldAttempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:01:00Z",
+		});
+		await coordinator.tick();
+		expect(
+			intents.some(
+				(intent) =>
+					intent.origin === "workflow" && intent.ticketIdentity === "github:github.com:I_6",
+			),
+		).toBe(true);
+		reportStart();
+		const routed = state
+			.visibleTickets([], "implement")
+			.find((ticket) => ticket.identity === "github:github.com:I_6");
+		expect(routed?.lastCompletion?.decision).toBe("auto-handed-off");
+		state.close();
+	});
+
+	test("auto mode's Dispatch pause holds a missing agent's restart", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		// A held failed trace sits on one ticket; a different ticket's agent has
+		// gone missing. The pause holds the restart, not just the open dispatch.
+		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		handOut(state, "github:github.com:I_6");
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		expect(state.ticketState("github:github.com:I_6")).toBe("handed-off");
+		state.close();
+	});
+
+	test("a completed turn after the held failure ends the pause and frees dispatch", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		settleForCause(state, "github:github.com:I_5", "review", "failed");
+		expect(state.dispatchPauseActive()).toBe(true);
+		// A completed settle after the held failure clears the pause.
+		settleForCause(state, "github:github.com:I_6", "review", "completed");
+		expect(state.dispatchPauseActive()).toBe(false);
+		await coordinator.tick();
+		// The held failure stays held; the completed one auto-closes and the
+		// now-open ticket dispatches, proving the pause is gone.
+		expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
+		expect(
+			intents.some(
+				(intent) => intent.origin === "open" && intent.ticketIdentity === "github:github.com:I_6",
+			),
+		).toBe(true);
+		state.close();
+	});
+
+	test("the Message line reports the hold and the pause as they happen", async () => {
+		const { state, coordinator, statuses } = rig({
+			autoOn: true,
+			agents: [agent("pane-implement", "done", "session-1")],
+			turnLogs: async () => ({
+				log: [{ kind: "text", text: "the turn failed" }],
+				cause: "failed",
+				detail: "the build broke",
+			}),
+		});
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		handOut(state, "github:github.com:I_5");
+		// The held settle names the ticket and the cause on the Message line,
+		// and the failed settle trips the Dispatch pause on the same cycle.
+		await coordinator.tick();
+		expect(
+			statuses.some(
+				(s) =>
+					s.kind === "warning" &&
+					s.text === "ticket github:github.com:I_5 held (failed): the build broke",
+			),
+		).toBe(true);
+		expect(statuses.some((s) => s.kind === "warning" && s.text.startsWith("Dispatch pause:"))).toBe(
+			true,
+		);
+		// A completed settle after the held failure clears the pause: the next
+		// cycle tells the operator the dispatch resumes.
+		settleForCause(state, "github:github.com:I_6", "review", "completed");
+		await coordinator.tick();
+		expect(
+			statuses.some((s) => s.kind === "info" && s.text.startsWith("Dispatch pause cleared:")),
+		).toBe(true);
+		state.close();
+	});
+
+	test("a restart after a held turn with no agent text carries the cause as the previous message", async () => {
+		const { state, intents, setAgents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-implement", "working")],
+		});
+		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
+		// I_5's failed turn left no agent text: the provider's own words sit in
+		// the detail. A later completed settle on another ticket lifts the
+		// pause, so the restart is not the pause's to hold.
+		const attempt = handOut(state, "github:github.com:I_5");
+		state.settleTurn({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: attempt,
+			taskType: "implement",
+			agentType: "pi",
+			message: "",
+			turnLog: [],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+			detail: "the build broke",
+		});
+		settleForCause(state, "github:github.com:I_6", "review", "completed");
+		expect(state.dispatchPauseActive()).toBe(false);
+		await coordinator.tick();
+		// I_5's agent still works: the held ticket reopens, and its next settle
+		// would overwrite the trace. Its trace still carries the cause.
+		expect(state.ticketState("github:github.com:I_5")).toBe("running");
+		// The agent goes missing: the restart carries the cause and its detail
+		// as the previous message, so the next agent reads the wall instead of
+		// inheriting silence.
+		setAgents([]);
+		await coordinator.tick();
+		const restarts = intents.filter((intent) => intent.origin === "restart");
+		expect(restarts).toEqual([
+			expect.objectContaining({
+				ticketIdentity: "github:github.com:I_5",
+				previousMessage: "previous turn ended failed: the build broke",
+			}),
+		]);
 		state.close();
 	});
 });

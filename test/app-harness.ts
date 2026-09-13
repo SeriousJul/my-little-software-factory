@@ -676,6 +676,50 @@ export async function openMessageView(
 }
 
 /**
+ * Tab until the frame names the slot the focus is on.
+ *
+ * A shared form paints its focus marker where the keyboard is, so the marker is
+ * the fact a test can wait on. Sending the next key before the frame says so
+ * would hand it to the slot the operator left, and the test would then blame
+ * the form for its own timing.
+ */
+export async function tabUntilSlot(setup: Setup, slot: string, steps = 6): Promise<string> {
+	let frame = await settle(setup);
+	for (let step = 0; step < steps; step += 1) {
+		if (frameText(frame).includes(slot)) return frame;
+		setup.mockInput.pressTab();
+		frame = await settle(setup);
+	}
+	throw new Error(`Tab never reached ${slot}\nlast frame:\n${frame}`);
+}
+
+/**
+ * Type the launcher's initial input and run its visible Launch action.
+ *
+ * The launcher's Enter belongs to the Draft field, so the route an operator
+ * walks is Tab to the action and Enter there. This helper is that route, and
+ * every launcher test takes it, so no test can launch by an editing key.
+ */
+export async function launchConsultationDraft(setup: Setup, input: string): Promise<void> {
+	await tabUntilSlot(setup, "❯ Initial input");
+	await setup.mockInput.typeText(input);
+	await tabUntilSlot(setup, "❯ Launch Consultation");
+	setup.mockInput.pressEnter();
+}
+
+/**
+ * Run the response editor's visible Send action.
+ *
+ * The editor's Enter belongs to the Draft field, so a reply is sent from the
+ * action the operator tabs to. Every response test takes this route, so none of
+ * them can send a response with an editing key.
+ */
+export async function sendResponseDraft(setup: Setup): Promise<void> {
+	await tabUntilSlot(setup, "❯ Send response");
+	setup.mockInput.pressEnter();
+}
+
+/**
  * Open the Consultation launcher, and wait until it owns the keys.
  *
  * The launcher's fields take the first keys after the open: Tab to the input,

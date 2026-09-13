@@ -1,7 +1,7 @@
 /** The Message line's facts: what kind of message is visible, and why. */
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { type MessageFacts, selectMessage } from "./messages.ts";
+import { type MessageFact, type MessageFacts, selectMessage } from "./messages.ts";
 
 /**
  * Which operation owns a progress line.
@@ -70,6 +70,24 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 	}, []);
 
 	/**
+	 * State what a control did, when it did it and there is nothing to warn about.
+	 *
+	 * A result is not a refusal and not progress, so it holds its own slot and
+	 * wears its own prefix: the line an operator reads after a control that ran
+	 * must not say `Warning:` about a copy that took.
+	 */
+	const news = useCallback(
+		(text: string) =>
+			setFacts((current) => ({
+				...current,
+				operation: undefined,
+				notice: undefined,
+				news: text,
+			})),
+		[],
+	);
+
+	/**
 	 * Answer a control the app will decide without the operator.
 	 *
 	 * A notice is not progress: it holds its own slot, below the facts an
@@ -78,7 +96,8 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 	 * the Message line.
 	 */
 	const notice = useCallback(
-		(text: string) => setFacts((current) => ({ ...current, operation: undefined, notice: text })),
+		(text: string) =>
+			setFacts((current) => ({ ...current, operation: undefined, news: undefined, notice: text })),
 		[],
 	);
 
@@ -91,6 +110,7 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 			setFacts((current) => ({
 				...current,
 				operation: { severity: "warning", text },
+				news: undefined,
 				notice: undefined,
 			})),
 		[],
@@ -101,6 +121,7 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 			setFacts((current) => ({
 				...current,
 				operation: { severity: "error", text },
+				news: undefined,
 				notice: undefined,
 			})),
 		[],
@@ -122,6 +143,7 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 			setFacts((current) => ({
 				...current,
 				operation: undefined,
+				news: undefined,
 				notice: undefined,
 				working: owned ? visibleWorking() : current.working,
 			}));
@@ -155,12 +177,32 @@ export function useMessageFacts(sourceHealth: string | undefined) {
 
 	const message = useMemo(() => selectMessage({ ...facts, sourceHealth }), [facts, sourceHealth]);
 
+	/**
+	 * Report the result of a control that ran, routed by the severity the
+	 * control named.
+	 *
+	 * A copy that took is news; a copy the terminal refused is a warning the
+	 * operator must keep. The control states which in the fact it reports, and
+	 * the shell writes the matching slot, so a surface never has to choose the
+	 * channel its result belongs on.
+	 */
+	const report = useCallback(
+		(fact: MessageFact) => {
+			if (fact.severity === "info") news(fact.text);
+			else if (fact.severity === "warning") warning(fact.text);
+			else error(fact.text);
+		},
+		[news, warning, error],
+	);
+
 	return {
 		message,
 		working,
+		news,
 		notice,
 		warning,
 		error,
+		report,
 		clearOperation,
 		clearWorking,
 		clearProgress,

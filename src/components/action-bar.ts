@@ -26,8 +26,8 @@ import {
 	type InteractionMode,
 	keyLabelFor,
 } from "./controls.ts";
+import { controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { COLORS } from "./theme.ts";
 
 interface ActionBarProps {
 	mode: InteractionMode;
@@ -51,6 +51,7 @@ interface ActionBarProps {
 
 interface PackedControl {
 	control: ControlDefinition;
+	label: string;
 	keyLabel: string;
 	availability: ReturnType<typeof availabilityFor>;
 }
@@ -83,6 +84,9 @@ function packActionBar(
 ): PackedBar {
 	const entries = controls.map((control) => ({
 		control,
+		// The hint's wording rides on the control that owns it, so the bar
+		// packs the catalogue and no second map restates a label.
+		label: control.barLabel?.(context) ?? control.label,
 		keyLabel: keyLabelFor(context.mode, control, context),
 		availability: availabilityFor(control, context),
 	}));
@@ -98,8 +102,7 @@ function packActionBar(
 	// else is a control the operator can act on.
 	const candidates = options.anchorOnly === true ? [] : entries.filter((entry) => entry !== anchor);
 	let range = options.rangeIndicator;
-	const widthOfHint = (entry: PackedControl): number =>
-		widthOf(`${entry.keyLabel} ${entry.control.label}`);
+	const widthOfHint = (entry: PackedControl): number => widthOf(`${entry.keyLabel} ${entry.label}`);
 	const anchorWidth = anchor === undefined ? 0 : widthOfHint(anchor);
 	const availableWidth = Math.max(0, width - (anchor === undefined ? 0 : anchorWidth + GAP));
 	const fits = (items: readonly PackedControl[], includeRange: boolean): boolean => {
@@ -135,10 +138,10 @@ function packActionBar(
 function fitAnchorHint(
 	anchor: PackedControl,
 	mode: InteractionMode,
-	context: ControlContext,
 	width: number,
+	context: ControlContext,
 ): string {
-	const full = `${anchor.keyLabel} ${anchor.control.label}`;
+	const full = `${anchor.keyLabel} ${anchor.label}`;
 	if (widthOf(full) <= width) return full;
 	for (const key of compactKeyLabels(mode, anchor.control, context))
 		if (widthOf(key) <= width) return key;
@@ -146,13 +149,14 @@ function fitAnchorHint(
 }
 
 export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor }: ActionBarProps) {
+	const ink = controlInk();
 	const controls = actionBarControls(mode, context);
 	const packed = packActionBar(controls, context, width, {
 		rangeIndicator,
 		anchorOnly: compactAnchor,
 	});
 	const anchor = packed.anchor;
-	const anchorText = anchor === undefined ? "" : `${anchor.keyLabel} ${anchor.control.label}`;
+	const anchorText = anchor === undefined ? "" : `${anchor.keyLabel} ${anchor.label}`;
 	// A frame that cannot hold the anchor's whole hint states as little of it
 	// as still names a key, and states nothing else: this is the row a compact
 	// frame shows, and the row no packing may leave the anchor off.
@@ -160,7 +164,7 @@ export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor 
 		return createElement(
 			"text",
 			{ style: { width: "100%", height: 1 } },
-			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, context, width), width), width),
+			padToWidth(truncateToWidth(fitAnchorHint(anchor, mode, width, context), width), width),
 		);
 	// The compact row left-aligns its one hint; a full bar keeps the anchor in
 	// its own cells at the right end of the row.
@@ -176,14 +180,18 @@ export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor 
 		children.push(...hintSpans(packed.left[i], `hint-${i}`));
 		if (packed.range !== undefined && packed.left[i].control.rangeAnchor === true) {
 			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
-			children.push(createElement("span", { key: "range", fg: COLORS.dim }, packed.range));
+			children.push(
+				createElement("span", { key: "range", fg: ink.detail.fg ?? undefined }, packed.range),
+			);
 			rangePlaced = true;
 		}
 	}
 	if (packed.range !== undefined && !rangePlaced) {
 		if (packed.left.length > 0)
 			children.push(createElement("span", { key: "range-gap" }, " ".repeat(GAP)));
-		children.push(createElement("span", { key: "range", fg: COLORS.dim }, packed.range));
+		children.push(
+			createElement("span", { key: "range", fg: ink.detail.fg ?? undefined }, packed.range),
+		);
 	}
 	if (anchor !== undefined) {
 		const gap = Math.max(0, anchorStart - leftWidth);
@@ -196,17 +204,18 @@ export function ActionBar({ mode, context, width, rangeIndicator, compactAnchor 
 }
 
 function hintSpans(entry: PackedControl, key: string): ReactElement[] {
+	const ink = controlInk();
 	const unavailable = !entry.availability.available;
 	return [
 		createElement(
 			"span",
-			{ key: `${key}-key`, fg: unavailable ? COLORS.dim : COLORS.borderFocused },
+			{ key: `${key}-key`, fg: (unavailable ? ink.detail : ink.indicator).fg ?? undefined },
 			`${entry.keyLabel} `,
 		),
 		createElement(
 			"span",
-			{ key: `${key}-label`, fg: unavailable ? COLORS.dim : COLORS.text },
-			entry.control.label,
+			{ key: `${key}-label`, fg: (unavailable ? ink.detail : ink.text).fg ?? undefined },
+			entry.label,
 		),
 	];
 }

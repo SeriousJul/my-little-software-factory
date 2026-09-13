@@ -26,16 +26,26 @@ export type InteractionMode =
 	| "override-list"
 	| "override-model"
 	| "override-text"
+	/** The controls one shared form runs, on the slots it holds. */
+	| "form-field"
+	| "form-selector"
+	| "form-action"
+	| "action-panel"
 	| "decision-modal"
 	| "missing-modal"
 	| "key-guide"
 	| "message-view"
-	| "consultation-interaction"
-	| "consultation-response";
+	| "consultation-interaction";
 
+/**
+ * Which screen area owns the control's meaning.
+ *
+ * `form` is the controls one shared form runs, on the slots it holds.
+ */
 type ControlScope =
 	| "global"
 	| "control-plane"
+	| "form"
 	| "ticket-list"
 	| "ticket-detail"
 	| "consultation-list"
@@ -43,8 +53,7 @@ type ControlScope =
 	| "override"
 	| "modal"
 	| "utility"
-	| "consultation-interaction"
-	| "consultation-response";
+	| "consultation-interaction";
 type ControlKey =
 	| "up"
 	| "down"
@@ -138,6 +147,23 @@ export interface ControlContext {
 	 * `e` key by control id.
 	 */
 	editableActionSelected?: boolean;
+	/**
+	 * The slot of the active form that holds the focus.
+	 *
+	 * A form owns one keyboard rule per slot: a field takes its own editing
+	 * keys, a selector cycles, an action confirms. The surface states the fact
+	 * from the slot it holds, and the catalogue gates on it, so no mode can
+	 * hand a Draft field's arrows to the form's selection.
+	 */
+	formSlot?: "field" | "selector" | "action";
+	/** The active form has a text selection the Copy control could hand over. */
+	fieldHasSelection?: boolean;
+	/** The Model search row holds text the clear control could remove. */
+	formSearchActive?: boolean;
+	/** How many values the focused selector offers. One of them cycles nowhere. */
+	formCycleCount?: number;
+	/** Why the form's Confirm action cannot run, in the surface's own words. */
+	formRefusal?: string;
 }
 
 export interface ControlDefinition {
@@ -182,6 +208,25 @@ export interface ControlDefinition {
 	 * Message view. A hint without the flag is plain text to the bar.
 	 */
 	rangeAnchor?: boolean;
+	/**
+	 * The wording of the control's hint on the Action bar. Default: `label`.
+	 *
+	 * A hint is a word an operator reads at the bottom of the screen, and for a
+	 * few controls it is not the control's own name: a bar that already lives in
+	 * the Consultation section does not restate "consultation", and a Refresh
+	 * that recovers a Consultation names the recovery. The wording rides on the
+	 * control that owns it, so the bar packs the catalogue and no second map has
+	 * to remember which hint went with which id.
+	 */
+	barLabel?: (context: ControlContext) => string | undefined;
+	/**
+	 * Whether the control belongs to the Key guide alone.
+	 *
+	 * A field owns its editing keys outright, so the plane dispatches nothing
+	 * for them and the Action bar names none. The guide still lists them: the
+	 * keys an operator uses most must not stay an undocumented exception.
+	 */
+	guideOnly?: boolean;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -209,7 +254,7 @@ const CONSULTATION_TYPES_MISSING =
 const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
 /** What the settled meaning of Enter does, for the guide's current section. */
 const DECIDE_NOTE = "opens the decision on a settled Ticket";
-/** What the Consultations view does when a Consultation needs the operator. */
+/** What the Consultation section does when a Consultation needs the operator. */
 const CONSULTATIONS_NOTE = "opens on the Consultation that needs the operator, if one does";
 
 /** The panel's own modes: while one is open, the list's selection is inert. */
@@ -380,22 +425,80 @@ const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
 const baseModes = [...ticketBaseModes, ...consultationBaseModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
+/**
+ * The modes one shared form surface runs, one per slot kind.
+ *
+ * A form's fields, selectors, and actions are the same controls in every
+ * screen that holds them, so they share these modes instead of each screen
+ * naming its own. A surface picks the mode of the slot under the focus.
+ */
+const formModes = ["form-field", "form-selector", "form-action"] as const;
+/** Every mode in which a field holds the printable keys and edits itself. */
+const fieldModes: readonly InteractionMode[] = ["form-field", "override-text", "override-model"];
 const modalModes = ["decision-modal", "missing-modal"] as const;
 const planeModes: readonly InteractionMode[] = [
 	...baseModes,
 	...overrideModes,
+	...formModes,
+	"action-panel",
 	...modalModes,
 	"key-guide",
 	"message-view",
 ];
-const allModes: readonly InteractionMode[] = [
-	...planeModes,
-	"consultation-interaction",
-	"consultation-response",
+const allModes: readonly InteractionMode[] = [...planeModes, "consultation-interaction"];
+// The Agent terminal owns its keys: Help, Message, and every control-plane
+// action stay out of its mode, and only the controls named below, plus the
+// emergency exit, reach it.
+
+/**
+ * One field editing row: a key the focused field owns outright.
+ *
+ * These controls dispatch nothing, because the field itself runs them. They
+ * exist so the Key guide names field editing instead of leaving the most-used
+ * keys of the plane undocumented, and so the guide stays the one catalog the
+ * plane has: a row here is read the same way as a dispatched control.
+ */
+function editingRow(
+	id: string,
+	label: string,
+	keyLabel: string,
+	modes: readonly InteractionMode[],
+): ControlDefinition {
+	return {
+		id,
+		label,
+		// Display-only: a key the focused field already took claims nothing.
+		keys: () => [],
+		keyLabel,
+		scope: "control-plane",
+		actionBar: false,
+		guideOnly: true,
+		priority: 0,
+		modes,
+		availability: available,
+	};
+}
+
+/**
+ * The editing controls of a Text field and a Draft field, for the Key guide.
+ *
+ * A Draft field adds the newline row: its Enter inserts a line rather than
+ * starting work, and the surface's visible action is what submits it.
+ */
+const FIELD_EDITING_ROWS: readonly ControlDefinition[] = [
+	editingRow("edit-caret", "Move caret", "Left/Right", fieldModes),
+	editingRow("edit-lines", "Move caret by line", "Up/Down", ["form-field"]),
+	editingRow("edit-select", "Select text", "Shift+arrow", fieldModes),
+	editingRow("edit-word", "Word movement", "Ctrl+Left/Right", fieldModes),
+	editingRow("edit-edges", "Line and buffer edges", "Home/End", fieldModes),
+	editingRow("edit-delete", "Delete backward, forward", "Backspace/Delete", fieldModes),
+	editingRow("edit-word-delete", "Delete a word", "Ctrl+Backspace", fieldModes),
+	editingRow("edit-undo", "Undo", "Ctrl+Z", fieldModes),
+	editingRow("edit-redo", "Redo", "Ctrl+Y", fieldModes),
+	editingRow("edit-select-all", "Select all", "Ctrl+A", fieldModes),
+	editingRow("edit-paste", "Paste text", "Terminal paste", fieldModes),
+	editingRow("edit-newline", "Insert a new line", "Enter", ["form-field"]),
 ];
-// The Agent terminal and the response editor own their keys: Help, Message,
-// and every control-plane action stay out of their mode, and only the controls
-// named below, plus the emergency exit, reach them.
 /**
  * The exhaustive fixed control definitions.
  *
@@ -410,12 +513,16 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "move-list",
 		label: "Move",
+		// The base panes share one list movement: a row list the operator can
+		// step through, with no detail pane to open on the way.
 		keys: (mode) =>
-			mode === "ticket-list" || mode === "consultation-list"
+			mode === "ticket-list"
 				? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
 				: mode === "override-list"
 					? ["up", "down", "j", "k", "tab"]
-					: ["up", "down", "tab"],
+					: mode === "consultation-list"
+						? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
+						: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",
 		actionBar: true,
@@ -473,14 +580,14 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "change-override",
 		label: "Change",
-		// The Model row types its letters, so h and l belong to its text and
-		// only the arrows cycle its value.
-		keys: (mode) => (mode === "override-model" ? ["left", "right"] : ["left", "right", "h", "l"]),
+		// Only a list row cycles: the Model row is a Text field that owns its
+		// arrows for the caret, and the Model search edits its own text.
+		keys: () => ["left", "right", "h", "l"],
 		keyLabel: "←→/hl",
 		scope: "override",
 		actionBar: true,
 		priority: 80,
-		modes: ["override-list", "override-model"],
+		modes: ["override-list"],
 		availability: available,
 	},
 	{
@@ -514,16 +621,19 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		id: "clear-override",
 		label: "Clear",
 		// Backspace on a list row gives the setting back to the agent. The
-		// free-text rows are standard inputs that own their own Backspace, so
-		// they keep the display-only Delete hint and never reach this control.
+		// free-text rows and the Model search are fields that own their own
+		// Backspace, so they keep the display-only Delete hint and never reach
+		// this control: a search an operator is correcting one character at a
+		// time must not vanish under the key they pressed to shorten it.
 		keys: () => ["backspace", "delete"],
 		keyLabel: "⌫",
 		scope: "override",
 		actionBar: true,
 		priority: 75,
-		modes: ["override-list", "override-model"],
+		modes: ["override-list"],
 		availability: available,
 	},
+
 	{
 		id: "handoff",
 		label: "Hand off",
@@ -737,29 +847,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 	},
 	{
-		id: "submit-response",
-		label: "Send response",
-		keys: () => ["return"],
-		keyLabel: "Enter",
-		scope: "consultation-response",
-		actionBar: true,
-		priority: 80,
-		modes: ["consultation-response"],
-		availability: available,
-	},
-	{
-		id: "keep-draft",
-		label: "Keep draft",
-		keys: () => ["escape"],
-		keyLabel: "Esc",
-		scope: "consultation-response",
-		actionBar: true,
-		barAnchor: true,
-		priority: 90,
-		modes: ["consultation-response"],
-		availability: available,
-	},
-	{
 		id: "cancel",
 		label: "Cancel",
 		keys: () => ["escape"],
@@ -771,12 +858,106 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 	},
 	{
+		// A focused field owns its own editing keys, so this control moves the
+		// form's selection. In a selector or an action it is Tab, as on the
+		// plane's list rows; the field's arrows belong to the caret.
+		id: "move-field",
+		label: "Field",
+		// A field owns Up and Down for its own caret, so Tab is the only key
+		// that leaves one. A selector or an action takes the arrows too, because
+		// nothing there edits text.
+		keys: (mode) => (mode === "form-field" ? ["tab"] : ["up", "down", "tab"]),
+		keyLabel: "Tab",
+		scope: "form",
+		actionBar: true,
+		priority: 82,
+		modes: [...formModes],
+		availability: available,
+	},
+	{
+		// A focused selector cycles the offered values on the row.
+		id: "cycle-choice",
+		label: "Change",
+		keys: () => ["left", "right"],
+		keyLabel: "←→",
+		scope: "form",
+		actionBar: true,
+		priority: 80,
+		modes: ["form-selector"],
+		availability: (context) =>
+			context.formCycleCount !== undefined && context.formCycleCount > 1
+				? available()
+				: unavailable("this choice has no other value"),
+	},
+	{
+		// The focused action runs on Enter. The bar's refusal line states
+		// why it cannot run; the surface supplies the reason in its own words.
+		id: "confirm-choice",
+		label: "Confirm",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "form",
+		actionBar: true,
+		priority: 70,
+		modes: ["form-action"],
+		availability: (context) =>
+			context.formRefusal === undefined ? available() : unavailable(context.formRefusal),
+	},
+	{
+		id: "copy-selection",
+		label: "Copy selection",
+		keys: () => ["f3"],
+		keyLabel: "F3",
+		scope: "form",
+		actionBar: true,
+		priority: 45,
+		modes: [...formModes, "override-text", "override-model"],
+		// Copy is its own control, because Ctrl+C stays the emergency exit even
+		// while a field holds a selection: a text selection may never change what
+		// a safety control means.
+		availability: (context) =>
+			context.fieldHasSelection === true
+				? available()
+				: unavailable("the focused field holds no selection to copy"),
+		showInBar: (context) => context.fieldHasSelection === true,
+	},
+	{
+		id: "clear-search",
+		label: "Clear",
+		// Backspace belongs to the search text, so the explicit clear is its own
+		// key: an operator who wants the whole query gone presses one key rather
+		// than one per character. With no query left, the same key gives the
+		// setting back to the agent, which is what clearing a list row does, so
+		// the row is never stuck on a value the operator cannot remove.
+		keys: () => ["delete"],
+		keyLabel: "Del",
+		scope: "override",
+		actionBar: true,
+		priority: 60,
+		modes: ["override-model"],
+		availability: available,
+	},
+	{
+		id: "close-form",
+		label: "Close",
+		// Closing a form keeps what the operator typed: discarding is its own
+		// visible action, never a side effect of the way out.
+		keys: () => ["escape"],
+		keyLabel: "Esc",
+		scope: "form",
+		actionBar: true,
+		priority: 90,
+		modes: [...formModes],
+		availability: available,
+	},
+
+	{
 		id: "help",
 		label: "Help",
 		// `?` opens Help wherever the mode does not own printable text. In the
 		// override text row and on the Model list row, which types its letters,
 		// it stays text, and only F1 reaches Help.
-		keys: (mode) => (mode === "override-text" || mode === "override-model" ? ["f1"] : ["f1", "?"]),
+		keys: (mode) => (fieldModes.includes(mode) ? ["f1"] : ["f1", "?"]),
 		keyLabel: "F1/?",
 		scope: "global",
 		actionBar: true,
@@ -843,7 +1024,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 80,
-		modes: [...modalModes],
+		modes: [...modalModes, "action-panel"],
 		availability: available,
 	},
 	{
@@ -867,7 +1048,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 75,
-		modes: ["missing-modal"],
+		modes: ["missing-modal", "action-panel"],
 		availability: available,
 	},
 	{
@@ -894,7 +1075,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 70,
-		modes: [...modalModes],
+		modes: [...modalModes, "action-panel"],
 		availability: available,
 	},
 	{
@@ -905,7 +1086,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 90,
-		modes: [...modalModes],
+		modes: [...modalModes, "action-panel"],
 		availability: available,
 	},
 	{
@@ -1177,6 +1358,7 @@ export function guideControls(context: ControlContext): Array<{
 		(control) =>
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
+			control.guideOnly !== true &&
 			isCataloguedInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
@@ -1184,6 +1366,7 @@ export function guideControls(context: ControlContext): Array<{
 		CONTROL_DEFINITIONS.filter(
 			(control) =>
 				!seen.has(control.id) &&
+				control.guideOnly !== true &&
 				!omitFromConsultationGuide(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
@@ -1191,8 +1374,15 @@ export function guideControls(context: ControlContext): Array<{
 			seen.add(control.id);
 			return { group, control };
 		});
+	// The guide states how a focused field edits, so the guide is the one
+	// catalog that covers it: the rows name the keys a field owns outright.
+	const fieldEditing = fieldModes.includes(mode)
+		? FIELD_EDITING_ROWS.filter((control) => control.modes.includes(mode))
+		: [];
+	for (const control of fieldEditing) seen.add(control.id);
 	return [
 		...current.map((control) => ({ group: "Current interaction mode", control })),
+		...fieldEditing.map((control) => ({ group: "Field editing", control })),
 		...append("Global controls", (control) => control.scope === "global"),
 		...append("Control plane controls", (control) => control.scope === "control-plane"),
 		...append("Other interaction modes", () => true),
@@ -1219,10 +1409,16 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Decision modal";
 		case "missing-modal":
 			return "Missing modal";
+		case "form-field":
+			return "Form field";
+		case "form-selector":
+			return "Form selector";
+		case "form-action":
+			return "Form action";
+		case "action-panel":
+			return "Action panel";
 		case "consultation-interaction":
 			return "Agent terminal";
-		case "consultation-response":
-			return "Response editor";
 		case "key-guide":
 			return "Key guide";
 		case "message-view":
@@ -1240,11 +1436,10 @@ function displayKeyLabel(
 	if (control.id === "consultation-interact") return "Enter";
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";
-	if (control.id === "change-override" && mode === "override-model") return "←→";
 	if (control.id === "help") {
-		// The Model row types its letters, and `?` is one of them: only F1
-		// opens the guide there.
-		if (mode === "override-text" || mode === "override-model") return "F1";
+		// A field owns its printable keys, and `?` is one of them: in the field
+		// modes only F1 opens the guide.
+		if (fieldModes.includes(mode)) return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
 		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "F1/?" : "?";
 	}

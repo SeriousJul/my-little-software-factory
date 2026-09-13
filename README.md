@@ -23,7 +23,9 @@ meaning, and `docs/adr/` for the decisions (ADR 0001: OpenTUI and
 TypeScript, ADR 0002: handoffs run through herdr, ADR 0005: a work cycle
 ends at close, ADR 0006: the control plane polls herdr, ADR 0011: the
 observation reclaims an agent that outlives its work cycle, ADR 0012: a
-leftover environment is a fact the operator can act on).
+leftover environment is a fact the operator can act on, ADR 0015: the turn end
+cause comes from the agent's session record, ADR 0016: the held turn gate and
+the Dispatch pause).
 
 For changes to controls, follow [the shared control standard](docs/shared-controls.md)
 and [the contributor instructions](AGENTS.md). The standard is the accepted target;
@@ -47,14 +49,26 @@ below remain the current behavior until their migration is complete.
 	go unchecked until the agent itself refuses one.
 ## Commands
 
-| Command             | What it does                              |
-| ------------------- | ----------------------------------------- |
-| `npm run dev`       | Start the control plane in watch mode     |
-| `npm test`          | Run the full test suite                   |
-| `npm run mutate`    | Run Stryker mutation testing, contained   |
-| `npm run lint`      | Lint and check formatting with Biome      |
-| `npm run fmt`       | Lint, format, and fix with Biome          |
-| `npm run typecheck` | Typecheck with TypeScript                 |
+| Command                | What it does                                          |
+| ---------------------- | ----------------------------------------------------- |
+| `npm run dev`          | Start the control plane in watch mode                  |
+| `npm test`             | Run the full test suite                                |
+| `npm run gallery`      | Run the shared control gallery, using the real modules |
+| `npm run mutate`       | Run Stryker mutation testing, contained                |
+| `npm run lint`         | Lint and check formatting with Biome                   |
+| `npm run fmt`          | Lint, format, and fix with Biome                       |
+| `npm run typecheck`    | Typecheck with TypeScript                              |
+
+### Shared control gallery
+
+`npm run gallery` opens the shared control gallery: every control the control
+plane owns, drawn by the production modules and answering the production keys.
+`Tab` shows the next example, and each one names its own state - normal and
+focused, invalid, unavailable, loading, Type-ahead search, and narrow. Pass an
+example name to land on it: `npm run gallery -- fields`. The gallery reads no
+config file, opens no state, and starts no Agent, and the same examples are
+exercised by `npm test`, so a gallery row cannot become an imitation of the
+control. See [the shared control standard](docs/shared-controls.md).
 
 ### Mutation testing
 
@@ -97,53 +111,59 @@ the guide and the Action bar are generated from one control catalogue
 
 ### Consultation controls
 
-The Consultation section dispatches from the same catalogue as the Ticket
-section, so its controls appear in the Action bar and the Key guide with their
-availability and reasons. `v` expands the Consultation section on the
-Consultation that needs the operator, if one does: an awaiting response wins,
-and among the recovery items the oldest wins. Once the section is expanded:
+The Consultation launcher, the response editor, and the Consultation
+confirmation panel are shared-control forms: their fields, choices, and
+actions are the modules in [src/components/shared](src/components/shared), so
+the keys they answer with are the keys the override panel answers with. The
+Consultation section's own list and detail, the Agent terminal, and the Agent
+interaction mode dispatch from the same catalogue as the Ticket section, so
+every Consultation control appears in the Action bar and the Key guide with
+its availability and reason.
 
-- `c` launches a Consultation, `f` cycles the history filter through open,
-	closed, and all, `x` closes the selected Consultation, and `d` deletes a
-	closed one.
+- `v` expands the Consultation section on the Consultation that needs the
+	operator, if one does: an awaiting response wins, and among the recovery
+	items the oldest wins. Once the section is expanded, `c` launches a
+	Consultation, `f` cycles the history filter through open, closed, and all,
+	`x` closes the selected Consultation, and `d` deletes a closed one. `t`
+	returns to the Ticket section from either Consultation pane, and `h` or
+	`Left` moves between the section's own list and detail panes when the list
+	is visible. Below 80 columns the Consultation list is hidden, the detail
+	keeps focus, and `h`/`Left` is unavailable.
+- In the launcher, `Tab` and `Shift+Tab` move between the two choices, the
+	Draft field, and the two actions; `←→` choose a type or Repository and
+	move the caret in the field; `Enter` adds a line inside the field and runs
+	the action it stands on; `F3` copies the selected text; `F1` opens the Key
+	guide, `F2` the Message view. `Esc` closes the launcher and keeps the
+	unfinished form - the same text, the same Consultation type, the same
+	Repository - for the rest of this run; `Discard draft text` is the action
+	that deletes it. A Consultation starts on the agent, environment, model,
+	thinking level, and context window its type names, each one passed through
+	the agent's own template, so the type must name an agent that maps every
+	setting it sets.
 - `Enter` answers the selected Consultation: it opens the response editor on
-	an awaiting one and Agent interaction on a working or blocked one. `t` always
-	returns to the Ticket section from either Consultation pane.
+	an awaiting one and Agent interaction on a working or blocked one. The
+	editor stores its draft in SQLite, `Tab` reaches `Send response` and
+	`Enter` runs it, `Enter` inside the field adds a line, `Esc` closes it with
+	the draft saved, and `Discard draft` deletes the saved draft.
 - `r` recovers a Consultation whose opening was interrupted, and refreshes the
-	Consultation projection and the Ticket sources otherwise. It remains Refresh
-	even when an awaiting Consultation can also be answered with Enter.
-- `t` expands the Ticket section again from either Consultation pane, and `h`
-	or `Left` moves between the expanded section's own list and detail panes when
-	the list is visible. Below 80 columns the Consultation list is hidden, the
-	detail keeps focus, and `h`/`Left` is unavailable.
-
-The Consultation launcher, the response editor, the Agent terminal, and the
-Consultation confirmation panels still handle their own keys (issue #9). The
-Action bar and the Key guide state the response editor and the Agent terminal
-from the catalogue, so the hint an operator sees on those surfaces is the key
-those surfaces really accept. In
-the launcher, `Tab` changes fields, arrows choose a type or Repository, `Enter`
-launches, `Shift+Enter` inserts a newline, and `Esc` cancels. A Consultation
-starts on the agent, environment, model, thinking level, and context window
-its type names, each one passed through the agent's own template, so the type
-must name an agent that maps every setting it sets. In the response editor the
-draft lives in SQLite, `Enter` submits it, `Shift+Enter` inserts a newline, and
-`Esc` leaves the draft in place. `End` follows the latest Agent output after
-scrolling, and closed history shows cleanup results and retained resources,
-including resources left by a Force-close. A blocked Agent uses Agent
-interaction mode instead of the response editor: every key reaches the Agent
-except the exit key, whose default is `F12` and which the Action bar states
-while the mode holds the keys; configure `interaction-exit-key` with a function
-key or `Ctrl` plus one letter.
+	Consultation projection and the Ticket sources otherwise. It remains
+	Refresh even when an awaiting Consultation can also be answered with
+	Enter.
+- `End` follows the latest Agent output after scrolling. Closed history shows
+	cleanup results and retained resources, including resources left by a
+	Force-close.
+- A blocked Agent uses Agent interaction mode instead of the response editor.
+	Every key reaches the Agent except the exit key, whose default is `F12` and
+	which the Action bar states while the mode holds the keys; configure
+	`interaction-exit-key` with a function key or `Ctrl` plus one letter.
 
 The override panel and the leftover clear act only in the Ticket section, so
 an unexpected key cannot fire while the operator works Consultations. The
-Ticket list and detail move with the row, page and jump
-keys, focus the detail with `l` or `Right` and the list with `h` or `Left`, hand
-an open ticket off with `Enter`, open the decision modal on an awaiting one,
-the missing modal on a ticket whose agent is gone, and the override panel with
-`e`. `a` toggles auto-handoff in the Ticket section, `r` refreshes, and `q`
-quits.
+Ticket list and detail move with the row, page and jump keys, focus the detail
+with `l` or `Right` and the list with `h` or `Left`, hand an open ticket off
+with `Enter`, open the decision modal on an awaiting one, the missing modal on
+a ticket whose agent is gone, and the override panel with `e`. `a` toggles
+auto-handoff, `r` refreshes, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -633,8 +653,8 @@ When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The
 completion trace records the task type, the agent, the Model, Thinking level,
 and context window that handoff started with, the completion time, the last
-message, and the decision that ends the awaiting state. A workflow
-handoff that follows an awaiting ticket renders its prompt with the
+message, the turn end cause, and the decision that ends the awaiting state. A
+workflow handoff that follows an awaiting ticket renders its prompt with the
 `{previous-message}` placeholder filled from that last message, so the next
 agent reads what the previous one left behind.
 
@@ -667,6 +687,41 @@ limits:
 ticket reaches it, auto-handoff leaves it open. A manual handoff may pass
 	the limit.
 Both limits gate auto-handoff only. A manual handoff is always allowed.
+
+### Held turns and the Dispatch pause
+
+The completion trace records the turn end cause beside the last message, read
+from the agent's session record in the same read that gives the turn log
+(ADR 0015): `completed`, `failed`, `aborted`, `truncated`, or `unknown`. The
+readers know three kinds: `pi`, `codex`, and `claude`. Every other kind, a
+missing or unreadable record, and a malformed record settle `unknown`, which
+fails open and auto-decides exactly as it did before: the absence of evidence
+is not evidence of failure. A record whose last turn-end event predates the
+handoff is not this turn's end: it settles `unknown`, never `completed`.
+
+An upgrade holds nothing. A trace that settled before the upgrade carries no
+cause and reads `unknown`, so the factory does not freeze on install. The
+accepted consequence: a turn that failed before the upgrade and is still
+`awaiting` after it can still be closed automatically, because the control
+plane holds no cause for it.
+
+A turn that settled `failed`, `aborted`, or `truncated`, and that no decision
+has landed on, is held (ADR 0016). No automatic decision runs on a held turn:
+the control plane does not close its cycle and does not route it, in auto mode
+or manual mode. The ticket rests in `awaiting`, shown held in the ticket list,
+in the detail pane, and in the attention line, until the operator decides it.
+Once the operator decides the held turn, it is no longer held.
+
+A held turn that settled `failed`, with no `completed` settle since it, also
+pauses the dispatch: while the pause is on, auto mode starts no agent by
+itself. The pause is derived from the completion traces on every cycle and
+never stored, so it survives a restart. It holds only the automatic origins -
+the open handoff, the workflow route, and the restart of a missing agent - and
+it ends at the next `completed` settle, or when the operator decides the held
+turn that started it. It never blocks a manual handoff. The open handoff and
+the restart run only in auto mode; the route block applies in manual mode
+too, where the auto-close types still route without the operator, exactly
+like the Parallel limit. A Consultation never contributes to the pause.
 
 A missing agent in auto mode restarts the handoff once, with the last
 message as the previous message. At the per-ticket handoff limit, the

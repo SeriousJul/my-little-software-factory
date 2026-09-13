@@ -12,12 +12,15 @@
  * selected action, esc cancels. While it is open, the keys of the app below
  * are disabled.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { useRef, useState } from "react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
+import { useState } from "react";
 
+import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
-import { type ActionRow, actionRowSpans, ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { type ActionRow, ModalSurface, modalFrame, useActionSelection } from "./modal-chrome.ts";
+import { ActionItem } from "./shared/choices.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -30,6 +33,13 @@ interface ActionPanelProps {
 	onCancel: () => void;
 	/** The Message fact the panel's own Message line shows. */
 	message: MessageFact | null;
+	/** The base facts preserved while this confirmation owns input. */
+	context?: ControlContext;
+	inputActive?: boolean;
+	onHelp?: () => void;
+	onMessage?: () => void;
+	onUnavailable?: (reason: string) => void;
+	onEmergencyExit?: () => void;
 }
 
 /** The message column stops at 60 cells: a confirmation line is short. */
@@ -49,8 +59,6 @@ export const panelBodyCols = (terminalWidth: number): number =>
 
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
-/** The hint row: this panel owns no Action bar, so it names its keys itself. */
-const HINT = "up/down select  j/k message  enter  esc";
 
 /** Wrap the message, retaining explicit blank lines. */
 function wrapBody(lines: readonly string[], width: number): string[] {
@@ -64,6 +72,12 @@ export function ActionPanel({
 	onAction,
 	onCancel,
 	message,
+	context,
+	inputActive = true,
+	onHelp,
+	onMessage,
+	onUnavailable,
+	onEmergencyExit = () => undefined,
 }: ActionPanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
 	const body = bodyLines ?? [];
@@ -90,40 +104,36 @@ export function ActionPanel({
 		: Math.min(wrapped.length, bodyRows);
 	const maxBodyScroll = Math.max(0, wrapped.length - shownBodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
-	const [selected, setSelected] = useState(0);
-	const selectedRef = useRef(0);
-
-	const move = (delta: number) => {
-		if (actions.length === 0) return;
-		const at = Math.min(selectedRef.current, actions.length - 1);
-		selectedRef.current = (at + delta + actions.length) % actions.length;
-		setSelected(selectedRef.current);
-	};
-
-	useKeyboard((key) => {
-		if (key.ctrl || key.meta) return;
-		switch (key.name) {
-			case "escape":
-				onCancel();
-				break;
-			case "return":
-				onAction(actions[Math.min(selectedRef.current, actions.length - 1)].key);
-				break;
-			case "down":
-				move(1);
-				break;
-			case "up":
-				move(-1);
-				break;
-			case "j":
-				setBodyScroll((current) => Math.min(current + 1, maxBodyScroll));
-				break;
-			case "k":
-				setBodyScroll((current) => Math.max(0, current - 1));
-				break;
-		}
+	const selection = useActionSelection(actions);
+	const actionContext = contextFor("action-panel", {
+		...(context ?? {
+			listCanMove: false,
+			detailCanScroll: false,
+			sourceCount: 0,
+			refreshingSourceCount: 0,
+			handoffActive: false,
+			messageTruncated: false,
+			consultationTypesConfigured: false,
+		}),
 	});
-
+	useControlDispatch({
+		mode: "action-panel",
+		context: actionContext,
+		active: inputActive,
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			help: () => onHelp?.(),
+			message: () => onMessage?.(),
+			"cancel-action": onCancel,
+			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
+			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
+			"scroll-message": ({ key }) =>
+				setBodyScroll((current) =>
+					key.name === "j" ? Math.min(current + 1, maxBodyScroll) : Math.max(0, current - 1),
+				),
+		},
+	});
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
 	const shownBody = windowOf(wrapped, scroll, shownBodyRows);
 	const hiddenRows = Math.max(0, wrapped.length - (scroll + shownBody.length));
@@ -135,10 +145,11 @@ export function ActionPanel({
 		width: terminalWidth,
 		title,
 		borderColor: COLORS.borderFocused,
-		// Every action row plus the hint: without them the panel states a
+		// Every action row plus one line of body: without them the panel states a
 		// problem with no way to answer it.
 		minContentRows: actions.length + 1,
 		message,
+		bar: { mode: "action-panel", context: actionContext },
 		children: [
 			...bodyShown.map((line, index) =>
 				createElement(
@@ -148,16 +159,12 @@ export function ActionPanel({
 				),
 			),
 			...actions.map((row, index) =>
-				createElement(
-					"text",
-					{ key: row.key },
-					...actionRowSpans(row, index === selected, frame.contentWidth),
-				),
-			),
-			createElement(
-				"text",
-				{ key: "hint", fg: COLORS.dim },
-				truncateToWidth(HINT, frame.contentWidth),
+				createElement(ActionItem, {
+					key: row.key,
+					row,
+					focused: index === selection.at,
+					width: frame.contentWidth,
+				}),
 			),
 		],
 	});
