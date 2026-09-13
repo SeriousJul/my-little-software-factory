@@ -65,10 +65,11 @@ export interface Completion {
 }
 
 /**
- * Whether a completion holds its turn (ADR 0016): its end cause is failed,
- * aborted, or truncated, and no decision has landed on it yet. A decided
- * held trace is no longer held - the operator already chose - and an
- * `unknown` cause never holds, so a broken record cannot hold a good turn.
+ * Whether a completion holds its turn (ADR 0016, ADR 0017): its end cause is
+ * failed, aborted, truncated, or no-turn, and no decision has landed on it
+ * yet. A decided held trace is no longer held - the operator already chose -
+ * and an `unknown` cause never holds, so a broken record cannot hold a good
+ * turn.
  */
 export function isHeldCompletion(completion: Completion | null): boolean {
 	return completion !== null && completion.decision === null && isHeldCause(completion.cause);

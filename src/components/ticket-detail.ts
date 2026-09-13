@@ -15,6 +15,7 @@ import { isHeldCompletion, type LeftoverEnvironment, type Ticket } from "../doma
 import type { HandoffChoice } from "../handoff.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
+import { turnEndCauseLine } from "./shared/presentation.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS, STATE_COLORS, stateBadge, taskTypeColor, ticketTaskType } from "./theme.ts";
 
@@ -115,10 +116,7 @@ export function detailLines(
 		// agent works again is retried, not held, and the pane says so without
 		// a warning.
 		if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion)) {
-			const causeLine =
-				completion.detail === ""
-					? `Turn ended ${completion.cause}`
-					: `Turn ended ${completion.cause}: ${completion.detail}`;
+			const causeLine = turnEndCauseLine(completion.cause, completion.detail);
 			for (const wrapped of wrapToWidth(causeLine, usableCols))
 				lines.push({ text: wrapped, fg: COLORS.statusWarning });
 			pushWrapped("no automatic decision runs on this turn", COLORS.statusWarning);

@@ -72,6 +72,32 @@ afterEach(() => {
 	for (const path of paths.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
+/**
+ * The path of a pi session record of one completed turn, the way herdr
+ * reports it. The turn's end is in the record, so the settle is immediate,
+ * without the startup grace (ADR 0017): these tests watch the screen's
+ * transforms, not the boot window.
+ */
+function settledSession(text: string): string {
+	const dir = mkdtempSync(join(tmpdir(), "factory-live-view-"));
+	paths.push(dir);
+	const file = join(dir, "session.jsonl");
+	writeFileSync(
+		file,
+		`${JSON.stringify({
+			type: "message",
+			timestamp: "2026-08-31T11:00:00Z",
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text }],
+			},
+		})}\n`,
+		"utf8",
+	);
+	return file;
+}
+
 const source = { name: "issues", kind: "github-issues" };
 const identity = "github:github.com:I_5";
 const repoIdentity = "github.com/acme/factory";
@@ -579,6 +605,7 @@ describe("the Live view against a running factory", () => {
 					workspaceId: "ws-1",
 					agent: "persist-source-facts",
 					status: "working",
+					sessionId: settledSession("The fix is in the layout math."),
 				},
 			]),
 		});
@@ -602,6 +629,7 @@ describe("the Live view against a running factory", () => {
 							workspaceId: "ws-1",
 							agent: "persist-source-facts",
 							status: "done",
+							sessionId: settledSession("The fix is in the layout math."),
 						},
 					]),
 				});
@@ -651,6 +679,7 @@ describe("the Live view against a running factory", () => {
 					workspaceId: "ws-1",
 					agent: "persist-source-facts",
 					status: "working",
+					sessionId: settledSession("the agent is finishing up"),
 				},
 			]),
 		});
@@ -672,6 +701,7 @@ describe("the Live view against a running factory", () => {
 							workspaceId: "ws-1",
 							agent: "persist-source-facts",
 							status: "done",
+							sessionId: settledSession("the agent is finishing up"),
 						},
 					]),
 				});
@@ -759,6 +789,7 @@ describe("the Live view against a running factory", () => {
 					workspaceId: "ws-1",
 					agent: "persist-source-facts",
 					status: status1,
+					sessionId: settledSession("the implementer is finishing"),
 				},
 				{
 					paneId: "pane-9",
@@ -829,6 +860,7 @@ describe("the Live view against a running factory", () => {
 					workspaceId: "ws-1",
 					agent: "persist-source-facts",
 					status: "working",
+					sessionId: settledSession("the implementer is finishing"),
 				},
 			]),
 		});
@@ -848,6 +880,7 @@ describe("the Live view against a running factory", () => {
 							workspaceId: "ws-1",
 							agent: "persist-source-facts",
 							status: "done",
+							sessionId: settledSession("the implementer is finishing"),
 						},
 					]),
 				});
@@ -899,6 +932,7 @@ describe("the Live view against a running factory", () => {
 					workspaceId: "ws-1",
 					agent: "persist-source-facts",
 					status: implementerStatus,
+					sessionId: settledSession("the implementer is finishing"),
 				},
 				{
 					paneId: "pane-9",
@@ -974,6 +1008,7 @@ describe("the Live view against a running factory", () => {
 					workspaceId: "ws-1",
 					agent: "persist-source-facts",
 					status: "working",
+					sessionId: settledSession("the agent is wrapping up"),
 				},
 			]),
 		});
@@ -996,6 +1031,7 @@ describe("the Live view against a running factory", () => {
 							workspaceId: "ws-1",
 							agent: "persist-source-facts",
 							status: "done",
+							sessionId: settledSession("the agent is wrapping up"),
 						},
 					]),
 				});

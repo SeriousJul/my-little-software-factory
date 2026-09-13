@@ -162,6 +162,38 @@ describe("RefreshCoordinator", () => {
 		state.close();
 	});
 
+	test("refreshNow pulls the next fetch forward and leaves one schedule behind", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("issues", 60_000);
+		const clock = new FakeClock();
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		coordinator.start();
+		await turns();
+		expect(source.calls).toBe(1);
+		source.settle(EMPTY);
+		await turns();
+		expect(clock.pending).toBe(1);
+
+		// The triggered fetch cancels the pending interval and starts at once.
+		expect(coordinator.refreshNow(source.name)).toBe(true);
+		await turns();
+		expect(source.calls).toBe(2);
+		expect(clock.pending).toBe(0);
+		// A source that is fetching keeps its in-flight fetch, and a name no
+		// source holds starts nothing.
+		expect(coordinator.refreshNow(source.name)).toBe(false);
+		expect(coordinator.refreshNow("absent")).toBe(false);
+		// The fetch's own completion reschedules the one interval, so the
+		// cancellation left no duplicate behind.
+		source.settle(EMPTY);
+		await turns();
+		expect(clock.pending).toBe(1);
+		expect(clock.delays).toEqual([60_000, 60_000]);
+		coordinator.stop();
+		expect(clock.pending).toBe(0);
+		state.close();
+	});
+
 	test("an unexpected rejection settles as a failed outcome and keeps scheduling", async () => {
 		const state = openFactoryState(":memory:");
 		const broken: TicketSource = {

@@ -21,12 +21,15 @@
  *    session record (ADR 0008), falling back to the pane's recent output
  *    when herdr reports no session, and stored in a completion trace with
  *    the agent's final text as its last message. The ticket rests in
- *    awaiting. A settle is trusted only when the turn demonstrably started:
- *    a running ticket settles at once, but a handed-off ticket that never
- *    showed working waits out its startup grace, the window in which a
- *    booted agent reports idle before it picks up the prompt. An awaiting
- *    ticket whose agent is working again reopens: its still-pending turn
- *    did not end, and the next settle refreshes the trace in place.
+ *    awaiting. A settle is trusted only when the turn demonstrably started,
+ *    and the proof is the session record, not herdr's status (ADR 0017): a
+ *    record that holds the turn's end settles at once, but a record without
+ *    a turn - or one that cannot be read - waits out the startup grace, the
+ *    window in which a booted agent reports idle before it picks up the
+ *    prompt. A working report marks the ticket running, but it drops no
+ *    grace. An awaiting ticket whose agent is working again reopens: its
+ *    still-pending turn did not end, and the next settle refreshes the trace
+ *    in place.
  * 3. A pane herdr no longer lists is missing. With auto-handoff on the
  *    loop restarts the agent once per episode, or abandons the cycle when
  *    the ticket has used up its handoffs.
@@ -60,6 +63,7 @@ import {
 	isHeldCause,
 	lastMessageFromLog,
 	readSessionTurnEnd,
+	type SessionTurnRead,
 	type TurnEnd,
 	type TurnEndCause,
 	type TurnLogEntry,
@@ -108,16 +112,18 @@ export interface AgentReader {
 
 /**
  * The settled turn, read from the agent's session record: its log, its end
- * cause, and the cause's detail, in one read (ADR 0015).
+ * cause, and the cause's detail, in one read (ADR 0015). The read answers
+ * three ways (ADR 0017): the turn ended, the record holds no turn, or the
+ * record is unavailable.
  *
  * The kind is the agent type's kind from the config, the sessionId the path
  * herdr reported, and startedAt the handoff's started time that feeds the
- * staleness guard. Null yields the terminal capture fallback with an
- * `unknown` cause. The real source reads the file (ADR 0008); tests inject a
- * fake.
+ * staleness guard. `no-turn` and `unavailable` both yield the terminal
+ * capture fallback; only `ended` settles inside the startup grace. The real
+ * source reads the file (ADR 0008); tests inject a fake.
  */
 export interface TurnLogSource {
-	read(kind: string, sessionId: string, startedAt: string | null): Promise<TurnEnd | null>;
+	read(kind: string, sessionId: string, startedAt: string | null): Promise<SessionTurnRead>;
 }
 
 /** The real turn source: the per-agent-type session record readers. */
@@ -319,6 +325,13 @@ interface ObservationOptions {
 	 */
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	/**
+	 * A cycle of this ticket ended: a close or abandon landed, and the ticket
+	 * returned to open. The agent of the ended cycle may have changed the
+	 * source item, so the app re-reads the ticket's sources now: the ticket
+	 * stays unverified against new dispatches until the re-read lands.
+	 */
+	onCycleEnd?: (ticketIdentity: string) => void;
+	/**
 	 * The Close cleanup of an auto-ended cycle: the worktree workspace is
 	 * removed or the live tab is closed. Returns a failure reason. The end
 	 * tells the dispatch seam which completion path closed the cycle.
@@ -366,6 +379,7 @@ export class ObservationCoordinator {
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
+	private readonly onCycleEnd?: (ticketIdentity: string) => void;
 	private readonly cleanup: (
 		handoff: HandoffTicket,
 		end: "closed" | "abandoned",
@@ -421,6 +435,7 @@ export class ObservationCoordinator {
 		this.herdr = options.herdr;
 		this.config = options.config;
 		this.dispatch = options.dispatch;
+		this.onCycleEnd = options.onCycleEnd;
 		this.cleanup = options.cleanup;
 		this.now = options.now;
 		this.mode = options.mode;
@@ -620,26 +635,31 @@ export class ObservationCoordinator {
 	/**
 	 * The settled turn, read once from the agent's session record.
 	 *
-	 * Null when herdr reports no session, the agent type has no known kind,
-	 * or the reader cannot read the record: the settle then falls back to the
-	 * terminal capture with an `unknown` cause.
+	 * `unavailable` when herdr reports no session, the agent type has no
+	 * known kind, or the reader cannot read the record: the settle then falls
+	 * back to the terminal capture with an `unknown` cause.
 	 */
 	private async maybeReadTurnEnd(
 		ticket: { ticketIdentity: string; agentType: string; startedAt: string },
 		agent: HerdrAgent,
-	): Promise<TurnEnd | null> {
+	): Promise<SessionTurnRead> {
 		const kind = this.config().agents[ticket.agentType]?.kind;
-		if (kind === undefined || agent.sessionId === "") return null;
+		if (kind === undefined || agent.sessionId === "") return { kind: "unavailable" };
 		return await this.turnLogs.read(kind, agent.sessionId, ticket.startedAt);
 	}
 
 	/** Whether a done or idle agent settles the ticket's turn now. */
-	private maybeSettles(ticket: HandoffTicket, turnEnd: TurnEnd | null): boolean {
-		if (ticket.state === "running") return true;
-		// A held turn settles at once: the startup grace waits for a turn that
-		// may still be starting, and a turn that demonstrably failed, aborted,
-		// or was truncated is done (ADR 0016).
-		if (turnEnd !== null && isHeldCause(turnEnd.cause)) return true;
+	private maybeSettles(ticket: HandoffTicket, turnRead: SessionTurnRead): boolean {
+		if (turnRead.kind === "ended") {
+			// The record holds the turn's end, so the turn demonstrably
+			// started: a turn that failed, aborted, or was truncated settles
+			// at once (ADR 0016), and a turn that completed does too.
+			return true;
+		}
+		// The record holds no turn, or it cannot be read. A working report
+		// does not lift the grace (ADR 0017): herdr's view of the pane is not
+		// evidence the turn ran, and a booted agent that flaps working while
+		// it parks must not settle early. The grace, the clock, decides.
 		return this.now() - Date.parse(ticket.startedAt) >= this.startupGraceMs;
 	}
 
@@ -810,10 +830,15 @@ export class ObservationCoordinator {
 				.consultationTurns(consultation.id)
 				.filter((turn) => turn.settledAt === null)
 				.at(-1);
-			const turnEnd =
+			// A record that holds no turn, or cannot be read, settles
+			// `unknown`, the fail-open cause (ADR 0017): a Consultation
+			// auto-decides nothing, and its operator is present at the screen
+			// it settles on.
+			const turnRead =
 				kind !== undefined && match.sessionId !== ""
 					? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
-					: null;
+					: ({ kind: "unavailable" } as SessionTurnRead);
+			const turnEnd = turnRead.kind === "ended" ? turnRead.turnEnd : null;
 			const settled = this.state.settleConsultationTurn(
 				consultation.id,
 				match.sequence ?? null,
@@ -836,12 +861,14 @@ export class ObservationCoordinator {
 	 * A settled turn: store its log, cause, and detail, rest the ticket in
 	 * awaiting.
 	 *
-	 * The log and the cause come from the session record that was read once
-	 * before the settle was decided (ADR 0015). The terminal capture is the
-	 * fallback: no session reported, the reader knows no such kind, or the
-	 * record is missing or unreadable. A record with no agent text keeps its
-	 * cause - a failed turn with no words is still a failed turn - and the
-	 * capture stands in for the display only.
+	 * The log and the cause come from the session read that was made once
+	 * before the settle was decided (ADR 0015, ADR 0017). The terminal
+	 * capture stands in when the read is not `ended`: no session reported, the
+	 * reader knows no such kind, the record is missing or unreadable
+	 * (`unavailable`, cause `unknown`), or the record is readable and holds no
+	 * turn (`no-turn`, cause `no-turn`, held). A record with no agent text but
+	 * a cause keeps its cause - a failed turn with no words is still a failed
+	 * turn - and the capture stands in for the display only.
 	 */
 	private async settle(
 		ticket: {
@@ -851,10 +878,12 @@ export class ObservationCoordinator {
 			agentType: string;
 		},
 		agent: HerdrAgent,
-		turnEnd: TurnEnd | null,
+		turnRead: SessionTurnRead,
 	): Promise<boolean> {
+		const turnEnd: TurnEnd | null = turnRead.kind === "ended" ? turnRead.turnEnd : null;
 		let turnLog: TurnLogEntry[] = turnEnd?.log ?? [];
-		const cause: TurnEndCause = turnEnd?.cause ?? "unknown";
+		const cause: TurnEndCause =
+			turnEnd?.cause ?? (turnRead.kind === "no-turn" ? "no-turn" : "unknown");
 		const detail: string = turnEnd?.detail ?? "";
 		let message = lastMessageFromLog(turnLog);
 		if (turnLog.length === 0) {
@@ -917,6 +946,7 @@ export class ObservationCoordinator {
 			});
 			this.restarted.delete(ticket.ticketIdentity);
 			if (!applied) return false;
+			this.onCycleEnd?.(ticket.ticketIdentity);
 			const failure = await this.cleanup(ticket, "abandoned");
 			if (this.stopped) return true;
 			this.onStatus(
@@ -1002,6 +1032,7 @@ export class ObservationCoordinator {
 				decidedAt,
 			});
 			if (!applied) return false;
+			this.onCycleEnd?.(ticket.ticketIdentity);
 			const failure = await this.cleanup(ticket, "closed");
 			if (this.stopped) return true;
 			this.onStatus(
@@ -1157,6 +1188,13 @@ export class ObservationCoordinator {
 		for (const ticket of tickets) {
 			if (ticket.state !== "open" || !ticket.actionable) continue;
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
+			// The ticket's last cycle may have ended on a source change the agent
+			// made (a merged pull request, a closed issue). Its membership still
+			// reads active and healthy on the stale fetch, so the dispatch waits
+			// for the sources to re-read the ticket: a merged item leaves the
+			// list and the ticket does not dispatch, an open one re-verifies and
+			// dispatches. The gate holds the ticket, not a parallel slot.
+			if (!this.state.sourceReverifiedSinceCycleEnd(ticket.identity)) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;
 			// The configured settings of the ticket's task profile (ADR 0009): an

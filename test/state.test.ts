@@ -406,7 +406,19 @@ describe("factory SQLite state", () => {
 		expect(returned.state).toBe("open");
 		expect(returned.lastCompletion?.decision).toBe("closed");
 
-		// The next handoff runs in work cycle 2.
+		// The cycle may have changed the source item, so the next handoff
+		// waits for the source to re-read the ticket since the close.
+		const gated = state.claimHandoff(returned.identity, choice, "open");
+		expect(gated.ok).toBe(false);
+		if (gated.ok) return;
+		expect(gated.reason).toContain("re-read since its last cycle ended");
+
+		// The re-read lands, and the next handoff runs in work cycle 2.
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
 		const second = state.claimHandoff(returned.identity, choice, "open");
 		expect(second.ok).toBe(true);
 		if (!second.ok) return;
@@ -415,6 +427,92 @@ describe("factory SQLite state", () => {
 			.prepare("SELECT work_cycle FROM handoffs WHERE ticket_identity = ? ORDER BY work_cycle")
 			.all(ticket.identity) as Array<{ work_cycle: number }>;
 		expect(cycles).toEqual([{ work_cycle: 1 }, { work_cycle: 2 }]);
+		state.close();
+	});
+
+	test("the re-verification reads the latest end decision against every listing source", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA, sourceB]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.applyFetch(sourceB, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// A ticket whose cycle has never ended is verified.
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(true);
+
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision: "auto-closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		// The close outlives both sources' last reads: the ticket is not
+		// verified, even though both sources still list it and are healthy.
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(false);
+
+		// One source re-reads; the other's listing still stands on the stale
+		// fetch, and the ticket is not verified on a mixed view.
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(false);
+
+		// The second source re-reads, and the ticket is verified again.
+		state.applyFetch(sourceB, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:32:00Z",
+			tickets: [fetched()],
+		});
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(true);
+		state.close();
+	});
+
+	test("an open claim waits for the source re-read after a cycle end", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		const gated = state.claimHandoff(identity, choice, "open");
+		expect(gated.ok).toBe(false);
+		if (gated.ok) return;
+		expect(gated.reason).toBe(
+			"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
+		);
+		// A failed re-read leaves the membership stale: the claim refuses on
+		// its own eligibility, and the gate holds either way.
+		state.applyFetch(sourceA, { status: "failed", reason: "GitHub rate limit exceeded" });
+		expect(state.claimHandoff(identity, choice, "open").ok).toBe(false);
 		state.close();
 	});
 
@@ -947,7 +1045,11 @@ describe("factory SQLite state", () => {
 		reopened.close();
 	});
 
-	/** A ticket whose one work cycle ran, settled, and closed. */
+	/**
+	 * A ticket whose one work cycle ran, settled, and closed. When `list` is
+	 * passed, the source is re-read after the close with that list, the way
+	 * the app re-reads a ticket's sources when its cycle ends.
+	 */
 	function closedCycle(
 		state: ReturnType<typeof openFactoryState>,
 		identity: string,
@@ -956,6 +1058,7 @@ describe("factory SQLite state", () => {
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		},
+		list?: FetchedTicket[],
 	): string {
 		const claim = state.claimHandoff(identity, choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
@@ -975,6 +1078,16 @@ describe("factory SQLite state", () => {
 			decision: "closed",
 			decidedAt: "2026-08-31T10:03:00Z",
 		});
+		if (list !== undefined) {
+			// The app re-reads the ticket's source when its cycle ends, after the
+			// decision's time: the ticket is re-verified, and a later open claim
+			// of it passes.
+			state.applyFetch(sourceA, {
+				status: "success",
+				fetchedAt: "2026-08-31T10:04:00Z",
+				tickets: list,
+			});
+		}
 		return claim.claim.attemptId;
 	}
 
@@ -1033,7 +1146,9 @@ describe("factory SQLite state", () => {
 			}),
 		).toBe(null);
 		const identity = "github:github.com:I_5";
-		closedCycle(state, identity);
+		// The close's re-read keeps every listed ticket, and clears the gate
+		// before the ticket's next cycle claims.
+		closedCycle(state, identity, undefined, [fetched("github:github.com:I_6"), fetched()]);
 		const claim = state.claimHandoff("github:github.com:I_6", choice, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true, undefined, { paneId: "pane-6" });
@@ -1105,10 +1220,12 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const identity = "github:github.com:I_5";
-		closedCycle(state, identity);
+		// The close's re-read keeps the ticket listed, and clears the gate
+		// before the next cycle claims.
+		closedCycle(state, identity, undefined, [fetched()]);
 		// A second closed cycle: the ticket now holds two environments, and the
 		// collision names the older one by its pane.
-		closedCycle(state, identity);
+		closedCycle(state, identity, undefined, [fetched()]);
 
 		const recorded = state.recordLeftoverEnvironment({
 			ticketIdentity: identity,
@@ -1143,15 +1260,18 @@ describe("factory SQLite state", () => {
 		state.initializeSources([sourceA]);
 		state.applyFetch(sourceA, success([fetched()]));
 		const identity = "github:github.com:I_5";
-		const first = closedCycle(state, identity);
+		// The close's re-read keeps the ticket listed, and clears the gate
+		// before the next cycle claims.
+		const first = closedCycle(state, identity, undefined, [fetched()]);
 		// The second cycle lived in the same workspace on another tab: the
 		// shape a reclaimed agent leaves, where one workspace holds the tabs of
 		// several cycles (ADR 0011).
-		const second = closedCycle(state, identity, {
-			paneId: "pane-2",
-			tabId: "tab-2",
-			workspaceId: "ws-1",
-		});
+		const second = closedCycle(
+			state,
+			identity,
+			{ paneId: "pane-2", tabId: "tab-2", workspaceId: "ws-1" },
+			[fetched()],
+		);
 		const record = () => {
 			state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: first, reason: "a" });
 			state.recordLeftoverEnvironment({ ticketIdentity: identity, handoffId: second, reason: "b" });

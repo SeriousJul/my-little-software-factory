@@ -247,6 +247,38 @@ function propsOf(app: SeededApp): AppProps {
 	};
 }
 
+/**
+ * The app re-reads the ticket's source when a cycle ends, so a seeded close
+ * that the next claim follows takes that re-read with it: the open ticket is
+ * re-verified at the given time.
+ */
+function reverify(app: SeededApp, outcome: FetchOutcome, at: string): void {
+	const refetch: FetchOutcome =
+		outcome.status === "success"
+			? { status: "success", fetchedAt: at, tickets: outcome.tickets }
+			: outcome;
+	app.state.applyFetch(source, refetch);
+}
+
+/**
+ * The app re-reads the ticket's source when a cycle ends inside the app.
+ * Settle that re-read at a time after the decision: the open ticket is
+ * re-verified for the next handoff.
+ */
+async function settleReverify(src: FakeSource, outcome: FetchOutcome): Promise<void> {
+	const refetch: FetchOutcome =
+		outcome.status === "success"
+			? {
+					status: "success",
+					fetchedAt: new Date(Date.now() + 60_000).toISOString(),
+					tickets: outcome.tickets,
+				}
+			: outcome;
+	src.settle(refetch);
+	// Let the coordinator's applyFetch land before the next key goes out.
+	for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+}
+
 /** Enter through the real key path, then wait for its effect. */
 async function pressReturn(
 	setup: AppSetup,
@@ -467,6 +499,7 @@ describe("the failure markers", () => {
 			HEIGHT,
 			propsOf(app),
 		);
+		reverify(app, success, new Date(Date.now() + 60_000).toISOString());
 		const next = app.state.claimHandoff(
 			identity,
 			{
@@ -1933,6 +1966,7 @@ describe("the leftover environment", () => {
 			decision: "closed",
 			decidedAt: "2026-09-02T09:30:00.000Z",
 		});
+		reverify(app, success, "2026-09-02T09:31:00.000Z");
 		const claim = app.state.claimHandoff(
 			identity,
 			{
@@ -2097,6 +2131,7 @@ describe("the leftover environment", () => {
 			decision: "closed",
 			decidedAt: "2026-09-02T09:30:00.000Z",
 		});
+		reverify(app, success, "2026-09-02T09:31:00.000Z");
 		// The tab herdr would not close, and the handoff Enter started took that
 		// same tab: the two rows name one live agent.
 		app.state.recordLeftoverEnvironment({
@@ -2191,6 +2226,7 @@ describe("the leftover environment", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 				expect(tabCloses(app)).toBe(1);
+				await settleReverify(app.src, success);
 				await pressReturn(setup, "the handoff", (f) => f.includes("handing off"));
 				await awaitFrame(setup, () => gate.busy(), "the handoff reaching herdr");
 
@@ -2267,6 +2303,7 @@ describe("the leftover environment", () => {
 				expect(
 					app.runner.commands().filter((c) => c === "herdr worktree remove --workspace ws-1"),
 				).toHaveLength(1);
+				await settleReverify(app.src, pairSuccess);
 				await pressReturn(setup, "the handoff the operator starts", (f) => f.includes("[open]"));
 				// The claim is taken, but it waits: no environment work of its
 				// own has reached herdr while the removal holds the seat.
@@ -2350,6 +2387,7 @@ describe("the leftover environment", () => {
 				);
 				// The second ticket is open again. Its handoff claims now, but the
 				// cleanup seat keeps its external work out of herdr.
+				await settleReverify(app.src, pairSuccess);
 				setup.mockInput.pressEnter();
 				await settle(setup);
 
@@ -2396,6 +2434,7 @@ describe("the leftover environment", () => {
 			decision: "closed",
 			decidedAt: "2026-09-02T09:30:00.000Z",
 		});
+		reverify(app, success, "2026-09-02T09:31:00.000Z");
 		app.state.recordLeftoverEnvironment({
 			ticketIdentity: identity,
 			handoffId: first.handoffId,
@@ -2489,13 +2528,15 @@ describe("the leftover environment", () => {
 		// Three closed cycles over the same workspace: the ticket holds three
 		// unresolved facts, and the panel cannot hold the guide, the blank, and
 		// all six fact rows at once.
-		const closeCycle = (handoffId: string, at: string) =>
+		const closeCycle = (handoffId: string, at: string) => {
 			app.state.applyCompletionDecision({
 				ticketIdentity: identity,
 				handoffId,
 				decision: "closed",
 				decidedAt: at,
 			});
+			reverify(app, success, at);
+		};
 		const nextCycle = (pane: string) => {
 			const claim = app.state.claimHandoff(
 				identity,
@@ -2667,10 +2708,11 @@ describe("the leftover environment", () => {
 	 * Close the cycle the seeded agent settled, then hand the open ticket off
 	 * again: the key path that meets the leftover name.
 	 */
-	async function closeAndHandOffAgain(setup: AppSetup): Promise<void> {
+	async function closeAndHandOffAgain(setup: AppSetup, src: FakeSource): Promise<void> {
 		await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 		await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 		await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+		await settleReverify(src, success);
 		// Enter on the open ticket: the leftover does not stop it.
 		await pressReturn(setup, "the handoff", (f) => ticketRow(f).includes("[handed-off]"));
 	}
@@ -2681,7 +2723,7 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await closeAndHandOffAgain(setup);
+				await closeAndHandOffAgain(setup, app.src);
 				const commands = app.runner.commands();
 				expect(commands).toContain(
 					"herdr agent start persist-source-facts-c2 --kind pi --pane pane-2",
@@ -2732,6 +2774,7 @@ describe("the leftover environment", () => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				await settleReverify(app.src, success);
 				await pressReturn(setup, "the handoff stopped by the stranger", (f) =>
 					f.includes("pane pane-stranger"),
 				);
@@ -2770,7 +2813,7 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
-				await closeAndHandOffAgain(setup);
+				await closeAndHandOffAgain(setup, app.src);
 				// One Message line carries both facts: the failure first, the name
 				// warning after it. The line is truncated to the terminal width,
 				// so the test renders wide enough to hold the whole of it.
@@ -3467,6 +3510,7 @@ describe("the handoff queue", () => {
 					"the boundary no-op on the open ticket",
 					(f) => markerRowOf(f) === 6,
 				);
+				await settleReverify(src, pairMoved);
 				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(
 					setup,

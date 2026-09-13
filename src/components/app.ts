@@ -427,9 +427,10 @@ export function App({
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
-	// The held turns (ADR 0016): the awaiting tickets whose last turn ended
-	// failed, aborted, or truncated with no decision. They rest in awaiting,
-	// held against every automatic decision, until the operator acts. A ticket
+	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
+	// ended failed, aborted, truncated, or no-turn with no decision. They rest
+	// in awaiting, held against every automatic decision, until the operator
+	// acts. A ticket
 	// whose agent works again has left awaiting and is no longer held (its
 	// next settle overwrites the trace).
 	const heldCount = tickets.filter(
@@ -738,6 +739,28 @@ export function App({
 			},
 		);
 	};
+	/**
+	 * Re-read the sources that list one ticket, now.
+	 *
+	 * Ending a work cycle can change the ticket's source item: the agent
+	 * merged the pull request, or closed the issue. The ticket's membership
+	 * still reads active on the stale fetch, so the cycle's end re-reads the
+	 * sources at once: the fetch either confirms the ticket still wants work
+	 * or drops it. The fetch's own completion already ticks the observation
+	 * loop, so a re-verified ticket dispatches without waiting for the next
+	 * poll, and a dropped one simply leaves the list.
+	 */
+	const refreshTicketSources = useCallback(
+		(identity: string): void => {
+			if (state === undefined) return;
+			const coordinator = coordinatorRef.current;
+			if (coordinator === undefined) return;
+			for (const sourceName of state.membershipSourceNames(identity)) {
+				coordinator.refreshNow(sourceName);
+			}
+		},
+		[state],
+	);
 	/**
 	 * Start the Clear action. The dispatch module owns its durable work and
 	 * Message-line reports; this caller only handles an unexpected rejection.
@@ -1101,6 +1124,7 @@ export function App({
 				setWarningMessage(`ticket ${ticket.identity} already decided`);
 				return;
 			}
+			refreshTicketSources(ticket.identity);
 			// The Close cleanup: the environment of the handoff the decision ends.
 			const stored = state.latestHandoff(ticket.identity);
 			if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
@@ -1415,6 +1439,7 @@ export function App({
 				setWarningMessage(`ticket ${ticket.identity} already decided`);
 				return;
 			}
+			refreshTicketSources(ticket.identity);
 			const stored = state.latestHandoff(ticket.identity);
 			if (stored !== null) runCloseCleanup(ticket.identity, stored, "abandoned");
 			setWarningMessage(`ticket ${ticket.identity} abandoned`);
@@ -1850,6 +1875,11 @@ export function App({
 			herdr: new HerdrAgentReader(commandRunner),
 			config: () => configRef.current,
 			dispatch: (intent) => dispatch.dispatch(intent),
+			// The cycle's end may have changed the ticket's source item (a merged
+			// pull request, a closed issue): re-read the sources now, so the
+			// ticket is re-verified - or drops off the list - before the next
+			// automatic dispatch of it.
+			onCycleEnd: (identity) => refreshTicketSources(identity),
 			// The Close cleanup of an auto-ended cycle: the environment of the
 			// handoff the decision ends. A cleanup that cannot remove the
 			// checkout leaves a leftover the ticket carries as a fact, so the
@@ -1919,6 +1949,7 @@ export function App({
 		onReady,
 		clearOperationMessage,
 		setStatus,
+		refreshTicketSources,
 	]);
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;

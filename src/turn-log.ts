@@ -10,8 +10,13 @@
  *
  * ADR 0015 widens the seam: the same read that returns the log also returns
  * the turn end cause and its detail, from the same record. The cause is the
- * agent's fact of why the turn ended, mapped into a closed five-value
- * vocabulary; the detail carries the agent's or the provider's own text.
+ * agent's fact of why the turn ended, mapped into a closed vocabulary; the
+ * detail carries the agent's or the provider's own text.
+ *
+ * ADR 0017 widens the read to a three-way answer: the turn ended, with its
+ * log and cause; the record is readable and well-formed but holds no turn,
+ * because the turn never started; or the record is unavailable. The settle
+ * gate and the `no-turn` cause ride on that distinction.
  *
  * The entries are the durable content of a Completion trace and the body of
  * the decision modal. They carry no styling: the modal renders them.
@@ -29,21 +34,30 @@ type ToolEntry = Extract<TurnLogEntry, { kind: "tool" }>;
 /**
  * The turn end cause: why the agent's settled turn ended.
  *
- * A closed five-value vocabulary. A vendor-specific class is mapped into it
- * and preserved in the detail, never added to it. `unknown` is the fail-open
- * case: no reader for the kind, a missing or unreadable record, or a record
- * that predates the handoff. `unknown` is not evidence of failure.
+ * A closed six-value vocabulary. A vendor-specific class is mapped into it
+ * and preserved in the detail, never added to it. `no-turn` (ADR 0017) is
+ * the readable record with no turn in it: the turn never started, and the
+ * settle that reaches it holds. `unknown` is the fail-open case: no reader
+ * for the kind, a missing or unreadable record, or a record that predates
+ * the handoff. `unknown` is not evidence of failure.
  */
-export const TURN_END_CAUSES = ["completed", "failed", "aborted", "truncated", "unknown"] as const;
+export const TURN_END_CAUSES = [
+	"completed",
+	"failed",
+	"aborted",
+	"truncated",
+	"no-turn",
+	"unknown",
+] as const;
 export type TurnEndCause = (typeof TURN_END_CAUSES)[number];
 
 /**
  * Whether a turn end cause holds its turn: it is a non-completed, non-unknown
  * cause. A held turn is the one no automatic decision runs on. `unknown`
- * fails open and is not held.
+ * fails open and is not held; `no-turn` holds (ADR 0017).
  */
 export function isHeldCause(cause: TurnEndCause | null | undefined): boolean {
-	return cause === "failed" || cause === "aborted" || cause === "truncated";
+	return cause === "failed" || cause === "aborted" || cause === "truncated" || cause === "no-turn";
 }
 
 /** The cap on the stored cause detail: one cell cannot hold a kilobyte of payload. */
@@ -62,6 +76,18 @@ export interface TurnEnd {
 	/** The agent's or the provider's own text, capped. Empty when there is none. */
 	detail: string;
 }
+
+/**
+ * One read of the agent's session record at settle (ADR 0017): the turn
+ * ended, with its log and cause; the record is readable and well-formed but
+ * holds no turn, because the turn never started; or the record is
+ * unavailable: no session reported, no reader for the kind, or a missing,
+ * unreadable, or malformed record.
+ */
+export type SessionTurnRead =
+	| { kind: "ended"; turnEnd: TurnEnd }
+	| { kind: "no-turn" }
+	| { kind: "unavailable" };
 
 /** Cap a cause detail to the stored cap. */
 function capDetail(detail: string): string {
@@ -116,7 +142,8 @@ function applyStalenessGuard(
  * messages yields null, so the caller falls back to the terminal capture.
  */
 export function turnLogFromPiSession(jsonl: string): TurnLogEntry[] | null {
-	return turnEndFromPiSession(jsonl, null)?.log ?? null;
+	const read = turnEndFromPiSession(jsonl, null);
+	return read.kind === "ended" ? read.turnEnd.log : null;
 }
 
 /**
@@ -128,9 +155,10 @@ export function turnLogFromPiSession(jsonl: string): TurnLogEntry[] | null {
  * detail; `aborted` is `aborted`; a last assistant message that is a tool
  * call (`toolUse`) is `aborted`, because the turn never produced its final
  * words; `length` is `truncated`. Anything else is `unknown`. A malformed
- * line or a record without messages yields null.
+ * line yields `unavailable`; a well-formed record without messages yields
+ * `no-turn`.
  */
-export function turnEndFromPiSession(jsonl: string, startedAt: string | null): TurnEnd | null {
+export function turnEndFromPiSession(jsonl: string, startedAt: string | null): SessionTurnRead {
 	const entries: TurnLogEntry[] = [];
 	const toolById = new Map<string, ToolEntry>();
 	let sawMessage = false;
@@ -143,7 +171,7 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): T
 		try {
 			record = JSON.parse(line);
 		} catch {
-			return null;
+			return { kind: "unavailable" };
 		}
 		if (!isRecord(record) || record.type !== "message") continue;
 		const message = isRecord(record.message) ? record.message : undefined;
@@ -180,7 +208,7 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): T
 			}
 		}
 	}
-	if (!sawMessage) return null;
+	if (!sawMessage) return { kind: "no-turn" };
 	let cause: TurnEndCause;
 	let detail = "";
 	switch (lastStop) {
@@ -202,9 +230,12 @@ export function turnEndFromPiSession(jsonl: string, startedAt: string | null): T
 			cause = "unknown";
 	}
 	return {
-		log: entries,
-		cause: applyStalenessGuard(cause, lastTs, startedAt),
-		detail: capDetail(detail),
+		kind: "ended",
+		turnEnd: {
+			log: entries,
+			cause: applyStalenessGuard(cause, lastTs, startedAt),
+			detail: capDetail(detail),
+		},
 	};
 }
 
@@ -237,9 +268,10 @@ export function codexAbortCause(reason: string | undefined): TurnEndCause {
  * detail; `stream_error` is `failed`; `turn_aborted` maps by its own reason,
  * and its reason is the detail: the agent's own text of why the turn died,
  * kept verbatim so the operator reads it instead of a category label.
- * A record without a turn-end event yields null.
+ * A record without a turn-end event yields `no-turn`; a malformed line
+ * yields `unavailable`.
  */
-export function turnEndFromCodexSession(jsonl: string, startedAt: string | null): TurnEnd | null {
+export function turnEndFromCodexSession(jsonl: string, startedAt: string | null): SessionTurnRead {
 	const entries: TurnLogEntry[] = [];
 	let sawTurnEnd = false;
 	let cause: TurnEndCause = "unknown";
@@ -251,7 +283,7 @@ export function turnEndFromCodexSession(jsonl: string, startedAt: string | null)
 		try {
 			record = JSON.parse(line);
 		} catch {
-			return null;
+			return { kind: "unavailable" };
 		}
 		if (!isRecord(record)) continue;
 		const payload = isRecord(record.payload) ? record.payload : undefined;
@@ -293,11 +325,14 @@ export function turnEndFromCodexSession(jsonl: string, startedAt: string | null)
 			detail = reason ?? "";
 		}
 	}
-	if (!sawTurnEnd) return null;
+	if (!sawTurnEnd) return { kind: "no-turn" };
 	return {
-		log: entries,
-		cause: applyStalenessGuard(cause, lastTs, startedAt),
-		detail: capDetail(detail),
+		kind: "ended",
+		turnEnd: {
+			log: entries,
+			cause: applyStalenessGuard(cause, lastTs, startedAt),
+			detail: capDetail(detail),
+		},
 	};
 }
 
@@ -325,9 +360,10 @@ function claudeErrorText(record: Record<string, unknown>): string {
  * is `failed`, with the message's own text as the detail. A real message
  * stopped on its output token limit (`max_tokens`) is `truncated`; an end of
  * turn or stop sequence is `completed`. A `tool_use` stop is mid-turn, not a
- * turn end. A record without a turn end yields null.
+ * turn end. A record without a turn end yields `no-turn`; a malformed line
+ * yields `unavailable`.
  */
-export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null): TurnEnd | null {
+export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null): SessionTurnRead {
 	const entries: TurnLogEntry[] = [];
 	let sawTurnEnd = false;
 	let cause: TurnEndCause = "unknown";
@@ -339,7 +375,7 @@ export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null
 		try {
 			record = JSON.parse(line);
 		} catch {
-			return null;
+			return { kind: "unavailable" };
 		}
 		if (!isRecord(record) || record.type !== "assistant") continue;
 		const message = isRecord(record.message) ? record.message : undefined;
@@ -371,11 +407,14 @@ export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null
 		}
 		// `tool_use` is mid-turn: the agent called a tool and the turn goes on.
 	}
-	if (!sawTurnEnd) return null;
+	if (!sawTurnEnd) return { kind: "no-turn" };
 	return {
-		log: entries,
-		cause: applyStalenessGuard(cause, lastTs, startedAt),
-		detail: capDetail(detail),
+		kind: "ended",
+		turnEnd: {
+			log: entries,
+			cause: applyStalenessGuard(cause, lastTs, startedAt),
+			detail: capDetail(detail),
+		},
 	};
 }
 
@@ -384,20 +423,20 @@ export function turnEndFromClaudeSession(jsonl: string, startedAt: string | null
  * agent's session record in one read.
  *
  * The kind is the agent type's kind from the config. A kind without a
- * reader, a missing or unreadable file, or a malformed record yields null,
- * and the caller falls back to the terminal capture with an `unknown`
- * cause. The started time of the handoff feeds the staleness guard.
+ * reader, or a missing or unreadable file, yields `unavailable`, and the
+ * caller falls back to the terminal capture with an `unknown` cause. The
+ * started time of the handoff feeds the staleness guard.
  */
 export function readSessionTurnEnd(
 	kind: string,
 	sessionPath: string,
 	startedAt: string | null,
-): TurnEnd | null {
+): SessionTurnRead {
 	let raw: string;
 	try {
 		raw = readFileSync(sessionPath, "utf8");
 	} catch {
-		return null;
+		return { kind: "unavailable" };
 	}
 	switch (kind) {
 		case "pi":
@@ -407,7 +446,7 @@ export function readSessionTurnEnd(
 		case "claude":
 			return turnEndFromClaudeSession(raw, startedAt);
 		default:
-			return null;
+			return { kind: "unavailable" };
 	}
 }
 

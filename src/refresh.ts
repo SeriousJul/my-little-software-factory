@@ -51,6 +51,26 @@ export class RefreshCoordinator {
 		return idle.map((source) => source.name);
 	}
 
+	/**
+	 * Start one source's fetch now, ahead of its schedule. A source that is
+	 * already fetching keeps its in-flight fetch. The pending timer is
+	 * cancelled, and the fetch's own completion reschedules it, so a
+	 * triggered refresh never leaves a duplicate schedule behind. Returns
+	 * whether this call started a fetch.
+	 */
+	refreshNow(sourceName: string): boolean {
+		if (this.stopped || this.inFlight.has(sourceName)) return false;
+		const source = this.sources.find((candidate) => candidate.name === sourceName);
+		if (source === undefined) return false;
+		const timer = this.timers.get(sourceName);
+		if (timer !== undefined) {
+			this.clock.clearTimeout(timer);
+			this.timers.delete(sourceName);
+		}
+		this.refresh(source);
+		return true;
+	}
+
 	/** The sources a refresh can start: the ones not already fetching. */
 	idleSources(): readonly TicketSource[] {
 		return this.sources.filter((source) => !this.inFlight.has(source.name));

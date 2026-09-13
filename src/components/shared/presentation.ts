@@ -22,6 +22,8 @@
  * presentation; the pin keeps the light pairs exercised in the meantime.
  */
 
+import type { TurnEndCause } from "../../turn-log.ts";
+
 /** The presentations the shared controls draw. */
 export type Presentation = "dark" | "light" | "mono";
 
@@ -136,6 +138,16 @@ export const STATE_WORDS = {
 	unavailable: "(unavailable)",
 	notSaved: "not saved across restarts",
 } as const;
+
+/**
+ * The line that states why a settled turn ended: `no-turn` states that the
+ * turn never started, and every other cause states the turn ended, with the
+ * agent's own text when it has one (ADR 0017).
+ */
+export function turnEndCauseLine(cause: TurnEndCause, detail: string): string {
+	if (cause === "no-turn") return "The turn never started";
+	return detail === "" ? `Turn ended ${cause}` : `Turn ended ${cause}: ${detail}`;
+}
 
 /** The focus marker a row carries: a character first, a color as well. */
 export const FOCUS_MARKER = "❯ ";

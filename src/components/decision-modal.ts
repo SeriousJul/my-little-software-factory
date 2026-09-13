@@ -39,6 +39,7 @@ import {
 	useActionSelection,
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
+import { turnEndCauseLine } from "./shared/presentation.ts";
 import { truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -360,10 +361,7 @@ export function DecisionModal({
 						createElement(
 							"text",
 							{ key: "held", fg: COLORS.statusWarning },
-							truncateToWidth(
-								detail === "" ? `Turn ended ${cause}` : `Turn ended ${cause}: ${detail}`,
-								frame.contentWidth,
-							),
+							truncateToWidth(turnEndCauseLine(cause, detail), frame.contentWidth),
 						),
 					]
 				: []),

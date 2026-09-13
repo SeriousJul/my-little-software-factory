@@ -222,7 +222,7 @@ _Avoid_: missing Agent, Herdr offline
 
 **Startup grace**:
 The window from a handoff during which the agent's idle report is its boot, not a turn end.
-A ticket that has never shown working waits the window out before an idle agent settles it.
+The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.
 _Avoid_: boot delay, settle delay
 
 **Reclaim**:
@@ -319,12 +319,12 @@ The control plane builds it from the agent's session record when herdr reports o
 _Avoid_: agent log, transcript, terminal capture
 
 **Turn end cause**:
-Why an agent's settled turn ended: `completed`, `failed`, `aborted`, `truncated`, or `unknown`, with the agent's own text as its detail.
-It is the agent's fact, not herdr's status, and it says nothing about whether the work itself succeeded.
+Why an agent's settled turn ended: `completed`, `failed`, `aborted`, `truncated`, `no-turn`, or `unknown`, with the agent's own text as its detail.
+`no-turn` is the cause of a settle whose session record is readable and holds no turn: the turn never started. `unknown` is the fail-open cause of a record that cannot be read. It is the agent's fact, not herdr's status, and it says nothing about whether the work itself succeeded.
 _Avoid_: done, exit reason, stop reason, agent status
 
 **Held turn**:
-A settled turn whose Turn end cause is `failed`, `aborted`, or `truncated`, and that no decision has landed on.
+A settled turn whose Turn end cause is `failed`, `aborted`, `truncated`, or `no-turn`, and that no decision has landed on.
 No automatic decision runs on it: the ticket rests in `awaiting` until the operator decides. A turn that settled `completed` or `unknown` is never held; `unknown` fails open, so it auto-decides as it normally would.
 _Avoid_: stalled turn, blocked turn, failed turn
 

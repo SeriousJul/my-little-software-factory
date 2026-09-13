@@ -104,6 +104,8 @@ function issueTicket(seed: Seed): FetchedTicket {
 
 interface Rig {
 	state: FactoryState;
+	/** The tickets the seed fetch listed on the state's one source. */
+	seeds: readonly Seed[];
 	/** The herdr and git answers the module's work meets. */
 	runner: FakeRunner;
 	dispatch: HandoffDispatch;
@@ -226,6 +228,7 @@ function rig(seeds: readonly Seed[] = [FIRST]): Rig {
 	);
 	return {
 		state,
+		seeds,
 		runner,
 		dispatch,
 		config,
@@ -355,6 +358,14 @@ function closeCycle(rig: Rig, seed: Seed, handoffId: string): void {
 		handoffId,
 		decision: "closed",
 		decidedAt: "2026-09-01T01:00:00Z",
+	});
+	// The app re-reads the ticket's source when a cycle ends: the re-read
+	// keeps the ticket listed after the decision's time, so a later claim of
+	// the open ticket passes the re-verification.
+	rig.state.applyFetch(source, {
+		status: "success",
+		fetchedAt: "2026-09-01T01:01:00Z",
+		tickets: rig.seeds.map(issueTicket),
 	});
 }
 

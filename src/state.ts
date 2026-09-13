@@ -972,6 +972,49 @@ export class FactoryState {
 	}
 
 	/**
+	 * Whether the ticket's source facts postdate its last ended cycle.
+	 *
+	 * A close, auto-close, or abandon returns the ticket to open, and the
+	 * agent of the ended cycle may have changed the source item in the
+	 * meantime: it merged the pull request, or closed the issue. The sources'
+	 * last successful reads are the only thing that can say, so the ticket
+	 * stays unverified until every source that still actively lists it has
+	 * re-read since the latest end decision. A ticket whose cycle has never
+	 * ended is verified, and a failed re-read needs no help here: it leaves
+	 * the membership stale, which already makes the ticket unactionable.
+	 */
+	sourceReverifiedSinceCycleEnd(identity: string): boolean {
+		const ended = this.db
+			.prepare(
+				"SELECT MAX(decided_at) AS ended_at FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL",
+			)
+			.get(identity) as { ended_at: string | null } | undefined;
+		if (ended?.ended_at === undefined || ended.ended_at === null) return true;
+		const unrefreshed = this.db
+			.prepare(
+				`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name
+				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR h.last_success < ?) LIMIT 1`,
+			)
+			.get(identity, ended.ended_at) as { 1: number } | undefined;
+		return unrefreshed === undefined;
+	}
+
+	/**
+	 * The names of the sources that hold a membership of one ticket, active
+	 * or not: the list a cycle-end refresh re-reads. A source that has already
+	 * dropped the ticket is on this list, because that is the source whose
+	 * re-read confirms the drop.
+	 */
+	membershipSourceNames(identity: string): string[] {
+		const rows = this.db
+			.prepare(
+				"SELECT DISTINCT source_name FROM memberships WHERE ticket_identity = ? ORDER BY source_name",
+			)
+			.all(identity) as Array<{ source_name: string }>;
+		return rows.map((row) => row.source_name);
+	}
+
+	/**
 	 * The durable state of one ticket, or undefined when the ticket no
 	 * longer exists. A queued handoff re-reads it before it runs: the
 	 * projection filters visibility, but a handoff waits on the state.
@@ -1543,6 +1586,16 @@ export class FactoryState {
 							ok: false,
 							reason:
 								"ticket is not actionable because all source memberships are stale, removed, or absent",
+						};
+					// The cycle the ticket just ended may have changed its source
+					// item (the agent merged the pull request, or closed the
+					// issue). The claim waits for the sources to re-read it, so
+					// the handoff never starts on facts the agent made stale.
+					if (!this.sourceReverifiedSinceCycleEnd(ticketIdentity))
+						return {
+							ok: false,
+							reason:
+								"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
 						};
 				}
 				if (origin === "workflow" && ticket.state !== "awaiting")

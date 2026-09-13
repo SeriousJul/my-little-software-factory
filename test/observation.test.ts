@@ -14,7 +14,7 @@ import {
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import type { TurnEnd, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
+import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -134,7 +134,13 @@ function rig(options: {
 	agents?: HerdrAgent[];
 	readPane?: (paneId: string, lines: number) => Promise<string | null>;
 	/** The turn log the fake session reader returns. Null: no session log. */
-	turnLogs?: (kind: string, sessionId: string, startedAt: string | null) => Promise<TurnEnd | null>;
+	turnLogs?: (
+		kind: string,
+		sessionId: string,
+		startedAt: string | null,
+	) => Promise<SessionTurnRead>;
+	/** The cycle-end report the loop answers to, the way the app does. */
+	onCycleEnd?: (ticketIdentity: string) => void;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = [...(options.agents ?? [])];
@@ -154,9 +160,10 @@ function rig(options: {
 		state,
 		herdr: reader(() => agents, options.readPane),
 		turnLogs: {
-			read: options.turnLogs ?? (async () => null),
+			read: options.turnLogs ?? (async () => ({ kind: "unavailable" })),
 		},
 		config: () => ({ ...config, ...options.config }),
+		onCycleEnd: options.onCycleEnd,
 		dispatch: async (intent) => {
 			intents.push(intent);
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
@@ -590,7 +597,7 @@ describe("the observation cycle", () => {
 			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
 			turnLogs: async (kind, sessionId) => {
 				calls.push({ kind, sessionId });
-				return { log: entries, cause: "completed", detail: "" };
+				return { kind: "ended", turnEnd: { log: entries, cause: "completed", detail: "" } };
 			},
 			readPane: async (paneId) => {
 				paneReads.push(paneId);
@@ -619,7 +626,7 @@ describe("the observation cycle", () => {
 	test("settle falls back to the pane capture when the session log is missing", async () => {
 		const { state, coordinator, advance } = rig({
 			agents: [agent("pane-implement", "done", "/tmp/session.jsonl")],
-			turnLogs: async () => null,
+			turnLogs: async () => ({ kind: "unavailable" }),
 		});
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
@@ -644,7 +651,10 @@ describe("the observation cycle", () => {
 			agents: [agent("pane-implement", "done")],
 			turnLogs: async () => {
 				asked = true;
-				return { log: [{ kind: "text", text: "a log" }], cause: "completed", detail: "" };
+				return {
+					kind: "ended",
+					turnEnd: { log: [{ kind: "text", text: "a log" }], cause: "completed", detail: "" },
+				};
 			},
 		});
 		handOut(state, "github:github.com:I_5");
@@ -707,16 +717,84 @@ describe("the observation cycle", () => {
 		state.close();
 	});
 
-	test("a running ticket settles on idle at once: the grace only guards a boot", async () => {
-		const { state, coordinator, setAgents } = rig({
-			agents: [agent("pane-implement", "working")],
+	test("a working report marks the ticket running but drops no grace", async () => {
+		// The flap: herdr reports working while the agent boots, then idle
+		// while it parks. The record holds no turn, so the grace stays until
+		// the clock says otherwise (ADR 0017).
+		const { state, coordinator, setAgents, advance, statuses } = rig({
+			agents: [agent("pane-implement", "working", "session-1")],
+			turnLogs: async () => ({ kind: "no-turn" }),
 		});
 		handOut(state, "github:github.com:I_5");
 		await coordinator.tick();
 		expect(state.ticketsByState(["running"])).toHaveLength(1);
-		// The turn ran, so the grace no longer applies: an idle agent
-		// settles at once, without waiting.
-		setAgents([agent("pane-implement", "idle")]);
+		setAgents([agent("pane-implement", "idle", "session-1")]);
+		await coordinator.tick();
+		// Inside the startup window the parked agent does not settle: the
+		// turn never started, and the flap did not lift the grace.
+		expect(state.ticketsByState(["running"])).toHaveLength(1);
+		expect(state.visibleTickets([], "implement").at(0)?.lastCompletion).toBeNull();
+		// Past the grace, the parked agent settles no-turn, held.
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		expect(ticket.state).toBe("awaiting");
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({
+				cause: "no-turn",
+				detail: "",
+				decision: null,
+			}),
+		);
+		// The hold is loud on the Message line.
+		expect(
+			statuses.some(
+				(status) => status.kind === "warning" && status.text.includes("held (no-turn)"),
+			),
+		).toBe(true);
+		state.close();
+	});
+
+	test("a no-turn settle is held: auto mode does not close the cycle", async () => {
+		const { state, coordinator, setAgents, advance } = rig({
+			autoOn: true,
+			agents: [agent("pane-implement", "working", "session-1")],
+			turnLogs: async () => ({ kind: "no-turn" }),
+		});
+		handOut(state, "github:github.com:I_5");
+		await coordinator.tick();
+		setAgents([agent("pane-implement", "idle", "session-1")]);
+		await coordinator.tick();
+		advance(30_001);
+		await coordinator.tick();
+		const [ticket] = state.visibleTickets([], "implement");
+		// The cycle is not closed on a boot screen: the ticket rests in
+		// awaiting, the trace held, and the decision is still open.
+		expect(ticket.state).toBe("awaiting");
+		expect(ticket.lastCompletion).toEqual(
+			expect.objectContaining({ cause: "no-turn", decision: null }),
+		);
+		state.close();
+	});
+
+	test("a real turn that ends inside the grace settles at once, on its record", async () => {
+		const { state, coordinator, setAgents } = rig({
+			agents: [agent("pane-implement", "working", "session-1")],
+			turnLogs: async () => ({
+				kind: "ended",
+				turnEnd: {
+					log: [{ kind: "text", text: "the work is done" }],
+					cause: "completed",
+					detail: "",
+				},
+			}),
+		});
+		handOut(state, "github:github.com:I_5");
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toHaveLength(1);
+		// The record holds the turn's end, so the idle agent settles at once,
+		// without waiting out the boot window.
+		setAgents([agent("pane-implement", "idle", "session-1")]);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
 		state.close();
@@ -726,9 +804,12 @@ describe("the observation cycle", () => {
 		const { state, coordinator } = rig({
 			agents: [agent("pane-implement", "done", "session-1")],
 			turnLogs: async () => ({
-				log: [{ kind: "text", text: "the turn failed" }],
-				cause: "failed",
-				detail: "the build broke",
+				kind: "ended",
+				turnEnd: {
+					log: [{ kind: "text", text: "the turn failed" }],
+					cause: "failed",
+					detail: "the build broke",
+				},
 			}),
 		});
 		handOut(state, "github:github.com:I_5");
@@ -1167,6 +1248,12 @@ describe("the awaiting rule", () => {
 			decision: "closed",
 			decidedAt: "2026-08-31T11:00:30Z",
 		});
+		// The re-read that the close triggers clears the gate for the claim.
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:01:00Z",
+			tickets: [fetched()],
+		});
 		const claim = state.claimHandoff(identity, { ...choice, taskType: "route" }, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true, undefined, {
@@ -1331,8 +1418,18 @@ describe("the awaiting rule", () => {
 				lastCompletion: expect.objectContaining({ decision: "auto-closed" }),
 			}),
 		);
-		// Under the handoff limit, the just-closed ticket is re-handed in the
-		// same cycle: the close-and-rehandoff loop the limit bounds.
+		// The gate holds the dispatch until the source re-reads the ticket the
+		// loop just handed back, so the close does not re-hand off on the stale
+		// fetch the close itself made.
+		expect(intents).toHaveLength(0);
+		// The re-read lands, and under the handoff limit the ticket is
+		// re-handed: the close-and-rehandoff loop the limit bounds.
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:01:00Z",
+			tickets: [fetched()],
+		});
+		await coordinator.tick();
 		expect(intents).toEqual([expect.objectContaining({ origin: "open" })]);
 		state.close();
 	});
@@ -1434,6 +1531,13 @@ describe("the open dispatch", () => {
 				decision: "closed",
 				decidedAt: "2026-08-31T11:01:00Z",
 			});
+			// The re-read that the close triggers keeps the ticket listed, and
+			// clears the gate for the round that follows.
+			state.applyFetch(source, {
+				status: "success",
+				fetchedAt: `2026-08-31T11:0${2 + round}:00Z`,
+				tickets: [fetched()],
+			});
 		}
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
@@ -1444,6 +1548,124 @@ describe("the open dispatch", () => {
 		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	/**
+	 * Run one full cycle on the fixture ticket and end it after the source's
+	 * last read: the shape the gate reasons about.
+	 */
+	function endedCycle(
+		state: FactoryState,
+		identity: string,
+		decision: "closed" | "auto-closed",
+	): void {
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: `pane-${identity}`,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "research",
+			agentType: "pi",
+			message: "the turn is over",
+			turnLog: [{ kind: "text", text: "the turn is over" }],
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision,
+			decidedAt: "2026-08-31T11:01:00Z",
+		});
+	}
+
+	test("a cycle that just ended holds the dispatch until the source re-reads the ticket", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const identity = "github:github.com:I_5";
+		endedCycle(state, identity, "closed");
+		// The stale fetch still lists the ticket, and still reads healthy: the
+		// gate, not the projection, holds the dispatch.
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		// The source re-reads and the ticket still wants work: it dispatches.
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:02:00Z",
+			tickets: [fetched()],
+		});
+		await coordinator.tick();
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual([identity]);
+		state.close();
+	});
+
+	test("a cycle that ended on a merged ticket drops it on the re-read", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const identity = "github:github.com:I_5";
+		endedCycle(state, identity, "auto-closed");
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		// The re-read no longer lists the merged ticket: it leaves the list, and
+		// no later cycle can hand it off again on the stale fetch.
+		state.applyFetch(source, { status: "success", fetchedAt: "2026-08-31T11:02:00Z", tickets: [] });
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		expect(state.visibleTickets(config.taskRules, "implement")).toEqual([]);
+		state.close();
+	});
+
+	test("a cycle the loop ends asks the app to re-read the ticket's source", async () => {
+		const ends: string[] = [];
+		const { state, coordinator, cleanups } = rig({
+			autoOn: true,
+			agents: [],
+			onCycleEnd: (identity) => ends.push(identity),
+		});
+		const identity = "github:github.com:I_5";
+		// A closed cycle, and the re-read that clears its gate.
+		const first = state.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.settleHandoff(first.claim.attemptId, true, undefined, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "research",
+			agentType: "pi",
+			message: "the turn is over",
+			turnLog: [{ kind: "text", text: "the turn is over" }],
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:01:00Z",
+		});
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:02:00Z",
+			tickets: [fetched()],
+		});
+		// The second cycle uses up the ticket's handoffs, so the missing agent
+		// abandons it, the cycle the loop ends.
+		const second = state.claimHandoff(identity, choice, "open");
+		if (!second.ok) throw new Error(second.reason);
+		state.settleHandoff(second.claim.attemptId, true, undefined, {
+			paneId: "pane-2",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		await coordinator.tick();
+		expect(ends).toEqual([identity]);
+		expect(cleanups).toHaveLength(1);
 		state.close();
 	});
 
@@ -1577,6 +1799,13 @@ describe("the held turn and the Dispatch pause", () => {
 			decidedAt: "2026-08-31T11:01:00Z",
 		});
 		expect(state.dispatchPauseActive()).toBe(false);
+		// The gate holds the dispatch until the source re-reads the ticket,
+		// so the re-read lands before the dispatch question.
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:02:00Z",
+			tickets: [fetched()],
+		});
 		await coordinator.tick();
 		// The pause is gone: the now-open ticket dispatches as open.
 		expect(intents).toHaveLength(1);
@@ -1744,9 +1973,18 @@ describe("the held turn and the Dispatch pause", () => {
 		settleForCause(state, "github:github.com:I_6", "review", "completed");
 		expect(state.dispatchPauseActive()).toBe(false);
 		await coordinator.tick();
-		// The held failure stays held; the completed one auto-closes and the
-		// now-open ticket dispatches, proving the pause is gone.
+		// The held failure stays held; the completed one auto-closes. The gate
+		// holds its re-dispatch until the source re-reads the ticket.
 		expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
+		expect(intents).toHaveLength(0);
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:01:00Z",
+			tickets: [fetched(), fetched("github:github.com:I_6")],
+		});
+		await coordinator.tick();
+		// The re-read lands, and the now-open ticket dispatches, proving the
+		// pause is gone.
 		expect(
 			intents.some(
 				(intent) => intent.origin === "open" && intent.ticketIdentity === "github:github.com:I_6",
@@ -1760,9 +1998,12 @@ describe("the held turn and the Dispatch pause", () => {
 			autoOn: true,
 			agents: [agent("pane-implement", "done", "session-1")],
 			turnLogs: async () => ({
-				log: [{ kind: "text", text: "the turn failed" }],
-				cause: "failed",
-				detail: "the build broke",
+				kind: "ended",
+				turnEnd: {
+					log: [{ kind: "text", text: "the turn failed" }],
+					cause: "failed",
+					detail: "the build broke",
+				},
 			}),
 		});
 		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
@@ -2398,12 +2639,24 @@ describe("an agent that outlives its work cycle", () => {
 	});
 
 	test("a reclaimed ticket settles into awaiting on its own next idle report", async () => {
-		const r = rig({ agents: [] });
+		const r = rig({
+			agents: [],
+			// The reclaimed turn's record holds its end, so the idle report
+			// settles it at once (ADR 0017).
+			turnLogs: async () => ({
+				kind: "ended",
+				turnEnd: {
+					log: [{ kind: "text", text: "the reclaimed turn is over" }],
+					cause: "completed",
+					detail: "",
+				},
+			}),
+		});
 		const { state, coordinator, setAgents } = r;
 		closedCycle(r);
-		setAgents([agent(PANE, "working")]);
+		setAgents([agent(PANE, "working", "session-1")]);
 		await coordinator.tick();
-		setAgents([agent(PANE, "idle")]);
+		setAgents([agent(PANE, "idle", "session-1")]);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity, workCycle: 2, taskType: "research" }),
