@@ -26,6 +26,8 @@ import {
 	actionBarRowOf,
 	awaitFrame,
 	closeOverlay,
+	crossToConsultations,
+	crossToTickets,
 	detailFocused,
 	HEIGHT,
 	listFocused,
@@ -116,7 +118,7 @@ describe("the contextual Action bar", () => {
 					"↑↓/jk Move",
 					"→/l Detail",
 					"Enter Hand off",
-					"v Consultations",
+					"x Section",
 					"c Launch",
 					"e Override",
 					"r Refresh",
@@ -129,8 +131,8 @@ describe("the contextual Action bar", () => {
 				// Available: the key wears the focus color, the label the text color.
 				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(COLORS.borderFocused));
 				expect(spanColorAt(setup, barRow, "Detail")).toEqual(rgb(COLORS.text));
-				expect(spanColorAt(setup, barRow, "v ")).toEqual(rgb(COLORS.borderFocused));
-				expect(spanColorAt(setup, barRow, "Consultations")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, barRow, "x ")).toEqual(rgb(COLORS.borderFocused));
+				expect(spanColorAt(setup, barRow, "Section")).toEqual(rgb(COLORS.text));
 				// Unavailable: the whole hint is dim.
 				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(COLORS.dim));
 				expect(spanColorAt(setup, barRow, "c Launch")).toEqual(rgb(COLORS.dim));
@@ -223,9 +225,9 @@ describe("the contextual Action bar", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 6);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 7);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
 				await openSurface(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 				// Enter on a modal action that is not the selected row is not a
 				// control the modal will run: F2 refuses for the same reason the
@@ -259,9 +261,9 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// The awaiting Ticket's Enter action opens a decision. It is not a
 				// dimmed Hand off control with an unrelated effect.
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 6);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 7);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 6);
 				const awaitingBar = actionBarRowOf(await settle(setup));
 				expect(awaitingBar).toContain("Enter Decide");
 				expect(awaitingBar).not.toContain("Hand off");
@@ -348,10 +350,10 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Launch, Consultations, Refresh, Override, Hand off, Detail,
-				// Move, and Help last. The spec's common controls of the base
-				// modes, Override and Refresh, therefore outlive the Launch
-				// entry the control plane reached for.
+				// Launch, Section, Refresh, Override, Hand off, Detail, Move,
+				// and Help last. The spec's common controls of the base modes,
+				// Override and Refresh, therefore outlive the Launch entry the
+				// control plane reached for.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -359,7 +361,7 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
-							"v Consultations",
+							"x Section",
 							"c Launch",
 							"e Override",
 							"r Refresh",
@@ -374,7 +376,7 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
-							"v Consultations",
+							"x Section",
 							"c Launch",
 							"e Override",
 							"r Refresh",
@@ -382,18 +384,31 @@ describe("the contextual Action bar", () => {
 						],
 					],
 					[
-						95,
+						90,
 						[
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
-							"v Consultations",
+							"x Section",
+							"c Launch",
 							"e Override",
 							"r Refresh",
 							"? Help",
 						],
 					],
-					[70, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"]],
+					[
+						85,
+						[
+							"↑↓/jk Move",
+							"→/l Detail",
+							"Enter Hand off",
+							"x Section",
+							"e Override",
+							"r Refresh",
+							"? Help",
+						],
+					],
+					[75, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"]],
 					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "? Help"]],
 					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "? Help"]],
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
@@ -406,14 +421,7 @@ describe("the contextual Action bar", () => {
 					const bar = rows.at(-1) ?? "";
 					for (const hint of kept) expect(bar).toContain(hint);
 					expect(bar.trimEnd().endsWith("? Help")).toBe(true);
-					for (const gone of [
-						"Detail",
-						"Hand off",
-						"Consultations",
-						"Launch",
-						"Override",
-						"Refresh",
-					]) {
+					for (const gone of ["Detail", "Hand off", "Section", "Launch", "Override", "Refresh"]) {
 						if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
 					}
 				}
@@ -465,14 +473,14 @@ describe("the contextual Action bar", () => {
 		);
 	});
 
-	test("v opens the Consultations view, and c opens the launcher or names the missing types", async () => {
+	test("the cursor crosses to the Consultations view, and c opens the launcher or names the missing types", async () => {
 		const runner = new FakeRunner();
 		// No Consultation types: c refuses on the Message line, and the
 		// launcher never opens.
 		await withApp(
 			async (setup) => {
-				await press(setup, "v", "the Consultations view", (f) => f.includes("❯ Consultations"));
-				await press(setup, "t", "the Ticket view", (f) => f.includes("[open]"));
+				await crossToConsultations(setup);
+				await crossToTickets(setup);
 				await press(setup, "c", "the refusal", (f) =>
 					messageRowOf(f).includes(
 						"no Consultation types configured; add [consultation-types.<name>] to the config file",
@@ -539,10 +547,10 @@ describe("the contextual Action bar", () => {
 		await withApp(
 			async (setup) => {
 				// Move: j, k, and both arrows.
-				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 5);
-				await press(setup, "k", "the selection to move back", (f) => markerRowOf(f) === 4);
-				await pressArrow(setup, "down", "the selection to move down", (f) => markerRowOf(f) === 5);
-				await pressArrow(setup, "up", "the selection to move up", (f) => markerRowOf(f) === 4);
+				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 4);
+				await press(setup, "k", "the selection to move back", (f) => markerRowOf(f) === 3);
+				await pressArrow(setup, "down", "the selection to move down", (f) => markerRowOf(f) === 4);
+				await pressArrow(setup, "up", "the selection to move up", (f) => markerRowOf(f) === 3);
 				// Detail: l and right focus it, h and left leave it.
 				await press(setup, "l", "the detail to take focus", detailFocused);
 				await press(setup, "h", "the list to take focus", listFocused);
@@ -837,8 +845,11 @@ describe("the contextual Action bar", () => {
 		// open the launcher: Ctrl+C is the emergency exit, not the launcher.
 		await withApp(
 			async (setup) => {
-				await press(setup, "v", "the consultations view", (f) =>
-					f.includes("Consultations require SQLite state"),
+				await crossToConsultations(setup);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Consultations require SQLite state"),
+					"the consultations view",
 				);
 				pressCtrlC(setup);
 				await destroyed(setup);
@@ -851,8 +862,11 @@ describe("the contextual Action bar", () => {
 		// The Consultation launcher open: Ctrl+C destroys, Esc would cancel.
 		await withApp(
 			async (setup) => {
-				await press(setup, "v", "the consultations view", (f) =>
-					f.includes("Consultations require SQLite state"),
+				await crossToConsultations(setup);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Consultations require SQLite state"),
+					"the consultations view",
 				);
 				await press(setup, "c", "the launcher to open", (f) => f.includes("Consultation launcher"));
 				pressCtrlC(setup);
@@ -866,8 +880,11 @@ describe("the contextual Action bar", () => {
 		// The legacy Key guide open over the Consultations view.
 		await withApp(
 			async (setup) => {
-				await press(setup, "v", "the consultations view", (f) =>
-					f.includes("Consultations require SQLite state"),
+				await crossToConsultations(setup);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Consultations require SQLite state"),
+					"the consultations view",
 				);
 				await press(setup, "?", "the legacy guide to open", (f) => f.includes("Key guide"));
 				pressCtrlC(setup);
@@ -904,8 +921,11 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await press(setup, "v", "the consultations view", (f) =>
-							f.includes("State: awaiting-response"),
+						await crossToConsultations(setup);
+						await awaitFrame(
+							setup,
+							(f) => f.includes("State: awaiting-response"),
+							"the consultations view",
 						);
 						await press(setup, "return", "the response editor", (f) =>
 							f.includes("Response draft"),
@@ -954,8 +974,11 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await press(setup, "v", "the consultations view", (f) =>
-							f.includes("State: awaiting-response"),
+						await crossToConsultations(setup);
+						await awaitFrame(
+							setup,
+							(f) => f.includes("State: awaiting-response"),
+							"the consultations view",
 						);
 						await press(setup, "return", "interaction mode", (f) =>
 							f.includes("F12 Exit interaction"),
@@ -982,8 +1005,9 @@ describe("the contextual Action bar", () => {
 			try {
 				await withApp(
 					async (setup) => {
-						await press(setup, "v", "the consultations view", (f) => f.includes("State: opening"));
-						await press(setup, "x", "the close panel", (f) => f.includes("Close Consultation"));
+						await crossToConsultations(setup);
+						await awaitFrame(setup, (f) => f.includes("State: opening"), "the consultations view");
+						await press(setup, "z", "the close panel", (f) => f.includes("Close Consultation"));
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
@@ -1001,9 +1025,18 @@ describe("the contextual Action bar", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
+				// The cursor walks the expanded sections' rows, so the list
+				// only stops when every visible row is the cursor's own.
+				// Cross to the Consultation list, collapse its section, and
+				// come back to the only Ticket: nothing is left to move into.
+				await press(setup, "j", "the Consultation list", (f) => f.includes("┌─❯ Consultations"));
+				await press(setup, "x", "the Consultation section to collapse", (f) =>
+					f.includes("▸ Consultations"),
+				);
+				await press(setup, "k", "the Ticket list", (f) => f.includes("┌─❯ Tickets"));
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				// One ticket: Move cannot move.
+				// One ticket, other section collapsed: Move cannot move.
 				expect(spanColorAt(setup, barRow, "↑↓/jk Move")).toEqual(rgb(COLORS.dim));
 				await press(setup, "j", "the move refusal", (f) =>
 					messageRowOf(f).includes("the Ticket list has nowhere to move"),
@@ -1042,7 +1075,7 @@ describe("the contextual Action bar", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 4);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// The bar names the one meaning Enter runs on this ticket. Hand

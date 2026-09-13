@@ -12,7 +12,8 @@ interface ConsultationListProps {
 	consultations: readonly Consultation[];
 	selectedIndex: number;
 	focused: boolean;
-	reservedRows: number;
+	/** The box's exact height in cells, from the Main view's section layout. */
+	rows: number;
 	emptyMessage?: string;
 	/** False while a surface above the panes owns the input. */
 	active?: boolean;
@@ -27,16 +28,19 @@ export function ConsultationList({
 	consultations,
 	selectedIndex,
 	focused,
-	reservedRows,
+	rows,
 	emptyMessage,
 	active = true,
 	onFocus,
 	onSelect,
 	onMove,
 }: ConsultationListProps) {
-	const geometry = usePaneGeometry("list", reservedRows);
+	const geometry = usePaneGeometry("list");
+	// The Main view hands the box its exact height: two border rows and two
+	// padding rows are chrome, and the rest is the window's room.
+	const visibleRows = Math.max(1, rows - 4);
 	const rootRef = useRef<BoxRenderable | null>(null);
-	const { start, visible } = listWindow(consultations, selectedIndex, geometry.visibleRows);
+	const { start, visible } = listWindow(consultations, selectedIndex, visibleRows);
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
@@ -58,6 +62,7 @@ export function ConsultationList({
 			padding: 1,
 			style: {
 				width: geometry.paneCols,
+				height: rows,
 				flexGrow: 0,
 				flexShrink: 0,
 				flexDirection: "column",

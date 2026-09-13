@@ -2,7 +2,6 @@
 import { describe, expect, test } from "vitest";
 
 import {
-	availabilityFor,
 	type ControlContext,
 	contextFor,
 	controlForKey,
@@ -20,14 +19,23 @@ const values: Omit<ControlContext, "mode"> = {
 };
 
 describe("the shared control catalogue", () => {
-	test("t returns to Tickets from Consultation detail and is not an Interact alias", () => {
+	test("x toggles the section under the cursor and is not an Interact alias", () => {
 		const context = contextFor("consultation-detail", values);
 		const interact = guideControls(context).find(
 			({ control }) => control.id === "consultation-interact",
 		);
 
-		expect(controlForKey({ name: "t" }, context)?.id).toBe("open-tickets");
+		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
 		expect(interact?.control.keys("consultation-detail", context)).toEqual(["return"]);
+	});
+
+	test("the Ticket guide names the section toggle in its own section", () => {
+		const context = contextFor("ticket-list", values);
+		const entries = guideControls(context);
+		const toggle = entries.find(({ control }) => control.id === "section-toggle");
+
+		expect(toggle?.group).toBe("Current interaction mode");
+		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
 	});
 
 	test("the Consultation guide omits Ticket-only controls", () => {
@@ -35,24 +43,13 @@ describe("the shared control catalogue", () => {
 		const ids = guideControls(context).map(({ control }) => control.id);
 
 		expect(ids).not.toContain("auto-handoff");
-		expect(ids).not.toContain("consultations");
-		expect(ids).toContain("open-tickets");
 		expect(controlForKey({ name: "a" }, context)).toBeUndefined();
-		expect(controlForKey({ name: "v" }, context)).toBeUndefined();
 	});
 
-	test("the hidden Consultation list refuses h and Left", () => {
-		const context = contextFor("consultation-detail", {
-			...values,
-			consultationListVisible: false,
-		});
-		const control = controlForKey({ name: "h" }, context);
+	test("the Consultation close is z, not the section toggle", () => {
+		const context = contextFor("consultation-detail", values);
 
-		expect(control?.id).toBe("consultation-list");
-		if (control === undefined) throw new Error("the hidden list control is missing");
-		expect(availabilityFor(control, context)).toEqual({
-			available: false,
-			reason: "the Consultation list is hidden below 80 columns",
-		});
+		expect(controlForKey({ name: "z" }, context)?.id).toBe("consultation-close");
+		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
 	});
 });

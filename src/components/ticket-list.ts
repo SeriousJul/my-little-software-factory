@@ -51,7 +51,8 @@ interface TicketListProps {
 	tickets: readonly Ticket[];
 	selectedIndex: number;
 	focused: boolean;
-	reservedRows: number;
+	/** The box's exact height in cells, from the Main view's section layout. */
+	rows: number;
 	emptyMessage?: string;
 	/** The failure badge of a ticket from the last observation, or null. */
 	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
@@ -68,7 +69,7 @@ export function TicketList({
 	tickets,
 	selectedIndex,
 	focused,
-	reservedRows,
+	rows,
 	emptyMessage,
 	markerOf,
 	limitReached,
@@ -77,10 +78,13 @@ export function TicketList({
 	onSelect,
 	onMove,
 }: TicketListProps) {
-	const geometry = usePaneGeometry("list", reservedRows);
+	const geometry = usePaneGeometry("list");
+	// The Main view hands the box its exact height: two border rows and two
+	// padding rows are chrome, and the rest is the window's room.
+	const visibleRows = Math.max(1, rows - 4);
 	const rootRef = useRef<BoxRenderable | null>(null);
 
-	const { start, visible } = listWindow(tickets, selectedIndex, geometry.visibleRows);
+	const { start, visible } = listWindow(tickets, selectedIndex, visibleRows);
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
@@ -107,6 +111,7 @@ export function TicketList({
 				// the rounded box would no longer match the geometry the
 				// rows and the detail pane lay their text on.
 				width: geometry.paneCols,
+				height: rows,
 				flexGrow: 0,
 				flexShrink: 0,
 				flexDirection: "column",

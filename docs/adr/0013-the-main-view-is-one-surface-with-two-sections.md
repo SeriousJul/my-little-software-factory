@@ -1,5 +1,9 @@
 # The Main view is one surface with two sections
 
+Status: accepted
+Date: 2026-09-13
+Superseded in part by ADR 0018: the decisions that one expanded section owns both list and detail, and that `t` and `v` switch sections, no longer hold. The Main surface, the single Message line, the single Action bar, the shared control catalogue, and the Consultation header's attention facts survive.
+
 The control plane ran two fullscreen main views, a Tickets view and a Consultation view, switched with `t` and `v`, each with its own bottom lines, and the Consultation side never reached the control catalogue (issue #9). We decided to merge them into one Main view holding two accordion sections: the expanded section keeps its list pane and detail pane, the collapsed one shrinks to a header row, and `t`, `v`, or a header click expand a section. The Consultation section's header carries its attention facts, its controls join the catalogue under the new `consultation-list` and `consultation-detail` base modes, and its messages become Message facts. A Consultation that needs the operator must not hide behind a view switch, and the glossary's one Message line and one Action bar finally exist as one each.
 
 ## Considered options

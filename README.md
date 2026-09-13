@@ -84,11 +84,22 @@ as `npm run mutate -- --dryRunOnly`.
 
 ## Controls
 
-The Main view holds two accordion sections, the Ticket section and the
-Consultation section, and one control catalogue, one Action bar, and one
-Message line answer for both. The expanded section owns the pane rows, and the
-mode the bar and the guide state derives from that section and its focused
+The Main view holds two list sections on the left, the Ticket section on
+top and the Consultation section below, and one context-dependent detail
+pane on the right that shows the detail of the item the cursor holds. One
+control catalogue, one Action bar, and one Message line answer for both.
+Both sections start expanded; `x` or a click on a section header collapses
+the section under the cursor to its header row, and the same toggle restores
+it. Up and down move the cursor through the visible rows and cross the
+section boundary when the sections are adjacent. The mode the bar and the
+guide state derives from the section that holds the cursor and its focused
 pane.
+
+The Ticket header always shows the pipeline counts - open, running, and
+awaiting - with the held count appended only when it is non-zero. The
+Consultation header carries its attention facts (awaiting response,
+recovery). Both counts are computed from the in-memory projection on each
+render; neither queries the state.
 
 The control plane keeps a contextual Action bar in the last row of the
 terminal. It shows the controls the current interaction mode can run, dims
@@ -120,15 +131,15 @@ interaction mode dispatch from the same catalogue as the Ticket section, so
 every Consultation control appears in the Action bar and the Key guide with
 its availability and reason.
 
-- `v` expands the Consultation section on the Consultation that needs the
-	operator, if one does: an awaiting response wins, and among the recovery
-	items the oldest wins. Once the section is expanded, `c` launches a
-	Consultation, `f` cycles the history filter through open, closed, and all,
-	`x` closes the selected Consultation, and `d` deletes a closed one. `t`
-	returns to the Ticket section from either Consultation pane, and `h` or
-	`Left` moves between the section's own list and detail panes when the list
-	is visible. Below 80 columns the Consultation list is hidden, the detail
-	keeps focus, and `h`/`Left` is unavailable.
+- `j` and `k` cross into the Consultation section from the last row of the
+	Ticket list, and back again from its first. Once the cursor holds a
+	Consultation, `c` launches a Consultation, `f` cycles the history filter
+	through open, closed, and all, `z` closes the selected Consultation, and
+	`d` deletes a closed one. `h` or `Left` moves between the section's own
+	list and the detail pane, and `x` collapses or restores the section under
+	the cursor. The Consultation that needs the operator keeps its attention
+	on the section header: an awaiting response wins, and among the recovery
+	items the oldest wins.
 - In the launcher, `Tab` and `Shift+Tab` move between the two choices, the
 	Draft field, and the two actions; `←→` choose a type or Repository and
 	move the caret in the field; `Enter` adds a line inside the field and runs
@@ -171,11 +182,13 @@ auto-handoff, `r` refreshes, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
-the Action bar reserve the two bottom rows at every terminal size, and the two
-section headers reserve the two rows above the panes: below the smallest useful
-frame (40 columns by 9 rows) the panes give way to a size message and a compact
-Help control, and a surface that cannot draw its own rows says so instead of
-painting them over its border. One hint holds the row's end cells: Help on a
+the Action bar reserve the two bottom rows at every terminal size, and each
+list section reserves its header row plus a minimum of three content rows:
+below the smallest useful frame (40 columns by 19 rows) the panes give way
+to a size message and a compact Help control, a section that cannot hold its
+minimum collapses rather than vanishing so both headers keep their counts, and
+a surface that cannot draw its own rows says so instead of painting them over
+its border. One hint holds the row's end cells: Help on a
 bar that can open the Key guide, and the overlay's own Close on a utility
 overlay. A frame too narrow for that hint states one of its whole keys, so the
 way out of a screen is named at any width and never cut in half.
@@ -414,24 +427,34 @@ builds an agent in a workspace it is taking away.
 
 ## Layout
 
-The Main view is one surface with two accordion sections: the Ticket section
-and the Consultation section. One section is expanded and holds two panes side
-by side; the other is collapsed to its header row. `t` and `v`, or a click on
-a header, expand a section, and the keyboard focus lands on its list pane. When
-the narrow Consultation layout removes the list pane, focus lands on the visible
-detail pane. A collapsed section keeps its list selection and its detail scroll,
-so a re-expand shows the same place. The rows run: the mode line (while the control
-plane has state to observe), the two section headers, the expanded section's
-panes, the Message line, and the Action bar. The Consultation header carries
-that section's attention facts, its awaiting-response and recovery counts, the
-bell marker while the bell rings, and "new output" while the section is
-expanded, so a Consultation that needs the operator is visible in either state
-and no free-standing attention line exists. Below the smallest useful frame the
-compact frame drops the headers with the panes.
+The Main view is one surface with two list sections, the Ticket section on
+top and the Consultation section below, and one context-dependent detail pane
+on the right (ADR 0018). Both sections start expanded, and the detail pane
+shows the detail of whichever item the cursor holds: the ticket detail on a
+ticket, the Consultation detail on a Consultation. `x` or a click on a header
+toggles the section under the cursor: it shrinks to its header row and its
+rows leave the navigation flow, and the same toggle restores it. A collapsed
+section keeps its list selection, and the selection and detail of a collapsed
+section survive the collapse, so a re-expand shows the same place. The rows
+run: the mode line (while the control plane has state to observe), the two
+section headers, the two sections' list panes stacked on the left, the
+detail pane on the right, the Message line, and the Action bar. The focused
+section takes the remaining rows after the other section claims its minimum
+of three content rows, so the list the operator works in gets the room. The
+Ticket header always shows the pipeline counts - open, running, and awaiting,
+in the labelled form on a terminal of at least 60 columns and the short form
+below - and appends the held count with its bell marker only when it is
+non-zero. The Consultation header carries that section's attention facts, its
+awaiting-response and recovery counts, the bell marker while the bell rings,
+and "new output" while the section is expanded, so a Consultation that needs
+the operator is visible in either state and no free-standing attention line
+exists. A section that cannot hold its minimum collapses rather than
+vanishing, so both headers keep their counts; below the smallest useful frame
+the compact frame drops the panes with a size message.
 
 Two panes side by side, flex-sized to the terminal.
-The list pane on the left shows every ticket with its state badge, task
-type badge, title, and repository. The task type badge is the type the
+The list pane on the left shows the tickets of the Ticket section with their
+state badge, task type badge, title, and repository. The task type badge is the type the
 control plane would hand off: an open ticket shows its suggested task type,
 every other ticket shows the task type its recorded handoff started with.
 A non-open ticket without a recorded handoff shows `[unknown]`, and only
@@ -458,7 +481,10 @@ The panes share one focus.
 Switching focus never moves the selection.
 
 The vertical keys act on the focused pane.
-With the list focused, they move the selection. Page keys move by one visible
+With the list focused, they move the selection and cross the section boundary
+when the sections are adjacent: from the last row of the Ticket list the next
+down lands on the Consultation list, and the next up from its first row lands
+back on the tickets. Page keys move by one visible
 list page, and Home and End select the list edges. With the detail focused,
 the row keys move at the configured speed, PageUp and PageDown retain one row
 of context, and Home and End move to the detail edges. A new selection starts
@@ -471,9 +497,9 @@ scrollbar. The gutter is always reserved when width permits, so wrapped text
 does not reflow as the bar appears. Click or drag the scrollbar, or use the
 wheel or trackpad over any part of the detail. Fast vertical wheel events
 accelerate to the configured limit. Horizontal and Shift-wheel input is
-ignored. A click or wheel action focuses its pane. Clicking a visible Ticket
-selects it, a list wheel event selects one adjacent Ticket, and a click on a
-collapsed section header expands that section.
+ignored. A click or wheel action focuses its pane. Clicking a visible row in either
+list selects it, a list wheel event selects one adjacent row, and a click on
+a section header toggles that section.
 
 Mouse reporting takes the host terminal's native text selection with it, so the
 control plane gives it back as Auto copy: drag with the mouse over any surface

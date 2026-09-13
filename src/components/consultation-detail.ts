@@ -99,7 +99,6 @@ interface ConsultationDetailProps {
 	visibleRows: number;
 	scroll: number;
 	focused: boolean;
-	compactHeading?: string;
 	/** False while a surface above the panes owns the input. */
 	active?: boolean;
 	onFocus: () => void;
@@ -113,7 +112,6 @@ export function ConsultationDetail({
 	visibleRows,
 	scroll,
 	focused,
-	compactHeading,
 	ansiLines,
 	active = true,
 	onFocus,
@@ -153,7 +151,7 @@ export function ConsultationDetail({
 		{
 			ref: rootRef,
 			onMouse: handleMouse,
-			title: compactHeading ?? (focused ? "❯ Agent view" : "  Agent view"),
+			title: focused ? "❯ Agent view" : "  Agent view",
 			border: true,
 			borderColor: focused ? COLORS.borderFocused : COLORS.border,
 			padding: 1,

@@ -218,10 +218,19 @@ async function pressReturn(
 	return await awaitFrame(setup, predicate, what);
 }
 
-/** The ticket's list row, by its title. */
+/**
+ * The ticket's list row, by its title.
+ *
+ * The dual-list frame (ADR 0018) truncates the list row's title, so the row
+ * is found by the selection marker and the title's leading cells, with the
+ * full-title row (the detail pane, the modal's title) as the fallback a
+ * modal frame offers.
+ */
 function ticketRow(frame: string, title = "Persist source facts"): string {
 	const rows = rowsOf(frame);
-	const row = rows.find((line) => line.includes(title));
+	const row =
+		rows.find((line) => line.includes("❯") && line.includes(title.slice(0, 3))) ??
+		rows.find((line) => line.includes(title));
 	if (row === undefined) throw new Error(`no ticket row for ${title} in frame:\n${frame}`);
 	return row;
 }

@@ -282,7 +282,9 @@ describe("the held turn through the real app flow", () => {
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				expect(rows[0]).toContain("auto: on 1/3 paused");
-				const rowA = rows.find((row) => row.includes("Persist source facts"));
+				// The row is the list's own row in the left column; the detail
+				// pane's title carries the same title in the right column.
+				const rowA = rows.find((row) => row.slice(0, 60).includes("Persist source facts"));
 				expect(rowA).toBeDefined();
 				expect(rowA).toContain("held");
 				expect(rowA).not.toContain("[awaiting]");

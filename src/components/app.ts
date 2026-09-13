@@ -11,18 +11,18 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff in the Ticket section. `v` expands the Consultation
- * section on the Consultation that needs the operator, if one does.
+ * `a` toggles auto-handoff in the Ticket section.
  *
- * The Main view is one surface with two accordion sections (ADR 0013): the
- * expanded section owns the pane rows, the collapsed one shrinks to its header
- * row, and one Message line, one Action bar, and one control catalog answer
- * for both.
+ * The Main view is one surface with two independently collapsable sections
+ * (ADR 0018): both lists stay in the left column, both expanded by default,
+ * and one detail pane on the right renders the selected item, whatever
+ * section it comes from. `x` toggles the section under the cursor, and one
+ * Message line, one Action bar, and one control catalog answer for both.
  */
 import os from "node:os";
 import type { Selection } from "@opentui/core";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
 	DEFAULT_CONFIG,
@@ -145,13 +145,6 @@ type Panel =
  */
 const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
 /**
- * Below this width the Consultation list hides and the detail keeps focus: a
- * two-pane section this narrow cannot hold both panes, so the pane switch and
- * the list keys that walk it stay unavailable.
- */
-const CONSULTATION_PANES_MIN_WIDTH = 80;
-
-/**
  * The handoff waiting behind the override panel.
  *
  * The panel edits one Handoff's settings, wherever its choice came from, so
@@ -190,10 +183,9 @@ export type AppKey =
 	| "r"
 	| "a"
 	| "c"
-	| "v"
-	| "t"
 	| "f"
 	| "x"
+	| "z"
 	| "d"
 	| "w"
 	| "up"
@@ -276,8 +268,16 @@ export function App({
 	// the empty SQLite projection while configured sources refresh.
 	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
 	const ticketsRef = useRef(tickets);
-	const [section, setSection] = useState<MainSection>("tickets");
-	const sectionRef = useRef<MainSection>("tickets");
+	// The two Main sections expand independently (ADR 0018): both stay open by
+	// default, and `x` collapses the one under the cursor to free rows for
+	// the other. The unified selection is the item the shared detail pane
+	// renders, whatever section its row comes from.
+	const [ticketsExpanded, setTicketsExpanded] = useState(true);
+	const ticketsExpandedRef = useRef(true);
+	const [consultationsExpanded, setConsultationsExpanded] = useState(true);
+	const consultationsExpandedRef = useRef(true);
+	const [selection, setSelection] = useState<"ticket" | "consultation">("ticket");
+	const selectionRef = useRef<"ticket" | "consultation">("ticket");
 	const [consultations, setConsultations] = useState<Consultation[]>(
 		() => state?.consultations("open") ?? [],
 	);
@@ -317,7 +317,9 @@ export function App({
 	const selectedIndexRef = useRef(0);
 	const configRef = useRef(config);
 	configRef.current = config;
-	sectionRef.current = section;
+	ticketsExpandedRef.current = ticketsExpanded;
+	consultationsExpandedRef.current = consultationsExpanded;
+	selectionRef.current = selection;
 	historyFilterRef.current = historyFilter;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	// Focus keys can arrive before React publishes the next render. The ref
@@ -472,6 +474,14 @@ export function App({
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
 				}${autoMode && dispatchPause ? " paused" : ""}`;
 	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
+	// The steady pipeline counts the Ticket header carries (user stories 11
+	// through 16): open, in flight, and awaiting a decision. They come from
+	// the in-memory ticket array on each render, so no query runs for them.
+	const openCount = tickets.filter((ticket) => ticket.state === "open").length;
+	const runningCount = tickets.filter(
+		(ticket) => ticket.state === "handed-off" || ticket.state === "running",
+	).length;
+	const awaitingCount = tickets.filter((ticket) => ticket.state === "awaiting").length;
 	// The held count the bell compares against: a rise rings the terminal bell
 	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
@@ -496,17 +506,55 @@ export function App({
 	const compactPadding = compactRows >= 3 ? 1 : 0;
 	const compactTextWidth = Math.max(1, terminalWidth - 2 * compactPadding);
 	const compactLineCount = Math.max(0, compactRows - 2 * compactPadding);
-	// The Main view keeps the permanent Message line and Action bar in both
-	// sections. The mode line and the two section headers sit above the
-	// expanded section's panes. Keep the compact size frame focused on its
-	// size and Help controls when it cannot show the normal layout.
-	// The mode line gives way before the panes' first text row: the minimum
-	// frame holds the headers, one real pane row, and the two permanent rows.
+	// The Main view keeps the permanent Message line and Action bar. The mode
+	// line gives way before the panes' first text row. Keep the compact size
+	// frame focused on its size and Help controls when it cannot show the
+	// normal layout.
 	const showModeLine = modeLine !== "" && !tooSmall;
-	const sectionHeaderRows = tooSmall ? 0 : 2;
-	const reservedRows = 2 + sectionHeaderRows + (showModeLine ? 1 : 0);
-	const listGeometry = usePaneGeometry("list", reservedRows);
-	const detailGeometry = usePaneGeometry("detail", reservedRows);
+	// The body holds every row between the (optional) mode line and the two
+	// permanent bottom rows (ADR 0018). Its left column stacks the two section
+	// headers and their list boxes; its right column holds the one detail
+	// pane for the selected item, at the full body height.
+	const bodyRows = terminalHeight - (showModeLine ? 1 : 0) - 2;
+	const leftCols = Math.floor(terminalWidth / 2);
+	const detailReservedRows = 2 + (showModeLine ? 1 : 0);
+	const detailGeometry = usePaneGeometry("detail", detailReservedRows);
+	// The rows a section's box spends on chrome: two borders and two padding
+	// rows. Each section's minimum is three content rows, so its minimum box
+	// is seven rows: both sections at their minimum cost sixteen body rows,
+	// and the minimum terminal holds exactly that (user story 29).
+	const SECTION_BOX_CHROME = 4;
+	const MIN_SECTION_BOX_ROWS = 3 + SECTION_BOX_CHROME;
+	let ticketsBoxRows = 0;
+	let consultationsBoxRows = 0;
+	if (!tooSmall) {
+		if (ticketsExpanded && consultationsExpanded) {
+			// The section under the cursor takes the remaining rows after the
+			// other section claims its minimum; at the minimum frame both
+			// hold their minimum.
+			const total = Math.max(0, bodyRows - 2);
+			const other = Math.min(MIN_SECTION_BOX_ROWS, Math.floor(total / 2));
+			const cursorSection = total - other;
+			if (selection === "ticket") {
+				ticketsBoxRows = cursorSection;
+				consultationsBoxRows = other;
+			} else {
+				ticketsBoxRows = other;
+				consultationsBoxRows = cursorSection;
+			}
+		} else if (ticketsExpanded) {
+			// One expanded section owns the whole body: both header rows stay
+			// visible, because a collapsed section keeps its header as the
+			// row it expands from.
+			ticketsBoxRows = Math.max(0, bodyRows - 2);
+		} else if (consultationsExpanded) {
+			consultationsBoxRows = Math.max(0, bodyRows - 2);
+		}
+	}
+	const ticketsContentRows = ticketsExpanded ? Math.max(1, ticketsBoxRows - SECTION_BOX_CHROME) : 0;
+	const consultationsContentRows = consultationsExpanded
+		? Math.max(1, consultationsBoxRows - SECTION_BOX_CHROME)
+		: 0;
 	// The Scroll control's availability must agree with the native detail's
 	// own overflow, so it asks the pane for the measurement rather than
 	// repeating the pane's gutter rule here.
@@ -517,7 +565,14 @@ export function App({
 		config.maxHandoffsPerTicket,
 	);
 	const selectedTicket = tickets[selectedIndex];
-	const selectedConsultation = consultations[consultationIndex];
+	// The Consultation the shared detail pane points at: the one under the
+	// unified cursor. None while the cursor is on the Ticket list, so the
+	// detail renders the ticket and no polling runs for a Consultation the
+	// operator is not looking at. The Consultation list keeps its own
+	// retained index either way, so re-expanding or crossing back resumes on
+	// the same row.
+	const selectedConsultation =
+		selection === "consultation" ? consultations[consultationIndex] : undefined;
 	// The status the observation last reported for the selected Consultation's
 	// Agent pane: it gates the response editor and the interaction mode.
 	const selectedConsultationAgentStatus =
@@ -541,11 +596,7 @@ export function App({
 					.consultations("all")
 					.filter((item) => item.replacementOf === selectedConsultation.id)
 					.map((item) => item.id);
-	const consultationNarrow =
-		section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
-	const consultationWidth = consultationNarrow
-		? Math.max(1, terminalWidth - 4)
-		: detailGeometry.usableCols;
+	const consultationWidth = detailGeometry.usableCols;
 	const remainingResources =
 		selectedConsultation === undefined ||
 		state === undefined ||
@@ -1284,8 +1335,7 @@ export function App({
 		setHistoryFilter("open");
 		// Stay on the record the replacement points back at, or on the
 		// launched Consultation when it replaces nothing.
-		openConsultations(consultation.replacementOf ?? consultation.id);
-		replaceConsultations();
+		selectConsultationById(consultation.replacementOf ?? consultation.id);
 		// A Replacement opens like a new Consultation: the module builds the
 		// linked record with its bounded recovery context, then the same launch
 		// route starts it.
@@ -1367,66 +1417,43 @@ export function App({
 	const closeResponseEditor = () => {
 		setResponseEditor(false);
 	};
+	/**
+	 * A click on a collapsed section's header: expand the section, move the
+	 * cursor into it, and focus its list. A click on the expanded section's
+	 * header does nothing, so the operator's place in the other section is
+	 * never lost to a stray click.
+	 */
 	const expandSection = (next: MainSection) => {
-		sectionRef.current = next;
-		setSection(next);
-		// The narrow Consultation layout removes its list pane, so focus the
-		// visible detail pane instead of leaving navigation on hidden content.
-		focusPane(
-			next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list",
-		);
+		if (next === "tickets") {
+			if (ticketsExpandedRef.current) return;
+			ticketsExpandedRef.current = true;
+			setTicketsExpanded(true);
+		} else {
+			if (consultationsExpandedRef.current) return;
+			consultationsExpandedRef.current = true;
+			setConsultationsExpanded(true);
+		}
+		selectionRef.current = next === "tickets" ? "ticket" : "consultation";
+		setSelection(selectionRef.current);
+		focusPane("list");
 	};
 	/**
-	 * The index, in the open list, of the Consultation that needs the
-	 * operator, if any.
-	 *
-	 * An awaiting response always wins: the Agent is working and waiting.
-	 * Otherwise attention goes to the oldest unresolved recovery item: it
-	 * has waited the longest for the operator. The list is newest-first, so
-	 * the attention row is usually not the first one, and ties break on
-	 * creation time.
+	 * Put the unified cursor on one Consultation by id, from the launch
+	 * route. The launched record, or the record its replacement points back
+	 * at, is the one the operator keeps looking at: the detail follows it
+	 * and the observation loop starts reading its pane.
 	 */
-	const attentionIndex = (): number | null => {
-		if (state === undefined) return null;
-		const current = state.consultations("open");
-		const recovery = current
-			.filter(
-				(item) =>
-					item.state === "missing" ||
-					item.state === "failed" ||
-					item.state === "opening" ||
-					item.state === "closing",
-			)
-			.reduce<Consultation | null>((oldest, item) => {
-				if (oldest === null) return item;
-				if (item.updatedAt < oldest.updatedAt) return item;
-				if (item.updatedAt === oldest.updatedAt && item.createdAt < oldest.createdAt) return item;
-				return oldest;
-			}, null);
-		const target = current.find((item) => item.state === "awaiting-response") ?? recovery;
-		if (target === undefined || target === null) return null;
-		return current.findIndex((item) => item.id === target.id);
-	};
-	const openConsultations = (selectId?: string) => {
-		expandSection("consultations");
-		// With an explicit selection the view stays on that Consultation:
-		// a launch keeps the operator on what it just created, or on the
-		// record the replacement points back at. Without one the view opens
-		// on the Consultation that needs the operator, if one does: it must
-		// not hide behind a collapsed section. Without either the section keeps
-		// its current filter and selection.
-		const index =
-			selectId === undefined
-				? attentionIndex()
-				: state === undefined
-					? null
-					: state.consultations("open").findIndex((item) => item.id === selectId);
-		if (index === undefined || index === null) return;
+	const selectConsultationById = (id: string) => {
 		historyFilterRef.current = "open";
 		setHistoryFilter("open");
 		replaceConsultations();
+		const index =
+			state === undefined ? -1 : consultationsRef.current.findIndex((item) => item.id === id);
+		if (index < 0) return;
 		consultationIndexRef.current = index;
 		setConsultationIndex(index);
+		selectionRef.current = "consultation";
+		setSelection("consultation");
 		consultationFollowRef.current = true;
 		setConsultationScroll(999999);
 		setNewOutput(false);
@@ -1504,7 +1531,7 @@ export function App({
 			? "consultation-interaction"
 			: responseEditor
 				? "form-field"
-				: sectionRef.current === "consultations"
+				: selectionRef.current === "consultation"
 					? focusedPaneRef.current === "list"
 						? "consultation-list"
 						: "consultation-detail"
@@ -1514,11 +1541,29 @@ export function App({
 	const controlContextFor = (mode: InteractionMode) =>
 		contextFor(mode, {
 			selectedTicket: ticketsRef.current[selectedIndexRef.current],
-			selectedConsultation: consultationsRef.current[consultationIndexRef.current],
-			listCanMove:
-				mode === "consultation-list"
-					? consultationsRef.current.length > 1
-					: ticketsRef.current.length > 1,
+			selectedConsultation:
+				selectionRef.current === "consultation"
+					? consultationsRef.current[consultationIndexRef.current]
+					: undefined,
+			// The cursor walks one sequence: the rows of each expanded section, in
+			// order. A step is possible past the last row of a section, into the
+			// next expanded one, so the list can move as long as the cursor is not
+			// the sequence's only row.
+			listCanMove: (() => {
+				const t = ticketsRef.current.length;
+				const c = consultationsRef.current.length;
+				const tOpen = ticketsExpandedRef.current;
+				const cOpen = consultationsExpandedRef.current;
+				// A cross reaches an empty section too, so the step into it is
+				// always possible while the other section is expanded.
+				if (selectionRef.current === "consultation")
+					return (
+						(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
+					);
+				return (
+					(tOpen && (t > 1 || (cOpen && selectedIndexRef.current >= t - 1))) || (!tOpen && cOpen)
+				);
+			})(),
 			detailCanScroll:
 				mode === "consultation-detail" ? consultationMaxScroll > 0 : detailMaxScroll > 0,
 			sourceCount: sources.length,
@@ -1528,7 +1573,6 @@ export function App({
 			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
 			messageTruncated,
 			consultationRefreshAvailable: state !== undefined,
-			consultationListVisible: !consultationNarrow,
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
@@ -1683,22 +1727,21 @@ export function App({
 				tickets: () => focusPane("list"),
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
-				consultations: () => openConsultations(),
-				"open-tickets": () => expandSection("tickets"),
+				"section-toggle": () => toggleSection(),
 				launch: () => {
 					if (Object.keys(configRef.current.consultationTypes).length === 0)
 						setWarningMessage(
 							"no Consultation types configured; add [consultation-types.<name>] to the config file",
 						);
 					else {
-						// In the Consultation section, a missing or failed Consultation
-						// is replaced rather than reopened: the launcher remembers which
-						// row asked for the replacement.
-						const selected = consultationsRef.current[consultationIndexRef.current];
-						if (
-							sectionRef.current === "consultations" &&
-							(selected?.state === "missing" || selected?.state === "failed")
-						)
+						// While a Consultation is under the cursor, a missing or failed
+						// Consultation is replaced rather than reopened: the launcher
+						// remembers which row asked for the replacement.
+						const selected =
+							selectionRef.current === "consultation"
+								? consultationsRef.current[consultationIndexRef.current]
+								: undefined;
+						if (selected?.state === "missing" || selected?.state === "failed")
 							setReplacementConsultationId(selected.id);
 						setLauncher(true);
 					}
@@ -1738,8 +1781,10 @@ export function App({
 				},
 				refresh: () => {
 					// Refresh answers for the whole plane: the Ticket sources, and
-					// the Consultation projection the expanded section shows.
-					if (sectionRef.current === "consultations") replaceConsultations();
+					// the Consultation projection while its section is visible or its
+					// Consultation is under the cursor.
+					if (consultationsExpandedRef.current || selectionRef.current === "consultation")
+						replaceConsultations();
 					refreshNow();
 				},
 				leftover: openLeftoverPanel,
@@ -1826,9 +1871,9 @@ export function App({
 	useEffect(() => {
 		if (
 			state === undefined ||
-			section !== "consultations" ||
-			selectedConsultation?.paneId === null ||
+			selection !== "consultation" ||
 			selectedConsultation === undefined ||
+			selectedConsultation.paneId === null ||
 			selectedConsultation.state === "closed"
 		) {
 			setLiveOutput(null);
@@ -1867,7 +1912,14 @@ export function App({
 			outputRefreshRef.current = null;
 			clearInterval(timer);
 		};
-	}, [commandRunner, consultationOperations, interaction, selectedConsultation, state, section]);
+	}, [
+		commandRunner,
+		consultationOperations,
+		interaction,
+		selectedConsultation,
+		selection,
+		state,
+	]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
@@ -1994,18 +2046,19 @@ export function App({
 		focusedPaneRef.current = pane;
 		setFocusedPane(pane);
 	}
-	// A resize can remove the narrow Consultation list without a section switch.
-	// Keep both focus representations on the visible detail pane in that case.
-	useLayoutEffect(() => {
-		if (
-			section === "consultations" &&
-			terminalWidth < CONSULTATION_PANES_MIN_WIDTH &&
-			focusedPaneRef.current !== "detail"
-		) {
-			focusedPaneRef.current = "detail";
-			setFocusedPane("detail");
+	/**
+	 * Move the unified cursor to one section's list: put it on that section's
+	 * retained row and focus the list pane. Row clicks, box focus, and list
+	 * wheels pass through it, so a click in one section never leaves the
+	 * cursor on a row the operator is not looking at.
+	 */
+	function focusListSection(next: "ticket" | "consultation") {
+		if (selectionRef.current !== next) {
+			selectionRef.current = next;
+			setSelection(next);
 		}
-	}, [section, terminalWidth]);
+		focusPane("list");
+	}
 	function selectTicket(index: number) {
 		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
 		if (next === selectedIndexRef.current) return;
@@ -2030,41 +2083,113 @@ export function App({
 		consultationFollowRef.current = false;
 		setConsultationScroll((current) => clamp(current + direction * page, 0, consultationMaxScroll));
 	}
+	/**
+	 * `x` toggles the section under the cursor (user story 8). Collapsing keeps
+	 * the selection with the section: the detail keeps showing it, and the
+	 * cursor rests on the section's boundary in the visible flow, so one step
+	 * into the other section crosses to it, and the same key or a header click
+	 * expands the section back on its retained row (user stories 19 and 20).
+	 */
+	function toggleSection() {
+		if (selectionRef.current === "ticket") {
+			ticketsExpandedRef.current = !ticketsExpandedRef.current;
+			setTicketsExpanded(ticketsExpandedRef.current);
+		} else {
+			consultationsExpandedRef.current = !consultationsExpandedRef.current;
+			setConsultationsExpanded(consultationsExpandedRef.current);
+		}
+	}
+	/**
+	 * Move the unified cursor by one row. The cursor walks the visible flow,
+	 * which is the concatenation of the expanded sections' rows in section
+	 * order: down from the last visible Ticket crosses to the first visible
+	 * Consultation, and up from the first visible Consultation crosses back to
+	 * the last visible Ticket. A collapsed section contributes no rows; when
+	 * it holds the cursor the flow starts or ends at its boundary, so a step
+	 * that would leave the visible rows does nothing (user story 21).
+	 */
 	function moveVertical(delta: number) {
-		if (sectionRef.current === "consultations") {
+		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = false;
 				setConsultationScroll((current) => clamp(current + delta, 0, consultationMaxScroll));
-			} else selectConsultation(consultationIndexRef.current + delta);
+				return;
+			}
+			if (consultationsExpandedRef.current) {
+				if (delta < 0 && consultationIndexRef.current === 0) {
+					// The cross reaches even an empty Ticket list: its empty
+					// message is the row the cursor takes.
+					if (ticketsExpandedRef.current) {
+						selectionRef.current = "ticket";
+						setSelection("ticket");
+						selectTicket(Math.max(0, ticketsRef.current.length - 1));
+					}
+					return;
+				}
+				selectConsultation(consultationIndexRef.current + delta);
+				return;
+			}
+			// The Consultation section is collapsed: the cursor rests on its
+			// boundary, and the only visible step is up to the last Ticket.
+			if (delta < 0 && ticketsExpandedRef.current) {
+				selectionRef.current = "ticket";
+				setSelection("ticket");
+				selectTicket(Math.max(0, ticketsRef.current.length - 1));
+			}
 			return;
 		}
-		if (focusedPaneRef.current === "detail")
+		if (focusedPaneRef.current === "detail") {
 			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
-		else moveList(delta);
+			return;
+		}
+		if (ticketsExpandedRef.current) {
+			if (delta > 0 && selectedIndexRef.current >= ticketsRef.current.length - 1) {
+				// The cross reaches even an empty Consultation list: its empty
+				// message is the row the cursor takes, and the history filter
+				// still operates from there.
+				if (consultationsExpandedRef.current) {
+					selectionRef.current = "consultation";
+					setSelection("consultation");
+					selectConsultation(0);
+				}
+				return;
+			}
+			moveList(delta);
+			return;
+		}
+		// The Ticket section is collapsed: the cursor rests on its boundary, and
+		// the only visible step is down to the first Consultation.
+		if (delta > 0 && consultationsExpandedRef.current) {
+			selectionRef.current = "consultation";
+			setSelection("consultation");
+			selectConsultation(0);
+		}
 	}
 	function movePage(direction: 1 | -1) {
-		if (sectionRef.current === "consultations") {
+		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") moveConsultationDetailPage(direction);
-			else selectConsultation(consultationIndexRef.current + direction * listGeometry.visibleRows);
+			else selectConsultation(consultationIndexRef.current + direction * consultationsContentRows);
 			return;
 		}
 		if (focusedPaneRef.current === "detail")
 			detailRef.current?.movePage(direction === 1 ? "down" : "up");
-		else moveList(direction * listGeometry.visibleRows);
+		else moveList(direction * ticketsContentRows);
 	}
 	function moveEdge(edge: "start" | "end") {
-		if (sectionRef.current === "consultations") {
+		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = edge === "end";
 				setConsultationScroll(edge === "start" ? 0 : 999999);
 				if (edge === "end") setNewOutput(false);
-			} else selectConsultation(edge === "start" ? 0 : consultationsRef.current.length - 1);
+			} else if (consultationsExpandedRef.current)
+				selectConsultation(edge === "start" ? 0 : consultationsRef.current.length - 1);
 			return;
 		}
 		if (focusedPaneRef.current === "detail") {
 			if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
-		} else selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
+		} else if (ticketsExpandedRef.current)
+			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
 	// live view over an in-flight agent, the missing-agent choice, and the
@@ -2243,37 +2368,17 @@ export function App({
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
-		// One Main frame: the mode line comes first, then the two section
-		// headers, and only the expanded section renders its panes below its
-		// own header.
+		// One Main frame: an optional mode line, the body, and the two
+		// permanent bottom rows. The body's left column stacks the two
+		// sections - each header row, and its list box while the section is
+		// expanded - and its right column holds the one detail pane for the
+		// selected item (ADR 0018).
 		showModeLine &&
 			createElement(
 				"text",
 				{ style: { width: "100%", height: 1, fg: COLORS.dim } },
 				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
 			),
-		!tooSmall &&
-			createElement(SectionHeader, {
-				section: "tickets",
-				expanded: section === "tickets",
-				width: terminalWidth,
-				held: heldCount,
-				heldBell,
-				active: mainSurfaceActive,
-				onExpand: () => expandSection("tickets"),
-			}),
-		!tooSmall &&
-			createElement(SectionHeader, {
-				section: "consultations",
-				expanded: section === "consultations",
-				width: terminalWidth,
-				awaitingResponse: consultationCounts.awaitingResponse,
-				recovery: consultationCounts.recovery,
-				bell,
-				newOutput,
-				active: mainSurfaceActive,
-				onExpand: () => expandSection("consultations"),
-			}),
 		tooSmall
 			? createElement(
 					"box",
@@ -2317,55 +2422,113 @@ export function App({
 					{
 						style: {
 							width: "100%",
-							height: Math.max(0, terminalHeight - reservedRows),
+							height: Math.max(0, bodyRows),
 							flexGrow: 0,
 							flexShrink: 1,
 							flexDirection: "row",
 							overflow: "hidden",
 						},
 					},
-					section === "tickets"
-						? createElement(TicketList, {
+					createElement(
+						"box",
+						{
+							style: {
+								// An exact cell count from the shared geometry, not "50%":
+								// OpenTUI rounds a percentage up on odd terminal widths, and
+								// the rounded box would no longer match the geometry the rows
+								// and the detail pane lay their text on.
+								width: leftCols,
+								height: "100%",
+								flexGrow: 0,
+								flexShrink: 0,
+								flexDirection: "column",
+								overflow: "hidden",
+							},
+						},
+						createElement(SectionHeader, {
+							section: "tickets",
+							expanded: ticketsExpanded,
+							terminalWidth,
+							width: leftCols,
+							open: openCount,
+							running: runningCount,
+							awaiting: awaitingCount,
+							held: heldCount,
+							heldBell,
+							active: mainSurfaceActive,
+							onExpand: () => expandSection("tickets"),
+						}),
+						ticketsExpanded &&
+							createElement(TicketList, {
 								tickets,
 								selectedIndex,
-								focused: focusedPane === "list",
-								reservedRows,
+								focused: focusedPane === "list" && selection === "ticket",
+								rows: ticketsBoxRows,
 								emptyMessage,
 								markerOf,
 								limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
 								active: mainSurfaceActive,
-								onFocus: () => focusPane("list"),
-								onSelect: selectTicket,
-								onMove: moveList,
-							})
-						: undefined,
-					section === "consultations" &&
-						!consultationNarrow &&
-						createElement(ConsultationList, {
-							consultations,
-							selectedIndex: consultationIndex,
-							focused: focusedPane === "list",
-							reservedRows,
+								onFocus: () => focusListSection("ticket"),
+								onSelect: (index: number) => {
+									focusListSection("ticket");
+									selectTicket(index);
+								},
+								onMove: (delta) => {
+									if (selectionRef.current !== "ticket") {
+										focusListSection("ticket");
+										return;
+									}
+									moveList(delta);
+								},
+							}),
+						createElement(SectionHeader, {
+							section: "consultations",
+							expanded: consultationsExpanded,
+							terminalWidth,
+							width: leftCols,
+							awaitingResponse: consultationCounts.awaitingResponse,
+							recovery: consultationCounts.recovery,
+							bell,
+							newOutput,
 							active: mainSurfaceActive,
-							onFocus: () => focusPane("list"),
-							onSelect: selectConsultation,
-							onMove: (delta) => selectConsultation(consultationIndexRef.current + delta),
-							emptyMessage:
-								state === undefined
-									? "Consultations require SQLite state"
-									: historyFilter === "closed"
-										? "no closed Consultations"
-										: historyFilter === "all"
-											? "no Consultations"
-											: "no open Consultations",
+							onExpand: () => expandSection("consultations"),
 						}),
-					section === "tickets"
+						consultationsExpanded &&
+							createElement(ConsultationList, {
+								consultations,
+								selectedIndex: consultationIndex,
+								focused: focusedPane === "list" && selection === "consultation",
+								rows: consultationsBoxRows,
+								active: mainSurfaceActive,
+								onFocus: () => focusListSection("consultation"),
+								onSelect: (index: number) => {
+									focusListSection("consultation");
+									selectConsultation(index);
+								},
+								onMove: (delta) => {
+									if (selectionRef.current !== "consultation") {
+										focusListSection("consultation");
+										return;
+									}
+									selectConsultation(consultationIndexRef.current + delta);
+								},
+								emptyMessage:
+									state === undefined
+										? "Consultations require SQLite state"
+										: historyFilter === "closed"
+											? "no closed Consultations"
+											: historyFilter === "all"
+												? "no Consultations"
+												: "no open Consultations",
+							}),
+					),
+					selection === "ticket"
 						? createElement(TicketDetail, {
 								ref: detailRef,
 								ticket: selectedTicket,
 								focused: focusedPane === "detail",
 								active: mainSurfaceActive,
-								reservedRows,
+								reservedRows: detailReservedRows,
 								handoffLimit: config.maxHandoffsPerTicket,
 								suggestedChoice:
 									selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
@@ -2373,48 +2536,42 @@ export function App({
 								onFocus: () => focusPane("detail"),
 								scrollSlot: detailScrollSlot,
 							})
-						: undefined,
-					section === "consultations" &&
-						createElement(
-							"box",
-							{ style: { flexGrow: 1, flexDirection: "column" } },
-							createElement(ConsultationDetail, {
-								lines: consultationLines,
-								ansiLines,
-								visibleRows: Math.max(
-									1,
-									detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
-								),
-								scroll: consultationDetailScroll,
-								focused: focusedPane === "detail" && !responseEditor,
-								active: mainSurfaceActive,
-								onFocus: () => focusPane("detail"),
-								onWheel: (delta) => moveVertical(delta),
-								compactHeading:
-									consultationNarrow && selectedConsultation !== undefined
-										? `${selectedConsultation.typeName} - ${selectedConsultation.repository.displayName}`
-										: undefined,
-							}),
-							responseEditor &&
-								createElement(ResponseEditor, {
-									draft: responseDraft,
-									width: consultationWidth,
-									rows: RESPONSE_EDITOR_ROWS,
-									focused: true,
-									context: controlContextFor("form-field"),
-									inputActive: utility === null,
-									onSend: sendResponseText,
-									onDiscard: discardResponseDraft,
-									onDraftChange: storeResponseDraft,
-									onClose: closeResponseEditor,
-									onHelp: () => openGuide("form-field"),
-									onMessage: () => openMessage("form-field"),
-									onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
-									onCopy: reportMessage,
-									message: visibleMessage,
-									onEmergencyExit: () => renderer.destroy(),
+						: createElement(
+								"box",
+								{ style: { flexGrow: 1, flexDirection: "column" } },
+								createElement(ConsultationDetail, {
+									lines: consultationLines,
+									ansiLines,
+									visibleRows: Math.max(
+										1,
+										detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+									),
+									scroll: consultationDetailScroll,
+									focused: focusedPane === "detail" && !responseEditor,
+									active: mainSurfaceActive,
+									onFocus: () => focusPane("detail"),
+									onWheel: (delta) => moveVertical(delta),
 								}),
-						),
+								responseEditor &&
+									createElement(ResponseEditor, {
+										draft: responseDraft,
+										width: consultationWidth,
+										rows: RESPONSE_EDITOR_ROWS,
+										focused: true,
+										context: controlContextFor("form-field"),
+										inputActive: utility === null,
+										onSend: sendResponseText,
+										onDiscard: discardResponseDraft,
+										onDraftChange: storeResponseDraft,
+										onClose: closeResponseEditor,
+										onHelp: () => openGuide("form-field"),
+										onMessage: () => openMessage("form-field"),
+										onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
+										onCopy: reportMessage,
+										message: visibleMessage,
+										onEmergencyExit: () => renderer.destroy(),
+									}),
+							),
 				),
 		launcher &&
 			createElement(ConsultationLauncher, {
