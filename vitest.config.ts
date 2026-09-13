@@ -26,16 +26,12 @@ export default defineConfig({
 		/**
 		 * The frame tests each drive their own rendered terminal, and a
 		 * machine that forks one renderer per core starves its own frames: at
-		 * thirty-two forks the suite's own load pushed a wait past the
+		 * thirty-two workers the suite's own load pushed a wait past the
 		 * harness's 10000 ms deadline on a machine that passes the same test
-		 * alone. Eight forks hold the suite's load below the worst case the
+		 * alone. Eight workers hold the suite's load below the worst case the
 		 * budgets above were measured at, on this machine and on the smaller
 		 * ones the cap does not reach.
 		 */
-		poolOptions: {
-			forks: {
-				maxForks: 8,
-			},
-		},
+		maxWorkers: 8,
 	},
 });
