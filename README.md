@@ -1073,10 +1073,14 @@ it carries the `grill-with-docs` Consultation type.
 
 ## Shape
 
-- `src/factory.ts`: the entry module.
-	Checks the node version, loads and validates the config, checks the config's
-	model values against what the agent runtimes report, opens the state, boots
-	the renderer, and mounts the app.
+- `src/factory.ts`: the entry module. Wires the startup: checks the node
+	version, runs the startup decisions, prints the lines the result carries,
+	and either exits or boots the renderer and mounts the app.
+- `src/startup.ts`: the startup decisions. Parses the arguments, loads and
+	validates the config, checks the config's model values against what the
+	agent runtimes report, and opens the state. A startup failure is a value
+	(the operator-facing lines and the exit status), so a test reads it
+	without a process.
 - `src/runtime.ts`: the node version gate.
 - `src/config.ts`: config types, strict startup validation, state path
 	resolution, and atomic TOML write-back.
