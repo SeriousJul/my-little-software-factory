@@ -76,6 +76,22 @@ describe("Auto copy", () => {
 		});
 	});
 
+	test("an ended drag leaves no selection behind", async () => {
+		await withApp(async (setup) => {
+			const clipboard = recordClipboard(setup, true);
+			try {
+				await dragOverDetail(setup);
+				// The highlight that ran the drag is gone with the copy: the
+				// renderer holds no selection after the release, so the surface
+				// reads as it did before the drag.
+				expect(setup.renderer.hasSelection).toBe(false);
+				expect(setup.renderer.getSelection()).toBeNull();
+			} finally {
+				clipboard.restore();
+			}
+		});
+	});
+
 	test("a click that does not drag records no clipboard write", async () => {
 		await withApp(async (setup) => {
 			const clipboard = recordClipboard(setup, true);

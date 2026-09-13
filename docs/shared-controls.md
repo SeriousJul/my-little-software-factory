@@ -96,6 +96,8 @@ Required behavior:
   wording; a copy that takes is silent and leaves the Message line alone.
 - A drag release over a list row fires no row action beyond the press that
   started the drag, so copying text does not move the row selection.
+- The ended selection clears its own highlight where the copy is made, so the
+  release never leaves the drag's highlight painted until the next click.
 - Text fields and Draft fields keep their own in-field selection and their
   keyboard Copy control unchanged; the shared form route is untouched.
 
@@ -234,8 +236,9 @@ The checks must cover:
 - Light, dark, and no-color output, contrast, resize, and narrow/short terminals.
 - Auto copy: a drag release over a surface ends with the selected text on the
   clipboard, a click that did not drag copies nothing, a refused write warns on
-  the Message line while a copy that takes is silent, and a drag release over a
-  list row leaves the row selection as the press set it.
+  the Message line while a copy that takes is silent, a drag release over a
+  list row leaves the row selection as the press set it, and the ended
+  selection clears its own highlight.
 - A real screen reader's access to labels, values, focus and caret location,
   selection, errors, modal changes, and progress feedback.
 - Agreement between available actions, dispatched keys, the Action bar, and the

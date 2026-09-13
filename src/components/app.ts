@@ -420,11 +420,16 @@ export function App({
 	 * the system clipboard without a setting. A click that did not drag ends an
 	 * empty selection and runs nothing, and a copy that takes is silent: only a
 	 * write the terminal refused states the shared warning on the Message line.
+	 * The ended selection is cleared where the copy is made, so the highlight
+	 * never outlives the copy it produced.
 	 */
 	useEffect(() => {
 		const onSelection = (selection: Selection | null): void => {
 			if (selection === null) return;
 			const text = selection.getSelectedText();
+			// The drag ended and the copy ran or was refused, so the highlight is
+			// done: drop it instead of leaving it painted until the next click.
+			renderer.clearSelection();
 			if (text === "") return;
 			if (!renderer.copyToClipboardOSC52(text)) setWarningMessage(COPY_REFUSED_REASON);
 		};
