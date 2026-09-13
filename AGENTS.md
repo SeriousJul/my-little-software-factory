@@ -47,3 +47,17 @@
 - Test the app at the unit test layer, and only at that layer. Run tests
   with `npm test` and the shared test harness. Use fake external operations
   and isolated test state.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as GitHub issues in `SeriousJul/my-little-software-factory`, driven with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.

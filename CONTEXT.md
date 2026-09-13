@@ -23,7 +23,7 @@ A collapsible part of the Main view that holds a list pane and a detail pane. On
 _Avoid_: tab, pane, view, accordion
 
 **Section header**:
-The row that names one section of the Main view. The expanded section's header stands directly above its panes; a collapsed section is nothing but its header row. The Consultation section's header also carries that section's attention facts.
+The row that names one section of the Main view. The expanded section's header stands directly above its panes; a collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery).
 _Avoid_: title bar, tab label, accordion toggle
 
 **Response editor**:
