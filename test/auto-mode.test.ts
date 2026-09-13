@@ -25,10 +25,15 @@ import type { TurnLogEntry } from "../src/turn-log.ts";
 import {
 	type AppSetup,
 	awaitFrame,
+	awaitGoneKeyHandler,
+	closeOverlay,
+	confirmPanel,
 	detailPaneText,
 	frameText,
 	HEIGHT,
+	keyHandlerListeners,
 	markerRowOf,
+	openLeftoverPanel,
 	press,
 	pressArrow,
 	pressEnterQuiet,
@@ -1763,8 +1768,7 @@ describe("the leftover environment", () => {
 				await press(setup, "?", "the key guide", (f) => f.includes("Key guide"));
 				expect(frameText(setup.captureCharFrame())).toContain("w clear leftover");
 				await pressEscape(setup, "the guide closes", (f) => !f.includes("Key guide"));
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
-				const panel = setup.captureCharFrame();
+				const panel = await openLeftoverPanel(setup);
 				expect(frameText(panel)).toContain("Retry");
 				// herdr's force is its own row: the operator chooses it, and the
 				// control plane never reaches for it alone.
@@ -1773,12 +1777,12 @@ describe("the leftover environment", () => {
 				// behind it would answer the same keys with other work.
 				expect(panel).not.toContain("Restart");
 				expect(panel).not.toContain("Abandon");
-				await pressEscape(setup, "the panel closes", (f) => !f.includes("Leftover environment"));
+				await closeOverlay(setup, "Leftover environment", "the panel closes");
 				expect(app.state.leftoverEnvironment(identity)).not.toBe(null);
 
 				// Retry alone does not ask herdr for force, and the leftover stands.
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
-				await pressReturn(setup, "the retry", (f) =>
+				await openLeftoverPanel(setup);
+				await confirmPanel(setup, "the retry", (f) =>
 					f.includes("still holds a leftover environment"),
 				);
 				expect(
@@ -1789,9 +1793,9 @@ describe("the leftover environment", () => {
 
 				// The forced removal is what ends it: the fact clears, and the
 				// marker leaves the row.
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await openLeftoverPanel(setup);
 				await pressArrow(setup, "down", "select force", (f) => frameText(f).includes("❯ Force"));
-				await pressReturn(setup, "the forced removal", (f) =>
+				await confirmPanel(setup, "the forced removal", (f) =>
 					f.includes("cleared the leftover environment"),
 				);
 				expect(app.runner.commands()).toContain("herdr worktree remove --workspace ws-1 --force");
@@ -1848,8 +1852,8 @@ describe("the leftover environment", () => {
 				// The operator has since closed the tab in herdr. The retry's tab
 				// close meets tab_not_found: the environment is gone, the
 				// cleanup succeeds, and the fact that names the tab clears.
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
-				await pressReturn(setup, "the retry", (f) =>
+				await openLeftoverPanel(setup);
+				await confirmPanel(setup, "the retry", (f) =>
 					f.includes("cleared the leftover environment"),
 				);
 				expect(app.state.leftoverEnvironment(identity)).toBe(null);
@@ -1887,9 +1891,9 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await openLeftoverPanel(setup);
 				await pressArrow(setup, "down", "select force", (f) => frameText(f).includes("❯ Force"));
-				await pressReturn(setup, "the refusal", (f) =>
+				await confirmPanel(setup, "the refusal", (f) =>
 					f.includes("close its work cycle before you clear"),
 				);
 				// The control plane never reaches for force on its own, and the
@@ -1937,9 +1941,13 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await openLeftoverPanel(setup);
+				const panelKeys = keyHandlerListeners(setup);
 				app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 				await awaitFrame(setup, (f) => !f.includes("Leftover environment"), "the panel closing");
+				// The next key is the ticket's own: a panel handler that is still
+				// subscribed would claim it, so wait for the release first.
+				await awaitGoneKeyHandler(setup, panelKeys, "the panel to release the keys");
 				expect(app.state.leftoverEnvironment(identity)).toBe(null);
 				expect(app.state.ticketState(identity)).toBe("open");
 				// The ticket keys answer again.
@@ -2018,8 +2026,8 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => ticketRow(f).includes("leftover"), "the leftover marker");
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
-				const panel = rowsOf(setup.captureCharFrame());
+				const frame = await openLeftoverPanel(setup);
+				const panel = rowsOf(frame);
 				// The guidance is on screen with the actions: the two rows mean
 				// them, and the branch fact stands.
 				expect(panel.some((row) => row.includes("Retry runs the Close cleanup again"))).toBe(true);
@@ -2167,13 +2175,12 @@ describe("the leftover environment", () => {
 		await withApp(
 			async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("leftover"), "the leftover marker");
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
-				const panel = frameText(setup.captureCharFrame());
+				const panel = frameText(await openLeftoverPanel(setup));
 				// A tab retry cannot use --force. The panel gives no Force row or
 				// force guidance when no checkout removal is available.
 				expect(panel).not.toContain("Force");
 				expect(panel).not.toContain("Force adds --force");
-				await pressReturn(setup, "the refusal", (f) =>
+				await confirmPanel(setup, "the refusal", (f) =>
 					// The Message line is truncated to the terminal width here.
 					f.includes("close its work cycle before you clear"),
 				);
@@ -2230,11 +2237,11 @@ describe("the leftover environment", () => {
 				await pressReturn(setup, "the handoff", (f) => f.includes("handing off"));
 				await awaitFrame(setup, () => gate.busy(), "the handoff reaching herdr");
 
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await openLeftoverPanel(setup);
 				// The refusal is written while the handoff's Working line holds, so
 				// the panel closes and the refusal waits behind it on the Message
 				// line rather than showing now.
-				const refused = await pressReturn(
+				const refused = await confirmPanel(
 					setup,
 					"the panel closing",
 					(f) => !f.includes("Leftover environment"),
@@ -2285,19 +2292,17 @@ describe("the leftover environment", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => f.includes("leftover"));
 
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await openLeftoverPanel(setup);
 				holdRemoval = true;
 				// The panel closes in the same action that starts the clear, and
 				// the render can lag the command: wait for both.
-				await pressReturn(setup, "the clear reaching herdr", () => gate.busy());
+				await confirmPanel(setup, "the clear reaching herdr", () => gate.busy());
 				await awaitFrame(setup, (f) => !f.includes("Leftover environment"), "the panel closing");
 				// A second clear meets the seat the first one holds: it reports that
 				// and runs nothing, because two removals of one workspace cannot
 				// take turns at herdr.
-				await press(setup, "w", "the leftover panel again", (f) =>
-					f.includes("Leftover environment"),
-				);
-				await pressReturn(setup, "the second clear", (f) =>
+				await openLeftoverPanel(setup, "the leftover panel again");
+				await confirmPanel(setup, "the second clear", (f) =>
 					f.includes("a leftover clear is already in flight"),
 				);
 				expect(
@@ -2505,7 +2510,7 @@ describe("the leftover environment", () => {
 					rgb(COLORS.statusWarning),
 				]);
 				expect(spanColors(setup, "press w to clear it")).toEqual([rgb(COLORS.statusWarning)]);
-				await press(setup, "w", "the leftover panel", (f) => f.includes("Leftover environment"));
+				await openLeftoverPanel(setup);
 				// The panel's guidance is message colour, not warning colour: it
 				// explains the action, it does not report a fact.
 				expect(spanColors(setup, "Retry runs the Close cleanup again.")).toEqual([rgb(COLORS.dim)]);
@@ -2589,9 +2594,7 @@ describe("the leftover environment", () => {
 				// The list column is narrow here, so the marker cannot be read
 				// off the row: the detail pane and the panel carry the fact.
 				await awaitFrame(setup, (f) => f.includes("[open]"), "the open ticket");
-				const frame = await press(setup, "w", "the leftover panel", (f) =>
-					f.includes("Leftover environment"),
-				);
+				const frame = await openLeftoverPanel(setup);
 				const rows = rowsOf(frame);
 				const top = rows.findIndex((row) => row.startsWith("┌") && row.includes("Leftover"));
 				const bottom = rows.findIndex((row, at) => at > top && row.startsWith("└"));

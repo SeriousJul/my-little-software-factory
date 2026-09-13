@@ -61,3 +61,7 @@ Default five-role vocabulary, each label string equal to its name. See `docs/age
 ### Domain docs
 
 Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.
+
+### Documentation site content
+
+New site pages follow the content conventions in `docs/agents/site-content.md`: kebab-case file names, a required frontmatter title, guide subfolders under the docs root, and a local `npm run docs:build` before pushing. See [ADR 0018](docs/adr/0018-the-documentation-site-builds-from-the-docs-folder-with-vitepress.md).
