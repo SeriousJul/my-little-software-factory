@@ -39,7 +39,14 @@ export default defineConfig({
 		 * ones the cap does not reach. A CI host can fork fewer than its
 		 * nominal cores can sustain, so the cap never exceeds the machine's
 		 * own parallelism.
+		 *
+		 * A CI host runs the same suite on a shared runner that also hosts other
+		 * jobs, so its cores are not all its own: forking one renderer per core
+		 * oversubscribes the runner, and a key the test sends into a surface
+		 * transition is dropped while the render is starved. Two workers leave
+		 * the runner headroom the frame waits and the key-handler waits hold;
+		 * the suite runs about twice as long, still well under the job budget.
 		 */
-		maxWorkers: Math.max(1, Math.min(8, availableParallelism())),
+		maxWorkers: ON_CI ? 2 : Math.max(1, Math.min(8, availableParallelism())),
 	},
 });

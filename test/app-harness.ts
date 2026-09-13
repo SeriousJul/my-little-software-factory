@@ -420,6 +420,9 @@ export async function pressScrollKey(
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<string> {
+	// Settle before the key lands, for the reason `press` states: a key sent
+	// into a surface transition is dropped on a slow host.
+	await settle(setup);
 	setup.mockInput.pressKey(SCROLL_KEY_BYTES[key]);
 	return awaitFrame(setup, predicate, what);
 }
@@ -446,6 +449,9 @@ export async function pressArrow(
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<string> {
+	// Settle before the key lands, for the reason `press` states: a key sent
+	// into a surface transition is dropped on a slow host.
+	await settle(setup);
 	setup.mockInput.pressArrow(direction);
 	return awaitFrame(setup, predicate, what);
 }
