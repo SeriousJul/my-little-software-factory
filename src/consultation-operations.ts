@@ -254,10 +254,7 @@ export class ConsultationOperations {
 				if (result.kind === "fit-failed") {
 					this.state.failConsultationOpening(current.id, result.reason);
 					this.callbacks.onConsultationsChanged();
-					this.status(
-						"error",
-						`Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`,
-					);
+					this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
 					return;
 				}
 				if (result.kind === "error") {
