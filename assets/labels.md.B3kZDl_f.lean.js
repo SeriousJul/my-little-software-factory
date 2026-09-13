@@ -1,0 +1,1 @@
+import{_ as t,o as r,c as a,a0 as d}from"./chunks/framework.ysVzM4be.js";const f=JSON.parse('{"title":"Ticket labels","description":"","frontmatter":{},"headers":[],"relativePath":"labels.md","filePath":"labels.md"}'),o={name:"labels.md"};function s(l,e,i,n,c,h){return r(),a("div",null,[...e[0]||(e[0]=[d("",3)])])}const u=t(o,[["render",s]]);export{f as __pageData,u as default};
