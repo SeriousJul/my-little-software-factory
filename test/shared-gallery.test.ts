@@ -14,11 +14,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
 import {
 	contrastRatio,
+	controlInk,
 	inkFor,
 	MIN_INDICATOR_CONTRAST,
 	MIN_TEXT_CONTRAST,
 } from "../src/components/shared/presentation.ts";
-import { awaitFrame, cellColors, frameText, settle } from "./app-harness.ts";
+import { awaitFrame, cellColors, frameText, type Setup, settle } from "./app-harness.ts";
 
 /** A `[r, g, b]` triplet as the `#rrggbb` the contrast formula reads. */
 const hexOf = (channels: readonly number[]): string =>
@@ -49,10 +50,27 @@ async function gallery(
 /** The state word every example must show, so a reviewer knows what they see. */
 const stateLine = (example: string) => GALLERY_EXAMPLES.find((e) => e.id === example)?.state ?? "";
 
+/** The cell where `text` first starts in the frame, by span, not by guess. */
+function findCell(setup: Setup, text: string): { x: number; y: number } {
+	const lines = setup.captureSpans().lines;
+	for (let y = 0; y < lines.length; y += 1) {
+		const spans = lines[y].spans;
+		const rowText = spans.map((span) => span.text).join("");
+		const at = rowText.indexOf(text);
+		if (at === -1) continue;
+		let x = 0;
+		for (const span of spans) {
+			if (at < x + span.width) return { x: at, y };
+			x += span.width;
+		}
+	}
+	throw new Error(`no frame row holds ${text}`);
+}
+
 describe("the shared control gallery", () => {
 	test("shows every state the standard names", async () => {
 		const ids = GALLERY_EXAMPLES.map((example) => example.id);
-		expect(ids).toEqual(["fields", "states", "search", "narrow"]);
+		expect(ids).toEqual(["fields", "states", "search", "notes", "narrow"]);
 		const states = GALLERY_EXAMPLES.map((example) => example.state).join(" ");
 		for (const needed of [
 			"normal",
@@ -248,6 +266,26 @@ describe("the shared control gallery", () => {
 		setup.mockInput.pressEscape();
 		await settle(setup);
 		expect(closed).toBe(1);
+	});
+
+	test("the notes example writes a reason at the box width, and waits in the dim tone", async () => {
+		// The box is wide enough for the whole sentence: the row is cut by the
+		// box the surface names, not by the value column the value happens to
+		// need, which is the state the override panel holds.
+		const setup = await gallery("notes", 120, 20);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("notes"));
+		expect(text).toContain(
+			`Error: Model: agent "codex" (cli) has no model "openai/gpt-5.1-codex": check the model id and its provider auth`,
+		);
+		const ink = controlInk();
+		// The warning row wears the warning tone on its own value.
+		const value = findCell(setup, "openai/gpt-5.1-codex");
+		expect(hexOf(cellColors(setup, value.x, value.y).fg)).toBe(ink.warning.fg);
+		// The waiting row keeps its value in the tone of a setting it cannot
+		// confirm yet, not in the tone of a value it stands on.
+		const waiting = findCell(setup, "anthropic/claude-sonnet-4-5");
+		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg);
 	});
 
 	test("the narrow example holds its columns without painting through them", async () => {

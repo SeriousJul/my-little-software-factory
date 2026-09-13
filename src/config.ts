@@ -5,16 +5,18 @@ import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parse, stringify } from "smol-toml";
 
-import {
-	isThinkingLevel,
-	type ThinkingLevel,
-	thinkingLevelList,
-	unsupportedThinkingLevel,
-} from "./domain/agent.ts";
-import { isTokenCount, TOKEN_COUNT_RULE, tokenCountDigits } from "./domain/settings.ts";
+import { isThinkingLevel, type ThinkingLevel, thinkingLevelList } from "./domain/agent.ts";
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
+import {
+	contextSettingFit,
+	modelSettingFit,
+	type ResolvedAgentType,
+	TOKEN_COUNT_RULE,
+	thinkingSettingFit,
+	tokenCountDigits,
+} from "./setting-fit.ts";
 
 export interface AgentTypeConfig {
 	kind: string;
@@ -573,27 +575,26 @@ function validateTaskTypes(
 		const agent = optionalStringField(raw, "agent", where);
 		if (agent !== undefined && !(agent in agents))
 			throw new ConfigError(`config: ${where}.agent: unknown agent "${agent}"`);
-		const profileAgent = agent ?? defaultAgent;
-		const agentConfig = agents[profileAgent];
+		const profileAgent: ResolvedAgentType = {
+			agentType: agent ?? defaultAgent,
+			// The named Agent type is checked below when the file names one, and
+			// `validateAgents` holds the default to a record the config has.
+			agent: agents[agent ?? defaultAgent],
+		};
 		const model = optionalStringField(raw, "model", where);
-		if (model !== undefined && agentConfig?.model === undefined)
-			throw new ConfigError(
-				`config: ${where}.model: agent "${profileAgent}" does not define a model setting`,
-			);
+		if (model !== undefined) {
+			const verdict = modelSettingFit(profileAgent, model);
+			if (!verdict.ok) throw new ConfigError(`config: ${where}.model: ${verdict.reason}`);
+		}
 		const thinking = validateThinkingLevel(
 			optionalStringField(raw, "thinking", where),
 			profileAgent,
-			agentConfig,
 			`${where}.thinking`,
 		);
 		// The profile's own agent is the one its context window must reach. An
 		// edge can reroute the handoff onto another agent later; that pair is
-		// caught at handoff time, the same way a model is.
-		const contextWindow = tokenCountField(raw, "context-window", where);
-		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
-			throw new ConfigError(
-				`config: ${where}.context-window: agent "${profileAgent}" does not define a context-window setting`,
-			);
+		// caught at handoff time by the same module.
+		const contextWindow = tokenCountField(raw, "context-window", where, profileAgent);
 		const autoClose = booleanField(raw, "auto-close", false);
 		for (const key of Object.keys(raw))
 			if (!["template", "agent", "model", "thinking", "context-window", "auto-close"].includes(key))
@@ -617,8 +618,7 @@ function validateTaskTypes(
  */
 function validateThinkingLevel(
 	value: string | undefined,
-	agentName: string,
-	agent: AgentTypeConfig | undefined,
+	agent: ResolvedAgentType,
 	where: string,
 ): ThinkingLevel | undefined {
 	if (value === undefined) return undefined;
@@ -627,15 +627,8 @@ function validateThinkingLevel(
 			`config: ${where}: "${value}" is not a standard thinking level (${thinkingLevelList()})`,
 		);
 	}
-	if (agent === undefined || agent.thinking === undefined)
-		throw new ConfigError(
-			`config: ${where}: agent "${agentName}" does not define a thinking setting`,
-		);
-	const supported = agent.thinkingValues ?? [];
-	if (!supported.includes(value))
-		throw new ConfigError(
-			`config: ${where}: ${unsupportedThinkingLevel(agentName, value, supported)}`,
-		);
+	const verdict = thinkingSettingFit(agent, value);
+	if (!verdict.ok) throw new ConfigError(`config: ${where}: ${verdict.reason}`);
 	return value;
 }
 
@@ -657,10 +650,11 @@ function validateConsultationTypes(
 			)
 				throw new ConfigError(`config: consultation-types.${name}: unknown key "${key}"`);
 		const where = `consultation-types.${name}`;
-		const agent = stringField(raw, "agent", where);
-		const agentConfig = agents[agent];
+		const agentName = stringField(raw, "agent", where);
+		const agentConfig = agents[agentName];
 		if (agentConfig === undefined)
-			throw new ConfigError(`${where}.agent: unknown agent "${agent}"`);
+			throw new ConfigError(`${where}.agent: unknown agent "${agentName}"`);
+		const agent: ResolvedAgentType = { agentType: agentName, agent: agentConfig };
 		const environment = stringField(raw, "environment", where);
 		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(environment))
 			throw new ConfigError(
@@ -669,21 +663,18 @@ function validateConsultationTypes(
 		const template = stringField(raw, "template", where);
 		validateConsultationTemplate(template, `${where}.template`);
 		const model = optionalStringField(raw, "model", where);
-		if (model !== undefined && agentConfig.model === undefined)
-			throw new ConfigError(`${where}.model: agent "${agent}" does not define a model setting`);
+		if (model !== undefined) {
+			const verdict = modelSettingFit(agent, model);
+			if (!verdict.ok) throw new ConfigError(`${where}.model: ${verdict.reason}`);
+		}
 		const thinking = validateThinkingLevel(
 			raw.thinking === undefined ? undefined : stringField(raw, "thinking", where),
 			agent,
-			agentConfig,
 			`${where}.thinking`,
 		);
-		const contextWindow = tokenCountField(raw, "context-window", where);
-		if (contextWindow !== undefined && agentConfig.contextWindow === undefined)
-			throw new ConfigError(
-				`${where}.context-window: agent "${agent}" does not define a context-window setting`,
-			);
+		const contextWindow = tokenCountField(raw, "context-window", where, agent);
 		out[name] = {
-			agent,
+			agent: agentName,
 			environment: environment as EnvironmentKind,
 			template,
 			...(model === undefined ? {} : { model }),
@@ -948,12 +939,17 @@ function tokenCountField(
 	record: Record<string, unknown>,
 	key: string,
 	where: string,
+	agent: ResolvedAgentType,
 ): string | undefined {
 	const value = record[key];
 	if (value === undefined) return undefined;
 	const digits = typeof value === "number" ? String(value) : typeof value === "string" ? value : "";
-	if (!isTokenCount(digits))
-		throw new ConfigError(`config: ${where}.${key}: must be ${TOKEN_COUNT_RULE}`);
+	// An explicit empty field is not the same as an omitted field in the file.
+	// Use the module's count rule for the error while keeping the config field's
+	// concise shape error.
+	if (digits === "") throw new ConfigError(`config: ${where}.${key}: must be ${TOKEN_COUNT_RULE}`);
+	const verdict = contextSettingFit(agent, digits);
+	if (!verdict.ok) throw new ConfigError(`config: ${where}.${key}: ${verdict.reason}`);
 	// The digits are the value: a file's count keeps one spelling, the same one
 	// the panel folds a typed count to.
 	return tokenCountDigits(digits);

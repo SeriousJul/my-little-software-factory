@@ -240,6 +240,15 @@ export class ConsultationOperations {
 			this.operationQueues,
 			current.repository.identity,
 			async () => {
+				// Recovery is another Consultation start. Re-check the stored
+				// settings before reading Herdr, so a config change cannot let a
+				// stale opening start trimmed.
+				const fit = await checkConsultationStart({
+					consultation: current,
+					config: this.config(),
+					runner: this.runner,
+				});
+				if (!fit.ok) return { kind: "fit-failed" as const, reason: fit.reason };
 				const probe = await new HerdrAgentReader(this.runner).listAgents();
 				if (probe.kind === "error") return { kind: "error" as const, reason: probe.reason };
 				const agent = matchConsultationAgent(current, probe.agents);
@@ -253,6 +262,12 @@ export class ConsultationOperations {
 			},
 		)
 			.then((result) => {
+				if (result.kind === "fit-failed") {
+					this.state.failConsultationOpening(current.id, result.reason);
+					this.callbacks.onConsultationsChanged();
+					this.status("error", `Consultation ${current.id.slice(0, 8)} failed: ${result.reason}`);
+					return;
+				}
 				if (result.kind === "error") {
 					this.status("error", `cannot verify Consultation Agent: ${result.reason}`);
 					return;

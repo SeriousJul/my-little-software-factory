@@ -78,6 +78,7 @@ const FOCUSED_CONTROL: Record<string, string> = {
 	fields: "context",
 	states: "launch",
 	search: "type-ahead",
+	notes: "reason",
 	narrow: "draft",
 };
 
@@ -208,6 +209,41 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				labelWidth: columns.labelWidth,
 			}),
 		],
+	},
+	{
+		id: "notes",
+		state: "a written reason wider than its column, and a waiting row",
+		render: (columns, holds, _inputActive, _wiring) => {
+			// The panel's own geometry: a value column narrower than the box,
+			// and a written reason the surface cuts at its own width, so a
+			// sentence wider than the column stays whole at the width the
+			// panel names.
+			const valueWidth = Math.min(columns.valueWidth, 30);
+			return [
+				createElement(ChoiceRow, {
+					key: "reason",
+					label: "Model",
+					value: "openai/gpt-5.1-codex",
+					focused: holds === "reason",
+					width: valueWidth,
+					labelWidth: columns.labelWidth,
+					warning: true,
+					error:
+						`agent "codex" (cli) has no model "openai/gpt-5.1-codex": ` +
+						`check the model id and its provider auth`,
+					noteWidth: columns.contentWidth,
+				}),
+				createElement(ChoiceRow, {
+					key: "waiting",
+					label: "Model",
+					value: "anthropic/claude-sonnet-4-5",
+					focused: holds === "waiting",
+					width: valueWidth,
+					labelWidth: columns.labelWidth,
+					muted: true,
+				}),
+			];
+		},
 	},
 	{
 		id: "narrow",

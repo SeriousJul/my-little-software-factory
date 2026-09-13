@@ -8,8 +8,9 @@
 import { describe, expect, test } from "vitest";
 
 import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
-import { checkSettingFit, validateConfiguredModels } from "../src/model-settings.ts";
+import { validateConfiguredModels } from "../src/model-settings.ts";
 import type { CommandRunner } from "../src/runner.ts";
+import { fitSettings } from "../src/setting-fit.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 /** A config with one task type and one agent, both named for the reason text. */
@@ -157,8 +158,9 @@ describe("validateConfiguredModels", () => {
 
 		expect(await validateConfiguredModels(config, runner)).toEqual({
 			errors: [
-				'config: default-model, resolved by task type "implement": agent "pilot" defines ' +
-					'no model setting, so "gpt-4o" cannot reach it',
+				'config: default-model, resolved by task type "implement": agent type "pilot" defines ' +
+					'no model setting, so model "gpt-4o" cannot reach it: clear the model in the override panel, ' +
+					"or start an agent type that maps one",
 			],
 			warnings: [],
 		});
@@ -177,7 +179,7 @@ describe("validateConfiguredModels", () => {
 	});
 });
 
-describe("checkSettingFit", () => {
+describe("fitSettings", () => {
 	/** One pi agent that maps both settings, as the checks see it. */
 	const piAgent = {
 		kind: "pi",
@@ -192,14 +194,12 @@ describe("checkSettingFit", () => {
 		{ model = "", thinking = "" }: { model?: string; thinking?: string },
 		runner: CommandRunner = new FakeRunner(),
 	): Promise<string> {
-		const check = await checkSettingFit({
-			agentType: "pilot",
-			agent: agent as never,
-			model,
-			thinking,
+		const check = await fitSettings(
+			{ agentType: "pilot", agent: agent as never },
+			{ model, thinking, contextWindow: "" },
 			runner,
-		});
-		return check.ok ? "" : check.reason;
+		);
+		return check === undefined ? "" : check.reason;
 	}
 
 	test("an empty setting is left to the agent and always fits", async () => {
@@ -241,13 +241,13 @@ describe("checkSettingFit", () => {
 
 	test("a thinking level the agent does not declare is refused with the levels it supports", async () => {
 		expect(await unfitOf(piAgent, { thinking: "xhigh" })).toBe(
-			'agent "pilot" does not support the thinking level "xhigh"; it supports: minimal, low',
+			'agent type "pilot" offers no thinking level "xhigh" (it offers: minimal, low): clear the thinking level in the override panel, or start an agent type that offers it',
 		);
 	});
 
-	test("a thinking level is not checked for an agent that maps no thinking setting", async () => {
-		// The start command drops a setting the agent does not map, so the
-		// agent never sees the value: it cannot be unfit.
-		expect(await unfitOf({ kind: "pi" }, { thinking: "xhigh" })).toBe("");
+	test("a thinking level an agent does not map is refused", async () => {
+		expect(await unfitOf({ kind: "pi" }, { thinking: "xhigh" })).toBe(
+			'agent type "pilot" defines no thinking setting, so thinking level "xhigh" cannot reach it: clear the thinking level in the override panel, or start an agent type that maps one',
+		);
 	});
 });
