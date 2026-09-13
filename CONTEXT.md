@@ -365,6 +365,10 @@ The one operator action that retries the Close cleanup of a ticket's Leftover en
 A forced removal is its own explicit choice within the action, because it discards a dirty checkout and stops the Agents in the workspace.
 _Avoid_: force delete, cleanup retry
 
+**Auto copy**:
+The control plane copies a mouse selection to the clipboard when the operator releases the drag. A click that does not drag copies nothing.
+_Avoid_: copy-on-select, clipboard mode
+
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
 The panel edits an open Ticket's next Handoff and a Workflow Handoff alike: `e` on a decision row opens the panel on the choice its edge resolved.
