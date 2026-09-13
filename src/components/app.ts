@@ -38,7 +38,12 @@ import {
 	type ConsultationStatus,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
-import { HANDOFF_ENVIRONMENT_KINDS, type Handoff, type Ticket } from "../domain/ticket.ts";
+import {
+	HANDOFF_ENVIRONMENT_KINDS,
+	type Handoff,
+	isHeldCompletion,
+	type Ticket,
+} from "../domain/ticket.ts";
 import {
 	baseChoice,
 	type HandoffChoice,
@@ -70,7 +75,7 @@ import {
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type { Consultation, FactoryState } from "../state.ts";
 import type { TicketSource } from "../ticket-source.ts";
-import type { TurnLogEntry } from "../turn-log.ts";
+import type { TurnEndCause, TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, panelBodyCols } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -293,6 +298,10 @@ export function App({
 	const consultationFollowRef = useRef(true);
 	const [newOutput, setNewOutput] = useState(false);
 	const [bell, setBell] = useState(false);
+	// The held-turn bell: it rings the moment a held count rises, so a turn
+	// that failed while the operator looked away gets their attention.
+	const [heldBell, setHeldBell] = useState(false);
+	const heldCountRef = useRef(-1);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const selectedIndexRef = useRef(0);
 	const configRef = useRef(config);
@@ -390,20 +399,44 @@ export function App({
 						(ticket.handoff?.paneId ?? null) !== null &&
 						agents.some((agent) => agent.paneId === ticket.handoff?.paneId),
 				).length;
+	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
+	// handoffs, routes, and restarts until it is decided or a turn completes.
+	const dispatchPause = state?.dispatchPauseActive() ?? false;
+	// The held turns (ADR 0016): the awaiting tickets whose last turn ended
+	// failed, aborted, or truncated with no decision. They rest in awaiting,
+	// held against every automatic decision, until the operator acts. A ticket
+	// whose agent works again has left awaiting and is no longer held (its
+	// next settle overwrites the trace).
+	const heldCount = tickets.filter(
+		(ticket) => ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion),
+	).length;
 	const modeLine =
 		state === undefined
 			? ""
 			: `auto: ${autoMode ? "on" : "off"} ${liveCount}${
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
-				}`;
+				}${autoMode && dispatchPause ? " paused" : ""}`;
 	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
+	const attentionEmpty =
+		consultationCounts.awaitingResponse === 0 &&
+		consultationCounts.recovery === 0 &&
+		heldCount === 0;
 	const attentionLine =
-		state === undefined ||
-		(view === "tickets" &&
-			consultationCounts.awaitingResponse === 0 &&
-			consultationCounts.recovery === 0)
+		state === undefined || (view === "tickets" && attentionEmpty)
 			? ""
-			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${bell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
+			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${heldCount > 0 ? `  held: ${heldCount}` : ""}${bell || heldBell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
+	// The held count the bell compares against: a rise rings the terminal
+	// bell and flashes the attention line, a fall or a steady count does not.
+	useEffect(() => {
+		if (heldCountRef.current >= 0 && heldCount > heldCountRef.current) {
+			if (configRef.current.attentionBell) {
+				setHeldBell(true);
+				setTimeout(() => setHeldBell(false), 250);
+				process.stdout.write("\u0007");
+			}
+		}
+		heldCountRef.current = heldCount;
+	}, [heldCount]);
 	const tooSmall = belowMinimum(terminalWidth, terminalHeight);
 	// The compact frame's own arithmetic. One row holds the Action bar at any
 	// height (user story 73), the Message line gives up before it, and the size
@@ -979,6 +1012,10 @@ export function App({
 		actions: ActionRow[];
 		entries: readonly TurnLogEntry[];
 		contextLine: string;
+		/** The turn's end cause, or null when the turn has no settled record. */
+		cause: TurnEndCause | null;
+		/** The agent's or provider's text for the cause; empty when none. */
+		detail: string;
 	} => {
 		const taskType = taskTypeOf(ticket);
 		const completion = ticket.lastCompletion;
@@ -1005,6 +1042,8 @@ export function App({
 			actions,
 			entries: completion?.turnLog ?? [],
 			contextLine,
+			cause: completion?.cause ?? null,
+			detail: completion?.detail ?? "",
 		};
 	};
 
@@ -2424,6 +2463,8 @@ export function App({
 				title: panelTicket.title,
 				contextLine: decision.contextLine,
 				entries: decision.entries,
+				cause: decision.cause,
+				detail: decision.detail,
 				actions: decision.actions,
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),

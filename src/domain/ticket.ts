@@ -1,6 +1,6 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
-import type { TurnLogEntry } from "../turn-log.ts";
+import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 
 /**
  * The ticket states.
@@ -53,8 +53,25 @@ export interface Completion {
 	message: string;
 	/** The agent's messages of the turn, in order; the decision modal's body. */
 	turnLog: TurnLogEntry[];
+	/**
+	 * Why the turn ended, the agent's fact read from its session record. A
+	 * legacy trace predates the cell and reads `unknown`, which fails open.
+	 */
+	cause: TurnEndCause;
+	/** The agent's or the provider's own text for the cause; empty when none. */
+	detail: string;
 	/** Null until a decision was made on this completion. */
 	decision: CompletionDecision | null;
+}
+
+/**
+ * Whether a completion holds its turn (ADR 0016): its end cause is failed,
+ * aborted, or truncated, and no decision has landed on it yet. A decided
+ * held trace is no longer held - the operator already chose - and an
+ * `unknown` cause never holds, so a broken record cannot hold a good turn.
+ */
+export function isHeldCompletion(completion: Completion | null): boolean {
+	return completion !== null && completion.decision === null && isHeldCause(completion.cause);
 }
 
 /** The latest handoff of a ticket, including the herdr handles it started. */

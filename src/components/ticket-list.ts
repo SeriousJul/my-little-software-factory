@@ -19,7 +19,7 @@ import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { type ReactElement, useRef } from "react";
 
-import type { Ticket } from "../domain/ticket.ts";
+import { isHeldCompletion, type Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry, windowOf } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
@@ -27,6 +27,7 @@ import {
 	BADGE_WIDTH,
 	COLORS,
 	failureBadge,
+	heldBadge,
 	MARKER_COLORS,
 	STATE_COLORS,
 	stateBadge,
@@ -188,13 +189,21 @@ function rowSpans(
 	}
 
 	// The failure badge replaces the state badge: the agent blocked or the
-	// pane gone stand out in the badge's own place.
+	// pane gone stand out in the badge's own place. A held turn wears its
+	// own badge in the state's place (ADR 0016): it is the fact the operator
+	// must act on, and it outranks the resting state it rests in. It only
+	// appears on an awaiting ticket: a held turn whose agent works again has
+	// left awaiting and shows its state badge, never `held` over an agent that
+	// is visibly working.
 	if (budget >= BADGE_WIDTH) {
-		if (marker === null)
+		if (marker !== null)
+			spans.push(createElement("span", { fg: MARKER_COLORS[marker] }, failureBadge(marker)));
+		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
+			spans.push(createElement("span", { fg: COLORS.statusWarning }, heldBadge()));
+		else
 			spans.push(
 				createElement("span", { fg: STATE_COLORS[ticket.state] }, stateBadge(ticket.state)),
 			);
-		else spans.push(createElement("span", { fg: MARKER_COLORS[marker] }, failureBadge(marker)));
 		budget -= BADGE_WIDTH;
 	}
 
