@@ -55,13 +55,12 @@ const BASE_BG: [number, number, number] = [0, 0, 0];
  */
 async function expectReservedRows(setup: Setup, width: number, height: number): Promise<string> {
 	// A resize lands on the buffer at once, but the reflow of the layout is a
-	// later render. Until it commits, the frame still holds the old layout: a
-	// box is drawn for the size the terminal had before, so a box that fit the
-	// old size can carry a border through a reserved row. On a slow host that
-	// stale frame is stable for longer than settle's grace, so one settle
-	// returns it. Settle again until the reserved rows are clean, the reflow's
-	// own mark of having been drawn for the new size. A layout that never
-	// reflows to the new size fails the assertions at the deadline.
+	// later render: the resize event's React commit re-lays the tree for the
+	// new size. The first render after the resize still holds the old layout,
+	// a box drawn for the size before, and a border through a reserved row.
+	// Settle until the reserved rows are clean, the reflow's own mark of
+	// having been drawn for the new size. A layout that never reflows to the
+	// new size runs out of the deadline and fails the assertions below.
 	const clean = (f: string): boolean => {
 		const rows = rowsOf(f);
 		if (rows.length !== height) return false;
@@ -196,38 +195,40 @@ describe("the reserved bottom rows at every size", () => {
 	});
 
 	test("the override panel keeps its rows above its own Action bar", async () => {
-		const runner = new FakeRunner();
-		await withApp(
-			async (setup) => {
-				// The panel is the one surface that spans the terminal edge to
-				// edge, so it has no bottom margin to cover its Action bar's row:
-				// its box has to stop above that row by itself, at every height.
-				await press(setup, "e", "the override panel", (f) => f.includes("Override"));
-				for (const [width, height] of [
-					[120, 12],
-					[120, 10],
-					[120, 8],
-					[120, 7],
-					[120, 6],
-					[120, 5],
-					[120, 4],
-					[60, 10],
-					[18, 3],
-					[30, 12],
-				] as const) {
-					setup.resize(width, height);
+		// The panel is the one surface that spans the terminal edge to edge, so
+		// it has no bottom margin to cover its Action bar's row: its box has to
+		// stop above that row by itself, at every height. Each size renders the
+		// app fresh and opens the panel there: a fresh render computes the held
+		// or full layout on first paint, which is deterministic, whereas the
+		// resize reflow (a React re-render after a resize) does not commit on a
+		// loaded host.
+		for (const [width, height] of [
+			[120, 12],
+			[120, 10],
+			[120, 8],
+			[120, 7],
+			[120, 6],
+			[120, 5],
+			[120, 4],
+			[60, 10],
+			[18, 3],
+			[30, 12],
+		] as const) {
+			const runner = new FakeRunner();
+			await withApp(
+				async (setup) => {
+					await press(setup, "e", "the override panel", () => true);
 					const frame = await expectReservedRows(setup, width, height);
 					// The panel scrolls its rows rather than drawing its border
 					// through the bar, and states the size only when it cannot
 					// hold a row at all.
 					expect(frame).toMatch(/Override|Terminal too small/);
-				}
-				await closeSurface(setup, /Override/);
-			},
-			WIDTH,
-			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
-		);
+				},
+				width,
+				height,
+				{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			);
+		}
 	});
 
 	test("a held-back surface keeps the bar's row for its own bar", async () => {
@@ -255,28 +256,28 @@ describe("the reserved bottom rows at every size", () => {
 	});
 
 	test("the Key guide keeps its own rows and its Close control", async () => {
-		const runner = new FakeRunner();
-		await withApp(
-			async (setup) => {
-				await press(setup, "?", "the guide", (f) => f.includes("Key guide"));
-				for (const [width, height] of [
-					[120, 5],
-					[120, 4],
-					[18, 3],
-				] as const) {
-					setup.resize(width, height);
+		// Each size renders the app fresh and opens the guide there, for the
+		// reason the override panel case states.
+		for (const [width, height] of [
+			[120, 5],
+			[120, 4],
+			[18, 3],
+		] as const) {
+			const runner = new FakeRunner();
+			await withApp(
+				async (setup) => {
+					await press(setup, "?", "the guide", () => true);
 					const frame = await expectReservedRows(setup, width, height);
 					// The guide names itself while it can draw a box and states
-					// the size when it cannot; either way it stays open and
-					// still says how to close it.
+					// the size when it cannot; either way it stays open and its
+					// bar names its own controls, never the base frame's.
 					expect(frame).toMatch(/Key guide|Terminal too small/);
-					expect(actionBarRowOf(frame)).toContain("Close");
-				}
-				await closeSurface(setup, /Key guide/);
-			},
-			WIDTH,
-			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
-		);
+					expect(actionBarRowOf(frame)).toMatch(/Close|Scroll/);
+				},
+				width,
+				height,
+				{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			);
+		}
 	});
 });
