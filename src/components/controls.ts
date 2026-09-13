@@ -127,8 +127,6 @@ export interface ControlContext {
 	detailCanScroll: boolean;
 	sourceCount: number;
 	refreshingSourceCount: number;
-	/** Whether the Consultation section can re-read its durable projection. */
-	consultationRefreshAvailable?: boolean;
 	/** Whether the Consultation list pane is rendered at the current width. */
 	consultationListVisible?: boolean;
 	/** The observed status of the selected Consultation Agent. */
@@ -371,11 +369,12 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
 					? "the Consultation detail has nowhere to scroll"
 					: "the Ticket detail has nowhere to scroll",
 			);
+/**
+ * Why `r` answers nothing: the refresh reads the Ticket sources, and the
+ * Consultation section runs the same refresh as the Ticket section, so both
+ * sections share this one gate and this one reason.
+ */
 const refresh = (context: ControlContext): ControlAvailability => {
-	if (consultationMode(context.mode))
-		return context.consultationRefreshAvailable === true
-			? available()
-			: unavailable("Consultations require SQLite state");
 	if (context.sourceCount === 0) return unavailable("no Ticket sources exist");
 	if (context.refreshingSourceCount >= context.sourceCount)
 		return unavailable("every Ticket source is already refreshing");
@@ -793,6 +792,24 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 				: ticketOnly(context),
 	},
 	{
+		id: "refresh",
+		label: "Refresh",
+		keys: () => ["r"],
+		keyLabel: "r",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 61,
+		modes: [...baseModes],
+		// The interrupted opening answers to `r` as the recovery, so the
+		// Consultation section hands its `r` over while a row opens. Listed
+		// before Recover, it owns the key the bar and the dispatch state when
+		// both meanings are refused: a missing source is a fact about refresh.
+		availability: (context) =>
+			consultationMode(context.mode) && context.selectedConsultation?.state === "opening"
+				? unavailable("the interrupted opening answers to r as recovery")
+				: refresh(context),
+	},
+	{
 		id: "recover",
 		label: "Recover",
 		// `r` names the recovery an interrupted opening needs, and stays Refresh
@@ -801,23 +818,12 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "r",
 		scope: "control-plane",
 		actionBar: true,
-		priority: 61,
+		priority: 60,
 		modes: [...consultationBaseModes],
 		availability: (context) =>
 			context.selectedConsultation?.state === "opening"
 				? available()
 				: unavailable("only an interrupted opening needs recovery"),
-	},
-	{
-		id: "refresh",
-		label: "Refresh",
-		keys: () => ["r"],
-		keyLabel: "r",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 60,
-		modes: [...baseModes],
-		availability: refresh,
 	},
 	{
 		id: "leftover",

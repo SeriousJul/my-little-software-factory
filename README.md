@@ -145,10 +145,9 @@ its availability and reason.
 	editor stores its draft in SQLite, `Tab` reaches `Send response` and
 	`Enter` runs it, `Enter` inside the field adds a line, `Esc` closes it with
 	the draft saved, and `Discard draft` deletes the saved draft.
-- `r` recovers a Consultation whose opening was interrupted, and refreshes the
-	Consultation projection and the Ticket sources otherwise. It remains
-	Refresh even when an awaiting Consultation can also be answered with
-	Enter.
+- `r` recovers a Consultation whose opening was interrupted, and refreshes
+	the Ticket sources otherwise, in both sections. It remains Refresh even
+	when an awaiting Consultation can also be answered with Enter.
 - `End` follows the latest Agent output after scrolling. Closed history shows
 	cleanup results and retained resources, including resources left by a
 	Force-close.

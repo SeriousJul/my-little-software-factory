@@ -153,6 +153,14 @@ const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
  * the list keys that walk it stay unavailable.
  */
 const CONSULTATION_PANES_MIN_WIDTH = 80;
+/**
+ * The Consultation detail's "follow the end" scroll.
+ *
+ * The value sits past the content on purpose: the render clamps it to
+ * `consultationMaxScroll`, so a detail that follows the end tracks every new
+ * line instead of resting at an offset that was current when it moved.
+ */
+const CONSULTATION_FOLLOW_END = Number.MAX_SAFE_INTEGER;
 
 /**
  * The handoff waiting behind the override panel.
@@ -516,7 +524,8 @@ export function App({
 					.consultations("all")
 					.filter((item) => item.replacementOf === selectedConsultation.id)
 					.map((item) => item.id);
-	const consultationNarrow = section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
+	const consultationNarrow =
+		section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
 	const consultationWidth = consultationNarrow
 		? Math.max(1, terminalWidth - 4)
 		: detailGeometry.usableCols;
@@ -1334,7 +1343,9 @@ export function App({
 		setSection(next);
 		// The narrow Consultation layout removes its list pane, so focus the
 		// visible detail pane instead of leaving navigation on hidden content.
-		focusPane(next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list");
+		focusPane(
+			next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list",
+		);
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1388,7 +1399,7 @@ export function App({
 		consultationIndexRef.current = index;
 		setConsultationIndex(index);
 		consultationFollowRef.current = true;
-		setConsultationScroll(999999);
+		setConsultationScroll(CONSULTATION_FOLLOW_END);
 		setNewOutput(false);
 	};
 	const cycleConsultationHistory = () => {
@@ -1486,7 +1497,6 @@ export function App({
 			).length,
 			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
 			messageTruncated,
-			consultationRefreshAvailable: state !== undefined,
 			consultationListVisible: !consultationNarrow,
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
@@ -1554,24 +1564,16 @@ export function App({
 		}
 		if (responseEditor) return;
 		if (interaction) {
-			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
-			const keyName = key.name.toLowerCase();
-			const isExit = keyName === exit || (key.ctrl === true && exit === `ctrl+${keyName}`);
-			if (isExit) {
-				setInteraction(false);
-				// Settle the queued input before announcing the exit: the last
-				// key the operator sent still belongs to the Agent.
-				void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
-					setStatus({ kind: "info", text: "left Agent interaction mode" }),
-				);
-				return;
-			}
-			const selected = consultationsRef.current[consultationIndexRef.current];
-			const event =
-				selected?.paneId === null || selected?.paneId === undefined
-					? null
-					: translateAgentKey(key, configRef.current.interactionExitKey);
-			if (selected !== undefined && selected.paneId !== null && event !== null) {
+			// One key at a time belongs to the selected Consultation's Agent:
+			// this is what the catalogue leaves unclaimed, and nothing refuses
+			// a key it cannot name.
+			const forwardToAgent = (forwarded: typeof key) => {
+				const selected = consultationsRef.current[consultationIndexRef.current];
+				const event =
+					selected?.paneId === null || selected?.paneId === undefined
+						? null
+						: translateAgentKey(forwarded, configRef.current.interactionExitKey);
+				if (selected === undefined || selected.paneId === null || event === null) return;
 				const queued = consultationOperations?.enqueue(selected.paneId, event);
 				if (queued === undefined) return;
 				void queued.then(
@@ -1593,7 +1595,38 @@ export function App({
 							text: `Agent interaction failed: ${errorMessage(error)}`,
 						}),
 				);
+			};
+			// Meta keys can never be the exit key: the Config names a function
+			// key or Ctrl plus a letter. They go straight to the Agent, which
+			// keeps the AltGr literal text some layouts report as Meta.
+			if (key.meta === true) {
+				forwardToAgent(key);
+				return;
 			}
+			// The catalogue decides the exit key through the interact-exit
+			// control: the bar, the guide, and this dispatch share one matcher,
+			// and a broken Config falls back to F12 in all of them.
+			const exitDispatch = createControlDispatch({
+				mode: "consultation-interaction",
+				context: controlContextFor("consultation-interaction"),
+				onUnavailable: setWarningMessage,
+				onEmergencyExit: () => renderer.destroy(),
+				handlers: {
+					"interact-exit": () => {
+						setInteraction(false);
+						// Settle the queued input before announcing the exit: the
+						// last key the operator sent still belongs to the Agent.
+						void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
+							setStatus({ kind: "info", text: "left Agent interaction mode" }),
+						);
+					},
+				},
+				onUnclaimed: (unclaimed) => {
+					forwardToAgent(unclaimed);
+					return undefined;
+				},
+			});
+			exitDispatch(key);
 			return;
 		}
 		// The control catalogue decides every key on the Main view, through the
@@ -1645,22 +1678,16 @@ export function App({
 				consultations: () => openConsultations(),
 				"open-tickets": () => expandSection("tickets"),
 				launch: () => {
-					if (Object.keys(configRef.current.consultationTypes).length === 0)
-						setWarningMessage(
-							"no Consultation types configured; add [consultation-types.<name>] to the config file",
-						);
-					else {
-						// In the Consultation section, a missing or failed Consultation
-						// is replaced rather than reopened: the launcher remembers which
-						// row asked for the replacement.
-						const selected = consultationsRef.current[consultationIndexRef.current];
-						if (
-							sectionRef.current === "consultations" &&
-							(selected?.state === "missing" || selected?.state === "failed")
-						)
-							setReplacementConsultationId(selected.id);
-						setLauncher(true);
-					}
+					// In the Consultation section, a missing or failed Consultation
+					// is replaced rather than reopened: the launcher remembers which
+					// row asked for the replacement.
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (
+						sectionRef.current === "consultations" &&
+						(selected?.state === "missing" || selected?.state === "failed")
+					)
+						setReplacementConsultationId(selected.id);
+					setLauncher(true);
 				},
 				history: cycleConsultationHistory,
 				"consultation-close": () => {
@@ -1695,12 +1722,7 @@ export function App({
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected?.state === "opening") recoverConsultationOpening(selected);
 				},
-				refresh: () => {
-					// Refresh answers for the whole plane: the Ticket sources, and
-					// the Consultation projection the expanded section shows.
-					if (sectionRef.current === "consultations") replaceConsultations();
-					refreshNow();
-				},
+				refresh: refreshNow,
 				leftover: openLeftoverPanel,
 				// `a` answers for the switch itself in the Ticket section, where
 				// the catalog binds it: reaching the state must never depend on
@@ -1804,7 +1826,7 @@ export function App({
 			consultationOperations?.recordOutputRead(selectedConsultation.id, output);
 			if (output === null) return;
 			if (consultationFollowRef.current) {
-				setConsultationScroll(999999);
+				setConsultationScroll(CONSULTATION_FOLLOW_END);
 				setNewOutput(false);
 			}
 			setLiveOutput((previous) => {
@@ -1940,7 +1962,11 @@ export function App({
 	// A resize can remove the narrow Consultation list without a section switch.
 	// Keep both focus representations on the visible detail pane in that case.
 	useLayoutEffect(() => {
-		if (section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH && focusedPaneRef.current !== "detail") {
+		if (
+			section === "consultations" &&
+			terminalWidth < CONSULTATION_PANES_MIN_WIDTH &&
+			focusedPaneRef.current !== "detail"
+		) {
 			focusedPaneRef.current = "detail";
 			setFocusedPane("detail");
 		}
@@ -1995,7 +2021,7 @@ export function App({
 		if (sectionRef.current === "consultations") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = edge === "end";
-				setConsultationScroll(edge === "start" ? 0 : 999999);
+				setConsultationScroll(edge === "start" ? 0 : CONSULTATION_FOLLOW_END);
 				if (edge === "end") setNewOutput(false);
 			} else selectConsultation(edge === "start" ? 0 : consultationsRef.current.length - 1);
 			return;
