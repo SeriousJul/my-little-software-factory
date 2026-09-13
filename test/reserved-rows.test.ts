@@ -52,6 +52,12 @@ const BASE_BG: [number, number, number] = [0, 0, 0];
  * cells with a border.
  */
 async function expectReservedRows(setup: Setup, width: number, height: number): Promise<string> {
+	// A resize lands on the buffer at once, but the reflow of the layout
+	// renders through the renderer's scheduler. On a slow host that commit
+	// can outlive settle's grace, and the frame is at the new size while the
+	// layout is still the old one. Drain the scheduler before the frame is
+	// trusted.
+	await setup.flush();
 	const frame = await settle(setup);
 	const rows = rowsOf(frame);
 	expect(rows).toHaveLength(height);

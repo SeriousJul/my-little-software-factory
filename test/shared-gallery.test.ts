@@ -196,6 +196,12 @@ describe("the shared control gallery", () => {
 		expect(guideText).toContain("Move caret by line");
 		expect(guideText).toContain("Copy selection");
 		expect(guideText).toContain("Esc/F1/? Close");
+		// The guide's keyboard handler wires up in the same render that draws
+		// it. Let that render settle before the closing key, so the key lands
+		// on the guide rather than the field beneath it: on a slow host the
+		// gap between the drawn frame and the live handler is wide enough for
+		// the key to fall through.
+		await setup.flush();
 		// F1 in the guide closes it: the close control outranks the Help that
 		// would only reopen it.
 		setup.mockInput.pressKey("F1");
