@@ -151,6 +151,8 @@ interface PanelRow {
 	/** "list" cycles, "text" edits, "type-ahead" searches, "pending" waits. */
 	kind: "list" | "text" | "type-ahead" | "pending";
 	options?: readonly string[];
+	/** Show the end of a value that does not fit, where a model name differs. */
+	clipTail?: boolean;
 	/** The dim marker a row holds while it has no value to show. */
 	placeholder?: string;
 	/**
@@ -701,6 +703,9 @@ function modelRow(status: ModelListStatus, verdict: FitVerdict): PanelRow {
 			key: "model",
 			kind: "type-ahead",
 			options: status.models,
+			// A real list carries one long provider in front of many models, so
+			// the tail is the part that tells two choices apart.
+			clipTail: true,
 			// An agent that reports no model has nothing to offer, and an empty
 			// value stays the valid unset state the panel names.
 			placeholder: status.models.length === 0 ? NO_MODELS_HINT : UNSET_HINT,
@@ -811,6 +816,7 @@ function rowElement(
 		// that value in the tone the panel uses for a setting it cannot confirm.
 		muted: r.kind === "pending" && value !== "",
 		warning: r.unfit !== undefined,
+		clipTail: r.clipTail === true,
 		error: r.unfit?.reason ?? null,
 		noteWidth: geometry.noteWidth,
 	});

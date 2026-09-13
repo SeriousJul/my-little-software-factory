@@ -25,9 +25,14 @@ import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor } from "./naming.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
-import { type TurnLogEntry, turnLogFromCapture } from "./turn-log.ts";
+import {
+	TURN_END_CAUSES,
+	type TurnEndCause,
+	type TurnLogEntry,
+	turnLogFromCapture,
+} from "./turn-log.ts";
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -68,6 +73,14 @@ interface SettleTurnInput {
 	message: string;
 	/** The agent's messages of the turn, in order, from its session record. */
 	turnLog: TurnLogEntry[];
+	/**
+	 * Why the turn ended, from its session record. Omitted when the settler
+	 * has no record to read, and stored as `unknown`: a settle without a cause
+	 * fails open, so it neither holds nor pauses.
+	 */
+	cause?: TurnEndCause;
+	/** The agent's or the provider's own text for the cause; empty when none. */
+	detail?: string;
 	completedAt: string;
 }
 
@@ -166,6 +179,10 @@ export interface ConsultationTurn {
 	sequenceBaseline: number | null;
 	settledAt: string | null;
 	settledStatus: string | null;
+	/** Why the turn ended, the same vocabulary as the ticket trace. */
+	cause: TurnEndCause;
+	/** The agent's or the provider's own text for the cause; empty when none. */
+	detail: string;
 	snapshotId: string | null;
 }
 
@@ -355,6 +372,18 @@ function turnLogOf(json: string | null, lastMessage: string): TurnLogEntry[] {
 	return entries.length > 0 ? entries : turnLogFromCapture(lastMessage);
 }
 
+/**
+ * The stored turn end cause, read back. A legacy trace predates the cell and
+ * reads NULL, which is `unknown`: the upgrade holds no ticket and freezes
+ * nothing. An unrecognized value degrades to `unknown` the same way.
+ */
+function turnEndCauseOf(stored: string | null): TurnEndCause {
+	if (stored === null) return "unknown";
+	return (TURN_END_CAUSES as readonly string[]).includes(stored)
+		? (stored as TurnEndCause)
+		: "unknown";
+}
+
 /** A record guard for the stored log's entries. */
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -453,6 +482,20 @@ const MIGRATION_V6_TO_V7 = `
 const MIGRATION_V7_TO_V8 = `
 	ALTER TABLE completion_traces ADD COLUMN context_window TEXT NOT NULL DEFAULT '';
 	ALTER TABLE consultations ADD COLUMN context_window TEXT NOT NULL DEFAULT '';
+`;
+
+/**
+ * The v9 traces carry the turn end cause and its detail, the agent's fact of
+ * why the settled turn ended (ADR 0015). Both cells are nullable: a legacy
+ * trace predates them and reads NULL, which is `unknown`, so an upgrade holds
+ * no ticket and freezes nothing. The Consultation turn record stores the same
+ * two facts, so one reader serves both surfaces.
+ */
+const MIGRATION_V8_TO_V9 = `
+	ALTER TABLE completion_traces ADD COLUMN cause TEXT;
+	ALTER TABLE completion_traces ADD COLUMN detail TEXT;
+	ALTER TABLE consultation_turns ADD COLUMN cause TEXT;
+	ALTER TABLE consultation_turns ADD COLUMN detail TEXT;
 `;
 
 /** Open state synchronously after creating its parent directory. */
@@ -563,6 +606,7 @@ export class FactoryState {
 			if (version < 6) this.db.exec(MIGRATION_V5_TO_V6);
 			if (version < 7) this.db.exec(MIGRATION_V6_TO_V7);
 			if (version < 8) this.db.exec(MIGRATION_V7_TO_V8);
+			if (version < 9) this.db.exec(MIGRATION_V8_TO_V9);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -865,7 +909,7 @@ export class FactoryState {
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db
 			.prepare(
-				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
@@ -878,6 +922,8 @@ export class FactoryState {
 					completed_at: string;
 					last_message: string;
 					turn_log_json: string | null;
+					cause: string | null;
+					detail: string | null;
 					decision: string | null;
 			  }
 			| undefined;
@@ -892,8 +938,37 @@ export class FactoryState {
 			completedAt: row.completed_at,
 			message: row.last_message,
 			turnLog: turnLogOf(row.turn_log_json, row.last_message),
+			cause: turnEndCauseOf(row.cause),
+			detail: row.detail ?? "",
 			decision: row.decision as CompletionDecision | null,
 		};
+	}
+
+	/**
+	 * The Dispatch pause, derived from the completion traces (ADR 0016).
+	 *
+	 * It is on when a held trace - a turn that settled `failed` and that no
+	 * decision has landed on - has no `completed` trace after it. It is never
+	 * stored, so it survives a control-plane restart and cannot drift from the
+	 * record it describes. It ends at the next `completed` settle, or the
+	 * moment the operator decides the held turn that started it. Only
+	 * `failed` pauses: `truncated` and `aborted` are one agent's own pressure
+	 * and a local event, and neither stops unrelated work. Consultations never
+	 * contribute: the pause reads only the ticket completion traces.
+	 */
+	dispatchPauseActive(): boolean {
+		const held = this.db
+			.prepare(
+				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get() as { completed_at: string; rowid: number } | undefined;
+		if (held === undefined) return false;
+		const after = this.db
+			.prepare(
+				"SELECT 1 FROM completion_traces WHERE cause = 'completed' AND (completed_at > ? OR (completed_at = ? AND rowid > ?)) LIMIT 1",
+			)
+			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | undefined;
+		return after === undefined;
 	}
 
 	/**
@@ -1292,6 +1367,10 @@ export class FactoryState {
 	 */
 	settleTurn(input: SettleTurnInput): void {
 		this.transaction(() => {
+			// A settle without a read cause is stored as `unknown`, the fail-open
+			// cause: it neither holds a turn nor pauses dispatch.
+			const cause = input.cause ?? "unknown";
+			const detail = input.detail ?? "";
 			this.db
 				.prepare(
 					"UPDATE tickets SET state = 'awaiting' WHERE identity = ? AND state IN ('handed-off', 'running', 'awaiting')",
@@ -1306,15 +1385,25 @@ export class FactoryState {
 			if (handoff === undefined) return;
 			const choice = jsonChoice(handoff.choice_json);
 			if (pending !== undefined) {
+				// A reopened turn settles again: the same trace is refreshed, its
+				// cause and detail overwritten, so a recovered turn reads as the
+				// turn it became.
 				this.db
 					.prepare(
-						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ? WHERE id = ?",
+						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ? WHERE id = ?",
 					)
-					.run(input.message, JSON.stringify(input.turnLog), input.completedAt, pending.id);
+					.run(
+						input.message,
+						JSON.stringify(input.turnLog),
+						input.completedAt,
+						cause,
+						detail,
+						pending.id,
+					);
 			} else {
 				this.db
 					.prepare(
-						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						randomUUID(),
@@ -1330,6 +1419,8 @@ export class FactoryState {
 						input.completedAt,
 						input.message,
 						JSON.stringify(input.turnLog),
+						cause,
+						detail,
 					);
 			}
 		});
@@ -1873,6 +1964,8 @@ export class FactoryState {
 		output: string | null,
 		settledStatus = "idle",
 		capturedAt = new Date().toISOString(),
+		cause: TurnEndCause = "unknown",
+		detail = "",
 	): boolean {
 		return this.transaction(() => {
 			const consultation = this.db
@@ -1899,9 +1992,9 @@ export class FactoryState {
 				return false;
 			this.db
 				.prepare(
-					"UPDATE consultation_turns SET settled_at = ?, settled_status = ? WHERE id = ? AND settled_at IS NULL",
+					"UPDATE consultation_turns SET settled_at = ?, settled_status = ?, cause = ?, detail = ? WHERE id = ? AND settled_at IS NULL",
 				)
-				.run(capturedAt, settledStatus, turn.id);
+				.run(capturedAt, settledStatus, cause, detail, turn.id);
 			if (output !== null) {
 				const bounded = boundedSnapshot(output);
 				const snapshotId = randomUUID();
@@ -1923,11 +2016,18 @@ export class FactoryState {
 					: isStaleAgentOutputWarning(consultation.warning)
 						? null
 						: consultation.warning;
+			// A turn that ended failed or aborted is not an answer: the
+			// Consultation needs recovery, so it leaves the awaiting-response
+			// line for the recovery one. Every other cause - completed,
+			// truncated, unknown - settles the turn and leaves it awaiting the
+			// operator's response.
+			const nextState: ConsultationState =
+				cause === "failed" || cause === "aborted" ? "failed" : "awaiting-response";
 			this.db
 				.prepare(
-					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
+					"UPDATE consultations SET state = ?, latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
 				)
-				.run(sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, warning, id);
+				.run(nextState, sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, warning, id);
 			return true;
 		});
 	}
@@ -2384,6 +2484,8 @@ interface ConsultationTurnRow {
 	sequence_baseline: number | null;
 	settled_at: string | null;
 	settled_status: string | null;
+	cause: string | null;
+	detail: string | null;
 	snapshot_id: string | null;
 }
 
@@ -2406,6 +2508,8 @@ function turnFromRow(row: ConsultationTurnRow): ConsultationTurn {
 		sequenceBaseline: row.sequence_baseline,
 		settledAt: row.settled_at,
 		settledStatus: row.settled_status,
+		cause: turnEndCauseOf(row.cause),
+		detail: row.detail ?? "",
 		snapshotId: row.snapshot_id,
 	};
 }

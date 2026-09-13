@@ -268,8 +268,8 @@ It gates auto-handoff only; a manual handoff may pass it.
 _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
-The condition in which Auto-handoff mode starts no agent by itself, because a turn settled `failed` and no turn has settled `completed` since.
-It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff.
+The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed` and no turn has settled `completed` since it.
+It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow route, and the restart. The route block applies in manual mode too, because auto-close types route there, exactly like the Parallel limit.
 _Avoid_: circuit breaker, cooldown, backoff
 
 **Task type**:
@@ -316,8 +316,8 @@ It is the agent's fact, not herdr's status, and it says nothing about whether th
 _Avoid_: done, exit reason, stop reason, agent status
 
 **Held turn**:
-A settled turn whose Turn end cause is not `completed`.
-No automatic decision runs on it: the ticket rests in `awaiting` until the operator decides.
+A settled turn whose Turn end cause is `failed`, `aborted`, or `truncated`, and that no decision has landed on.
+No automatic decision runs on it: the ticket rests in `awaiting` until the operator decides. A turn that settled `completed` or `unknown` is never held; `unknown` fails open, so it auto-decides as it normally would.
 _Avoid_: stalled turn, blocked turn, failed turn
 
 **Completion trace**:

@@ -38,3 +38,12 @@
   Record tested versions and results. A skipped required check is not a pass.
 - Update current-behavior documentation as migrations land. Keep implementation
   rules in the standard and architecture decisions in ADRs, not in the glossary.
+
+## Testing limits
+
+- Do NOT control the desktop environment to test the app. Never run
+  `hyprctl` (or any other window manager or desktop tool) from a test,
+  a script, or by hand while verifying a change.
+- Test the app at the unit test layer, and only at that layer. Run tests
+  with `npm test` and the shared test harness. Use fake external operations
+  and isolated test state.
