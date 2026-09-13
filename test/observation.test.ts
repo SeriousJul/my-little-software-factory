@@ -1679,9 +1679,9 @@ describe("Consultation observation identity", () => {
 		}
 	});
 
-	// Issue #24: Herdr can omit this optional handle. Keep the expected
-	// behavior pinned until the observation match treats the pane as verified.
-	test.fails("keeps the stored session id when a verified opening Agent has no stable session id", async () => {
+	// Issue #24: Herdr can omit this optional handle. The known pane is
+	// verified at weaker certainty and the stored session id is preserved.
+	test("keeps the stored session id when a verified opening Agent has no stable session id", async () => {
 		const { state, coordinator } = rig({ agents: [agent("pane-1", "idle")] });
 		try {
 			openingConsultation(state, "opening-without-stable-id");

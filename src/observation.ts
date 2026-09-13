@@ -239,7 +239,14 @@ export function matchConsultationAgent(
 			? undefined
 			: agents.find((agent) => agent.paneId === consultation.paneId);
 	if (pane !== undefined) {
-		if (consultation.sessionId === null || pane.stableSessionId === consultation.sessionId)
+		// The known pane matches. A Herdr version that omits the stable session
+		// id cannot contradict the stored one, so the match stands at weaker
+		// certainty: the caller keeps its stored id (issue #24).
+		if (
+			consultation.sessionId === null ||
+			pane.stableSessionId === undefined ||
+			pane.stableSessionId === consultation.sessionId
+		)
 			return pane;
 		return "ambiguous";
 	}
