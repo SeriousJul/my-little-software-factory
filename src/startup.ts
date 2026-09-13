@@ -144,7 +144,8 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 	const statePath = statePathFor(loaded.config, parsed.configPath);
 	const opened = openStartupState(statePath);
 	if (!opened.ok) {
-		return { ok: false, lines: [opened.reason], exitCode: 1 };
+		// The warnings precede the failure they lead to.
+		return { ok: false, lines: [...notes, opened.reason], exitCode: 1 };
 	}
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));

@@ -25,6 +25,18 @@ const USAGE = "usage: factory [--config <path>]";
 
 const tempDirs: string[] = [];
 
+/**
+ * The lines minus the model check warnings.
+ *
+ * The whole-startup cases run the real agent CLI. On a machine without the
+ * agent runtime the model list fails and a `warning:` line appears, so the
+ * assertions hold on both kinds of machines: they pin every line that is
+ * not a model warning, and the warnings when present.
+ */
+function withoutModelWarnings(lines: readonly string[]): string[] {
+	return lines.filter((line) => !line.startsWith("warning: "));
+}
+
 function inTempDir(prefix: string): (name: string) => string {
 	const dir = mkdtempSync(join(tmpdir(), `factory-${prefix}-`));
 	tempDirs.push(dir);
@@ -42,8 +54,9 @@ afterEach(() => {
 });
 
 /** A valid config body, pointed at the state file the case names. */
-function configBody(stateFile?: string, sources?: boolean): string {
+function configBody(stateFile?: string, sources?: boolean, defaultModel?: string): string {
 	return [
+		...(defaultModel === undefined ? [] : [`default-model = "${defaultModel}"`]),
 		'default-agent = "pi"',
 		'default-environment = "live-worktree"',
 		'default-task-type = "implement"',
@@ -182,7 +195,37 @@ describe("the whole startup", () => {
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
-		expect(result.lines[0]).toContain(`cannot open factory state at ${blocked}`);
+		// The failure line is the one non-warning line, and the warnings,
+		// when any, come before it.
+		const rest = withoutModelWarnings(result.lines);
+		expect(rest).toHaveLength(1);
+		expect(rest[0]).toContain(`cannot open factory state at ${blocked}`);
+		expect(result.lines[result.lines.length - 1]).toBe(rest[0]);
+	});
+
+	test("a blocked state path carries the model warnings before the failure line", async () => {
+		const blocked = inTempDir("run-state-warn")("state.sqlite");
+		mkdirSync(blocked, { recursive: true });
+		const configPath = inTempDir("run-state-warn")("config.toml");
+		// A model value makes the boot fetch the agent's Model list.
+		writeFileSync(configPath, configBody(blocked, false, "pi/openai/gpt-test"), "utf8");
+		// An empty PATH makes the agent CLI unavailable on any machine: the
+		// model list fails, the boot warns, and it must still reach the state
+		// open, which fails last.
+		const emptyBin = inTempDir("run-state-warn")("empty-bin");
+		mkdirSync(emptyBin, { recursive: true });
+		vi.stubEnv("PATH", emptyBin);
+		const result = await runStartup(["--config", configPath]);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.exitCode).toBe(1);
+		expect(result.lines.length).toBeGreaterThan(1);
+		for (const line of result.lines.slice(0, -1)) {
+			expect(line).toMatch(/^warning: /);
+		}
+		expect(result.lines[result.lines.length - 1]).toContain(
+			`cannot open factory state at ${blocked}`,
+		);
 	});
 
 	test("a valid config opens the state and carries the renderer inputs", async () => {
@@ -194,7 +237,7 @@ describe("the whole startup", () => {
 		if (!result.ok) return;
 		expect(result.configPath).toBe(configPath);
 		expect(result.statePath).toBe(statePath);
-		expect(result.notes).toEqual([]);
+		expect(withoutModelWarnings(result.notes)).toEqual([]);
 		expect(result.sources.map((source) => source.name)).toEqual(["issues"]);
 		expect(typeof result.runner.run).toBe("function");
 		expect(existsSync(statePath)).toBe(true);
@@ -209,7 +252,9 @@ describe("the whole startup", () => {
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.config).toEqual(DEFAULT_CONFIG);
-		expect(result.notes).toEqual([`no config file at ${missing}, using the shipped defaults`]);
+		expect(withoutModelWarnings(result.notes)).toEqual([
+			`no config file at ${missing}, using the shipped defaults`,
+		]);
 		expect(result.statePath).toBe(join(stateHome, "factory", "state.sqlite"));
 		expect(existsSync(result.statePath)).toBe(true);
 		result.state.close();
