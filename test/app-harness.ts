@@ -34,8 +34,13 @@ const FRAME_POLL_MS = 10;
  * rather than a busy one. A test whose effect never arrives still fails, only
  * at this deadline; the runner's own budget (vitest.config.ts) stays above
  * the sum of a test's waits.
+ *
+ * CI hosts set `CI`, and their shared runners run the suite under a load the
+ * deadline was not tuned for. Doubling it there keeps a slow runner slow
+ * instead of red; a test whose effect never arrives still fails, at 20000 ms
+ * instead of 10000.
  */
-const FRAME_DEADLINE_MS = 10000;
+const FRAME_DEADLINE_MS = process.env.CI ? 20000 : 10000;
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
 /** The state badge the list pane renders for each ticket state. */

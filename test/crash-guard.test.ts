@@ -70,8 +70,15 @@ function runGuard(mode: string, infoPath: string): Promise<GuardRun> {
 		child.stderr.on("data", (chunk) => (stderr += String(chunk)));
 		child.on("error", reject);
 		child.on("close", (code) => {
-			const [pidLine, limitLine] = readFileSync(infoPath, "utf8").trim().split("\n");
-			resolve({ code, stderr, childPid: Number(pidLine), coreLimit: limitLine });
+			try {
+				const [pidLine, limitLine] = readFileSync(infoPath, "utf8").trim().split("\n");
+				resolve({ code, stderr, childPid: Number(pidLine), coreLimit: limitLine });
+			} catch {
+				// The workload died before it recorded its child, and the test's
+				// own timeout already moved on: fail the run with the reason
+				// instead of an uncaught throw from this event handler.
+				reject(new Error(`the workload left no info file: ${stderr.trim()}`));
+			}
 		});
 	});
 }
@@ -119,5 +126,9 @@ describe("crash guard, run containment", () => {
 
 		expect(run.code).toBe(0);
 		expect(isAlive(run.childPid)).toBe(false);
-	}, 30_000);
+		// The guard's reap loop spawns a process per poll, and the workload and
+		// its stubborn child each start a node. On the CI host, where the suite
+		// saturates the machine, that chain has outlived a 30 second budget.
+		// 60 seconds holds it with room.
+	}, 60_000);
 });

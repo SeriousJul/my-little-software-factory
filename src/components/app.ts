@@ -1818,13 +1818,18 @@ export function App({
 		// would spawn git calls for every repository per tick.
 	}, [commandRunner, homeDir, repositoryCatalogKey]);
 	// The selected Agent output refreshes at one-second cadence. Lifecycle
-	// polling remains owned by the shared observation coordinator.
+	// polling remains owned by the shared observation coordinator. A closed
+	// Consultation is a record the operator reads: its detail pane shows the
+	// captured history, and the pane's scroll belongs to the operator.
+	// Refreshing it would re-engage the follow-to-bottom the close just
+	// released, and push the record's heading rows off screen.
 	useEffect(() => {
 		if (
 			state === undefined ||
 			section !== "consultations" ||
 			selectedConsultation?.paneId === null ||
-			selectedConsultation === undefined
+			selectedConsultation === undefined ||
+			selectedConsultation.state === "closed"
 		) {
 			setLiveOutput(null);
 			return;

@@ -13,7 +13,11 @@
  * of red. A test whose real effect never arrives still fails: its own frame
  * wait throws at the harness's deadline first.
  */
+import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
+
+/** GitHub Actions and other CI hosts set `CI` for every run. */
+const ON_CI = process.env.CI !== undefined;
 
 export default defineConfig({
 	test: {
@@ -21,8 +25,10 @@ export default defineConfig({
 		 * The heaviest test in the suite measured 4804 ms in a parallel run
 		 * at the fork cap below. Six times that is the budget, so a busy
 		 * machine has room and a broken one still fails inside half a minute.
+		 * CI hosts run under the same doubled load the harness deadline
+		 * doubles for (see test/app-harness.ts), so the budget doubles with it.
 		 */
-		testTimeout: 30000,
+		testTimeout: ON_CI ? 60000 : 30000,
 		/**
 		 * The frame tests each drive their own rendered terminal, and a
 		 * machine that forks one renderer per core starves its own frames: at
@@ -30,8 +36,10 @@ export default defineConfig({
 		 * harness's 10000 ms deadline on a machine that passes the same test
 		 * alone. Eight workers hold the suite's load below the worst case the
 		 * budgets above were measured at, on this machine and on the smaller
-		 * ones the cap does not reach.
+		 * ones the cap does not reach. A CI host can fork fewer than its
+		 * nominal cores can sustain, so the cap never exceeds the machine's
+		 * own parallelism.
 		 */
-		maxWorkers: 8,
+		maxWorkers: Math.max(1, Math.min(8, availableParallelism())),
 	},
 });
