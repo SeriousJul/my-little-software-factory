@@ -63,9 +63,9 @@ async function expectReservedRows(setup: Setup, width: number, height: number): 
 
 /** Select the awaiting Ticket and open its decision. */
 async function openDecision(setup: Setup): Promise<void> {
-	await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
-	await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-	await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
+	await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
+	await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 6);
+	await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 7);
 	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 }
 
@@ -106,7 +106,7 @@ describe("the reserved bottom rows at every size", () => {
 				// and keeps the Help control on the last row.
 				setup.resize(120, 4);
 				frame = await expectReservedRows(setup, 120, 4);
-				expect(frame).toContain("Terminal too small: minimum 40 columns by 7 rows");
+				expect(frame).toContain("Terminal too small: minimum 40 columns by 9 rows");
 				expect(actionBarRowOf(frame).trim()).toBe("? Help");
 			},
 			WIDTH,
