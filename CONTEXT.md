@@ -22,6 +22,14 @@ _Avoid_: dashboard, home, screen, primary view
 A collapsible part of the Main view that holds a list pane and a detail pane. One section is expanded, and the other is collapsed to its header row.
 _Avoid_: tab, pane, view, accordion
 
+**Section header**:
+The row that names one section of the Main view. The expanded section's header stands directly above its panes; a collapsed section is nothing but its header row. The Consultation section's header also carries that section's attention facts.
+_Avoid_: title bar, tab label, accordion toggle
+
+**Response editor**:
+The Interaction mode that composes the operator's answer to an awaiting Consultation. Its draft is a Consultation fact, not an Agent turn, until the control plane sends it.
+_Avoid_: reply box, chat input
+
 **Action bar**:
 The persistent guide to controls that are relevant to the operator's current interaction mode.
 The anchor hint holds the row's end cells: the surface's own Close on a utility overlay, and Help wherever a bar can open the Key guide. A frame too narrow for the anchor states one of its whole keys, and never part of one.

@@ -51,9 +51,9 @@ async function settledListeners(setup: AppSetup): Promise<number> {
 /** Move to the awaiting sample Ticket (#4) and open its decision modal. */
 async function openDecision(setup: AppSetup): Promise<void> {
 	// The list holds the four sample Tickets; each press moves one row.
-	await press(setup, "j", "the handed-off Ticket", (f) => markerRowOf(f) === 3);
-	await press(setup, "j", "the running Ticket", (f) => markerRowOf(f) === 4);
-	await press(setup, "j", "the awaiting Ticket", (f) => markerRowOf(f) === 5);
+	await press(setup, "j", "the handed-off Ticket", (f) => markerRowOf(f) === 5);
+	await press(setup, "j", "the running Ticket", (f) => markerRowOf(f) === 6);
+	await press(setup, "j", "the awaiting Ticket", (f) => markerRowOf(f) === 7);
 	await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 }
 

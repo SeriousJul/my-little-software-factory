@@ -1,5 +1,7 @@
 /** The live Agent view and Captured history for one Consultation. */
+import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
+import { useRef } from "react";
 import type {
 	Consultation,
 	ConsultationResource,
@@ -8,6 +10,7 @@ import type {
 } from "../state.ts";
 import type { AnsiLine } from "./ansi-screen.ts";
 import { windowOf } from "./geometry.ts";
+import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -97,6 +100,10 @@ interface ConsultationDetailProps {
 	scroll: number;
 	focused: boolean;
 	compactHeading?: string;
+	/** False while a surface above the panes owns the input. */
+	active?: boolean;
+	onFocus: () => void;
+	onWheel: (delta: number) => void;
 	/** Sanitized cell output used only in Agent interaction mode. */
 	ansiLines?: readonly AnsiLine[];
 }
@@ -108,7 +115,16 @@ export function ConsultationDetail({
 	focused,
 	compactHeading,
 	ansiLines,
+	active = true,
+	onFocus,
+	onWheel,
 }: ConsultationDetailProps) {
+	const rootRef = useRef<BoxRenderable | null>(null);
+	const handleMouse = paneMouse({
+		active: () => active,
+		onFocus,
+		onWheel: (direction) => onWheel(direction === "up" ? -1 : 1),
+	});
 	const content =
 		ansiLines === undefined
 			? windowOf(lines, scroll, visibleRows).map((line, index) =>
@@ -135,6 +151,8 @@ export function ConsultationDetail({
 	return createElement(
 		"box",
 		{
+			ref: rootRef,
+			onMouse: handleMouse,
 			title: compactHeading ?? (focused ? "❯ Agent view" : "  Agent view"),
 			border: true,
 			borderColor: focused ? COLORS.borderFocused : COLORS.border,

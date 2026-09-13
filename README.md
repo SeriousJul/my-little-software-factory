@@ -84,6 +84,12 @@ as `npm run mutate -- --dryRunOnly`.
 
 ## Controls
 
+The Main view holds two accordion sections, the Ticket section and the
+Consultation section, and one control catalogue, one Action bar, and one
+Message line answer for both. The expanded section owns the pane rows, and the
+mode the bar and the guide state derives from that section and its focused
+pane.
+
 The control plane keeps a contextual Action bar in the last row of the
 terminal. It shows the controls the current interaction mode can run, dims
 one it will not run in the present state, and names the reason on the Message
@@ -92,74 +98,79 @@ line when the operator presses it anyway.
 The in-app Key guide lists the controls of the modes the app dispatches from
 its catalogue. Press `?` or `F1` to open it from anywhere, including the
 panes and the modals. It carries the Ticket list, the Ticket detail, the
-override panel in both of its row kinds, the decision modal, the missing
-modal, the guide and the Message view, the controls that are only reachable
-from another mode, Quit, and the `Ctrl+C` emergency exit, each with what it
-does and, where the app will not run it, why. Press `Esc`, `F1`, or `?` to
-close it.
+Consultation list, the Consultation detail, the Agent terminal, the response
+editor, the override panel in both of its row kinds, the decision modal, the
+missing modal, the guide and the Message view, the controls that are only
+reachable from another mode, Quit, and the `Ctrl+C` emergency exit, each with
+what it does and, where the app will not run it, why. Press `Esc`, `F1`, or
+`?` to close it.
 
 This file does not repeat that list. A table of keys here went stale twice:
 the guide and the Action bar are generated from one control catalogue
 (`src/components/controls.ts`), so what the app shows is what the app runs.
 
-The controls the Consultation surfaces use are listed below. They dispatch
-from the catalogue like the rest of the plane, so the Key guide and the Action
-bar state them as well; this file is where their behavior is stated.
-
 ### Consultation controls
 
-The Consultation launcher and the response editor are shared-control forms:
-their fields, choices, and actions are the modules in
-[src/components/shared](src/components/shared), so the keys they answer with
-are the keys the override panel answers with. The Consultation view's own list
-and detail, the Agent interaction mode, and the Consultation confirmation
-panel dispatch from the catalogue as well, and take their Action bar, Key
-guide, and Message view from the shared modules.
+The Consultation launcher, the response editor, and the Consultation
+confirmation panel are shared-control forms: their fields, choices, and
+actions are the modules in [src/components/shared](src/components/shared), so
+the keys they answer with are the keys the override panel answers with. The
+Consultation section's own list and detail, the Agent terminal, and the Agent
+interaction mode dispatch from the same catalogue as the Ticket section, so
+every Consultation control appears in the Action bar and the Key guide with
+its availability and reason.
 
-- The Consultation view keeps an independent list and Agent view. `v` opens
-	it on the Consultation that needs the operator, if one does: an awaiting
-	response wins, and among the recovery items the oldest wins. In the
-	launcher, `Tab` and `Shift+Tab` move between the two choices, the Draft
-	field, and the two actions; `←→` choose a type or Repository and move the
-	caret in the field; `Enter` adds a line inside the field and runs the action
-	it stands on; `F1` opens the Key guide, `F2` the Message view, and `F3`
-	copies the selected text. `Esc` closes the launcher and keeps the unfinished
-	form - the same text, the same Consultation type, the same Repository - for
-	the rest of this run; `Discard draft text` is the action that deletes it.
-	A Consultation starts on the agent, environment, model, thinking level, and
-	context window its type names, each one passed through the agent's own
-	template, so the type must name an agent that maps every setting it
-	sets.
-- `Enter` on an awaiting response opens the response editor. The editor
-	stores its draft in SQLite, `Tab` reaches `Send response` and `Enter` runs
-	it, `Enter` inside the field adds a line, `Esc` closes it with the draft
-	saved, and `Discard draft` deletes the saved draft.
+- `v` expands the Consultation section on the Consultation that needs the
+	operator, if one does: an awaiting response wins, and among the recovery
+	items the oldest wins. Once the section is expanded, `c` launches a
+	Consultation, `f` cycles the history filter through open, closed, and all,
+	`x` closes the selected Consultation, and `d` deletes a closed one. `t`
+	returns to the Ticket section from either Consultation pane, and `h` or
+	`Left` moves between the section's own list and detail panes when the list
+	is visible. Below 80 columns the Consultation list is hidden, the detail
+	keeps focus, and `h`/`Left` is unavailable.
+- In the launcher, `Tab` and `Shift+Tab` move between the two choices, the
+	Draft field, and the two actions; `←→` choose a type or Repository and
+	move the caret in the field; `Enter` adds a line inside the field and runs
+	the action it stands on; `F3` copies the selected text; `F1` opens the Key
+	guide, `F2` the Message view. `Esc` closes the launcher and keeps the
+	unfinished form - the same text, the same Consultation type, the same
+	Repository - for the rest of this run; `Discard draft text` is the action
+	that deletes it. A Consultation starts on the agent, environment, model,
+	thinking level, and context window its type names, each one passed through
+	the agent's own template, so the type must name an agent that maps every
+	setting it sets.
+- `Enter` answers the selected Consultation: it opens the response editor on
+	an awaiting one and Agent interaction on a working or blocked one. The
+	editor stores its draft in SQLite, `Tab` reaches `Send response` and
+	`Enter` runs it, `Enter` inside the field adds a line, `Esc` closes it with
+	the draft saved, and `Discard draft` deletes the saved draft.
+- `r` recovers a Consultation whose opening was interrupted, and refreshes the
+	Consultation projection and the Ticket sources otherwise. It remains
+	Refresh even when an awaiting Consultation can also be answered with
+	Enter.
 - `End` follows the latest Agent output after scrolling. Closed history shows
 	cleanup results and retained resources, including resources left by a
 	Force-close.
 - A blocked Agent uses Agent interaction mode instead of the response editor.
-	The default exit key is `F12`; configure `interaction-exit-key` with a
-	function key or `Ctrl` plus one letter.
-Every surface the control plane owns dispatches from the catalogue, so the Key
-guide and the Action bar state its controls: the Ticket list, the Ticket
-detail, the override panel in each of its row kinds, the Consultation launcher
-and the response editor, the Consultation view's list and detail, the Agent
-interaction mode, and the Consultation confirmation panel, the decision modal,
-the missing modal, and the two utility overlays.
-Where a focused field owns a key, the guide names that key under Field editing
-and the Action bar stays off it, so a hint never claims a key the field already
-took. The Ticket list and detail
-move with the row, page and jump keys, focus the detail with `l` or `Right` and
-the list with `h` or `Left`, hand an open ticket off with `Enter`, open the
-decision modal on an awaiting one, the missing modal on a ticket whose agent
-is gone, and the override panel with `e`. `a` toggles auto-handoff, `r`
-refreshes the sources, `v` and `t` switch views, and `q` quits.
+	Every key reaches the Agent except the exit key, whose default is `F12` and
+	which the Action bar states while the mode holds the keys; configure
+	`interaction-exit-key` with a function key or `Ctrl` plus one letter.
+
+The override panel and the leftover clear act only in the Ticket section, so
+an unexpected key cannot fire while the operator works Consultations. The
+Ticket list and detail move with the row, page and jump keys, focus the detail
+with `l` or `Right` and the list with `h` or `Left`, hand an open ticket off
+with `Enter`, open the decision modal on an awaiting one, the missing modal on
+a ticket whose agent is gone, and the override panel with `e`. `a` toggles
+auto-handoff, `r` refreshes, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
-the Action bar reserve the two bottom rows at every terminal size: below the
-smallest useful frame the panes give way to a size message and a compact Help
-control, and a surface that cannot draw its own rows says so instead of
+the Action bar reserve the two bottom rows at every terminal size, and the two
+section headers reserve the two rows above the panes: below the smallest useful
+frame (40 columns by 9 rows) the panes give way to a size message and a compact
+Help control, and a surface that cannot draw its own rows says so instead of
 painting them over its border. One hint holds the row's end cells: Help on a
 bar that can open the Key guide, and the overlay's own Close on a utility
 overlay. A frame too narrow for that hint states one of its whole keys, so the
@@ -391,6 +402,21 @@ builds an agent in a workspace it is taking away.
 
 ## Layout
 
+The Main view is one surface with two accordion sections: the Ticket section
+and the Consultation section. One section is expanded and holds two panes side
+by side; the other is collapsed to its header row. `t` and `v`, or a click on
+a header, expand a section, and the keyboard focus lands on its list pane. When
+the narrow Consultation layout removes the list pane, focus lands on the visible
+detail pane. A collapsed section keeps its list selection and its detail scroll,
+so a re-expand shows the same place. The rows run: the mode line (while the control
+plane has state to observe), the two section headers, the expanded section's
+panes, the Message line, and the Action bar. The Consultation header carries
+that section's attention facts, its awaiting-response and recovery counts, the
+bell marker while the bell rings, and "new output" while the section is
+expanded, so a Consultation that needs the operator is visible in either state
+and no free-standing attention line exists. Below the smallest useful frame the
+compact frame drops the headers with the panes.
+
 Two panes side by side, flex-sized to the terminal.
 The list pane on the left shows every ticket with its state badge, task
 type badge, title, and repository. The task type badge is the type the
@@ -434,7 +460,8 @@ does not reflow as the bar appears. Click or drag the scrollbar, or use the
 wheel or trackpad over any part of the detail. Fast vertical wheel events
 accelerate to the configured limit. Horizontal and Shift-wheel input is
 ignored. A click or wheel action focuses its pane. Clicking a visible Ticket
-selects it, and a list wheel event selects one adjacent Ticket.
+selects it, a list wheel event selects one adjacent Ticket, and a click on a
+collapsed section header expands that section.
 
 When the terminal is too narrow for a field, the field drops out of the row
 instead of wrapping it.
@@ -461,7 +488,8 @@ Above the panes sits a mode line. It shows the auto-handoff state and the
 live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
 when no limit is set. The count is the in-flight tickets whose agent was
 alive in the latest herdr poll. The `a` key toggles the mode for the
-session; the config's `auto-handoff` key sets the startup value only.
+session from the Ticket section; the config's `auto-handoff` key sets the
+startup value only.
 
 A blocked agent replaces the state badge in the list row with a `blocked`
 badge: the agent shows an approval or question UI and waits for a human.
@@ -754,7 +782,7 @@ state-file = "factory.sqlite"
 
 # --- Auto-handoff and limits -----------------------------------------
 
-# Start in auto-handoff mode. The a key toggles it per session.
+# Start in auto-handoff mode. The a key toggles it from the Ticket section.
 auto-handoff = false
 
 # The in-flight agents the control plane keeps. 0 means unlimited.
@@ -998,7 +1026,7 @@ source-kind = "github-issue"
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
 | `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
-| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it per session. |
+| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it from the Ticket section. |
 | `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |

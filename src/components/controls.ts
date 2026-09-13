@@ -23,10 +23,10 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
-	| "consultation-interaction"
 	| "override-list"
 	| "override-model"
 	| "override-text"
+	/** The controls one shared form runs, on the slots it holds. */
 	| "form-field"
 	| "form-selector"
 	| "form-action"
@@ -34,18 +34,26 @@ export type InteractionMode =
 	| "decision-modal"
 	| "missing-modal"
 	| "key-guide"
-	| "message-view";
+	| "message-view"
+	| "consultation-interaction";
 
+/**
+ * Which screen area owns the control's meaning.
+ *
+ * `form` is the controls one shared form runs, on the slots it holds.
+ */
 type ControlScope =
 	| "global"
 	| "control-plane"
-	/** The controls one shared form runs, on the slots it holds. */
 	| "form"
 	| "ticket-list"
 	| "ticket-detail"
+	| "consultation-list"
+	| "consultation-detail"
 	| "override"
 	| "modal"
-	| "utility";
+	| "utility"
+	| "consultation-interaction";
 type ControlKey =
 	| "up"
 	| "down"
@@ -62,20 +70,42 @@ type ControlKey =
 	| "l"
 	| "q"
 	| "e"
-	| "t"
-	| "f"
-	| "x"
-	| "d"
 	| "r"
 	| "a"
 	| "m"
 	| "c"
+	| "t"
+	| "f"
+	| "x"
+	| "d"
 	| "v"
 	| "w"
 	| "delete"
 	| "f1"
 	| "f2"
 	| "f3"
+	| "f4"
+	| "f5"
+	| "f6"
+	| "f7"
+	| "f8"
+	| "f9"
+	| "f10"
+	| "f11"
+	| "f12"
+	| "f13"
+	| "f14"
+	| "f15"
+	| "f16"
+	| "f17"
+	| "f18"
+	| "f19"
+	| "f20"
+	| "f21"
+	| "f22"
+	| "f23"
+	| "f24"
+	| `ctrl+${string}`
 	| "?"
 	| "return"
 	| "escape"
@@ -91,14 +121,24 @@ export interface ControlContext {
 	mode: InteractionMode;
 	/** The Ticket the base panes point at, if the list holds one. */
 	selectedTicket?: Ticket;
+	/** The Consultation the base panes point at, if the list holds one. */
+	selectedConsultation?: Consultation;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
 	refreshingSourceCount: number;
+	/** Whether the Consultation section can re-read its durable projection. */
+	consultationRefreshAvailable?: boolean;
+	/** Whether the Consultation list pane is rendered at the current width. */
+	consultationListVisible?: boolean;
+	/** The observed status of the selected Consultation Agent. */
+	consultationAgentStatus?: string | null;
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
 	consultationTypesConfigured: boolean;
+	/** The configured key that leaves Agent interaction mode. */
+	interactionExitKey?: string;
 	/**
 	 * The decision modal's row under the cursor carries settings to edit.
 	 *
@@ -124,22 +164,19 @@ export interface ControlContext {
 	formCycleCount?: number;
 	/** Why the form's Confirm action cannot run, in the surface's own words. */
 	formRefusal?: string;
-	/** The Consultation selected by the consultations section. */
-	selectedConsultation?: Consultation;
-	/** The last observed Agent status for the selected Consultation. */
-	consultationAgentStatus?: string | null;
-	consultationCanMove?: boolean;
-	consultationDetailCanScroll?: boolean;
-	consultationHistory?: "open" | "closed" | "all";
-	/** The configured key which returns from Agent interaction mode. */
-	interactionExitKey?: string;
 }
 
 export interface ControlDefinition {
 	id: string;
 	label: string;
-	/** The keys the control accepts in each interaction mode. */
-	keys: (mode: InteractionMode) => readonly ControlKey[];
+	/**
+	 * The keys the control accepts in each interaction mode.
+	 *
+	 * One control answers to a key the operator configures: the Agent
+	 * terminal's exit key is read from the context, so the catalogue, the bar,
+	 * and the dispatch still share one source for what a key means.
+	 */
+	keys: (mode: InteractionMode, context: ControlContext) => readonly ControlKey[];
 	/** Displayed in familiar arrow order, then Vim aliases. */
 	keyLabel: string;
 	scope: ControlScope;
@@ -217,7 +254,7 @@ const CONSULTATION_TYPES_MISSING =
 const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
 /** What the settled meaning of Enter does, for the guide's current section. */
 const DECIDE_NOTE = "opens the decision on a settled Ticket";
-/** What the Consultations view does when a Consultation needs the operator. */
+/** What the Consultation section does when a Consultation needs the operator. */
 const CONSULTATIONS_NOTE = "opens on the Consultation that needs the operator, if one does";
 
 /** The panel's own modes: while one is open, the list's selection is inert. */
@@ -273,67 +310,101 @@ const liveViewEligibility = (context: ControlContext): ControlAvailability => {
 	if (ticket.state === "handed-off" || ticket.state === "running") return available();
 	return unavailable("only an in-flight Ticket has a Live view");
 };
+/**
+ * The configured interaction exit key, as the catalogue names a key.
+ *
+ * The Config accepts a function key or Ctrl plus a letter. A key outside that
+ * set is a broken Config, and `F12` is what the app falls back to.
+ */
+function exitControlKey(exitKey: string | undefined): ControlKey {
+	const normalized = (exitKey ?? "f12")
+		.trim()
+		.toLowerCase()
+		.replace(/^ctrl-/, "ctrl+");
+	const functionKey = /^f(?:[1-9]|1[0-9]|2[0-4])$/.exec(normalized);
+	if (functionKey !== null) return normalized as ControlKey;
+	if (/^ctrl\+[a-z]$/.test(normalized)) return normalized as ControlKey;
+	return "f12";
+}
+
+/** The interaction exit key, as a hint states it. */
+function interactionExitLabel(exitKey: string | undefined): string {
+	return keyName(exitControlKey(exitKey));
+}
+
 /** What the in-flight meaning of Enter does, for the guide's current section. */
 const LIVE_VIEW_NOTE = "opens the Live view on an in-flight Ticket";
+const consultationMode = (mode: InteractionMode): boolean =>
+	mode === "consultation-list" || mode === "consultation-detail";
+const ticketBaseMode = (mode: InteractionMode): boolean =>
+	mode === "ticket-list" || mode === "ticket-detail";
+/**
+ * Why a Ticket-section control answers nothing in the Consultation section.
+ *
+ * The control stays a candidate in both sections so the key the operator
+ * already knows states a readable refusal instead of doing nothing at all.
+ */
+const ticketOnly = (context: ControlContext): ControlAvailability =>
+	ticketBaseMode(context.mode)
+		? available()
+		: unavailable("this control is available only in the Ticket section");
+const consultationListNavigation = (context: ControlContext): ControlAvailability =>
+	context.consultationListVisible === false
+		? unavailable("the Consultation list is hidden below 80 columns")
+		: available();
 const listMove = (context: ControlContext): ControlAvailability =>
-	context.mode === "consultation-list"
-		? consultationListMove(context)
-		: context.mode === "override-list" ||
-				context.mode === "override-model" ||
-				context.mode === "override-text" ||
-				context.listCanMove
-			? available()
-			: unavailable("the Ticket list has nowhere to move");
+	context.mode === "override-list" ||
+	context.mode === "override-model" ||
+	context.mode === "override-text" ||
+	context.listCanMove
+		? available()
+		: unavailable(
+				consultationMode(context.mode)
+					? "the Consultation list has nowhere to move"
+					: "the Ticket list has nowhere to move",
+			);
 const detailScroll = (context: ControlContext): ControlAvailability =>
-	context.detailCanScroll ? available() : unavailable("the Ticket detail has nowhere to scroll");
-const consultationListMove = (context: ControlContext): ControlAvailability =>
-	context.consultationCanMove === true
+	context.detailCanScroll
 		? available()
-		: unavailable("the Consultation list has nowhere to move");
-const consultationDetailScroll = (context: ControlContext): ControlAvailability =>
-	context.consultationDetailCanScroll === true
-		? available()
-		: unavailable("the Agent view has nowhere to scroll");
-const consultationModes = ["consultation-list", "consultation-detail"] as const;
-const consultationResponse = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
-	if (consultation === undefined) return unavailable("no Consultation is selected");
-	if (consultation.state !== "awaiting-response")
-		return unavailable("only an awaiting-response Consultation accepts a response");
-	if (context.consultationAgentStatus === "blocked")
-		return unavailable("the Agent is blocked; Enter opens interaction mode");
-	return available();
-};
-const consultationInteraction = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
-	if (consultation === undefined) return unavailable("no Consultation is selected");
-	if (consultation.paneId === null) return unavailable("the Consultation has no Agent pane");
-	if (
-		consultation.state === "working" ||
-		(consultation.state === "awaiting-response" && context.consultationAgentStatus === "blocked")
-	)
-		return available();
-	return unavailable("the selected Consultation has no interactive Agent");
-};
-const consultationClose = (context: ControlContext): ControlAvailability => {
-	const consultation = context.selectedConsultation;
-	if (consultation === undefined) return unavailable("no Consultation is selected");
-	return ["opening", "working", "awaiting-response", "missing", "failed", "closing"].includes(
-		consultation.state,
-	)
-		? available()
-		: unavailable("the selected Consultation is already closed");
-};
-const consultationDelete = (context: ControlContext): ControlAvailability =>
-	context.selectedConsultation?.state === "closed"
-		? available()
-		: unavailable("only a closed Consultation can be deleted");
+		: unavailable(
+				context.mode === "consultation-detail"
+					? "the Consultation detail has nowhere to scroll"
+					: "the Ticket detail has nowhere to scroll",
+			);
 const refresh = (context: ControlContext): ControlAvailability => {
+	if (consultationMode(context.mode))
+		return context.consultationRefreshAvailable === true
+			? available()
+			: unavailable("Consultations require SQLite state");
 	if (context.sourceCount === 0) return unavailable("no Ticket sources exist");
 	if (context.refreshingSourceCount >= context.sourceCount)
 		return unavailable("every Ticket source is already refreshing");
 	return available();
 };
+const consultationResponse = (context: ControlContext): ControlAvailability =>
+	context.selectedConsultation?.state === "awaiting-response" &&
+	context.consultationAgentStatus !== "blocked"
+		? available()
+		: unavailable("only an awaiting Consultation can receive a response");
+const consultationInteraction = (context: ControlContext): ControlAvailability =>
+	(context.selectedConsultation?.state === "working" ||
+		(context.selectedConsultation?.state === "awaiting-response" &&
+			context.consultationAgentStatus === "blocked")) &&
+	context.selectedConsultation?.paneId !== null &&
+	context.selectedConsultation?.paneId !== undefined
+		? available()
+		: unavailable("only a working or blocked Consultation with an Agent can be interacted with");
+const consultationClose = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	return consultation.state === "closed"
+		? unavailable("the selected Consultation is already closed")
+		: available();
+};
+const consultationDelete = (context: ControlContext): ControlAvailability =>
+	context.selectedConsultation?.state === "closed"
+		? available()
+		: unavailable("only a closed Consultation can be deleted");
 const activeQuit = (context: ControlContext): ControlAvailability =>
 	context.handoffActive ? unavailable("normal Quit is unavailable during a Handoff") : available();
 const message = (context: ControlContext): ControlAvailability =>
@@ -345,12 +416,14 @@ const message = (context: ControlContext): ControlAvailability =>
 const leftoverClear = (context: ControlContext): ControlAvailability => {
 	const ticket = context.selectedTicket;
 	if (ticket === undefined) return unavailable("no Ticket is selected");
-	if (ticket.leftover === null || ticket.leftover === undefined)
+	if (ticket.leftover === null)
 		return unavailable(`no leftover environment is recorded for ticket ${ticket.identity}`);
 	return available();
 };
 
-const baseModes = ["ticket-list", "ticket-detail"] as const;
+const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
+const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
+const baseModes = [...ticketBaseModes, ...consultationBaseModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
 /**
  * The modes one shared form surface runs, one per slot kind.
@@ -363,10 +436,8 @@ const formModes = ["form-field", "form-selector", "form-action"] as const;
 /** Every mode in which a field holds the printable keys and edits itself. */
 const fieldModes: readonly InteractionMode[] = ["form-field", "override-text", "override-model"];
 const modalModes = ["decision-modal", "missing-modal"] as const;
-const allModes: readonly InteractionMode[] = [
+const planeModes: readonly InteractionMode[] = [
 	...baseModes,
-	...consultationModes,
-	"consultation-interaction",
 	...overrideModes,
 	...formModes,
 	"action-panel",
@@ -374,6 +445,10 @@ const allModes: readonly InteractionMode[] = [
 	"key-guide",
 	"message-view",
 ];
+const allModes: readonly InteractionMode[] = [...planeModes, "consultation-interaction"];
+// The Agent terminal owns its keys: Help, Message, and every control-plane
+// action stay out of its mode, and only the controls named below, plus the
+// emergency exit, reach it.
 
 /**
  * One field editing row: a key the focused field owns outright.
@@ -424,7 +499,6 @@ const FIELD_EDITING_ROWS: readonly ControlDefinition[] = [
 	editingRow("edit-paste", "Paste text", "Terminal paste", fieldModes),
 	editingRow("edit-newline", "Insert a new line", "Enter", ["form-field"]),
 ];
-
 /**
  * The exhaustive fixed control definitions.
  *
@@ -439,6 +513,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "move-list",
 		label: "Move",
+		// The base panes share one list movement: a row list the operator can
+		// step through, with no detail pane to open on the way.
 		keys: (mode) =>
 			mode === "ticket-list"
 				? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
@@ -473,42 +549,33 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-detail",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-detail"],
+		modes: ["ticket-detail", "consultation-detail"],
 		availability: detailScroll,
-	},
-	{
-		id: "scroll-consultation",
-		label: "Scroll",
-		keys: () => ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"],
-		keyLabel: "↑↓/jk",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 80,
-		modes: ["consultation-detail"],
-		availability: consultationDetailScroll,
 	},
 	{
 		id: "tickets",
 		label: "Tickets",
-		keys: (mode) =>
-			mode === "consultation-list" || mode === "consultation-detail" ? ["t"] : ["left", "h"],
+		keys: () => ["left", "h"],
 		keyLabel: "←/h",
 		scope: "ticket-detail",
 		actionBar: true,
 		priority: 75,
-		modes: ["ticket-detail", "consultation-list", "consultation-detail"],
+		modes: ["ticket-detail"],
 		availability: available,
 	},
 	{
-		id: "consultation-focus-list",
+		// The same pane navigation, named for the section that owns it. Left
+		// returns to the Consultation list, never to the Ticket list.
+		id: "consultation-list",
 		label: "List",
 		keys: () => ["left", "h"],
 		keyLabel: "←/h",
-		scope: "control-plane",
+		scope: "consultation-detail",
 		actionBar: true,
 		priority: 75,
 		modes: ["consultation-detail"],
-		availability: available,
+		availability: consultationListNavigation,
+		showInBar: (context) => context.consultationListVisible !== false,
 	},
 	{
 		id: "change-override",
@@ -527,8 +594,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		id: "edit-override",
 		label: "Edit",
 		// Display-only: a free-text row is a standard input that owns its
-		// typing, and the Model row types into its visible search. Neither key
-		// reaches the panel, so the hint claims none.
+		// typing, and the Model list row types into its type-ahead. Neither
+		// key reaches the panel, so the hint claims none.
 		keys: () => [],
 		keyLabel: "Type",
 		scope: "override",
@@ -566,6 +633,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: ["override-list"],
 		availability: available,
 	},
+
 	{
 		id: "handoff",
 		label: "Hand off",
@@ -574,7 +642,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 70,
-		modes: [...baseModes, ...overrideModes],
+		modes: [...ticketBaseModes, ...overrideModes],
 		availability: handoffEligibility(),
 	},
 	{
@@ -585,7 +653,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 70,
-		modes: [...baseModes],
+		modes: [...ticketBaseModes],
 		availability: liveViewEligibility,
 		// Enter means three things in the base modes, and the Key guide names
 		// all of them whatever the selected Ticket runs, so the guide has to
@@ -600,7 +668,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 70,
-		modes: [...baseModes],
+		modes: [...ticketBaseModes],
 		availability: completionEligibility,
 		// Enter means three things in the base modes, and the Key guide names
 		// all of them whatever the selected Ticket runs, so the guide has to
@@ -610,33 +678,103 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultations",
 		label: "Consultations",
+		// `v` expands the Consultation section from the Ticket section. It is
+		// absent from Consultation modes, so repeating it is a no-op. On entry
+		// from Tickets it may select the Consultation that needs the operator.
 		keys: () => ["v"],
 		keyLabel: "v",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
-		// `v` re-opens the view on the Consultation that needs the operator
-		// from inside the view as well: it must not hide behind the selection.
-		modes: [...baseModes, ...consultationModes],
+		modes: [...ticketBaseModes],
 		availability: available,
 		guideNote: CONSULTATIONS_NOTE,
 	},
 	{
+		id: "open-tickets",
+		label: "Tickets",
+		// `t` returns to the Ticket section from either Consultation pane. Agent
+		// interaction uses Enter in the detail, so one key has one meaning.
+		keys: () => ["t"],
+		keyLabel: "t",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 45,
+		modes: ["consultation-list", "consultation-detail"],
+		availability: available,
+	},
+	{
 		id: "launch",
-		label: "Launch consultation",
+		label: "Launch",
+		// A Consultation can be opened from either section: from the Ticket
+		// section it carries the selected Ticket's Repository into the launcher.
 		keys: () => ["c"],
 		keyLabel: "c",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 40,
-		modes: [...baseModes, ...consultationModes],
+		modes: [...baseModes],
 		availability: (context) =>
 			context.consultationTypesConfigured ? available() : unavailable(CONSULTATION_TYPES_MISSING),
-		// The Consultation section's bar already says where the operator is.
-		barLabel: (context) =>
-			context.mode === "consultation-list" || context.mode === "consultation-detail"
-				? "launch"
-				: undefined,
+	},
+	{
+		id: "history",
+		label: "History",
+		// The filter answers even when the current filter holds nothing: an
+		// empty open list is exactly when the operator reaches for the history.
+		keys: () => ["f"],
+		keyLabel: "f",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 55,
+		modes: [...consultationBaseModes],
+		availability: available,
+	},
+	{
+		id: "consultation-close",
+		label: "Close",
+		keys: () => ["x"],
+		keyLabel: "x",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 50,
+		modes: [...consultationBaseModes],
+		availability: consultationClose,
+	},
+	{
+		id: "consultation-delete",
+		label: "Delete",
+		keys: () => ["d"],
+		keyLabel: "d",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 35,
+		modes: [...consultationBaseModes],
+		availability: consultationDelete,
+	},
+	{
+		id: "consultation-respond",
+		label: "Respond",
+		// Enter answers an awaiting Consultation from either pane. `r` remains
+		// the shared Refresh key, including while a response is available.
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: [...consultationBaseModes],
+		availability: consultationResponse,
+	},
+	{
+		id: "consultation-interact",
+		label: "Interact",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 69,
+		modes: [...consultationBaseModes],
+		availability: consultationInteraction,
 	},
 	{
 		id: "override",
@@ -647,9 +785,28 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 65,
 		modes: [...baseModes],
-		availability: handoffEligibility(
-			"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
-		),
+		availability: (context) =>
+			ticketBaseMode(context.mode)
+				? handoffEligibility(
+						"awaiting ticket: press Enter, then e on a Handoff row to edit its settings",
+					)(context)
+				: ticketOnly(context),
+	},
+	{
+		id: "recover",
+		label: "Recover",
+		// `r` names the recovery an interrupted opening needs, and stays Refresh
+		// for every other Consultation row.
+		keys: () => ["r"],
+		keyLabel: "r",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 61,
+		modes: [...consultationBaseModes],
+		availability: (context) =>
+			context.selectedConsultation?.state === "opening"
+				? available()
+				: unavailable("only an interrupted opening needs recovery"),
 	},
 	{
 		id: "refresh",
@@ -671,83 +828,23 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 35,
 		modes: [...baseModes],
-		availability: leftoverClear,
+		availability: (context) =>
+			ticketBaseMode(context.mode) ? leftoverClear(context) : ticketOnly(context),
 	},
 	{
-		id: "consultation-respond",
-		label: "Respond",
-		keys: () => ["return"],
-		keyLabel: "Enter",
-		scope: "control-plane",
+		// The Agent terminal forwards every key to the Agent. Only the
+		// configured exit key and the emergency exit answer to the plane, so
+		// this mode claims nothing else.
+		id: "interact-exit",
+		label: "Exit interaction",
+		keys: (_mode, context) => [exitControlKey(context.interactionExitKey)],
+		keyLabel: "F12",
+		scope: "consultation-interaction",
 		actionBar: true,
-		priority: 71,
-		modes: [...consultationModes],
-		availability: consultationResponse,
-		barLabel: () => "respond",
-	},
-	{
-		id: "consultation-interact",
-		label: "Interact",
-		keys: () => ["return"],
-		keyLabel: "Enter",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 72,
-		modes: [...consultationModes],
-		availability: consultationInteraction,
-		barLabel: () => "interact",
-	},
-	{
-		id: "consultation-history",
-		label: "History",
-		keys: () => ["f"],
-		keyLabel: "f",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 60,
-		modes: [...consultationModes],
+		barAnchor: true,
+		priority: 100,
+		modes: ["consultation-interaction"],
 		availability: available,
-		barLabel: () => "history",
-	},
-	{
-		id: "consultation-close",
-		label: "Close",
-		keys: () => ["x"],
-		keyLabel: "x",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 50,
-		modes: [...consultationModes],
-		availability: consultationClose,
-		barLabel: () => "close",
-	},
-	{
-		id: "consultation-delete",
-		label: "Delete",
-		keys: () => ["d"],
-		keyLabel: "d",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 50,
-		modes: [...consultationModes],
-		availability: consultationDelete,
-		showInBar: (context) => consultationDelete(context).available,
-		barLabel: () => "delete",
-	},
-	{
-		id: "consultation-refresh",
-		label: "Refresh",
-		keys: () => ["r"],
-		keyLabel: "r",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 35,
-		modes: [...consultationModes],
-		availability: available,
-		// A Consultation stuck in opening is not a refresh: the same key brings
-		// the pane back, so the hint names the recovery the operator is asking for.
-		barLabel: (context) =>
-			context.selectedConsultation?.state === "opening" ? "recover" : "refresh",
 	},
 	{
 		id: "cancel",
@@ -761,6 +858,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 	},
 	{
+		// A focused field owns its own editing keys, so this control moves the
+		// form's selection. In a selector or an action it is Tab, as on the
+		// plane's list rows; the field's arrows belong to the caret.
 		id: "move-field",
 		label: "Field",
 		// A field owns Up and Down for its own caret, so Tab is the only key
@@ -775,6 +875,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: available,
 	},
 	{
+		// A focused selector cycles the offered values on the row.
 		id: "cycle-choice",
 		label: "Change",
 		keys: () => ["left", "right"],
@@ -789,6 +890,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 				: unavailable("this choice has no other value"),
 	},
 	{
+		// The focused action runs on Enter. The bar's refusal line states
+		// why it cannot run; the surface supplies the reason in its own words.
 		id: "confirm-choice",
 		label: "Confirm",
 		keys: () => ["return"],
@@ -847,6 +950,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...formModes],
 		availability: available,
 	},
+
 	{
 		id: "help",
 		label: "Help",
@@ -859,7 +963,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		barAnchor: true,
 		priority: 1000,
-		modes: allModes.filter((mode) => mode !== "consultation-interaction"),
+		modes: [...planeModes],
 		availability: available,
 	},
 	{
@@ -867,18 +971,12 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Message",
 		// `m` opens the Message view only from the base panes. F2 is the
 		// alias in every interaction mode, so text input keeps its `m`.
-		keys: (mode) =>
-			mode === "ticket-list" ||
-			mode === "ticket-detail" ||
-			mode === "consultation-list" ||
-			mode === "consultation-detail"
-				? ["m", "f2"]
-				: ["f2"],
+		keys: (mode) => (ticketBaseMode(mode) || consultationMode(mode) ? ["m", "f2"] : ["f2"]),
 		keyLabel: "m/F2",
 		scope: "global",
 		actionBar: true,
 		priority: 900,
-		modes: allModes.filter((mode) => mode !== "consultation-interaction"),
+		modes: [...planeModes],
 		availability: message,
 		// The bar never offers a Message view with nothing to read: the hint
 		// belongs to a Message the terminal has cut short.
@@ -892,7 +990,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: false,
 		priority: 10,
-		modes: [...baseModes, ...consultationModes],
+		modes: [...ticketBaseModes],
 		availability: available,
 	},
 	{
@@ -903,7 +1001,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "global",
 		actionBar: false,
 		priority: 5,
-		modes: [...baseModes, ...consultationModes],
+		modes: [...baseModes],
 		availability: activeQuit,
 	},
 	{
@@ -917,25 +1015,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...allModes],
 		availability: available,
 		guideNote: EMERGENCY_EXIT_NOTE,
-	},
-	{
-		id: "interaction-exit",
-		label: "Exit interaction",
-		keys: () => [],
-		keyLabel: "Exit",
-		scope: "control-plane",
-		actionBar: true,
-		barAnchor: true,
-		priority: 95,
-		modes: ["consultation-interaction", ...consultationModes],
-		availability: available,
-		showInBar: (context) =>
-			context.mode === "consultation-interaction" ||
-			(context.selectedConsultation?.state === "awaiting-response" &&
-				context.consultationAgentStatus === "blocked"),
-		// The hint names the key the exit waits on, which is the configured
-		// return key in interaction mode and the word for it on the section bar.
-		barLabel: (context) => (context.mode === "consultation-interaction" ? "exit" : "interact exit"),
 	},
 	{
 		id: "select-action",
@@ -1094,11 +1173,11 @@ function isReachableInMode(
 	control: ControlDefinition,
 	context: ControlContext,
 ): boolean {
-	const keys = control.keys(mode);
+	const keys = control.keys(mode, context);
 	if (keys.length === 0) return true;
 	return keys.some((key) => {
 		const event = key === "ctrl+c" ? { name: "c", ctrl: true } : { name: key };
-		return controlForKey(mode, event, context)?.id === control.id;
+		return controlForKey(event, context)?.id === control.id;
 	});
 }
 
@@ -1112,18 +1191,19 @@ function isReachableInMode(
  * the guide uses it to name every meaning a mode dispatches, and the bar uses
  * it with the facts to hide a meaning the state does not run.
  */
-function candidatesForKey(mode: InteractionMode, key: ControlKey): readonly ControlDefinition[] {
+function candidatesForKey(context: ControlContext, key: ControlKey): readonly ControlDefinition[] {
+	const mode = context.mode;
 	// Utility close controls take precedence over global aliases that share
 	// their keys. The catalogue still owns both meanings.
 	if (mode === "key-guide" && (key === "escape" || key === "f1" || key === "?"))
 		return [controlById("guide-close")];
 	if (mode === "message-view" && (key === "escape" || key === "f2"))
 		return [controlById("message-close")];
-	return controlsForMode(mode).filter((control) => control.keys(mode).includes(key));
+	return controlsForMode(mode).filter((control) => control.keys(mode, context).includes(key));
 }
 
 /** The whole key one accepted binding is called by, as a hint states it. */
-const KEY_NAMES: Record<ControlKey, string> = {
+const KEY_NAMES: Record<string, string> = {
 	up: "↑",
 	down: "↓",
 	left: "←",
@@ -1151,6 +1231,27 @@ const KEY_NAMES: Record<ControlKey, string> = {
 	f1: "F1",
 	f2: "F2",
 	f3: "F3",
+	f4: "F4",
+	f5: "F5",
+	f6: "F6",
+	f7: "F7",
+	f8: "F8",
+	f9: "F9",
+	f10: "F10",
+	f11: "F11",
+	f12: "F12",
+	f13: "F13",
+	f14: "F14",
+	f15: "F15",
+	f16: "F16",
+	f17: "F17",
+	f18: "F18",
+	f19: "F19",
+	f20: "F20",
+	f21: "F21",
+	f22: "F22",
+	f23: "F23",
+	f24: "F24",
 	"?": "?",
 	return: "Enter",
 	escape: "Esc",
@@ -1159,6 +1260,11 @@ const KEY_NAMES: Record<ControlKey, string> = {
 	w: "w",
 	"ctrl+c": "Ctrl+C",
 };
+
+function keyName(key: ControlKey): string {
+	if (key.startsWith("ctrl+")) return `Ctrl+${key.slice(5).toUpperCase()}`;
+	return KEY_NAMES[key] ?? key;
+}
 
 /**
  * The whole keys that still run this control in this mode, best first.
@@ -1172,51 +1278,23 @@ const KEY_NAMES: Record<ControlKey, string> = {
 export function compactKeyLabels(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context?: ControlContext,
+	context: ControlContext,
 ): string[] {
-	if (control.id === "interaction-exit" && context !== undefined)
-		return [interactionExitLabel(context)];
 	const ranked = control
-		.keys(mode)
-		.map((key) => KEY_NAMES[key])
+		.keys(mode, context)
+		.map(keyName)
 		.map((label) => ({ label, rank: label === KEY_NAMES.escape ? 0 : 1, cells: widthOf(label) }));
 	ranked.sort((a, b) => a.rank - b.rank || a.cells - b.cells);
 	return [...new Set(ranked.map((entry) => entry.label))];
 }
 
-/** Match the configured key which returns from Agent interaction mode. */
-function interactionExitMatches(
-	context: ControlContext,
-	key: { name: string; ctrl?: boolean },
-): boolean {
-	const configured = context.interactionExitKey?.trim().toLowerCase();
-	if (configured === undefined || configured === "") return false;
-	const normalized = configured.replace(/^ctrl-/, "ctrl+");
-	return normalized.startsWith("ctrl+")
-		? key.ctrl === true && key.name.toLowerCase() === normalized.slice(5)
-		: key.ctrl !== true && key.name.toLowerCase() === normalized;
-}
-
-function interactionExitLabel(context: ControlContext): string {
-	const configured = (context.interactionExitKey ?? "")
-		.trim()
-		.toLowerCase()
-		.replace(/^ctrl-/, "ctrl+");
-	return configured.startsWith("ctrl+")
-		? `Ctrl+${configured.slice(5).toUpperCase()}`
-		: configured.toUpperCase();
-}
-
 /** Find a control accepted by this mode for one OpenTUI key event. */
 export function controlForKey(
-	mode: InteractionMode,
 	key: { name: string; ctrl?: boolean; meta?: boolean },
 	context: ControlContext,
 ): ControlDefinition | undefined {
-	if (mode === "consultation-interaction" && interactionExitMatches(context, key))
-		return controlById("interaction-exit");
-	const name = key.ctrl && key.name === "c" ? "ctrl+c" : key.name;
-	const candidates = candidatesForKey(mode, name as ControlKey);
+	const name = key.ctrl === true && /^[a-z]$/.test(key.name) ? `ctrl+${key.name}` : key.name;
+	const candidates = candidatesForKey(context, name as ControlKey);
 	// Enter has a state-specific completion action as well as Hand off. An
 	// available meaning wins. If none is available, the first definition owns
 	// the key and supplies its stable unavailable reason.
@@ -1230,6 +1308,18 @@ export function availabilityFor(
 	return control.availability(context);
 }
 
+/** Ticket-section controls have no useful meaning in a Consultation guide. */
+function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefinition): boolean {
+	return (
+		consultationMode(mode) &&
+		control.scope !== "global" &&
+		(control.scope === "control-plane" ||
+			control.scope === "ticket-list" ||
+			control.scope === "ticket-detail") &&
+		!control.modes.some(consultationMode)
+	);
+}
+
 /**
  * Whether the Key guide lists this control among the mode's own.
  *
@@ -1240,61 +1330,59 @@ export function availabilityFor(
  * another control outright, as both utility overlays take F1 and ?, is not a
  * control of this mode, so neither the bar nor the guide may name it.
  */
-function isCataloguedInMode(mode: InteractionMode, control: ControlDefinition): boolean {
+function isCataloguedInMode(
+	mode: InteractionMode,
+	control: ControlDefinition,
+	context: ControlContext,
+): boolean {
 	// A control of another mode is cataloged on its own terms: the guide
 	// states what it does and claims nothing about this mode's keys.
 	if (!control.modes.includes(mode)) return true;
-	const keys = control.keys(mode);
+	const keys = control.keys(mode, context);
 	// A display-only hint (the text row's Type and Backspace) claims no key.
 	if (keys.length === 0) return true;
 	return keys.some((key) =>
-		candidatesForKey(mode, key).some((candidate) => candidate.id === control.id),
+		candidatesForKey({ ...context, mode }, key).some((candidate) => candidate.id === control.id),
 	);
 }
 
 /** Current-mode controls, then global and control-plane controls, then other modes. */
-export function guideControls(
-	mode: InteractionMode,
-): Array<{ group: string; control: ControlDefinition }> {
+export function guideControls(context: ControlContext): Array<{
+	group: string;
+	control: ControlDefinition;
+}> {
+	const mode = context.mode;
 	// The current section is every control this mode dispatches a key for. The
 	// bar shows only the meaning the current state runs; the guide shows both.
 	const current = controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
-			control.guideOnly !== true &&
 			control.id !== "emergency-exit" &&
-			isCataloguedInMode(mode, control),
+			control.guideOnly !== true &&
+			isCataloguedInMode(mode, control, context),
 	);
-	// A field owns its editing keys, so the plane dispatches none of them. The
-	// guide still names them, and names them with the mode's own controls, so a
-	// field's basic editing is never the undocumented exception again.
-	const editing = FIELD_EDITING_ROWS.filter((control) => control.modes.includes(mode));
 	const seen = new Set(current.map((control) => control.id));
-	const consultationOnly = new Set([
-		"consultation-respond",
-		"consultation-interact",
-		"consultation-history",
-		"consultation-close",
-		"consultation-delete",
-		"consultation-refresh",
-		"consultation-focus-list",
-		"scroll-consultation",
-		"interaction-exit",
-	]);
 	const append = (group: string, predicate: (control: ControlDefinition) => boolean) =>
 		CONTROL_DEFINITIONS.filter(
 			(control) =>
 				!seen.has(control.id) &&
+				control.guideOnly !== true &&
+				!omitFromConsultationGuide(mode, control) &&
 				predicate(control) &&
-				(!consultationOnly.has(control.id) || mode.startsWith("consultation")) &&
-				isCataloguedInMode(mode, control),
+				isCataloguedInMode(mode, control, context),
 		).map((control) => {
 			seen.add(control.id);
 			return { group, control };
 		});
+	// The guide states how a focused field edits, so the guide is the one
+	// catalog that covers it: the rows name the keys a field owns outright.
+	const fieldEditing = fieldModes.includes(mode)
+		? FIELD_EDITING_ROWS.filter((control) => control.modes.includes(mode))
+		: [];
+	for (const control of fieldEditing) seen.add(control.id);
 	return [
 		...current.map((control) => ({ group: "Current interaction mode", control })),
-		...editing.map((control) => ({ group: "Field editing", control })),
+		...fieldEditing.map((control) => ({ group: "Field editing", control })),
 		...append("Global controls", (control) => control.scope === "global"),
 		...append("Control plane controls", (control) => control.scope === "control-plane"),
 		...append("Other interaction modes", () => true),
@@ -1310,27 +1398,27 @@ export function modeTitle(mode: InteractionMode): string {
 		case "consultation-list":
 			return "Consultation list";
 		case "consultation-detail":
-			return "Agent view";
-		case "consultation-interaction":
-			return "Agent interaction";
+			return "Consultation detail";
 		case "override-list":
 			return "Override list row";
 		case "override-model":
 			return "Override model row";
 		case "override-text":
 			return "Override text row";
-		case "form-field":
-			return "Form field";
-		case "form-selector":
-			return "Form choice";
-		case "form-action":
-			return "Form action";
-		case "action-panel":
-			return "Confirmation";
 		case "decision-modal":
 			return "Decision modal";
 		case "missing-modal":
 			return "Missing modal";
+		case "form-field":
+			return "Form field";
+		case "form-selector":
+			return "Form selector";
+		case "form-action":
+			return "Form action";
+		case "action-panel":
+			return "Action panel";
+		case "consultation-interaction":
+			return "Agent terminal";
 		case "key-guide":
 			return "Key guide";
 		case "message-view":
@@ -1342,23 +1430,21 @@ function displayKeyLabel(
 	mode: InteractionMode,
 	control: ControlDefinition,
 	includeAllAliases: boolean,
-	context?: ControlContext,
+	context: ControlContext,
 ): string {
-	if (control.id === "interaction-exit" && context !== undefined)
-		return interactionExitLabel(context);
-	if (control.id === "tickets" && (mode === "consultation-list" || mode === "consultation-detail"))
-		return "t";
+	if (control.id === "interact-exit") return interactionExitLabel(context.interactionExitKey);
+	if (control.id === "consultation-interact") return "Enter";
 	if (control.id === "move-list" && (mode === "override-text" || mode === "override-model"))
 		return "↑↓";
 	if (control.id === "help") {
-		// A field types its letters, and `?` is one of them: only F1 opens the
-		// guide where a field holds the printable keys.
+		// A field owns its printable keys, and `?` is one of them: in the field
+		// modes only F1 opens the guide.
 		if (fieldModes.includes(mode)) return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
-		if (mode === "ticket-list" || mode === "ticket-detail") return includeAllAliases ? "F1/?" : "?";
+		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "F1/?" : "?";
 	}
 	if (control.id === "message") {
-		if (mode === "ticket-list" || mode === "ticket-detail") return includeAllAliases ? "m/F2" : "m";
+		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "m/F2" : "m";
 		return "F2";
 	}
 	return control.keyLabel;
@@ -1367,7 +1453,7 @@ function displayKeyLabel(
 export function keyLabelFor(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context?: ControlContext,
+	context: ControlContext,
 ): string {
 	return displayKeyLabel(mode, control, false, context);
 }
@@ -1376,7 +1462,7 @@ export function keyLabelFor(
 export function guideKeyLabel(
 	mode: InteractionMode,
 	control: ControlDefinition,
-	context?: ControlContext,
+	context: ControlContext,
 ): string {
 	return displayKeyLabel(mode, control, true, context);
 }

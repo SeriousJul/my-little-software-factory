@@ -11,12 +11,17 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff. `v` opens the Consultations view on the
- * Consultation that needs the operator, if one does.
+ * `a` toggles auto-handoff in the Ticket section. `v` expands the Consultation
+ * section on the Consultation that needs the operator, if one does.
+ *
+ * The Main view is one surface with two accordion sections (ADR 0013): the
+ * expanded section owns the pane rows, the collapsed one shrinks to its header
+ * row, and one Message line, one Action bar, and one control catalog answer
+ * for both.
  */
 import os from "node:os";
 import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
 	DEFAULT_CONFIG,
@@ -35,7 +40,6 @@ import {
 } from "../consultation.ts";
 import {
 	type ConsultationOperations,
-	type ConsultationStatus,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
 import {
@@ -93,7 +97,7 @@ import {
 import { DecisionModal } from "./decision-modal.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { LiveView } from "./live-view.ts";
-import { useMessageFacts } from "./message-facts.ts";
+import { consultationProgressOwner, useMessageFacts } from "./message-facts.ts";
 import {
 	messageColor as colorOfMessage,
 	formatMessage,
@@ -109,6 +113,7 @@ import {
 	OverridePanel,
 } from "./override-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
+import { type MainSection, SectionHeader } from "./section-header.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 import {
@@ -121,7 +126,10 @@ import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
 
 type Pane = "list" | "detail";
-type MainView = "tickets" | "consultations";
+interface StatusMessage {
+	kind: "info" | "warning" | "error";
+	text: string;
+}
 /** The action modal open above the panes, if any. */
 type Panel =
 	| null
@@ -139,6 +147,12 @@ type Panel =
  * the Stale Agent output, the glossary's name for it.
  */
 const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
+/**
+ * Below this width the Consultation list hides and the detail keeps focus: a
+ * two-pane section this narrow cannot hold both panes, so the pane switch and
+ * the list keys that walk it stay unavailable.
+ */
+const CONSULTATION_PANES_MIN_WIDTH = 80;
 
 /**
  * The handoff waiting behind the override panel.
@@ -197,8 +211,8 @@ export type AppKey =
 	| "m";
 /**
  * The utility overlay open above the panes, if any. Overlays replace one
- * another. The ticket view and the ticket modals use the catalog's guide and
- * the Message view's captured fact.
+ * another. Every surface of the Main view opens the catalog's own Key guide
+ * and Message view, captured from the mode the operator pressed the key in.
  */
 type Utility =
 	| null
@@ -265,8 +279,8 @@ export function App({
 	// the empty SQLite projection while configured sources refresh.
 	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
 	const ticketsRef = useRef(tickets);
-	const [view, setView] = useState<MainView>("tickets");
-	const viewRef = useRef<MainView>("tickets");
+	const [section, setSection] = useState<MainSection>("tickets");
+	const sectionRef = useRef<MainSection>("tickets");
 	const [consultations, setConsultations] = useState<Consultation[]>(
 		() => state?.consultations("open") ?? [],
 	);
@@ -306,7 +320,7 @@ export function App({
 	const selectedIndexRef = useRef(0);
 	const configRef = useRef(config);
 	configRef.current = config;
-	viewRef.current = view;
+	sectionRef.current = section;
 	historyFilterRef.current = historyFilter;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	// Focus keys can arrive before React publishes the next render. The ref
@@ -318,7 +332,7 @@ export function App({
 	// unmount through this slot: the pane saves its offset out, and a remount
 	// of the same ticket resumes from it.
 	const detailScrollSlot = useRef<{ identity: string; top: number } | null>(null);
-	const [status, setStatus] = useState<ConsultationStatus | null>(null);
+
 	// The handoff the override panel is editing: its ticket, where it came
 	// from, and the settings it resolves to before the operator changes them.
 	const [override, setOverride] = useState<PendingOverride | null>(null);
@@ -370,8 +384,6 @@ export function App({
 				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
 		)
 		.join("; ");
-	// The consultations view shows the same source health on its own line.
-	const healthLine = sourceHealthMessage;
 	const {
 		message: visibleMessage,
 		working: setWorkingMessage,
@@ -380,10 +392,28 @@ export function App({
 		error: setErrorMessage,
 		clearOperation: clearOperationMessage,
 		clearWorking: clearWorkingMessage,
+		clearProgress: clearProgressMessage,
 		// What a control that ran did, routed by the severity it named: a copy
 		// that took is news, and a copy the terminal refused is a warning.
 		report: reportMessage,
 	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
+	/**
+	 * Write one Consultation outcome onto the shared Message facts.
+	 *
+	 * A `null` outcome ends the fact a previous operation left and leaves every
+	 * progress line alone: only the operation that owns a line ends it, and it
+	 * says so through `onProgress`. Info becomes a notice, warning a warning,
+	 * and error an error, so Consultation results read like Ticket results.
+	 */
+	const setStatus = useCallback(
+		(next: StatusMessage | null): void => {
+			if (next === null) clearOperationMessage("none");
+			else if (next.kind === "info") setNoticeMessage(next.text);
+			else if (next.kind === "warning") setWarningMessage(next.text);
+			else setErrorMessage(next.text);
+		},
+		[clearOperationMessage, setNoticeMessage, setWarningMessage, setErrorMessage],
+	);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
 	// The mode line carries the auto-handoff state and the live agent count:
@@ -417,16 +447,8 @@ export function App({
 					config.maxParallelAgents === 0 ? "" : `/${config.maxParallelAgents}`
 				}${autoMode && dispatchPause ? " paused" : ""}`;
 	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
-	const attentionEmpty =
-		consultationCounts.awaitingResponse === 0 &&
-		consultationCounts.recovery === 0 &&
-		heldCount === 0;
-	const attentionLine =
-		state === undefined || (view === "tickets" && attentionEmpty)
-			? ""
-			: `awaiting response: ${consultationCounts.awaitingResponse}  recovery: ${consultationCounts.recovery}${heldCount > 0 ? `  held: ${heldCount}` : ""}${bell || heldBell ? "  !!!" : ""}${view === "consultations" && newOutput ? "  new output" : ""}`;
-	// The held count the bell compares against: a rise rings the terminal
-	// bell and flashes the attention line, a fall or a steady count does not.
+	// The held count the bell compares against: a rise rings the terminal bell
+	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
 		if (heldCountRef.current >= 0 && heldCount > heldCountRef.current) {
 			if (configRef.current.attentionBell) {
@@ -437,6 +459,7 @@ export function App({
 		}
 		heldCountRef.current = heldCount;
 	}, [heldCount]);
+
 	const tooSmall = belowMinimum(terminalWidth, terminalHeight);
 	// The compact frame's own arithmetic. One row holds the Action bar at any
 	// height (user story 73), the Message line gives up before it, and the size
@@ -448,21 +471,15 @@ export function App({
 	const compactPadding = compactRows >= 3 ? 1 : 0;
 	const compactTextWidth = Math.max(1, terminalWidth - 2 * compactPadding);
 	const compactLineCount = Math.max(0, compactRows - 2 * compactPadding);
-	// The tickets view keeps the permanent Message line and Action bar. The
-	// mode line is above its panes, and the attention line joins the bottom
-	// rows when a Consultation needs the operator. Keep the compact size
-	// frame focused on its size and Help controls when it cannot show the
-	// normal layout.
-	const showModeLine = modeLine !== "" && !tooSmall && terminalHeight >= 8;
-	const showAttentionLine = attentionLine !== "" && !tooSmall;
-	const reservedRows =
-		view === "consultations"
-			? (status === null ? 0 : 1) +
-				(healthLine === "" ? 0 : 1) +
-				(modeLine === "" ? 0 : 1) +
-				(attentionLine === "" ? 0 : 1) +
-				(state !== undefined ? 1 : 0)
-			: 2 + (showModeLine ? 1 : 0) + (showAttentionLine ? 1 : 0);
+	// The Main view keeps the permanent Message line and Action bar in both
+	// sections. The mode line and the two section headers sit above the
+	// expanded section's panes. Keep the compact size frame focused on its
+	// size and Help controls when it cannot show the normal layout.
+	// The mode line gives way before the panes' first text row: the minimum
+	// frame holds the headers, one real pane row, and the two permanent rows.
+	const showModeLine = modeLine !== "" && !tooSmall;
+	const sectionHeaderRows = tooSmall ? 0 : 2;
+	const reservedRows = 2 + sectionHeaderRows + (showModeLine ? 1 : 0);
 	const listGeometry = usePaneGeometry("list", reservedRows);
 	const detailGeometry = usePaneGeometry("detail", reservedRows);
 	// The Scroll control's availability must agree with the native detail's
@@ -499,7 +516,7 @@ export function App({
 					.consultations("all")
 					.filter((item) => item.replacementOf === selectedConsultation.id)
 					.map((item) => item.id);
-	const consultationNarrow = view === "consultations" && terminalWidth < 80;
+	const consultationNarrow = section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH;
 	const consultationWidth = consultationNarrow
 		? Math.max(1, terminalWidth - 4)
 		: detailGeometry.usableCols;
@@ -674,16 +691,13 @@ export function App({
 			controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
-				onStatus: (next) => {
-					setStatus(next);
-					// Consultation outcomes must remain visible on the Message line
-					// when the operator is on the Tickets view. The status row stays
-					// for the Consultation view, while the shared message facts carry
-					// warnings and errors without crossing the Ticket boundary.
-					if (next === null) clearOperationMessage("none");
-					else if (next.kind === "error") setErrorMessage(next.text);
-					else if (next.kind === "warning") setWarningMessage(next.text);
-				},
+				onStatus: setStatus,
+				// Each Consultation operation owns its progress line, so two
+				// operations in two repositories never erase one another.
+				onProgress: (text, owner) =>
+					text === null
+						? clearProgressMessage(consultationProgressOwner(owner))
+						: setWorkingMessage(text, consultationProgressOwner(owner)),
 				onConsultationsChanged: replaceConsultations,
 				onSafetyConflict: ({ consultationId, safety }) => {
 					setConsultationSafety({ consultationId, safety });
@@ -1202,6 +1216,7 @@ export function App({
 	const beginConsultationLaunch = (consultation: Consultation) => {
 		void consultationOperations?.launch(consultation);
 	};
+
 	const startConsultation = (
 		typeName: string,
 		repository: ConsultationRepositoryOption,
@@ -1282,8 +1297,9 @@ export function App({
 	 * Keep the durable Response draft equal to what the field holds.
 	 *
 	 * The Draft field owns the text while the operator edits it, and the saved
-	 * draft is what survives a close, a rejection, and a restart, so every change
-	 * is stored as it happens rather than carried out of the editor by hand.
+	 * draft is what survives a close, a rejection, and a restart, so every
+	 * change is stored as it happens rather than carried out of the editor by
+	 * hand.
 	 */
 	const storeResponseDraft = (text: string) => {
 		responseDraftRef.current = text;
@@ -1312,6 +1328,13 @@ export function App({
 	/** Close the editor. The Response draft it leaves is the one already stored. */
 	const closeResponseEditor = () => {
 		setResponseEditor(false);
+	};
+	const expandSection = (next: MainSection) => {
+		sectionRef.current = next;
+		setSection(next);
+		// The narrow Consultation layout removes its list pane, so focus the
+		// visible detail pane instead of leaving navigation on hidden content.
+		focusPane(next === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH ? "detail" : "list");
 	};
 	/**
 	 * The index, in the open list, of the Consultation that needs the
@@ -1345,15 +1368,13 @@ export function App({
 		return current.findIndex((item) => item.id === target.id);
 	};
 	const openConsultations = (selectId?: string) => {
-		viewRef.current = "consultations";
-		setView("consultations");
-		setFocusedPane("list");
+		expandSection("consultations");
 		// With an explicit selection the view stays on that Consultation:
 		// a launch keeps the operator on what it just created, or on the
 		// record the replacement points back at. Without one the view opens
 		// on the Consultation that needs the operator, if one does: it must
-		// not hide behind a view switch. Without either the view keeps its
-		// current filter and selection.
+		// not hide behind a collapsed section. Without either the section keeps
+		// its current filter and selection.
 		const index =
 			selectId === undefined
 				? attentionIndex()
@@ -1438,37 +1459,37 @@ export function App({
 			});
 	};
 	const currentBaseMode = (): InteractionMode =>
-		focusedPane === "list" ? "ticket-list" : "ticket-detail";
+		interaction
+			? "consultation-interaction"
+			: responseEditor
+				? "form-field"
+				: sectionRef.current === "consultations"
+					? focusedPaneRef.current === "list"
+						? "consultation-list"
+						: "consultation-detail"
+					: focusedPaneRef.current === "list"
+						? "ticket-list"
+						: "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
 		contextFor(mode, {
 			selectedTicket: ticketsRef.current[selectedIndexRef.current],
-			listCanMove: ticketsRef.current.length > 1,
-			detailCanScroll: detailMaxScroll > 0,
-			sourceCount: sources.length,
-			refreshingSourceCount: sources.filter(
-				(source) => coordinatorRef.current?.isFetching(source.name) === true,
-			).length,
-			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
-			messageTruncated,
-			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
-		});
-	const consultationContextFor = (mode: InteractionMode) =>
-		contextFor(mode, {
-			selectedTicket: ticketsRef.current[selectedIndexRef.current],
-			listCanMove: false,
-			detailCanScroll: false,
-			sourceCount: sources.length,
-			refreshingSourceCount: sources.filter(
-				(source) => coordinatorRef.current?.isFetching(source.name) === true,
-			).length,
-			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
-			messageTruncated,
-			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			selectedConsultation: consultationsRef.current[consultationIndexRef.current],
+			listCanMove:
+				mode === "consultation-list"
+					? consultationsRef.current.length > 1
+					: ticketsRef.current.length > 1,
+			detailCanScroll:
+				mode === "consultation-detail" ? consultationMaxScroll > 0 : detailMaxScroll > 0,
+			sourceCount: sources.length,
+			refreshingSourceCount: sources.filter(
+				(source) => coordinatorRef.current?.isFetching(source.name) === true,
+			).length,
+			handoffActive: handoffDispatch?.handoffActive() ?? noStateHandoffInFlightRef.current,
+			messageTruncated,
+			consultationRefreshAvailable: state !== undefined,
+			consultationListVisible: !consultationNarrow,
 			consultationAgentStatus: selectedConsultationAgentStatus,
-			consultationCanMove: consultationsRef.current.length > 1,
-			consultationDetailCanScroll: consultationMaxScroll > 0,
-			consultationHistory: historyFilterRef.current,
+			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
 		});
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
@@ -1494,6 +1515,14 @@ export function App({
 		if (coordinator === undefined) return;
 		const started = coordinator.refreshAll();
 		manualRefreshPending.current = new Set(started);
+		if (started.length === 0) {
+			setWarningMessage(
+				sources.length === 0
+					? "no Ticket sources exist"
+					: "every Ticket source is already refreshing",
+			);
+			return;
+		}
 		setWorkingMessage(`refreshing ${started.length} sources`, "refresh");
 	};
 	useKeyboard((key) => {
@@ -1501,142 +1530,74 @@ export function App({
 		// override panel, and the action modals all handle input in their
 		// own keyboard hooks.
 		if (utility !== null || override !== null || panel !== null || launcher) {
-			// Every overlay drives its own keys through the Control catalogue and
-			// none of them may claim the emergency exit, so the shell keeps the
-			// exit for them: the catalogue's own exit control would destroy
-			// through this same renderer call anyway.
+			// The legacy Consultations surfaces keep their pre-catalogue key
+			// switches, and none of them may claim the emergency exit. The
+			// catalogue-driven surfaces destroy through that same control
+			// anyway; the shell owns the exit for the rest.
 			if (key.ctrl === true && key.name === "c") renderer.destroy();
 			return;
 		}
+		// The shell owns the emergency exit before the Agent terminal matches a
+		// key, so Ctrl+C cannot reach an Agent. Every other surface dispatches
+		// Ctrl+C through the control catalogue below.
+		if (interaction && key.ctrl === true && key.name === "c") {
+			renderer.destroy();
+			return;
+		}
+		// The response editor is a shared form surface: its field and actions
+		// answer the keys there, and nothing below may claim them. The shell
+		// keeps the emergency exit, because the field takes every other Ctrl key
+		// as text editing.
+		if (responseEditor && key.ctrl === true && key.name === "c") {
+			renderer.destroy();
+			return;
+		}
+		if (responseEditor) return;
 		if (interaction) {
-			createControlDispatch({
-				mode: "consultation-interaction",
-				context: consultationContextFor("consultation-interaction"),
-				onUnavailable: (reason) => setStatus({ kind: "warning", text: reason }),
-				onEmergencyExit: () => renderer.destroy(),
-				handlers: {
-					"interaction-exit": () => {
-						setInteraction(false);
-						// Settle the queued input before announcing the exit: the last
-						// key the operator sent still belongs to the Agent.
-						void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
-							setStatus({ kind: "info", text: "left Agent interaction mode" }),
-						);
-					},
-				},
-				onUnclaimed: (key) => {
-					const selected = consultationsRef.current[consultationIndexRef.current];
-					const event =
-						selected?.paneId === null || selected?.paneId === undefined
-							? null
-							: translateAgentKey(key, configRef.current.interactionExitKey);
-					if (selected === undefined || selected.paneId === null || event === null) return false;
-					const queued = consultationOperations?.enqueue(selected.paneId, event);
-					if (queued === undefined) return false;
-					void queued.then(
-						(result) => {
-							if (result.code === 0) {
-								setNewOutput(true);
-								// The key may have produced output already: re-read
-								// the pane now, not on the next interval tick.
-								outputRefreshRef.current?.();
-							} else
-								setStatus({
-									kind: "error",
-									text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
-								});
-						},
-						(error) =>
+			const exit = configRef.current.interactionExitKey.toLowerCase().replace(/^ctrl-/, "ctrl+");
+			const keyName = key.name.toLowerCase();
+			const isExit = keyName === exit || (key.ctrl === true && exit === `ctrl+${keyName}`);
+			if (isExit) {
+				setInteraction(false);
+				// Settle the queued input before announcing the exit: the last
+				// key the operator sent still belongs to the Agent.
+				void (consultationOperations?.flush() ?? Promise.resolve()).then(() =>
+					setStatus({ kind: "info", text: "left Agent interaction mode" }),
+				);
+				return;
+			}
+			const selected = consultationsRef.current[consultationIndexRef.current];
+			const event =
+				selected?.paneId === null || selected?.paneId === undefined
+					? null
+					: translateAgentKey(key, configRef.current.interactionExitKey);
+			if (selected !== undefined && selected.paneId !== null && event !== null) {
+				const queued = consultationOperations?.enqueue(selected.paneId, event);
+				if (queued === undefined) return;
+				void queued.then(
+					(result) => {
+						if (result.code === 0) {
+							setNewOutput(true);
+							// The key may have produced output already: re-read
+							// the pane now, not on the next interval tick.
+							outputRefreshRef.current?.();
+						} else
 							setStatus({
 								kind: "error",
-								text: `Agent interaction failed: ${errorMessage(error)}`,
-							}),
-					);
-					return true;
-				},
-			})(key);
-			return;
-		}
-		// The response editor is a shared form surface: its fields and actions
-		// answer the keys there, and nothing below may claim them.
-		if (responseEditor) return;
-		if (viewRef.current === "consultations") {
-			const consultationMode =
-				focusedPaneRef.current === "detail" ? "consultation-detail" : "consultation-list";
-			createControlDispatch({
-				mode: consultationMode,
-				context: consultationContextFor(consultationMode),
-				onUnavailable: setWarningMessage,
-				onEmergencyExit: () => renderer.destroy(),
-				ungated: ["consultation-respond"],
-				handlers: {
-					quit: () => renderer.destroy(),
-					"move-list": ({ key }) => moveRange(key.name),
-					"scroll-consultation": ({ key }) => moveRange(key.name),
-					detail: () => focusPane("detail"),
-					"consultation-focus-list": () => focusPane("list"),
-					tickets: () => {
-						viewRef.current = "tickets";
-						setView("tickets");
-						setFocusedPane("list");
+								text: `Agent interaction failed: ${result.stderr.trim() || `exit code ${result.code}`}`,
+							});
 					},
-					consultations: () => openConsultations(),
-					launch: () => {
-						if (
-							selectedConsultation?.state === "missing" ||
-							selectedConsultation?.state === "failed"
-						)
-							setReplacementConsultationId(selectedConsultation.id);
-						setLauncher(true);
-					},
-					"consultation-history": cycleConsultationHistory,
-					"consultation-close": () => {
-						if (selectedConsultation === undefined) return;
-						if (
-							selectedConsultation.state === "opening" ||
-							selectedConsultation.state === "working" ||
-							selectedConsultation.state === "closing"
-						)
-							setPanel({ kind: "consultation-close", identity: selectedConsultation.id });
-						else closeConsultation(selectedConsultation);
-					},
-					"consultation-delete": () => {
-						if (selectedConsultation !== undefined)
-							setPanel({ kind: "consultation-delete", identity: selectedConsultation.id });
-					},
-					"consultation-respond": ({ refuse }) => {
-						if (selectedConsultation === undefined) return refuse();
-						if (selectedConsultation.state === "awaiting-response") {
-							beginResponse(selectedConsultation);
-							return;
-						}
-						if (
-							selectedConsultation.state === "missing" ||
-							selectedConsultation.state === "failed"
-						) {
-							setStatus({ kind: "warning", text: "use c to open a Replacement Consultation" });
-							return;
-						}
+					(error) =>
 						setStatus({
-							kind: "info",
-							text: `Consultation ${selectedConsultation.id.slice(0, 8)} is ${selectedConsultation.state}`,
-						});
-					},
-					"consultation-interact": () => setInteraction(true),
-					"consultation-refresh": () => {
-						if (selectedConsultation?.state === "opening")
-							recoverConsultationOpening(selectedConsultation);
-						else coordinatorRef.current?.refreshAll();
-					},
-					"auto-handoff": () => toggleAutoHandoff(),
-					help: () => openGuide(consultationMode),
-					message: () => openMessage(consultationMode),
-				},
-			})(key);
+							kind: "error",
+							text: `Agent interaction failed: ${errorMessage(error)}`,
+						}),
+				);
+			}
 			return;
 		}
-		// The control catalogue decides the rest, through the same dispatch
-		// hook every modal, panel, and overlay uses.
+		// The control catalogue decides every key on the Main view, through the
+		// same dispatch hook every modal, panel, and overlay uses.
 		const mode = currentBaseMode();
 		createControlDispatch({
 			mode,
@@ -1677,14 +1638,75 @@ export function App({
 				},
 				quit: () => renderer.destroy(),
 				detail: () => focusPane("detail"),
+				"consultation-list": () => focusPane("list"),
 				tickets: () => focusPane("list"),
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				consultations: () => openConsultations(),
-				launch: () => setLauncher(true),
+				"open-tickets": () => expandSection("tickets"),
+				launch: () => {
+					if (Object.keys(configRef.current.consultationTypes).length === 0)
+						setWarningMessage(
+							"no Consultation types configured; add [consultation-types.<name>] to the config file",
+						);
+					else {
+						// In the Consultation section, a missing or failed Consultation
+						// is replaced rather than reopened: the launcher remembers which
+						// row asked for the replacement.
+						const selected = consultationsRef.current[consultationIndexRef.current];
+						if (
+							sectionRef.current === "consultations" &&
+							(selected?.state === "missing" || selected?.state === "failed")
+						)
+							setReplacementConsultationId(selected.id);
+						setLauncher(true);
+					}
+				},
+				history: cycleConsultationHistory,
+				"consultation-close": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					if (
+						selected.state === "opening" ||
+						selected.state === "working" ||
+						selected.state === "closing"
+					)
+						setPanel({ kind: "consultation-close", identity: selected.id });
+					else if (
+						selected.state === "awaiting-response" ||
+						selected.state === "missing" ||
+						selected.state === "failed"
+					)
+						closeConsultation(selected);
+				},
+				"consultation-delete": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected !== undefined)
+						setPanel({ kind: "consultation-delete", identity: selected.id });
+				},
+				"consultation-respond": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					beginResponse(selected);
+				},
+				"consultation-interact": () => setInteraction(true),
 				override: openOverride,
-				refresh: refreshNow,
+				recover: () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected?.state === "opening") recoverConsultationOpening(selected);
+				},
+				refresh: () => {
+					// Refresh answers for the whole plane: the Ticket sources, and
+					// the Consultation projection the expanded section shows.
+					if (sectionRef.current === "consultations") replaceConsultations();
+					refreshNow();
+				},
 				leftover: openLeftoverPanel,
+				// `a` answers for the switch itself in the Ticket section, where
+				// the catalog binds it: reaching the state must never depend on
+				// whether a Consultation needs the operator. The Consultation
+				// section does not bind the key, so `a` there is the catalog's
+				// refusal, not this action.
 				"auto-handoff": () => toggleAutoHandoff(),
 				help: () => openGuide(mode),
 				message: () => openMessage(mode),
@@ -1755,17 +1777,13 @@ export function App({
 		// would spawn git calls for every repository per tick.
 	}, [commandRunner, homeDir, repositoryCatalogKey]);
 	// The selected Agent output refreshes at one-second cadence. Lifecycle
-	// polling remains owned by the shared observation coordinator. A closed
-	// Consultation has no live Agent: its pane is gone, and polling it would
-	// re-pin the follow scroll onto the captured history and flag a closed
-	// Consultation with a stale-output warning.
+	// polling remains owned by the shared observation coordinator.
 	useEffect(() => {
 		if (
 			state === undefined ||
-			view !== "consultations" ||
-			selectedConsultation === undefined ||
-			selectedConsultation.state === "closed" ||
-			selectedConsultation.paneId === null
+			section !== "consultations" ||
+			selectedConsultation?.paneId === null ||
+			selectedConsultation === undefined
 		) {
 			setLiveOutput(null);
 			return;
@@ -1803,21 +1821,7 @@ export function App({
 			outputRefreshRef.current = null;
 			clearInterval(timer);
 		};
-	}, [commandRunner, consultationOperations, interaction, selectedConsultation, state, view]);
-	// A Consultation that closes while selected flips its detail from the live
-	// Agent view to the captured history. The follow scroll had pinned the
-	// detail to the bottom while the Agent ran; the history is read from the
-	// top, where the header lines (state, close result) live, so the close
-	// returns the reading position to the top and re-arms the follow.
-	const closedConsultationId =
-		selectedConsultation !== undefined && selectedConsultation.state === "closed"
-			? selectedConsultation.id
-			: null;
-	useEffect(() => {
-		if (closedConsultationId === null) return;
-		consultationFollowRef.current = true;
-		setConsultationScroll(0);
-	}, [closedConsultationId]);
+	}, [commandRunner, consultationOperations, interaction, selectedConsultation, state, section]);
 	// A ref lets the key handler use the startup coordinator without making
 	// React recreate keyboard subscriptions on each frame.
 	useEffect(() => {
@@ -1892,17 +1896,17 @@ export function App({
 			},
 			reconcileOnly: true,
 			onStatus: (kind, text, topic) => {
-				// Both views read observation events: the consultations view keeps
-				// its status line, and the tickets view keeps the durable Message
-				// facts. Other informational events stay out of the Message line:
-				// it is for active work and operational facts, not a log.
+				// Both sections read the same observation events: an outcome is
+				// a fact for the one Message line, whichever section is expanded.
+				// `setStatus` maps the observation's kinds onto that line: info
+				// becomes a notice, warning a warning, and error an error. The
+				// observation sends only the facts an operator acts on, so the
+				// Message line stays a statement of the plane and not a log.
 				setStatus({ kind, text });
-				if (kind === "error") setErrorMessage(text);
-				else if (kind === "warning") setWarningMessage(text);
 				// The recovery topic is the structured signal that a stale
 				// operation fact can clear; the text stays human-facing. The
 				// observation writes no progress line of its own.
-				else if (topic === "herdr-recovered") clearOperationMessage("none");
+				if (topic === "herdr-recovered") clearOperationMessage("none");
 			},
 		});
 		observationRef.current = coordinator;
@@ -1926,14 +1930,21 @@ export function App({
 		replaceConsultations,
 		commandRunner,
 		onReady,
-		setErrorMessage,
-		setWarningMessage,
 		clearOperationMessage,
+		setStatus,
 	]);
 	function focusPane(pane: Pane) {
 		focusedPaneRef.current = pane;
 		setFocusedPane(pane);
 	}
+	// A resize can remove the narrow Consultation list without a section switch.
+	// Keep both focus representations on the visible detail pane in that case.
+	useLayoutEffect(() => {
+		if (section === "consultations" && terminalWidth < CONSULTATION_PANES_MIN_WIDTH && focusedPaneRef.current !== "detail") {
+			focusedPaneRef.current = "detail";
+			setFocusedPane("detail");
+		}
+	}, [section, terminalWidth]);
 	function selectTicket(index: number) {
 		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
 		if (next === selectedIndexRef.current) return;
@@ -1943,21 +1954,27 @@ export function App({
 	function moveList(delta: number) {
 		selectTicket(selectedIndexRef.current + delta);
 	}
+	function selectConsultation(index: number) {
+		const next = clamp(index, 0, Math.max(0, consultationsRef.current.length - 1));
+		if (next === consultationIndexRef.current) return;
+		consultationIndexRef.current = next;
+		setConsultationIndex(next);
+		setConsultationScroll(0);
+		consultationFollowRef.current = true;
+		setNewOutput(false);
+	}
+	/** Move the Consultation detail by whole pages, keeping the follow rule. */
+	function moveConsultationDetailPage(direction: 1 | -1) {
+		const page = Math.max(1, detailGeometry.visibleRows - 2);
+		consultationFollowRef.current = false;
+		setConsultationScroll((current) => clamp(current + direction * page, 0, consultationMaxScroll));
+	}
 	function moveVertical(delta: number) {
-		if (viewRef.current === "consultations") {
+		if (sectionRef.current === "consultations") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = false;
 				setConsultationScroll((current) => clamp(current + delta, 0, consultationMaxScroll));
-			} else {
-				setConsultationIndex((index) => {
-					const next = clamp(index + delta, 0, consultationsRef.current.length - 1);
-					consultationIndexRef.current = next;
-					return next;
-				});
-				setConsultationScroll(0);
-				consultationFollowRef.current = true;
-				setNewOutput(false);
-			}
+			} else selectConsultation(consultationIndexRef.current + delta);
 			return;
 		}
 		if (focusedPaneRef.current === "detail")
@@ -1965,26 +1982,9 @@ export function App({
 		else moveList(delta);
 	}
 	function movePage(direction: 1 | -1) {
-		if (viewRef.current === "consultations") {
-			if (focusedPaneRef.current === "detail") {
-				consultationFollowRef.current = false;
-				setConsultationScroll((current) =>
-					clamp(current + direction * detailGeometry.visibleRows, 0, consultationMaxScroll),
-				);
-			} else {
-				setConsultationIndex((index) => {
-					const next = clamp(
-						index + direction * listGeometry.visibleRows,
-						0,
-						Math.max(0, consultationsRef.current.length - 1),
-					);
-					consultationIndexRef.current = next;
-					return next;
-				});
-				setConsultationScroll(0);
-				consultationFollowRef.current = true;
-				setNewOutput(false);
-			}
+		if (sectionRef.current === "consultations") {
+			if (focusedPaneRef.current === "detail") moveConsultationDetailPage(direction);
+			else selectConsultation(consultationIndexRef.current + direction * listGeometry.visibleRows);
 			return;
 		}
 		if (focusedPaneRef.current === "detail")
@@ -1992,19 +1992,12 @@ export function App({
 		else moveList(direction * listGeometry.visibleRows);
 	}
 	function moveEdge(edge: "start" | "end") {
-		if (viewRef.current === "consultations") {
+		if (sectionRef.current === "consultations") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = edge === "end";
-				setConsultationScroll(edge === "start" ? 0 : consultationMaxScroll);
-				setNewOutput(false);
-			} else {
-				const next = edge === "start" ? 0 : Math.max(0, consultationsRef.current.length - 1);
-				consultationIndexRef.current = next;
-				setConsultationIndex(next);
-				setConsultationScroll(0);
-				consultationFollowRef.current = true;
-				setNewOutput(false);
-			}
+				setConsultationScroll(edge === "start" ? 0 : 999999);
+				if (edge === "end") setNewOutput(false);
+			} else selectConsultation(edge === "start" ? 0 : consultationsRef.current.length - 1);
 			return;
 		}
 		if (focusedPaneRef.current === "detail") {
@@ -2155,22 +2148,9 @@ export function App({
 						repositoryIdentity: selectedTicket?.repositoryRef.identity ?? "",
 						input: "",
 					};
-	const actionMode =
-		view === "consultations"
-			? interaction
-				? "consultation-interaction"
-				: focusedPane === "list"
-					? "consultation-list"
-					: "consultation-detail"
-			: currentBaseMode();
+	const actionMode = currentBaseMode();
 	const ticketContext = controlContextFor(actionMode);
 	const messageColor = colorOfMessage(visibleMessage);
-	const statusColor =
-		status?.kind === "error"
-			? COLORS.statusError
-			: status?.kind === "warning"
-				? COLORS.statusWarning
-				: COLORS.text;
 	const importantSmallMessage =
 		visibleMessage !== null &&
 		(visibleMessage.severity === "error" || visibleMessage.severity === "working")
@@ -2188,21 +2168,52 @@ export function App({
 	).slice(0, compactLineCount);
 	const utilityContext =
 		utility?.kind === "guide" || utility?.kind === "message"
-			? utility.mode.startsWith("consultation")
-				? consultationContextFor(utility.mode)
-				: controlContextFor(utility.mode)
+			? controlContextFor(utility.mode)
 			: ticketContext;
+	// Response editing and Agent interaction own all input above the Main
+	// panes. Keep headers and panes mouse-inert until that mode closes.
+	const mainSurfaceActive =
+		override === null &&
+		panel === null &&
+		utility === null &&
+		!launcher &&
+		!responseEditor &&
+		!interaction;
 	return createElement(
 		"box",
 		{ style: { width: "100%", height: "100%", flexDirection: "column" } },
-		view === "tickets" &&
-			showModeLine &&
+		// One Main frame: the mode line comes first, then the two section
+		// headers, and only the expanded section renders its panes below its
+		// own header.
+		showModeLine &&
 			createElement(
 				"text",
 				{ style: { width: "100%", height: 1, fg: COLORS.dim } },
 				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
 			),
-		view === "tickets" && tooSmall
+		!tooSmall &&
+			createElement(SectionHeader, {
+				section: "tickets",
+				expanded: section === "tickets",
+				width: terminalWidth,
+				held: heldCount,
+				heldBell,
+				active: mainSurfaceActive,
+				onExpand: () => expandSection("tickets"),
+			}),
+		!tooSmall &&
+			createElement(SectionHeader, {
+				section: "consultations",
+				expanded: section === "consultations",
+				width: terminalWidth,
+				awaitingResponse: consultationCounts.awaitingResponse,
+				recovery: consultationCounts.recovery,
+				bell,
+				newOutput,
+				active: mainSurfaceActive,
+				onExpand: () => expandSection("consultations"),
+			}),
+		tooSmall
 			? createElement(
 					"box",
 					// The bottom rows are the frame's promise: the Message line and
@@ -2252,7 +2263,7 @@ export function App({
 							overflow: "hidden",
 						},
 					},
-					view === "tickets"
+					section === "tickets"
 						? createElement(TicketList, {
 								tickets,
 								selectedIndex,
@@ -2261,33 +2272,38 @@ export function App({
 								emptyMessage,
 								markerOf,
 								limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
-								active: override === null && panel === null && utility === null,
+								active: mainSurfaceActive,
 								onFocus: () => focusPane("list"),
 								onSelect: selectTicket,
 								onMove: moveList,
 							})
-						: consultationNarrow
-							? null
-							: createElement(ConsultationList, {
-									consultations,
-									selectedIndex: consultationIndex,
-									focused: focusedPane === "list",
-									reservedRows,
-									emptyMessage:
-										state === undefined
-											? "Consultations require SQLite state"
-											: historyFilter === "closed"
-												? "no closed Consultations"
-												: historyFilter === "all"
-													? "no Consultations"
-													: "no open Consultations",
-								}),
-					view === "tickets"
+						: undefined,
+					section === "consultations" &&
+						!consultationNarrow &&
+						createElement(ConsultationList, {
+							consultations,
+							selectedIndex: consultationIndex,
+							focused: focusedPane === "list",
+							reservedRows,
+							active: mainSurfaceActive,
+							onFocus: () => focusPane("list"),
+							onSelect: selectConsultation,
+							onMove: (delta) => selectConsultation(consultationIndexRef.current + delta),
+							emptyMessage:
+								state === undefined
+									? "Consultations require SQLite state"
+									: historyFilter === "closed"
+										? "no closed Consultations"
+										: historyFilter === "all"
+											? "no Consultations"
+											: "no open Consultations",
+						}),
+					section === "tickets"
 						? createElement(TicketDetail, {
 								ref: detailRef,
 								ticket: selectedTicket,
 								focused: focusedPane === "detail",
-								active: override === null && panel === null && utility === null,
+								active: mainSurfaceActive,
 								reservedRows,
 								handoffLimit: config.maxHandoffsPerTicket,
 								suggestedChoice:
@@ -2296,70 +2312,49 @@ export function App({
 								onFocus: () => focusPane("detail"),
 								scrollSlot: detailScrollSlot,
 							})
-						: createElement(
-								"box",
-								{ style: { flexGrow: 1, flexDirection: "column" } },
-								createElement(ConsultationDetail, {
-									lines: consultationLines,
-									ansiLines,
-									visibleRows: Math.max(
-										1,
-										detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
-									),
-									scroll: consultationDetailScroll,
-									focused: focusedPane === "detail" && !responseEditor,
-									compactHeading:
-										consultationNarrow && selectedConsultation !== undefined
-											? `${selectedConsultation.typeName} - ${selectedConsultation.repository.displayName}`
-											: undefined,
+						: undefined,
+					section === "consultations" &&
+						createElement(
+							"box",
+							{ style: { flexGrow: 1, flexDirection: "column" } },
+							createElement(ConsultationDetail, {
+								lines: consultationLines,
+								ansiLines,
+								visibleRows: Math.max(
+									1,
+									detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+								),
+								scroll: consultationDetailScroll,
+								focused: focusedPane === "detail" && !responseEditor,
+								active: mainSurfaceActive,
+								onFocus: () => focusPane("detail"),
+								onWheel: (delta) => moveVertical(delta),
+								compactHeading:
+									consultationNarrow && selectedConsultation !== undefined
+										? `${selectedConsultation.typeName} - ${selectedConsultation.repository.displayName}`
+										: undefined,
+							}),
+							responseEditor &&
+								createElement(ResponseEditor, {
+									draft: responseDraft,
+									width: consultationWidth,
+									rows: RESPONSE_EDITOR_ROWS,
+									focused: true,
+									context: controlContextFor("form-field"),
+									inputActive: utility === null,
+									onSend: sendResponseText,
+									onDiscard: discardResponseDraft,
+									onDraftChange: storeResponseDraft,
+									onClose: closeResponseEditor,
+									onHelp: () => openGuide("form-field"),
+									onMessage: () => openMessage("form-field"),
+									onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
+									onCopy: reportMessage,
+									message: visibleMessage,
+									onEmergencyExit: () => renderer.destroy(),
 								}),
-								responseEditor &&
-									createElement(ResponseEditor, {
-										draft: responseDraft,
-										width: consultationWidth,
-										rows: RESPONSE_EDITOR_ROWS,
-										focused: true,
-										context: controlContextFor("form-field"),
-										inputActive: utility === null,
-										onSend: sendResponseText,
-										onDiscard: discardResponseDraft,
-										onDraftChange: storeResponseDraft,
-										onClose: closeResponseEditor,
-										onHelp: () => openGuide("form-field"),
-										onMessage: () => openMessage("form-field"),
-										onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
-										onCopy: reportMessage,
-										message: visibleMessage,
-										onEmergencyExit: () => renderer.destroy(),
-									}),
-							),
+						),
 				),
-		view === "consultations" &&
-			healthLine !== "" &&
-			createElement(
-				"text",
-				{ style: { width: "100%", fg: COLORS.statusWarning } },
-				truncateToWidth(healthLine, terminalWidth),
-			),
-		view === "consultations" &&
-			modeLine !== "" &&
-			createElement(
-				"text",
-				{ style: { width: "100%", fg: COLORS.dim } },
-				truncateToWidth(modeLine, terminalWidth),
-			),
-		view === "consultations" &&
-			attentionLine !== "" &&
-			createElement(
-				"text",
-				{
-					style: {
-						width: "100%",
-						fg: consultationCounts.awaitingResponse > 0 ? COLORS.textBright : COLORS.dim,
-					},
-				},
-				truncateToWidth(attentionLine, terminalWidth),
-			),
 		launcher &&
 			createElement(ConsultationLauncher, {
 				types: config.consultationTypes,
@@ -2393,45 +2388,13 @@ export function App({
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
-		view === "consultations" &&
-			state !== undefined &&
-			createElement(ActionBar, {
-				mode: actionMode,
-				context: consultationContextFor(actionMode),
-				width: terminalWidth,
-				compactAnchor: tooSmall,
-			}),
-		view === "consultations" &&
-			status !== null &&
-			createElement(
-				"text",
-				{ style: { width: "100%", fg: statusColor } },
-				truncateToWidth(`${status.kind}: ${status.text}`, terminalWidth),
-			),
-		// showAttentionLine, not attentionLine !== "": below the minimum size
-		// the compact frame keeps exactly its reserved rows, and a
-		// Consultation that needs the operator still shows in the
-		// consultations view and in the launcher's ring.
-		view === "tickets" &&
-			showAttentionLine &&
-			createElement(
-				"text",
-				{
-					style: {
-						width: "100%",
-						fg: consultationCounts.awaitingResponse > 0 ? COLORS.textBright : COLORS.dim,
-					},
-				},
-				truncateToWidth(attentionLine, terminalWidth),
-			),
-		view === "tickets" && terminalHeight >= 2 && messageRowElement(visibleMessage, terminalWidth),
-		view === "tickets" &&
-			createElement(ActionBar, {
-				mode: actionMode,
-				context: ticketContext,
-				width: terminalWidth,
-				compactAnchor: tooSmall,
-			}),
+		terminalHeight >= 2 && messageRowElement(visibleMessage, terminalWidth),
+		createElement(ActionBar, {
+			mode: actionMode,
+			context: ticketContext,
+			width: terminalWidth,
+			compactAnchor: tooSmall,
+		}),
 		override !== null &&
 			createElement(OverridePanel, {
 				agents: Object.keys(config.agents),
@@ -2439,6 +2402,7 @@ export function App({
 				taskTypes: Object.keys(config.taskTypes),
 				agentSettings,
 				profiles,
+				onCopy: reportMessage,
 				modelList,
 				onAgentChange: requestModelList,
 				initial: override.choice,
@@ -2447,7 +2411,6 @@ export function App({
 				onHelp: (mode) => openGuide(mode),
 				onMessage: (mode) => openMessage(mode),
 				onUnavailable: setWarningMessage,
-				onCopy: reportMessage,
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 				onConfirm: confirmOverride,
@@ -2463,9 +2426,9 @@ export function App({
 				title: panelTicket.title,
 				contextLine: decision.contextLine,
 				entries: decision.entries,
+				actions: decision.actions,
 				cause: decision.cause,
 				detail: decision.detail,
-				actions: decision.actions,
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
 				onCancel: () => setPanel(null),

@@ -28,12 +28,15 @@ import type {
 } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
+	actionBarRowOf,
 	awaitFrame,
 	closeOverlay,
 	confirmPanel,
 	detailPaneText,
 	frameText,
 	launchConsultationDraft,
+	messageRowOf,
+	mouseClick,
 	openConsultationPanel,
 	openLauncher,
 	press,
@@ -267,6 +270,29 @@ function stubTopology(
  * Agent name and branch a fresh launch picks, answers `agent list` with a
  * test-controlled list, and pins every other command exactly.
  */
+/**
+ * A runner that holds every command one predicate names, so a test can keep an
+ * operation in flight for as long as it needs.
+ */
+class GatedRunner implements CommandRunner {
+	private readonly inner: CommandRunner;
+	private readonly gate: (command: string, args: readonly string[]) => boolean;
+
+	constructor(inner: CommandRunner, gate: (command: string, args: readonly string[]) => boolean) {
+		this.inner = inner;
+		this.gate = gate;
+	}
+
+	listModels(kind: string): Promise<ModelListResult> {
+		return this.inner.listModels(kind);
+	}
+
+	run(command: string, args: readonly string[], options?: CommandOptions): Promise<CommandResult> {
+		if (!this.gate(command, args)) return this.inner.run(command, args, options);
+		return new Promise<CommandResult>(() => {});
+	}
+}
+
 class ConsultationRunner implements CommandRunner {
 	private readonly inner: FakeRunner;
 	agentListJson: string;
@@ -523,7 +549,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(state.pendingConsultationResponse(started[0].id)).toBeNull();
 				},
 				WIDTH,
-				30,
+				32,
 				{
 					...bootProps(state, runner),
 					config: { ...configFor(), repos: {} },
@@ -564,7 +590,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					expect(state.consultationTurns(WORKING_ID)[0].settledAt).not.toBeNull();
 				},
 				WIDTH,
-				30,
+				32,
 				{
 					state,
 					runner,
@@ -595,7 +621,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 						detailPaneText(f).includes("State: "),
 					);
 					// The action bar offers recovery for an opening Consultation.
-					expect(frameText(setup.captureCharFrame())).toContain("r recover");
+					expect(frameText(setup.captureCharFrame())).toContain("r Recover");
 					await press(setup, "r", "the recovered launch to reach working", (f) =>
 						f.includes("State: working"),
 					);
@@ -610,7 +636,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(state.consultation(OPENING_ID)?.state).toBe("working");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -684,7 +710,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(replacements[0].state).toBe("working");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -728,7 +754,7 @@ describe("Consultation responses through the UI", () => {
 					expect(turns[1].input).toBe("follow up");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -770,7 +796,7 @@ describe("Consultation responses through the UI", () => {
 					expect(frameText(setup.captureCharFrame())).toContain("follow up");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -800,7 +826,12 @@ describe("Consultation responses through the UI", () => {
 					);
 					expect(detailPaneText(settled)).toContain("Agent view:");
 					expect(detailPaneText(settled)).toContain("the design holds");
-					expect(frameText(settled)).toContain("Enter respond");
+					expect(actionBarRowOf(settled)).toContain("Enter Respond");
+					expect(actionBarRowOf(settled)).not.toContain("Enter/r Respond");
+					// `r` remains Refresh even when Enter can open the response editor.
+					await press(setup, "r", "refresh instead of response", (f) =>
+						messageRowOf(f).includes("no Ticket sources exist"),
+					);
 
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("then ship it");
@@ -817,7 +848,7 @@ describe("Consultation responses through the UI", () => {
 					expect(turns.at(-1)?.input).toBe("then ship it");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
 			);
 		} finally {
@@ -842,7 +873,7 @@ describe("Agent interaction through the UI", () => {
 						detailPaneText(f).includes("State: "),
 					);
 					await pressEnter(setup, "interaction mode with its exit key", (f) =>
-						f.includes("F12 exit"),
+						f.includes("F12 Exit interaction"),
 					);
 					const frame = await awaitFrame(
 						setup,
@@ -859,7 +890,7 @@ describe("Agent interaction through the UI", () => {
 					setup.mockInput.pressKey("h");
 					setup.mockInput.pressKey("\u00e9");
 					await pressEnter(setup, "the frame to stay in interaction", (f) =>
-						f.includes("F12 exit"),
+						f.includes("F12 Exit interaction"),
 					);
 					await waitForCommands(
 						runner,
@@ -877,7 +908,7 @@ describe("Agent interaction through the UI", () => {
 					);
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -966,7 +997,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					}
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1038,7 +1069,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(worktrees[0]).toMatchObject({ owned: false });
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1062,10 +1093,16 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					);
 					const frame = setup.captureCharFrame();
 					expect(frame).not.toContain("\u276f Consultations");
+					expect(actionBarRowOf(frame)).not.toContain("←/h List");
+					expect(actionBarRowOf(frame)).not.toContain("→/l Detail");
 					expect(frameText(frame)).toContain("State: working");
+					const refused = await press(setup, "h", "the unavailable hidden Consultation list", (f) =>
+						messageRowOf(f).includes("the Consultation list is hidden below 80 columns"),
+					);
+					expect(frameText(refused)).toContain("State: working");
 				},
 				70,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1113,7 +1150,7 @@ describe("Consultation geometry, privacy, and history through the UI", () => {
 					expect(state.consultation(CLOSED_ID)).toBeUndefined();
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1171,7 +1208,7 @@ describe("Consultation attention through the UI", () => {
 					expect(bells.count()).toBe(2);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1213,7 +1250,7 @@ describe("Consultation attention through the UI", () => {
 					expect(bells.count()).toBe(1);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1244,16 +1281,19 @@ describe("Consultation attention through the UI", () => {
 						f.includes("State: failed"),
 					);
 					expect(frameText(oldest)).toContain("herdr refused the launch");
-					// An awaiting response always wins over the recovery items.
+					// An awaiting response always wins over the recovery items. v is
+					// intentionally a no-op while Consultations is expanded, so return
+					// to Tickets before opening it again.
 					seed(state, AWAITING_ID, true, t(4));
 					state.settleConsultationTurn(AWAITING_ID, null, "answer", "idle");
+					await press(setup, "t", "the Ticket section", (f) => f.includes("▾ Tickets"));
 					const selected = await press(setup, "v", "the awaiting detail", (f) =>
 						f.includes("State: awaiting-response"),
 					);
 					expect(detailPaneText(selected)).toContain("State: awaiting-response");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1291,7 +1331,7 @@ describe("Consultation attention through the UI", () => {
 					expect(rows.join("\n")).not.toContain("awaiting response");
 				},
 				WIDTH,
-				30,
+				32,
 				bootProps(state, runner),
 			);
 		} finally {
@@ -1346,7 +1386,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.workspaceId).toBe("ws-live");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1408,7 +1448,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.contextWindow).toBe("131072");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config, home },
 			);
 		} finally {
@@ -1452,7 +1492,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.workspaceId).toBe("ws-new");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1521,7 +1561,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					});
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1590,7 +1630,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.paneId).toBeNull();
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config, home },
 			);
 		} finally {
@@ -1622,7 +1662,7 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(consultation.warning).toBe("the live checkout has uncommitted changes");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: liveConfigFor(), home },
 			);
 		} finally {
@@ -1654,15 +1694,19 @@ describe("Consultation response gating by observed Agent status", () => {
 					// configured exit key is visible before any input is forwarded.
 					const bar = await awaitFrame(
 						setup,
-						(f) => frameText(f).includes("F12 interact exit"),
+						(f) => frameText(f).includes("Enter Interact"),
 						"the blocked Agent hints",
 					);
-					expect(frameText(bar)).toContain("Enter interact");
-					await pressEnter(
-						setup,
-						"interaction mode, not the response editor",
-						(f) => f.includes("F12 exit") && !f.includes("interact exit"),
+					expect(frameText(bar)).toContain("Enter Interact");
+					await pressEnter(setup, "interaction mode, not the response editor", (f) =>
+						f.includes("F12 Exit interaction"),
 					);
+					// Agent interaction owns keyboard and mouse input. A header click
+					// must not switch to the hidden Ticket section.
+					await mouseClick(setup, 10, 1);
+					const stillConsultations = await settle(setup);
+					expect(stillConsultations).toContain("▾ Consultations");
+					expect(stillConsultations).not.toContain("▾ Tickets");
 					// No input is forwarded until the operator sends keys.
 					expect(runner.commands().join("\n")).not.toContain("send-text");
 					expect(runner.commands().join("\n")).not.toContain("send-keys");
@@ -1671,7 +1715,7 @@ describe("Consultation response gating by observed Agent status", () => {
 					);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1697,13 +1741,25 @@ describe("Consultation response gating by observed Agent status", () => {
 					// The gate is the observed status, not the last settled turn.
 					await awaitFrame(
 						setup,
-						(f) => frameText(f).includes("Enter respond"),
+						(f) => frameText(f).includes("Enter Respond"),
 						"the idle Agent hints",
 					);
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
+					// The response editor owns mouse input too. A pane click must not
+					// move focus behind it, which would change the next base mode when
+					// the editor closes.
+					await mouseClick(setup, 80, 5);
+					await settle(setup);
+					const afterEditor = await press(
+						setup,
+						"escape",
+						"the response editor to close",
+						(f) => !f.includes("Response draft"),
+					);
+					expect(afterEditor).toContain("┌─❯ Consultations");
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1726,10 +1782,8 @@ describe("Consultation response gating by observed Agent status", () => {
 			await withApp(
 				async (setup) => {
 					await press(setup, "v", "the consultations view", (f) => f.includes("State: working"));
-					await pressEnter(
-						setup,
-						"interaction mode with its exit key",
-						(f) => f.includes("F12 exit") && !f.includes("interact exit"),
+					await pressEnter(setup, "interaction mode with its exit key", (f) =>
+						f.includes("F12 Exit interaction"),
 					);
 					const ansiReads = () =>
 						runner.commands().filter((c) => c.includes("--format ansi")).length;
@@ -1747,7 +1801,7 @@ describe("Consultation response gating by observed Agent status", () => {
 					);
 				},
 				WIDTH,
-				30,
+				32,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
 			);
 		} finally {
@@ -1755,6 +1809,61 @@ describe("Consultation response gating by observed Agent status", () => {
 		}
 	});
 });
+
+const interactionExitCases = [
+	{
+		name: "ctrl+e",
+		config: "ctrl+e" as const,
+		label: "Ctrl+E",
+		send: (setup: Setup) => setup.mockInput.pressKey("e", { ctrl: true }),
+	},
+	{
+		name: "f13",
+		config: "f13" as const,
+		label: "F13",
+		// The mock helper exposes F1-F12 only; send Kitty's F13 code through
+		// the same renderer parser used by the production terminal.
+		send: (setup: Setup) => setup.mockInput.pressKey("\u001b[57376u"),
+	},
+] as const;
+
+for (const exitCase of interactionExitCases) {
+	test(`the configured ${exitCase.name} exits Agent interaction end to end`, async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, INTERACTION_ID);
+		const paneId = `pane-${INTERACTION_ID.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubPaneReadText(inner, paneId, "Agent: working");
+		stubPaneReadAnsi(inner, paneId, "agent: waiting for input");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await press(setup, "v", "the Consultation section", (f) => f.includes("State: working"));
+					await pressEnter(setup, "Agent interaction mode", (f) =>
+						f.includes(`${exitCase.label} Exit interaction`),
+					);
+					exitCase.send(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("left Agent interaction mode"),
+						"the interaction exit",
+					);
+					expect(runner.commands().join("\n")).not.toContain("send-text");
+				},
+				WIDTH,
+				32,
+				{ state, runner, config: { ...configFor(), interactionExitKey: exitCase.config }, home },
+				{ kittyKeyboard: true },
+			);
+		} finally {
+			state.close();
+		}
+	});
+}
 
 describe("The full Consultation operator flow", () => {
 	test("launch, settle, respond, blocked interaction, settle, close, and inspect the history", async () => {
@@ -1794,9 +1903,9 @@ describe("The full Consultation operator flow", () => {
 					);
 					await sleep(150);
 					expect(bells.count()).toBe(1);
-					// a toggles auto-handoff even in the Consultations view: the
-					// launched Consultation is already the selection.
-					await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+					// a is a Ticket-section control, so it is inert in Consultations.
+					setup.mockInput.pressKey("a");
+					expect((await settle(setup)).match(/auto: on/g)).toBeNull();
 					// The Agent is idle: Enter opens the response editor.
 					await pressEnter(setup, "the response editor", (f) => f.includes("Response draft"));
 					setup.mockInput.typeText("answer one");
@@ -1816,10 +1925,8 @@ describe("The full Consultation operator flow", () => {
 					);
 					expect(state.consultationTurns(id).at(-1)?.settledStatus).toBe("blocked");
 					// Enter now opens interaction, not the response editor.
-					await pressEnter(
-						setup,
-						"the blocked interaction mode",
-						(f) => f.includes("F12 exit") && !f.includes("interact exit"),
+					await pressEnter(setup, "the blocked interaction mode", (f) =>
+						f.includes("F12 Exit interaction"),
 					);
 					setup.mockInput.pressKey("h");
 					await waitForCommands(runner, [`herdr pane send-text pane-c1 h`], "the forwarded key");
@@ -1904,6 +2011,99 @@ describe("The full Consultation operator flow", () => {
 				WIDTH,
 				30,
 				{ state, runner, config: configFor(), home, pollIntervalMs: 50 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a settling refresh cannot clear the Consultation's progress line", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const ticketSource = { name: "tickets", kind: "github-issues" };
+		const sourceConfig = {
+			name: "tickets",
+			kind: "github-issues" as const,
+			refreshIntervalSeconds: 60,
+			repositories: ["acme/factory"],
+			host: "github.com",
+		};
+		const outcome = {
+			status: "success" as const,
+			fetchedAt: "2026-09-01T10:00:00.000Z",
+			tickets: [],
+		};
+		state.initializeSources([ticketSource]);
+		state.applyFetch(ticketSource, outcome);
+		const source = new FakeSource(ticketSource.name, ticketSource.kind, outcome);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		// The Consultation's own herdr command never answers, so the Consultation
+		// stays in flight and its progress line holds the Message line. The
+		// source's refresh runs on its own, so the two operations overlap.
+		const runner = new GatedRunner(
+			new ConsultationRunner(inner, agentListJson([])),
+			(command, args) =>
+				command === "herdr" && args.includes("worktree") && args.includes("create"),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					// The mount fetch answers first, so the refresh has an idle
+					// source to start.
+					source.settle(outcome);
+					await settle(setup);
+					await press(setup, "v", "the Consultation section", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await openLauncher(setup);
+					await launchConsultationDraft(setup, "review auth");
+					// The opening owns the line: it is the only operation running.
+					await press(
+						setup,
+						"return",
+						"the launch progress",
+						(f) =>
+							messageRowOf(f).startsWith("Working: ") && messageRowOf(f).includes("Consultation"),
+					);
+					// The refresh runs beside it, from the Ticket section, and
+					// covers the one line with its own progress. The Consultation's
+					// progress survives the switch: it is the frame's line.
+					await press(
+						setup,
+						"t",
+						"the Ticket section",
+						(f) => rowsOf(f)[1]?.startsWith("▾ Tickets") === true,
+					);
+					setup.mockInput.pressKey("r");
+					const refreshing = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("refreshing 1 sources"),
+						"the refresh progress",
+					);
+					expect(messageRowOf(refreshing)).toContain("refreshing 1 sources");
+					source.settle(outcome);
+					// Its settle must not leave the line blank: the Consultation
+					// still runs, and the line returns to its progress.
+					const returned = await awaitFrame(
+						setup,
+						(f) =>
+							messageRowOf(f).startsWith("Working: ") && messageRowOf(f).includes("Consultation"),
+						"the Consultation's progress to return",
+					);
+					expect(messageRowOf(returned)).toContain("Working: ");
+					expect(messageRowOf(returned)).not.toContain("refreshing");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), sources: [sourceConfig] },
+					home,
+					sources: [source],
+					pollIntervalMs: 60_000,
+				},
 			);
 		} finally {
 			state.close();

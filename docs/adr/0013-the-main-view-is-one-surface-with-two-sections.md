@@ -12,3 +12,5 @@ The control plane ran two fullscreen main views, a Tickets view and a Consultati
 - Both sections keep their list selection and detail scroll while collapsed; a re-expand shows the same place.
 - The free-standing attention line and the Consultation status line disappear: attention facts live on the Consultation section's header row, and Consultation progress, notices, warnings, and errors ride the Message line.
 - No key letter changes: Consultation keys keep their letters and gain catalogue availability, the Action bar, and the Key guide.
+- The Main frame owns two header rows, so its minimum useful size rises with them: 40 columns by 9 rows is the shortest terminal that holds both headers, one real pane row, the Message line, and the Action bar. Below it the compact frame drops the headers with the panes.
+- The Agent terminal and the response editor join the interaction mode set, so the Action bar and the Key guide state the keys those surfaces actually accept: the configured exit key, and Send and Keep draft.

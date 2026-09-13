@@ -268,6 +268,30 @@ export function isLiteralText(value: string): boolean {
 	);
 }
 
+/**
+ * A bracketed paste arrives as raw terminal bytes and may carry terminal
+ * sequences alongside the text. The sequences are removed first (CSI such as
+ * color, OSC such as title, and the other two-byte escapes), then the literal
+ * rule applies per character, so a pasted draft keeps its newlines and tabs
+ * and never carries terminal control into the agent's prompt.
+ */
+const TERMINAL_ESC = String.fromCharCode(27);
+const TERMINAL_BEL = String.fromCharCode(7);
+const CSI_SEQUENCE = new RegExp(`${TERMINAL_ESC}\\[[0-?]*[ -/]*[@-~]`, "gu");
+const OSC_SEQUENCE = new RegExp(
+	`${TERMINAL_ESC}\\][^${TERMINAL_ESC}${TERMINAL_BEL}]*(?:${TERMINAL_ESC}\\\\|${TERMINAL_BEL})?`,
+	"gu",
+);
+const TWO_BYTE_ESCAPE = new RegExp(`${TERMINAL_ESC}[\\u0040-\\u005f]`, "gu");
+
+export function sanitizePastedText(value: string): string {
+	const withoutSequences = value
+		.replace(CSI_SEQUENCE, "")
+		.replace(OSC_SEQUENCE, "")
+		.replace(TWO_BYTE_ESCAPE, "");
+	return [...withoutSequences].filter((character) => isLiteralText(character)).join("");
+}
+
 function uniqueConflicts(conflicts: readonly CheckoutConflict[]): CheckoutConflict[] {
 	const seen = new Set<string>();
 	return conflicts.filter((conflict) => {

@@ -101,7 +101,7 @@ export function createControlDispatch(spec: ControlDispatchSpec): (key: KeyEvent
 		if (key.meta || spec.skip?.(key)) return false;
 		const mode = typeof spec.mode === "function" ? spec.mode() : spec.mode;
 		const context = contextFor(mode, spec.context);
-		const control = controlForKey(mode, key, context);
+		const control = controlForKey(key, context);
 		if (control === undefined) return spec.onUnclaimed?.(key) === true;
 		const availability = availabilityFor(control, context);
 		if (!availability.available && !spec.ungated?.includes(control.id)) {

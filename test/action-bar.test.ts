@@ -117,7 +117,7 @@ describe("the contextual Action bar", () => {
 					"→/l Detail",
 					"Enter Hand off",
 					"v Consultations",
-					"c Launch consultation",
+					"c Launch",
 					"e Override",
 					"r Refresh",
 				]) {
@@ -133,7 +133,7 @@ describe("the contextual Action bar", () => {
 				expect(spanColorAt(setup, barRow, "Consultations")).toEqual(rgb(COLORS.text));
 				// Unavailable: the whole hint is dim.
 				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(COLORS.dim));
-				expect(spanColorAt(setup, barRow, "c Launch consultation")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "c Launch")).toEqual(rgb(COLORS.dim));
 			},
 			WIDTH,
 			HEIGHT,
@@ -223,9 +223,9 @@ describe("the contextual Action bar", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 6);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 7);
 				await openSurface(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
 				// Enter on a modal action that is not the selected row is not a
 				// control the modal will run: F2 refuses for the same reason the
@@ -259,9 +259,9 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// The awaiting Ticket's Enter action opens a decision. It is not a
 				// dimmed Hand off control with an unrelated effect.
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
-				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 4);
-				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
+				await press(setup, "j", "the running ticket", (f) => markerRowOf(f) === 6);
+				await press(setup, "j", "the awaiting ticket", (f) => markerRowOf(f) === 7);
 				const awaitingBar = actionBarRowOf(await settle(setup));
 				expect(awaitingBar).toContain("Enter Decide");
 				expect(awaitingBar).not.toContain("Hand off");
@@ -348,10 +348,10 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Launch consultation, Consultations, Refresh, Override, Hand
-				// off, Detail, Move, and Help last. The spec's common controls
-				// of the base modes, Override and Refresh, therefore outlive
-				// the Consultation entries the control plane reached for.
+				// Launch, Consultations, Refresh, Override, Hand off, Detail,
+				// Move, and Help last. The spec's common controls of the base
+				// modes, Override and Refresh, therefore outlive the Launch
+				// entry the control plane reached for.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -360,16 +360,29 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"v Consultations",
-							"c Launch consultation",
+							"c Launch",
 							"e Override",
 							"r Refresh",
 							"? Help",
 						],
 					],
-					// The two widths the last review measured: the Consultation
-					// entries give way, and the spec's common controls stay.
+					// The widths the last review measured: the Launch entry gives
+					// way first, and the spec's common controls stay.
 					[
 						100,
+						[
+							"↑↓/jk Move",
+							"→/l Detail",
+							"Enter Hand off",
+							"v Consultations",
+							"c Launch",
+							"e Override",
+							"r Refresh",
+							"? Help",
+						],
+					],
+					[
+						95,
 						[
 							"↑↓/jk Move",
 							"→/l Detail",
@@ -526,10 +539,10 @@ describe("the contextual Action bar", () => {
 		await withApp(
 			async (setup) => {
 				// Move: j, k, and both arrows.
-				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 3);
-				await press(setup, "k", "the selection to move back", (f) => markerRowOf(f) === 2);
-				await pressArrow(setup, "down", "the selection to move down", (f) => markerRowOf(f) === 3);
-				await pressArrow(setup, "up", "the selection to move up", (f) => markerRowOf(f) === 2);
+				await press(setup, "j", "the selection to move on", (f) => markerRowOf(f) === 5);
+				await press(setup, "k", "the selection to move back", (f) => markerRowOf(f) === 4);
+				await pressArrow(setup, "down", "the selection to move down", (f) => markerRowOf(f) === 5);
+				await pressArrow(setup, "up", "the selection to move up", (f) => markerRowOf(f) === 4);
 				// Detail: l and right focus it, h and left leave it.
 				await press(setup, "l", "the detail to take focus", detailFocused);
 				await press(setup, "h", "the list to take focus", listFocused);
@@ -944,7 +957,9 @@ describe("the contextual Action bar", () => {
 						await press(setup, "v", "the consultations view", (f) =>
 							f.includes("State: awaiting-response"),
 						);
-						await press(setup, "return", "interaction mode", (f) => f.includes("F12 exit"));
+						await press(setup, "return", "interaction mode", (f) =>
+							f.includes("F12 Exit interaction"),
+						);
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},
@@ -1027,7 +1042,7 @@ describe("the contextual Action bar", () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
-				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 3);
+				await press(setup, "j", "the handed-off ticket", (f) => markerRowOf(f) === 5);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// The bar names the one meaning Enter runs on this ticket. Hand
