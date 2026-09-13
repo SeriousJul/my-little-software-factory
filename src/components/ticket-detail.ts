@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import type { ScrollConfig } from "../config.ts";
-import type { LeftoverEnvironment, Ticket } from "../domain/ticket.ts";
+import { isHeldCompletion, type LeftoverEnvironment, type Ticket } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
@@ -105,6 +105,24 @@ export function detailLines(
 	}
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;
+		// The held-turn warning (ADR 0016): the turn ended without completing
+		// and now blocks the automatic decisions. It stands above the
+		// last-completion line, so the warning reads before the fact it
+		// warns on, and it wears the warning color of the Leftover block above:
+		// the turn needs the operator, and red stays reserved for a pane that
+		// is gone. The last line states what the control plane refuses to do.
+		// It only shows while the ticket rests in awaiting: a held turn whose
+		// agent works again is retried, not held, and the pane says so without
+		// a warning.
+		if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion)) {
+			const causeLine =
+				completion.detail === ""
+					? `Turn ended ${completion.cause}`
+					: `Turn ended ${completion.cause}: ${completion.detail}`;
+			for (const wrapped of wrapToWidth(causeLine, usableCols))
+				lines.push({ text: wrapped, fg: COLORS.statusWarning });
+			pushWrapped("no automatic decision runs on this turn", COLORS.statusWarning);
+		}
 		// The date is the first minute of the stored completion time; the
 		// decision is `pending` until one is made on the turn.
 		const date = completion.completedAt.slice(0, 16).replace("T", " ");

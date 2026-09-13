@@ -24,7 +24,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useMemo, useState } from "react";
 
-import type { TurnLogEntry } from "../turn-log.ts";
+import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
@@ -32,13 +32,13 @@ import { type MdLine, renderMarkdown } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
-	actionRowSpans,
 	bodyRowSpans,
 	ModalSurface,
 	modalFrame,
 	scrollbarRows,
 	useActionSelection,
 } from "./modal-chrome.ts";
+import { ActionItem } from "./shared/choices.ts";
 import { truncateToWidth, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -49,6 +49,10 @@ interface DecisionModalProps {
 	contextLine: string;
 	/** The settled turn's log, in order. */
 	entries: readonly TurnLogEntry[];
+	/** The turn's end cause; a held cause shows its warning above the rows. */
+	cause?: TurnEndCause | null;
+	/** The agent's or provider's text for the cause; empty when none. */
+	detail?: string;
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	/** The `e` key on a row flagged editable: change its Handoff's settings. */
@@ -208,6 +212,8 @@ export function DecisionModal({
 	title,
 	contextLine,
 	entries,
+	cause = null,
+	detail = "",
 	actions,
 	onAction,
 	onEditAction,
@@ -250,16 +256,25 @@ export function DecisionModal({
 	// Reserve a column for the scrollbar only when the log needs one. A
 	// scrollbar can add wrap rows, so determine overflow once at the final
 	// width, then make the final window from the narrower text width.
+	// A held turn shows its cause above the action rows (ADR 0016): one row
+	// the log yields to, so the operator reads why the turn is held before
+	// the rows that decide it.
+	const held = cause !== null && isHeldCause(cause);
+	const heldRows = held ? 1 : 0;
 	const fullWidthBody = useMemo(
 		() => turnLogBody(entries, finalFrame.contentWidth),
 		[entries, finalFrame.contentWidth],
 	);
-	const hasScrollbar = fullWidthBody.length > logRows(finalFrame.contentRows, actions.length);
+	const hasScrollbar =
+		fullWidthBody.length > logRows(finalFrame.contentRows, actions.length) - heldRows;
 	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
 	const body = useMemo(() => turnLogBody(entries, bodyWidth), [entries, bodyWidth]);
-	const bodyRows = Math.min(body.length, logRows(frame.contentRows, actions.length));
+	const bodyRows = Math.min(
+		body.length,
+		Math.max(0, logRows(frame.contentRows, actions.length) - heldRows),
+	);
 	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the
 	// newest line in view. `null` pins the view to the bottom until the
@@ -320,7 +335,7 @@ export function DecisionModal({
 		borderColor: COLORS.borderFocused,
 		// The context row and every action row: without them the modal is
 		// not a decision, so it holds itself back at that size.
-		minContentRows: actions.length + CONTEXT_ROWS,
+		minContentRows: actions.length + CONTEXT_ROWS + heldRows,
 		opacity: pop,
 		message,
 		bar: {
@@ -340,12 +355,25 @@ export function DecisionModal({
 					...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
 				),
 			),
+			...(held
+				? [
+						createElement(
+							"text",
+							{ key: "held", fg: COLORS.statusWarning },
+							truncateToWidth(
+								detail === "" ? `Turn ended ${cause}` : `Turn ended ${cause}: ${detail}`,
+								frame.contentWidth,
+							),
+						),
+					]
+				: []),
 			...actions.map((row, index) =>
-				createElement(
-					"text",
-					{ key: row.key },
-					...actionRowSpans(row, index === selection.at, frame.contentWidth),
-				),
+				createElement(ActionItem, {
+					key: row.key,
+					row,
+					focused: index === selection.at,
+					width: frame.contentWidth,
+				}),
 			),
 		],
 	});

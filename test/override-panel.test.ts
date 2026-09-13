@@ -78,6 +78,7 @@ async function withPanel(
 			onCancel: () => undefined,
 			context: BASE_CONTEXT,
 			message: null,
+			onCopy: () => undefined,
 			onEmergencyExit: () => undefined,
 		}),
 		{ width: WIDTH, height: HEIGHT },
@@ -129,13 +130,42 @@ describe("the Model row's list belongs to the agent the panel is on", () => {
 			INITIAL,
 			async (setup) => {
 				await moveToModelRow(setup);
-				await setup.mockInput.pressArrow("right");
+				// The row's list is the agent's own, so its search answers with a
+				// value from that list. Arrows move the caret here, not the value.
+				await setup.mockInput.typeText("model-y");
 				const shown = await awaitFrame(
 					setup,
 					(f) => frameText(f).includes("only-for-pilot/model-y"),
-					"the agent's own model to cycle in",
+					"the agent's own model to match the search",
 				);
 				expect(frameText(shown)).toContain("Model only-for-pilot/model-y");
+			},
+		);
+	});
+
+	test("the Model search exposes Copy selection and removes it when the caret collapses it", async () => {
+		await withPanel(
+			{
+				agentType: "pilot",
+				status: { status: "available", models: ["only-for-pilot/model-y"] },
+			},
+			INITIAL,
+			async (setup) => {
+				await moveToModelRow(setup);
+				await setup.mockInput.typeText("model-y");
+				setup.mockInput.pressKey("HOME");
+				setup.mockInput.pressArrow("right", { shift: true });
+				await awaitFrame(
+					setup,
+					(f) => frameText(f).includes("F3 Copy selection"),
+					"Copy selection on the Model search",
+				);
+				setup.mockInput.pressArrow("right");
+				await awaitFrame(
+					setup,
+					(f) => !frameText(f).includes("F3 Copy selection"),
+					"Copy selection to leave the bar when the selection collapses",
+				);
 			},
 		);
 	});

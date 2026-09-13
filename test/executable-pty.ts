@@ -11,8 +11,9 @@
  *
  * The PTY is opened through the same node:ffi the OpenTUI native renderer
  * already loads, so no extra dependency is added. The helper is defensive:
- * if the platform cannot open a PTY, `openControlPlanePty` reports that and
- * the caller skips the test rather than failing it.
+ * if the platform cannot open a PTY, `openControlPlanePty` reports that with
+ * `null`, and the caller fails the test rather than skipping it, because a
+ * skipped required check is not a pass.
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -39,7 +40,8 @@ const TIOCSWINSZ: Record<string, number> = { linux: 0x5414, darwin: 0x40087467 }
 
 /**
  * The libc symbol table and fcntl constants differ per platform. Anything
- * outside this table cannot open a PTY here, so the test is skipped.
+ * outside this table cannot open a PTY here, so the check fails loudly: the
+ * boundary the caller verifies went unverified, and that must be visible.
  */
 const PTY_SUPPORT: Partial<
 	Record<NodeJS.Platform, { libcPaths: string[]; fSetFl: number; oNonBlock: bigint }>
@@ -109,6 +111,15 @@ export interface PtySession {
 export interface PtyOptions {
 	/** The terminal window size in cells. The renderer draws to it. */
 	size?: { cols: number; rows: number };
+	/**
+	 * The entry to run instead of the control plane's bin.
+	 *
+	 * The shared control gallery is a second production entry: the same renderer
+	 * startup, the same key parser, the same field modules, without a config
+	 * file or an Agent. A check that belongs to the library is run at that
+	 * boundary, so the executable path is proven as well as the frame path.
+	 */
+	entry?: string;
 }
 
 export async function openControlPlanePty(
@@ -145,7 +156,7 @@ export async function openControlPlanePty(
 		}
 	}
 
-	const child = spawn(process.execPath, [CONTROLLER_BIN, ...args], {
+	const child = spawn(process.execPath, [options.entry ?? CONTROLLER_BIN, ...args], {
 		stdio: [slave, slave, slave],
 		env: { ...baseEnv(), ...env },
 	});

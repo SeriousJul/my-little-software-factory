@@ -13,8 +13,9 @@ import {
 } from "./controls.ts";
 import { type MessageFact, messageColor } from "./messages.ts";
 import { ModalSurface, modalFrame } from "./modal-chrome.ts";
+import { controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
-import { COLORS, prefixForSeverity } from "./theme.ts";
+import { prefixForSeverity } from "./theme.ts";
 
 /** Whether the named key moves a window up. */
 const upKey = (name: string): boolean => name === "up" || name === "k";
@@ -115,11 +116,12 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 	});
 
 	const range = rangeIndicator(scroll, visible.length, rows.length);
+	const ink = controlInk();
 	return createElement(ModalSurface, {
 		frame,
 		width,
 		title: modalTitle,
-		borderColor: COLORS.borderFocused,
+		borderColor: ink.indicator.fg ?? undefined,
 		minContentRows: 1,
 		zIndex: 20,
 		message,
@@ -131,7 +133,7 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 		children: [
 			createElement(
 				"text",
-				{ key: "mode", fg: COLORS.dim },
+				{ key: "mode", fg: ink.detail.fg ?? undefined },
 				truncateToWidth(modeTitle(mode), frame.contentWidth),
 			),
 			...visible.map((row, index) =>
@@ -181,11 +183,13 @@ export function MessageView({
 	});
 
 	const range = rangeIndicator(scroll, visible.length, wrapped.length);
+	const ink = controlInk();
 	return createElement(ModalSurface, {
 		frame,
 		width,
 		title: modalTitle,
-		borderColor: fact.severity === "error" ? COLORS.statusError : COLORS.borderFocused,
+		borderColor:
+			fact.severity === "error" ? (ink.error.fg ?? undefined) : (ink.indicator.fg ?? undefined),
 		minContentRows: 1,
 		zIndex: 20,
 		message,
@@ -240,7 +244,7 @@ function guideRows(
 		const availability = isCurrent ? availabilityFor(entry.control, context) : { available: true };
 		rows.push({
 			kind: "control",
-			keys: guideKeyLabel(context.mode, entry.control),
+			keys: guideKeyLabel(context.mode, entry.control, context),
 			label: entry.control.label,
 			// A control that is always available carries its guide note; a
 			// current-mode control carries its live unavailable reason. Other
@@ -313,14 +317,19 @@ function flowGuideRows(rows: GuideLine[], width: number): GuideLine[] {
 }
 
 function guideRowElement(row: GuideLine, width: number, key: string): ReactElement {
+	const ink = controlInk();
 	if (row.kind === "group")
-		return createElement("text", { key, fg: COLORS.textBright }, truncateToWidth(row.group, width));
+		return createElement(
+			"text",
+			{ key, fg: ink.focusedText.fg ?? undefined },
+			truncateToWidth(row.group, width),
+		);
 	if (row.kind === "reason")
 		// A continuation of the control row above it: the reason column owns
 		// these cells, and they carry the same dim color.
 		return createElement(
 			"text",
-			{ key, fg: COLORS.dim },
+			{ key, fg: ink.detail.fg ?? undefined },
 			padToWidth(
 				`${" ".repeat(Math.max(0, row.indent))}${truncateToWidth(row.text, Math.max(1, width - row.indent))}`,
 				width,
@@ -331,11 +340,19 @@ function guideRowElement(row: GuideLine, width: number, key: string): ReactEleme
 	return createElement(
 		"text",
 		{ key },
-		createElement("span", { fg: unavailable ? COLORS.dim : COLORS.borderFocused }, row.keys),
-		createElement("span", { fg: unavailable ? COLORS.dim : COLORS.text }, `  ${row.label}`),
 		createElement(
 			"span",
-			{ fg: COLORS.dim },
+			{ fg: (unavailable ? ink.detail : ink.indicator).fg ?? undefined },
+			row.keys,
+		),
+		createElement(
+			"span",
+			{ fg: (unavailable ? ink.detail : ink.text).fg ?? undefined },
+			`  ${row.label}`,
+		),
+		createElement(
+			"span",
+			{ fg: ink.detail.fg ?? undefined },
 			truncateToWidth(reason, Math.max(0, width - widthOf(row.keys) - widthOf(`  ${row.label}`))),
 		),
 	);

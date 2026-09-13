@@ -21,13 +21,13 @@ import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
-	actionRowSpans,
 	bodyRowSpans,
 	ModalSurface,
 	modalFrame,
 	scrollbarRows,
 	useActionSelection,
 } from "./modal-chrome.ts";
+import { ActionItem } from "./shared/choices.ts";
 import { wrapToWidth } from "./text.ts";
 import { COLORS } from "./theme.ts";
 
@@ -143,11 +143,12 @@ export function MissingModal({
 				),
 			),
 			...actions.map((row, index) =>
-				createElement(
-					"text",
-					{ key: row.key },
-					...actionRowSpans(row, index === selection.at, frame.contentWidth),
-				),
+				createElement(ActionItem, {
+					key: row.key,
+					row,
+					focused: index === selection.at,
+					width: frame.contentWidth,
+				}),
 			),
 		],
 	});

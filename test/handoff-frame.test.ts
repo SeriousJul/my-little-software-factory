@@ -160,6 +160,31 @@ async function moveToModelRow(setup: Setup): Promise<string> {
 	return press(setup, "j", "the selection to move to the model", (f) => f.includes("❯ Model"));
 }
 
+/**
+ * The Model row's search line as the terminal holds it, without its label.
+ *
+ * The frame's whitespace collapse cannot show an empty field, so this probe
+ * reads the row itself: an operator who cleared the query sees nothing after
+ * the label, and that is the fact a test has to tell apart from a stale one.
+ */
+const searchRowOf = (frame: string): string => {
+	const row = rowsOf(frame).find((line) => line.includes("Search"));
+	if (row === undefined) return "";
+	const at = row.indexOf("Search") + "Search".length;
+	return (row.slice(at).match(/^\S*/u)?.[0] ?? "").trim();
+};
+
+/**
+ * Type into the Model row's visible search.
+ *
+ * The search is a field, so the operator's letters go into it and nothing else:
+ * the panel dispatches no control for a printable key while the Model row holds
+ * the cursor.
+ */
+async function typeModelSearch(setup: Setup, text: string): Promise<void> {
+	await setup.mockInput.typeText(text);
+}
+
 /** Walk the panel selection down to the Thinking row, below the Model row. */
 async function moveToThinkingRow(setup: Setup): Promise<string> {
 	await moveToModelRow(setup);
@@ -2618,12 +2643,14 @@ describe("the override panel", () => {
 				await setup.mockInput.pressKey("HOME");
 				await setup.mockInput.pressArrow("right", { shift: true });
 				await setup.mockInput.pasteBracketedText("X");
+				// The bar cursor and the selection agree on one cell, so the selected
+				// "S" is exactly what the pasted "X" replaces.
 				const frame = await awaitFrame(
 					setup,
-					(f) => frameText(f).includes("Model XabE"),
+					(f) => frameText(f).includes("Model XMabE"),
 					"the paste over a selection",
 				);
-				expect(frameText(frame)).toContain("Model XabE");
+				expect(frameText(frame)).toContain("Model XMabE");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2888,8 +2915,11 @@ describe("the override panel", () => {
 				// The Model list row's bar names its controls. The row takes
 				// typed letters, so j and k are not on its Move hint, and it
 				// cycles with the arrows only.
+				// The Model row is the shared Type-ahead: its search is a field, so
+				// the bar names the arrows as movement and the letters as editing, and
+				// its one explicit clear key.
 				expect(frameText(modelFrame)).toContain(
-					"↑↓ Move ←→ Change Type Edit ⌫ Clear Enter Hand off Esc Cancel F1 Help",
+					"↑↓ Move Type Edit Enter Hand off Esc Cancel Del Clear F1 Help",
 				);
 				expect(frameText(modelFrame)).not.toContain("Backspace Delete");
 				// On the Model row `j` is a letter, not a move: the selection
@@ -2971,7 +3001,7 @@ describe("the override panel", () => {
 	 * pinned there as well as at the default size.
 	 */
 	function modelListRowScenarios(size: PanelSize): void {
-		test(`the Model row cycles the list the selected agent reported (${size.width}x${size.height})`, async () => {
+		test(`the Model search names the first model that holds its text (${size.width}x${size.height})`, async () => {
 			const runner = new FakeRunner();
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
@@ -2987,75 +3017,35 @@ describe("the override panel", () => {
 					await openPanel(setup);
 					expect(runner.modelListCalls).toEqual(["pi"]);
 					await moveToModelRow(setup);
-					// The task type names no model, so the row starts unset.
+					// The task type names no model, so the row starts unset and the
+					// search line under it is empty.
 					expect(frameText(setup.captureCharFrame())).toContain("Model (unset)");
-					await pressArrow(setup, "right", "the first model to be offered", (f) =>
-						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
-					);
-					const second = await pressArrow(
+					await typeModelSearch(setup, "gpt-5.1");
+					const matched = await awaitFrame(
 						setup,
-						"right",
-						"the next model to be offered",
-						(f) =>
-							frameText(f).includes("Model openai/gpt-5.1 ") ||
-							frameText(f).endsWith("openai/gpt-5.1"),
+						(f) => frameText(f).includes("Model openai/gpt-5.1"),
+						"the first model that holds the query",
 					);
-					expect(frameText(second)).toContain("openai/gpt-5.1");
+					// The query stays on screen beside the value it named, so the
+					// operator reads the search and the setting as two things.
+					expect(frameText(matched)).toContain("Search gpt-5.1");
+					await typeModelSearch(setup, "-codex");
+					const longer = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("Model openai/gpt-5.1-codex"),
+						"the longer query to narrow the match",
+					);
+					expect(frameText(longer)).toContain("Search gpt-5.1-codex");
 					await pressEnterToHandoff(setup);
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-					expect(start?.args).toEqual([
-						"agent",
-						"start",
-						firstAgent,
-						"--kind",
-						"pi",
-						"--pane",
-						"pane-1",
-						"--",
-						"--model",
-						"openai/gpt-5.1",
-					]);
+					expect(start?.args).toContain("openai/gpt-5.1-codex");
 				},
 				size.width,
 				size.height,
 				props,
 			);
 		});
-		test(`typing on the Model row jumps the value to the first model that holds the text (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
-			stubLiveHandoff(runner);
-			runner.setModelList("pi", [
-				"anthropic/claude-haiku-4-5",
-				"anthropic/claude-sonnet-4-5",
-				"openai/gpt-5.1-codex",
-			]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-			await withApp(
-				async (setup) => {
-					await openPanel(setup);
-					await moveToModelRow(setup);
-					// Case does not matter: the operator typed the family in capitals.
-					await setup.mockInput.typeText("SONNET");
-					const jumped = await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
-						"the value to jump to the model holding the typed text",
-					);
-					// The typed text is never displayed: the jumping value is the feedback.
-					expect(frameText(jumped)).not.toContain("SONNET");
-					// The selection stays on the row: typing never moves it.
-					expect(jumped).toContain("❯ Model");
-					await pressEnterToHandoff(setup);
-					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-					expect(start?.args).toContain("anthropic/claude-sonnet-4-5");
-				},
-				size.width,
-				size.height,
-				props,
-			);
-		});
-		test(`a letter that matches no model leaves the value, and the arrows then take a match (${size.width}x${size.height})`, async () => {
+		test(`a query that matches nothing keeps its text and says so (${size.width}x${size.height})`, async () => {
 			const runner = new FakeRunner();
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
@@ -3069,35 +3059,50 @@ describe("the override panel", () => {
 				async (setup) => {
 					await openPanel(setup);
 					await moveToModelRow(setup);
-					await setup.mockInput.typeText("gpt-5.1");
-					const jumped = await awaitFrame(
+					await typeModelSearch(setup, "gpt-5.1");
+					await awaitFrame(
 						setup,
-						(f) =>
-							frameText(f).includes("Model openai/gpt-5.1 ") ||
-							frameText(f).endsWith("openai/gpt-5.1"),
-						"the value to jump to the first match",
+						(f) => frameText(f).includes("Model openai/gpt-5.1"),
+						"the first match",
 					);
-					expect(frameText(jumped)).toContain("openai/gpt-5.1");
-					// A letter no model holds extends the run and changes nothing: the
-					// value stays on the last match rather than jumping away.
-					await setup.mockInput.typeText("q");
-					const held = await settle(setup);
-					expect(frameText(held)).toContain("openai/gpt-5.1");
-					// The arrows select from there, and end the type-ahead run.
-					const next = await pressArrow(setup, "right", "the next model to be offered", (f) =>
-						frameText(f).includes("openai/gpt-5.1-codex"),
+					// A letter no model holds extends the query and changes nothing:
+					// the value stays on the last match, and the failed query stays
+					// readable instead of restarting from its last character.
+					await typeModelSearch(setup, "q");
+					const held = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("no match"),
+						"the no-match feedback",
 					);
-					expect(frameText(next)).toContain("openai/gpt-5.1-codex");
+					expect(frameText(held)).toContain("gpt-5.1q");
+					expect(frameText(held)).toContain("Model openai/gpt-5.1");
+					// Backspace edits the query, so the operator corrects it in place.
+					setup.mockInput.pressBackspace();
+					const fixed = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("Search gpt-5.1 ") && !frameText(f).includes("no match"),
+						"the corrected query to match again",
+					);
+					expect(frameText(fixed)).toContain("gpt-5.1");
+					// Delete clears the whole query in one key, and the Model it
+					// named stands: clearing a search is not clearing a setting.
+					setup.mockInput.pressKey("DELETE");
+					const cleared = await awaitFrame(
+						setup,
+						(f) => searchRowOf(f) === "" && frameText(f).includes("Model openai/gpt-5.1"),
+						"the query to clear and the value to stay",
+					);
+					expect(frameText(cleared)).toContain("Model openai/gpt-5.1");
 					await pressEnterToHandoff(setup);
 					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-					expect(start?.args).toContain("openai/gpt-5.1-codex");
+					expect(start?.args).toContain("openai/gpt-5.1");
 				},
 				size.width,
 				size.height,
 				props,
 			);
 		});
-		test(`backspace clears the Model row and leaves the model to the agent (${size.width}x${size.height})`, async () => {
+		test(`Delete on an empty search gives the Model back to the agent (${size.width}x${size.height})`, async () => {
 			const runner = new FakeRunner();
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
@@ -3107,18 +3112,21 @@ describe("the override panel", () => {
 				async (setup) => {
 					await openPanel(setup);
 					await moveToModelRow(setup);
-					await setup.mockInput.typeText("gpt");
+					await typeModelSearch(setup, "gpt");
 					await awaitFrame(
 						setup,
 						(f) => frameText(f).includes("openai/gpt-5.1"),
-						"the jumped model",
+						"the matched model",
 					);
-					const cleared = await pressArrow(setup, "left", "the row to fall back one model", (f) =>
-						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
-					);
-					expect(frameText(cleared)).toContain("anthropic/claude-sonnet-4-5");
-					const unset = await pressBackspace(setup, "the Model row to clear", (f) =>
-						frameText(f).includes("Model (unset)"),
+					setup.mockInput.pressKey("DELETE");
+					await awaitFrame(setup, (f) => searchRowOf(f) === "", "the query to clear");
+					// The second Delete has no query left to remove, so it gives the
+					// setting back to the agent: one key, two explicit steps.
+					setup.mockInput.pressKey("DELETE");
+					const unset = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("Model (unset)"),
+						"the Model row to clear",
 					);
 					expect(frameText(unset)).toContain("Model (unset)");
 					await pressEnterToHandoff(setup);
@@ -3143,12 +3151,14 @@ describe("the override panel", () => {
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Model (loading...)");
 					await moveToModelRow(setup);
-					// The row takes no typing while the list is missing: the letters
-					// cannot be mistaken for a model the operator meant to choose.
+					// The waiting row is not a field: it holds no list to search, so
+					// the letters cannot be mistaken for a model the operator meant
+					// to choose, and no search line appears under it.
 					await setup.mockInput.typeText("sonnet");
 					const held = await settle(setup);
 					expect(frameText(held)).toContain("Model (loading...)");
 					expect(frameText(held)).not.toContain("sonnet");
+					expect(searchRowOf(held)).toBe("");
 					// Only movement keys leave the row.
 					const thinking = await pressArrow(
 						setup,
@@ -3157,14 +3167,18 @@ describe("the override panel", () => {
 						(f) => f.includes("❯ Thinking"),
 					);
 					expect(frameText(thinking)).toContain("❯ Thinking");
-					// The query answers: the row becomes the list it reported.
+					// The query answers: the row becomes the list it reported, with
+					// its search line under it.
 					runner.releaseModelLists();
 					const ready = await pressArrow(setup, "up", "the Model row to hold the list", (f) =>
 						f.includes("❯ Model"),
 					);
 					expect(frameText(ready)).toContain("Model (unset)");
-					await pressArrow(setup, "right", "the fetched model to show", (f) =>
-						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					await typeModelSearch(setup, "sonnet");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
+						"the match",
 					);
 				},
 				size.width,
@@ -3220,10 +3234,14 @@ describe("the override panel", () => {
 					expect(spanColors(setup, "gpt-4o")).toEqual([rgb(COLORS.statusWarning)]);
 					// The thinking level the task type names is supported, so it stays plain.
 					expect(frameText(opened)).toContain("Thinking (unset)");
-					// Cycling to a model the agent does hold clears the warning.
+					// A search that names a model the agent does hold clears the
+					// warning, because the value it selects is one the handoff can send.
 					await moveToModelRow(setup);
-					await pressArrow(setup, "right", "the row to take a model the agent offers", (f) =>
-						frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+					await typeModelSearch(setup, "claude");
+					await awaitFrame(
+						setup,
+						(f) => frameText(f).includes("Model anthropic/claude-sonnet-4-5"),
+						"the model the agent offers",
 					);
 					expect(spanColors(setup, "gpt-4o")).toEqual([]);
 					// The selected row reads in the bright color, never the warning one.
@@ -3433,8 +3451,11 @@ describe("the override panel", () => {
 				async (setup) => {
 					await openPanel(setup);
 					await moveToModelRow(setup);
-					const shown = await pressArrow(setup, "right", "the long model to show its tail", (f) =>
-						frameText(f).includes(`…${long.slice(-(size.valueCells - 1))}`),
+					await typeModelSearch(setup, "IQ1_M_XL");
+					const shown = await awaitFrame(
+						setup,
+						(f) => frameText(f).includes(`…${long.slice(-(size.valueCells - 1))}`),
+						"the long model to show its tail",
 					);
 					// The value column holds size.valueCells cells: the cut marker plus
 					// the rest of the end, and nothing of the shared provider
@@ -3491,146 +3512,6 @@ describe("the override panel", () => {
 					expect(frameText(onModel)).not.toContain("query failed");
 					// No query ran for a kind that has no list command.
 					expect(runner.modelListCalls).toEqual([]);
-				},
-				size.width,
-				size.height,
-				props,
-			);
-		});
-		test(`a letter that matches nothing restarts the run, so the row keeps answering (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
-			stubLiveHandoff(runner);
-			// The list is shaped so a dead run and a live one cannot be confused:
-			// "codex" is reachable only as its own run, never as the tail of "gpt".
-			runner.setModelList("pi", [
-				"anthropic/claude-sonnet-4-5",
-				"openai/gpt-5.1",
-				"openai/gpt-5.1-codex",
-			]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-			await withApp(
-				async (setup) => {
-					await openPanel(setup);
-					await moveToModelRow(setup);
-					await setup.mockInput.typeText("gpt");
-					await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("openai/gpt-5.1 "),
-						"the first match",
-					);
-					// "x" ends the run: "gptx" is in no model. The row does not go quiet
-					// on the operator there: the failing letter starts a new run, and the
-					// only model holding an x jumps into the value.
-					const restarted = await setup.mockInput
-						.typeText("x")
-						.then(() =>
-							awaitFrame(
-								setup,
-								(f) => frameText(f).includes("gpt-5.1-codex"),
-								"the run to restart",
-							),
-						);
-					expect(frameText(restarted)).toContain("openai/gpt-5.1-codex");
-					// The new run keeps growing from that letter: "5" cannot follow "x",
-					// so "5" alone picks the first model that holds it.
-					await setup.mockInput.typeText("5");
-					const again = await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
-						"the second restart of the run",
-					);
-					expect(frameText(again)).toContain("anthropic/claude-sonnet-4-5");
-					// A letter no model holds at all is the last case: the value stays
-					// where it is, and the row is still answering. "z" starts a run nothing
-					// can extend, and the "x" after it starts the next run on a real model.
-					await setup.mockInput.typeText("z");
-					const held = await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("anthropic/claude-sonnet-4-5"),
-						"the value to hold on a letter nothing holds",
-					);
-					expect(frameText(held)).toContain("anthropic/claude-sonnet-4-5");
-					await setup.mockInput.typeText("x");
-					const afterDead = await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("openai/gpt-5.1-codex"),
-						"the row to answer after a letter nothing holds",
-					);
-					expect(frameText(afterDead)).toContain("openai/gpt-5.1-codex");
-					await pressEnterToHandoff(setup);
-					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-					// The value the run left is the value the handoff carries.
-					expect(start?.args).toContain("openai/gpt-5.1-codex");
-				},
-				size.width,
-				size.height,
-				props,
-			);
-		});
-		test(`leaving the Model row ends its type-ahead run (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
-			stubLiveHandoff(runner);
-			// Only the second model holds "z", and only the first holds "q" ahead of it.
-			runner.setModelList("pi", ["anthropic/qwen-first", "openai/zq-second"]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-			await withApp(
-				async (setup) => {
-					await openPanel(setup);
-					await moveToModelRow(setup);
-					await setup.mockInput.typeText("z");
-					await awaitFrame(setup, (f) => frameText(f).includes("openai/zq-second"), "the z match");
-					// Leave the row and come back: the run the operator built is over.
-					await pressArrow(setup, "down", "the selection to reach Thinking", (f) =>
-						f.includes("❯ Thinking"),
-					);
-					await pressArrow(setup, "up", "the selection to return to Model", (f) =>
-						f.includes("❯ Model"),
-					);
-					// "q" alone finds the first model that holds it. Had the run carried
-					// over, "zq" would have held the row on the model it was already on.
-					const back = await setup.mockInput
-						.typeText("q")
-						.then(() =>
-							awaitFrame(
-								setup,
-								(f) => frameText(f).includes("anthropic/qwen-first"),
-								"a fresh run",
-							),
-						);
-					expect(frameText(back)).toContain("anthropic/qwen-first");
-				},
-				size.width,
-				size.height,
-				props,
-			);
-		});
-		test(`Delete clears a Model row, like Backspace (${size.width}x${size.height})`, async () => {
-			const runner = new FakeRunner();
-			stubCheckout(runner);
-			stubLiveHandoff(runner);
-			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
-			await withApp(
-				async (setup) => {
-					await openPanel(setup);
-					await moveToModelRow(setup);
-					await setup.mockInput.typeText("gpt");
-					await awaitFrame(
-						setup,
-						(f) => frameText(f).includes("openai/gpt-5.1"),
-						"the jumped model",
-					);
-					// A list row has no caret, so forward delete is the same decision as
-					// backspace: leave the setting to the agent.
-					const cleared = await pressDelete(setup, "the Model row to clear", (f) =>
-						frameText(f).includes("Model (unset)"),
-					);
-					expect(frameText(cleared)).toContain("Model (unset)");
-					await pressEnterToHandoff(setup);
-					const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
-					expect(start?.args).not.toContain("--model");
 				},
 				size.width,
 				size.height,
@@ -3716,7 +3597,9 @@ describe("the override panel", () => {
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Model openai/gpt-5.1");
 					await moveToModelRow(setup);
-					await pressBackspace(setup, "the Model row to clear", (f) =>
+					// The row starts with no query, so one Delete gives the setting
+					// back to the agent.
+					await pressDelete(setup, "the Model row to clear", (f) =>
 						frameText(f).includes("Model (unset)"),
 					);
 					await moveToTaskTypeFromModelRow(setup);
@@ -3840,6 +3723,7 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
+				await moveToModelRow(setup);
 				const shown = await awaitFrame(
 					setup,
 					(f) => frameText(f).includes("Model (no mo"),
@@ -3854,6 +3738,7 @@ describe("the override panel", () => {
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
+				await moveToModelRow(setup);
 				const shown = await awaitFrame(
 					setup,
 					(f) => frameText(f).includes("Model (loadi"),

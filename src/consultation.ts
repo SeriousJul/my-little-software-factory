@@ -70,14 +70,30 @@ export function validateConsultationInput(
 	return undefined;
 }
 
+/**
+ * The reason a Response is too large to send, in the plane's words.
+ *
+ * The size reason and the emptiness reason are read in two different places:
+ * the size reason stands on the field, where the oversized text is, and the
+ * other reasons stand on the Send action. Exporting the rule rather than its
+ * sentence is what lets the field ask "is this a size reason?" without a view
+ * recognizing a string.
+ */
+export function responseOversize(
+	value: string,
+	limit = CONSULTATION_INPUT_LIMIT,
+): string | undefined {
+	const bytes = utf8ByteLength(value);
+	return bytes > limit ? `response is ${bytes} UTF-8 bytes; the limit is ${limit}` : undefined;
+}
+
 /** The bounded prompt argument used by normal Consultation responses. */
 export function validateResponseInput(
 	value: string,
 	limit = CONSULTATION_INPUT_LIMIT,
 ): string | undefined {
 	if (value.trim() === "") return "response cannot be empty";
-	const bytes = utf8ByteLength(value);
-	return bytes > limit ? `response is ${bytes} UTF-8 bytes; the limit is ${limit}` : undefined;
+	return responseOversize(value, limit);
 }
 
 /** A Repository catalog contains only known identities and configured paths. */
