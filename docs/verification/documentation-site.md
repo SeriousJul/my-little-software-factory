@@ -40,6 +40,12 @@ link starting with `..` without resolving it against the page.
 The temporary guide pages used for the dead-link and rewrite rows were removed
 after the checks, and the final build was rerun clean.
 
+## What was verified on the pull request
+
+- The CI site build job on pull requests. Run 34790093877 ran the same
+  `npm run docs:build` command on the pull request head (`2de11ac`) and
+  passed, alongside the lint, typecheck, and test jobs.
+
 ## What has not been measured
 
 - The GitHub Pages deploy. The site deploy workflow builds on push to `main`
@@ -50,6 +56,3 @@ after the checks, and the final build was rerun clean.
   standards page render, the sidebar lists the published pages grouped by
   folder, and the excluded folders are absent. Record the result in this
   section when it has run.
-- The CI site build job on pull requests. It runs the same `npm run docs:build`
-  command that passed locally, but the workflow itself has not completed a run
-  on this change yet.
