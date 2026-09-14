@@ -20,7 +20,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { FactoryConfig } from "../src/config.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -37,6 +36,7 @@ import {
 	sleep,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 
@@ -142,7 +142,7 @@ describe("the held turn through the real app flow", () => {
 			"utf8",
 		);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			repos: { [repoIdentity]: checkoutPath },
 			workflows: [{ from: "implement", to: ["review"] }],
 			autoHandoff: true,

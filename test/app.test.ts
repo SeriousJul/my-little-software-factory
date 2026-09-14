@@ -31,7 +31,6 @@ import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
 import { describe, expect, test, vi } from "vitest";
 import { COLORS, STATE_COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
@@ -65,6 +64,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 describe("the control plane", () => {
@@ -793,9 +793,9 @@ describe("the control plane", () => {
 
 	test("a long task type and wide Unicode titles keep every row exact", async () => {
 		const longConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				consultation: { template: "Consult the record.", autoClose: false },
 			},
 		};
@@ -1006,7 +1006,7 @@ describe("the control plane", () => {
 
 	test("a custom Config controls fixed detail key movement", async () => {
 		const config = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 2, acceleration: 0, maximumSpeed: 2 },
 		};
 		await withApp(
@@ -1028,7 +1028,7 @@ describe("the control plane", () => {
 
 	test("a custom Config controls the first detail wheel step", async () => {
 		const config = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 2, acceleration: 0, maximumSpeed: 2 },
 		};
 		await withApp(
@@ -1079,7 +1079,7 @@ describe("the control plane", () => {
 
 	test("rapid detail input records only complete native terminal frames", async () => {
 		const config = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 0, maximumSpeed: 1 },
 		};
 		await withApp(

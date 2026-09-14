@@ -16,7 +16,13 @@
  * a ticket to an agent that dies inside its own terminal.
  */
 import type { FactoryConfig } from "./config.ts";
-import { ConfigError, defaultConfigPath, loadConfigFile, statePathFor } from "./config.ts";
+import {
+	ConfigError,
+	defaultConfigPath,
+	type LoadedConfig,
+	loadConfigFile,
+	statePathFor,
+} from "./config.ts";
 import { validateConfiguredModels } from "./model-settings.ts";
 import type { CommandRunner } from "./runner.ts";
 import { createChildProcessRunner } from "./runner.ts";
@@ -71,11 +77,11 @@ export function configPathFromArgs(args: readonly string[]): StartupArgsResult {
 
 /**
  * Load and structurally validate the config at the given path. A missing
- * file is the shipped defaults with one note; an unreadable or invalid file
- * is one readable failure line.
+ * file is seeded from the Default configuration the package ships, with one
+ * note; an unreadable or invalid file is one readable failure line.
  */
 export async function loadStartupConfig(configPath: string): Promise<StartupConfigResult> {
-	let loaded: { config: FactoryConfig; fromFile: boolean };
+	let loaded: LoadedConfig;
 	try {
 		loaded = await loadConfigFile(configPath);
 	} catch (error) {
@@ -84,13 +90,17 @@ export async function loadStartupConfig(configPath: string): Promise<StartupConf
 		}
 		throw error;
 	}
-	return loaded.fromFile
-		? { ok: true, config: loaded.config }
-		: {
-				ok: true,
-				config: loaded.config,
-				note: `no config file at ${configPath}, using the shipped defaults`,
-			};
+	if (loaded.seeded) {
+		return {
+			ok: true,
+			config: loaded.config,
+			note: `no config file at ${configPath}; created it from the shipped Default configuration`,
+		};
+	}
+	return {
+		ok: true,
+		config: loaded.config,
+	};
 }
 
 /**

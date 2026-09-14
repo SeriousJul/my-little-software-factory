@@ -16,7 +16,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
@@ -40,6 +39,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -114,7 +114,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -162,7 +162,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 
 		// Missing modal: an in-flight Ticket whose pane herdr no longer
@@ -363,7 +363,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -412,7 +412,7 @@ describe("the in-app Key guide", () => {
 				},
 				width,
 				height,
-				{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 			);
 		});
 	}
@@ -500,7 +500,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -529,7 +529,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -571,7 +571,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -605,7 +605,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -681,7 +681,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -743,7 +743,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -759,7 +759,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -799,7 +799,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -825,7 +825,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -865,7 +865,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
 		);
 	});
 
@@ -885,7 +885,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -931,7 +931,7 @@ describe("the in-app Key guide", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 });

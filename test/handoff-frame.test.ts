@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { panelValueCells } from "../src/components/override-panel.ts";
 import { COLORS } from "../src/components/theme.ts";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
 import type { CommandResult, CommandRunner, ModelListResult } from "../src/runner.ts";
@@ -44,6 +44,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -72,7 +73,7 @@ const checkout = () => join(home, "src", "billing");
 /** The first sample ticket, the one Enter acts on by default. */
 const first = SAMPLE_TICKETS[0];
 const firstAgent = "retry-policy-for-webhooks";
-const firstPrompt = renderPrompt(DEFAULT_CONFIG.taskTypes.implement.template, first);
+const firstPrompt = renderPrompt(BASE_CONFIG.taskTypes.implement.template, first);
 
 /** Stub the git answers for a healthy convention checkout. */
 function stubCheckout(runner: FakeRunner): void {
@@ -345,20 +346,20 @@ async function typeText(setup: Setup, text: string): Promise<void> {
 }
 
 const contextProfileConfig: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	agents: {
-		...DEFAULT_CONFIG.agents,
+		...BASE_CONFIG.agents,
 		codex: {
-			...DEFAULT_CONFIG.agents.codex,
+			...BASE_CONFIG.agents.codex,
 			model: "-m {value}",
 			thinking: "-r {value}",
 			contextWindow: "-c model_context_window={value}",
 		},
 	},
 	taskTypes: {
-		...DEFAULT_CONFIG.taskTypes,
+		...BASE_CONFIG.taskTypes,
 		implement: {
-			...DEFAULT_CONFIG.taskTypes.implement,
+			...BASE_CONFIG.taskTypes.implement,
 			agent: "codex",
 			model: "gpt-5.6-codex",
 			contextWindow: "272000",
@@ -380,7 +381,7 @@ describe("the Enter handoff", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnterToHandoff(setup);
@@ -420,7 +421,7 @@ describe("the Enter handoff", () => {
 			code: 1,
 			stderr: "error: herdr is not running\n",
 		});
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnter(
@@ -447,7 +448,7 @@ describe("the Enter handoff", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnter(
@@ -485,7 +486,7 @@ describe("the Enter handoff", () => {
 			],
 			{ stdout: "the agent is editing the layout math\n" },
 		);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				// The second sample ticket is already handed off.
@@ -530,7 +531,7 @@ describe("the Enter handoff", () => {
 		// A file where ~/src should be: mkdir cannot create the clone parent.
 		rmSync(join(home, "src"), { recursive: true, force: true });
 		writeFileSync(join(home, "src"), "a file");
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				setup.mockInput.pressEnter();
@@ -591,7 +592,7 @@ describe("the in-flight guard", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
-		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
@@ -613,7 +614,7 @@ describe("the in-flight guard", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
-		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
 		await withApp(
 			async (setup) => {
 				// Both Enters are queued before a render: the key parser
@@ -635,7 +636,7 @@ describe("the in-flight guard", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
-		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
@@ -669,7 +670,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubWorktreeHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const opened = await openPanel(setup);
@@ -726,7 +727,7 @@ describe("the override panel", () => {
 		// The delay holds the pipeline before agent start, so the in-flight
 		// handoff is visible while it is not yet recorded.
 		const props = {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner: new DelayedRunner(runner, 800),
 			home,
 			configPath,
@@ -774,7 +775,7 @@ describe("the override panel", () => {
 				expect(settledRow).not.toContain("[implement]");
 				expect(detailPaneText(settled)).toContain("Handoff task type: fix");
 				// The override drove the prompt too.
-				const fixPrompt = renderPrompt(DEFAULT_CONFIG.taskTypes.fix.template, first);
+				const fixPrompt = renderPrompt(BASE_CONFIG.taskTypes.fix.template, first);
 				expect(runner.commands()).toContain(`herdr agent prompt ${firstAgent} ${fixPrompt}`);
 			},
 			WIDTH,
@@ -786,12 +787,12 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const fixPrompt = renderPrompt(DEFAULT_CONFIG.taskTypes.fix.template, first);
+		const fixPrompt = renderPrompt(BASE_CONFIG.taskTypes.fix.template, first);
 		runner.set("herdr", ["agent", "prompt", firstAgent, fixPrompt], {
 			code: 1,
 			stderr: "error: the agent is not accepting prompts\n",
 		});
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				// Override the task type to fix, then hand off.
@@ -823,7 +824,7 @@ describe("the override panel", () => {
 	});
 	test("an unset thinking row cycles to the first option on the first right", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -861,16 +862,16 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			defaultModel: "global-model",
 			agents: {
-				...DEFAULT_CONFIG.agents,
-				codex: { ...DEFAULT_CONFIG.agents.codex, contextWindow: "-c {value}" },
+				...BASE_CONFIG.agents,
+				codex: { ...BASE_CONFIG.agents.codex, contextWindow: "-c {value}" },
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "codex",
 					model: "task-model",
 					thinking: "high",
@@ -931,19 +932,19 @@ describe("the override panel", () => {
 		// profile the ticket now resolves takes another agent and names none of
 		// them, so the record and the next handoff disagree on all four.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				codex: {
-					...DEFAULT_CONFIG.agents.codex,
+					...BASE_CONFIG.agents.codex,
 					model: "-m {value}",
 					thinking: "-r {value}",
 					contextWindow: "-c model_context_window={value}",
 				},
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "pi" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "pi" },
 			},
 		};
 		// A close ends a work cycle and returns the ticket to open, but its
@@ -1027,11 +1028,11 @@ describe("the override panel", () => {
 			{ code: 1, stderr: "error: codex rejected model rejected-model\n" },
 		);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "codex",
 					model: "rejected-model",
 				},
@@ -1061,10 +1062,10 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "task-model" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, model: "task-model" },
 			},
 		};
 		const props = { config, runner, home, configPath };
@@ -1104,10 +1105,10 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, thinking: "low" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, thinking: "low" },
 			},
 		};
 		const props = { config, runner, home, configPath };
@@ -1146,12 +1147,12 @@ describe("the override panel", () => {
 		// The profile sends its handoffs to an agent that maps no setting, and
 		// the default model still resolves onto it.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			defaultModel: "factory-model",
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
 		const props = { config, runner, home, configPath };
@@ -1181,12 +1182,12 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			defaultModel: "factory-model",
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
 		const props = { config, runner, home, configPath };
@@ -1248,9 +1249,9 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				merge: {
 					template: "Merge pull request {external-key}.",
 					thinking: "low",
@@ -1294,9 +1295,9 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				merge: {
 					template: "Merge pull request {external-key}.",
 					thinking: "low",
@@ -1350,9 +1351,9 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				merge: {
 					template: "Merge pull request {external-key}.",
 					thinking: "low",
@@ -1406,8 +1407,8 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		// A fourth agent that maps no setting at all.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			...BASE_CONFIG,
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
 		const props = { config, runner, home, configPath };
 		await withApp(
@@ -1438,7 +1439,7 @@ describe("the override panel", () => {
 	});
 	test("the task type row cycles through the task types and wraps", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1470,7 +1471,7 @@ describe("the override panel", () => {
 	});
 	test("the container environment is never offered", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1496,7 +1497,7 @@ describe("the override panel", () => {
 	});
 	test("escape cancels the panel without a handoff", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -1527,15 +1528,15 @@ describe("the override panel", () => {
 		const config: FactoryConfig = {
 			...contextProfileConfig,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "codex",
 					model: "gpt-5.6-codex",
 					contextWindow: "272000",
 				},
 				fix: {
-					...DEFAULT_CONFIG.taskTypes.fix,
+					...BASE_CONFIG.taskTypes.fix,
 					agent: "codex",
 					model: "gpt-5.6-codex",
 					contextWindow: "65536",
@@ -1860,14 +1861,14 @@ describe("the override panel", () => {
 		// cycling the Agent row onto it leaves a value with an argv to ride on
 		// and no Agent that takes it.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "low"] },
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "pi", thinking: "minimal" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "pi", thinking: "minimal" },
 			},
 		};
 		const props = { config, runner, home, configPath };
@@ -1965,7 +1966,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2002,7 +2003,7 @@ describe("the override panel", () => {
 	});
 	test("the selected text field has a focused background and bright text", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2035,7 +2036,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2078,7 +2079,7 @@ describe("the override panel", () => {
 	});
 	test("a move and a cycle in the same tick act on the moved row", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2104,7 +2105,7 @@ describe("the override panel", () => {
 	});
 	test("Tab and Shift+Tab move from list and text rows", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2152,7 +2153,7 @@ describe("the override panel", () => {
 		runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", sibling, "--no-focus"], {
 			stdout: tabCreateJson("pane-1"),
 		});
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await pressEnterToHandoff(setup);
@@ -2182,7 +2183,7 @@ describe("the override panel", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 400);
-		const props = { config: DEFAULT_CONFIG, runner: slow, home, configPath };
+		const props = { config: BASE_CONFIG, runner: slow, home, configPath };
 		await withApp(
 			async (setup) => {
 				await pressEnter(setup, "the in-flight status", "handing off");
@@ -2225,7 +2226,7 @@ describe("the override panel", () => {
 		});
 		// The config file cannot be written: a directory sits at its path.
 		mkdirSync(configPath, { recursive: true });
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnter(
@@ -2247,7 +2248,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2293,7 +2294,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2339,7 +2340,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2387,7 +2388,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2439,7 +2440,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2486,7 +2487,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2543,7 +2544,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2588,7 +2589,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2631,7 +2632,7 @@ describe("the override panel", () => {
 	});
 	test("pasting at the start, middle, end, and over a selection edits in place", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2674,7 +2675,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		const longValue = "abcdefghijklmnopqrstuv9876543210";
 		await withApp(
 			async (setup) => {
@@ -2720,7 +2721,7 @@ describe("the override panel", () => {
 	});
 	test("word deletion removes a word in either direction", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2754,7 +2755,7 @@ describe("the override panel", () => {
 	});
 	test("question mark and m type into a selected free-text row", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2782,7 +2783,7 @@ describe("the override panel", () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);
@@ -2807,8 +2808,8 @@ describe("the override panel", () => {
 	test("a text draft survives an agent change and terminal resize", async () => {
 		const runner = new FakeRunner();
 		const config = {
-			...DEFAULT_CONFIG,
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			...BASE_CONFIG,
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 		};
 		const props = { config, runner, home, configPath };
 		await withApp(
@@ -2871,7 +2872,7 @@ describe("the override panel", () => {
 	});
 	test("a short terminal scrolls the rows to keep the selected one on screen", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				// A six-row terminal holds the box's two borders, the Action
@@ -2907,7 +2908,7 @@ describe("the override panel", () => {
 		// The canned list makes the Model row a list row, so its guide reads as a
 		// choice row rather than as a text field.
 		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const frame = await openPanel(setup);
@@ -2956,7 +2957,7 @@ describe("the override panel", () => {
 	});
 	test("a narrow terminal sizes the panel instead of corrupting rows", async () => {
 		const runner = new FakeRunner();
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				const frame = await openPanel(setup);
@@ -3024,7 +3025,7 @@ describe("the override panel", () => {
 				"openai/gpt-5.1",
 				"openai/gpt-5.1-codex",
 			]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					await openPanel(setup);
@@ -3067,7 +3068,7 @@ describe("the override panel", () => {
 				"openai/gpt-5.1",
 				"openai/gpt-5.1-codex",
 			]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					await openPanel(setup);
@@ -3120,7 +3121,7 @@ describe("the override panel", () => {
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					await openPanel(setup);
@@ -3158,7 +3159,7 @@ describe("the override panel", () => {
 				stubCheckout(runner);
 				stubLiveHandoff(runner);
 				runner.setModelList("pi", [...models]);
-				const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+				const props = { config: BASE_CONFIG, runner, home, configPath };
 				await withApp(
 					async (setup) => {
 						await openPanel(setup);
@@ -3184,7 +3185,7 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			runner.holdModelLists();
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					const opened = await openPanel(setup);
@@ -3230,7 +3231,7 @@ describe("the override panel", () => {
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", []);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					const opened = await openPanel(setup);
@@ -3257,10 +3258,10 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
-					implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+					...BASE_CONFIG.taskTypes,
+					implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
 				},
 			};
 			const props = { config, runner, home, configPath };
@@ -3302,10 +3303,10 @@ describe("the override panel", () => {
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]);
 			runner.holdModelLists();
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
-					implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "openai/gpt-4o" },
+					...BASE_CONFIG.taskTypes,
+					implement: { ...BASE_CONFIG.taskTypes.implement, model: "openai/gpt-4o" },
 				},
 			};
 			const props = { config, runner, home, configPath };
@@ -3352,11 +3353,11 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				defaultAgent: "claude",
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
-					implement: { ...DEFAULT_CONFIG.taskTypes.implement, thinking: "xhigh" },
+					...BASE_CONFIG.taskTypes,
+					implement: { ...BASE_CONFIG.taskTypes.implement, thinking: "xhigh" },
 				},
 			};
 			const props = { config, runner, home, configPath };
@@ -3397,10 +3398,10 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
-					implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+					...BASE_CONFIG.taskTypes,
+					implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
 				},
 			};
 			const props = { config, runner, home, configPath };
@@ -3427,9 +3428,9 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
+					...BASE_CONFIG.taskTypes,
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
@@ -3490,7 +3491,7 @@ describe("the override panel", () => {
 			const long =
 				"llama-server=http://127.0.0.1:8080/AtomicChat/DeepSeek-V4-Flash-0731-GGUF:IQ1_M_XL";
 			runner.setModelList("pi", [long, `${long.slice(0, long.length - 1)}2`]);
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					await openPanel(setup);
@@ -3521,7 +3522,7 @@ describe("the override panel", () => {
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
 			runner.setModelListFailure("pi", "network unreachable");
-			const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+			const props = { config: BASE_CONFIG, runner, home, configPath };
 			await withApp(
 				async (setup) => {
 					await openPanel(setup);
@@ -3544,7 +3545,7 @@ describe("the override panel", () => {
 			const runner = new FakeRunner();
 			stubCheckout(runner);
 			stubLiveHandoff(runner);
-			const config: FactoryConfig = { ...DEFAULT_CONFIG, defaultAgent: "codex" };
+			const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "codex" };
 			const props = { config, runner, home, configPath };
 			await withApp(
 				async (setup) => {
@@ -3568,9 +3569,9 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5", "openai/gpt-5.1"]);
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
+					...BASE_CONFIG.taskTypes,
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
@@ -3621,9 +3622,9 @@ describe("the override panel", () => {
 			// A list that arrives late shows why an untouched row alone is not enough:
 			// the clear is the operator's decision either way.
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
+					...BASE_CONFIG.taskTypes,
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
@@ -3677,9 +3678,9 @@ describe("the override panel", () => {
 			stubLiveHandoff(runner);
 			runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
+					...BASE_CONFIG.taskTypes,
 					merge: {
 						template: "Merge pull request {external-key}.",
 						agent: "claude",
@@ -3777,7 +3778,7 @@ describe("the override panel", () => {
 			},
 			24,
 			8,
-			{ config: DEFAULT_CONFIG, runner: none, home, configPath },
+			{ config: BASE_CONFIG, runner: none, home, configPath },
 		);
 		await withApp(
 			async (setup) => {
@@ -3792,14 +3793,14 @@ describe("the override panel", () => {
 			},
 			24,
 			8,
-			{ config: DEFAULT_CONFIG, runner: held, home, configPath },
+			{ config: BASE_CONFIG, runner: held, home, configPath },
 		);
 	});
 	test("the Thinking row offers the selected agent's levels, and backspace clears it", async () => {
 		const runner = new FakeRunner();
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
-		const config: FactoryConfig = { ...DEFAULT_CONFIG, defaultAgent: "claude" };
+		const config: FactoryConfig = { ...BASE_CONFIG, defaultAgent: "claude" };
 		const props = { config, runner, home, configPath };
 		await withApp(
 			async (setup) => {
@@ -3843,7 +3844,7 @@ describe("the override panel", () => {
 			code: 1,
 			stderr: "agent name is already used\n",
 		});
-		const props = { config: DEFAULT_CONFIG, runner, home, configPath };
+		const props = { config: BASE_CONFIG, runner, home, configPath };
 		await withApp(
 			async (setup) => {
 				await openPanel(setup);

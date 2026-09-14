@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import {
 	expandHome,
 	githubCloneUrl,
@@ -29,6 +29,7 @@ import {
 	resolveRepository,
 } from "../src/repo.ts";
 import { commandFailureText } from "../src/runner.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const createdDirs: string[] = [];
@@ -69,7 +70,7 @@ function checkout(
 }
 
 const configWith = (repos: Record<string, string>): FactoryConfig => ({
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	repos,
 });
 
@@ -120,7 +121,7 @@ describe("resolveRepository", () => {
 	test("a missing convention path is cloned from the GitHub URL", async () => {
 		const home = tempHome();
 		const runner = new FakeRunner();
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) {
 			return;
@@ -138,7 +139,7 @@ describe("resolveRepository", () => {
 		const home = tempHome();
 		const runner = new FakeRunner();
 		const dir = checkout(home, "billing", runner, "https://github.com/acme/billing.git");
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome).toMatchObject({ ok: true, repository: { path: dir } });
 		expect(runner.calls.filter((c) => c.command === "git").length).toBe(2);
 	});
@@ -192,7 +193,7 @@ describe("resolveRepository", () => {
 		const home = tempHome();
 		const runner = new FakeRunner();
 		checkout(home, "billing", runner, "https://github.com/acme/portal.git");
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) {
 			return;
@@ -211,7 +212,7 @@ describe("resolveRepository", () => {
 		const home = tempHome();
 		const runner = new FakeRunner();
 		checkout(home, "billing", runner, null);
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (outcome.ok) {
 			expect(outcome.repository.notes?.warning).toContain("no verifiable origin remote");
@@ -224,7 +225,7 @@ describe("resolveRepository", () => {
 		checkout(home, "billing", runner, null);
 		// billing_1 already holds a different repository: the resolver takes billing_2.
 		checkout(home, "billing_1", runner, "https://github.com/acme/portal.git");
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (outcome.ok) {
 			expect(outcome.repository.path).toBe(join(home, "src", "billing_2"));
@@ -236,7 +237,7 @@ describe("resolveRepository", () => {
 		const runner = new FakeRunner();
 		checkout(home, "billing", runner, null);
 		checkout(home, "billing_1", runner, "https://github.com/acme/billing.git");
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (outcome.ok) {
 			expect(outcome.repository.path).toBe(join(home, "src", "billing_1"));
@@ -258,7 +259,7 @@ describe("resolveRepository", () => {
 			code: 128,
 			stderr: "not a git repository\n",
 		});
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(false);
 		if (!outcome.ok) {
 			expect(outcome.reason).toContain("not a git repository");
@@ -276,7 +277,7 @@ describe("resolveRepository", () => {
 				stderr: "fatal: repository not found\n",
 			},
 		);
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(false);
 		if (!outcome.ok) {
 			expect(outcome.reason).toContain("clone failed");
@@ -289,7 +290,7 @@ describe("resolveRepository", () => {
 		const runner = new FakeRunner();
 		// A file where ~/src should be: mkdir cannot create the clone parent.
 		writeFileSync(join(home, "src"), "a file");
-		const outcome = await resolveRepository("acme/billing", DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository("acme/billing", BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(false);
 		if (!outcome.ok) {
 			expect(outcome.reason).toContain("cannot create");
@@ -334,7 +335,7 @@ describe("host-qualified repository references", () => {
 	test("a missing convention path clones from the reference's own clone URL", async () => {
 		const home = tempHome();
 		const runner = new FakeRunner();
-		const outcome = await resolveRepository(gitlabBilling, DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository(gitlabBilling, BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) {
 			return;
@@ -366,7 +367,7 @@ describe("host-qualified repository references", () => {
 		const runner = new FakeRunner();
 		// The convention path holds the github.com twin, not the gitlab.com repository.
 		checkout(home, "billing", runner, "https://github.com/acme/billing.git");
-		const outcome = await resolveRepository(gitlabBilling, DEFAULT_CONFIG, { runner, home });
+		const outcome = await resolveRepository(gitlabBilling, BASE_CONFIG, { runner, home });
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) {
 			return;

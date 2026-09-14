@@ -3,7 +3,7 @@ import { CliRenderEvents } from "@opentui/core";
 import { describe, expect, test, vi } from "vitest";
 
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -26,6 +26,7 @@ import {
 	settle,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -43,7 +44,7 @@ const GUTTER_X = SCROLL_WIDTH - 2;
  */
 const detailRow = (i: number): number => paneRow(i) + 1;
 const LONG_SCROLL_CONFIG: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	scroll: { speed: 1, acceleration: 0.8, maximumSpeed: 6 },
 };
 
@@ -111,7 +112,7 @@ const sourceSuccess = (tickets: FetchedTicket[]): FetchOutcome => ({
 });
 
 const sourceConfig: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	sources: [
 		{
 			name: "issues",
@@ -357,7 +358,7 @@ describe("native Ticket detail viewport", () => {
 		);
 
 		const capped = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 5, maximumSpeed: 3 },
 		};
 		await withApp(
@@ -382,7 +383,7 @@ describe("native Ticket detail viewport", () => {
 		);
 
 		const reset = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 5, maximumSpeed: 2 },
 		};
 		await withApp(
@@ -441,7 +442,7 @@ describe("native Ticket detail viewport", () => {
 
 	test("does not bank wheel acceleration at either detail edge", async () => {
 		const config = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 5, maximumSpeed: 3 },
 		};
 		await withApp(
@@ -480,7 +481,7 @@ describe("native Ticket detail viewport", () => {
 
 	test("records monotonic complete frames and applies every rapid accepted wheel event", async () => {
 		const linear = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			scroll: { speed: 1, acceleration: 0, maximumSpeed: 1 },
 		};
 		// Ten base steps need a detail taller than the minimum frame's

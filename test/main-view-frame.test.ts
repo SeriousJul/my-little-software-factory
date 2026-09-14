@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
@@ -39,6 +39,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -55,7 +56,7 @@ afterEach(() => {
 });
 
 const config: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	sources: [
 		{
 			name: "issues",
@@ -309,7 +310,7 @@ describe("the merged Main view", () => {
 			WIDTH,
 			32,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},
@@ -330,7 +331,7 @@ describe("the merged Main view", () => {
 			WIDTH,
 			32,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},
@@ -353,7 +354,7 @@ describe("the merged Main view", () => {
 			WIDTH,
 			32,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
 			},
@@ -375,7 +376,7 @@ describe("the merged Main view", () => {
 			59,
 			24,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},
@@ -392,7 +393,7 @@ describe("the merged Main view", () => {
 			40,
 			19,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},
@@ -419,7 +420,7 @@ describe("the merged Main view", () => {
 			59,
 			24,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
 			},
@@ -440,7 +441,7 @@ describe("the merged Main view", () => {
 			WIDTH,
 			32,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
 				initialTickets: [],
 			},

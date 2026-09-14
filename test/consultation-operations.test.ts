@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import {
 	CONSULTATION_INPUT_LIMIT,
 	type ConsultationRepositoryOption,
@@ -34,6 +34,7 @@ import { consultationBranchName } from "../src/naming.ts";
 import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import { type Consultation, type FactoryState, openFactoryState } from "../src/state.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner, tabCreateJson, worktreeCreateJson } from "./fake-runner.ts";
 
 const directories: string[] = [];
@@ -82,7 +83,7 @@ function makeFixture(model = ""): Fixture {
 	return {
 		state,
 		config: {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			repos: {
 				"github.com/acme/factory": checkout,
 				"github.com/acme/other": otherCheckout,

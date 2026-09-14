@@ -12,13 +12,11 @@ import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
-import { isSupportedNodeVersion, MIN_NODE_VERSION } from "./runtime.ts";
+import { isSupportedNodeVersion, unsupportedNodeVersionMessage } from "./runtime.ts";
 import { runStartup } from "./startup.ts";
 
 if (!isSupportedNodeVersion(process.versions.node)) {
-	process.stderr.write(
-		`factory needs Node ${MIN_NODE_VERSION} or newer, but this is Node ${process.versions.node}.\nThe project pins a supported Node in .tool-versions; run it through mise.\n`,
-	);
+	process.stderr.write(unsupportedNodeVersionMessage(process.versions.node));
 	process.exit(1);
 }
 

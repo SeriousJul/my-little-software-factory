@@ -14,7 +14,6 @@
 import { describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	actionBarRowOf,
 	cellColors,
@@ -31,6 +30,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -134,7 +134,7 @@ describe("the reserved bottom rows at every size", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -159,7 +159,7 @@ describe("the reserved bottom rows at every size", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -190,7 +190,7 @@ describe("the reserved bottom rows at every size", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -226,7 +226,7 @@ describe("the reserved bottom rows at every size", () => {
 				},
 				width,
 				height,
-				{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 			);
 		}
 	});
@@ -251,7 +251,7 @@ describe("the reserved bottom rows at every size", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -276,7 +276,7 @@ describe("the reserved bottom rows at every size", () => {
 				},
 				width,
 				height,
-				{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+				{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 			);
 		}
 	});

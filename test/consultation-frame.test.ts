@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { widthOf } from "../src/components/text.ts";
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type {
 	CommandOptions,
@@ -54,6 +54,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -127,7 +128,7 @@ const selectedTicket: Ticket = {
 
 function configFor(): FactoryConfig {
 	return {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		repos: { "github.com/acme/factory": checkout },
 		consultationTypes: {
 			grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
@@ -380,7 +381,7 @@ const launchedAgent = { pane: "pane-c1", tab: "tab-ws-new", ws: "ws-new", sess: 
 /** A configuration with a live-worktree Consultation type. */
 function liveConfigFor(): FactoryConfig {
 	return {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		repos: { "github.com/acme/factory": checkout },
 		consultationTypes: {
 			"grill-live": { agent: "pi", environment: "live-worktree", template: "/grill {input}" },
@@ -1482,8 +1483,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 		const config: FactoryConfig = {
 			...liveConfigFor(),
 			agents: {
-				...DEFAULT_CONFIG.agents,
-				pi: { ...DEFAULT_CONFIG.agents.pi, contextWindow: "--context {value}" },
+				...BASE_CONFIG.agents,
+				pi: { ...BASE_CONFIG.agents.pi, contextWindow: "--context {value}" },
 			},
 			consultationTypes: {
 				"grill-live": {

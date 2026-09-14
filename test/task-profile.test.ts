@@ -1,23 +1,24 @@
 import { parse as parseToml } from "smol-toml";
 import { describe, expect, test } from "vitest";
 
-import { configToToml, DEFAULT_CONFIG, type FactoryConfig, validateConfig } from "../src/config.ts";
+import { configToToml, type FactoryConfig, validateConfig } from "../src/config.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 
 const config: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	defaultAgent: "pi",
 	defaultEnvironment: "live-worktree",
 	defaultModel: "factory-default",
 	taskTypes: {
-		...DEFAULT_CONFIG.taskTypes,
+		...BASE_CONFIG.taskTypes,
 		implement: {
-			...DEFAULT_CONFIG.taskTypes.implement,
+			...BASE_CONFIG.taskTypes.implement,
 			agent: "codex",
 			model: "task-model",
 			thinking: "high",
 		},
-		review: { ...DEFAULT_CONFIG.taskTypes.review, agent: "claude" },
+		review: { ...BASE_CONFIG.taskTypes.review, agent: "claude" },
 	},
 };
 

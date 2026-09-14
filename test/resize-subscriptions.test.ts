@@ -10,7 +10,6 @@
  * component that subscribes again fails here (issue #9).
  */
 import { describe, expect, test } from "vitest";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	type AppSetup,
 	HEIGHT,
@@ -21,6 +20,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -98,7 +98,7 @@ describe("the renderer's resize listeners", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 });

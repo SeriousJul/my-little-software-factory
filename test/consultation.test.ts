@@ -4,7 +4,6 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 import { renderAnsiScreen } from "../src/components/ansi-screen.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	boundedReplacementInput,
 	CONSULTATION_INPUT_LIMIT,
@@ -22,6 +21,7 @@ import {
 import { expandHome, realPathOf } from "../src/repo.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const directories: string[] = [];
@@ -275,7 +275,7 @@ describe("launcher repository validation", () => {
 				cloneUrl: "https://github.com/acme/unmapped.git",
 			},
 		};
-		const catalog = consultationRepositoryCatalog({ ...DEFAULT_CONFIG, repos: {} }, [visible]);
+		const catalog = consultationRepositoryCatalog({ ...BASE_CONFIG, repos: {} }, [visible]);
 		expect(catalog).toEqual([
 			expect.objectContaining({ identity: "github.com/acme/unmapped", path: "" }),
 		]);

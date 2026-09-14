@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	checkConsultationStart,
@@ -26,6 +26,7 @@ import {
 	settingArgs,
 } from "../src/handoff.ts";
 import type { Consultation } from "../src/state.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -112,7 +113,7 @@ function stubLiveWorkspace(runner: FakeRunner): void {
 }
 
 /** The exact prompt the implement task type renders for this ticket. */
-const PROMPT = renderPrompt(DEFAULT_CONFIG.taskTypes.implement.template, ticket);
+const PROMPT = renderPrompt(BASE_CONFIG.taskTypes.implement.template, ticket);
 const EXPECTED_IMPLEMENT_PROMPT =
 	"Implement the following github-issue.\n\nRepository: acme/billing\n\n" +
 	"#7: Retry policy for webhooks\n\nURL: https://github.com/acme/billing/issues/7\n\n" +
@@ -244,7 +245,7 @@ describe("renderPrompt", () => {
 
 describe("settingArgs", () => {
 	test("a chosen setting the agent maps becomes arguments", () => {
-		const agent = DEFAULT_CONFIG.agents.pi;
+		const agent = BASE_CONFIG.agents.pi;
 		expect(settingArgs(agent, { ...defaultChoice, model: "gpt-5.6", thinking: "high" })).toEqual([
 			"--model",
 			"gpt-5.6",
@@ -255,11 +256,12 @@ describe("settingArgs", () => {
 
 	test("an omitted setting is ignored: no template, no arguments", () => {
 		// No setting chosen: no arguments at all.
-		expect(settingArgs(DEFAULT_CONFIG.agents.pi, defaultChoice)).toEqual([]);
+		expect(settingArgs(BASE_CONFIG.agents.pi, defaultChoice)).toEqual([]);
 		// Only the thinking chosen: the model template contributes nothing.
-		expect(
-			settingArgs(DEFAULT_CONFIG.agents.codex, { ...defaultChoice, thinking: "high" }),
-		).toEqual(["-c", "model_reasoning_effort=high"]);
+		expect(settingArgs(BASE_CONFIG.agents.codex, { ...defaultChoice, thinking: "high" })).toEqual([
+			"-c",
+			"model_reasoning_effort=high",
+		]);
 		// An agent with no setting template maps nothing at all.
 		expect(
 			settingArgs({ kind: "cursor" }, { ...defaultChoice, model: "m", thinking: "high" }),
@@ -270,8 +272,8 @@ describe("settingArgs", () => {
 		// The task type's thinking default is prefilled into the choice by
 		// the app, not applied here: an empty choice stays empty, so the
 		// panel can show exactly what the handoff will run on.
-		expect(settingArgs(DEFAULT_CONFIG.agents.pi, defaultChoice)).toEqual([]);
-		expect(settingArgs(DEFAULT_CONFIG.agents.pi, { ...defaultChoice, thinking: "low" })).toEqual([
+		expect(settingArgs(BASE_CONFIG.agents.pi, defaultChoice)).toEqual([]);
+		expect(settingArgs(BASE_CONFIG.agents.pi, { ...defaultChoice, thinking: "low" })).toEqual([
 			"--thinking",
 			"low",
 		]);
@@ -295,7 +297,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -354,7 +356,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -403,7 +405,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -435,7 +437,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		);
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -459,7 +461,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 
 		const choice = { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" };
 		const outcome = await handOffTicket(ticket, choice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -494,7 +496,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -519,7 +521,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -534,7 +536,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		runner.set("herdr", ["workspace", "list"], { stdout: "not a workspace list\n" });
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -574,7 +576,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -622,7 +624,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -668,7 +670,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -719,7 +721,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("ok");
@@ -770,7 +772,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -820,7 +822,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -874,7 +876,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -910,7 +912,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -948,7 +950,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -991,7 +993,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		expect(outcome.status).toBe("failed");
@@ -1029,7 +1031,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 
 		// The agent is running in the worktree and can be prompted by hand.
@@ -1042,7 +1044,7 @@ describe("handOffTicket: the guard rails", () => {
 	test("only open tickets can be handed off", async () => {
 		const runner = new FakeRunner();
 		const outcome = await handOffTicket({ ...ticket, state: "running" }, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -1055,7 +1057,7 @@ describe("handOffTicket: the guard rails", () => {
 		const outcome = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, environment: "container" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("reserved");
@@ -1072,7 +1074,7 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "gpt-4o" },
-				{ config: DEFAULT_CONFIG, runner, home: HOME },
+				{ config: BASE_CONFIG, runner, home: HOME },
 			);
 
 			expect(outcome.status).toBe("failed");
@@ -1093,7 +1095,7 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5" },
-				{ config: DEFAULT_CONFIG, runner, home: HOME },
+				{ config: BASE_CONFIG, runner, home: HOME },
 			);
 
 			expect(outcome.status).toBe("ok");
@@ -1121,7 +1123,7 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "anthropic/claude-sonnet-4-5", thinking: "ultra" },
-				{ config: DEFAULT_CONFIG, runner, home: HOME },
+				{ config: BASE_CONFIG, runner, home: HOME },
 			);
 
 			expect(outcome.status).toBe("failed");
@@ -1146,7 +1148,7 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffTicket(
 				ticket,
 				{ ...defaultChoice, model: "gpt-4o" },
-				{ config: DEFAULT_CONFIG, runner, home: HOME },
+				{ config: BASE_CONFIG, runner, home: HOME },
 			);
 
 			expect(outcome.status).toBe("ok");
@@ -1163,7 +1165,7 @@ describe("handOffTicket: the guard rails", () => {
 			const outcome = await handOffStoredWorkspace({
 				ticket,
 				choice: { ...defaultChoice, model: "gpt-4o" },
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				workspaceId: "ws-stored",
@@ -1194,7 +1196,7 @@ describe("handOffTicket: the guard rails", () => {
 
 			const outcome = await handOffConsultation({
 				consultation: consultationRecord({ model: "gpt-4o" }),
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 			});
@@ -1215,7 +1217,7 @@ describe("handOffTicket: the guard rails", () => {
 
 			const outcome = await handOffConsultation({
 				consultation: consultationRecord({ thinking: "ultra" }),
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 			});
@@ -1233,8 +1235,8 @@ describe("handOffTicket: the guard rails", () => {
 				{
 					label: "model",
 					config: {
-						...DEFAULT_CONFIG,
-						agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+						...BASE_CONFIG,
+						agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 					},
 					consultation: { agentType: "cursor", model: "factory-model" },
 					text: 'defines no model setting, so model "factory-model" cannot reach it',
@@ -1242,15 +1244,15 @@ describe("handOffTicket: the guard rails", () => {
 				{
 					label: "thinking",
 					config: {
-						...DEFAULT_CONFIG,
-						agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+						...BASE_CONFIG,
+						agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 					},
 					consultation: { agentType: "cursor", thinking: "high" },
 					text: 'defines no thinking setting, so thinking level "high" cannot reach it',
 				},
 				{
 					label: "context window",
-					config: DEFAULT_CONFIG,
+					config: BASE_CONFIG,
 					consultation: { contextWindow: "131072" },
 					text: "defines no context window setting, so the count of 131072 tokens cannot reach it",
 				},
@@ -1273,10 +1275,10 @@ describe("handOffTicket: the guard rails", () => {
 		test("a Consultation start refuses a count that is not positive digits", async () => {
 			const runner = new FakeRunner();
 			const config: FactoryConfig = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				agents: {
-					...DEFAULT_CONFIG.agents,
-					pi: { ...DEFAULT_CONFIG.agents.pi, contextWindow: "--context {value}" },
+					...BASE_CONFIG.agents,
+					pi: { ...BASE_CONFIG.agents.pi, contextWindow: "--context {value}" },
 				},
 			};
 			const outcome = await handOffConsultation({
@@ -1300,7 +1302,7 @@ describe("handOffTicket: the guard rails", () => {
 
 			const outcome = await handOffConsultation({
 				consultation: consultationRecord({ model: "anthropic/claude-sonnet-4-5" }),
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 			});
@@ -1332,14 +1334,14 @@ describe("handOffTicket: the guard rails", () => {
 			const consultation = consultationRecord({ model: "anthropic/claude-sonnet-4-5" });
 			const startCheck = await checkConsultationStart({
 				consultation,
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 			});
 			expect(startCheck.ok).toBe(true);
 
 			const outcome = await handOffConsultation({
 				consultation,
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				startCheck,
@@ -1357,13 +1359,13 @@ describe("handOffTicket: the guard rails", () => {
 		const agent = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, agentType: "cursor" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 		expect(agent).toEqual({ status: "failed", reason: "unknown agent type: cursor" });
 		const task = await handOffTicket(
 			ticket,
 			{ ...defaultChoice, taskType: "refactor" },
-			{ config: DEFAULT_CONFIG, runner, home: HOME },
+			{ config: BASE_CONFIG, runner, home: HOME },
 		);
 		expect(task).toEqual({ status: "failed", reason: "unknown task type: refactor" });
 		expect(runner.calls).toHaveLength(0);
@@ -1374,12 +1376,12 @@ describe("handOffTicket: the guard rails", () => {
 		// The profile names no model: the default one resolves onto an agent
 		// that maps no model, so the value has nowhere to go.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			defaultModel: "factory-model",
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		};
 
@@ -1402,11 +1404,11 @@ describe("handOffTicket: the guard rails", () => {
 	test("a thinking level the resolved agent cannot map fails before any command", async () => {
 		const runner = new FakeRunner();
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			...BASE_CONFIG,
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor", thinking: "high" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor", thinking: "high" },
 			},
 		};
 
@@ -1432,9 +1434,9 @@ describe("handOffTicket: the guard rails", () => {
 		// cycling the panel's Agent row onto zed: the level list is the other
 		// half of the same loud rule (ADR 0009).
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "low"] },
 			},
 		};
@@ -1460,10 +1462,10 @@ describe("handOffTicket: the guard rails", () => {
 		// safe integer range cannot be stated without rounding it. A separator
 		// or a suffix would split into two argv elements.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
-				codex: { ...DEFAULT_CONFIG.agents.codex, contextWindow: "-c model_context_window={value}" },
+				...BASE_CONFIG.agents,
+				codex: { ...BASE_CONFIG.agents.codex, contextWindow: "-c model_context_window={value}" },
 			},
 		};
 
@@ -1499,7 +1501,7 @@ describe("handOffTicket: the guard rails", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -1532,7 +1534,7 @@ describe("handOffTicket: the guard rails", () => {
 		});
 
 		const outcome = await handOffTicket(ticket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 		});
@@ -1550,11 +1552,11 @@ describe("handOffTicket: the guard rails", () => {
 
 /** A config whose implement template carries the previous message. */
 const previousMessageConfig: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	taskTypes: {
-		...DEFAULT_CONFIG.taskTypes,
+		...BASE_CONFIG.taskTypes,
 		implement: {
-			...DEFAULT_CONFIG.taskTypes.implement,
+			...BASE_CONFIG.taskTypes.implement,
 			template: "Previous: {previous-message}\n{description}",
 		},
 	},
@@ -1574,7 +1576,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket,
 			choice: defaultChoice,
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-stored",
@@ -1614,7 +1616,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket,
 			choice: { ...defaultChoice, agentType: "codex", model: "gpt-5.6", thinking: "high" },
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-stored",
@@ -1697,7 +1699,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket,
 			choice: { ...defaultChoice, environment: "worktree" },
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-gone",
@@ -1734,7 +1736,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket,
 			choice: defaultChoice,
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-gone",
@@ -1780,7 +1782,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket,
 			choice: { ...defaultChoice, environment: "worktree" },
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-live",
@@ -1815,7 +1817,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket,
 			choice: defaultChoice,
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-stored",
@@ -1837,20 +1839,20 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		// render them, so one profile says the same three things to three
 		// agents in three different argv shapes.
 		const profileConfig: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				codex: {
-					...DEFAULT_CONFIG.agents.codex,
+					...BASE_CONFIG.agents.codex,
 					model: "-m {value}",
 					thinking: "-r {value}",
 					contextWindow: "-c model_context_window={value}",
 				},
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "codex",
 					model: "gpt-5.6",
 					thinking: "high",
@@ -1899,16 +1901,16 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 	test("a context window the resolved agent cannot map fails before any command", async () => {
 		const runner = new FakeRunner();
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				// cursor maps nothing: the count the profile names has no argv.
-				cursor: { ...DEFAULT_CONFIG.agents.codex, contextWindow: undefined },
+				cursor: { ...BASE_CONFIG.agents.codex, contextWindow: undefined },
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "cursor",
 					contextWindow: "272000",
 				},
@@ -1944,7 +1946,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		const outcome = await handOffStoredWorkspace({
 			ticket: { ...ticket, state: "running" },
 			choice: { ...defaultChoice, agentType: "pi", contextWindow: "272000" },
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			workspaceId: "ws-stored",
@@ -1965,11 +1967,11 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		// fail a handoff an edge routed to another agent, and that failure is
 		// how the config error is seen.
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			...BASE_CONFIG,
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				review: { ...DEFAULT_CONFIG.taskTypes.review, model: "pi-model" },
+				...BASE_CONFIG.taskTypes,
+				review: { ...BASE_CONFIG.taskTypes.review, model: "pi-model" },
 			},
 		};
 		const edge = { from: "implement", to: ["review"], agent: "cursor" };
@@ -1997,14 +1999,14 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		// replaced only the agent, so the pair the reroute creates is checked at
 		// handoff time by the same rule that fails a model (ADR 0009).
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				zed: { kind: "zed", thinking: "-t {value}", thinkingValues: ["off", "low"] },
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				review: { ...DEFAULT_CONFIG.taskTypes.review, thinking: "medium" },
+				...BASE_CONFIG.taskTypes,
+				review: { ...BASE_CONFIG.taskTypes.review, thinking: "medium" },
 			},
 		};
 		const edge = { from: "implement", to: ["review"], agent: "zed" };
@@ -2086,7 +2088,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
@@ -2153,7 +2155,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				names: { ownPaneIds: [], ownWorkspaceIds: [], leftoverKnown: true },
@@ -2174,7 +2176,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
@@ -2211,7 +2213,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: [], leftoverKnown: false },
@@ -2248,7 +2250,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
@@ -2292,7 +2294,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		});
 
 		const outcome = await handOffTicket(longTicket, defaultChoice, {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			home: HOME,
 			names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },
@@ -2327,7 +2329,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 			ticket,
 			{ ...defaultChoice, environment: "worktree" },
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				home: HOME,
 				names: { ownPaneIds: ["pane-old"], ownWorkspaceIds: ["ws-old"], leftoverKnown: false },

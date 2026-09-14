@@ -5,11 +5,11 @@
 	"type": "module",
 	"license": "MIT",
 	"bin": {
-		"factory": "./bin/factory.mjs",
-		"factory-gallery": "./bin/factory-gallery.mjs"
+		"factory": "./bin/factory.mjs"
 	},
 	"files": [
-		"bin",
+		"bin/factory.mjs",
+		"config/default.toml",
 		"src"
 	],
 	"scripts": {

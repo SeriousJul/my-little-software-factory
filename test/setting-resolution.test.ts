@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import {
 	profileAgentOf,
 	resolveEnvironment,
@@ -16,6 +16,7 @@ import {
 	taskProfileOf,
 	taskProfilesOf,
 } from "../src/setting-resolution.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 
 /** The shipped config plus one agent and the task types the chains need. */
 function configWith(
@@ -23,12 +24,12 @@ function configWith(
 	taskTypes: Record<string, Record<string, unknown>> = {},
 ): FactoryConfig {
 	return {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		...over,
 		taskTypes: Object.fromEntries(
 			Object.entries(taskTypes).map(([name, task]) => [
 				name,
-				{ ...DEFAULT_CONFIG.taskTypes.implement, ...task },
+				{ ...BASE_CONFIG.taskTypes.implement, ...task },
 			]),
 		),
 	};

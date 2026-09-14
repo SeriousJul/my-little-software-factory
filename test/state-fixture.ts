@@ -9,11 +9,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import { sleep } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import type { FakeSource } from "./fake-source.ts";
 
 const paths: string[] = [];
@@ -32,7 +33,7 @@ export function cleanupStateFixtures(): void {
 
 /** The config with one issue source named `issues`. */
 export const issuesConfig: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	sources: [
 		{
 			name: "issues",

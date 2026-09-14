@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import { App, type AppProps } from "../src/components/app.ts";
 import { COLORS } from "../src/components/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -279,7 +280,7 @@ export interface AppSetup extends Setup {
 }
 
 export async function bootApp(
-	props: AppProps = {},
+	props: Partial<AppProps> = {},
 	width = WIDTH,
 	height = HEIGHT,
 	rendererOptions: { kittyKeyboard?: boolean } = {},
@@ -288,11 +289,13 @@ export async function bootApp(
 	// or state passed explicitly opts into the real empty/loading behavior.
 	// A state without an explicit runner gets the empty-agent fake runner, so
 	// the observation loop stays hermetic: no test can reach a real herdr.
+	// A suite that names no config runs on the base config fixture: the app
+	// itself carries no in-code default config.
 	const runner = "runner" in props ? props : { runner: emptyAgentRunner() };
-	const appProps =
+	const appProps: AppProps =
 		"state" in props || "sources" in props
-			? { ...runner, ...props }
-			: { initialTickets: SAMPLE_TICKETS, ...runner, ...props };
+			? { config: BASE_CONFIG, ...runner, ...props }
+			: { initialTickets: SAMPLE_TICKETS, config: BASE_CONFIG, ...runner, ...props };
 	let stopApp: (() => void) | null = null;
 	const wired: AppProps =
 		"onReady" in appProps ? appProps : { ...appProps, onReady: (ready) => (stopApp = ready.stop) };
@@ -317,7 +320,7 @@ export async function withApp(
 	body: (setup: AppSetup) => Promise<void>,
 	width = WIDTH,
 	height = HEIGHT,
-	props: AppProps = {},
+	props: Partial<AppProps> = {},
 	rendererOptions: { kittyKeyboard?: boolean } = {},
 ): Promise<void> {
 	const setup = await bootApp(props, width, height, rendererOptions);

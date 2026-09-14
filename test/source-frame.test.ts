@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
@@ -36,6 +36,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -110,7 +111,7 @@ const success = (tickets: FetchedTicket[]): FetchOutcome => ({
 const RATE_LIMITED: FetchOutcome = { status: "failed", reason: "GitHub rate limit exceeded" };
 
 const issuesConfig: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	sources: [
 		{
 			name: "issues",
@@ -273,7 +274,7 @@ describe("source-driven frames", () => {
 				ticket("github:github.com:I_9", { externalKey: "#9", title: "Another open item" }),
 			]),
 		);
-		const [first] = state.visibleTickets(DEFAULT_CONFIG.taskRules, DEFAULT_CONFIG.defaultTaskType);
+		const [first] = state.visibleTickets(BASE_CONFIG.taskRules, BASE_CONFIG.defaultTaskType);
 		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true);
@@ -296,7 +297,7 @@ describe("source-driven frames", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, state, sources: [] },
+			{ config: BASE_CONFIG, state, sources: [] },
 		);
 		state.close();
 	});
@@ -339,14 +340,14 @@ describe("source-driven frames", () => {
 			...issuesConfig,
 			defaultModel: "factory-model",
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "codex",
 					model: "implement-model",
 					thinking: "high",
 				},
-				review: { ...DEFAULT_CONFIG.taskTypes.review, agent: "claude" },
+				review: { ...BASE_CONFIG.taskTypes.review, agent: "claude" },
 			},
 			taskRules: [{ taskType: "review", when: { labelsAny: ["ready-for-review"] } }],
 		};
@@ -468,7 +469,7 @@ describe("source-driven frames", () => {
 		state.applyFetch(issues, success([runTicket, offTicket, openTicket, awaitTicket]));
 		state.applyFetch(pulls, success([pendingTicket]));
 		const off = state
-			.visibleTickets(DEFAULT_CONFIG.taskRules, "implement")
+			.visibleTickets(BASE_CONFIG.taskRules, "implement")
 			.find((t) => t.title === "Off ticket");
 		if (off === undefined) throw new Error("Off ticket is missing");
 		const claim = state.claimHandoff(off.identity, HANDOFF_CHOICE, "open");
@@ -607,7 +608,7 @@ describe("source-driven frames", () => {
 		const definition = { name: "issues", kind: "github-issues" };
 		state.initializeSources([definition]);
 		state.applyFetch(definition, success([ticket()]));
-		const [first] = state.visibleTickets(DEFAULT_CONFIG.taskRules, DEFAULT_CONFIG.defaultTaskType);
+		const [first] = state.visibleTickets(BASE_CONFIG.taskRules, BASE_CONFIG.defaultTaskType);
 		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		// The attempt stays unresolved: the process died before settling it.
