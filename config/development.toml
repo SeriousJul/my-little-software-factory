@@ -44,7 +44,13 @@ context-window = "--autocompact {value}"
 [consultation-types.grill-with-docs]
 agent = "pi"
 environment = "live-worktree"
+thinking = "xhigh"
 template = "/skill:grill-with-docs {input}"
+
+[consultation-types.free]
+agent = "pi"
+environment = "live-worktree"
+template = "{input}"
 
 [task-types.implement]
 template = '''
