@@ -125,6 +125,35 @@ A ticket source whose latest refresh failed.
 Its last tickets stay visible, but they cannot be handed off until the source refreshes successfully.
 _Avoid_: offline source
 
+**Ticket priority**:
+The rank that orders tickets: the ticket list within an attention group, the open auto-handoff dispatch, and the waiting workflow routes that compete for a freed parallel slot.
+It is a fact of the ticket identity: it survives every task type change and every work cycle close.
+The effective rank is, in order, the Priority override, the rank of the ticket's own label in the Priority label list, or, for a pull request, the highest effective priority of the issues it closes.
+A ticket with no rank sorts after every ranked ticket.
+_Avoid_: urgency, importance, ticket rank
+
+**Priority label list**:
+The ordered list of labels that defines the priority ranks; the first entry is the highest rank.
+A label that is not in the list gives no rank, and a missing list ranks no ticket.
+_Avoid_: priority scale, rank table
+
+**Priority override**:
+The operator-set value of a ticket's priority.
+It takes a rank from the Priority label list, or off, which forces the ticket unranked.
+It is factory state on the ticket identity, not a source fact: it survives every work cycle close, it beats every source fact of its ticket, and the control plane never writes it to the external source.
+_Avoid_: pin, manual priority, label edit
+
+**Issue reference**:
+The fact that a pull request closes one or more issues, read from the source.
+The control plane stores the identities of the referenced issues on the pull request's membership, and a refresh can change the references.
+_Avoid_: link, related issue, cross-reference
+
+**Referenced issue fact**:
+The labels and fetch time the control plane reads directly for an issue no ticket source lists, so an Issue reference can carry a priority.
+It is a fact, not a ticket: it takes no row in the Main view and is never handed off.
+When the issue later matches a ticket source, the real snapshot beats the fact.
+_Avoid_: ghost ticket, stub ticket, shadow issue
+
 **Work cycle**:
 One passage of a ticket from `open` through the factory to cycle close.
 A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number.
@@ -391,7 +420,7 @@ The settings are: Agent type, Environment kind, Task type, Model, Thinking level
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
+The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, the priority label list, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
 A missing file is seeded from the Default configuration on first run. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 
