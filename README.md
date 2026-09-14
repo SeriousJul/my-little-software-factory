@@ -56,7 +56,7 @@ below remain the current behavior until their migration is complete.
 The control plane ships through npm, and both names start the same app:
 
 ```sh
-npx @seriousjul/factory
+npx my-little-software-factory
 npx mlsf
 ```
 
