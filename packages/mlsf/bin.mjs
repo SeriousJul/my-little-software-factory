@@ -37,6 +37,12 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 				// The child exited between the check and the kill.
 			}
 		}
+		// Drop the handlers before re-raising. With a listener still
+		// registered, the re-raise below re-enters this handler and loops at
+		// full CPU instead of killing the launcher, leaving the child an orphan.
+		for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+			process.removeAllListeners(name);
+		}
 		// Raise the same signal on the launcher so it dies from it, as the
 		// child does.
 		process.kill(process.pid, signal);

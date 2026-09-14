@@ -87,6 +87,49 @@ describe("control plane executable, terminal protocol", () => {
 		TEST_TIMEOUT_MS,
 	);
 
+	it(
+		"forwards a shutdown signal to the entry and dies from it instead of looping",
+		async (ctx) => {
+			const isolated = mkdtempSync(join(tmpdir(), "factory-exec-signal-"));
+			let sig: PtySession | null = null;
+			try {
+				const configPath = join(isolated, "config.toml");
+				writeFileSync(configPath, configToml(join(isolated, "state.sqlite")), "utf8");
+				sig = await openControlPlanePty(["--config", configPath], isolatedEnv(isolated));
+				if (sig === null) {
+					ctx.skip("cannot open a pseudo-terminal on this platform");
+					return;
+				}
+				// Reach normal startup: the renderer is live, the wrapper has
+				// spawned the entry, and its signal handlers are registered.
+				await sig.waitFor(
+					(out) => out.includes(ALT_SCREEN),
+					"the alternate screen",
+					STARTUP_TIMEOUT_MS,
+				);
+				await sig.waitForStable(500, STABLE_TIMEOUT_MS);
+
+				// SIGINT to the wrapper, as Ctrl-C reaches it. The wrapper must
+				// forward it to the entry and die from the same signal. With a
+				// handler left registered, the re-raise re-enters the handler
+				// and loops, so this never resolves and the timeout fails.
+				const pid = sig.child.pid;
+				if (pid === undefined) throw new Error("the wrapper reported no pid");
+				process.kill(pid, "SIGINT");
+				const exit = await withTimeout(
+					sig.exit(),
+					EXIT_TIMEOUT_MS,
+					"the wrapper to die from SIGINT",
+				);
+				expect(exit.signal).toBe("SIGINT");
+			} finally {
+				sig?.dispose();
+				rmSync(isolated, { recursive: true, force: true });
+			}
+		},
+		TEST_TIMEOUT_MS,
+	);
+
 	// Every bad startup argument must end in a readable line and a nonzero exit,
 	// with the UI never entered.
 	const startupFailures: Array<{ name: string; argv: (dir: string) => string[]; needle: string }> =
