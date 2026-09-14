@@ -194,12 +194,12 @@ describe("the control plane", () => {
 				(frame) => frame.includes("the Ticket detail has nowhere to scroll"),
 				"the unavailable Scroll reason",
 			);
-			expect(markerRowOf(after)).toBe(4);
+			expect(markerRowOf(after)).toBe(3);
 
 			// h moves the focus back to the list pane; the selection is
 			// preserved.
 			frame = await press(setup, "h", "the list pane to take focus", listFocused);
-			expect(markerRowOf(frame)).toBe(4);
+			expect(markerRowOf(frame)).toBe(3);
 			expect(showsTicket(frame, SAMPLE_TICKETS[0])).toBe(true);
 		});
 	});
@@ -212,7 +212,7 @@ describe("the control plane", () => {
 				setup,
 				"j",
 				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 5,
+				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 4,
 			);
 
 			// The right arrow focuses the detail pane. The selection is
@@ -224,13 +224,13 @@ describe("the control plane", () => {
 				"the detail pane to take focus",
 				detailFocused,
 			);
-			expect(markerRowOf(right)).toBe(5);
+			expect(markerRowOf(right)).toBe(4);
 			expect(showsTicket(right, SAMPLE_TICKETS[1])).toBe(true);
 
 			// The left arrow focuses the list pane. The selection is
 			// preserved.
 			const left = await pressArrow(setup, "left", "the list pane to take focus", listFocused);
-			expect(markerRowOf(left)).toBe(5);
+			expect(markerRowOf(left)).toBe(4);
 			expect(showsTicket(left, SAMPLE_TICKETS[1])).toBe(true);
 		});
 	});
@@ -277,7 +277,7 @@ describe("the control plane", () => {
 				await focusDetail(setup);
 				const agentRow = agentRowOf(setup.captureCharFrame());
 				expect(agentRow).toBeGreaterThan(0);
-				expect(markerRowOf(setup.captureCharFrame())).toBe(4);
+				expect(markerRowOf(setup.captureCharFrame())).toBe(3);
 
 				// j translates the native surface one terminal row. The top padding
 				// scrolls away first, and every mounted content row moves together.
@@ -288,7 +288,7 @@ describe("the control plane", () => {
 					(f) => agentRowOf(f) === agentRow - 1 && f.includes("Retry policy for webhooks"),
 				);
 				// The selection did not move.
-				expect(markerRowOf(scrolled)).toBe(4);
+				expect(markerRowOf(scrolled)).toBe(3);
 
 				// k scrolls back to the top. The title is back.
 				const back = await press(
@@ -297,10 +297,10 @@ describe("the control plane", () => {
 					"the detail to scroll back to the top",
 					(f) => agentRowOf(f) === agentRow && f.includes("Retry policy for webhooks"),
 				);
-				expect(markerRowOf(back)).toBe(4);
+				expect(markerRowOf(back)).toBe(3);
 			},
 			60,
-			14,
+			19,
 		);
 	});
 
@@ -335,10 +335,10 @@ describe("the control plane", () => {
 				expect(afterBottom).toBe(atBottom);
 
 				// The selection never moved.
-				expect(markerRowOf(atBottom)).toBe(4);
+				expect(markerRowOf(atBottom)).toBe(3);
 			},
 			60,
-			12,
+			19,
 		);
 	});
 
@@ -357,47 +357,33 @@ describe("the control plane", () => {
 	test("the list pane window slides when the tickets overflow the pane", async () => {
 		await withApp(
 			async (setup) => {
-				// The pane shows two rows at this height: the first two tickets
-				// only. The rows carry their state and task type badges as
-				// their identity, so a slide is visible in the badges even
-				// where a title wraps or truncates.
+				// The pane shows four rows at this height: the first four
+				// tickets only. The rows carry their state and task type
+				// badges as their identity, so a slide is visible in the
+				// badges even where a title wraps or truncates.
 				let frame = frameText(setup.captureCharFrame());
 				expect(frame).toContain("[handed-off]");
-				expect(frame).not.toContain("[running]");
-				expect(frame).not.toContain("[awaiting]");
+				expect(frame).toContain("[awaiting]");
+				expect(frame).not.toContain("Ticket id");
 
-				// Moving the selection slides the window: each slide brings the
-				// next state badge in and drops the oldest row out.
-				await press(
-					setup,
-					"j",
-					"the selection to move to the second ticket",
-					(f) => markerRowOf(f) === 5,
-				);
-				frame = await press(
-					setup,
-					"j",
-					"the window to keep the third ticket in view",
-					(f) => frameText(f).includes("[running]") && frameText(f).includes("[handed-off]"),
-				);
-				expect(frame).not.toContain("[awaiting]");
-				// The rows that slid in carry their task type badges.
-				const rows = rowsOf(frame);
-				expect(rows.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
-				expect(rows.find((r) => r.includes("[handed-off]"))?.includes("[implement]")).toBe(true);
+				// Moving the selection slides the window: enough slides bring
+				// the later tickets in and drop the oldest rows out.
+				for (let i = 0; i < 5; i += 1) {
+					setup.mockInput.pressKey("j");
+					frame = frameText(await settle(setup));
+				}
+				expect(frame).toContain("[running]");
+				expect(frame).toContain("[awaiting]");
+				expect(frame).not.toContain("Retry polic");
 
-				frame = await press(
-					setup,
-					"j",
-					"the window to slide to the last tickets",
-					(f) => frameText(f).includes("[awaiting]") && !frameText(f).includes("[handed-off]"),
+				frame = await press(setup, "end", "the window to slide to the last tickets", (f) =>
+					(rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "").includes("Ticket id"),
 				);
-				const rows3 = rowsOf(frame);
-				expect(rows3.find((r) => r.includes("[awaiting]"))?.includes("[review]")).toBe(true);
-				expect(rows3.find((r) => r.includes("[running]"))?.includes("[fix]")).toBe(true);
+				expect(frame).toContain("Observe the agent");
+				expect(frame).not.toContain("Drop the legacy");
 			},
 			WIDTH,
-			10,
+			19,
 		);
 	});
 
@@ -408,7 +394,7 @@ describe("the control plane", () => {
 				setup,
 				"j",
 				"the selection to move to the second ticket",
-				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 5,
+				(f) => showsTicket(f, SAMPLE_TICKETS[1]) && markerRowOf(f) === 4,
 			);
 			// The badge rides on the selected row at this width.
 			expect(setup.captureCharFrame()).toContain("[implement]");
@@ -419,13 +405,13 @@ describe("the control plane", () => {
 			// geometry itself: in the 60-wide layout the [implement] badge
 			// and the repository have dropped from the list rows, and the
 			// short [fix] badge still rides.
-			setup.resize(60, 12);
+			setup.resize(60, 19);
 			const small = await awaitFrame(
 				setup,
 				(f) => {
 					const rows = rowsOf(f);
 					return (
-						rows.length === 12 &&
+						rows.length === 19 &&
 						rows.every((row) => row.length === 60) &&
 						f.includes("Tickets") &&
 						f.includes("Detail") &&
@@ -439,7 +425,7 @@ describe("the control plane", () => {
 			// Both panes and the selection survive the resize.
 			expect(small).toContain("Tickets");
 			expect(small).toContain("Detail");
-			expect(markerRowOf(small)).toBe(5);
+			expect(markerRowOf(small)).toBe(4);
 			// The badge drops at this width; the repository already did.
 			expect(small).not.toContain("[implement]");
 
@@ -474,7 +460,7 @@ describe("the control plane", () => {
 			);
 			expect(large).toContain("Tickets");
 			expect(large).toContain("Detail");
-			expect(markerRowOf(large)).toBe(5);
+			expect(markerRowOf(large)).toBe(4);
 			expect(showsTicket(large, SAMPLE_TICKETS[1])).toBe(true);
 			// The badge comes back, the focus stays, and the detail scroll
 			// clamps to the window that now fits the whole ticket.
@@ -515,12 +501,12 @@ describe("the control plane", () => {
 				expect(rows).toHaveLength(25);
 				for (const row of rows) {
 					expect(row.length).toBe(75);
-				} // Rows 0-1 are the section headers and row 2 is the mode line, so the
-				// panes' own rows start below them and stop at the Message line. The
-				// split puts the list box on columns 0-36 and the detail box on
-				// 37-74. At an odd width a "50%" list would take 38 columns, and the
-				// shared geometry would then lay text one cell off the rendered box.
-				for (const row of rows.slice(3, -3)) {
+				} // Row 0 carries the section header and the detail's top border, and
+				// the Ticket box runs from row 1 to row 14. The split puts the
+				// list box on columns 0-36 and the detail box on 37-74. At an
+				// odd width a "50%" list would take 38 columns, and the shared
+				// geometry would then lay text one cell off the rendered box.
+				for (const row of rows.slice(2, 14)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -546,7 +532,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const rows = rowsOf(setup.captureCharFrame());
-				expect(rows).toHaveLength(12);
+				expect(rows).toHaveLength(19);
 				// Every terminal row is exactly as wide as the terminal:
 				// nothing wrapped or overflowed.
 				for (const row of rows) {
@@ -568,7 +554,7 @@ describe("the control plane", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("acme/billing");
 			},
 			60,
-			12,
+			19,
 		);
 	});
 
@@ -576,7 +562,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const rows = rowsOf(setup.captureCharFrame());
-				expect(rows).toHaveLength(12);
+				expect(rows).toHaveLength(19);
 				// Every terminal row is exactly as wide as the terminal:
 				// nothing wrapped or overflowed.
 				for (const row of rows) {
@@ -595,7 +581,7 @@ describe("the control plane", () => {
 				expect(listHalf).not.toContain("acme/");
 			},
 			40,
-			12,
+			19,
 		);
 	});
 
@@ -770,10 +756,10 @@ describe("the control plane", () => {
 		expect(await selectedRowAt(80, 24)).toBe("│ ❯ [open]      [implement] Retry poli │");
 		// 60: the badge no longer fits beside the title minimum, so it
 		// drops complete. A short type on another row still fits.
-		const narrow = await selectedRowAt(60, 12);
+		const narrow = await selectedRowAt(60, 19);
 		expect(narrow).toBe("│ ❯ [open]       Retry polic │");
 		// 40: nothing but the marker and the state badge fits.
-		expect(await selectedRowAt(40, 12)).toBe("│ ❯ [open]       R │");
+		expect(await selectedRowAt(40, 19)).toBe("│ ❯ [open]       R │");
 	});
 
 	test("the badge drops when its complete text cannot fit, and the detail keeps the value", async () => {
@@ -801,7 +787,7 @@ describe("the control plane", () => {
 				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
 			},
 			60,
-			14,
+			19,
 		);
 	});
 
@@ -863,7 +849,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			12,
+			19,
 			props,
 		);
 	});
@@ -909,7 +895,7 @@ describe("the control plane", () => {
 				expect(top).not.toBe(page);
 			},
 			60,
-			12,
+			19,
 		);
 	});
 
@@ -918,8 +904,10 @@ describe("the control plane", () => {
 			async (setup) => {
 				const selectedState = (frame: string) =>
 					rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "";
+				// One page is four visible rows at this height: the page lands
+				// on the fifth ticket.
 				await press(setup, "pagedown", "the list to move one visible page", (frame) =>
-					selectedState(frame).includes("[running]"),
+					selectedState(frame).includes("Observe th"),
 				);
 				await press(setup, "end", "the list to select its last ticket", (frame) =>
 					selectedState(frame).includes("Ticket id i"),
@@ -929,7 +917,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			10,
+			19,
 		);
 	});
 
@@ -964,7 +952,7 @@ describe("the control plane", () => {
 					(frame) => detailFocused(frame) && frame !== before,
 					"the detail wheel event to move its surface",
 				);
-				expect(markerRowOf(scrolled)).toBe(6);
+				expect(markerRowOf(scrolled)).toBe(5);
 
 				// Horizontal and Shift-wheel gestures are inert for wrapped detail text.
 				const stable = setup.captureCharFrame();
@@ -973,7 +961,7 @@ describe("the control plane", () => {
 				expect(await settle(setup)).toBe(stable);
 			},
 			60,
-			12,
+			19,
 		);
 	});
 
@@ -995,14 +983,14 @@ describe("the control plane", () => {
 				const initial = setup.captureCharFrame();
 				expect(initial).toMatch(/[▀▄█]/);
 				// The panes sit above the Message line and Action bar, so the
-				// track spans the pane's inner rows one to four.
+				// track spans the detail's inner rows below the thumb.
 				await mouseClick(setup, 58, paneRow(4));
 				const trackJump = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== initial,
 					"a scrollbar track click to jump to a proportional detail position",
 				);
-				expect(markerRowOf(trackJump)).toBe(4);
+				expect(markerRowOf(trackJump)).toBe(3);
 				const thumbRow = rowsOf(trackJump).findIndex((row) => /[▀▄█]/.test(row.slice(58, 59)));
 				await mouseDrag(setup, [58, thumbRow], [58, paneRow(1)]);
 				await awaitFrame(
@@ -1012,7 +1000,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			10,
+			19,
 		);
 	});
 
@@ -1033,7 +1021,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			12,
+			19,
 			{ config },
 		);
 	});
@@ -1054,7 +1042,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			12,
+			19,
 			{ config },
 		);
 	});
@@ -1085,7 +1073,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			12,
+			19,
 		);
 	});
 
@@ -1110,7 +1098,7 @@ describe("the control plane", () => {
 				expect(frames.length).toBeGreaterThan(0);
 				for (const frame of frames) {
 					const rows = rowsOf(frame);
-					expect(rows).toHaveLength(12);
+					expect(rows).toHaveLength(19);
 					expect(rows.every((row) => row.length === 60)).toBe(true);
 					expect(rows[paneRow(0)]).toContain("┌");
 					// The panes sit above the Message line and Action bar.
@@ -1119,7 +1107,7 @@ describe("the control plane", () => {
 				}
 			},
 			60,
-			12,
+			19,
 			{ config },
 		);
 	});
@@ -1134,7 +1122,7 @@ describe("the control plane", () => {
 				expect(await settle(setup)).toBe(before);
 			},
 			60,
-			8,
+			19,
 		);
 	});
 

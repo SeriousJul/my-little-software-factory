@@ -33,6 +33,7 @@ import {
 	press,
 	pressEnterQuiet,
 	rowsOf,
+	settle,
 	sleep,
 	withApp,
 } from "./app-harness.ts";
@@ -282,7 +283,9 @@ describe("the held turn through the real app flow", () => {
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				expect(rows[0]).toContain("auto: on 1/3 paused");
-				const rowA = rows.find((row) => row.includes("Persist source facts"));
+				// The row is the list's own row in the left column; the detail
+				// pane's title carries the same title in the right column.
+				const rowA = rows.find((row) => row.slice(0, 60).includes("Persist source facts"));
 				expect(rowA).toBeDefined();
 				expect(rowA).toContain("held");
 				expect(rowA).not.toContain("[awaiting]");
@@ -326,6 +329,14 @@ describe("the held turn through the real app flow", () => {
 					"the decision modal to close",
 					(f) => !f.includes("Decision:"),
 				);
+
+				// The same held header below sixty columns: the narrow form
+				// with the held count is whole on the header's own full-width
+				// row. The held count is the steady fact the row carries; the
+				// bell that rang when it rose is a 250 ms flash and has rested.
+				setup.resize(59, 24);
+				const narrowRow = rowsOf(await settle(setup)).find((row) => row.startsWith("▾ Tickets"));
+				expect(narrowRow?.trim()).toBe("▾ Tickets  open 1  running 2  awaiting 1  held 1");
 			},
 			undefined,
 			undefined,

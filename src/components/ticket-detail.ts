@@ -398,8 +398,8 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// nearer end. The renderer reports a frame once it has laid the tree out,
 	// which is the first moment the box knows its own content height and
 	// viewport, so the restore waits for that one pass instead of asking on a
-	// timer while the operator watches. This runs on mount only: a plain ticket
-	// switch keeps its own start-at-top behavior.
+	// timer while the operator watches.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the identity in the deps list is deliberate - the effect reads refs only, and it must re-run when a switch lands back on the retained ticket, not only on mount
 	useEffect(() => {
 		const box = scrollboxRef.current;
 		const slot = scrollSlot.current;
@@ -410,7 +410,15 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			if (identityRef.current !== identity) return;
 			const live = scrollSlot.current;
 			if (live === null || live.identity !== identity) return;
-			box.scrollTop = Math.min(live.top, maxScrollOf(box.scrollHeight, box.viewport.height));
+			const max = maxScrollOf(box.scrollHeight, box.viewport.height);
+			// A cross back through the other section can remount the pane before
+			// the renderer has laid it out at its new size. Until the first frame
+			// with real geometry, an offset would clamp to zero and be lost.
+			if (max === 0) {
+				renderer.once("frame", restore);
+				return;
+			}
+			box.scrollTop = Math.min(live.top, max);
 			// The pass has run: a later frame must not drag the scroll back to
 			// the offset the operator has since moved on from.
 			scrollSlot.current = null;
@@ -419,18 +427,28 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		return () => {
 			renderer.removeListener("frame", restore);
 		};
-	}, [renderer, scrollSlot]);
+		// The pane is one instance for the whole section, so the effect must
+		// re-run when a switch lands on the retained ticket, not only on mount.
+	}, [renderer, scrollSlot, ticket?.identity]);
 
-	// Save the native offset when the pane unmounts, keyed by the identity it
-	// showed, so a remount of another ticket starts at its own position.
+	// The slot keeps the offset of the ticket the operator scrolled. A ticket
+	// switch saves the offset the pane leaves behind, but a switch at top never
+	// clobbers a scrolled offset: the cross into the other section walks
+	// through the rest of the list, and the walked rows must not erase the
+	// row the operator left behind. The identity change runs the previous
+	// render's cleanup, so a plain switch saves the old identity and the true
+	// unmount saves the current one.
 	useEffect(() => {
 		const box = scrollboxRef.current;
 		return () => {
-			const identity = identityRef.current;
+			const identity = ticket?.identity;
 			if (box === null || identity === undefined) return;
-			scrollSlot.current = { identity, top: box.scrollTop };
+			const top = box.scrollTop;
+			const live = scrollSlot.current;
+			if (live !== null && live.identity !== identity && top === 0) return;
+			scrollSlot.current = { identity, top };
 		};
-	}, [scrollSlot]);
+	}, [scrollSlot, ticket?.identity]);
 
 	// Slider track clicks stop propagation inside OpenTUI so they can start a
 	// drag. Listen on the slider itself as well, which keeps pane focus in

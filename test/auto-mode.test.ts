@@ -304,10 +304,19 @@ async function pressEscape(
 	return await awaitFrame(setup, predicate, what);
 }
 
-/** The ticket's list row, by its title. */
+/**
+ * The ticket's list row, by its title.
+ *
+ * The dual-list frame (ADR 0019) truncates the list row's title - at the
+ * handoff limit, to its leading cells - so the row is found by the selection
+ * marker and the title's leading cells, with the full-title row (the detail
+ * pane, the modal's title) as the fallback a modal frame offers.
+ */
 function ticketRow(frame: string, title = "Persist source facts"): string {
 	const rows = rowsOf(frame);
-	const row = rows.find((line) => line.includes(title));
+	const row =
+		rows.find((line) => line.includes("❯") && line.includes(title.slice(0, 3))) ??
+		rows.find((line) => line.includes(title));
 	if (row === undefined) throw new Error(`no ticket row for ${title} in frame:\n${frame}`);
 	return row;
 }
@@ -3452,18 +3461,17 @@ describe("the handoff queue", () => {
 				const pressReturnQuietFor = (what: string, predicate: (f: string) => boolean) =>
 					pressEnterQuiet(setup, what, predicate);
 				// Hand off the open ticket: it runs, and it holds the seat.
-				// The mode line sits above the list box, so the list rows sit
-				// on frame lines three and four: line one is the box border,
-				// and the list pads a blank line above its first row. The
-				// in-flight ticket is first, and it is the initial selection,
-				// so the move down lands the marker on line four - a line it
-				// was not on, so the key is applied before the next key is
-				// pressed.
-				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 6);
+				// The mode line, the Ticket header, the list box border, and
+				// the box's padding row sit above the list rows, so the two
+				// tickets sit on frame lines four and five. The in-flight
+				// ticket is first, and it is the initial selection, so the
+				// move down lands the marker on line five - a line it was not
+				// on, so the key is applied before the next key is pressed.
+				await pressQuietFor("j", "select the open ticket", (f) => markerRowOf(f) === 5);
 				await pressReturnQuietFor("the handoff to start", (f) => f.includes("handing off"));
 				// Back to the missing ticket: its restart queues behind the
 				// handoff in flight.
-				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 5);
+				await pressQuietFor("k", "select the missing ticket", (f) => markerRowOf(f) === 4);
 				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
@@ -3505,14 +3513,14 @@ describe("the handoff queue", () => {
 				expect(inFlight?.handoffRecoveryRequired).toBe(false);
 
 				// The claim settled, so the ticket is not dead: it hands off
-				// again on demand. It is the second row (row four: the mode
-				// line and the border sit above the list), and the selection
-				// already holds it, so the move is the boundary no-op.
-				await pressQuietFor(
-					"j",
-					"the boundary no-op on the open ticket",
-					(f) => markerRowOf(f) === 6,
-				);
+				// again on demand. It is the second row (row five: the mode
+				// line, the Ticket header, the border, and the padding row
+				// sit above the list), and the abandonment left the
+				// selection on it, so the selection is probed instead of
+				// stepped: a move down from the last row would cross into
+				// the Consultation section.
+				const held = await settle(setup);
+				expect(markerRowOf(held)).toBe(5);
 				await settleReverify(src, pairMoved);
 				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
 				await awaitFrame(

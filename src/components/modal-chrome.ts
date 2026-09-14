@@ -34,12 +34,14 @@ const MIN_TERMINAL_WIDTH = 40;
 /**
  * The smallest terminal height the control plane draws its panes at.
  *
- * A pane box costs two border rows and two padding rows around its first text
- * row, and the Main frame owns two section headers above them, plus the
- * permanent Message line and Action bar below: nine rows is the shortest
- * terminal that holds both headers and one real pane row.
+ * Both Main sections start expanded, and each must shrink to its usable
+ * minimum instead of disappearing: a section costs one header row, and its
+ * box costs two border rows and two padding rows around its three minimum
+ * content rows. The two sections cost sixteen body rows, and the permanent
+ * Message line, Action bar, and mode line add three more: nineteen rows is
+ * the shortest terminal that holds both sections at their minimum.
  */
-const MIN_TERMINAL_HEIGHT = 9;
+const MIN_TERMINAL_HEIGHT = 19;
 /** The row every surface's Message line owns. */
 const MESSAGE_ROWS = 1;
 /** The row every surface with a bar owns. */

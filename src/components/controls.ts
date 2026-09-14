@@ -74,11 +74,10 @@ type ControlKey =
 	| "a"
 	| "m"
 	| "c"
-	| "t"
 	| "f"
 	| "x"
+	| "z"
 	| "d"
-	| "v"
 	| "w"
 	| "delete"
 	| "f1"
@@ -129,8 +128,6 @@ export interface ControlContext {
 	refreshingSourceCount: number;
 	/** Whether the Consultation section can re-read its durable projection. */
 	consultationRefreshAvailable?: boolean;
-	/** Whether the Consultation list pane is rendered at the current width. */
-	consultationListVisible?: boolean;
 	/** The observed status of the selected Consultation Agent. */
 	consultationAgentStatus?: string | null;
 	handoffActive: boolean;
@@ -254,8 +251,8 @@ const CONSULTATION_TYPES_MISSING =
 const EMERGENCY_EXIT_NOTE = "may require Handoff recovery on the next start";
 /** What the settled meaning of Enter does, for the guide's current section. */
 const DECIDE_NOTE = "opens the decision on a settled Ticket";
-/** What the Consultation section does when a Consultation needs the operator. */
-const CONSULTATIONS_NOTE = "opens on the Consultation that needs the operator, if one does";
+/** What the section toggle does with the section under the cursor. */
+const SECTION_TOGGLE_NOTE = "collapses the section the cursor is in, or expands it back";
 
 /** The panel's own modes: while one is open, the list's selection is inert. */
 const panelMode = (mode: InteractionMode) =>
@@ -348,10 +345,6 @@ const ticketOnly = (context: ControlContext): ControlAvailability =>
 	ticketBaseMode(context.mode)
 		? available()
 		: unavailable("this control is available only in the Ticket section");
-const consultationListNavigation = (context: ControlContext): ControlAvailability =>
-	context.consultationListVisible === false
-		? unavailable("the Consultation list is hidden below 80 columns")
-		: available();
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -574,8 +567,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 75,
 		modes: ["consultation-detail"],
-		availability: consultationListNavigation,
-		showInBar: (context) => context.consultationListVisible !== false,
+		availability: available,
 	},
 	{
 		id: "change-override",
@@ -676,32 +668,19 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: DECIDE_NOTE,
 	},
 	{
-		id: "consultations",
-		label: "Consultations",
-		// `v` expands the Consultation section from the Ticket section. It is
-		// absent from Consultation modes, so repeating it is a no-op. On entry
-		// from Tickets it may select the Consultation that needs the operator.
-		keys: () => ["v"],
-		keyLabel: "v",
+		id: "section-toggle",
+		label: "Section",
+		// `x` collapses the section the cursor is in, or expands it back. Both
+		// sections stay visible as long as the frame can hold them, so the
+		// toggle is a matter of room, not of access.
+		keys: () => ["x"],
+		keyLabel: "x",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
-		modes: [...ticketBaseModes],
+		modes: [...baseModes],
 		availability: available,
-		guideNote: CONSULTATIONS_NOTE,
-	},
-	{
-		id: "open-tickets",
-		label: "Tickets",
-		// `t` returns to the Ticket section from either Consultation pane. Agent
-		// interaction uses Enter in the detail, so one key has one meaning.
-		keys: () => ["t"],
-		keyLabel: "t",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 45,
-		modes: ["consultation-list", "consultation-detail"],
-		availability: available,
+		guideNote: SECTION_TOGGLE_NOTE,
 	},
 	{
 		id: "launch",
@@ -733,8 +712,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultation-close",
 		label: "Close",
-		keys: () => ["x"],
-		keyLabel: "x",
+		// `z` closes the Consultation: `x` is the shared section toggle.
+		keys: () => ["z"],
+		keyLabel: "z",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 50,
@@ -1219,15 +1199,14 @@ const KEY_NAMES: Record<string, string> = {
 	l: "l",
 	q: "q",
 	e: "e",
-	t: "t",
 	f: "f",
 	x: "x",
+	z: "z",
 	d: "d",
 	r: "r",
 	a: "a",
 	m: "m",
 	c: "c",
-	v: "v",
 	f1: "F1",
 	f2: "F2",
 	f3: "F3",

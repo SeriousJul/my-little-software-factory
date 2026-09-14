@@ -81,17 +81,26 @@ export const overlayRows = (frame: string): string[] =>
  */
 export const listHalfOf = (row: string): string => `${row.split("││")[0]}│`;
 /**
- * The Main view's two section headers: the panes start two rows lower than
- * they did when one view owned the whole frame.
+ * The Ticket section header: the Ticket list box starts one row lower than
+ * it did when the section owned the whole frame (ADR 0019). The Consultation
+ * section header sits between the two list boxes, so it is not part of this
+ * offset.
  *
  * Frame tests that point at a pane row or click a pane cell state their
- * target relative to this constant, so the headers stay one fact instead of
- * a repeated magic number.
+ * target relative to this constant, so the header stays one fact instead of
+ * a repeated magic number. The offset assumes no mode line: a test that boots
+ * state sees the mode line on the first row and the rows shift down by one.
  */
-export const HEADER_ROWS = 2;
-/** The terminal row a frame-relative pane row holds under the headers. */
+export const HEADER_ROWS = 1;
+/** The terminal row a frame-relative pane row holds under the header. */
 export const paneRow = (row: number): number => HEADER_ROWS + row;
-/** The terminal row of the selected entry in the list pane. */
+/**
+ * The terminal row of the selected entry in the list that holds the cursor.
+ *
+ * The Ticket list sits above the Consultation list, so a row that starts
+ * with the marker is the Ticket selection's row while a Ticket holds the
+ * cursor, and the Consultation selection's row while a Consultation does.
+ */
 export const markerRowOf = (frame: string) =>
 	rowsOf(frame).findIndex((row) => row.startsWith("│ ❯"));
 /**
@@ -823,20 +832,80 @@ export async function openSurface(
 }
 
 /**
- * x and d open a confirmation panel over the consultations view for the
+ * z and d open a confirmation panel over the Consultation detail for the
  * states that need one. The panel's key handler subscribes after the open
  * commit, and the next key in the test is the panel's own, so wait for the
  * panel's subscription the same way.
  */
 export async function openConsultationPanel(
 	setup: Setup,
-	key: "x" | "d",
+	key: "z" | "d",
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<void> {
 	const before = keyHandlerListeners(setup);
 	await press(setup, key, what, predicate);
 	await awaitNewKeyHandler(setup, before, "the confirmation panel to take the keys");
+}
+/**
+ * Walk the unified cursor into the Consultation list, and wait for it there.
+ *
+ * The Main view is one visible flow: the Ticket rows, then the Consultation
+ * rows. `j` from the last visible Ticket crosses the boundary and lands on
+ * the first Consultation row (ADR 0019). The walk presses `j` until the
+ * Consultation list shows the focus marker, so a test states that it is
+ * across instead of counting the Ticket rows it crossed.
+ */
+export async function crossToConsultations(setup: Setup, maxSteps = 30): Promise<string> {
+	// The frame marks each list's retained row at once, so the cursor is on
+	// the Consultation list only while the Consultation box title carries the
+	// focus marker, and on the Ticket list only while its box title does.
+	const onConsultations = (frame: string) =>
+		frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Tickets");
+	if (!onConsultations(setup.captureCharFrame())) {
+		// The detail holds the cursor: bring it back to the Ticket list first.
+		if (!setup.captureCharFrame().includes("┌─❯ Tickets"))
+			await press(setup, "h", "the list to take focus", (f) => f.includes("┌─❯ Tickets"));
+	}
+	for (let step = 0; step < maxSteps; step += 1) {
+		const frame = setup.captureCharFrame();
+		if (onConsultations(frame)) return frame;
+		setup.mockInput.pressKey("j");
+		await settle(setup, 200);
+	}
+	throw new Error(
+		`the cursor never crossed to the Consultation list\nlast frame:\n${setup.captureCharFrame()}`,
+	);
+}
+/**
+ * Walk the unified cursor back to the Ticket list, and wait for it there.
+ *
+ * `k` from the first visible Consultation crosses the boundary to the last
+ * Ticket row, the same walk in reverse (ADR 0019).
+ *
+ * The frame shows the marker on two boxes at once: the Ticket box while the
+ * cursor holds the Consultation list (its retained row), and the
+ * Consultation box while it holds the Ticket list. The cursor is on the
+ * Ticket list once the Consultation marker row holds no Consultation row of
+ * its own, that is, once the Consultation box title carries no focus marker.
+ */
+export async function crossToTickets(setup: Setup, maxSteps = 30): Promise<string> {
+	const onTickets = (frame: string) =>
+		frame.includes("┌─❯ Tickets") && !frame.includes("┌─❯ Consultations");
+	if (!onTickets(setup.captureCharFrame())) {
+		// The detail holds the cursor: bring it back to the Consultation list first.
+		if (!setup.captureCharFrame().includes("┌─❯ Consultations"))
+			await press(setup, "h", "the list to take focus", (f) => f.includes("┌─❯ Consultations"));
+	}
+	for (let step = 0; step < maxSteps; step += 1) {
+		const frame = setup.captureCharFrame();
+		if (onTickets(frame)) return frame;
+		setup.mockInput.pressKey("k");
+		await settle(setup, 200);
+	}
+	throw new Error(
+		`the cursor never crossed back to the Ticket list\nlast frame:\n${setup.captureCharFrame()}`,
+	);
 }
 
 /**

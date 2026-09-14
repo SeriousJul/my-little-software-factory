@@ -1,4 +1,3 @@
-/** A clickable header for one section of the Main view. */
 import type { MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
 
@@ -9,60 +8,106 @@ export type MainSection = "tickets" | "consultations";
 
 interface SectionHeaderProps {
 	section: MainSection;
-	expanded: boolean;
+	/** False while a modal owns the surface above the Main view. */
+	active: boolean;
+	/**
+	 * The terminal width. It chooses the wide or narrow count form (wide
+	 * starts at 60 columns), per the Main view's header layout.
+	 */
+	terminalWidth: number;
+	/** The cells the header row actually holds. The text truncates to them. */
 	width: number;
+	/** Whether the section's list box is expanded (user story 3). */
+	expanded: boolean;
+	/** The steady Ticket counts for the Tickets section's header. */
+	open?: number;
+	running?: number;
+	awaiting?: number;
+	/** The Consultation counts for the Consultations section's header. */
 	awaitingResponse?: number;
 	recovery?: number;
-	bell?: boolean;
-	newOutput?: boolean;
-	/** The Tickets section's held turns, held against automatic decisions. */
+	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
-	/** The held count rose since the last render: flash the header like a bell. */
+	/**
+	 * The Consultation attention bell, set by the observation coordinator: a
+	 * Consultation moved to awaiting response while this app ran, or a
+	 * recovery became possible.
+	 */
+	bell?: boolean;
+	/**
+	 * The held-turn bell (ADR 0016): the held count rose while this app ran.
+	 * It rings with the terminal bell and flashes this header.
+	 */
 	heldBell?: boolean;
-	active: boolean;
-	onExpand: () => void;
+	/**
+	 * The observation coordinator's new-output flag: the selected Consultation's
+	 * pane produced output while the operator did not follow it, so the
+	 * header, not just the bell, carries the fact.
+	 */
+	newOutput?: boolean;
+	/**
+	 * A click on the header toggles the section (user story 9). Expanding
+	 * lands the cursor on the section's list; collapsing keeps its selection
+	 * and detail, the same action `x` takes for the cursor.
+	 */
+	onToggle: (section: MainSection) => void;
 }
 
 /**
- * Draw one row that can expand its section.
+ * Draw one row for one Main view section's header.
  *
- * The header is deliberately not a bordered box. The two section rows are part
- * of the Main frame, not extra panes, and their full-width row is also the
- * mouse target for the same action as `t` and `v`.
+ * The row carries the section name, the count facts the section reports, and
+ * the marker that says the section is expanded. The Tickets section reports
+ * steady counts - open, running, awaiting - plus the held count with its
+ * bell, and the Consultations section reports the Consultation facts with
+ * their bell and the new-output fact (user stories 11 through 16). The row
+ * truncates at the end rather than wrapping: the Main view's rows are fixed,
+ * and a truncation must never hide the section name at the row's start. A
+ * click on a header toggles the section, the same action `x` takes for the
+ * cursor: expanding lands the cursor on the section's list, and collapsing
+ * keeps its selection and detail (user stories 6, 9, and 20).
  */
 export function SectionHeader({
 	section,
-	expanded,
+	active,
+	terminalWidth,
 	width,
+	expanded,
+	open = 0,
+	running = 0,
+	awaiting = 0,
 	awaitingResponse = 0,
 	recovery = 0,
-	bell = false,
-	newOutput = false,
 	held = 0,
+	bell = false,
 	heldBell = false,
-	active,
-	onExpand,
+	newOutput = false,
+	onToggle,
 }: SectionHeaderProps) {
-	const marker = expanded ? "▾ " : "▸ ";
-	const name = section === "tickets" ? "Tickets" : "Consultations";
-	// The counts answer for the collapsed section too: the header is the only
-	// row a collapsed section shows. A narrow frame states them in the short
-	// form rather than truncating the whole line mid-count.
+	// The terminal's width chooses the form; the row's own width only sets
+	// where a too-long count truncates, so the section name stays readable.
+	const wide = terminalWidth >= 60;
 	const counts =
-		width >= 60
-			? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
-			: `awaiting ${awaitingResponse}  recovery ${recovery}`;
-	// A held turn is a fact about the Ticket section, and its count answers
-	// for the collapsed section the same way the Consultation counts do.
+		section === "tickets"
+			? wide
+				? `open: ${open}  running: ${running}  awaiting: ${awaiting}`
+				: `open ${open}  running ${running}  awaiting ${awaiting}`
+			: wide
+				? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
+				: `awaiting ${awaitingResponse}  recovery ${recovery}`;
+	// The section name leads so a truncation never hides it, the held count
+	// shows only when it is above zero (a steady zero holds no row), and the
+	// bells sit by the facts they ring on.
 	const facts =
-		section === "consultations"
-			? `  ${counts}${bell ? "  !!!" : ""}${expanded && newOutput ? "  new output" : ""}`
-			: held > 0
-				? `  held: ${held}${heldBell ? "  !!!" : ""}`
-				: "";
-	const text = `${marker}${name}${facts}`;
+		section === "tickets"
+			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
+					heldBell ? "  !!!" : ""
+				}`
+			: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
+	const text = `${expanded ? "▾" : "▸"} ${section === "tickets" ? "Tickets" : "Consultations"}${facts}`;
 	const handleMouse = (event: MouseEvent) => {
-		if (active && event.type === "down" && event.button === 0) onExpand();
+		if (!active) return;
+		if (event.type === "down" && event.button === 0) onToggle(section);
 	};
 	return createElement(
 		"box",

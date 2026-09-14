@@ -170,3 +170,13 @@ Catalogue rows the Ticket and Consultation sections add - is covered by the
 automatic suite, which passed in full on the merged branch. The terminal
 walks above were not re-run on the merged Main view: they are recorded as
 not re-verified for that view, not as a pass.
+
+## The dual-list Main view (issue #49)
+
+ADR 0019 replaces the accordion with two stacked list sections and one
+context-dependent detail pane: `t` and `v` are gone, `x` toggles the section
+under the cursor, the Consultation close moved to `z`, and up and down cross
+the section boundary. The automatic suite covers the headers, the steady
+counts, the collapse, and the cross-section navigation, and it passed in full
+on this branch. The terminal walks above were not re-run on the dual-list Main
+view: they are recorded as not re-verified for that view, not as a pass.
