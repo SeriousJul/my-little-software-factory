@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import type { AppSetup } from "./app-harness.ts";
@@ -49,6 +49,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import {
 	agentListJson,
@@ -139,7 +140,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -160,7 +161,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -190,7 +191,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -217,7 +218,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -251,7 +252,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -299,7 +300,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -440,7 +441,7 @@ describe("the contextual Action bar", () => {
 			},
 			120,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -469,7 +470,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -490,7 +491,7 @@ describe("the contextual Action bar", () => {
 			},
 			120,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 		// With a type configured: c opens the launcher from the Ticket view.
 		await withApp(
@@ -501,7 +502,7 @@ describe("the contextual Action bar", () => {
 			HEIGHT,
 			{
 				config: {
-					...DEFAULT_CONFIG,
+					...BASE_CONFIG,
 					consultationTypes: {
 						grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
 					},
@@ -529,7 +530,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: [cjk], home, configPath },
+			{ config: BASE_CONFIG, runner, initialTickets: [cjk], home, configPath },
 		);
 	});
 
@@ -538,7 +539,7 @@ describe("the contextual Action bar", () => {
 		stubCheckout(runner);
 		stubLiveHandoff(runner);
 		const props = {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner,
 			initialTickets: SAMPLE_TICKETS,
 			home,
@@ -608,7 +609,7 @@ describe("the contextual Action bar", () => {
 
 	test("q quits from both base panes, and refuses while a Handoff is active", async () => {
 		const props = {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner: new FakeRunner(),
 			initialTickets: SAMPLE_TICKETS,
 			home,
@@ -671,7 +672,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS, home, configPath },
 		);
 
 		// On the override list row: q is inert - no panel, no quit.
@@ -690,7 +691,7 @@ describe("the contextual Action bar", () => {
 
 	test("Ctrl+C destroys the renderer from every interaction mode", async () => {
 		const props = {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner: new FakeRunner(),
 			initialTickets: SAMPLE_TICKETS,
 			home,
@@ -788,7 +789,7 @@ describe("the contextual Action bar", () => {
 		};
 		mkdirSync(repository.path, { recursive: true });
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			repos: { [repository.identity]: repository.path },
 			consultationTypes: {
 				grill: { agent: "pi", environment: "worktree", template: "/grill {input}" },
@@ -1050,7 +1051,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: [SAMPLE_TICKETS[0]] },
+			{ config: BASE_CONFIG, runner, initialTickets: [SAMPLE_TICKETS[0]] },
 		);
 	});
 
@@ -1067,7 +1068,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: [] },
+			{ config: BASE_CONFIG, runner, initialTickets: [] },
 		);
 	});
 
@@ -1097,7 +1098,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -1142,7 +1143,7 @@ describe("the contextual Action bar", () => {
 		stubLiveHandoff(runner);
 		const slow = new DelayedRunner(runner, 2000);
 		const props = {
-			config: DEFAULT_CONFIG,
+			config: BASE_CONFIG,
 			runner: slow,
 			initialTickets: SAMPLE_TICKETS,
 			home,
@@ -1191,7 +1192,7 @@ describe("the contextual Action bar", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 });

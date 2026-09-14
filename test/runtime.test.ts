@@ -5,7 +5,12 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { compareVersions, isSupportedNodeVersion, MIN_NODE_VERSION } from "../src/runtime.ts";
+import {
+	compareVersions,
+	isSupportedNodeVersion,
+	MIN_NODE_VERSION,
+	unsupportedNodeVersionMessage,
+} from "../src/runtime.ts";
 
 describe("the node version gate", () => {
 	test("the requirement matches the OpenTUI native renderer floor", () => {
@@ -35,5 +40,14 @@ describe("the node version gate", () => {
 		expect(isSupportedNodeVersion("26.3.9")).toBe(false);
 		expect(isSupportedNodeVersion("22.12.0")).toBe(false);
 		expect(isSupportedNodeVersion("20.0.0")).toBe(false);
+	});
+
+	test("the failure message names the required version, the actual one, and the reason", () => {
+		const message = unsupportedNodeVersionMessage("22.12.0");
+		expect(message).toContain("Node 26.4.0 or newer");
+		expect(message).toContain("Node 22.12.0");
+		expect(message).toContain("node:ffi");
+		// The operator can act on it: no stack trace, no code path.
+		expect(message).not.toContain("at ");
 	});
 });

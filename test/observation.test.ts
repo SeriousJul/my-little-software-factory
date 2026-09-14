@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
 import {
@@ -15,6 +15,7 @@ import {
 import type { RefreshClock } from "../src/refresh.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 const source = { name: "issues", kind: "github-issues" };
@@ -38,7 +39,7 @@ const choice = {
  *   no route, closes. In manual mode both wait for a human.
  */
 const config: FactoryConfig = {
-	...DEFAULT_CONFIG,
+	...BASE_CONFIG,
 	taskTypes: {
 		implement: { template: "implement", autoClose: false, thinking: "high" },
 		review: { template: "review", autoClose: true },
@@ -1455,8 +1456,8 @@ describe("the open dispatch", () => {
 					origin: "open",
 					previousMessage: "",
 					choice: expect.objectContaining({
-						agentType: DEFAULT_CONFIG.defaultAgent,
-						environment: DEFAULT_CONFIG.defaultEnvironment,
+						agentType: BASE_CONFIG.defaultAgent,
+						environment: BASE_CONFIG.defaultEnvironment,
 						taskType: "implement",
 					}),
 				}),

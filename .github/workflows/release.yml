@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Trusted publishing: npm identifies this repository through the OIDC token
+# it hands GitHub Actions. No npm token is stored anywhere.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      # Every failed check stops the publish: a broken build never reaches
+      # the registry.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run docs:build
+      - name: The tag must match the version both packages declare
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          main="$(node -p "require('./package.json').version")"
+          alias="$(node -p "require('./packages/mlsf/package.json').version")"
+          test "$tag" = "$main"
+          test "$tag" = "$alias"
+          echo "publishing $main"
+      # The main package first: the alias pins an exact version of it and
+      # must find it in the registry.
+      - name: Publish my-little-software-factory with provenance
+        run: npm publish --provenance
+      - name: Publish the mlsf alias with provenance
+        run: npm publish --provenance --prefix packages/mlsf

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parse, stringify } from "smol-toml";
 
 import { isThinkingLevel, type ThinkingLevel, thinkingLevelList } from "./domain/agent.ts";
@@ -178,86 +179,41 @@ export class ConfigError extends Error {
 	}
 }
 
-export const DEFAULT_CONFIG: FactoryConfig = {
-	defaultAgent: "pi",
-	defaultEnvironment: "live-worktree",
-	defaultTaskType: "implement",
-	agents: {
-		pi: {
-			kind: "pi",
-			model: "--model {value}",
-			thinking: "--thinking {value}",
-			thinkingValues: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-		},
-		codex: {
-			kind: "codex",
-			model: "--model {value}",
-			thinking: "-c model_reasoning_effort={value}",
-			thinkingValues: ["minimal", "low", "medium", "high"],
-		},
-		claude: {
-			kind: "claude",
-			model: "--model {value}",
-			thinking: "--effort {value}",
-			thinkingValues: ["low", "medium", "high", "xhigh", "max"],
-		},
-	},
-	consultationTypes: {},
-	attentionBell: true,
-	interactionExitKey: "f12",
-	taskTypes: {
-		implement: {
-			template:
-				"Implement the following {source-kind}.\n\nRepository: {repository}\n\n" +
-				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
-		},
-		fix: {
-			template:
-				"Fix the following {source-kind}.\n\nRepository: {repository}\n\n" +
-				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
-		},
-		review: {
-			template:
-				"Review pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
-				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
-		},
-		rework: {
-			template:
-				"Rework pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
-				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
-		},
-	},
-	autoHandoff: false,
-	maxParallelAgents: 2,
-	agentPollIntervalSeconds: 5,
-	completionMessageLines: 200,
-	maxHandoffsPerTicket: 10,
-	scroll: { speed: 1, acceleration: 0.8, maximumSpeed: 6 },
-	workflows: [],
-	repos: {},
-	sources: [],
-	taskRules: [
-		{ taskType: "rework", when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] } },
-		{
-			taskType: "review",
-			when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
-		},
-	],
-};
+/**
+ * The per-key defaults one optional scroll value takes when the file omits
+ * it. They are per-key defaults, not a config: the control plane carries no
+ * in-code config object, and the shipped Default configuration is the TOML
+ * at config/default.toml.
+ */
+const DEFAULT_SCROLL: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
 
 export function defaultConfigPath(): string {
-	return join(os.homedir(), ".config", "factory", "config.toml");
+	return join(os.homedir(), ".config", "my-little-software-factory", "config.toml");
 }
 
 export function defaultStatePath(
 	home = os.homedir(),
 	xdgStateHome = process.env.XDG_STATE_HOME,
 ): string {
-	return join(xdgStateHome || join(home, ".local", "state"), "factory", "state.sqlite");
+	return join(
+		xdgStateHome || join(home, ".local", "state"),
+		"my-little-software-factory",
+		"state.sqlite",
+	);
+}
+
+/** The Default configuration the package ships and a missing file is seeded from. */
+export function shippedDefaultConfigPath(): string {
+	return fileURLToPath(new URL("../config/default.toml", import.meta.url));
+}
+
+/** A loaded config, and whether the load seeded the file. */
+export interface LoadedConfig {
+	config: FactoryConfig;
+	/** The file at the path held config text when the parse ran. */
+	fromFile: boolean;
+	/** The file was missing: the seam seeded it from the Default configuration. */
+	seeded?: boolean;
 }
 
 /** Resolve a configured state path relative to the selected config file. */
@@ -270,12 +226,17 @@ export function statePathFor(config: FactoryConfig, configPath: string): string 
 		: resolve(dirname(configPath), config.stateFile);
 }
 
-export async function loadConfigFile(
-	path: string,
-): Promise<{ config: FactoryConfig; fromFile: boolean }> {
-	if (!(await fileExists(path))) {
-		return { config: DEFAULT_CONFIG, fromFile: false };
-	}
+/**
+ * Load the config at the given path. A missing file is seeded from the
+ * Default configuration the package ships, at the path itself, and the
+ * seeded file is loaded through the normal parse and validate path, so a
+ * seed that would not validate stops the control plane like any bad file.
+ * The load reports that it seeded, so the operator sees a note instead of
+ * silence.
+ */
+export async function loadConfigFile(path: string): Promise<LoadedConfig> {
+	const seeded = !(await fileExists(path));
+	if (seeded) await seedConfigFile(path);
 	let text: string;
 	try {
 		text = await readFile(path, "utf8");
@@ -283,12 +244,42 @@ export async function loadConfigFile(
 		throw new ConfigError(`cannot read ${path}: ${String(error)}`);
 	}
 	try {
-		return { config: validateConfig(parse(text)), fromFile: true };
+		return {
+			config: validateConfig(parse(text)),
+			fromFile: true,
+			...(seeded ? { seeded: true } : {}),
+		};
 	} catch (error) {
 		if (error instanceof ConfigError) {
 			throw error;
 		}
 		throw new ConfigError(`invalid TOML in ${path}: ${readableParseError(error)}`);
+	}
+}
+
+/**
+ * Seed a missing Config file from the Default configuration. The text goes
+ * over verbatim: the operator's file keeps the template's comments, and the
+ * seed write is atomic like every other config write.
+ */
+async function seedConfigFile(path: string): Promise<void> {
+	const source = shippedDefaultConfigPath();
+	let text: string;
+	try {
+		text = await readFile(source, "utf8");
+	} catch (error) {
+		throw new ConfigError(`cannot read the Default configuration at ${source}: ${String(error)}`);
+	}
+	await mkdir(dirname(path), { recursive: true });
+	const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+	await writeFile(temp, text, { encoding: "utf8", mode: 0o666 });
+	try {
+		await rename(temp, path);
+	} catch (error) {
+		try {
+			await unlink(temp);
+		} catch {}
+		throw new ConfigError(`cannot create ${path}: ${String(error)}`);
 	}
 }
 
@@ -393,23 +384,23 @@ export function validateConfig(data: unknown): FactoryConfig {
 }
 
 function validateScroll(value: unknown): ScrollConfig {
-	if (value === undefined) return { ...DEFAULT_CONFIG.scroll };
+	if (value === undefined) return { ...DEFAULT_SCROLL };
 	if (!isRecord(value)) throw new ConfigError("config: scroll: must be a table");
 	const known = new Set(["speed", "acceleration", "maximum-speed"]);
 	for (const key of Object.keys(value)) {
 		if (!known.has(key)) throw new ConfigError(`config: scroll: unknown key "${key}"`);
 	}
-	const speed = positiveIntField(value, "speed", DEFAULT_CONFIG.scroll.speed, "scroll");
+	const speed = positiveIntField(value, "speed", DEFAULT_SCROLL.speed, "scroll");
 	const acceleration = nonNegativeFiniteNumberField(
 		value,
 		"acceleration",
-		DEFAULT_CONFIG.scroll.acceleration,
+		DEFAULT_SCROLL.acceleration,
 		"scroll",
 	);
 	const maximumSpeed = positiveIntField(
 		value,
 		"maximum-speed",
-		DEFAULT_CONFIG.scroll.maximumSpeed,
+		DEFAULT_SCROLL.maximumSpeed,
 		"scroll",
 	);
 	if (maximumSpeed < speed) {

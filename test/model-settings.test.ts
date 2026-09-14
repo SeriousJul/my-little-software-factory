@@ -7,10 +7,11 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import { validateConfiguredModels } from "../src/model-settings.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { fitSettings } from "../src/setting-fit.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
 /** A config with one task type and one agent, both named for the reason text. */
@@ -20,11 +21,11 @@ function configWith(
 	over: Partial<Pick<FactoryConfig, "defaultModel" | "consultationTypes">> = {},
 ): FactoryConfig {
 	return {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		defaultAgent: "pilot",
 		taskTypes: {
 			implement: {
-				...DEFAULT_CONFIG.taskTypes.implement,
+				...BASE_CONFIG.taskTypes.implement,
 				...task,
 			},
 		},
@@ -68,7 +69,7 @@ describe("validateConfiguredModels", () => {
 			},
 			taskTypes: {
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "slow",
 					model: "anthropic/claude-sonnet-4-5",
 				},
@@ -171,7 +172,7 @@ describe("validateConfiguredModels", () => {
 		const runner = new FakeRunner();
 		runner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
 
-		expect(await validateConfiguredModels(DEFAULT_CONFIG, runner)).toEqual({
+		expect(await validateConfiguredModels(BASE_CONFIG, runner)).toEqual({
 			errors: [],
 			warnings: [],
 		});

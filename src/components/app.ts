@@ -25,7 +25,6 @@ import { createElement, useKeyboard, useRenderer, useTerminalDimensions } from "
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-	DEFAULT_CONFIG,
 	defaultConfigPath,
 	type FactoryConfig,
 	persistConfig,
@@ -208,7 +207,12 @@ type Utility =
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
 export interface AppProps {
-	config?: FactoryConfig;
+	/**
+	 * The validated config. The production entry always supplies it from the
+	 * config load seam; the test harness fills a base config when a suite
+	 * omits it.
+	 */
+	config: FactoryConfig;
 	runner?: CommandRunner;
 	home?: string;
 	configPath?: string;
@@ -263,7 +267,7 @@ export function App({
 }: AppProps) {
 	const renderer = useRenderer();
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const [config, setConfig] = useState<FactoryConfig>(() => configProp ?? DEFAULT_CONFIG);
+	const [config, setConfig] = useState<FactoryConfig>(() => configProp);
 	// Only test callers supply deterministic tickets. Production starts with
 	// the empty SQLite projection while configured sources refresh.
 	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
@@ -348,9 +352,7 @@ export function App({
 		lines: readonly string[];
 		note: string | null;
 	} | null>(null);
-	const [autoMode, setAutoMode] = useState<boolean>(
-		() => (configProp ?? DEFAULT_CONFIG).autoHandoff,
-	);
+	const [autoMode, setAutoMode] = useState<boolean>(() => configProp.autoHandoff);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,

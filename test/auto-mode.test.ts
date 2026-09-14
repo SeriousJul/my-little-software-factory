@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AppProps } from "../src/components/app.ts";
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
@@ -47,6 +47,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import {
 	agentListJson,
 	FakeRunner,
@@ -213,7 +214,7 @@ function seededApp(
 	const configPath = join(home, "config.toml");
 	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
 	const config: FactoryConfig = {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		repos: { [repoIdentity]: path },
 		workflows: [{ from: "implement", to: ["review"] }],
 		...extra,
@@ -681,10 +682,10 @@ describe("the detail pane", () => {
 
 describe("the decision modal", () => {
 	test("enter on an awaiting ticket shows the completion and routes on confirm", async () => {
-		const review = { ...DEFAULT_CONFIG.taskTypes.review };
+		const review = { ...BASE_CONFIG.taskTypes.review };
 		review.template += "\n\nPrevious work message:\n{previous-message}";
 		const app = seededApp("awaiting", {
-			taskTypes: { ...DEFAULT_CONFIG.taskTypes, review },
+			taskTypes: { ...BASE_CONFIG.taskTypes, review },
 		});
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -786,8 +787,8 @@ describe("the decision modal", () => {
 			"awaiting",
 			{
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
-					review: { ...DEFAULT_CONFIG.taskTypes.review, thinking: "low" },
+					...BASE_CONFIG.taskTypes,
+					review: { ...BASE_CONFIG.taskTypes.review, thinking: "low" },
 				},
 			},
 			success,
@@ -836,9 +837,9 @@ describe("the decision modal", () => {
 			"awaiting",
 			{
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
+					...BASE_CONFIG.taskTypes,
 					review: {
-						...DEFAULT_CONFIG.taskTypes.review,
+						...BASE_CONFIG.taskTypes.review,
 						agent: "codex",
 						model: "review-model",
 						thinking: "high",
@@ -891,16 +892,16 @@ describe("the decision modal", () => {
 		const app = seededApp("awaiting", {
 			workflows: [{ from: "implement", to: ["review"], agent: "pi" }],
 			agents: {
-				...DEFAULT_CONFIG.agents,
+				...BASE_CONFIG.agents,
 				pi: {
-					...DEFAULT_CONFIG.agents.pi,
+					...BASE_CONFIG.agents.pi,
 					contextWindow: "--context {value}",
 				},
 			},
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				review: {
-					...DEFAULT_CONFIG.taskTypes.review,
+					...BASE_CONFIG.taskTypes.review,
 					model: "review-model",
 					contextWindow: "131072",
 				},
@@ -985,9 +986,9 @@ describe("the decision modal", () => {
 		const app = seededApp("awaiting", {
 			workflows: [{ from: "implement", to: ["review"], agent: "claude" }],
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				review: { ...DEFAULT_CONFIG.taskTypes.review, model: "review-model" },
-				fix: { ...DEFAULT_CONFIG.taskTypes.fix, agent: "pi", model: "fix-model" },
+				...BASE_CONFIG.taskTypes,
+				review: { ...BASE_CONFIG.taskTypes.review, model: "review-model" },
+				fix: { ...BASE_CONFIG.taskTypes.fix, agent: "pi", model: "fix-model" },
 			},
 		});
 		stubCheckout(app);
@@ -1098,8 +1099,8 @@ describe("the decision modal", () => {
 	test("a workflow row shows the arriving task profile's effective agent", async () => {
 		const app = seededApp("awaiting", {
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				review: { ...DEFAULT_CONFIG.taskTypes.review, agent: "codex" },
+				...BASE_CONFIG.taskTypes,
+				review: { ...BASE_CONFIG.taskTypes.review, agent: "codex" },
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1131,9 +1132,9 @@ describe("the decision modal", () => {
 			"awaiting",
 			{
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
+					...BASE_CONFIG.taskTypes,
 					review: {
-						...DEFAULT_CONFIG.taskTypes.review,
+						...BASE_CONFIG.taskTypes.review,
 						model: "anthropic/claude-review-4",
 					},
 				},
@@ -2890,9 +2891,9 @@ describe("the auto dispatch", () => {
 			autoHandoff: true,
 			defaultModel: "anthropic/claude-sonnet-4-5",
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
+				...BASE_CONFIG.taskTypes,
 				implement: {
-					...DEFAULT_CONFIG.taskTypes.implement,
+					...BASE_CONFIG.taskTypes.implement,
 					agent: "codex",
 					thinking: "high",
 				},
@@ -2940,8 +2941,8 @@ describe("the auto dispatch", () => {
 		const app = seededApp("open", {
 			autoHandoff: true,
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, model: "gpt-4o" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
 			},
 		});
 		stubCheckout(app);
@@ -3022,10 +3023,10 @@ describe("the auto dispatch", () => {
 		const app = seededApp("open", {
 			autoHandoff: true,
 			defaultModel: "factory-model",
-			agents: { ...DEFAULT_CONFIG.agents, cursor: { kind: "cursor" } },
+			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, agent: "cursor" },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, agent: "cursor" },
 			},
 		});
 		stubCheckout(app);
@@ -3085,11 +3086,11 @@ describe("the auto dispatch", () => {
 
 describe("the auto decision", () => {
 	test("auto mode routes a settled turn to the workflow target without the operator", async () => {
-		const review = { ...DEFAULT_CONFIG.taskTypes.review };
+		const review = { ...BASE_CONFIG.taskTypes.review };
 		review.template += "\n\nPrevious work message:\n{previous-message}";
 		const app = seededApp("awaiting", {
 			autoHandoff: true,
-			taskTypes: { ...DEFAULT_CONFIG.taskTypes, review },
+			taskTypes: { ...BASE_CONFIG.taskTypes, review },
 		});
 		stubCheckout(app);
 		// The routed agent's pane is live from the first list: a later tick
@@ -3151,8 +3152,8 @@ describe("the auto decision", () => {
 			{
 				autoHandoff: true,
 				taskTypes: {
-					...DEFAULT_CONFIG.taskTypes,
-					review: { ...DEFAULT_CONFIG.taskTypes.review, model: "anthropic/claude-review-4" },
+					...BASE_CONFIG.taskTypes,
+					review: { ...BASE_CONFIG.taskTypes.review, model: "anthropic/claude-review-4" },
 				},
 			},
 			success,
@@ -3210,7 +3211,7 @@ describe("the auto decision", () => {
 			autoHandoff: true,
 			defaultAgent: "claude",
 			defaultModel: "factory-model",
-			agents: { ...DEFAULT_CONFIG.agents, claude: { kind: "claude" } },
+			agents: { ...BASE_CONFIG.agents, claude: { kind: "claude" } },
 			workflows: [{ from: "implement", to: ["review"] }],
 		});
 		stubCheckout(app);
@@ -3409,7 +3410,7 @@ describe("the handoff queue", () => {
 		const configPath = join(home, "config.toml");
 		writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			repos: { [repoIdentity]: path },
 			workflows: [{ from: "implement", to: ["review"] }],
 		};

@@ -1,14 +1,16 @@
 /**
- * The config tests: the shipped defaults, a valid file, and every way a
- * file can be wrong.
+ * The config tests: the shipped Default configuration, the seed of a
+ * missing file, the standard paths, a valid file, and every way a file can
+ * be wrong.
  *
- * The validation rules: a missing file is the shipped defaults; a file must
- * carry every key the control plane reads, reject every key it does not
- * read, and check the cross references (default agent, default task type,
- * default environment). The error is always one readable line an operator
- * can act on.
+ * The validation rules: a missing file is seeded from the Default
+ * configuration the package ships, then loaded; a file must carry every key
+ * the control plane reads, reject every key it does not read, and check the
+ * cross references (default agent, default task type, default environment).
+ * The error is always one readable line an operator can act on.
  */
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
@@ -17,16 +19,17 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 
 import {
 	ConfigError,
 	configToToml,
-	DEFAULT_CONFIG,
+	defaultConfigPath,
+	defaultStatePath,
 	type FactoryConfig,
 	loadConfigFile,
 	persistConfig,
@@ -34,6 +37,10 @@ import {
 	validateConfig,
 } from "../src/config.ts";
 import { THINKING_LEVELS } from "../src/domain/agent.ts";
+import { BASE_CONFIG } from "./base-config.ts";
+
+/** The checked-in Default configuration the package ships. */
+const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
 
 const tempDirs: string[] = [];
 
@@ -79,33 +86,106 @@ function expectConfigError(data: unknown, fragment: string): void {
 	expect(message).toContain(fragment);
 }
 
-describe("loadConfigFile", () => {
-	test("a missing file yields the shipped defaults", async () => {
+describe("the Default configuration", () => {
+	test("a missing file is seeded from it, at the path, and loaded", async () => {
 		const path = inTempDir()("config.toml");
-		const { config, fromFile } = await loadConfigFile(path);
-		expect(fromFile).toBe(false);
-		expect(config).toEqual(DEFAULT_CONFIG);
+		const { config, fromFile, seeded } = await loadConfigFile(path);
+		expect(fromFile).toBe(true);
+		expect(seeded).toBe(true);
+		// The seed is a verbatim copy: the operator's file carries the
+		// template's comments, so the seeded file says what it means.
+		expect(existsSync(path)).toBe(true);
+		expect(readFileSync(path, "utf8")).toBe(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"));
+		expect(config).toEqual(validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"))));
+		// A present file is not seeded again, whatever it holds.
+		writeFileSync(path, "# kept as is\n", "utf8");
+		await expect(loadConfigFile(path)).rejects.toThrow(ConfigError);
 	});
 
-	test("the shipped defaults are a valid config", () => {
-		expect(() => validateConfig(parseToml(configToToml(DEFAULT_CONFIG)))).not.toThrow();
-		expect(DEFAULT_CONFIG.agents).toHaveProperty("pi");
-		expect(DEFAULT_CONFIG.agents).toHaveProperty("codex");
-		expect(DEFAULT_CONFIG.agents).toHaveProperty("claude");
-		expect(DEFAULT_CONFIG.taskTypes).toHaveProperty("implement");
-		expect(DEFAULT_CONFIG.defaultEnvironment).toBe("live-worktree");
-		expect(DEFAULT_CONFIG.autoHandoff).toBe(false);
-		expect(DEFAULT_CONFIG.maxParallelAgents).toBe(2);
-		expect(DEFAULT_CONFIG.agentPollIntervalSeconds).toBe(5);
-		expect(DEFAULT_CONFIG.completionMessageLines).toBe(200);
-		expect(DEFAULT_CONFIG.maxHandoffsPerTicket).toBe(10);
-		expect(DEFAULT_CONFIG.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
-		expect(DEFAULT_CONFIG.workflows).toEqual([]);
-		for (const task of Object.values(DEFAULT_CONFIG.taskTypes)) {
+	test("it validates through the seam and carries the workflow template", async () => {
+		const { config, fromFile, seeded } = await loadConfigFile(SHIPPED_DEFAULT_CONFIG);
+		expect(fromFile).toBe(true);
+		expect(seeded).toBeUndefined();
+		// The four workflow task types, and the three task rules of the label
+		// workflow.
+		expect(Object.keys(config.taskTypes).sort()).toEqual([
+			"implement",
+			"merge",
+			"review",
+			"rework",
+		]);
+		for (const task of Object.values(config.taskTypes)) {
 			expect(task.autoClose).toBe(false);
 		}
+		expect(config.taskRules).toEqual([
+			{
+				taskType: "rework",
+				when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+			},
+			{
+				taskType: "review",
+				when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+			},
+			{
+				taskType: "merge",
+				when: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+			},
+		]);
+		// One neutral Consultation type that passes the operator's input
+		// straight through.
+		expect(config.consultationTypes).toEqual({
+			consult: { agent: "pi", environment: "live-worktree", template: "{input}" },
+		});
+		// No ticket sources, no repository mappings, and no state file entry:
+		// the file works on any machine.
+		expect(config.sources).toEqual([]);
+		expect(config.repos).toEqual({});
+		expect(config.stateFile).toBeUndefined();
+		// The agent types and the existing default limits.
+		expect(Object.keys(config.agents).sort()).toEqual(["claude", "codex", "pi"]);
+		expect(config.defaultAgent).toBe("pi");
+		expect(config.defaultTaskType).toBe("implement");
+		expect(config.autoHandoff).toBe(false);
+		expect(config.maxParallelAgents).toBe(2);
+		expect(config.agentPollIntervalSeconds).toBe(5);
+		expect(config.completionMessageLines).toBe(200);
+		expect(config.maxHandoffsPerTicket).toBe(20);
+		expect(config.workflows).toEqual([]);
 	});
 
+	test("it marks the workflow template as extensible and holds a source example", () => {
+		const text = readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8");
+		expect(text).toContain("Workflow template");
+		expect(text).toContain("meant to be extended");
+		// The commented-out source block the operator uncomments and edits.
+		expect(text).toContain("# [[sources]]");
+	});
+});
+
+describe("the standard paths", () => {
+	test("the default Config file lives under the project name", () => {
+		expect(defaultConfigPath()).toBe(
+			join(homedir(), ".config", "my-little-software-factory", "config.toml"),
+		);
+	});
+
+	test("the default state file lives under the project name in the XDG state home", () => {
+		expect(defaultStatePath("/home/op", "/custom/state")).toBe(
+			join("/custom/state", "my-little-software-factory", "state.sqlite"),
+		);
+		// With the state home unset, the file lives under the home.
+		vi.stubEnv("XDG_STATE_HOME", "");
+		expect(defaultStatePath("/home/op")).toBe(
+			join("/home/op", ".local", "state", "my-little-software-factory", "state.sqlite"),
+		);
+	});
+});
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+});
+
+describe("loadConfigFile", () => {
 	test("a valid file loads", async () => {
 		const path = inTempDir()("config.toml");
 		writeFileSync(path, validBody);
@@ -274,7 +354,7 @@ describe("validateConfig", () => {
 		test("a literal token persists to an owner-only file and comes back intact", async () => {
 			const path = inTempDir()("secret/config.toml");
 			const config = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				sources: [sourceWithAuth({ token: "ghp_secret_token_value" })],
 			};
 			await persistConfig(path, config);
@@ -286,7 +366,7 @@ describe("validateConfig", () => {
 		test("an environment token stays out of the written TOML", async () => {
 			const path = inTempDir()("env-token/config.toml");
 			const config = {
-				...DEFAULT_CONFIG,
+				...BASE_CONFIG,
 				sources: [sourceWithAuth({ tokenEnv: "FACTORY_TEST_TOKEN" })],
 			};
 			process.env.FACTORY_TEST_TOKEN = "ghp_must_not_be_written";
@@ -728,8 +808,8 @@ describe("validateConfig", () => {
 			"anthropic/claude-sonnet-4-5",
 		);
 		// Omitted: the key is absent, not an empty string.
-		expect(DEFAULT_CONFIG.defaultModel).toBeUndefined();
-		expect(configToToml(DEFAULT_CONFIG)).not.toContain("default-model");
+		expect(BASE_CONFIG.defaultModel).toBeUndefined();
+		expect(configToToml(BASE_CONFIG)).not.toContain("default-model");
 		expectConfigError(
 			{
 				"default-agent": "pi",
@@ -793,23 +873,14 @@ describe("validateConfig", () => {
 	});
 
 	test("every shipped agent declares the levels its runtime supports", () => {
-		// Each shipped subset holds standard levels in the runtime's own order,
-		// and every one of them fits inside the standard set.
-		expect(DEFAULT_CONFIG.agents.pi.thinkingValues).toEqual(THINKING_LEVELS);
-		expect(DEFAULT_CONFIG.agents.codex.thinkingValues).toEqual([
-			"minimal",
-			"low",
-			"medium",
-			"high",
-		]);
-		expect(DEFAULT_CONFIG.agents.claude.thinkingValues).toEqual([
-			"low",
-			"medium",
-			"high",
-			"xhigh",
-			"max",
-		]);
-		for (const agent of Object.values(DEFAULT_CONFIG.agents)) {
+		// The Default configuration's agents are the shipped set: each subset
+		// holds standard levels in the runtime's own order, and every one of
+		// them fits inside the standard set.
+		const agents = validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"))).agents;
+		expect(agents.pi.thinkingValues).toEqual(THINKING_LEVELS);
+		expect(agents.codex.thinkingValues).toEqual(["minimal", "low", "medium", "high"]);
+		expect(agents.claude.thinkingValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		for (const agent of Object.values(agents)) {
 			for (const level of agent.thinkingValues ?? []) {
 				expect(THINKING_LEVELS).toContain(level);
 			}
@@ -1408,15 +1479,15 @@ describe("consultation configuration", () => {
 
 describe("configToToml and persistConfig", () => {
 	test("the shipped defaults round-trip through TOML", () => {
-		const config = validateConfig(parseToml(configToToml(DEFAULT_CONFIG)));
-		expect(config).toEqual(DEFAULT_CONFIG);
+		const config = validateConfig(parseToml(configToToml(BASE_CONFIG)));
+		expect(config).toEqual(BASE_CONFIG);
 	});
 
 	test("persistConfig writes a file the loader reads back", async () => {
 		const temp = inTempDir();
 		const path = temp("factory/config.toml");
 		const config: FactoryConfig = {
-			...DEFAULT_CONFIG,
+			...BASE_CONFIG,
 			repos: { "acme/billing": "~/src/billing_1" },
 		};
 		await persistConfig(path, config);
@@ -1432,7 +1503,7 @@ describe("configToToml and persistConfig", () => {
 		const path = join(dir, "config.toml");
 		// A directory where the file should be: the rename must fail.
 		mkdirSync(path, { recursive: true });
-		await expect(persistConfig(path, DEFAULT_CONFIG)).rejects.toThrow();
+		await expect(persistConfig(path, BASE_CONFIG)).rejects.toThrow();
 		expect(readdirSync(dir).filter((name) => name.endsWith(".tmp"))).toHaveLength(0);
 	});
 });

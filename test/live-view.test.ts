@@ -22,7 +22,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { AppProps } from "../src/components/app.ts";
 import { COLORS } from "../src/components/theme.ts";
 import type { FactoryConfig } from "../src/config.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -45,6 +44,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { agentListJson, FakeRunner, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -186,7 +186,7 @@ function seededApp(extra: Partial<FactoryConfig> = {}): SeededApp {
 	const configPath = join(home, "config.toml");
 	writeFileSync(configPath, "agent-poll-interval-seconds = 60\n");
 	const config = {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		repos: { [repoIdentity]: path },
 		workflows: [{ from: "implement", to: ["review"] }],
 		...extra,
@@ -267,7 +267,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -298,7 +298,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -332,7 +332,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -369,7 +369,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -412,7 +412,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -454,7 +454,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -490,7 +490,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -514,7 +514,7 @@ describe("the Live view on the ticket list", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner },
+			{ config: BASE_CONFIG, runner },
 		);
 	});
 
@@ -546,7 +546,7 @@ describe("the Live view on the ticket list", () => {
 			WIDTH,
 			HEIGHT,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner,
 				initialTickets: [...SAMPLE_TICKETS.slice(0, 2), { ...SAMPLE_TICKETS[2], handoff: null }],
 			},
@@ -668,8 +668,8 @@ describe("the Live view against a running factory", () => {
 	test("a settled turn the factory decides for itself keeps streaming", async () => {
 		const app = seededApp({
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, autoClose: true },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, autoClose: true },
 			},
 		});
 		const checkoutPath = Object.values(app.config.repos)[0];
@@ -1005,8 +1005,8 @@ describe("the Live view against a running factory", () => {
 		const app = seededApp({
 			workflows: [],
 			taskTypes: {
-				...DEFAULT_CONFIG.taskTypes,
-				implement: { ...DEFAULT_CONFIG.taskTypes.implement, autoClose: true },
+				...BASE_CONFIG.taskTypes,
+				implement: { ...BASE_CONFIG.taskTypes.implement, autoClose: true },
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], {

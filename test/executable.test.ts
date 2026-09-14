@@ -167,7 +167,7 @@ describe("control plane executable, terminal protocol", () => {
 	}
 
 	it(
-		"starts with shipped defaults and a note when the config file is missing",
+		"starts from the seeded Default configuration with a note when the config file is missing",
 		async (ctx) => {
 			const isolated = mkdtempSync(join(tmpdir(), "factory-exec-defaults-"));
 			let defaults: PtySession | null = null;
@@ -187,8 +187,10 @@ describe("control plane executable, terminal protocol", () => {
 					(out) =>
 						out
 							.toString("utf8")
-							.includes(`no config file at ${missing}, using the shipped defaults`),
-					"the shipped-defaults note",
+							.includes(
+								`no config file at ${missing}; created it from the shipped Default configuration`,
+							),
+					"the seed note",
 					STARTUP_TIMEOUT_MS,
 				);
 				await defaults.waitForStable(500, STABLE_TIMEOUT_MS);

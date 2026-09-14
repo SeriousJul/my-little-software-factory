@@ -17,7 +17,7 @@ import {
 	panelNoteCells,
 } from "../src/components/override-panel.ts";
 import { inkFor } from "../src/components/shared/presentation.ts";
-import { type AgentTypeConfig, DEFAULT_CONFIG } from "../src/config.ts";
+import type { AgentTypeConfig } from "../src/config.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { type FitVerdict, settingFit } from "../src/setting-fit.ts";
 import { taskProfileOf } from "../src/setting-resolution.ts";
@@ -34,6 +34,7 @@ import {
 	spanColors,
 	WIDTH,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 
 /**
  * The Agent types the panel offers: two, both on the pi kind, each one mapping
@@ -60,7 +61,7 @@ const AGENTS: Record<string, AgentTypeConfig> = {
 	// offer, and the level a chain resolved still shows on it.
 	mute: { kind: "pi", model: "--model {value}", thinking: "--thinking {value}" },
 };
-const PROFILES = { implement: taskProfileOf(DEFAULT_CONFIG, "implement") };
+const PROFILES = { implement: taskProfileOf(BASE_CONFIG, "implement") };
 /**
  * A panel wide enough to hold a whole status sentence under a value.
  *

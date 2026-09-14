@@ -8,12 +8,14 @@
  * The pseudo-terminal suite (test/executable.test.ts) still pins the shipped
  * bin end to end; these tests pin the words and the order.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parse as parseToml } from "smol-toml";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 
-import { DEFAULT_CONFIG, defaultConfigPath } from "../src/config.ts";
+import { defaultConfigPath, validateConfig } from "../src/config.ts";
 import {
 	configPathFromArgs,
 	loadStartupConfig,
@@ -22,6 +24,9 @@ import {
 } from "../src/startup.ts";
 
 const USAGE = "usage: factory [--config <path>]";
+
+/** The checked-in Default configuration the package ships. */
+const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
 
 const tempDirs: string[] = [];
 
@@ -113,13 +118,18 @@ describe("the startup config load", () => {
 		expect(loaded.config.defaultAgent).toBe("pi");
 	});
 
-	test("a missing file is the shipped defaults with the note", async () => {
+	test("a missing file is seeded from the Default configuration with the note", async () => {
 		const missing = inTempDir("config-missing")("does-not-exist.toml");
 		const loaded = await loadStartupConfig(missing);
 		expect(loaded.ok).toBe(true);
 		if (!loaded.ok) return;
-		expect(loaded.note).toBe(`no config file at ${missing}, using the shipped defaults`);
-		expect(loaded.config).toEqual(DEFAULT_CONFIG);
+		expect(loaded.note).toBe(
+			`no config file at ${missing}; created it from the shipped Default configuration`,
+		);
+		expect(loaded.config).toEqual(
+			validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"))),
+		);
+		expect(readFileSync(missing, "utf8")).toBe(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"));
 	});
 
 	test("an invalid file is one failure line", async () => {
@@ -183,7 +193,7 @@ describe("the whole startup", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.lines).toHaveLength(1);
 		expect(result.lines[0]).toContain("default-agent");
-		expect(existsSync(join(stateHome, "factory", "state.sqlite"))).toBe(false);
+		expect(existsSync(join(stateHome, "my-little-software-factory", "state.sqlite"))).toBe(false);
 	});
 
 	test("a blocked state path stops with its failure line", async () => {
@@ -244,18 +254,22 @@ describe("the whole startup", () => {
 		result.state.close();
 	});
 
-	test("a missing config starts on the shipped defaults with the note", async () => {
+	test("a missing config is seeded from the Default configuration with the note", async () => {
 		const stateHome = inTempDir("run-defaults")("state-home");
 		vi.stubEnv("XDG_STATE_HOME", stateHome);
 		const missing = inTempDir("run-defaults")("does-not-exist.toml");
 		const result = await runStartup(["--config", missing]);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
-		expect(result.config).toEqual(DEFAULT_CONFIG);
+		expect(result.config).toEqual(
+			validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"))),
+		);
 		expect(withoutModelWarnings(result.notes)).toEqual([
-			`no config file at ${missing}, using the shipped defaults`,
+			`no config file at ${missing}; created it from the shipped Default configuration`,
 		]);
-		expect(result.statePath).toBe(join(stateHome, "factory", "state.sqlite"));
+		// The seed lands at the path the operator asked for, verbatim.
+		expect(readFileSync(missing, "utf8")).toBe(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"));
+		expect(result.statePath).toBe(join(stateHome, "my-little-software-factory", "state.sqlite"));
 		expect(existsSync(result.statePath)).toBe(true);
 		result.state.close();
 	});

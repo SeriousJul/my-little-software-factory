@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
-import { DEFAULT_CONFIG, type FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { baseChoice, type HandoffChoice, type NameCollision } from "../src/handoff.ts";
 import type { HandoffDispatchOptions } from "../src/handoff-dispatch.ts";
@@ -29,6 +29,7 @@ import {
 } from "../src/handoff-dispatch.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { FactoryState, type HandoffOrigin } from "../src/state.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
@@ -171,7 +172,7 @@ function rig(seeds: readonly Seed[] = [FIRST]): Rig {
 	});
 	runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: "abcdef\n" });
 	const config: FactoryConfig = {
-		...DEFAULT_CONFIG,
+		...BASE_CONFIG,
 		sources: [
 			{
 				name: "issues",

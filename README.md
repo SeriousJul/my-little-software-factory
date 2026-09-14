@@ -25,7 +25,11 @@ ends at close, ADR 0006: the control plane polls herdr, ADR 0011: the
 observation reclaims an agent that outlives its work cycle, ADR 0012: a
 leftover environment is a fact the operator can act on, ADR 0015: the turn end
 cause comes from the agent's session record, ADR 0016: the held turn gate and
-the Dispatch pause).
+the Dispatch pause, ADR 0020: the control plane publishes from a version tag
+with a short alias package).
+
+The [Getting Started guide](docs/getting-started/index.md) covers the npx
+install, the config file, and the workflow template.
 
 For changes to controls, follow [the shared control standard](docs/shared-controls.md)
 and [the contributor instructions](AGENTS.md). The standard is the accepted target;
@@ -47,6 +51,24 @@ below remain the current behavior until their migration is complete.
 	actually offers, with its provider auth already applied (ADR 0010). A kind
 	that reports no list keeps a free-text Model row, and its configured models
 	go unchecked until the agent itself refuses one.
+## Install
+
+The control plane ships through npm, and both names start the same app:
+
+```sh
+npx @seriousjul/factory
+npx mlsf
+```
+
+On the first start the package writes the shipped Default configuration to
+`~/.config/my-little-software-factory/config.toml`, and the start says so
+before the UI takes over. The file carries a working control plane, and the
+[key reference](#key-reference) explains everything it holds, so from there
+the operator edits the file to their own repositories and workflow.
+
+[herdr](https://github.com/seriousjul/herdr) must be on the `PATH` for the
+handoffs, as [the requirements](#requirements) say.
+
 ## Commands
 
 | Command                | What it does                                          |
@@ -786,19 +808,19 @@ open with its cycle number incremented.
 
 ## Configuration
 
-The config lives at `~/.config/factory/config.toml`, or at the path the
-`--config` flag names: `factory [--config <path>]`. A missing file yields
-the shipped defaults, so the control plane starts with no config at all, and
-the start says so before the UI takes over, with the path to put a file at.
+The config lives at `~/.config/my-little-software-factory/config.toml`, or
+at the path the `--config` flag names: `factory [--config <path>]`. A
+missing file is seeded from the Default configuration the package ships,
+with a note on the start, so a first run leaves a working file at the path.
 A file that does not parse or does not validate stops the control plane
 with a readable error before the UI starts: a present file must carry every
 required key, and a key the control plane does not read is an error, so a
 typo surfaces at startup, not at handoff time.
 
-A present file replaces the shipped defaults wholesale. An optional key the
-file omits takes the per-key default the key reference names, and that
-default is empty for lists and tables. The key reference marks each key
-required or optional.
+A present file is what the control plane runs on; there is no in-code config
+behind it. An optional key the file omits takes the per-key default the key
+reference names, and that default is empty for lists and tables. The key
+reference marks each key required or optional.
 
 ### Complete example
 
@@ -828,8 +850,9 @@ default-environment = "worktree"
 default-task-type = "implement"
 
 # The SQLite state file. A relative path resolves against the directory
-# of this config file. Omitted: $XDG_STATE_HOME/factory/state.sqlite,
-# else ~/.local/state/factory/state.sqlite.
+# of this config file. Omitted:
+# $XDG_STATE_HOME/my-little-software-factory/state.sqlite, else
+# ~/.local/state/my-little-software-factory/state.sqlite.
 state-file = "factory.sqlite"
 
 # --- Auto-handoff and limits -----------------------------------------
@@ -1077,7 +1100,7 @@ source-kind = "github-issue"
 | `default-model` | no | empty | The model a handoff starts with when its Task profile names none, and the starting value of the Model row. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
-| `state-file` | no | `$XDG_STATE_HOME/factory/state.sqlite`, else `~/.local/state/factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
+| `state-file` | no | `$XDG_STATE_HOME/my-little-software-factory/state.sqlite`, else `~/.local/state/my-little-software-factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
 | `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it from the Ticket section. |
 | `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |

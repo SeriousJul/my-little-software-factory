@@ -1,0 +1,18 @@
+{
+	"name": "mlsf",
+	"version": "0.1.0",
+	"description": "The short name for the my-little-software-factory control plane: npx mlsf.",
+	"license": "MIT",
+	"bin": {
+		"mlsf": "./bin.mjs"
+	},
+	"files": [
+		"bin.mjs"
+	],
+	"dependencies": {
+		"my-little-software-factory": "0.1.0"
+	},
+	"engines": {
+		"node": ">=26.4.0"
+	}
+}

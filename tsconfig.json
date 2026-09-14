@@ -1,6 +1,7 @@
 {
 	"compilerOptions": {
 		"target": "esnext",
+		"allowJs": true,
 		"module": "nodenext",
 		"moduleResolution": "nodenext",
 		"lib": ["esnext"],

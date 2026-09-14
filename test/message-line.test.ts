@@ -14,7 +14,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
 import { COLORS } from "../src/components/theme.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -35,6 +34,7 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
 import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
@@ -112,7 +112,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -128,7 +128,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 
 		// A refused refresh warns on the line. A source app needs state to
@@ -185,7 +185,7 @@ describe("the permanent Message line", () => {
 			WIDTH,
 			HEIGHT,
 			{
-				config: DEFAULT_CONFIG,
+				config: BASE_CONFIG,
 				runner: failingHandoffRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},
@@ -207,7 +207,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -379,7 +379,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 
 		// A fitting message earns no hint.
@@ -392,7 +392,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -428,7 +428,7 @@ describe("the permanent Message line", () => {
 			HEIGHT,
 			{
 				config: {
-					...DEFAULT_CONFIG,
+					...BASE_CONFIG,
 					consultationTypes: {
 						grill: { agent: "claude", environment: "live-worktree", template: "/grill {input}" },
 					},
@@ -466,7 +466,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: [WORKING_TICKET] },
+			{ config: BASE_CONFIG, runner, initialTickets: [WORKING_TICKET] },
 		);
 	});
 
@@ -503,7 +503,7 @@ describe("the permanent Message line", () => {
 			WIDTH,
 			HEIGHT,
 			{
-				config: { ...DEFAULT_CONFIG, autoHandoff: true },
+				config: { ...BASE_CONFIG, autoHandoff: true },
 				runner: new FakeRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},
@@ -535,7 +535,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -573,7 +573,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner, initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -592,7 +592,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 
 		// Question mark.
@@ -608,7 +608,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -627,7 +627,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 
 		// Warning: no important line - warnings are not important below the
@@ -647,7 +647,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
@@ -667,7 +667,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: new FakeRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 
 		// Error round trip: the truncation and the hint return with the width.
@@ -687,7 +687,7 @@ describe("the permanent Message line", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			{ config: DEFAULT_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
+			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
 	});
 
