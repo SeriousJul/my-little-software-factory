@@ -436,9 +436,10 @@ toggles the section under the cursor: it shrinks to its header row and its
 rows leave the navigation flow, and the same toggle restores it. A collapsed
 section keeps its list selection, and the selection and detail of a collapsed
 section survive the collapse, so a re-expand shows the same place. The rows
-run: the mode line (while the control plane has state to observe), the two
-section headers, the two sections' list panes stacked on the left, the
-detail pane on the right, the Message line, and the Action bar. The focused
+run: the mode line (while the control plane has state to observe), the
+Ticket header across the full terminal width, the two sections' list panes
+stacked on the left with the Consultation header between them, the detail
+pane on the right, the Message line, and the Action bar. The focused
 section takes the remaining rows after the other section claims its minimum
 of three content rows, so the list the operator works in gets the room. The
 Ticket header always shows the pipeline counts - open, running, and awaiting,
@@ -446,9 +447,9 @@ in the labelled form on a terminal of at least 60 columns and the short form
 below - and appends the held count with its bell marker only when it is
 non-zero. The Consultation header carries that section's attention facts, its
 awaiting-response and recovery counts, the bell marker while the bell rings,
-and "new output" while the section is expanded, so a Consultation that needs
-the operator is visible in either state and no free-standing attention line
-exists. A section that cannot hold its minimum collapses rather than
+and "new output" while that fact holds, so a Consultation that needs
+the operator is visible whether the section is expanded or collapsed and no
+free-standing attention line exists. A section that cannot hold its minimum collapses rather than
 vanishing, so both headers keep their counts; below the smallest useful frame
 the compact frame drops the panes with a size message.
 

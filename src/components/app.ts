@@ -512,12 +512,17 @@ export function App({
 	// normal layout.
 	const showModeLine = modeLine !== "" && !tooSmall;
 	// The body holds every row between the (optional) mode line and the two
-	// permanent bottom rows (ADR 0019). Its left column stacks the two section
-	// headers and their list boxes; its right column holds the one detail
-	// pane for the selected item, at the full body height.
+	// permanent bottom rows (ADR 0019). Its first row is the Ticket section's
+	// header, run the full terminal width, so its counts stay whole on a
+	// small terminal; below it the left column stacks the Ticket list and the
+	// Consultation section's header and list, and the right column holds the
+	// one detail pane for the selected item.
 	const bodyRows = terminalHeight - (showModeLine ? 1 : 0) - 2;
 	const leftCols = Math.floor(terminalWidth / 2);
-	const detailReservedRows = 2 + (showModeLine ? 1 : 0);
+	// The detail pane starts one row below the body's top: the full-width
+	// Ticket header owns the body's first row, so the reservation holds that
+	// row with the mode line and the two permanent bottom rows.
+	const detailReservedRows = 3 + (showModeLine ? 1 : 0);
 	const detailGeometry = usePaneGeometry("detail", detailReservedRows);
 	// The rows a section's box spends on chrome: two borders and two padding
 	// rows. Each section's minimum is three content rows, so its minimum box
@@ -1425,14 +1430,7 @@ export function App({
 	 * a stray click (user stories 19 and 20).
 	 */
 	const clickSection = (next: MainSection) => {
-		if (next === "tickets") {
-			ticketsExpandedRef.current = !ticketsExpandedRef.current;
-			setTicketsExpanded(ticketsExpandedRef.current);
-		} else {
-			consultationsExpandedRef.current = !consultationsExpandedRef.current;
-			setConsultationsExpanded(consultationsExpandedRef.current);
-		}
-		if (next === "tickets" ? ticketsExpandedRef.current : consultationsExpandedRef.current) {
+		if (flipSectionExpanded(next)) {
 			selectionRef.current = next === "tickets" ? "ticket" : "consultation";
 			setSelection(selectionRef.current);
 			focusPane("list");
@@ -2084,14 +2082,23 @@ export function App({
 	 * into the other section crosses to it, and the same key or a header click
 	 * expands the section back on its retained row (user stories 19 and 20).
 	 */
-	function toggleSection() {
-		if (selectionRef.current === "ticket") {
+	/**
+	 * Flip one section's expanded pair - the ref and the state - and return
+	 * the flag after the flip. The cursor's `x` and a header click both
+	 * toggle through it, so one flip keeps one shape.
+	 */
+	function flipSectionExpanded(section: MainSection): boolean {
+		if (section === "tickets") {
 			ticketsExpandedRef.current = !ticketsExpandedRef.current;
 			setTicketsExpanded(ticketsExpandedRef.current);
-		} else {
-			consultationsExpandedRef.current = !consultationsExpandedRef.current;
-			setConsultationsExpanded(consultationsExpandedRef.current);
+			return ticketsExpandedRef.current;
 		}
+		consultationsExpandedRef.current = !consultationsExpandedRef.current;
+		setConsultationsExpanded(consultationsExpandedRef.current);
+		return consultationsExpandedRef.current;
+	}
+	function toggleSection() {
+		flipSectionExpanded(selectionRef.current === "ticket" ? "tickets" : "consultations");
 	}
 	/**
 	 * Move the unified cursor by one row. The cursor walks the visible flow,
@@ -2419,151 +2426,168 @@ export function App({
 							height: Math.max(0, bodyRows),
 							flexGrow: 0,
 							flexShrink: 1,
-							flexDirection: "row",
+							flexDirection: "column",
 							overflow: "hidden",
 						},
 					},
+					// The Ticket header owns the body's first row at the full
+					// terminal width, so its counts stay whole where the
+					// columns below split (ADR 0019).
+					createElement(SectionHeader, {
+						section: "tickets",
+						expanded: ticketsExpanded,
+						terminalWidth,
+						width: terminalWidth,
+						open: openCount,
+						running: runningCount,
+						awaiting: awaitingCount,
+						held: heldCount,
+						heldBell,
+						active: mainSurfaceActive,
+						onToggle: () => clickSection("tickets"),
+					}),
 					createElement(
 						"box",
 						{
 							style: {
-								// An exact cell count from the shared geometry, not "50%":
-								// OpenTUI rounds a percentage up on odd terminal widths, and
-								// the rounded box would no longer match the geometry the rows
-								// and the detail pane lay their text on.
-								width: leftCols,
-								height: "100%",
+								width: "100%",
+								height: Math.max(0, bodyRows - 1),
 								flexGrow: 0,
-								flexShrink: 0,
-								flexDirection: "column",
+								flexShrink: 1,
+								flexDirection: "row",
 								overflow: "hidden",
 							},
 						},
-						createElement(SectionHeader, {
-							section: "tickets",
-							expanded: ticketsExpanded,
-							terminalWidth,
-							width: leftCols,
-							open: openCount,
-							running: runningCount,
-							awaiting: awaitingCount,
-							held: heldCount,
-							heldBell,
-							active: mainSurfaceActive,
-							onToggle: () => clickSection("tickets"),
-						}),
-						ticketsExpanded &&
-							createElement(TicketList, {
-								tickets,
-								selectedIndex,
-								focused: focusedPane === "list" && selection === "ticket",
-								rows: ticketsBoxRows,
-								emptyMessage,
-								markerOf,
-								limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
-								active: mainSurfaceActive,
-								onFocus: () => focusListSection("ticket"),
-								onSelect: (index: number) => {
-									focusListSection("ticket");
-									selectTicket(index);
+						createElement(
+							"box",
+							{
+								style: {
+									// An exact cell count from the shared geometry, not "50%":
+									// OpenTUI rounds a percentage up on odd terminal widths, and
+									// the rounded box would no longer match the geometry the rows
+									// and the detail pane lay their text on.
+									width: leftCols,
+									height: "100%",
+									flexGrow: 0,
+									flexShrink: 0,
+									flexDirection: "column",
+									overflow: "hidden",
 								},
-								onMove: (delta) => {
-									// The first wheel spin into a section both moves the cursor
-									// there and selects one adjacent row.
-									focusListSection("ticket");
-									moveList(delta);
-								},
-							}),
-						createElement(SectionHeader, {
-							section: "consultations",
-							expanded: consultationsExpanded,
-							terminalWidth,
-							width: leftCols,
-							awaitingResponse: consultationCounts.awaitingResponse,
-							recovery: consultationCounts.recovery,
-							bell,
-							newOutput,
-							active: mainSurfaceActive,
-							onToggle: () => clickSection("consultations"),
-						}),
-						consultationsExpanded &&
-							createElement(ConsultationList, {
-								consultations,
-								selectedIndex: consultationIndex,
-								focused: focusedPane === "list" && selection === "consultation",
-								rows: consultationsBoxRows,
-								active: mainSurfaceActive,
-								onFocus: () => focusListSection("consultation"),
-								onSelect: (index: number) => {
-									focusListSection("consultation");
-									selectConsultation(index);
-								},
-								onMove: (delta) => {
-									// The first wheel spin into a section both moves the cursor
-									// there and selects one adjacent row.
-									focusListSection("consultation");
-									selectConsultation(consultationIndexRef.current + delta);
-								},
-								emptyMessage:
-									state === undefined
-										? "Consultations require SQLite state"
-										: historyFilter === "closed"
-											? "no closed Consultations"
-											: historyFilter === "all"
-												? "no Consultations"
-												: "no open Consultations",
-							}),
-					),
-					selection === "ticket"
-						? createElement(TicketDetail, {
-								ref: detailRef,
-								ticket: selectedTicket,
-								focused: focusedPane === "detail",
-								active: mainSurfaceActive,
-								reservedRows: detailReservedRows,
-								handoffLimit: config.maxHandoffsPerTicket,
-								suggestedChoice:
-									selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
-								scroll: config.scroll,
-								onFocus: () => focusPane("detail"),
-								scrollSlot: detailScrollSlot,
-							})
-						: createElement(
-								"box",
-								{ style: { flexGrow: 1, flexDirection: "column" } },
-								createElement(ConsultationDetail, {
-									lines: consultationLines,
-									ansiLines,
-									visibleRows: Math.max(
-										1,
-										detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
-									),
-									scroll: consultationDetailScroll,
-									focused: focusedPane === "detail" && !responseEditor,
+							},
+							ticketsExpanded &&
+								createElement(TicketList, {
+									tickets,
+									selectedIndex,
+									focused: focusedPane === "list" && selection === "ticket",
+									rows: ticketsBoxRows,
+									emptyMessage,
+									markerOf,
+									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
 									active: mainSurfaceActive,
-									onFocus: () => focusPane("detail"),
-									onWheel: (delta) => moveVertical(delta),
+									onFocus: () => focusListSection("ticket"),
+									onSelect: (index: number) => {
+										focusListSection("ticket");
+										selectTicket(index);
+									},
+									onMove: (delta) => {
+										// The first wheel spin into a section both moves the cursor
+										// there and selects one adjacent row.
+										focusListSection("ticket");
+										moveList(delta);
+									},
 								}),
-								responseEditor &&
-									createElement(ResponseEditor, {
-										draft: responseDraft,
-										width: consultationWidth,
-										rows: RESPONSE_EDITOR_ROWS,
-										focused: true,
-										context: controlContextFor("form-field"),
-										inputActive: utility === null,
-										onSend: sendResponseText,
-										onDiscard: discardResponseDraft,
-										onDraftChange: storeResponseDraft,
-										onClose: closeResponseEditor,
-										onHelp: () => openGuide("form-field"),
-										onMessage: () => openMessage("form-field"),
-										onUnavailable: (reason: string) => setStatus({ kind: "warning", text: reason }),
-										onCopy: reportMessage,
-										message: visibleMessage,
-										onEmergencyExit: () => renderer.destroy(),
+							createElement(SectionHeader, {
+								section: "consultations",
+								expanded: consultationsExpanded,
+								terminalWidth,
+								width: leftCols,
+								awaitingResponse: consultationCounts.awaitingResponse,
+								recovery: consultationCounts.recovery,
+								bell,
+								newOutput,
+								active: mainSurfaceActive,
+								onToggle: () => clickSection("consultations"),
+							}),
+							consultationsExpanded &&
+								createElement(ConsultationList, {
+									consultations,
+									selectedIndex: consultationIndex,
+									focused: focusedPane === "list" && selection === "consultation",
+									rows: consultationsBoxRows,
+									active: mainSurfaceActive,
+									onFocus: () => focusListSection("consultation"),
+									onSelect: (index: number) => {
+										focusListSection("consultation");
+										selectConsultation(index);
+									},
+									onMove: (delta) => {
+										// The first wheel spin into a section both moves the cursor
+										// there and selects one adjacent row.
+										focusListSection("consultation");
+										selectConsultation(consultationIndexRef.current + delta);
+									},
+									emptyMessage:
+										state === undefined
+											? "Consultations require SQLite state"
+											: historyFilter === "closed"
+												? "no closed Consultations"
+												: historyFilter === "all"
+													? "no Consultations"
+													: "no open Consultations",
+								}),
+						),
+						selection === "ticket"
+							? createElement(TicketDetail, {
+									ref: detailRef,
+									ticket: selectedTicket,
+									focused: focusedPane === "detail",
+									active: mainSurfaceActive,
+									reservedRows: detailReservedRows,
+									handoffLimit: config.maxHandoffsPerTicket,
+									suggestedChoice:
+										selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
+									scroll: config.scroll,
+									onFocus: () => focusPane("detail"),
+									scrollSlot: detailScrollSlot,
+								})
+							: createElement(
+									"box",
+									{ style: { flexGrow: 1, flexDirection: "column" } },
+									createElement(ConsultationDetail, {
+										lines: consultationLines,
+										ansiLines,
+										visibleRows: Math.max(
+											1,
+											detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+										),
+										scroll: consultationDetailScroll,
+										focused: focusedPane === "detail" && !responseEditor,
+										active: mainSurfaceActive,
+										onFocus: () => focusPane("detail"),
+										onWheel: (delta) => moveVertical(delta),
 									}),
-							),
+									responseEditor &&
+										createElement(ResponseEditor, {
+											draft: responseDraft,
+											width: consultationWidth,
+											rows: RESPONSE_EDITOR_ROWS,
+											focused: true,
+											context: controlContextFor("form-field"),
+											inputActive: utility === null,
+											onSend: sendResponseText,
+											onDiscard: discardResponseDraft,
+											onDraftChange: storeResponseDraft,
+											onClose: closeResponseEditor,
+											onHelp: () => openGuide("form-field"),
+											onMessage: () => openMessage("form-field"),
+											onUnavailable: (reason: string) =>
+												setStatus({ kind: "warning", text: reason }),
+											onCopy: reportMessage,
+											message: visibleMessage,
+											onEmergencyExit: () => renderer.destroy(),
+										}),
+								),
+					),
 				),
 		launcher &&
 			createElement(ConsultationLauncher, {

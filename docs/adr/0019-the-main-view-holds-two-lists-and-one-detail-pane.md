@@ -21,8 +21,11 @@ time across both lists, so the two sections never need two detail panes.
 ## Decision
 
 **Both sections are lists, and both can be expanded at once.** The Main
-view's left side stacks the Ticket list over the Consultation list under
-their section headers. Both start expanded. Each section is
+view's first body row is the Ticket section's header, run the full
+terminal width, so its counts stay whole on a small terminal: the narrow
+count form is the longest text the minimum width holds. Below it the left
+side stacks the Ticket list over the Consultation list, the Consultation
+header between them. Both start expanded. Each section is
 independently collapsable with `x` or a click on its header: collapsing
 shrinks the section to its header row and its rows leave the navigation
 flow, and the toggle is reversible. The `t` and `v` view-switch keys are
@@ -76,4 +79,4 @@ pattern.
 - The `x` key moves from closing the Consultation to toggling the section
   under the cursor; the Consultation close takes `z`.
 - A section below its minimum rows collapses rather than vanishing, so
-  both headers keep their counts on a small terminal.
+  both headers stay on screen on a small terminal.

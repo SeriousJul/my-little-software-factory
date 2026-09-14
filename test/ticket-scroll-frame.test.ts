@@ -34,6 +34,14 @@ const SCROLL_WIDTH = 60;
 // tests boot the smallest frame the detail viewport can take.
 const SCROLL_HEIGHT = 19;
 const GUTTER_X = SCROLL_WIDTH - 2;
+/**
+ * The detail pane's terminal row, from its inner-area row i.
+ *
+ * The full-width Ticket header (ADR 0019) owns the body's first row, so the
+ * split boxes - and the detail's inner area - start one row below where the
+ * list pane's do: the detail's row i is the list's row i plus one.
+ */
+const detailRow = (i: number): number => paneRow(i) + 1;
 const LONG_SCROLL_CONFIG: FactoryConfig = {
 	...DEFAULT_CONFIG,
 	scroll: { speed: 1, acceleration: 0.8, maximumSpeed: 6 },
@@ -64,7 +72,7 @@ async function wheelAt(
 ): Promise<void> {
 	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
 	try {
-		await mouseWheel(setup, 45, paneRow(3), direction);
+		await mouseWheel(setup, 45, detailRow(3), direction);
 	} finally {
 		clock.mockRestore();
 	}
@@ -121,20 +129,20 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const initial = setup.captureCharFrame();
 				const thumb = thumbRows(initial);
-				expect(thumb).toEqual([paneRow(0)]);
+				expect(thumb).toEqual([detailRow(0)]);
 				expect(cellColors(setup, GUTTER_X, thumb[0])).toEqual({
 					fg: rgb(COLORS.borderFocused),
 					bg: rgb(COLORS.dim),
 				});
-				expect(cellColors(setup, GUTTER_X, paneRow(2)).bg).toEqual(rgb(COLORS.dim));
+				expect(cellColors(setup, GUTTER_X, detailRow(2)).bg).toEqual(rgb(COLORS.dim));
 
-				await mouseClick(setup, 45, paneRow(3));
+				await mouseClick(setup, 45, detailRow(3));
 				await awaitFrame(setup, detailFocused, "the detail to take click focus");
 				expect(cellColors(setup, GUTTER_X, thumb[0]).fg).toEqual(rgb(COLORS.borderFocused));
 
 				// The track spans the pane's inner rows. The thumb marks the
 				// offset, so the end click lands on the track below it.
-				await mouseClick(setup, GUTTER_X, paneRow(11));
+				await mouseClick(setup, GUTTER_X, detailRow(11));
 				const end = await awaitFrame(
 					setup,
 					(frame) => frame !== initial && !frame.includes("Retry policy for webhooks"),
@@ -152,7 +160,7 @@ describe("native Ticket detail viewport", () => {
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
-				await mouseClick(setup, GUTTER_X, paneRow(11));
+				await mouseClick(setup, GUTTER_X, detailRow(11));
 				const end = await awaitFrame(
 					setup,
 					(frame) => detailFocused(frame) && frame !== initial,
@@ -160,7 +168,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(end).not.toContain("Retry policy for webhooks");
 
-				await mouseClick(setup, GUTTER_X, paneRow(1));
+				await mouseClick(setup, GUTTER_X, detailRow(1));
 				const start = await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -168,7 +176,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(start).not.toContain("their retries.");
 
-				await mouseClick(setup, GUTTER_X, paneRow(6));
+				await mouseClick(setup, GUTTER_X, detailRow(6));
 				const middle = await awaitFrame(
 					setup,
 					(frame) => frame !== start && frame !== end,
@@ -176,15 +184,15 @@ describe("native Ticket detail viewport", () => {
 				);
 				expect(detailFocused(middle)).toBe(true);
 
-				await mouseClick(setup, GUTTER_X, paneRow(1));
-				await mouseDrag(setup, [GUTTER_X, paneRow(1)], [GUTTER_X, paneRow(11)]);
+				await mouseClick(setup, GUTTER_X, detailRow(1));
+				await mouseDrag(setup, [GUTTER_X, detailRow(1)], [GUTTER_X, detailRow(11)]);
 				const draggedDown = await awaitFrame(
 					setup,
 					(frame) => frame !== start && !frame.includes("Retry policy for webhooks"),
 					"a thumb drag toward the end",
 				);
-				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(paneRow(1));
-				await mouseDrag(setup, [GUTTER_X, paneRow(11)], [GUTTER_X, paneRow(1)]);
+				expect(thumbRows(draggedDown).at(-1)).toBeGreaterThan(detailRow(1));
+				await mouseDrag(setup, [GUTTER_X, detailRow(11)], [GUTTER_X, detailRow(1)]);
 				await awaitFrame(
 					setup,
 					(frame) => frame.includes("Retry policy for webhooks"),
@@ -198,10 +206,10 @@ describe("native Ticket detail viewport", () => {
 
 	test("moves detail state from content, gutter, track, and thumb wheel targets", async () => {
 		for (const [name, x, y] of [
-			["content", 45, paneRow(3)],
-			["gutter", GUTTER_X, paneRow(2)],
-			["track", GUTTER_X, paneRow(6)],
-			["thumb", GUTTER_X, paneRow(0)],
+			["content", 45, detailRow(3)],
+			["gutter", GUTTER_X, detailRow(2)],
+			["track", GUTTER_X, detailRow(6)],
+			["thumb", GUTTER_X, detailRow(0)],
 		] as const) {
 			await withApp(
 				async (setup) => {
@@ -514,7 +522,7 @@ describe("native Ticket detail viewport", () => {
 					setup.renderer.on(CliRenderEvents.FRAME, record);
 					try {
 						for (let event = 0; event < 10; event += 1) {
-							await mouseWheel(setup, 45, paneRow(3), "down");
+							await mouseWheel(setup, 45, detailRow(3), "down");
 						}
 						const final = await awaitFrame(
 							setup,

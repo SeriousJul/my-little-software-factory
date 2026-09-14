@@ -360,6 +360,93 @@ describe("the merged Main view", () => {
 		);
 	});
 
+	test("the Ticket header uses the narrow count form below sixty columns", async () => {
+		// The header owns the terminal's full width on its row, so below
+		// sixty columns it carries the narrow form - no colons - whole, and
+		// on the minimum frame the form is the row's full width (user
+		// stories 11 to 14, 29).
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+					"▾ Tickets  open 5  running 2  awaiting 1",
+				);
+			},
+			59,
+			24,
+			{
+				config: DEFAULT_CONFIG,
+				runner: emptyAgentRunner(),
+				initialTickets: SAMPLE_TICKETS,
+			},
+		);
+		// At the minimum frame the same row holds the same text, edge to
+		// edge: the counts are the longest text the frame keeps.
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
+				expect(rowsOf(setup.captureCharFrame())[0]).toBe(
+					"▾ Tickets  open 5  running 2  awaiting 1",
+				);
+			},
+			40,
+			19,
+			{
+				config: DEFAULT_CONFIG,
+				runner: emptyAgentRunner(),
+				initialTickets: SAMPLE_TICKETS,
+			},
+		);
+	});
+
+	test("the Ticket header keeps the held count whole in the narrow form", async () => {
+		// A held turn on a terminal under sixty columns: the held count rides
+		// the narrow form. The bell stays off at boot - it means the count
+		// rose while this app ran, and the held turn's flow asserts it.
+		const heldLast = SAMPLE_TICKETS[3].lastCompletion;
+		if (heldLast === null) throw new Error("the held sample ticket has no last completion");
+		const held: Ticket = {
+			...SAMPLE_TICKETS[3],
+			lastCompletion: { ...heldLast, cause: "failed" },
+		};
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+					"▾ Tickets  open 5  running 2  awaiting 1  held 1",
+				);
+			},
+			59,
+			24,
+			{
+				config: DEFAULT_CONFIG,
+				runner: emptyAgentRunner(),
+				initialTickets: [...SAMPLE_TICKETS.slice(0, 3), held, ...SAMPLE_TICKETS.slice(4)],
+			},
+		);
+	});
+
+	test("the Ticket header shows zero counts while no tickets exist", async () => {
+		// An empty pipeline keeps the header's shape: all three counts
+		// render, as zero, and the held count stays off the row (user
+		// stories 14, 25).
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("▾ Tickets"), "the Tickets");
+				expect(headerOf(setup.captureCharFrame(), "Tickets")).toBe(
+					"▾ Tickets  open: 0  running: 0  awaiting: 0",
+				);
+			},
+			WIDTH,
+			32,
+			{
+				config: DEFAULT_CONFIG,
+				runner: emptyAgentRunner(),
+				initialTickets: [],
+			},
+		);
+	});
+
 	test("x collapses the section under the cursor, and x again restores it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seedConsultation(state, uid("c"));
