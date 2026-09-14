@@ -32,7 +32,7 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -148,7 +148,6 @@ export interface Consultation {
 	warning: string | null;
 	replacementOf: string | null;
 	closeResult: string | null;
-	liveConflictOverride: boolean;
 	attentionAt: string | null;
 	pendingResponse: ConsultationPendingResponse | null;
 	resources: ConsultationResource[];
@@ -211,7 +210,6 @@ export interface CreateConsultationInput {
 	repository: ConsultationRepository;
 	agentName: string;
 	replacementOf?: string | null;
-	liveConflictOverride?: boolean;
 	createdAt?: string;
 }
 
@@ -498,6 +496,26 @@ const MIGRATION_V8_TO_V9 = `
 	ALTER TABLE consultation_turns ADD COLUMN detail TEXT;
 `;
 
+/**
+ * The v10 step: the live checkout safety confirmation belongs to the checkout,
+ * not to the opening Consultation.
+ *
+ * The per-Consultation one-shot override column is dropped. In its place, the
+ * checkout's confirmed set of conflict identities is stored per resolved,
+ * realpath-normalized checkout path: a launch asks again only when a conflict
+ * identity appears that is not in that set, and a restarted control plane
+ * reads the same fact back. Each checkout keeps its own set, so one checkout's
+ * confirmation never silences another's.
+ */
+const MIGRATION_V9_TO_V10 = `
+	ALTER TABLE consultations DROP COLUMN live_conflict_override;
+	CREATE TABLE checkout_conflict_confirmations (
+		checkout_path TEXT PRIMARY KEY,
+		identities_json TEXT NOT NULL,
+		confirmed_at TEXT NOT NULL
+	);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -607,6 +625,7 @@ export class FactoryState {
 			if (version < 7) this.db.exec(MIGRATION_V6_TO_V7);
 			if (version < 8) this.db.exec(MIGRATION_V7_TO_V8);
 			if (version < 9) this.db.exec(MIGRATION_V8_TO_V9);
+			if (version < 10) this.db.exec(MIGRATION_V9_TO_V10);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1716,8 +1735,8 @@ export class FactoryState {
 						initial_input, rendered_opening_prompt, repository_identity,
 						repository_display_name, repository_clone_url, repository_path,
 						state, created_at, updated_at, agent_name, draft, replacement_of,
-						live_conflict_override, attention_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, ?, NULL)`,
+						attention_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, NULL)`,
 				)
 				.run(
 					id,
@@ -1738,7 +1757,6 @@ export class FactoryState {
 					createdAt,
 					input.agentName,
 					input.replacementOf ?? null,
-					input.liveConflictOverride === true ? 1 : 0,
 				);
 			this.db
 				.prepare(
@@ -1800,13 +1818,43 @@ export class FactoryState {
 			.run(path, new Date().toISOString(), id);
 	}
 
-	/** Record the one-shot operator approval for a live checkout conflict. */
-	setConsultationLiveConflictOverride(id: string): void {
+	/**
+	 * The conflict identities the operator confirmed for this checkout's live
+	 * launch. The set is empty when the checkout holds no confirmation, and a
+	 * corrupt cell reads empty, so a damaged fact re-asks instead of sharing.
+	 */
+	confirmedCheckoutConflicts(checkoutPath: string): string[] {
+		const row = this.db
+			.prepare(
+				"SELECT identities_json FROM checkout_conflict_confirmations WHERE checkout_path = ?",
+			)
+			.get(checkoutPath) as { identities_json: string } | undefined;
+		if (row === undefined) return [];
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(row.identities_json);
+		} catch {
+			return [];
+		}
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter((value): value is string => typeof value === "string");
+	}
+
+	/** Store the confirmed conflict set of one checkout, with the confirmation time. */
+	recordCheckoutConflictConfirmation(checkoutPath: string, identities: readonly string[]): void {
 		this.db
 			.prepare(
-				"UPDATE consultations SET live_conflict_override = 1, updated_at = ? WHERE id = ? AND state = 'opening'",
+				`INSERT INTO checkout_conflict_confirmations(checkout_path, identities_json, confirmed_at)
+					VALUES (?, ?, ?)
+					ON CONFLICT(checkout_path) DO UPDATE SET
+						identities_json = excluded.identities_json,
+						confirmed_at = excluded.confirmed_at`,
 			)
-			.run(new Date().toISOString(), id);
+			.run(
+				checkoutPath,
+				JSON.stringify([...new Set(identities)]),
+				new Date(this.now()).toISOString(),
+			);
 	}
 
 	/** Update the Herdr identity after the Agent has started. */
@@ -2432,7 +2480,6 @@ export class FactoryState {
 			warning: row.warning,
 			replacementOf: row.replacement_of,
 			closeResult: row.close_result,
-			liveConflictOverride: row.live_conflict_override === 1,
 			attentionAt: row.attention_at,
 			pendingResponse: this.pendingConsultationResponse(row.id),
 			resources: this.consultationResources(row.id),
@@ -2537,7 +2584,6 @@ interface ConsultationRow {
 	warning: string | null;
 	replacement_of: string | null;
 	close_result: string | null;
-	live_conflict_override: number;
 	attention_at: string | null;
 }
 

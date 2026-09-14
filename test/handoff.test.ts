@@ -162,7 +162,6 @@ function consultationRecord(over: Partial<Consultation> = {}): Consultation {
 		warning: null,
 		replacementOf: null,
 		closeResult: null,
-		liveConflictOverride: false,
 		attentionAt: null,
 		pendingResponse: null,
 		resources: [],

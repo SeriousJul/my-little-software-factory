@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { FactoryConfig } from "./config.ts";
 import {
 	type AgentInputEvent,
+	type CheckoutConflict,
 	ConsultationInputQueue,
 	type ConsultationRepositoryOption,
 	inspectLiveCheckout,
@@ -32,7 +33,12 @@ import {
 } from "./handoff.ts";
 import { consultationAgentName } from "./naming.ts";
 import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
-import { type RepositoryMapping, type ResolvedRepository, resolveRepository } from "./repo.ts";
+import {
+	type RepositoryMapping,
+	type ResolvedRepository,
+	realPathOf,
+	resolveRepository,
+} from "./repo.ts";
 import {
 	type CommandResult,
 	type CommandRunner,
@@ -71,7 +77,7 @@ export interface ConsultationOperationCallbacks {
 	onProgress: (text: string | null, owner: string) => void;
 	/** The durable Consultation projection changed. */
 	onConsultationsChanged: () => void;
-	/** A live checkout needs the view to show its one-shot confirmation panel. */
+	/** A live checkout needs the view to show its confirmation panel. */
 	onSafetyConflict: (conflict: ConsultationSafetyConflict) => void;
 }
 
@@ -631,15 +637,26 @@ export class ConsultationOperations {
 	}
 
 	/**
-	 * Approve a live checkout conflict once, and continue the launch.
+	 * Approve the live checkout conflict set, and continue the launch.
 	 *
-	 * The override is one-shot and durable: it belongs to this opening, so a
-	 * later launch of another Consultation is checked again.
+	 * The confirmation belongs to the checkout, not to this opening. It stores
+	 * the union of the checkout's previously confirmed identities and the
+	 * panel's conflicts, before the Agent starts, so a crash after confirming
+	 * never re-asks. A later launch into the checkout asks again only when a
+	 * conflict identity appears that is not in the confirmed set, whatever
+	 * Consultation opens it.
 	 */
-	confirmSafetyConflict(consultation: Consultation): void {
-		this.state.setConsultationLiveConflictOverride(consultation.id);
+	async confirmSafetyConflict(
+		consultation: Consultation,
+		conflicts: readonly CheckoutConflict[],
+	): Promise<void> {
 		const current = this.state.consultation(consultation.id);
-		if (current !== undefined) void this.launch(current);
+		if (current === undefined) return;
+		const key = await realPathOf(current.repository.path);
+		const confirmed = new Set(this.state.confirmedCheckoutConflicts(key));
+		for (const conflict of conflicts) confirmed.add(conflict.identity);
+		this.state.recordCheckoutConflictConfirmation(key, [...confirmed]);
+		await this.launch(current);
 	}
 
 	replacementInput(consultationId: string): string {
@@ -733,11 +750,19 @@ export class ConsultationOperations {
 						);
 						if (safety.warning !== undefined)
 							this.state.setConsultationWarning(current.id, safety.warning);
-						if (
-							safety.conflicts.length > 0 &&
-							this.state.consultation(current.id)?.liveConflictOverride !== true
-						)
+						// The safety question belongs to the checkout, not to this
+						// opening: the launch asks again only when the current
+						// conflict set holds an identity the checkout has not
+						// confirmed, and a launch that proceeds stores the current
+						// set, so a shrunken set is persisted and never re-asked.
+						const key = await realPathOf(resolvedRepository.path);
+						const confirmed = this.state.confirmedCheckoutConflicts(key);
+						if (safety.conflicts.some((conflict) => !confirmed.includes(conflict.identity)))
 							return { status: "conflict", safety };
+						this.state.recordCheckoutConflictConfirmation(
+							key,
+							safety.conflicts.map((conflict) => conflict.identity),
+						);
 					}
 					return handOffConsultation({
 						consultation: current,

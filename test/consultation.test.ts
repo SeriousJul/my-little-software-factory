@@ -727,6 +727,13 @@ describe("pending responses across restart and migration", () => {
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
 		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
 		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
+		// The v10 facts belong to the run after this record: a v4 database
+		// never stored a checkout's confirmed conflict set, and its
+		// Consultation never held the one-shot override column.
+		db.prepare(
+			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
+		).run();
+		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
 		const reopened = openFactoryState(path);
@@ -735,6 +742,36 @@ describe("pending responses across restart and migration", () => {
 		// The pending table is back and usable for the preserved history.
 		expect(reopened.pendingConsultationResponse(consultation.id)).toBeNull();
 		expect(reopened.beginConsultationResponse(consultation.id, "again", 1)).toBeDefined();
+		reopened.close();
+	});
+
+	test("migrates a v9 database to v10: the override column goes, the checkout set comes", () => {
+		const { state, path } = makeStateFile();
+		const consultation = createConsultation(state);
+		state.setConsultationAgent(consultation.id, { paneId: "pane-1" });
+		state.close();
+		// Downgrade the record to the v9 shape: restore the one-shot override
+		// column the v10 step drops, and drop the checkout's confirmed set.
+		const db = new DatabaseSync(path);
+		db.exec(
+			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0;",
+		);
+		db.exec("DROP TABLE checkout_conflict_confirmations;");
+		db.prepare("UPDATE schema_version SET version = 9").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The Consultation record survives the step, and its row reads back
+		// without the dropped column.
+		expect(reopened.consultation(consultation.id)?.state).toBe("working");
+		const columns = new DatabaseSync(path)
+			.prepare("PRAGMA table_info(consultations)")
+			.all() as Array<{ name: string }>;
+		expect(columns.map((column) => column.name)).not.toContain("live_conflict_override");
+		// The checkout's confirmed set is fresh and usable.
+		expect(reopened.confirmedCheckoutConflicts("/tmp/factory")).toEqual([]);
+		reopened.recordCheckoutConflictConfirmation("/tmp/factory", ["pane-1"]);
+		expect(reopened.confirmedCheckoutConflicts("/tmp/factory")).toEqual(["pane-1"]);
 		reopened.close();
 	});
 });
