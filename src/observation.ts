@@ -30,9 +30,10 @@
  *    grace. An awaiting ticket whose agent is working again reopens: its
  *    still-pending turn did not end, and the next settle refreshes the trace
  *    in place.
- * 3. A pane herdr no longer lists is missing. With auto-handoff on the
- *    loop restarts the agent once per episode, or abandons the cycle when
- *    the ticket has used up its handoffs.
+ * 3. A pane herdr no longer lists is missing, except for a started agent
+ *    still inside the startup grace: it is booting, not missing. With
+ *    auto-handoff on the loop restarts a missing agent once per episode, or
+ *    abandons the cycle when the ticket has used up its handoffs.
  * 4. Automatic completion decisions resolve the awaiting tickets: every
  *    one with auto-handoff on, the auto-close types alone without it.
  *    Exactly one outgoing edge routes (while the parallel limit has room),
@@ -45,9 +46,12 @@
  *    both limits - is handed off on its task profile's configured settings.
  *    The parallel count is the in-flight tickets whose agent was alive in
  *    the latest poll: a blocked agent holds a slot, a missing one does not.
- *    Every agent this cycle itself dispatches - a restart, a route, an open
- *    handoff - holds a slot before the next dispatch of the cycle is
- *    measured, so one cycle never starts more agents than the limit.
+ *    A handoff still in progress, and a started agent that herdr has not
+ *    listed yet (still inside the startup grace), hold a slot too: they run
+ *    or are about to run, and the limit bounds running agents. Every agent
+ *    this cycle itself dispatches - a restart, a route, an open handoff -
+ *    holds a slot before the next dispatch of the cycle is measured, so one
+ *    cycle never starts more agents than the limit.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -297,10 +301,11 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * The parallel slots held this cycle: the agents the poll saw alive, plus
- * every agent this cycle dispatched. All dispatches of one cycle read the
- * same poll, so each new start must hold a slot before the next dispatch is
- * measured against the parallel limit.
+ * The parallel slots held: the agents the poll saw alive, the handoffs still
+ * in progress, the started agents herdr has not listed yet, and every agent
+ * this cycle dispatched. All dispatches of one cycle read the same poll, so
+ * each new start must hold a slot before the next dispatch is measured
+ * against the parallel limit.
  */
 interface ParallelSlots {
 	count: number;
@@ -551,13 +556,25 @@ export class ObservationCoordinator {
 		const reclaimed = this.reclaimLiveAgents(byPane);
 		if (this.stopped) return;
 
-		// The parallel count is the in-flight tickets whose agent was alive
-		// in this poll: a blocked agent still holds a slot, a missing one
-		// does not.
+		// The parallel slots this poll holds. An in-flight ticket holds one
+		// while its agent is alive in this poll. It also holds one while the
+		// agent has not been listed yet: a handoff still in progress, or a
+		// started agent still inside the startup grace. A missing agent past
+		// the grace holds none, so the restart path can refill the seat.
 		const inFlight = this.state.ticketsByState(["handed-off", "running"]);
+		const inProgress = new Set(this.state.openAttemptTickets());
+		const counted = new Set<string>();
 		const slots: ParallelSlots = { count: 0 };
 		for (const ticket of inFlight) {
-			if (ticket.paneId !== null && byPane.has(ticket.paneId)) slots.count += 1;
+			const listed = ticket.paneId !== null && byPane.has(ticket.paneId);
+			const booting = !listed && this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs;
+			if (listed || booting) {
+				slots.count += 1;
+				counted.add(ticket.ticketIdentity);
+			}
+		}
+		for (const identity of inProgress) {
+			if (!counted.has(identity)) slots.count += 1;
 		}
 
 		// An episode ends when its ticket leaves in-flight: restarts may resume.
@@ -941,7 +958,9 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * An in-flight ticket whose pane herdr no longer lists: missing.
+	 * An in-flight ticket whose pane herdr no longer lists: missing, except a
+	 * started agent still inside the startup grace: it is booting, and
+	 * restarting it would double-start the turn.
 	 *
 	 * Auto mode restarts it in its workspace with a restart prompt carrying
 	 * the last captured message; a ticket that has used up its handoffs is
@@ -951,6 +970,7 @@ export class ObservationCoordinator {
 	 */
 	private async handleMissing(ticket: HandoffTicket, slots: ParallelSlots): Promise<boolean> {
 		const config = this.config();
+		if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) return false;
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
 		if (handoffCount >= config.maxHandoffsPerTicket) {
 			const applied = this.state.applyCompletionDecision({

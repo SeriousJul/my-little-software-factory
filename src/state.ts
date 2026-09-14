@@ -1252,6 +1252,18 @@ export class FactoryState {
 	 * choices and herdr handles. The observation loop reads in-flight and
 	 * awaiting tickets through this.
 	 */
+	/**
+	 * The tickets with an unresolved handoff claim: a handoff is in progress,
+	 * from the claim until the agent starts or the start fails.
+	 */
+	openAttemptTickets(): string[] {
+		return (
+			this.db
+				.prepare("SELECT ticket_identity FROM handoff_attempts WHERE resolved_at IS NULL")
+				.all() as Array<{ ticket_identity: string }>
+		).map((row) => row.ticket_identity);
+	}
+
 	ticketsByState(states: readonly TicketState[]): HandoffTicket[] {
 		const clauses = states.map(() => "?").join(", ");
 		const rows = this.db

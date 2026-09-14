@@ -132,6 +132,21 @@ function stubCheckout(app: SeededApp): void {
 	});
 }
 
+/** The settled handoff's turn facts, and the clock the state writes with. */
+interface SeedDetail {
+	message?: string;
+	model?: string;
+	thinking?: string;
+	contextWindow?: string;
+	turnLog?: TurnLogEntry[];
+	/**
+	 * The state's clock. Pin it in the past to age the stored handoff, so a
+	 * missing agent is past the startup grace: it died, it did not fail to
+	 * boot.
+	 */
+	stateNow?: () => number;
+}
+
 /**
  * A state with the ticket in the given shape: open, in flight with the
  * stored herdr handles, or awaiting with a settled completion. The stored
@@ -141,27 +156,24 @@ function seed(
 	shape: "open" | "in-flight" | "awaiting",
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
-	message = "The turn is done.",
-	model = "",
-	thinking = "",
-	contextWindow = "",
-	turnLog: TurnLogEntry[] | undefined = undefined,
+	detail: SeedDetail = {},
 ): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-auto-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
+	const state = openFactoryState(join(dir, "state.sqlite"), detail.stateNow);
 	state.initializeSources([source]);
 	state.applyFetch(source, outcome);
 	if (shape !== "open") {
+		const message = detail.message ?? "The turn is done.";
 		const claim = state.claimHandoff(
 			identity,
 			{
 				agentType: "pi",
 				environment,
 				taskType: "implement",
-				model,
-				thinking,
-				contextWindow,
+				model: detail.model ?? "",
+				thinking: detail.thinking ?? "",
+				contextWindow: detail.contextWindow ?? "",
 			},
 			"open",
 		);
@@ -178,7 +190,7 @@ function seed(
 				taskType: "implement",
 				agentType: "pi",
 				message,
-				turnLog: turnLog ?? [{ kind: "text", text: message }],
+				turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
 				completedAt: "2026-08-31T11:00:00Z",
 			});
 		}
@@ -200,13 +212,9 @@ function seededApp(
 	extra: Partial<FactoryConfig> = {},
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
-	message = "The turn is done.",
-	model = "",
-	thinking = "",
-	contextWindow = "",
-	turnLog: TurnLogEntry[] | undefined = undefined,
+	detail: SeedDetail = {},
 ): SeededApp {
-	const state = seed(shape, outcome, environment, message, model, thinking, contextWindow, turnLog);
+	const state = seed(shape, outcome, environment, detail);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -455,7 +463,11 @@ describe("the failure markers", () => {
 	});
 
 	test("restart in the Missing modal repeats the interrupted handoff choices", async () => {
-		const app = seededApp("in-flight", {}, success, "live-worktree", "", "gpt-5.6", "high");
+		const app = seededApp("in-flight", {}, success, "live-worktree", {
+			message: "",
+			model: "gpt-5.6",
+			thinking: "high",
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		stubCheckout(app);
 		app.runner.set("herdr", ["workspace", "list"], {
@@ -792,9 +804,7 @@ describe("the decision modal", () => {
 			},
 			success,
 			"live-worktree",
-			"The turn is done.",
-			"opus-4",
-			"high",
+			{ message: "The turn is done.", model: "opus-4", thinking: "high" },
 		);
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -847,9 +857,7 @@ describe("the decision modal", () => {
 			},
 			success,
 			"live-worktree",
-			"The turn is done.",
-			"opus-4",
-			"high",
+			{ message: "The turn is done.", model: "opus-4", thinking: "high" },
 		);
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1140,9 +1148,7 @@ describe("the decision modal", () => {
 			},
 			success,
 			"live-worktree",
-			"The turn is done.",
-			"opus-4",
-			"high",
+			{ message: "The turn is done.", model: "opus-4", thinking: "high" },
 		);
 		stubCheckout(app);
 		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
@@ -1317,7 +1323,7 @@ describe("the decision modal", () => {
 			{ length: 40 },
 			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
 		).join("\n");
-		const app = seededApp("awaiting", {}, success, "live-worktree", lines);
+		const app = seededApp("awaiting", {}, success, "live-worktree", { message: lines });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const thumbRowOf = (frame: string) => rowsOf(frame).findIndex((row) => row.includes("█"));
 
@@ -1401,12 +1407,15 @@ describe("the decision modal", () => {
 
 	test("the modal shows the border title, the context line, and the log's notes", async () => {
 		const conclusion = "## Result\n\n**All 142 tests pass.**";
-		const app = seededApp("awaiting", {}, success, "live-worktree", conclusion, "", "", "", [
-			{ kind: "text", text: "I will run the tests." },
-			{ kind: "tool", name: "bash", target: "npm test", failed: false },
-			{ kind: "tool", name: "bash", target: "npm run lint", failed: true },
-			{ kind: "text", text: conclusion },
-		]);
+		const app = seededApp("awaiting", {}, success, "live-worktree", {
+			message: conclusion,
+			turnLog: [
+				{ kind: "text", text: "I will run the tests." },
+				{ kind: "tool", name: "bash", target: "npm test", failed: false },
+				{ kind: "tool", name: "bash", target: "npm run lint", failed: true },
+				{ kind: "text", text: conclusion },
+			],
+		});
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -1452,7 +1461,7 @@ describe("the decision modal", () => {
 			{ length: 40 },
 			(_, i) => `log ${String(i + 1).padStart(3, "0")}`,
 		).join("\n");
-		const app = seededApp("awaiting", {}, success, "live-worktree", lines);
+		const app = seededApp("awaiting", {}, success, "live-worktree", { message: lines });
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -1719,6 +1728,9 @@ describe("the leftover environment", () => {
 			{ maxHandoffsPerTicket: 1, autoHandoff: true },
 			success,
 			"worktree",
+			// The agent ran a while before it died: the handoff is past the
+			// startup grace, so the missing agent is not a booted one.
+			{ stateNow: () => Date.now() - 600_000 },
 		);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
@@ -1931,6 +1943,9 @@ describe("the leftover environment", () => {
 			{ autoHandoff: true, maxHandoffsPerTicket: 1 },
 			success,
 			"worktree",
+			// The agent ran a while before it died: the handoff is past the
+			// startup grace, so the missing agent is not a booted one.
+			{ stateNow: () => Date.now() - 600_000 },
 		);
 		// The agent lives while the panel opens, and is gone by the next poll.
 		app.runner.set("herdr", ["agent", "list"], {
@@ -3157,10 +3172,12 @@ describe("the auto decision", () => {
 			},
 			success,
 			"live-worktree",
-			"The turn is done.",
-			// The model the settled handoff ran on: a route must not inherit it.
-			"opus-4",
-			"high",
+			{
+				message: "The turn is done.",
+				// The model the settled handoff ran on: a route must not inherit it.
+				model: "opus-4",
+				thinking: "high",
+			},
 		);
 		stubCheckout(app);
 		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);

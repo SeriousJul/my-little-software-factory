@@ -112,6 +112,8 @@ function agent(
 interface Rig {
 	state: FactoryState;
 	intents: HandoffIntent[];
+	/** The attempt ids of the claims the dispatching rig made, in dispatch order. */
+	claims: string[];
 	/**
 	 * Report the start of the oldest dispatch still waiting for one, the way
 	 * the app's handoff settle path does. The loop holds a route's decision
@@ -141,6 +143,13 @@ function rig(options: {
 	) => Promise<SessionTurnRead>;
 	/** The cycle-end report the loop answers to, the way the app does. */
 	onCycleEnd?: (ticketIdentity: string) => void;
+	/**
+	 * Claim in the state, the way the app's dispatch does, so a dispatched
+	 * handoff is in progress until a test settles it. Off by default: the
+	 * loop-level tests drive the state by hand.
+	 */
+	dispatchClaims?: boolean;
+	startupGraceMs?: number;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = [...(options.agents ?? [])];
@@ -150,6 +159,7 @@ function rig(options: {
 	state.initializeSources([source]);
 	state.applyFetch(source, success([fetched()]));
 	const intents: HandoffIntent[] = [];
+	const claims: string[] = [];
 	// The start reports the dispatches still owe the loop. The app answers a
 	// claim first and reports the start when its external work settles, so
 	// the rig holds each report back until a test fires it.
@@ -166,6 +176,10 @@ function rig(options: {
 		onCycleEnd: options.onCycleEnd,
 		dispatch: async (intent) => {
 			intents.push(intent);
+			if (options.dispatchClaims) {
+				const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
+				if (claim.ok) claims.push(claim.claim.attemptId);
+			}
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
 			return { ok: true };
 		},
@@ -179,6 +193,7 @@ function rig(options: {
 		},
 		now: () => nowMs,
 		mode: () => options.autoOn ?? false,
+		startupGraceMs: options.startupGraceMs,
 		intervalMs: 60_000,
 		onChanged: () => {},
 		onStatus: (kind, text) => {
@@ -188,6 +203,7 @@ function rig(options: {
 	return {
 		state,
 		intents,
+		claims,
 		reportStart: (started: DispatchResult = { ok: true }) => {
 			const next = pending.shift();
 			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
@@ -953,8 +969,10 @@ describe("the observation cycle", () => {
 
 describe("missing agents", () => {
 	test("auto mode restarts a missing agent once per episode, with the last message", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
 		handOut(state, "github:github.com:I_5");
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(intents).toEqual([
 			expect.objectContaining({
@@ -971,7 +989,7 @@ describe("missing agents", () => {
 	});
 
 	test("a restart carries the last completion message", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
 		const identity = "github:github.com:I_5";
 		const attempt = settleFor(state, identity, "implement");
 		// The operator went to the agent: the ticket is in flight again on the
@@ -982,6 +1000,8 @@ describe("missing agents", () => {
 			decision: "goto",
 			decidedAt: "2026-08-31T11:00:30Z",
 		});
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(intents).toEqual([
 			expect.objectContaining({
@@ -994,7 +1014,7 @@ describe("missing agents", () => {
 	});
 
 	test("a restart keeps the settings the previous handoff ran with", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
 		const claim = state.claimHandoff(
 			"github:github.com:I_5",
 			{ ...choice, model: "opus-4", thinking: "high", contextWindow: "272000" },
@@ -1006,6 +1026,8 @@ describe("missing agents", () => {
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(intents).toEqual([
 			expect.objectContaining({
@@ -1037,7 +1059,10 @@ describe("missing agents", () => {
 	});
 
 	test("a missing agent at the handoff limit is abandoned, not restarted", async () => {
-		const { state, intents, cleanups, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, cleanups, coordinator, advance } = rig({
+			autoOn: true,
+			agents: [],
+		});
 		const identity = "github:github.com:I_5";
 		handOut(state, identity);
 		// Use up the second handoff the way a restart dispatch would.
@@ -1048,6 +1073,8 @@ describe("missing agents", () => {
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		// No restart: the ticket is abandoned, its environment is closed, and
 		// the auto mode may hand the now-open ticket out again.
@@ -1089,8 +1116,30 @@ describe("missing agents", () => {
 		state.close();
 	});
 
-	test("a missing agent does not hold a parallel slot", async () => {
-		const { state, intents, coordinator } = rig({
+	test("a started agent inside the startup grace is booting, not missing", async () => {
+		const { state, intents, claims, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			dispatchClaims: true,
+		});
+		await coordinator.tick();
+		// The one open ticket dispatched; the limit of two still has room.
+		expect(intents).toHaveLength(1);
+		// The agent started, but herdr has not listed it yet.
+		state.settleHandoff(claims[0], true, undefined, {
+			paneId: "pane-fresh",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		await coordinator.tick();
+		// Inside the startup grace the agent is booting, not missing: a
+		// restart would double-start the turn even though the limit has room.
+		expect(intents).toHaveLength(1);
+		state.close();
+	});
+
+	test("a missing agent past the startup grace does not hold a parallel slot", async () => {
+		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
 			agents: [agent("pane-github:github.com:I_6", "working")],
 		});
@@ -1103,8 +1152,11 @@ describe("missing agents", () => {
 			tabId: "tab-2",
 			workspaceId: "ws-2",
 		});
-		// ...and the other in-flight ticket's agent is missing: it holds no slot.
+		// ...and the other in-flight ticket's agent is missing past the
+		// startup grace: it holds no slot. Inside the grace a started agent
+		// is still booting, so the seat is held and no restart double-starts.
 		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		// The missing ticket's restart fits under the limit of two.
 		expect(intents).toEqual([
@@ -1117,7 +1169,7 @@ describe("missing agents", () => {
 	});
 
 	test("a restart dispatched in this cycle holds a parallel seat for the rest of it", async () => {
-		const { state, intents, coordinator } = rig({
+		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
 			agents: [],
 			config: { maxParallelAgents: 1 },
@@ -1125,6 +1177,8 @@ describe("missing agents", () => {
 		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
 		handOut(state, "github:github.com:I_5");
 		handOut(state, "github:github.com:I_6");
+		// Past the startup grace both agents are missing, not booting.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		// Both agents are missing, but only one restart fits under the limit
 		// of one: the second restart waits for a slot to free.
@@ -1492,6 +1546,58 @@ describe("the awaiting rule", () => {
 });
 
 describe("the open dispatch", () => {
+	test("an in-progress handoff holds a parallel seat before its agent is listed", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			dispatchClaims: true,
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		await coordinator.tick();
+		// Three eligible tickets, a limit of two: two dispatches fill both seats.
+		expect(intents).toHaveLength(config.maxParallelAgents);
+		await coordinator.tick();
+		// The next poll sees no live agent yet. The two in-progress handoffs
+		// hold both seats, so the third ticket waits instead of starting a
+		// third agent into the limit.
+		expect(intents).toHaveLength(config.maxParallelAgents);
+		const third = state
+			.visibleTickets([], "implement")
+			.find((t) => t.identity === "github:github.com:I_7");
+		expect(third).toEqual(expect.objectContaining({ state: "open", actionable: true }));
+		state.close();
+	});
+
+	test("a started agent inside the startup grace holds a parallel seat", async () => {
+		const { state, intents, claims, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			dispatchClaims: true,
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		await coordinator.tick();
+		expect(intents).toHaveLength(config.maxParallelAgents);
+		// Both agents started, but herdr has not listed them yet.
+		for (const attempt of claims) {
+			state.settleHandoff(attempt, true, undefined, {
+				paneId: `pane-${attempt}`,
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+		}
+		await coordinator.tick();
+		// Inside the startup grace the started agents hold both seats, so the
+		// third ticket still waits.
+		expect(intents).toHaveLength(config.maxParallelAgents);
+		state.close();
+	});
+
 	test("auto mode hands off every eligible open ticket under the limits", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		state.applyFetch(
@@ -1676,7 +1782,7 @@ describe("the open dispatch", () => {
 
 	test("a cycle the loop ends asks the app to re-read the ticket's source", async () => {
 		const ends: string[] = [];
-		const { state, coordinator, cleanups } = rig({
+		const { state, coordinator, cleanups, advance } = rig({
 			autoOn: true,
 			agents: [],
 			onCycleEnd: (identity) => ends.push(identity),
@@ -1719,6 +1825,8 @@ describe("the open dispatch", () => {
 			tabId: "tab-1",
 			workspaceId: "ws-1",
 		});
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
 		expect(ends).toEqual([identity]);
 		expect(cleanups).toHaveLength(1);
@@ -2088,9 +2196,11 @@ describe("the held turn and the Dispatch pause", () => {
 	});
 
 	test("a restart after a held turn with no agent text carries the cause as the previous message", async () => {
+		// No startup grace: the agents of this test are about to die, not to boot.
 		const { state, intents, setAgents, coordinator } = rig({
 			autoOn: true,
 			agents: [agent("pane-implement", "working")],
+			startupGraceMs: 0,
 		});
 		state.applyFetch(source, success([fetched(), fetched("github:github.com:I_6")]));
 		// I_5's failed turn left no agent text: the provider's own words sit in

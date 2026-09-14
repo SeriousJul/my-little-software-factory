@@ -219,7 +219,7 @@ A Ticket stays `running`; a Consultation moves to `awaiting-response`.
 _Avoid_: stalled, waiting
 
 **Missing agent**:
-The observation that the stored pane is gone or holds no Agent.
+The observation that the stored pane is gone or holds no Agent, past the Startup grace of a started one.
 The operator must explicitly recover or close the affected work.
 _Avoid_: dead agent, orphaned
 
@@ -229,7 +229,7 @@ The last known Consultation states stay visible and cannot become `missing` from
 _Avoid_: missing Agent, Herdr offline
 
 **Startup grace**:
-The window from a handoff during which the agent's idle report is its boot, not a turn end.
+The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.
 _Avoid_: boot delay, settle delay
 
@@ -274,7 +274,7 @@ The config file carries the startup default; the UI toggle is session-only.
 _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
-The maximum number of agents in flight, counted as tickets in `handed-off` or `running` state whose agent is alive.
+The maximum number of agents in flight. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, and by a started agent still inside its Startup grace: all of them run or are about to run (ADR 0021).
 It gates auto-handoff only; a manual handoff is always allowed.
 _Avoid_: concurrency cap, max agents
 
