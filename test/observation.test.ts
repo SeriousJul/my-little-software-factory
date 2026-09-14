@@ -1115,6 +1115,27 @@ describe("missing agents", () => {
 		]);
 		state.close();
 	});
+
+	test("a restart dispatched in this cycle holds a parallel seat for the rest of it", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			config: { maxParallelAgents: 1 },
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		handOut(state, "github:github.com:I_5");
+		handOut(state, "github:github.com:I_6");
+		await coordinator.tick();
+		// Both agents are missing, but only one restart fits under the limit
+		// of one: the second restart waits for a slot to free.
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(expect.objectContaining({ origin: "restart" }));
+		// The next cycle sees no live agent at all, so the second missing
+		// ticket restarts then.
+		await coordinator.tick();
+		expect(intents).toHaveLength(2);
+		state.close();
+	});
 });
 
 describe("the awaiting rule", () => {
@@ -1319,6 +1340,41 @@ describe("the awaiting rule", () => {
 			}),
 		);
 		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a route dispatched in this cycle holds a parallel seat for the rest of it", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			config: { maxParallelAgents: 1 },
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		settleFor(state, "github:github.com:I_5", "route");
+		settleFor(state, "github:github.com:I_6", "route");
+		await coordinator.tick();
+		// The single parallel seat is held by the route the cycle just started:
+		// the second route waits in awaiting, and the open ticket waits for a
+		// slot too. Together they must not start two agents against one limit.
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				ticketIdentity: "github:github.com:I_5",
+			}),
+		]);
+		const byIdentity = new Map(state.visibleTickets([], "implement").map((t) => [t.identity, t]));
+		expect(byIdentity.get("github:github.com:I_6")).toEqual(
+			expect.objectContaining({
+				state: "awaiting",
+				lastCompletion: expect.objectContaining({ decision: null }),
+			}),
+		);
+		expect(byIdentity.get("github:github.com:I_7")).toEqual(
+			expect.objectContaining({ state: "open" }),
+		);
 		state.close();
 	});
 

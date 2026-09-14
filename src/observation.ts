@@ -45,6 +45,9 @@
  *    both limits - is handed off on its task profile's configured settings.
  *    The parallel count is the in-flight tickets whose agent was alive in
  *    the latest poll: a blocked agent holds a slot, a missing one does not.
+ *    Every agent this cycle itself dispatches - a restart, a route, an open
+ *    handoff - holds a slot before the next dispatch of the cycle is
+ *    measured, so one cycle never starts more agents than the limit.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -291,6 +294,16 @@ export function stripAnsi(text: string): string {
 			// biome-ignore lint/suspicious/noControlCharactersInRegex: stray control characters
 			.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
 	);
+}
+
+/**
+ * The parallel slots held this cycle: the agents the poll saw alive, plus
+ * every agent this cycle dispatched. All dispatches of one cycle read the
+ * same poll, so each new start must hold a slot before the next dispatch is
+ * measured against the parallel limit.
+ */
+interface ParallelSlots {
+	count: number;
 }
 
 /**
@@ -542,9 +555,9 @@ export class ObservationCoordinator {
 		// in this poll: a blocked agent still holds a slot, a missing one
 		// does not.
 		const inFlight = this.state.ticketsByState(["handed-off", "running"]);
-		let liveCount = 0;
+		const slots: ParallelSlots = { count: 0 };
 		for (const ticket of inFlight) {
-			if (ticket.paneId !== null && byPane.has(ticket.paneId)) liveCount += 1;
+			if (ticket.paneId !== null && byPane.has(ticket.paneId)) slots.count += 1;
 		}
 
 		// An episode ends when its ticket leaves in-flight: restarts may resume.
@@ -559,7 +572,7 @@ export class ObservationCoordinator {
 			const agent = byPane.get(ticket.paneId);
 			if (agent === undefined) {
 				if (autoOn) {
-					changed = (await this.handleMissing(ticket, liveCount)) || changed;
+					changed = (await this.handleMissing(ticket, slots)) || changed;
 					if (this.stopped) return;
 				}
 				continue;
@@ -592,20 +605,22 @@ export class ObservationCoordinator {
 			if (agent === undefined || normalizeAgentStatus(agent.status) !== "working") continue;
 			if (this.state.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
 				changed = true;
-				liveCount += 1;
+				slots.count += 1;
 			}
 		}
 
 		for (const ticket of this.state.ticketsByState(["awaiting"])) {
-			changed = (await this.handleAwaiting(ticket, liveCount, autoOn)) || changed;
+			changed = (await this.handleAwaiting(ticket, slots, autoOn)) || changed;
 			if (this.stopped) return;
 		}
 
 		// The count is what this poll saw alive, before the settles above:
 		// a ticket that settled this cycle still holds its seat here. The
-		// next poll no longer sees it in flight and frees the seat.
+		// next poll no longer sees it in flight and frees the seat. Slots
+		// taken by the dispatches above are counted in too, so the open
+		// dispatch never fills a slot a route or restart just started.
 		if (autoOn) {
-			changed = this.dispatchOpen(liveCount) || changed;
+			changed = this.dispatchOpen(slots.count) || changed;
 		}
 
 		// Tickets and Consultations share this one successful Herdr list poll.
@@ -934,7 +949,7 @@ export class ObservationCoordinator {
 	 * the operator's panel. A ticket already restarted this episode is not
 	 * restarted again until the episode ends.
 	 */
-	private async handleMissing(ticket: HandoffTicket, liveCount: number): Promise<boolean> {
+	private async handleMissing(ticket: HandoffTicket, slots: ParallelSlots): Promise<boolean> {
 		const config = this.config();
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
 		if (handoffCount >= config.maxHandoffsPerTicket) {
@@ -957,8 +972,8 @@ export class ObservationCoordinator {
 			);
 			return true;
 		}
-		// The missing agent holds no slot, so liveCount already excludes it.
-		if (config.maxParallelAgents > 0 && liveCount >= config.maxParallelAgents) {
+		// The missing agent holds no slot, so the count already excludes it.
+		if (config.maxParallelAgents > 0 && slots.count >= config.maxParallelAgents) {
 			return false;
 		}
 		if (this.restarted.has(ticket.ticketIdentity)) return false;
@@ -993,6 +1008,9 @@ export class ObservationCoordinator {
 			);
 			return false;
 		}
+		// The restarted agent is not in this poll, so the cycle's count must
+		// hold its slot before the next dispatch of the cycle is measured.
+		slots.count += 1;
 		this.onStatus("warning", `agent missing on ticket ${ticket.ticketIdentity}; restarting`);
 		return true;
 	}
@@ -1010,12 +1028,12 @@ export class ObservationCoordinator {
 	 */
 	private async handleAwaiting(
 		ticket: HandoffTicket,
-		liveCount: number,
+		slots: ParallelSlots,
 		autoOn: boolean,
 	): Promise<boolean> {
 		const config = this.config();
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
-		const decision = this.decideAwaiting(ticket.taskType, liveCount, handoffCount, autoOn);
+		const decision = this.decideAwaiting(ticket.taskType, slots.count, handoffCount, autoOn);
 		if (decision === "wait") return false;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
 		// truncated is held. No automatic decision runs on it, in auto or
@@ -1075,6 +1093,9 @@ export class ObservationCoordinator {
 			);
 			return false;
 		}
+		// The routed agent is not in this poll, so the cycle's count must
+		// hold its slot before the next dispatch of the cycle is measured.
+		slots.count += 1;
 		// The claim holds the work, so the cycle changed the record: the route's
 		// decision follows the handoff's start.
 		return true;
