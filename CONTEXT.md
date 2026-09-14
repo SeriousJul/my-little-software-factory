@@ -363,7 +363,8 @@ _Avoid_: sandbox, isolation
 
 **Live checkout conflict**:
 The condition where an Agent would start in a live checkout already used by another active Agent.
-It blocks the start unless the operator gives a one-shot safety confirmation.
+It blocks the start unless the checkout holds a safety confirmation for the current set of conflicting identities: an Agent that no Consultation or ticket owns takes the herdr Agent pane id, and an Agent owned by an open Consultation or a running ticket takes that Consultation's or ticket's identity.
+The operator confirms once per conflict set: the confirmation belongs to the checkout, is durable, and stores the confirmed set with its time. A later launch into the checkout asks again only when a conflicting identity appears that is not in the confirmed set. A shrinking set never re-asks, and each checkout keeps its own set, so one checkout's confirmation never silences another checkout's question.
 _Avoid_: dirty checkout, parallel limit
 
 **Leftover environment**:

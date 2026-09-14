@@ -5,11 +5,11 @@
  * plane does: a fake command runner that records the exact herdr and git calls,
  * a real SQLite state file that holds the durable record, and stub callbacks
  * that collect the facts the view gets back. Together they pin what issue #33
- * asked for: launch and its stages, the live checkout conflict and its one-shot
- * confirmation, recovery of an interrupted opening, response delivery and its
- * failure, close topology and retry, Force-close and the guard it shares with
- * close, Replacement bounds and linking, deletion, the Stale Agent output
- * warning, and the ordered interaction input queue.
+ * asked for: launch and its stages, the live checkout conflict and its
+ * per-checkout confirmed set, recovery of an interrupted opening, response
+ * delivery and its failure, close topology and retry, Force-close and the guard
+ * it shares with close, Replacement bounds and linking, deletion, the Stale
+ * Agent output warning, and the ordered interaction input queue.
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -643,13 +643,17 @@ describe("Consultation operations: launch", () => {
 		expect(runner.commands().join("\n")).not.toContain("agent prompt");
 		expect(harness.conflicts[0].safety.conflicts[0].label).toContain("pane-herdr");
 
-		// Confirm once: the same launch continues and the override is durable.
-		harness.operations.confirmSafetyConflict(consultation);
+		// Confirm once: the same launch continues and the checkout's confirmed
+		// set is durable.
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
 		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
-		expect(current(fixture.state, id)).toMatchObject({
-			state: "working",
-			liveConflictOverride: true,
-		});
+		expect(current(fixture.state, id).state).toBe("working");
+		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([
+			"pane-herdr",
+		]);
 		expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /grill review auth`);
 	});
 
@@ -684,7 +688,7 @@ describe("Consultation operations: launch", () => {
 
 		expect(harness.conflicts).toHaveLength(2);
 		expect(current(fixture.state, id).state).toBe("opening");
-		expect(current(fixture.state, id).liveConflictOverride).toBe(false);
+		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([]);
 		expect(runner.commands().join("\n")).not.toContain("tab create");
 	});
 
@@ -706,6 +710,385 @@ describe("Consultation operations: launch", () => {
 		});
 		expect(harness.conflicts).toHaveLength(0);
 		expect(harness.statuses.some((status) => status.kind === "warning")).toBe(true);
+	});
+});
+
+describe("Consultation operations: live checkout confirmation lifetime", () => {
+	/** Herdr's agent list of one Agent working in the named checkout. */
+	function busyAgentJson(checkout: string, paneId: string): string {
+		return agentListJson([
+			{
+				paneId,
+				tabId: `tab-${paneId}`,
+				workspaceId: `ws-${paneId}`,
+				agent: "pi",
+				status: "working",
+			},
+		]).replace(
+			`"pane_id":"${paneId}"`,
+			`"pane_id":"${paneId}","checkout_path":"${realpathSync(checkout)}"`,
+		);
+	}
+
+	/** Herdr's agent list of every named pane working in the named checkout. */
+	function busyAgentsJson(checkout: string, paneIds: readonly string[]): string {
+		return JSON.stringify({
+			result: {
+				agents: paneIds.map((paneId) => ({
+					pane_id: paneId,
+					tab_id: `tab-${paneId}`,
+					workspace_id: `ws-${paneId}`,
+					agent: "pi",
+					agent_status: "working",
+					checkout_path: realpathSync(checkout),
+				})),
+			},
+		});
+	}
+
+	/** A running ticket whose live-worktree handoff occupies the named pane. */
+	function runningTicket(identity: string, paneId: string): Ticket {
+		return {
+			identity,
+			title: "conflict ticket",
+			repository: "acme/factory",
+			repositoryRef: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+			},
+			state: "running",
+			handoff: {
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+				attemptId: `attempt-${identity}`,
+				paneId,
+				tabId: null,
+				workspaceId: null,
+			},
+			workCycle: 1,
+			handoffCount: 1,
+			lastCompletion: null,
+			description: "",
+			sourceKind: "github",
+			externalKey: identity,
+			sourceState: "open",
+			url: "",
+			labels: [],
+			externalUpdatedAt: "2026-09-01T00:00:00.000Z",
+			memberships: [],
+			suggestedTaskType: "implement",
+			actionable: true,
+			handoffRecoveryRequired: false,
+			leftover: null,
+		};
+	}
+
+	test("does not re-ask a second launch for a confirmed conflict set", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("a");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+		expect(harness.conflicts).toHaveLength(1);
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
+		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
+
+		// A second Consultation into the same checkout: the same Agents still
+		// occupy it, and none of them is unconfirmed.
+		const id2 = uid("b");
+		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
+
+		await harness.operations.launch(second);
+
+		expect(harness.conflicts).toHaveLength(1);
+		expect(current(fixture.state, id2)).toMatchObject({ state: "working", paneId: LAUNCH.paneId });
+	});
+
+	test("asks again when an unconfirmed identity enters the checkout", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("c");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
+		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
+
+		// A second Agent enters the checkout while the first is still there.
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentsJson(fixture.checkout, ["pane-herdr", "pane-new"]),
+		});
+		const id2 = uid("d");
+		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
+
+		await harness.operations.launch(second);
+
+		expect(harness.conflicts).toHaveLength(2);
+		expect(harness.conflicts[1].safety.conflicts.map((c) => c.identity).sort()).toEqual([
+			"pane-herdr",
+			"pane-new",
+		]);
+		expect(current(fixture.state, id2).state).toBe("opening");
+
+		// Confirming stores the union of the confirmed set and the new one.
+		await harness.operations.confirmSafetyConflict(second, harness.conflicts[1].safety.conflicts);
+		await until(() => current(fixture.state, id2).state === "working", "the confirmed launch");
+		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout)).sort()).toEqual(
+			["pane-herdr", "pane-new"],
+		);
+	});
+
+	test("does not re-ask when a confirmed identity leaves, and shrinks the stored set", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("e");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
+		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
+
+		// The occupying Agent is gone. A safer checkout never surprises the
+		// operator with a fresh panel.
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const id2 = uid("f");
+		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
+
+		await harness.operations.launch(second);
+
+		expect(harness.conflicts).toHaveLength(1);
+		expect(current(fixture.state, id2).state).toBe("working");
+		// The stored set is updated to what the checkout holds now.
+		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([]);
+	});
+
+	test("does not re-ask a fresh operations instance for a confirmed set", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("g");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
+		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
+
+		// A control plane restart reads the same state file: the confirmation
+		// belongs to the checkout, so the new instance asks nothing.
+		const fresh = makeHarness(fixture, runner);
+		const id2 = uid("h");
+		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
+
+		await fresh.operations.launch(second);
+
+		expect(fresh.conflicts).toHaveLength(0);
+		expect(current(fixture.state, id2).state).toBe("working");
+	});
+
+	test("asks separately for a different checkout", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("i");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubCheckout(runner.inner, fixture.otherCheckout, "other");
+		runner.inner.set(
+			"git",
+			["-C", fixture.otherCheckout, "status", "--porcelain", "--untracked-files=all"],
+			{ stdout: "" },
+		);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: JSON.stringify({
+				result: {
+					agents: [
+						{
+							pane_id: "pane-herdr",
+							tab_id: "tab-herdr",
+							workspace_id: "ws-herdr",
+							agent: "pi",
+							agent_status: "working",
+							checkout_path: realpathSync(fixture.checkout),
+						},
+						{
+							pane_id: "pane-herdr-other",
+							tab_id: "tab-herdr-other",
+							workspace_id: "ws-herdr-other",
+							agent: "pi",
+							agent_status: "working",
+							checkout_path: realpathSync(fixture.otherCheckout),
+						},
+					],
+				},
+			}),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+		expect(harness.conflicts).toHaveLength(1);
+		expect(harness.conflicts[0].safety.conflicts.map((c) => c.identity)).toEqual(["pane-herdr"]);
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
+		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
+
+		// Another repository's checkout keeps its own safety question.
+		const id2 = uid("j");
+		const second = seed(fixture.state, fixture, id2, {
+			environment: "live-worktree",
+			repository: fixture.otherRepository,
+		});
+		stubLiveLaunch(runner.inner, fixture.otherCheckout, id2, "ws-other");
+
+		await harness.operations.launch(second);
+
+		expect(harness.conflicts).toHaveLength(2);
+		expect(harness.conflicts[1].safety.conflicts.map((c) => c.identity)).toEqual([
+			"pane-herdr-other",
+		]);
+		expect(current(fixture.state, id2).state).toBe("opening");
+	});
+
+	test("proceeds without a panel when no identity is unconfirmed", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("o");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-herdr"),
+		});
+		// The checkout already holds the confirmation, as a previous run left it.
+		fixture.state.recordCheckoutConflictConfirmation(realpathSync(fixture.checkout), [
+			"pane-herdr",
+		]);
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+
+		expect(harness.conflicts).toHaveLength(0);
+		expect(current(fixture.state, id)).toMatchObject({ state: "working", paneId: LAUNCH.paneId });
+		expect(runner.commands()).toContain(`herdr agent prompt ${agentOf(id)} /grill review auth`);
+	});
+
+	test("names an Agent owned by an open Consultation on one panel line", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		// A Consultation that already occupies the checkout with its live Agent.
+		const occupier = seed(fixture.state, fixture, uid("k"), { environment: "live-worktree" });
+		startAgent(fixture.state, occupier.id, {
+			paneId: "pane-occ",
+			tabId: "tab-occ",
+			workspaceId: "ws-occ",
+		});
+		const id = uid("l");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-occ"),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+
+		expect(harness.conflicts).toHaveLength(1);
+		// One line per underlying Agent: the pane is the Consultation's, so the
+		// panel names the Consultation and not a second bare Herdr Agent.
+		expect(harness.conflicts[0].safety.conflicts).toEqual([
+			{
+				kind: "consultation",
+				identity: occupier.id,
+				label: `Consultation ${occupier.id.slice(0, 8)}`,
+			},
+		]);
+	});
+
+	test("names an Agent owned by a running ticket, and does not re-ask it", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("m");
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		stubLiveCheckout(runner.inner, fixture.checkout);
+		stubLiveLaunch(runner.inner, fixture.checkout, id);
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: busyAgentJson(fixture.checkout, "pane-tick"),
+		});
+		const harness = makeHarness(fixture, runner, {
+			tickets: () => [runningTicket("ACME-42", "pane-tick")],
+		});
+
+		await harness.operations.launch(consultation);
+
+		expect(harness.conflicts).toHaveLength(1);
+		expect(harness.conflicts[0].safety.conflicts).toEqual([
+			{ kind: "ticket", identity: "ACME-42", label: "Ticket ACME-42" },
+		]);
+
+		// The ticket's Agent takes the same lifetime rule as a Consultation's.
+		await harness.operations.confirmSafetyConflict(
+			consultation,
+			harness.conflicts[0].safety.conflicts,
+		);
+		await until(() => current(fixture.state, id).state === "working", "the confirmed launch");
+		const id2 = uid("n");
+		const second = seed(fixture.state, fixture, id2, { environment: "live-worktree" });
+		stubLiveLaunch(runner.inner, fixture.checkout, id2, "ws-live-2");
+
+		await harness.operations.launch(second);
+
+		expect(harness.conflicts).toHaveLength(1);
+		expect(current(fixture.state, id2).state).toBe("working");
+		expect(fixture.state.confirmedCheckoutConflicts(realpathSync(fixture.checkout))).toEqual([
+			"ACME-42",
+		]);
 	});
 });
 

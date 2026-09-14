@@ -13,7 +13,7 @@
  * real repository. Random launch identities are canonicalized by
  * ConsultationRunner so the command sequence stays pinnable.
  */
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -1625,10 +1625,9 @@ describe("Consultation live-worktree launch through the UI", () => {
 						],
 						"the confirmed launch sequence",
 					);
-					expect(state.consultation(consultation.id)).toMatchObject({
-						state: "working",
-						liveConflictOverride: true,
-					});
+					expect(state.consultation(consultation.id)).toMatchObject({ state: "working" });
+					// The confirmation belongs to the checkout, not to the opening.
+					expect(state.confirmedCheckoutConflicts(realpathSync(checkout))).toContain("pane-herdr");
 				},
 				WIDTH,
 				32,

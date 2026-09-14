@@ -749,6 +749,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultation_snapshots;
 			DROP TABLE consultation_turns;
 			DROP TABLE consultations;
+			DROP TABLE checkout_conflict_confirmations;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -829,6 +830,13 @@ describe("factory SQLite state", () => {
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
 		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
 		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
+		// The v10 facts belong to the run after this record: a v5 database
+		// never stored a checkout's confirmed conflict set, and its
+		// Consultation never held the one-shot override column.
+		db.prepare(
+			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
+		).run();
+		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		db.prepare("UPDATE schema_version SET version = 5").run();
 		db.prepare(
 			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
@@ -888,6 +896,13 @@ describe("factory SQLite state", () => {
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN detail").run();
 		db.prepare("ALTER TABLE consultation_turns DROP COLUMN cause").run();
 		db.prepare("ALTER TABLE consultation_turns DROP COLUMN detail").run();
+		// The v10 facts belong to the run after this record: a v7 database
+		// never stored a checkout's confirmed conflict set, and its
+		// Consultation never held the one-shot override column.
+		db.prepare(
+			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
+		).run();
+		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		db.prepare("UPDATE schema_version SET version = 7").run();
 		db.prepare(
 			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",

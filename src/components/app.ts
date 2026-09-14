@@ -2758,7 +2758,11 @@ export function App({
 					setConsultationSafety(null);
 					if (key === "confirm") {
 						const current = state?.consultation(panelConsultation.id);
-						if (current !== undefined) consultationOperations?.confirmSafetyConflict(current);
+						if (current !== undefined && consultationSafety !== null)
+							void consultationOperations?.confirmSafetyConflict(
+								current,
+								consultationSafety.safety.conflicts,
+							);
 					}
 				},
 				onCancel: () => {

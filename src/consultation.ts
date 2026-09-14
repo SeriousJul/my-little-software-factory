@@ -175,8 +175,12 @@ export interface CheckoutConflict {
 }
 
 /**
- * Check a live checkout without making changes. The caller decides whether a
- * conflict gets a one-shot override. Dirty state is a warning, not a block.
+ * Check a live checkout without making changes. One conflict is reported per
+ * underlying Agent: an Agent whose pane belongs to a counted open Consultation
+ * or a counted running ticket handoff is reported under that Consultation's
+ * or ticket's identity, never again as a bare Herdr Agent. The caller decides
+ * whether the checkout's confirmed set covers the reported identities. Dirty
+ * state is a warning, not a block.
  */
 export async function inspectLiveCheckout(
 	checkout: string,
@@ -199,6 +203,12 @@ export async function inspectLiveCheckout(
 		);
 	const dirty = status.stdout.trim() !== "";
 	const conflicts: CheckoutConflict[] = [];
+	/**
+	 * Panes already counted as a conflict. Their Agents get one panel line under
+	 * the Consultation's or ticket's identity, not a second bare Herdr Agent
+	 * line for the same underlying Agent.
+	 */
+	const countedPanes = new Set<string>();
 	const target = await realPathOf(checkout);
 	// Ticket conflicts compare the resolved checkout, not the repository
 	// identity: a worktree handoff of the same repository does not share
@@ -217,6 +227,7 @@ export async function inspectLiveCheckout(
 		} else if (ticket.handoff.environment !== "live-worktree") continue;
 		// An unknown checkout of a live-worktree handoff cannot be proven
 		// separate: keep it a conflict instead of sharing a shared checkout.
+		countedPanes.add(agent.paneId);
 		conflicts.push({
 			kind: "ticket",
 			identity: ticket.identity,
@@ -238,14 +249,19 @@ export async function inspectLiveCheckout(
 		if (
 			consultation.paneId !== null &&
 			agents.some((agent) => agent.paneId === consultation.paneId)
-		)
+		) {
+			countedPanes.add(consultation.paneId);
 			conflicts.push({
 				kind: "consultation",
 				identity: consultation.id,
 				label: `Consultation ${consultation.id.slice(0, 8)}`,
 			});
+		}
 	}
 	for (const agent of agents) {
+		// One panel line per underlying Agent: a pane counted above stays named
+		// by the Consultation or ticket that owns it.
+		if (countedPanes.has(agent.paneId)) continue;
 		if (agent.checkoutPath === undefined || (await realPathOf(agent.checkoutPath)) !== target)
 			continue;
 		conflicts.push({
