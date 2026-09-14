@@ -44,6 +44,10 @@ _Avoid_: status line, notification bar
 The on-demand, read-only presentation of a full message that does not fit on the Message line.
 _Avoid_: message modal, error popup
 
+**Theme**:
+The set of resolved color roles the control plane inherits from the active herdr theme. A theme carries an appearance: light or dark. It is distinct from the no-color presentation, which is an axis that works on top of any theme.
+_Avoid_: palette, color scheme, skin
+
 **Control catalogue**:
 The complete set of controls owned by the control plane, with each control's keys, Interaction modes, availability, and reason when unavailable.
 It is the common reference for the controls the operator can use and the controls described by the Action bar and Key guide.
@@ -386,9 +390,14 @@ The settings are: Agent type, Environment kind, Task type, Model, Thinking level
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
-A missing file yields the shipped defaults. An invalid file stops the control plane with a readable error before the UI starts.
+The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
+A missing file is seeded from the Default configuration on first run. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
+
+**Default configuration**:
+The TOML the package ships, used to seed the Config file on first run.
+It carries the workflow template (the task types and task rules) and one Consultation type, and it is meant to be extended by the operator.
+_Avoid_: built-in defaults, factory settings
 
 **Repository identity**:
 The stable, host-qualified identity of a source repository, such as `github.com/owner/name`.
