@@ -238,6 +238,11 @@ _Avoid_: transcript, chat history
 The saved operator inputs and settled or partial Agent output shown when live Agent output is no longer available.
 _Avoid_: live output, exact transcript
 
+**Session view**:
+The presentation of an Agent's session record in the Consultation detail: the operator's inputs and the Agent's messages in order, with one short note per tool call.
+It is the detail's default body for open and closed Consultations while the record is readable. Otherwise the detail falls back to the Agent view for an open Consultation and to the Captured history for a closed one.
+_Avoid_: pi view, transcript, chat
+
 **Agent terminal**:
 The Interaction mode that shows an Agent's terminal and forwards operator input to it while reserving a configurable, keyboard-layout-independent control to return keyboard ownership to the control plane.
 _Avoid_: terminal handoff, attach mode
