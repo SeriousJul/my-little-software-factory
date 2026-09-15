@@ -63,7 +63,7 @@ The control plane copies a mouse selection to the clipboard when the operator re
 _Avoid_: copy-on-select, select-to-copy, clipboard selection
 
 **Decision modal**:
-The near-fullscreen Interaction mode above an awaiting ticket: the turn log, and the rows the operator confirms: close, goto, and the workflow handoffs.
+The near-fullscreen Interaction mode above an awaiting ticket: the turn log, the label facts the Transition wrote, and the rows the operator confirms: close, goto, and, when the ticket's new position offers a task, the handoff of that task.
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
@@ -126,7 +126,7 @@ Its last tickets stay visible, but they cannot be handed off until the source re
 _Avoid_: offline source
 
 **Ticket priority**:
-The rank that orders tickets: the ticket list within an attention group, the open auto-handoff dispatch, and the waiting workflow routes that compete for a freed parallel slot.
+The rank that orders tickets: the ticket list within an attention group, the open auto-handoff dispatch, and the waiting workflow advances that compete for a freed parallel slot.
 It is a fact of the ticket identity: it survives every task type change and every work cycle close.
 The effective rank is, in order, the Priority override, the rank of the ticket's own label in the Priority label list, or, for a pull request, the highest effective priority of the issues it closes.
 A ticket with no rank sorts after every ranked ticket.
@@ -319,7 +319,7 @@ _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
 The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed` and no turn has settled `completed` since it.
-It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow route, and the restart. The route block applies in manual mode too, because auto-close types route there, exactly like the Parallel limit.
+It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow advance, and the restart. The advance block applies in manual mode too, because auto-advance transitions route there, exactly like the Parallel limit.
 _Avoid_: circuit breaker, cooldown, backoff
 
 **Same-type hold**:
@@ -328,36 +328,49 @@ A completed work needs no repeat, and progress needs a new signal. It is derived
 _Avoid_: dispatch block, retry gate, backoff
 
 **Task type**:
-A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and the Task profile its handoffs start on.
-_Avoid_: prompt, template
+The named description of a kind of work: its prompt template, the Task profile its handoffs start on, and its Transition, the label facts a completed turn of it writes.
+A Workflow state offers a task type, and the default task type offers one when no state matches. The completion behavior follows the task type to whatever ticket it runs on.
+_Avoid_: prompt, template, task
 
 **Task profile**:
 The agent type, model, thinking level, and context window a task type starts its handoffs with.
-It is a start value: the override panel prefills it, a workflow edge's agent pin can replace its agent for one handoff, and an operator override beats all of it.
+It is a start value: the override panel prefills it, a Transition's agent pin can replace its agent for one handoff, and an operator override beats all of it.
 A setting the Agent a Handoff lands on cannot take fails that Handoff with a readable reason, so a reroute that leaves a setting behind is seen, not absorbed.
 _Avoid_: run settings, task settings
 
 **Suggested task type**:
-The Task type proposed for a Ticket's next Handoff by the first matching Task rule, or by the configured default when no rule matches.
+The Task type proposed for a Ticket's next Handoff by the task of the first matching Workflow state, or by the configured default task type when no state matches.
 An Override can replace it for one Handoff.
 _Avoid_: detected task type, inferred task type
 
-**Task rule**:
-A configured condition that selects the suggested task type for a ticket before handoff.
-Rules are ordered, and the first matching rule wins; an override can replace the suggestion.
-_Avoid_: task mapping, task route
-
 **Workflow**:
-A configured routing from one completed task type to the next.
-An edge can pin the agent type and environment of the next handoff.
-_Avoid_: pipeline, state machine
+The configured machine of the factory: an ordered set of Workflow states, and the Transitions of the task types they offer.
+A ticket's position in it is derived from its source facts on every refresh and never stored.
+_Avoid_: pipeline, state machine, task rules
 
-**Auto-close**:
-A property of a task type. For its completions the control plane decides without the operator even in manual mode: exactly one outgoing edge and a free parallel slot hand off with that task, a full parallel slot leaves the ticket awaiting, any other edge count closes the cycle, and a route at the ticket's handoff limit degrades to close.
-_Avoid_: auto complete, auto done
+**Workflow state**:
+A named position in the Workflow. It matches on a source kind, and optionally on a source name, a repository, and label sets (all, any, none). It offers at most one task type.
+The states are ordered and the first match wins, so the config author encodes label priority by order. A state that offers no task is a parking state: the control plane does nothing on it, and an external label write is the only engine that moves the ticket.
+_Avoid_: status, phase, stage, ticket state
+
+**Transition**:
+The label facts a completed turn of a task type writes. It fires on a `completed` settle, before the Completion decision, in manual mode and in auto mode alike, and it is idempotent.
+It adds and removes labels on the ticket and on its linked pull request, and a branch chooses between alternative fact sets on a Judgment. After it runs, the label set matches its spec whatever writers ran before, and the tickets' new positions derive from the written labels.
+_Avoid_: handoff, label flip, workflow edge
+
+**Judgment**:
+The condition a Transition branch tests to choose its fact set: the review score against the configured threshold, and whether the linked pull request is still open.
+It is a fact read from the turn or the source at settle time, never a stored value.
+_Avoid_: verdict, score check, gate
+
+**Auto-advance**:
+A property of a Transition. When it is set, the control plane hands off the suggested task of the ticket's new position without the operator, even in manual mode: a free parallel slot starts the handoff, a full slot leaves the ticket awaiting, and an advance at the ticket's handoff limit degrades to close.
+A transition whose new position offers no task on this ticket closes the cycle in auto mode.
+_Avoid_: auto complete, auto done, auto close
 
 **Completion decision**:
-The choice made on a settled agent turn: close the cycle, go to the agent, or hand off with a workflow task.
+The choice made on a settled agent turn: close the cycle, go to the agent, or hand off with the task the ticket's new position offers.
+On a task type that carries a Transition, the Transition has written its label facts before this choice.
 _Avoid_: action, verdict
 
 **Turn log**:
@@ -417,26 +430,22 @@ The one operator action that retries the Close cleanup of a ticket's Leftover en
 A forced removal is its own explicit choice within the action, because it discards a dirty checkout and stops the Agents in the workspace.
 _Avoid_: force delete, cleanup retry
 
-**Auto copy**:
-The control plane copies a mouse selection to the clipboard when the operator releases the drag, and the ended selection clears its own highlight. A click that does not drag copies nothing.
-_Avoid_: copy-on-select, clipboard mode
-
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
-The panel edits an open Ticket's next Handoff and a Workflow Handoff alike: `e` on a decision row opens the panel on the choice its edge resolved.
-It applies to that Handoff only and never becomes a new default; a later Workflow Handoff resolves its own profile instead of inheriting one.
+The panel edits an open Ticket's next Handoff and a handoff the Workflow position suggests alike: `e` on a decision row opens the panel on the settings that row resolved.
+It applies to that Handoff only and never becomes a new default; a later handoff the Workflow position suggests resolves its own profile instead of inheriting one.
 A Restart repeats the interrupted Handoff's choices as recovery.
 The settings are: Agent type, Environment kind, Task type, Model, Thinking level, and Context window.
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, the priority label list, ticket sources, task rules, agent types, task types, workflows, state file, and repository mappings.
+The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, the priority label list, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
 A missing file is seeded from the Default configuration on first run. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 
 **Default configuration**:
 The TOML the package ships, used to seed the Config file on first run.
-It carries the workflow template (the task types and task rules) and one Consultation type, and it is meant to be extended by the operator.
+It carries the Workflow machine (its states and the task types with their Transitions) and one Consultation type, and it is meant to be extended by the operator.
 _Avoid_: built-in defaults, factory settings
 
 **Repository identity**:
