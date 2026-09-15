@@ -8,6 +8,7 @@ import type {
 	ConsultationSnapshot,
 	ConsultationTurn,
 } from "../state.ts";
+import type { SessionEntry } from "../turn-log.ts";
 import type { AnsiLine } from "./ansi-screen.ts";
 import { windowOf } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
@@ -22,12 +23,39 @@ export interface ConsultationDetailLine {
 	bold?: boolean;
 }
 
+/**
+ * The Consultation detail body the operator is looking at (ADR 0025):
+ * the Session view, read live from the Agent's session record; the Agent
+ * view, the terminal's pane read, when the record does not render yet; or
+ * the Captured history, the closed Consultation's turns and snapshots, when
+ * there is no live view at all.
+ */
+export type ConsultationDetailBody = "session" | "agent" | "captured";
+
+/** Pick the body by the reads the last ticks produced, not by hope. */
+export function consultationDetailBody(
+	consultation: Consultation | undefined,
+	liveOutput: string | null,
+	sessionEntries: readonly SessionEntry[] | null,
+): ConsultationDetailBody {
+	if (consultation === undefined) return "captured";
+	if (sessionEntries !== null && sessionEntries.length > 0) return "session";
+	if (liveOutput !== null && consultation.state !== "closed") return "agent";
+	return "captured";
+}
+
+/** The border title the body stands under. */
+export function consultationDetailTitle(body: ConsultationDetailBody): string {
+	return body === "session" ? "Session view" : "Agent view";
+}
+
 export function consultationDetailLines(
 	consultation: Consultation | undefined,
 	turns: readonly ConsultationTurn[],
 	snapshots: readonly ConsultationSnapshot[],
 	width: number,
 	liveOutput: string | null,
+	sessionEntries: readonly SessionEntry[] | null = null,
 	replacementIds: readonly string[] = [],
 	agentStatus: string | null = null,
 	remainingResources: readonly ConsultationResource[] = [],
@@ -84,7 +112,18 @@ export function consultationDetailLines(
 			consultation.draftOld ? paint("yellow") : paint("subtext0"),
 		);
 	lines.push({ text: " ", fg: paint("subtext0") });
-	if (liveOutput !== null && consultation.state !== "closed") {
+	const session = sessionEntries !== null && sessionEntries.length > 0 ? sessionEntries : null;
+	if (session !== null) {
+		push("Session view:", paint("text"), true);
+		for (const entry of session) {
+			if (entry.kind === "input") push(`❯ ${entry.text}`);
+			else if (entry.kind === "text") push(entry.text);
+			else {
+				const note = entry.target === "" ? entry.name : `${entry.name}: ${entry.target}`;
+				push(`▸ ${note}`, entry.failed ? paint("yellow") : paint("subtext0"));
+			}
+		}
+	} else if (liveOutput !== null && consultation.state !== "closed") {
 		push("Agent view:", paint("text"), true);
 		for (const line of liveOutput.split("\n")) push(line);
 	} else {
@@ -121,6 +160,8 @@ interface ConsultationDetailProps {
 	onWheel: (delta: number) => void;
 	/** Sanitized cell output used only in Agent interaction mode. */
 	ansiLines?: readonly AnsiLine[];
+	/** The body the detail stands under: "Session view" or "Agent view". */
+	bodyTitle?: string;
 }
 
 export function ConsultationDetail({
@@ -129,6 +170,7 @@ export function ConsultationDetail({
 	scroll,
 	focused,
 	ansiLines,
+	bodyTitle = "Agent view",
 	active = true,
 	onFocus,
 	onWheel,
@@ -171,7 +213,7 @@ export function ConsultationDetail({
 		{
 			ref: rootRef,
 			onMouse: handleMouse,
-			title: focused ? "❯ Agent view" : "  Agent view",
+			title: focused ? `❯ ${bodyTitle}` : `  ${bodyTitle}`,
 			border: true,
 			borderColor: focused ? paint("accent") : paint("surface_dim"),
 			padding: 1,

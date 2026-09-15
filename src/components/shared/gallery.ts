@@ -15,9 +15,12 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
+import type { Consultation } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
+import { ActionBar } from "../action-bar.ts";
+import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
-import { contextFor } from "../controls.ts";
+import { type ControlContext, contextFor } from "../controls.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "../modal-chrome.ts";
 import { truncateToWidth } from "../text.ts";
@@ -128,6 +131,63 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * One entry per state the standard names, so the list is also the checklist a
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
+/** The Consultation the detail examples render under. */
+function sampleConsultation(state: "working" | "closed"): Consultation {
+	const now = "2026-02-17T10:00:00.000Z";
+	return {
+		id: "c1c1c1c1-1111-4111-8111-111111111111",
+		typeName: "Review",
+		agentType: "consultation",
+		environment: "worktree",
+		model: "openai/gpt-5.1",
+		thinking: "",
+		contextWindow: "",
+		template: "",
+		initialInput: "review the auth design",
+		renderedOpeningPrompt: "",
+		repository: {
+			identity: "SeriousJul/my-little-software-factory",
+			displayName: "my-little-software-factory",
+			cloneUrl: "",
+			path: "/tmp/my-little-software-factory",
+		},
+		state,
+		createdAt: now,
+		updatedAt: now,
+		agentName: "consultation-00000000",
+		paneId: "pane-c1",
+		tabId: "tab-ws-new",
+		workspaceId: "ws-new",
+		sessionId: "sess-c1",
+		latestSequence: 1,
+		draft: "",
+		draftUpdatedAt: null,
+		draftOld: false,
+		failure: null,
+		warning: null,
+		replacementOf: null,
+		closeResult: null,
+		attentionAt: null,
+		pendingResponse: null,
+		resources: [],
+	};
+}
+
+/** The Consultation-detail context the Goto example runs on. */
+function gotoContext(paneAlive: boolean): ControlContext {
+	return contextFor("consultation-detail", {
+		selectedConsultation: sampleConsultation("working"),
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		consultationPaneAlive: paneAlive,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
 export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "fields",
@@ -356,6 +416,131 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				),
 			];
 		},
+	},
+	{
+		// The Consultation detail's own bodies (ADR 0025): the Session view
+		// reads from the Agent's session record, the Agent view is the
+		// terminal's pane read when the record does not render yet, and the
+		// Captured history stands in once the Consultation is closed and the
+		// record reads nothing.
+		id: "session-view",
+		state: "Session view: the Agent's session record",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "session",
+				// The pane's own border and padding give the lines a region
+				// four cells narrower than the box's content, and the
+				// gallery's box holds seven content rows: the sample sits
+				// scrolled onto its body, the way the operator reads it.
+				lines: consultationDetailLines(
+					sampleConsultation("working"),
+					[],
+					[],
+					columns.contentWidth - 4,
+					null,
+					[
+						{ kind: "input", text: "review the auth design" },
+						{ kind: "text", text: "The design keeps the session in memory." },
+						{ kind: "tool", name: "bash", target: "npm test", failed: false },
+						{ kind: "text", text: "All 571 tests pass." },
+					],
+				),
+				visibleRows: 7,
+				scroll: 3,
+				focused: false,
+				bodyTitle: "Session view",
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "agent-view-fallback",
+		state: "Agent view: the terminal fallback when the record does not read",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "agent",
+				lines: consultationDetailLines(
+					sampleConsultation("working"),
+					[],
+					[],
+					columns.contentWidth - 4,
+					"Agent: reading src/auth.ts\nAgent: running the tests",
+					null,
+				),
+				visibleRows: 7,
+				scroll: 1,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "captured-history-fallback",
+		state: "Captured history: the closed Consultation's record",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "captured",
+				lines: consultationDetailLines(
+					sampleConsultation("closed"),
+					[
+						{
+							id: "turn-1",
+							consultationId: sampleConsultation("closed").id,
+							input: "review the auth design",
+							acceptedAt: "2026-02-17T10:01:00.000Z",
+							sequenceBaseline: 1,
+							settledAt: "2026-02-17T10:02:00.000Z",
+							settledStatus: "done",
+							cause: "completed",
+							detail: "",
+							snapshotId: "snap-1",
+						},
+					],
+					[
+						{
+							id: "snap-1",
+							consultationId: sampleConsultation("closed").id,
+							turnId: "turn-1",
+							text: "All 571 tests pass.",
+							capturedAt: "2026-02-17T10:02:00.000Z",
+							partial: false,
+							truncated: false,
+						},
+					],
+					columns.contentWidth - 4,
+					null,
+					null,
+				),
+				visibleRows: 7,
+				scroll: 3,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		// Goto from either Consultation pane: available while herdr's last
+		// poll still reports the Agent's pane alive, unavailable with its
+		// own reason when the pane is gone.
+		id: "goto",
+		state: "Goto: available on an alive Agent pane, unavailable when it is gone",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionBar, {
+				key: "goto-available",
+				mode: "consultation-detail",
+				context: gotoContext(true),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "goto-unavailable",
+				mode: "consultation-detail",
+				context: gotoContext(false),
+				width: columns.contentWidth,
+			}),
+		],
 	},
 	{
 		id: "theme",

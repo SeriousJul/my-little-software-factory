@@ -42,6 +42,8 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | Type-ahead shows its search, matches by substring, keeps an unmatched query with `no match`, edits with Backspace, clears with one key, and keeps query and value distinct | `test/shared-gallery.test.ts`, `test/handoff-frame.test.ts`, `test/override-panel.test.ts` | Passed |
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue | `test/consultation-frame.test.ts` | Passed |
+| The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
+| Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
@@ -206,3 +208,29 @@ the section boundary. The automatic suite covers the headers, the steady
 counts, the collapse, and the cross-section navigation, and it passed in full
 on this branch. The terminal walks above were not re-run on the dual-list Main
 view: they are recorded as not re-verified for that view, not as a pass.
+
+## The Session view in the Consultation detail (issue #67)
+
+ADR 0025 reads the Agent's session record as the Consultation detail's body:
+the operator's inputs, the agent's text, and the tool notes, in order, capped,
+re-read on the detail's refresh while the Consultation is open, and read once
+for the after-the-fact review of a closed Consultation. The record's rows sit
+under the `Session view` border title; when the record cannot be read, the
+older bodies remain the fallback under the `Agent view` title: the live pane
+output for an open Consultation, the captured history for a closed one. The
+Goto control in the Consultation base modes (`g`) focuses the Agent pane while
+it is alive in the last poll and states its reason otherwise; it is a
+navigation, and it never changes the Consultation.
+
+The automatic suite covers the record's parsing and caps (`test/turn-log.test.ts`),
+the body's selection and rows (`test/consultation-detail.test.ts`), Goto's
+availability and dispatch (`test/controls.test.ts`), the four new gallery
+examples a reviewer must see (`test/shared-gallery.test.ts`), and the two
+end-to-end frame tests: a working detail that shows the record's rows and
+focuses with `g` without touching the Consultation, and a closed Consultation
+whose record is shown and whose Goto states its reason when the poll drops
+the pane. It passed in full on this branch.
+
+The terminal walks above were not re-run on the Session view's paint: they are
+recorded as not re-verified for that body, not as a pass. The screen-reader
+target remains unverified.

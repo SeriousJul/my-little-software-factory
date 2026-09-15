@@ -75,6 +75,7 @@ type ControlKey =
 	| "m"
 	| "c"
 	| "f"
+	| "g"
 	| "x"
 	| "z"
 	| "d"
@@ -133,6 +134,11 @@ export interface ControlContext {
 	consultationRefreshAvailable?: boolean;
 	/** The observed status of the selected Consultation Agent. */
 	consultationAgentStatus?: string | null;
+	/**
+	 * Whether the selected Consultation's Agent pane is alive in the last
+	 * herdr poll. Goto focuses that pane, so it needs it.
+	 */
+	consultationPaneAlive?: boolean;
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
@@ -390,6 +396,18 @@ const consultationInteraction = (context: ControlContext): ControlAvailability =
 	context.selectedConsultation?.paneId !== undefined
 		? available()
 		: unavailable("only a working or blocked Consultation with an Agent can be interacted with");
+/**
+ * Why Goto answers nothing (ADR 0025): the Consultation needs a selected
+ * row with an Agent pane the last herdr poll reported alive. Goto is
+ * navigation: it focuses the pane and leaves the Consultation record
+ * untouched.
+ */
+const consultationGoto = (context: ControlContext): ControlAvailability =>
+	context.selectedConsultation?.paneId !== null &&
+	context.selectedConsultation?.paneId !== undefined &&
+	context.consultationPaneAlive === true
+		? available()
+		: unavailable("the Agent's pane is not alive in the last poll");
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -772,6 +790,21 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 69,
 		modes: [...consultationBaseModes],
 		availability: consultationInteraction,
+	},
+	{
+		id: "consultation-goto",
+		label: "Goto",
+		// `g` focuses the Agent's pane in herdr from either Consultation pane,
+		// the way `g` does on a Ticket row, and changes nothing.
+		keys: () => ["g"],
+		keyLabel: "g",
+		scope: "control-plane",
+		actionBar: true,
+		// Below Interact, above Refresh: navigation is worth the row's space
+		// more than a re-read, less than reaching the Agent itself.
+		priority: 68,
+		modes: [...consultationBaseModes],
+		availability: consultationGoto,
 	},
 	{
 		id: "override",
