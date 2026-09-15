@@ -876,20 +876,29 @@ export class ObservationCoordinator {
 					? await this.turnLogs.read(kind, match.sessionId, pendingTurn?.acceptedAt ?? null)
 					: ({ kind: "unavailable" } as SessionTurnRead);
 			const turnEnd = turnRead.kind === "ended" ? turnRead.turnEnd : null;
+			const endCause: TurnEndCause = turnEnd?.cause ?? "unknown";
+			const endDetail: string = turnEnd?.detail ?? "";
 			const settled = this.state.settleConsultationTurn(
 				consultation.id,
 				match.sequence ?? null,
 				output,
 				status,
 				new Date(this.now()).toISOString(),
-				turnEnd?.cause ?? "unknown",
-				turnEnd?.detail ?? "",
+				endCause,
+				endDetail,
 			);
 			if (!settled) continue;
 			changed = true;
 			this.onConsultationsChanged?.();
 			if (!this.suppressConsultationAttention) this.onConsultationAttention?.(consultation.id);
-			this.onStatus("info", `Consultation ${consultation.id.slice(0, 8)} awaits a response`);
+			// A turn that failed or aborted is named on the Message line, so the
+			// operator reads why it did not answer. Any other cause settles quiet.
+			if (endCause === "failed" || endCause === "aborted")
+				this.onStatus(
+					"warning",
+					`Consultation ${consultation.id.slice(0, 8)} turn ended ${endCause}${endDetail === "" ? "" : `: ${endDetail}`}`,
+				);
+			else this.onStatus("info", `Consultation ${consultation.id.slice(0, 8)} awaits a response`);
 		}
 		return changed;
 	}

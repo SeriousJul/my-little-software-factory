@@ -6,6 +6,7 @@ import type { HerdrAgent } from "./observation.ts";
 import { expandHome, matchesRepository, realPathOf } from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
 import type { Consultation, ConsultationResource } from "./state.ts";
+import type { TurnEndCause } from "./turn-log.ts";
 
 export const CONSULTATION_INPUT_LIMIT = 64 * 1024;
 export const CONSULTATION_SNAPSHOT_LIMIT = 1024 * 1024;
@@ -26,6 +27,23 @@ const LEGACY_STALE_AGENT_OUTPUT_WARNING = "Agent output is stale";
 /** Whether a warning is the Stale Agent output fact, in either spelling. */
 export function isStaleAgentOutputWarning(warning: string | null | undefined): boolean {
 	return warning === STALE_AGENT_OUTPUT_WARNING || warning === LEGACY_STALE_AGENT_OUTPUT_WARNING;
+}
+
+/**
+ * The warning a Consultation carries after a turn that ended failed or
+ * aborted: the cause and the agent's own words, so the record names why the
+ * turn did not answer instead of resting silently. Any other cause - the
+ * turn answered - carries none.
+ */
+export function turnEndWarning(cause: TurnEndCause, detail: string): string | null {
+	if (cause !== "failed" && cause !== "aborted") return null;
+	const bounded = detail === "" ? "" : `: ${detail.slice(0, 200)}`;
+	return `Turn ended ${cause}${bounded}`;
+}
+
+/** Whether a warning is the turn-end fact, so a later settled turn can clear it. */
+export function isTurnEndWarning(warning: string | null | undefined): boolean {
+	return typeof warning === "string" && warning.startsWith("Turn ended ");
 }
 
 /** Serialize topology and cleanup work per Repository without blocking others. */

@@ -11,7 +11,12 @@ import os from "node:os";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TaskRule } from "./config.ts";
-import { isStaleAgentOutputWarning, STALE_AGENT_OUTPUT_WARNING } from "./consultation.ts";
+import {
+	isStaleAgentOutputWarning,
+	isTurnEndWarning,
+	STALE_AGENT_OUTPUT_WARNING,
+	turnEndWarning,
+} from "./consultation.ts";
 import {
 	type Completion,
 	type CompletionDecision,
@@ -2104,9 +2109,12 @@ export class FactoryState {
 
 	/** Update the Herdr identity after the Agent has started. */
 	setConsultationAgent(id: string, details: ConsultationAgentDetails): void {
+		// The opening's Agent warning is spent now: the Agent is verified and
+		// connected, so clear only the "Opening Agent ..." fact. Any other
+		// warning, such as the live checkout's uncommitted-changes note, stays.
 		this.db
 			.prepare(
-				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, state = 'working', updated_at = ?, failure = NULL WHERE id = ? AND state = 'opening'",
+				"UPDATE consultations SET pane_id = ?, tab_id = ?, workspace_id = ?, session_id = ?, state = 'working', updated_at = ?, failure = NULL, warning = CASE WHEN warning LIKE 'Opening Agent %' THEN NULL ELSE warning END WHERE id = ? AND state = 'opening'",
 			)
 			.run(
 				details.paneId,
@@ -2365,27 +2373,30 @@ export class FactoryState {
 					.prepare("UPDATE consultation_turns SET snapshot_id = ? WHERE id = ?")
 					.run(snapshotId, turn.id);
 			}
+			// A turn the Agent settled rests the Consultation in awaiting-response
+			// whatever the cause: the Agent is alive and has answered its turn, so a
+			// response, the Agent terminal, Goto, and close all stand. A turn that
+			// ended failed or aborted is not a normal answer, so it names itself on
+			// the record - the operator reads the cause and the agent's own words
+			// instead of finding it silently waiting (ADR 0015).
+			const endWarning = turnEndWarning(cause, detail);
 			// A turn that settled without its output read leaves the Stale Agent
 			// output warning; a turn that settled with output clears only that
-			// warning, so any other fact the operator still needs stays.
-			const warning =
+			// warning. A settled turn also clears the turn-end warning a previous
+			// failed or aborted turn left, so a later answer is quiet again.
+			const baseWarning =
 				output === null
 					? STALE_AGENT_OUTPUT_WARNING
 					: isStaleAgentOutputWarning(consultation.warning)
 						? null
 						: consultation.warning;
-			// A turn that ended failed or aborted is not an answer: the
-			// Consultation needs recovery, so it leaves the awaiting-response
-			// line for the recovery one. Every other cause - completed,
-			// truncated, unknown - settles the turn and leaves it awaiting the
-			// operator's response.
-			const nextState: ConsultationState =
-				cause === "failed" || cause === "aborted" ? "failed" : "awaiting-response";
+			const warning =
+				endWarning !== null ? endWarning : isTurnEndWarning(baseWarning) ? null : baseWarning;
 			this.db
 				.prepare(
-					"UPDATE consultations SET state = ?, latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
+					"UPDATE consultations SET state = 'awaiting-response', latest_sequence = ?, attention_at = ?, updated_at = ?, draft = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN '' ELSE draft END, draft_updated_at = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN NULL ELSE draft_updated_at END, draft_old = CASE WHEN draft = (SELECT input FROM consultation_turns WHERE id = ?) THEN 0 ELSE draft_old END, warning = ? WHERE id = ?",
 				)
-				.run(nextState, sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, warning, id);
+				.run(sequence, capturedAt, capturedAt, turn.id, turn.id, turn.id, warning, id);
 			return true;
 		});
 	}

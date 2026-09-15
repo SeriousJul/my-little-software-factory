@@ -553,7 +553,7 @@ describe("durable Consultation lifecycle", () => {
 			return consultation.id;
 		}
 
-		test("a failed turn ends the Consultation failed, for recovery", () => {
+		test("a failed turn rests it awaiting the response, named for recovery", () => {
 			const state = makeState();
 			const id = working(state);
 			expect(
@@ -567,21 +567,44 @@ describe("durable Consultation lifecycle", () => {
 					"the API rejected the request",
 				),
 			).toBe(true);
-			expect(state.consultation(id)?.state).toBe("failed");
+			// The turn is not an answer, but the Agent is alive: the Consultation
+			// rests where it can be answered or closed, not the terminal line, and
+			// it names the cause so the failure is not silent.
+			expect(state.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultation(id)?.warning).toBe(
+				"Turn ended failed: the API rejected the request",
+			);
 			const turn = state.consultationTurns(id)[0];
 			expect(turn.cause).toBe("failed");
 			expect(turn.detail).toBe("the API rejected the request");
 			state.close();
 		});
 
-		test("an aborted turn ends the Consultation failed too", () => {
+		test("an aborted turn rests it awaiting the response, named for recovery", () => {
 			const state = makeState();
 			const id = working(state);
 			expect(
 				state.settleConsultationTurn(id, 1, "", "idle", "2026-09-01T00:01:00Z", "aborted"),
 			).toBe(true);
-			expect(state.consultation(id)?.state).toBe("failed");
+			expect(state.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultation(id)?.warning).toBe("Turn ended aborted");
 			expect(state.consultationTurns(id)[0].cause).toBe("aborted");
+			state.close();
+		});
+
+		test("a settled turn clears a failed turn's warning", () => {
+			const state = makeState();
+			const id = working(state);
+			state.settleConsultationTurn(id, 1, "boom", "idle", "2026-09-01T00:01:00Z", "aborted");
+			expect(state.consultation(id)?.warning).toBe("Turn ended aborted");
+			// The Agent answers again: the later turn is quiet, the failure stays on
+			// the turn record, and the Consultation stays awaiting.
+			const pending = state.beginConsultationResponse(id, "try again", null);
+			if (pending === undefined) throw new Error("no pending response");
+			state.acceptConsultationResponse(id, pending.id);
+			state.settleConsultationTurn(id, 2, "answer", "idle", "2026-09-01T00:02:00Z");
+			expect(state.consultation(id)?.state).toBe("awaiting-response");
+			expect(state.consultation(id)?.warning).toBeNull();
 			state.close();
 		});
 
@@ -593,6 +616,7 @@ describe("durable Consultation lifecycle", () => {
 					state.settleConsultationTurn(id, 1, "answer", "idle", "2026-09-01T00:01:00Z", cause),
 				).toBe(true);
 				expect(state.consultation(id)?.state).toBe("awaiting-response");
+				expect(state.consultation(id)?.warning).toBeNull();
 				expect(state.consultationTurns(id)[0].cause).toBe(cause);
 				state.close();
 			}

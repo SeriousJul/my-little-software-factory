@@ -69,10 +69,13 @@ trace past the state the operator already sees.
 
 The cause and its detail are stored on the Completion trace and on the
 Consultation turn. A re-settle of the same still-pending turn refreshes both.
-A Consultation turn that settled `failed` or `aborted` is not an answer: it
-leaves the Consultation in `failed`, for recovery. Every other cause -
-`completed`, `truncated`, `unknown` - leaves it `awaiting-response`, as a turn
-that settled with its output does today.
+A Consultation turn the Agent settled rests it in `awaiting-response` whatever
+the cause: the Agent is alive and has answered its turn, so a response, the
+Agent terminal, Goto, and close all stand. A turn that settled `failed` or
+`aborted` is not a normal answer, so it names itself on the record - the cause
+and the agent's own words - and the operator reads the failure instead of
+finding it silently waiting. `failed` as a Consultation state is left for the
+opening that never reached a live Agent, where there is no session to resume.
 
 The considered alternatives:
 
@@ -93,8 +96,10 @@ The considered alternatives:
 - The Completion trace and the Consultation turn each grow a `cause` and a
   `detail` cell. A legacy trace predates the cells and reads `unknown`, which
   fails open, so an old record behaves exactly as it did before this ADR.
-- A Consultation turn that settled without an answer is visible as `failed`,
-  so the operator recovers it instead of finding it silently waiting.
+- A Consultation turn that settled without an answer rests in
+  `awaiting-response`, named with its cause on the record, so the operator
+  reads the failure and acts - respond, goto, or close - instead of finding it
+  silently waiting.
 - A turn the control plane cannot read never blocks: it settles `unknown` and
   auto-decides as it did before, so a runtime that changes its record format
   breaks the cause, not the flow.
