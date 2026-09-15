@@ -129,11 +129,19 @@ describe("shared fields through tmux", () => {
 	test("a real terminal path draws the fields, takes ordinary keys, and refuses a bad paste whole", async () => {
 		tmuxSpawn(session, [process.execPath, "--experimental-ffi", GALLERY_BIN, "fields"], 90, 26);
 		try {
-			// The gallery is up and the shared chrome drew its controls.
+			// The gallery is up and the shared chrome drew its controls. The wait
+			// demands every row the check reads, so a slow runner never hands back a
+			// half-drawn frame: a capture taken mid-redraw would hold the header
+			// before the action bar landed, and the check would fail on the missing
+			// bar instead of on the field it exists to test.
 			const opened = await tmuxWaitFor(
 				session,
-				(screen) => screen.includes("Shared controls") && screen.includes("Context"),
-				"the gallery to draw its fields",
+				(screen) =>
+					screen.includes("Shared controls") &&
+					screen.includes("Initial input") &&
+					collapse(screen).includes("Context 272000") &&
+					collapse(screen).includes("Tab Field"),
+				"the gallery to draw its fields and its action bar",
 			);
 			expect(opened).toContain("272000");
 			expect(opened).toContain("Initial input");
