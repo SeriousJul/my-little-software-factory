@@ -83,11 +83,11 @@ Implement the following {source-kind}.
    - Open a new Pull Request.
    - Link the pull request to the ticket. Successfully merging this pull request may close these issues.
    - List any technical choices made when specifications were not clear.
-   - Add the **`ready-for-review`** label.
-   - Add the **`ready-for-agent`** label.
+   - Add the **`ready-for-review`** label to the pull request.
+   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request. Only the review task sets those.
 
 3. **Update Ticket**
-   - Remove the **`ready-for-agent`** label
+   - Remove the **`ready-for-agent`** label from the ticket.
 
 Repository: {repository}
 
