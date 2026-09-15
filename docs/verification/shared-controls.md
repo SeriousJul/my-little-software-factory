@@ -49,7 +49,8 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
 | The no-color presentation strips color and keeps labels, the focus marker, and state words | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The overlay surface paints the theme's own `panel_bg` role, and the text the surface's own rows paint clears the measured contrast on the surface it landed on | `test/reserved-rows.test.ts`, `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed |
-| The plane paints the Theme the environment resolves: the inherited herdr theme's colors on rows, borders, badges, and the Message line, the fallback warning on an unknown name, the standalone theme outside herdr, and `reset` roles and `NO_COLOR` painting no color | `test/theme-resolver.test.ts`, `test/theme-source.test.ts`, `test/theme-frame.test.ts` | Passed |
+| The plane paints the Theme the environment resolves: the inherited herdr theme's colors on rows, borders, badges, and the Message line, a light theme painting the whole plane light, the fallback warning on an unknown name, the standalone theme outside herdr, and `reset` roles and `NO_COLOR` painting no color | `test/theme-resolver.test.ts`, `test/theme-source.test.ts`, `test/theme-frame.test.ts` | Passed |
+| The gallery shows the states a theme change must keep: the inherited theme's swatches, the fallback warning, a light theme painting the shared controls' ink, the per-token `[theme.custom]` overrides, and the no-color presentation | `test/shared-gallery.test.ts` | Passed |
 | Decorative animation and caret blinking are off by default, and no check depends on a blink or a timer | `test/shared-presentation.test.ts`, the frame suite's bounded waits | Passed |
 | Small and narrow frames keep the focused control and the way out; below a usable size the surface states its size and how to leave | `test/reserved-rows.test.ts`, `test/handoff-frame.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The shared library is required: no screen builds its own field, names a renderer field, or hand-edits a draft string | `test/shared-control-architecture.test.ts` | Passed |
@@ -84,7 +85,7 @@ Every check below runs in `npm test`, which is `npm run lint`,
 Run it on a machine with a desktop session, then record the versions and results
 in this file. Do not mark the row verified from the automated suite.
 
-1. `npm run gallery` and walk all eight examples with `Tab`.
+1. `npm run gallery` and walk every example with `Tab`, the theme examples included.
 2. In the `fields` example: type into the focused Context field, press Left,
    Right, Home, End, Shift+Arrow, Ctrl+Arrow, Ctrl+Backspace, Ctrl+Z, Ctrl+Y;
    paste `1e3` and then `42`; paste a long single line and a multi-line draft.

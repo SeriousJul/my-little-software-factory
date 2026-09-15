@@ -29,8 +29,14 @@ import { KeyGuide } from "../utility.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
-import { controlInk, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
-import { HERDR_THEME_VERSION, THEME_ROLES, type ThemeRole, unknownThemeWarning } from "./theme.ts";
+import { controlInk, inkForTheme, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
+import {
+	HERDR_THEME_VERSION,
+	resolveTheme,
+	THEME_ROLES,
+	type ThemeRole,
+	unknownThemeWarning,
+} from "./theme.ts";
 import { TypeAheadRow } from "./type-ahead.ts";
 
 /** One example of the gallery: a title, a state word, and the controls it shows. */
@@ -86,7 +92,40 @@ const FOCUSED_CONTROL: Record<string, string> = {
 	priority: "rank",
 	narrow: "draft",
 	"no-color": "no-color-repository",
+	"theme-light": "light-model",
 };
+
+/**
+ * The light theme the gallery's light example shows.
+ *
+ * It is resolved by the same pure rules the startup resolution runs - a light
+ * name in herdr's config, read exactly the way herdr reads it - so the
+ * example cannot drift from what the plane inherits.
+ */
+const GALLERY_LIGHT_THEME = resolveTheme('[theme]\nname = "catppuccin-latte"\n', true).theme;
+
+/** The base theme the override example names, and the token values its [theme.custom] section holds. */
+const GALLERY_OVERRIDE_BASE = "catppuccin";
+const GALLERY_OVERRIDE_TOKENS: ReadonlyArray<readonly [ThemeRole, string]> = [
+	["accent", "#ffb86c"],
+	["text", "rgb(255, 255, 255)"],
+	["panel_bg", "reset"],
+];
+
+/**
+ * The config the gallery's override example states, and the theme it resolves.
+ *
+ * The config text and the example's heading line both build from these same
+ * tokens, so a change to the config shows in both.
+ */
+const GALLERY_OVERRIDE_CONFIG = [
+	"[theme]",
+	`name = "${GALLERY_OVERRIDE_BASE}"`,
+	"",
+	"[theme.custom]",
+	...GALLERY_OVERRIDE_TOKENS.map(([token, value]) => `${token} = "${value}"`),
+].join("\n");
+const GALLERY_OVERRIDE_THEME = resolveTheme(GALLERY_OVERRIDE_CONFIG, true).theme;
 
 /** One role's swatch: the role's color under the role's name. */
 function themeSwatchRow(theme: { roles: Record<ThemeRole, string> }): ReactElement {
@@ -106,6 +145,21 @@ function themeSwatchRow(theme: { roles: Record<ThemeRole, string> }): ReactEleme
 			),
 		),
 	);
+}
+
+/**
+ * The ink an example's own theme wears on its heading row: its text role on
+ * its panel surface. A role that resolves to `reset` paints no color, so the
+ * terminal's own default shows through where the theme says so.
+ */
+function exampleHeadingInk(theme: { roles: Record<ThemeRole, string> }): {
+	fg: string | undefined;
+	bg: string | undefined;
+} {
+	return {
+		fg: theme.roles.text === "reset" ? undefined : theme.roles.text,
+		bg: theme.roles.panel_bg === "reset" ? undefined : theme.roles.panel_bg,
+	};
 }
 
 /** The Model list the Type-ahead examples search. */
@@ -584,6 +638,70 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			messageRowElement(
 				{ severity: "warning", text: unknownThemeWarning("frobnicate") },
 				columns.contentWidth,
+			),
+		],
+	},
+	{
+		id: "theme-light",
+		state: "the light theme: a light name in herdr's config, the same controls in that ink",
+		render: (columns, holds, inputActive, wiring) => {
+			const ink = inkForTheme(GALLERY_LIGHT_THEME);
+			// The heading wears the example's own pair, not the environment's
+			// ink, so a light name reads light on any terminal.
+			const heading = exampleHeadingInk(GALLERY_LIGHT_THEME);
+			return [
+				createElement(
+					"text",
+					{ key: "light-name", fg: heading.fg, bg: heading.bg },
+					truncateToWidth(
+						`theme: ${GALLERY_LIGHT_THEME.name} (${GALLERY_LIGHT_THEME.appearance})`,
+						columns.contentWidth,
+					),
+				),
+				themeSwatchRow(GALLERY_LIGHT_THEME),
+				createElement(TextField, {
+					key: "light-model",
+					label: "Model",
+					value: "openai/gpt-5.1",
+					focused: holds === "light-model",
+					inputActive,
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					ink,
+					...(holds === "light-model"
+						? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
+						: {}),
+				}),
+			];
+		},
+	},
+	{
+		id: "theme-override",
+		state: "custom overrides: the per-token [theme.custom] values on top of the base theme",
+		render: (columns) => [
+			createElement(
+				"text",
+				// The heading wears the override's own pair: the overridden text
+				// role stands, and the panel surface resolves to `reset`.
+				{
+					key: "override-config",
+					...exampleHeadingInk(GALLERY_OVERRIDE_THEME),
+				},
+				truncateToWidth(
+					`[theme] names "${GALLERY_OVERRIDE_BASE}"; [theme.custom] sets ${GALLERY_OVERRIDE_TOKENS.map(
+						([token, value]) => `${token} to ${value}`,
+					).join(", ")}`,
+					columns.contentWidth,
+				),
+			),
+			themeSwatchRow(GALLERY_OVERRIDE_THEME),
+			createElement(
+				"text",
+				{ key: "override-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"a swatch wears the override where the token holds, and stands without one where the token resolves to `reset`",
+					columns.contentWidth,
+				),
 			),
 		],
 	},

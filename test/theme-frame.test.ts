@@ -89,6 +89,37 @@ describe("theme inheritance", () => {
 		}
 	});
 
+	test("inside herdr, a light theme name paints the whole plane light", async () => {
+		const cleanup = herdrConfig('[theme]\nname = "one-light"\n');
+		try {
+			await withApp(async (setup) => {
+				const frame = await settle(setup);
+				const rows = rowsOf(frame);
+				// The focused list's border wears the light theme's accent, not the
+				// standalone dark one...
+				const borderRow = rows.findIndex((row) => row.includes("┌"));
+				expect(spanColorAt(setup, borderRow, "─")).toEqual([0x40, 0x78, 0xf2]);
+				// ...the selected row's marker wears the light theme's dark text...
+				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
+				expect(spanColorAt(setup, markerRow, "❯")).toEqual([0x38, 0x3a, 0x42]);
+				// ...and the state badge keeps its written word in the light theme's
+				// yellow. No surface of the plane stays on the old dark palette: the
+				// half-light failure the old pin had is gone.
+				const badgeRow = rows.findIndex((row) => row.includes("[handed-off]"));
+				expect(spanColorAt(setup, badgeRow, "[handed-off]")).toEqual([0xc1, 0x84, 0x01]);
+				// The overlay surface is light as well: the Key guide paints on
+				// one-light's panel, not the terminal's default.
+				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
+				const guide = rowsOf(await settle(setup)).length;
+				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(roleColor("panel_bg")));
+				expect(cellColors(setup, 0, guide - 2).bg).toEqual([0xfa, 0xfa, 0xfa]);
+				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
+			});
+		} finally {
+			cleanup();
+		}
+	});
+
 	test("inside herdr, a missing config paints the built-in default without a warning", async () => {
 		// The config file is named but absent, the way herdr's own startup
 		// starts on its built-in default when its config is missing.
