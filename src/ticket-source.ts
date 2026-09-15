@@ -38,6 +38,15 @@ export type FetchOutcome =
 	  }
 	| { status: "failed"; reason: string };
 
+/**
+ * One live ticket as the refresh covers references against it (ADR 0023):
+ * its identity and the labels of its newest membership.
+ */
+export interface LiveTicket {
+	readonly identity: string;
+	readonly labels: string[];
+}
+
 export interface TicketSource {
 	readonly name: string;
 	readonly kind: string;
@@ -45,12 +54,13 @@ export interface TicketSource {
 	/**
 	 * Read one full, settled snapshot.
 	 *
-	 * @param knownTicketIdentities The identities of the live tickets of the
-	 * current snapshot (ADR 0023). The pull request source covers its Issue
-	 * references against them and reads the uncovered ones directly, in at
-	 * most one extra request.
+	 * @param knownLiveTickets The live tickets of the current snapshot with
+	 * their newest membership labels (ADR 0023). The pull request source
+	 * covers its Issue references against them: a covered reference's fact
+	 * refreshes from its ticket's labels, and the uncovered ones are read
+	 * directly, in chunks of at most 250 references per request.
 	 */
-	fetch(knownTicketIdentities?: readonly string[]): Promise<FetchOutcome>;
+	fetch(knownLiveTickets?: readonly LiveTicket[]): Promise<FetchOutcome>;
 }
 
 /** Construct one configured built-in source. Config validation has run first. */
@@ -61,6 +71,14 @@ export function createTicketSource(
 ): TicketSource {
 	return new GitHubTicketSource(config, runner, environment);
 }
+
+/**
+ * The chunk of the batched reference read: one request per 250 references.
+ * 250 references times their 100 labels is 25,000 possible nodes, a fifth
+ * of GitHub's 500,000 possible-node cap, so the count of references can
+ * grow without re-tripping the limit (issue #65).
+ */
+const REFERENCE_READ_CHUNK = 250;
 
 const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String) {
   search(query: $searchQuery, type: ISSUE, first: 100, after: $after) {
@@ -79,8 +97,7 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
         repository { name nameWithOwner url }
         closingIssuesReferences(first: 100) {
           nodes {
-            id number title
-            labels(first: 100) { nodes { name } }
+            id number
             repository { name nameWithOwner }
           }
         }
@@ -109,7 +126,7 @@ class GitHubTicketSource implements TicketSource {
 		this.refreshIntervalMs = config.refreshIntervalSeconds * 1000;
 	}
 
-	async fetch(knownTicketIdentities: readonly string[] = []): Promise<FetchOutcome> {
+	async fetch(knownLiveTickets: readonly LiveTicket[] = []): Promise<FetchOutcome> {
 		try {
 			const authentication = await this.authentication();
 			if (!authentication.ok) return { status: "failed", reason: authentication.reason };
@@ -126,12 +143,15 @@ class GitHubTicketSource implements TicketSource {
 			const deduped = dedupeReferences(references);
 			if (deduped.length === 0) return { status: "success", fetchedAt, tickets };
 			// A reference is covered when the issue is a live ticket of the
-			// current snapshot: its ticket's stored labels supply the rank.
-			// One rule covers the never-seen issue and the issue that left
-			// the source: the uncovered ones are read directly (ADR 0023).
-			const covered = new Set(knownTicketIdentities);
+			// current snapshot: its ticket's stored labels supply the rank,
+			// and they refresh the reference's fact. One rule covers the
+			// never-seen issue and the issue that left the source: the
+			// uncovered ones are read directly (ADR 0023).
+			const coveredLabels = new Map(
+				knownLiveTickets.map((ticket) => [ticket.identity, ticket.labels]),
+			);
 			const uncovered = deduped.filter(
-				(reference) => reference.identity === null || !covered.has(reference.identity),
+				(reference) => reference.identity === null || !coveredLabels.has(reference.identity),
 			);
 			if (uncovered.length === 0)
 				return {
@@ -140,7 +160,7 @@ class GitHubTicketSource implements TicketSource {
 					tickets,
 					referencedIssueFacts: deduped.map((reference) => ({
 						identity: reference.identity as string,
-						labels: reference.labels,
+						labels: coveredLabels.get(reference.identity as string) ?? [],
 						fetchedAt,
 					})),
 				};
@@ -166,8 +186,8 @@ class GitHubTicketSource implements TicketSource {
 			const facts: ReferencedIssueFact[] = [];
 			for (const reference of deduped) {
 				const identity = reference.identity;
-				if (identity !== null && covered.has(identity)) {
-					facts.push({ identity, labels: reference.labels, fetchedAt });
+				if (identity !== null && coveredLabels.has(identity)) {
+					facts.push({ identity, labels: coveredLabels.get(identity) ?? [], fetchedAt });
 					continue;
 				}
 				const answer = answerByKey.get(referenceKey(reference));
@@ -186,11 +206,13 @@ class GitHubTicketSource implements TicketSource {
 	}
 
 	/**
-	 * The batched direct read (ADR 0023): one GraphQL request per pull request
-	 * source refresh that resolves every uncovered Issue reference. It
-	 * resolves each reference by its identity when the identity is known, else
-	 * by its repository and number. A failure returns the reason: the refresh
-	 * still succeeds, with one warning line and the previous facts in place.
+	 * The batched direct read (ADR 0023): GraphQL requests that resolve every
+	 * uncovered Issue reference, at most REFERENCE_READ_CHUNK per request, so
+	 * the read stays under GitHub's possible-node budget no matter how many
+	 * references a snapshot carries (issue #65). It resolves each reference by
+	 * its identity when the identity is known, else by its repository and
+	 * number. A failure returns the reason: the refresh still succeeds, with
+	 * one warning line and the previous facts in place.
 	 */
 	private async readUncoveredReferences(
 		authentication: { ok: true; options: GhOptions },
@@ -202,6 +224,32 @@ class GitHubTicketSource implements TicketSource {
 		  }
 		| { ok: false; reason: string }
 	> {
+		const resolved: Array<{ identity: string; number: number; labels: string[] } | null> =
+			Array.from({ length: references.length }, () => null);
+		for (let start = 0; start < references.length; start += REFERENCE_READ_CHUNK) {
+			const chunk = references.slice(start, start + REFERENCE_READ_CHUNK);
+			const read = await this.readReferenceChunk(authentication, chunk);
+			if (!read.ok) return { ok: false, reason: read.reason };
+			read.resolved.forEach((answer, index) => {
+				resolved[start + index] = answer;
+			});
+		}
+		return { ok: true, resolved };
+	}
+
+	/**
+	 * One request of the batched direct read (ADR 0023): at most
+	 * REFERENCE_READ_CHUNK references, so the request stays under GitHub's
+	 * possible-node budget no matter how many references a snapshot carries
+	 * (issue #65).
+	 */
+	private async readReferenceChunk(
+		authentication: { ok: true; options: GhOptions },
+		references: readonly SearchReference[],
+	): Promise<
+		| { ok: true; resolved: Array<{ identity: string; number: number; labels: string[] } | null> }
+		| { ok: false; reason: string }
+	> {
 		const declarations: string[] = [];
 		const fields: string[] = [];
 		const assignments: string[] = [];
@@ -209,7 +257,7 @@ class GitHubTicketSource implements TicketSource {
 			if (reference.nodeId !== null) {
 				declarations.push(`$ref${index}Id: ID!`);
 				fields.push(
-					`reference${index}: node(id: $ref${index}Id) { ... on Issue { id number title labels(first: 100) { nodes { name } } } }`,
+					`reference${index}: node(id: $ref${index}Id) { ... on Issue { id number labels(first: 100) { nodes { name } } } }`,
 				);
 				assignments.push(`ref${index}Id=${reference.nodeId}`);
 				return;
@@ -224,7 +272,7 @@ class GitHubTicketSource implements TicketSource {
 				`$ref${index}Number: Int!`,
 			);
 			fields.push(
-				`reference${index}: repository(owner: $ref${index}Owner, name: $ref${index}Name) { issue(number: $ref${index}Number) { id number title labels(first: 100) { nodes { name } } } }`,
+				`reference${index}: repository(owner: $ref${index}Owner, name: $ref${index}Name) { issue(number: $ref${index}Number) { id number labels(first: 100) { nodes { name } } } }`,
 			);
 			assignments.push(
 				`ref${index}Owner=${owner}`,
@@ -442,8 +490,13 @@ type QueryResult =
 	| { status: "success"; tickets: FetchedTicket[]; references: SearchReference[] }
 	| { status: "failed"; reason: string };
 
-/** One referenced issue as the search response resolves it (ADR 0023). */
-type SearchReference = IssueReference & { nodeId: string | null; labels: string[] };
+/**
+ * One referenced issue as the search response resolves it (ADR 0023). The
+ * search carries no labels on the reference: a nested label list would push
+ * the query past GitHub's possible-node budget (issue #65). The labels ride
+ * the ticket's snapshot or the direct read.
+ */
+type SearchReference = IssueReference & { nodeId: string | null };
 
 /** The map key of one reference: the identity, else the number. */
 function referenceKey(reference: { identity: string | null; number: number }): string {
@@ -481,8 +534,7 @@ function labelNamesOf(raw: unknown): string[] | undefined {
  *
  * The references are secondary facts: a reference without a readable
  * number is skipped, and a reference the response leaves without a node
- * identity or a label list keeps an empty value, so the refresh can still
- * read it directly.
+ * identity keeps an empty value, so the refresh can still read it directly.
  */
 function parseClosingReferences(raw: unknown, host: string): SearchReference[] {
 	const nodes = (raw as { nodes?: unknown } | undefined)?.nodes;
@@ -500,7 +552,6 @@ function parseClosingReferences(raw: unknown, host: string): SearchReference[] {
 			nodeId,
 			number,
 			repository,
-			labels: labelNamesOf(item.labels) ?? [],
 		});
 	}
 	return references;

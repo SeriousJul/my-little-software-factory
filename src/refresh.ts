@@ -81,7 +81,7 @@ export class RefreshCoordinator {
 		this.inFlight.add(source.name);
 		// The pull request source covers its Issue references against the
 		// live tickets and reads the uncovered ones directly (ADR 0023).
-		const known = this.state.liveTicketIdentities();
+		const known = this.state.liveTicketLabels();
 		let outcome: FetchOutcome;
 		void Promise.resolve()
 			.then(() => source.fetch(known))

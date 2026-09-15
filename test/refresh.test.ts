@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { type RefreshClock, RefreshCoordinator } from "../src/refresh.ts";
 import { openFactoryState } from "../src/state.ts";
-import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
+import type { FetchOutcome, LiveTicket, TicketSource } from "../src/ticket-source.ts";
 import { issueTicket, success } from "./state-fixture.ts";
 
 const EMPTY: FetchOutcome = { status: "success", fetchedAt: "2026-01-01T00:00:00Z", tickets: [] };
@@ -13,8 +13,8 @@ class ControlledSource implements TicketSource {
 	readonly kind = "github-issues";
 	readonly refreshIntervalMs: number;
 	calls = 0;
-	/** The live ticket identities the coordinator passed to the last fetch. */
-	lastKnown: readonly string[] = [];
+	/** The live tickets the coordinator passed to the last fetch. */
+	lastKnown: readonly LiveTicket[] = [];
 	private resolvers: Array<(outcome: FetchOutcome) => void> = [];
 
 	constructor(name: string, refreshIntervalMs: number) {
@@ -22,8 +22,8 @@ class ControlledSource implements TicketSource {
 		this.refreshIntervalMs = refreshIntervalMs;
 	}
 
-	fetch(knownTicketIdentities: readonly string[] = []): Promise<FetchOutcome> {
-		this.lastKnown = knownTicketIdentities;
+	fetch(knownLiveTickets: readonly LiveTicket[] = []): Promise<FetchOutcome> {
+		this.lastKnown = knownLiveTickets;
 		this.calls += 1;
 		return new Promise((resolve) => this.resolvers.push(resolve));
 	}
@@ -140,7 +140,7 @@ describe("RefreshCoordinator", () => {
 		state.close();
 	});
 
-	test("passes the live ticket identities to the fetch (ADR 0023)", async () => {
+	test("passes the live tickets and their labels to the fetch (ADR 0023)", async () => {
 		const state = openFactoryState(":memory:");
 		const source = new ControlledSource("issues", 60_000);
 		const clock = new FakeClock();
@@ -155,7 +155,9 @@ describe("RefreshCoordinator", () => {
 		clock.fireOldest();
 		await turns();
 		expect(source.calls).toBe(2);
-		expect(source.lastKnown).toEqual(["github:github.com:I_5"]);
+		expect(source.lastKnown).toEqual([
+			{ identity: "github:github.com:I_5", labels: ["ready-for-agent"] },
+		]);
 		coordinator.stop();
 		state.close();
 	});

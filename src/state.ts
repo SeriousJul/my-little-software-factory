@@ -795,20 +795,34 @@ export class FactoryState {
 	}
 
 	/**
-	 * The live tickets: the ones a current source snapshot still lists
-	 * (ADR 0023). A ticket that left every source keeps its row but is no
-	 * longer live, so a pull request's reference to it is read directly.
+	 * The live tickets and the labels of their newest membership (ADR 0023):
+	 * the facts a pull request source covers its Issue references against.
+	 * A ticket is live when a current source snapshot still lists it; a
+	 * ticket that left every source keeps its row but is no longer live, so
+	 * a pull request's reference to it is read directly. The newest
+	 * membership rule matches the rank read, so a kept reference's fact
+	 * refreshes to the labels the rank reads on its ticket.
 	 */
-	liveTicketIdentities(): string[] {
-		return (
-			this.db
-				.prepare(
-					`SELECT DISTINCT m.ticket_identity
-					FROM memberships m JOIN source_health h ON h.source_name = m.source_name
-					WHERE m.active = 1 AND h.health != 'removed'`,
+	liveTicketLabels(): Array<{ identity: string; labels: string[] }> {
+		const rows = this.db
+			.prepare(
+				`SELECT m.ticket_identity AS identity, m.labels_json AS labels_json
+				FROM memberships m
+				WHERE EXISTS (
+					SELECT 1
+					FROM memberships live JOIN source_health h ON h.source_name = live.source_name
+					WHERE live.ticket_identity = m.ticket_identity
+						AND live.active = 1 AND h.health != 'removed'
 				)
-				.all() as Array<{ ticket_identity: string }>
-		).map((row) => row.ticket_identity);
+				ORDER BY m.external_updated_at DESC, m.source_name ASC`,
+			)
+			.all() as Array<{ identity: string; labels_json: string }>;
+		const newestFirst = new Map<string, string[]>();
+		for (const row of rows) {
+			if (newestFirst.has(row.identity)) continue;
+			newestFirst.set(row.identity, jsonStringArray(row.labels_json));
+		}
+		return [...newestFirst].map(([identity, labels]) => ({ identity, labels }));
 	}
 
 	/**
