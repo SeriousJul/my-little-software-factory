@@ -11,7 +11,7 @@ This record states what was measured, on what, and what was not measured. A
 required check that could not run is recorded as incomplete. It is not a pass,
 and it is not silently dropped.
 
-See [the shared control standard](../shared-controls.md) for what the baseline
+See [the shared control standard](../development/shared-controls.md) for what the baseline
 requires, and [ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for
 who owns control behavior.
 

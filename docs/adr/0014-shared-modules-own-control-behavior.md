@@ -27,7 +27,7 @@ requiring each screen to repair its own caret or key handling.
   establish the common behavior.
 - The library remains inside this repository. This decision does not create a
   published package or replace OpenTUI by itself.
-- The [shared control standard](../shared-controls.md) defines editing, numeric
+- The [shared control standard](../development/shared-controls.md) defines editing, numeric
   paste rejection, draft retention, presentation, verification, and migration.
   Its numeric paste rule refines ADR 0009 without changing setting resolution or
   the meaning of a Context window.

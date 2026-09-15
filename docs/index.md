@@ -8,9 +8,6 @@ hero:
   name: My Little Software Factory
   text: The control plane of my little software factory
   tagline: Watches the tickets. Hands them to agents. Tracks every turn.
-  image:
-    src: /hero.png
-    alt: The control plane running in a herdr workspace
   actions:
     - theme: brand
       text: Get started
@@ -18,39 +15,33 @@ hero:
     - theme: alt
       text: See it in action
       link: /operation/main-view.html
-
-features:
-  - title: Getting started
-    details: The requirements, the install, the first screen, and the
-      repository's commands, from a blank machine to a working control plane.
-    link: /getting-started/index.html
-    linkText: Get started
-  - title: Operation
-    details: The Main view and its controls, the Consultation and the override
-      panel, the decision, missing, and leftover modals, and the Live view,
-      with screenshots of the running app.
-    link: /operation/main-view.html
-    linkText: Read the operation guide
-  - title: Work flow
-    details: "How a ticket becomes a running agent: the setting chains, model
-      discovery, repository resolution, and what happens after a turn
-      settles."
-    link: /work-flow/handoffs.html
-    linkText: Read the work flow guide
-  - title: Configuration
-    details: The complete config example with every key, the key reference,
-      the notes, and the shipped defaults, in one page.
-    link: /configuration/index.html
-    linkText: Read the configuration guide
-  - title: Architecture decisions
-    details: The ADRs record what the project decided and why, in name order.
-      New decisions append to the end of the list.
-    link: /adr/0001-open-tui-typescript.md
-    linkText: Read the ADRs
-  - title: Standards
-    details: The shared control standard defines the required baseline for
-      every control the control plane owns, and the ticket labels define the
-      label vocabulary the control plane reads.
-    link: /shared-controls.md
-    linkText: Read the standards
 ---
+
+![The control plane running in a herdr workspace](/hero.png)
+
+<div class="guide-grid">
+  <a class="guide-card" href="/getting-started/index.html">
+    <h3>Getting started</h3>
+    <p>The prerequisites, the first launch, and the minimal config, from a blank machine to a working control plane.</p>
+  </a>
+  <a class="guide-card" href="/operation/main-view.html">
+    <h3>Operation</h3>
+    <p>The Main view and its controls, the Consultation and the override panel, the decision and leftover modals, and the Live view.</p>
+  </a>
+  <a class="guide-card" href="/work-flow/handoffs.html">
+    <h3>Work flow</h3>
+    <p>How a ticket becomes a running agent: the setting chains, model discovery, repository resolution, and what happens after a turn settles.</p>
+  </a>
+  <a class="guide-card" href="/configuration/index.html">
+    <h3>Configuration</h3>
+    <p>The complete config example with every key, the key reference, the notes, and the shipped defaults, in one page.</p>
+  </a>
+  <a class="guide-card" href="/development/commands.html">
+    <h3>Development</h3>
+    <p>The repository's commands, the shared control standard, and the ticket labels the control plane reads.</p>
+  </a>
+  <a class="guide-card" href="/adr/index.html">
+    <h3>Architecture decisions</h3>
+    <p>The ADRs record what the project decided and why, in name order. New decisions append to the end of the list.</p>
+  </a>
+</div>

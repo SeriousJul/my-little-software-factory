@@ -62,7 +62,7 @@ Source: [Production PTY test helper](../../test/executable-pty.ts).
 ## Open acceptance work
 
 - Run the agreed Linux terminal and GNOME Terminal/Orca checks in the
-  [shared control standard](../shared-controls.md). These are acceptance targets,
+  [shared control standard](../development/shared-controls.md). These are acceptance targets,
   not verified support claims.
 - Test labels, values, focus and caret location, selection, validation errors,
   modal entry and exit, and changing progress messages with a real screen reader.

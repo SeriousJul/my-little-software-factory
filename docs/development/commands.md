@@ -29,7 +29,7 @@ focused, invalid, unavailable, loading, Type-ahead search, and narrow. Pass an
 example name to land on it: `npm run gallery -- fields`. The gallery reads no
 config file, opens no state, and starts no Agent, and the same examples are
 exercised by `npm test`, so a gallery row cannot become an imitation of the
-control. See [the shared control standard](../shared-controls.md).
+control. See [the shared control standard](./shared-controls.md).
 
 ## Mutation testing
 

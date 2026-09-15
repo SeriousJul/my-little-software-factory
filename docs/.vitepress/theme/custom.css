@@ -1,0 +1,93 @@
+/*
+ * Site overrides for the VitePress default theme.
+ *
+ * The terminal screenshots are wide (roughly 2:1). The default theme caps the
+ * documentation column at about 768px, so on a high-resolution display the
+ * shots read small. Widen the column so the screenshots use the room, and let
+ * every image fill it. The text measure widens with the column.
+ */
+
+.VPDoc .content,
+.VPDoc .content-container {
+	max-width: 1120px;
+}
+
+.vp-doc img {
+	max-width: 100%;
+	height: auto;
+	display: block;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+/*
+ * The home page. The hero is text only (name, tagline, actions). Below it the
+ * page body carries the full-width herdr screenshot and the guide cards, so
+ * the shot reads large instead of sitting beside the tagline in a small box.
+ */
+
+.VPHome .vp-doc {
+	max-width: 1200px;
+	margin: 0 auto;
+	padding: 0 32px 64px;
+}
+
+.VPHome .vp-doc > p > img {
+	max-width: 100%;
+	border-radius: 12px;
+	border: 1px solid var(--vp-c-divider);
+}
+
+/* The guide cards: a responsive grid that replaces the frontmatter features,
+   so the screenshot can sit directly under the hero. */
+.VPHome .guide-grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 16px;
+	margin-top: 40px;
+}
+
+.VPHome .guide-card {
+	display: block;
+	padding: 20px 24px;
+	border: 1px solid var(--vp-c-divider);
+	border-radius: 12px;
+	background: var(--vp-c-bg-soft);
+	color: inherit;
+	text-decoration: none;
+	transition: border-color 0.15s ease;
+}
+
+.VPHome .guide-card:hover {
+	border-color: var(--vp-c-brand-1);
+}
+
+.VPHome .guide-card h3 {
+	margin: 0 0 8px;
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--vp-c-text-1);
+}
+
+.VPHome .guide-card p {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.6;
+	color: var(--vp-c-text-2);
+}
+
+@media (max-width: 960px) {
+	.VPHome .guide-grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+@media (max-width: 640px) {
+	.VPHome .guide-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.VPHome .vp-doc {
+		padding: 0 20px 48px;
+	}
+}

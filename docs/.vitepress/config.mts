@@ -94,7 +94,7 @@ function markdownFiles(dir: string): string[] {
 }
 
 // The group order the sidebar shows: the guides in the order an operator
-// reads them, the ADRs after, and the top-level Standards pages last. A
+// reads them, the contributor Development pages after, and the ADRs last. A
 // published folder that is not named here still shows: it appends after the
 // named groups, in name order, so a new page or a new guide never requires a
 // config edit.
@@ -103,6 +103,7 @@ const GROUP_ORDER: { folder: string; text: string }[] = [
 	{ folder: "operation", text: "Operation" },
 	{ folder: "work-flow", text: "Work flow" },
 	{ folder: "configuration", text: "Configuration" },
+	{ folder: "development", text: "Development" },
 	{ folder: "adr", text: "ADR" },
 ];
 
@@ -120,10 +121,13 @@ function sidebar(): DefaultTheme.Sidebar {
 		// A folder the order does not name keeps the plain rule: an
 		// all-lowercase name is an acronym, shown uppercased.
 		const text = named?.text ?? (/^[a-z]+$/.test(folder) ? folder.toUpperCase() : folder);
+		// The ADR group shows one landing item, not one entry per ADR: the
+		// index lists every ADR, so the sidebar stays compact.
+		const files = folder === "adr" ? ["index.md"] : markdownFiles(folder);
 		return {
 			text,
 			collapsible: true,
-			items: markdownFiles(folder).map((name) => ({
+			items: files.map((name) => ({
 				text: pageTitle(join(folder, name)),
 				link: `/${folder}/${name}`,
 			})),
@@ -135,14 +139,6 @@ function sidebar(): DefaultTheme.Sidebar {
 	for (const folder of folders) {
 		if (GROUP_ORDER.some((named) => named.folder === folder)) continue;
 		groups.push(groupOf(folder));
-	}
-	const standards = markdownFiles("").filter((name) => name !== "index.md");
-	if (standards.length > 0) {
-		groups.push({
-			text: "Standards",
-			collapsible: true,
-			items: standards.map((name) => ({ text: pageTitle(name), link: `/${name}` })),
-		});
 	}
 	return groups;
 }

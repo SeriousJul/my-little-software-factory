@@ -3,19 +3,19 @@
 Status: accepted, and the baseline is implemented for every editable field,
 selector, search, form action, and form focus route the control plane owns.
 Confirmed on 2026-09-09; implemented in the shared control library under
-[src/components/shared](../src/components/shared).
+[src/components/shared](../../src/components/shared).
 
 The current results for every acceptance target, with their versions, are in
-[the verification record](verification/shared-controls.md): the keyboard and
+[the verification record](../verification/shared-controls.md): the keyboard and
 visual targets ran in Ghostty and foot, and a tmux path runs in the suite; a
 screen reader has never read this application, and no claim of screen-reader
 support is made anywhere in this repository.
 
 This is the required baseline for human and agent contributors.
 
-See [the glossary](../CONTEXT.md) for domain terms,
-[ADR 0014](adr/0014-shared-modules-own-control-behavior.md) for ownership, and
-[the accessibility research](research/terminal-accessibility.md) for evidence.
+See [the glossary](../../CONTEXT.md) for domain terms,
+[ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for ownership, and
+[the accessibility research](../research/terminal-accessibility.md) for evidence.
 
 ## Scope and ownership
 
@@ -117,7 +117,7 @@ rejection. Never turn `1e3` into `13` by removing the letter. Keep the existing
 count validation and leading-zero normalization: `007` and `7` represent the
 same count, while `0` is not a valid count.
 
-This refines the entry behavior in [ADR 0009](adr/0009-handoff-setting-resolution.md).
+This refines the entry behavior in [ADR 0009](../adr/0009-handoff-setting-resolution.md).
 It does not change setting resolution, the meaning of a count, or the rule that
 an invalid setting cannot start Agent work.
 
@@ -200,12 +200,12 @@ The initial acceptance targets are:
 
 | Environment | Required checks | Current result |
 | --- | --- | --- |
-| Linux with Ghostty | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
-| Linux with foot | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
-| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | [The verification record](verification/shared-controls.md) |
+| Linux with Ghostty | Keyboard and visual checks | [The verification record](../verification/shared-controls.md) |
+| Linux with foot | Keyboard and visual checks | [The verification record](../verification/shared-controls.md) |
+| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | [The verification record](../verification/shared-controls.md) |
 | Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified |
 
-The results live in [the verification record](verification/shared-controls.md),
+The results live in [the verification record](../verification/shared-controls.md),
 which states what was measured, on what, and what was not measured: the
 screen-reader path is the target that has never run. Record the exact OS,
 terminal, multiplexer, renderer, and screen-reader versions used, as
@@ -279,8 +279,8 @@ skipped or cannot run is not a pass.
    replaced implementations rather than retaining permanent alternatives.
 5. Add and enforce the architecture checks. Update current-behavior documentation
    and contributor instructions as each migration lands. Done: the architecture
-   test, this standard, [the README](../README.md), and
-   [the contributor instructions](../AGENTS.md).
+   test, this standard, [the README](../../README.md), and
+   [the contributor instructions](../../AGENTS.md).
 6. Complete all acceptance checks and record their results.
 
 The migration is complete only when every owned control follows this standard
@@ -293,5 +293,5 @@ and `npm run gallery`. The architecture rule is checked by
 `test/shared-control-architecture.test.ts`, which rejects a separate field
 implementation, a hand-edited draft string, and a screen that names a renderer
 field instead of the library. The screen-reader procedure is written down in
-[the verification record](verification/shared-controls.md); it has not been
+[the verification record](../verification/shared-controls.md); it has not been
 run, and no result is claimed for it.

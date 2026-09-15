@@ -38,7 +38,7 @@ import { openControlPlanePty } from "../test/executable-pty.ts";
 import { parseScreen, renderPng } from "./ansi-render.ts";
 
 /** The screen the screenshots show: the size the PTY opens with. */
-export const SCREEN = { cols: 146, rows: 34 } as const;
+export const SCREEN = { cols: 180, rows: 40 } as const;
 
 /** The six screens, in capture order, with the doc page each belongs to. */
 export interface ScreenshotTarget {

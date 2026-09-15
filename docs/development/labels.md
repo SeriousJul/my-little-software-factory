@@ -1,7 +1,7 @@
 # Ticket labels
 
 The control plane reads labels as source facts, and it writes them through
-the transitions of the [workflow machine](adr/0027-the-plane-owns-the-workflow-machine-and-label-transitions.md).
+the transitions of the [workflow machine](../adr/0027-the-plane-owns-the-workflow-machine-and-label-transitions.md).
 After a transition, the label set matches the machine's spec, whatever
 labels the agents or humans wrote before. The agents no longer write
 workflow labels: the task templates carry no label instructions. A human
