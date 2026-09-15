@@ -103,26 +103,22 @@ export interface PtySession {
 }
 
 /**
- * Start the control plane bin on a fresh PTY with an isolated environment.
- *
- * `env` is merged over a clean base, so the process never inherits the
- * operator's home, XDG state, or GitHub credentials.
+ * The PTY options shared by every spawn: the terminal window size in cells,
+ * the size the renderer draws to.
  */
 export interface PtyOptions {
 	/** The terminal window size in cells. The renderer draws to it. */
 	size?: { cols: number; rows: number };
-	/**
-	 * The entry to run instead of the control plane's bin.
-	 *
-	 * The shared control gallery is a second production entry: the same renderer
-	 * startup, the same key parser, the same field modules, without a config
-	 * file or an Agent. A check that belongs to the library is run at that
-	 * boundary, so the executable path is proven as well as the frame path.
-	 */
-	entry?: string;
 }
 
-export async function openControlPlanePty(
+/**
+ * Start `command` on a fresh PTY with the given environment and observe its
+ * terminal protocol output. Returns `null` when this platform cannot open a
+ * PTY; the caller fails loudly rather than skip, because a skipped required
+ * check is not a pass.
+ */
+export async function openPty(
+	command: string,
 	args: string[],
 	env: Record<string, string>,
 	options: PtyOptions = {},
@@ -156,10 +152,7 @@ export async function openControlPlanePty(
 		}
 	}
 
-	const child = spawn(process.execPath, [options.entry ?? CONTROLLER_BIN, ...args], {
-		stdio: [slave, slave, slave],
-		env: { ...baseEnv(), ...env },
-	});
+	const child = spawn(command, args, { stdio: [slave, slave, slave], env });
 	// The parent drops its copy of the slave; the child keeps its dup.
 	libs.close(slave);
 
@@ -247,6 +240,38 @@ export async function openControlPlanePty(
 		},
 	};
 	return session;
+}
+
+/**
+ * Start the control plane bin on a fresh PTY with an isolated environment.
+ *
+ * `env` is merged over a clean base, so the process never inherits the
+ * operator's home, XDG state, or GitHub credentials.
+ */
+export interface ControlPlanePtyOptions extends PtyOptions {
+	/**
+	 * The entry to run instead of the control plane's bin.
+	 *
+	 * The shared control gallery is a second production entry: the same renderer
+	 * startup, the same key parser, the same field modules, without a config
+	 * file or an Agent. A check that belongs to the library is run at that
+	 * boundary, so the executable path is proven as well as the frame path.
+	 */
+	entry?: string;
+}
+
+export async function openControlPlanePty(
+	args: string[],
+	env: Record<string, string>,
+	options: ControlPlanePtyOptions = {},
+): Promise<PtySession | null> {
+	const { entry, ...ptyOptions } = options;
+	return openPty(
+		process.execPath,
+		[entry ?? CONTROLLER_BIN, ...args],
+		{ ...baseEnv(), ...env },
+		ptyOptions,
+	);
 }
 
 /**

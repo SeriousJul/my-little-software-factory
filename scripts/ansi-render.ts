@@ -4,11 +4,11 @@
  * It reads the ANSI byte stream a PTY session captured from the production
  * renderer and reduces it to the screen the operator sees: a grid of
  * (character, foreground, background) cells. It then paints that grid to a
- * PNG - one filled rectangle per cell in the cell's background color, the
- * glyph in the cell's foreground color, the 256-color palette expanded to
- * the RGB values the stream named. The committed screenshots are the output
- * of this renderer over the captured stream, so an image change is always a
- * screen change.
+ * PNG: each cell in its background color, its glyph blended over the
+ * background by the per-pixel coverage the font table carries, the 256-color
+ * palette expanded to the RGB values the stream named. The committed
+ * screenshots are the output of this renderer over the captured stream, so
+ * an image change is always a screen change.
  *
  * The parser keeps only what the production stream uses: cursor addressing
  * and movement, character attributes (SGR), line endings, and everything
@@ -18,7 +18,7 @@
 
 import { deflateSync } from "node:zlib";
 
-import { CELL_H, CELL_W, FONT } from "./screen-font.ts";
+import { CELL_H, CELL_W, glyphOf } from "./screen-font.ts";
 
 /** One cell of the terminal grid. */
 interface Cell {
@@ -294,9 +294,10 @@ export function parseScreen(data: Uint8Array, cols: number, rows: number): Cell[
 /**
  * Paint a cell grid to a PNG.
  *
- * One rectangle per cell in the cell's background color, the glyph in the
- * foreground. A background of -1 is the terminal's own background, which the
- * stream does not name: it is painted with the theme's base.
+ * One cell per font cell: the background fills the cell, and the glyph's
+ * coverage blends the foreground over it, pixel by pixel. A background of -1
+ * is the terminal's own background, which the stream does not name: it is
+ * painted with the theme's base.
  */
 export function renderPng(cells: Cell[][], bgOverride?: [number, number, number]): Buffer {
 	const cols = cells[0]?.length ?? 0;
@@ -323,16 +324,16 @@ export function renderPng(cells: Cell[][], bgOverride?: [number, number, number]
 					pixels[off + 2] = cellBg[2];
 				}
 			}
-			const glyph = FONT[cell.char];
+			const glyph = glyphOf(cell.char);
 			if (glyph === undefined) continue;
 			for (let y = 0; y < CELL_H; y++) {
-				const bits = glyph[y];
 				for (let x = 0; x < CELL_W; x++) {
-					if ((bits & (0x80 >> x)) === 0) continue;
+					const coverage = glyph[y * CELL_W + x] / 255;
+					if (coverage === 0) continue;
 					const off = ((y0 + y) * width + x0 + x) * 3;
-					pixels[off] = cellFg[0];
-					pixels[off + 1] = cellFg[1];
-					pixels[off + 2] = cellFg[2];
+					pixels[off] = Math.round(cellBg[0] * (1 - coverage) + cellFg[0] * coverage);
+					pixels[off + 1] = Math.round(cellBg[1] * (1 - coverage) + cellFg[1] * coverage);
+					pixels[off + 2] = Math.round(cellBg[2] * (1 - coverage) + cellFg[2] * coverage);
 				}
 			}
 		}

@@ -19,7 +19,9 @@
 		"docs:dev": "vitepress dev docs",
 		"docs:build": "vitepress build docs",
 		"docs:preview": "vitepress preview docs",
+		"font": "node scripts/generate-screen-font.ts && biome check --write scripts/screen-font.ts",
 		"screenshots": "NODE_OPTIONS=--experimental-ffi node scripts/generate-screenshots.ts",
+		"hero": "NODE_OPTIONS=--experimental-ffi node scripts/generate-herdr-hero.ts",
 		"mutate": "bash scripts/mutate.sh",
 		"lint": "biome check .",
 		"fmt": "biome check --write .",
@@ -41,6 +43,7 @@
 		"@stryker-mutator/vitest-runner": "^10.0.0",
 		"@types/node": "^26.0.0",
 		"@types/react": "^19.2.0",
+		"fontkit": "^2.0.4",
 		"typescript": "^5.9.0",
 		"vitepress": "^1.6.4",
 		"vitest": "^4.1.11"

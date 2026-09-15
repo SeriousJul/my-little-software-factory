@@ -7,15 +7,17 @@ titleTemplate: false
 hero:
   name: My Little Software Factory
   text: The control plane of my little software factory
-  tagline: Architecture decisions, standards, and guides, published from the
-    docs folder of the repository.
+  tagline: Watches the tickets. Hands them to agents. Tracks every turn.
+  image:
+    src: /hero.png
+    alt: The control plane running in a herdr workspace
   actions:
     - theme: brand
-      text: Read the architecture decisions
-      link: /adr/0001-open-tui-typescript.md
+      text: Get started
+      link: /getting-started/index.html
     - theme: alt
-      text: Read the standards
-      link: /shared-controls.md
+      text: See it in action
+      link: /operation/main-view.html
 
 features:
   - title: Getting started
@@ -52,8 +54,3 @@ features:
     link: /shared-controls.md
     linkText: Read the standards
 ---
-
-## Guides
-
-A guide is a subfolder of the docs root. Every guide folder's pages appear in
-the sidebar and on this site automatically, with no configuration edit.

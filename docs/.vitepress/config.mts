@@ -93,20 +93,21 @@ function markdownFiles(dir: string): string[] {
 		.sort((a, b) => a.localeCompare(b));
 }
 
-// The sidebar is generated from the folder structure at build time: the
-// top-level pages form the Standards group, and every published folder forms
-// a group of its own, in name order. Adding or moving a page never requires a
+// The group order the sidebar shows: the guides in the order an operator
+// reads them, the ADRs after, and the top-level Standards pages last. A
+// published folder that is not named here still shows: it appends after the
+// named groups, in name order, so a new page or a new guide never requires a
 // config edit.
+const GROUP_ORDER: { folder: string; text: string }[] = [
+	{ folder: "getting-started", text: "Getting Started" },
+	{ folder: "operation", text: "Operation" },
+	{ folder: "work-flow", text: "Work flow" },
+	{ folder: "configuration", text: "Configuration" },
+	{ folder: "adr", text: "ADR" },
+];
+
 function sidebar(): DefaultTheme.Sidebar {
 	const groups: DefaultTheme.SidebarGroup[] = [];
-	const standards = markdownFiles("").filter((name) => name !== "index.md");
-	if (standards.length > 0) {
-		groups.push({
-			text: "Standards",
-			collapsible: true,
-			items: standards.map((name) => ({ text: pageTitle(name), link: `/${name}` })),
-		});
-	}
 	const folders = readdirSync(srcDir, { withFileTypes: true })
 		.filter(
 			(entry) =>
@@ -114,16 +115,33 @@ function sidebar(): DefaultTheme.Sidebar {
 		)
 		.map((entry) => entry.name)
 		.sort((a, b) => a.localeCompare(b));
-	for (const folder of folders) {
-		// An all-lowercase folder name is an acronym; show it uppercased.
-		const text = /^[a-z]+$/.test(folder) ? folder.toUpperCase() : folder;
-		groups.push({
+	const groupOf = (folder: string): DefaultTheme.SidebarGroup => {
+		const named = GROUP_ORDER.find((entry) => entry.folder === folder);
+		// A folder the order does not name keeps the plain rule: an
+		// all-lowercase name is an acronym, shown uppercased.
+		const text = named?.text ?? (/^[a-z]+$/.test(folder) ? folder.toUpperCase() : folder);
+		return {
 			text,
 			collapsible: true,
 			items: markdownFiles(folder).map((name) => ({
 				text: pageTitle(join(folder, name)),
 				link: `/${folder}/${name}`,
 			})),
+		};
+	};
+	for (const named of GROUP_ORDER) {
+		if (folders.includes(named.folder)) groups.push(groupOf(named.folder));
+	}
+	for (const folder of folders) {
+		if (GROUP_ORDER.some((named) => named.folder === folder)) continue;
+		groups.push(groupOf(folder));
+	}
+	const standards = markdownFiles("").filter((name) => name !== "index.md");
+	if (standards.length > 0) {
+		groups.push({
+			text: "Standards",
+			collapsible: true,
+			items: standards.map((name) => ({ text: pageTitle(name), link: `/${name}` })),
 		});
 	}
 	return groups;
