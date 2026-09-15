@@ -101,6 +101,78 @@ export interface RepositoryRef {
 	cloneUrl: string;
 }
 
+/**
+ * The attribute key a pull request membership stores its Issue references
+ * in (ADR 0023).
+ */
+export const ISSUE_REFERENCES_ATTRIBUTE = "closes";
+
+/**
+ * One Issue reference a pull request membership stores as a source fact
+ * (ADR 0023). The reference is tracked by the issue's identity, which is
+ * stable across the repository.
+ */
+export interface IssueReference {
+	/** The issue's stable identity, or null when the source never learned it. */
+	identity: string | null;
+	/** The issue's number in its repository; what the detail pane names. */
+	number: number;
+	/** The issue's repository as owner/name, for the direct read's fallback. */
+	repository: string;
+}
+
+/**
+ * The references a membership's attributes store.
+ *
+ * A pull request's refresh re-reads its closing-issue references, so a
+ * malformed or missing fact reads as no references rather than failing the
+ * read.
+ */
+export function issueReferencesOf(attributes: Record<string, string>): IssueReference[] {
+	const stored = attributes[ISSUE_REFERENCES_ATTRIBUTE];
+	if (stored === undefined) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stored);
+	} catch {
+		return [];
+	}
+	if (!Array.isArray(parsed)) return [];
+	const references: IssueReference[] = [];
+	for (const item of parsed) {
+		const record = item as Record<string, unknown>;
+		const identity =
+			typeof record.identity === "string" && record.identity !== "" ? record.identity : null;
+		const number = record.number;
+		const repository = record.repository;
+		if (typeof number !== "number" || typeof repository !== "string") continue;
+		references.push({ identity, number, repository });
+	}
+	return references;
+}
+
+/**
+ * A membership's attributes with the pull request's Issue references stored
+ * (ADR 0023). A pull request that closes nothing carries no attribute. The
+ * references are a source fact like `draft`: a refresh can change them.
+ */
+export function withIssueReferences(
+	attributes: Record<string, string>,
+	references: readonly IssueReference[],
+): Record<string, string> {
+	if (references.length === 0) return attributes;
+	return {
+		...attributes,
+		[ISSUE_REFERENCES_ATTRIBUTE]: JSON.stringify(
+			references.map((reference) => ({
+				identity: reference.identity,
+				number: reference.number,
+				repository: reference.repository,
+			})),
+		),
+	};
+}
+
 /** A normalized source fact, independent of factory state. */
 export interface FetchedTicket {
 	identity: string;
@@ -181,8 +253,13 @@ export interface Ticket {
 	priority: TicketPriority;
 }
 
-/** The unranked priority: no rank, no label, no source. */
-export const UNRANKED_PRIORITY: TicketPriority = { rank: null, label: null, source: "none" };
+/** The unranked priority: no rank, no label, no source, no reference. */
+export const UNRANKED_PRIORITY: TicketPriority = {
+	rank: null,
+	label: null,
+	source: "none",
+	inheritedFrom: null,
+};
 
 /** The marker an observation poll sets on an in-flight ticket. */
 export type TicketMarker = "blocked" | "missing";

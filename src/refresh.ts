@@ -1,6 +1,6 @@
 /** Per-source refresh scheduling. A slow source never overlaps itself. */
 import type { FactoryState, SourceDefinition } from "./state.ts";
-import type { TicketSource } from "./ticket-source.ts";
+import type { FetchOutcome, TicketSource } from "./ticket-source.ts";
 
 export interface RefreshClock {
 	setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
@@ -15,14 +15,14 @@ export class RefreshCoordinator {
 	private stopped = false;
 	private readonly sources: readonly TicketSource[];
 	private readonly state: FactoryState;
-	private readonly changed: () => void;
+	private readonly changed: (outcome?: FetchOutcome) => void;
 	private readonly clock: RefreshClock;
 	private readonly settled?: (sourceName: string) => void;
 
 	constructor(
 		sources: readonly TicketSource[],
 		state: FactoryState,
-		changed: () => void,
+		changed: (outcome?: FetchOutcome) => void,
 		clock: RefreshClock = SYSTEM_CLOCK,
 		options: { settled?: (sourceName: string) => void } = {},
 	) {
@@ -79,25 +79,31 @@ export class RefreshCoordinator {
 	refresh(source: TicketSource): void {
 		if (this.stopped || this.inFlight.has(source.name)) return;
 		this.inFlight.add(source.name);
+		// The pull request source covers its Issue references against the
+		// live tickets and reads the uncovered ones directly (ADR 0023).
+		const known = this.state.liveTicketIdentities();
+		let outcome: FetchOutcome;
 		void Promise.resolve()
-			.then(() => source.fetch())
+			.then(() => source.fetch(known))
 			// A fetch can outlive the coordinator: the shutdown window between
 			// stop() and the state closing must not touch either.
-			.then((outcome) => {
+			.then((result) => {
+				outcome = result;
 				if (this.stopped) return;
-				this.state.applyFetch(sourceDefinition(source), outcome);
+				this.state.applyFetch(sourceDefinition(source), result);
 			})
 			.catch((error) => {
-				if (this.stopped) return;
-				this.state.applyFetch(sourceDefinition(source), {
+				outcome = {
 					status: "failed",
 					reason: `unexpected source failure: ${error instanceof Error ? error.message : String(error)}`,
-				});
+				};
+				if (this.stopped) return;
+				this.state.applyFetch(sourceDefinition(source), outcome);
 			})
 			.finally(() => {
 				this.inFlight.delete(source.name);
 				if (this.stopped) return;
-				this.changed();
+				this.changed(outcome);
 				this.settled?.(source.name);
 				const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
 				this.timers.set(source.name, timer);

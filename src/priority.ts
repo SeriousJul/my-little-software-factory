@@ -7,6 +7,11 @@
  * that is not in the list gives no rank, a duplicate takes the rank of its
  * first occurrence, and a missing or empty list ranks no ticket.
  *
+ * A pull request that ranks nothing on its own inherits the best effective
+ * rank of the issues it closes (ADR 0023): after its own override and own
+ * label, the inheritance step reads each referenced issue by that issue's
+ * own chain.
+ *
  * This module owns the rank function and the one comparator that orders
  * tickets wherever priority matters. The state stores the override, and the
  * screens show the rank: nothing else re-derives an order of its own.
@@ -16,7 +21,7 @@
 export const PRIORITY_OFF = "off";
 
 /** Where a ticket's effective rank comes from. */
-export type PrioritySource = "override" | "label" | "none";
+export type PrioritySource = "override" | "label" | "inherited" | "none";
 
 /** The effective priority of one ticket against one Priority label list. */
 export interface TicketPriority {
@@ -31,6 +36,11 @@ export interface TicketPriority {
 	label: string | null;
 	/** Where the effective rank comes from. */
 	source: PrioritySource;
+	/**
+	 * The issue number that supplied the rank, when it is inherited through
+	 * the pull request's Issue references (ADR 0023). Null otherwise.
+	 */
+	inheritedFrom: number | null;
 }
 
 /**
@@ -50,8 +60,8 @@ export function effectivePriority(
 ): TicketPriority {
 	if (override !== null) {
 		const at = labels.indexOf(override);
-		if (at !== -1) return { rank: at, label: override, source: "override" };
-		return { rank: null, label: override, source: "override" };
+		if (at !== -1) return { rank: at, label: override, source: "override", inheritedFrom: null };
+		return { rank: null, label: override, source: "override", inheritedFrom: null };
 	}
 	let best: number | null = null;
 	let bestLabel: string | null = null;
@@ -62,8 +72,79 @@ export function effectivePriority(
 			bestLabel = label;
 		}
 	}
-	if (best !== null) return { rank: best, label: bestLabel, source: "label" };
-	return { rank: null, label: null, source: "none" };
+	if (best !== null) return { rank: best, label: bestLabel, source: "label", inheritedFrom: null };
+	return { rank: null, label: null, source: "none", inheritedFrom: null };
+}
+
+/** The facts of one Issue reference as the inheritance step reads them (ADR 0023). */
+export interface ReferencedIssueRank {
+	/** The issue's number in its repository; what the detail pane names. */
+	number: number;
+	/** The issue's labels, from its snapshot or its Referenced issue fact. */
+	labels: readonly string[];
+	/** The issue's Priority override when it is a ticket, else null. */
+	override: string | null;
+}
+
+/**
+ * The inheritance step of the effective rank (ADR 0023).
+ *
+ * The best effective rank among a pull request's Issue references, each
+ * resolved by the issue's own chain: its Priority override when it is a
+ * ticket, then its labels, then unranked. When two references tie at the
+ * best rank, the lowest issue number supplies it, so the detail pane names
+ * one issue. When no reference is ranked, the step ranks nothing.
+ */
+export function inheritedPriority(
+	labels: readonly string[],
+	references: readonly ReferencedIssueRank[],
+): TicketPriority {
+	let best: { rank: number; label: string; number: number } | null = null;
+	for (const reference of references) {
+		const priority = effectivePriority(labels, reference.override, reference.labels);
+		if (priority.rank === null) continue;
+		if (
+			best === null ||
+			priority.rank < best.rank ||
+			(priority.rank === best.rank && reference.number < best.number)
+		)
+			best = { rank: priority.rank, label: priority.label ?? "", number: reference.number };
+	}
+	if (best === null) return { rank: null, label: null, source: "none", inheritedFrom: null };
+	return {
+		rank: best.rank,
+		label: best.label,
+		source: "inherited",
+		inheritedFrom: best.number,
+	};
+}
+
+/**
+ * The effective rank of a pull request (ADR 0023).
+ *
+ * The pull request's own chain - its Priority override, then its own label -
+ * beats the inheritance step. Only an unranked pull request inherits: the
+ * best effective rank among its Issue references takes the third slot of
+ * the chain, so the pull request's own facts never lose to the issues it
+ * closes. An issue ticket, which carries no references, reads exactly its
+ * own chain.
+ */
+export function effectivePullRequestPriority(
+	labels: readonly string[],
+	override: string | null,
+	ownLabels: readonly string[],
+	references: readonly ReferencedIssueRank[],
+): TicketPriority {
+	const own = effectivePriority(labels, override, ownLabels);
+	if (own.rank !== null) return own;
+	// The pull request's own `off` keeps it unranked: it is the operator's
+	// override in both directions, and it beats the inherited rank.
+	if (override === PRIORITY_OFF) return own;
+	const inherited = inheritedPriority(labels, references);
+	// When the references rank nothing, the ticket keeps its own stored
+	// fact: a dropped override label stays stated the way it did before
+	// inheritance existed.
+	return inherited.rank !== null ? inherited : own;
 }
 
 /**
@@ -155,5 +236,7 @@ export function bumpPriority(
 export function prioritySourceWord(priority: TicketPriority): string | null {
 	if (priority.source === "override") return "set by you";
 	if (priority.source === "label") return "its own label";
+	if (priority.source === "inherited")
+		return priority.inheritedFrom === null ? null : `issue #${priority.inheritedFrom}`;
 	return null;
 }

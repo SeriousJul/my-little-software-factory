@@ -750,6 +750,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultation_turns;
 			DROP TABLE consultations;
 			DROP TABLE checkout_conflict_confirmations;
+			DROP TABLE referenced_issues;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -840,6 +841,9 @@ describe("factory SQLite state", () => {
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
 		).run();
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
+		// The v12 facts belong to the run after this record: the issue the
+		// control plane read directly has no fact yet.
+		db.exec("DROP TABLE referenced_issues;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -909,6 +913,9 @@ describe("factory SQLite state", () => {
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
 		).run();
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
+		// The v12 facts belong to the run after this record: the issue the
+		// control plane read directly has no fact yet.
+		db.exec("DROP TABLE referenced_issues;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();

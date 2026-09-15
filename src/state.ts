@@ -12,18 +12,24 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { TaskRule } from "./config.ts";
 import { isStaleAgentOutputWarning, STALE_AGENT_OUTPUT_WARNING } from "./consultation.ts";
-import type {
-	Completion,
-	CompletionDecision,
-	EnvironmentKind,
-	LeftoverEnvironment,
-	SourceMembership,
-	Ticket,
-	TicketState,
+import {
+	type Completion,
+	type CompletionDecision,
+	type EnvironmentKind,
+	type IssueReference,
+	issueReferencesOf,
+	type LeftoverEnvironment,
+	type SourceMembership,
+	type Ticket,
+	type TicketState,
 } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor } from "./naming.ts";
-import { compareTicketPriority, effectivePriority } from "./priority.ts";
+import {
+	compareTicketPriority,
+	effectivePullRequestPriority,
+	type ReferencedIssueRank,
+} from "./priority.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import {
@@ -33,7 +39,7 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -527,6 +533,22 @@ const MIGRATION_V9_TO_V10 = `
  */
 const MIGRATION_V10_TO_V11 = `ALTER TABLE tickets ADD COLUMN priority_override TEXT;`;
 
+/**
+ * The v12 step: the Referenced issue facts (ADR 0023).
+ *
+ * The labels and fetch time the control plane reads directly for an issue no
+ * ticket source lists, keyed by the issue's identity. A fact is not a
+ * ticket: it takes no row in the Main view and is never handed off. A fact
+ * persists until overwritten; an orphaned fact is kept and never cleaned up.
+ */
+const MIGRATION_V11_TO_V12 = `
+	CREATE TABLE referenced_issues (
+		identity TEXT PRIMARY KEY,
+		labels_json TEXT NOT NULL,
+		fetched_at TEXT NOT NULL
+	);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -638,6 +660,7 @@ export class FactoryState {
 			if (version < 9) this.db.exec(MIGRATION_V8_TO_V9);
 			if (version < 10) this.db.exec(MIGRATION_V9_TO_V10);
 			if (version < 11) this.db.exec(MIGRATION_V10_TO_V11);
+			if (version < 12) this.db.exec(MIGRATION_V11_TO_V12);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -747,12 +770,100 @@ export class FactoryState {
 						)
 						.run(source.name, row.ticket_identity);
 			}
+			// The Referenced issue facts covered by the refresh (ADR 0023): each
+			// overwrites the fact it keys, and an orphaned fact - a reference
+			// the refresh no longer carries - is kept and never cleaned up.
+			if (outcome.referencedIssueFacts !== undefined) {
+				for (const fact of outcome.referencedIssueFacts) {
+					this.db
+						.prepare(`
+							INSERT INTO referenced_issues(identity, labels_json, fetched_at)
+							VALUES (?, ?, ?)
+							ON CONFLICT(identity) DO UPDATE SET
+								labels_json = excluded.labels_json,
+								fetched_at = excluded.fetched_at
+						`)
+						.run(fact.identity, JSON.stringify(fact.labels), fact.fetchedAt);
+				}
+			}
 			this.db
 				.prepare(
 					"UPDATE source_health SET health = 'healthy', error = NULL, last_success = ? WHERE source_name = ?",
 				)
 				.run(outcome.fetchedAt, source.name);
 		});
+	}
+
+	/**
+	 * The live tickets: the ones a current source snapshot still lists
+	 * (ADR 0023). A ticket that left every source keeps its row but is no
+	 * longer live, so a pull request's reference to it is read directly.
+	 */
+	liveTicketIdentities(): string[] {
+		return (
+			this.db
+				.prepare(
+					`SELECT DISTINCT m.ticket_identity
+					FROM memberships m JOIN source_health h ON h.source_name = m.source_name
+					WHERE m.active = 1 AND h.health != 'removed'`,
+				)
+				.all() as Array<{ ticket_identity: string }>
+		).map((row) => row.ticket_identity);
+	}
+
+	/**
+	 * The rank the ticket's Issue references carry (ADR 0023).
+	 *
+	 * Each reference resolves by the issue's own chain: its Priority
+	 * override, then its labels. The labels come from the issue's snapshot -
+	 * a live or last known ticket - when it is one, else from its Referenced
+	 * issue fact. A snapshot always beats a fact.
+	 */
+	issueReferenceRanks(
+		memberships: readonly { attributes: Record<string, string> }[],
+	): ReferencedIssueRank[] {
+		const references: IssueReference[] = [];
+		const seen = new Set<string>();
+		for (const membership of memberships) {
+			for (const reference of issueReferencesOf(membership.attributes)) {
+				const key = reference.identity ?? `number:${reference.number}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				references.push(reference);
+			}
+		}
+		const ranks: ReferencedIssueRank[] = [];
+		for (const reference of references) {
+			if (reference.identity === null) {
+				ranks.push({ number: reference.number, labels: [], override: null });
+				continue;
+			}
+			const ticket = this.db
+				.prepare("SELECT priority_override FROM tickets WHERE identity = ?")
+				.get(reference.identity) as { priority_override: string | null } | undefined;
+			if (ticket !== undefined) {
+				const fact = this.db
+					.prepare(
+						"SELECT labels_json FROM memberships WHERE ticket_identity = ? ORDER BY external_updated_at DESC, source_name LIMIT 1",
+					)
+					.get(reference.identity) as { labels_json: string } | undefined;
+				ranks.push({
+					number: reference.number,
+					labels: jsonStringArray(fact?.labels_json ?? "[]"),
+					override: ticket.priority_override,
+				});
+				continue;
+			}
+			const stored = this.db
+				.prepare("SELECT labels_json FROM referenced_issues WHERE identity = ?")
+				.get(reference.identity) as { labels_json: string } | undefined;
+			ranks.push({
+				number: reference.number,
+				labels: jsonStringArray(stored?.labels_json ?? "[]"),
+				override: null,
+			});
+		}
+		return ranks;
 	}
 
 	private ensureSource(source: SourceDefinition): void {
@@ -830,7 +941,15 @@ export class FactoryState {
 			)[0];
 			if (facts === undefined) continue;
 			const handoff = this.handoffFor(row.identity);
-			const priority = effectivePriority(priorityLabels, row.priority_override, facts.labels);
+			// The pull request's own facts beat the rank its Issue references
+			// carry; an issue ticket, which closes nothing, reads its own chain
+			// (ADR 0023).
+			const priority = effectivePullRequestPriority(
+				priorityLabels,
+				row.priority_override,
+				facts.labels,
+				this.issueReferenceRanks(storedMemberships),
+			);
 			tickets.push({
 				identity: row.identity,
 				title: facts.title,
@@ -1368,7 +1487,7 @@ export class FactoryState {
 		// observation tick skips the pass instead of paying it per ticket.
 		const ranked = priorityLabels.length > 0;
 		const rankOf: Array<{
-			priority: ReturnType<typeof effectivePriority>;
+			priority: ReturnType<typeof effectivePullRequestPriority>;
 			externalUpdatedAt: string;
 			identity: string;
 		}> = [];
@@ -1392,16 +1511,20 @@ export class FactoryState {
 				startedAt: row.started_at,
 			});
 			if (!ranked) continue;
-			const facts = [...this.membershipsFor(row.ticket_identity, row.state)].sort(
+			const memberships = this.membershipsFor(row.ticket_identity, row.state);
+			const facts = [...memberships].sort(
 				(a, b) =>
 					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
 					a.sourceName.localeCompare(b.sourceName),
 			)[0];
 			rankOf.push({
-				priority: effectivePriority(
+				// The pull request's own facts beat the rank its Issue
+				// references carry (ADR 0023).
+				priority: effectivePullRequestPriority(
 					priorityLabels,
 					this.priorityOverride(row.ticket_identity),
 					facts?.labels ?? [],
+					this.issueReferenceRanks(memberships),
 				),
 				externalUpdatedAt: facts?.externalUpdatedAt ?? "",
 				identity: row.ticket_identity,
