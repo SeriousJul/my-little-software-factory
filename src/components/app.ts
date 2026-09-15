@@ -1805,13 +1805,14 @@ export function App({
 					refreshNow();
 				},
 				leftover: openLeftoverPanel,
-				// `=` raises the rank and `-` lowers it (ADR 0022). The catalogue
-				// gated the key, so this runs the movement and reports the
-				// outcome on the Message line, accepted and no-op alike.
+				// `+` (or `=`, its unshifted form) raises the rank and `-` lowers
+				// it (ADR 0022). The catalogue gated the key, so this runs the
+				// movement and reports the outcome on the Message line, accepted
+				// and no-op alike.
 				"bump-priority": ({ context, key }) => {
 					const ticket = context.selectedTicket;
 					if (ticket === undefined) return;
-					bumpTicketPriority(ticket, key.name === "=" ? "up" : "down");
+					bumpTicketPriority(ticket, key.name === "+" || key.name === "=" ? "up" : "down");
 				},
 				"clear-priority": ({ context }) => {
 					const ticket = context.selectedTicket;

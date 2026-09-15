@@ -116,7 +116,8 @@ describe("the Priority controls (ADR 0022)", () => {
 					expect(detailPaneText(frame)).toContain("Priority: low (set by you)");
 					expect(frameText(frame)).toContain("[open] 3");
 
-					frame = await press(setup, "=", "the second bump", (f) =>
+					// `+`, the shifted form of `=`, raises the same way.
+					frame = await press(setup, "+", "the second bump", (f) =>
 						messageRowOf(f).includes("priority raised to high"),
 					);
 					expect(detailPaneText(frame)).toContain("Priority: high (set by you)");

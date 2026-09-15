@@ -319,7 +319,7 @@ describe("the in-app Key guide", () => {
 					"w clear leftover - no leftover environment is recorded for ticket",
 					"github:github.com:I_1",
 					// The Priority bump and clear, each with its own note.
-					"=/- Bump priority - raises or lowers the rank",
+					"+/- Bump priority - raises or lowers the rank",
 					"⌫ Clear priority - removes the set rank",
 					"F1/? Help",
 					"m/F2 Message - the current Message fits on the Message line",
@@ -661,7 +661,7 @@ describe("the in-app Key guide", () => {
 				expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(roleColor("text")));
 				const bumpRow = rowOf("Bump priority");
-				expect(spanColorAt(setup, bumpRow, "=/-")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, bumpRow, "+/-")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, bumpRow, "Bump priority")).toEqual(rgb(roleColor("text")));
 				// Unavailable: the key and the label are dim, the reason dim.
 				const refreshRow = rowOf("r Refresh");

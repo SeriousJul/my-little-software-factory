@@ -342,7 +342,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 						fg: ink.detail.fg ?? undefined,
 					},
 					truncateToWidth(
-						"bump: = raised to high   - lowered to routine   from the lowest: set to off",
+						"bump: + raised to high   - lowered to routine   from the lowest: set to off",
 						columns.contentWidth,
 					),
 				),

@@ -111,7 +111,8 @@ type ControlKey =
 	| "backspace"
 	| "ctrl+c"
 	| "-"
-	| "=";
+	| "="
+	| "+";
 
 export interface ControlAvailability {
 	available: boolean;
@@ -830,12 +831,13 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "bump-priority",
 		label: "Bump priority",
-		// One bump, two directions: `=` raises the rank and `-` lowers it.
-		// From unranked, `-` goes nowhere and `=` takes the lowest rank; from
-		// the lowest rank, `-` takes off; off and unranked share the floor
-		// (ADR 0022). The Detail pane's Override row is the value it moves.
-		keys: () => ["=", "-"],
-		keyLabel: "=/-",
+		// One bump, two directions: `+` (or `=`, its unshifted form) raises the
+		// rank and `-` lowers it. From unranked, `-` goes nowhere and `+` takes
+		// the lowest rank; from the lowest rank, `-` takes off; off and unranked
+		// share the floor (ADR 0022). The Detail pane's Override row is the value
+		// it moves.
+		keys: () => ["=", "+", "-"],
+		keyLabel: "+/-",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 34,
