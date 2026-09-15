@@ -286,6 +286,12 @@ describe("the shared control gallery", () => {
 			throw new Error("the light example lost its accent swatch");
 		}
 		expect(hexOf(swatch.bg)).toBe("#1e66f5");
+		// The heading row wears the example's own pair, not the environment's
+		// ink: the light theme's text on its own panel surface.
+		const heading = findCell(setup, "theme: catppuccin-latte (light)");
+		const headingCell = cellColors(setup, heading.x, heading.y);
+		expect(headingCell.fg).toEqual([0x4c, 0x4f, 0x69]);
+		expect(headingCell.bg).toEqual([0xef, 0xf1, 0xf5]);
 	});
 
 	test("the override example wears the token values the [theme.custom] section holds", async () => {
@@ -293,6 +299,18 @@ describe("the shared control gallery", () => {
 		const raw = setup.captureCharFrame();
 		const frame = frameText(raw);
 		expect(frame).toContain('names "catppuccin"');
+		// The heading wears the override's own pair: the overridden text role
+		// stands as its ink, and the panel surface resolved to `reset`, so the
+		// base theme's value never shows there either.
+		const headingRow = rowsOf(raw).findIndex((row) => row.includes('names "catppuccin"'));
+		expect(headingRow).toBeGreaterThanOrEqual(0);
+		const heading = rowSpans(setup, headingRow).find((span) => span.text.includes("catppuccin"));
+		if (heading === undefined || heading.fg === null) {
+			throw new Error("the override example lost its heading");
+		}
+		expect(hexOf(heading.fg)).toBe("#ffffff");
+		if (heading.bg !== null)
+			expect(hexOf(heading.bg)).not.toBe(BUILTIN_THEMES.catppuccin.roles.panel_bg);
 		// The swatch row holds every role name at once; the config line above
 		// it names only the overridden tokens.
 		const swatchRow = rowsOf(raw).findIndex((row) => row.includes(" subtext0 "));
@@ -320,7 +338,8 @@ describe("the shared control gallery", () => {
 		// surface behind it stands, and the base theme's value never shows.
 		const panel = swatches.find((span) => span.text.trim() === "panel_bg");
 		if (panel === undefined) throw new Error("the override example lost its panel_bg swatch");
-		if (panel.bg !== null) expect(hexOf(panel.bg)).not.toBe(BUILTIN_THEMES["catppuccin"].roles.panel_bg);
+		if (panel.bg !== null)
+			expect(hexOf(panel.bg)).not.toBe(BUILTIN_THEMES.catppuccin.roles.panel_bg);
 	});
 
 	test("the no-color example paints the same controls with no color", async () => {

@@ -104,15 +104,26 @@ const FOCUSED_CONTROL: Record<string, string> = {
  */
 const GALLERY_LIGHT_THEME = resolveTheme('[theme]\nname = "catppuccin-latte"\n', true).theme;
 
-/** The config the gallery's override example states, and the theme it resolves. */
+/** The base theme the override example names, and the token values its [theme.custom] section holds. */
+const GALLERY_OVERRIDE_BASE = "catppuccin";
+const GALLERY_OVERRIDE_TOKENS: ReadonlyArray<readonly [ThemeRole, string]> = [
+	["accent", "#ffb86c"],
+	["text", "rgb(255, 255, 255)"],
+	["panel_bg", "reset"],
+];
+
+/**
+ * The config the gallery's override example states, and the theme it resolves.
+ *
+ * The config text and the example's heading line both build from these same
+ * tokens, so a change to the config shows in both.
+ */
 const GALLERY_OVERRIDE_CONFIG = [
 	"[theme]",
-	'name = "catppuccin"',
+	`name = "${GALLERY_OVERRIDE_BASE}"`,
 	"",
 	"[theme.custom]",
-	'accent = "#ffb86c"',
-	'text = "rgb(255, 255, 255)"',
-	'panel_bg = "reset"',
+	...GALLERY_OVERRIDE_TOKENS.map(([token, value]) => `${token} = "${value}"`),
 ].join("\n");
 const GALLERY_OVERRIDE_THEME = resolveTheme(GALLERY_OVERRIDE_CONFIG, true).theme;
 
@@ -134,6 +145,21 @@ function themeSwatchRow(theme: { roles: Record<ThemeRole, string> }): ReactEleme
 			),
 		),
 	);
+}
+
+/**
+ * The ink an example's own theme wears on its heading row: its text role on
+ * its panel surface. A role that resolves to `reset` paints no color, so the
+ * terminal's own default shows through where the theme says so.
+ */
+function exampleHeadingInk(theme: { roles: Record<ThemeRole, string> }): {
+	fg: string | undefined;
+	bg: string | undefined;
+} {
+	return {
+		fg: theme.roles.text === "reset" ? undefined : theme.roles.text,
+		bg: theme.roles.panel_bg === "reset" ? undefined : theme.roles.panel_bg,
+	};
 }
 
 /** The Model list the Type-ahead examples search. */
@@ -620,10 +646,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		state: "the light theme: a light name in herdr's config, the same controls in that ink",
 		render: (columns, holds, inputActive, wiring) => {
 			const ink = inkForTheme(GALLERY_LIGHT_THEME);
+			// The heading wears the example's own pair, not the environment's
+			// ink, so a light name reads light on any terminal.
+			const heading = exampleHeadingInk(GALLERY_LIGHT_THEME);
 			return [
 				createElement(
 					"text",
-					{ key: "light-name", fg: paint("text") },
+					{ key: "light-name", fg: heading.fg, bg: heading.bg },
 					truncateToWidth(
 						`theme: ${GALLERY_LIGHT_THEME.name} (${GALLERY_LIGHT_THEME.appearance})`,
 						columns.contentWidth,
@@ -652,9 +681,16 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns) => [
 			createElement(
 				"text",
-				{ key: "override-config", fg: paint("text") },
+				// The heading wears the override's own pair: the overridden text
+				// role stands, and the panel surface resolves to `reset`.
+				{
+					key: "override-config",
+					...exampleHeadingInk(GALLERY_OVERRIDE_THEME),
+				},
 				truncateToWidth(
-					`[theme] names "catppuccin"; [theme.custom] sets accent to #ffb86c, text to rgb(255, 255, 255), panel_bg to reset`,
+					`[theme] names "${GALLERY_OVERRIDE_BASE}"; [theme.custom] sets ${GALLERY_OVERRIDE_TOKENS.map(
+						([token, value]) => `${token} to ${value}`,
+					).join(", ")}`,
 					columns.contentWidth,
 				),
 			),
