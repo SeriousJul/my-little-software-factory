@@ -64,6 +64,7 @@ import {
 import {
 	type HerdrAgent,
 	HerdrAgentReader,
+	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
 } from "../observation.ts";
@@ -81,11 +82,21 @@ import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts"
 import type { Consultation, FactoryState } from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
-import type { TurnEndCause, TurnLogEntry } from "../turn-log.ts";
+import {
+	readSessionExchange,
+	type SessionEntry,
+	type TurnEndCause,
+	type TurnLogEntry,
+} from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, panelBodyCols } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
-import { ConsultationDetail, consultationDetailLines } from "./consultation-detail.ts";
+import {
+	ConsultationDetail,
+	consultationDetailBody,
+	consultationDetailLines,
+	consultationDetailTitle,
+} from "./consultation-detail.ts";
 import { ConsultationLauncher, type LauncherDraft } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
 import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
@@ -312,6 +323,10 @@ export function App({
 	const responseDraftRef = useRef("");
 	const [interaction, setInteraction] = useState(false);
 	const [liveOutput, setLiveOutput] = useState<string | null>(null);
+	// The selected Consultation's Session view rows, read from the Agent's
+	// session record at the pane's own pace (ADR 0025). Null means the last
+	// read was unavailable, and the detail shows the terminal body instead.
+	const [sessionEntries, setSessionEntries] = useState<readonly SessionEntry[] | null>(null);
 	const [consultationScroll, setConsultationScroll] = useState(0);
 	const consultationFollowRef = useRef(true);
 	const [newOutput, setNewOutput] = useState(false);
@@ -598,6 +613,11 @@ export function App({
 			: normalizeAgentStatus(
 					agents.find((agent) => agent.paneId === selectedConsultation.paneId)?.status ?? "unknown",
 				);
+	// Whether herdr's last poll still reports the selected Consultation's
+	// Agent pane alive: Goto focuses that pane, so it needs it (ADR 0025).
+	const selectedConsultationPaneAlive =
+		typeof selectedConsultation?.paneId === "string" &&
+		agents?.some((agent) => agent.paneId === selectedConsultation.paneId) === true;
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
@@ -620,12 +640,21 @@ export function App({
 		selectedConsultation.state !== "closed"
 			? []
 			: state.consultationRemainingResources(selectedConsultation.id);
+	// The body the detail stands under (ADR 0025): the Session view reads
+	// from the Agent's record, the Agent view from the terminal. Interaction
+	// mode shows the live screen, which is the Agent view.
+	const consultationBody = consultationDetailBody(
+		selectedConsultation,
+		interaction ? null : liveOutput,
+		interaction ? null : sessionEntries,
+	);
 	const consultationLines = consultationDetailLines(
 		selectedConsultation,
 		consultationTurns,
 		consultationSnapshots,
 		consultationWidth,
 		interaction ? null : liveOutput,
+		interaction ? null : sessionEntries,
 		replacementIds,
 		selectedConsultationAgentStatus,
 		remainingResources,
@@ -678,6 +707,7 @@ export function App({
 			setConsultationScroll(0);
 			consultationFollowRef.current = true;
 			setLiveOutput(null);
+			setSessionEntries(null);
 		}
 	}, [state]);
 	// The Task profile of every task type (ADR 0009): what the panel prefills,
@@ -1591,6 +1621,7 @@ export function App({
 			messageTruncated,
 			consultationRefreshAvailable: state !== undefined,
 			consultationAgentStatus: selectedConsultationAgentStatus,
+			consultationPaneAlive: selectedConsultationPaneAlive,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
 		});
@@ -1791,6 +1822,19 @@ export function App({
 					beginResponse(selected);
 				},
 				"consultation-interact": () => setInteraction(true),
+				"consultation-goto": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined || selected.paneId === null) return;
+					// Navigation only (ADR 0025): the Consultation record stays
+					// untouched, and the confirmation stands on the Message line.
+					void commandRunner.run("herdr", ["agent", "focus", selected.paneId]).then((result) => {
+						if (result.code === 0)
+							setNoticeMessage(
+								`focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`,
+							);
+						else setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
+					});
+				},
 				override: openOverride,
 				recover: () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -1946,47 +1990,76 @@ export function App({
 		// gets a fresh identity on every poll, and re-validating on each poll
 		// would spawn git calls for every repository per tick.
 	}, [commandRunner, homeDir, repositoryCatalogKey]);
-	// The selected Agent output refreshes at one-second cadence. Lifecycle
-	// polling remains owned by the shared observation coordinator. A closed
+	// The selected Consultation's bodies refresh at one-second cadence. The
+	// pane read stays on its own interval, and the Session view (ADR 0025)
+	// reads the Agent's session record in the same tick. Lifecycle polling
+	// remains owned by the shared observation coordinator. A closed
 	// Consultation is a record the operator reads: its detail pane shows the
-	// captured history, and the pane's scroll belongs to the operator.
-	// Refreshing it would re-engage the follow-to-bottom the close just
-	// released, and push the record's heading rows off screen.
+	// session record when it reads, else the captured history, and the
+	// record does not grow while nothing runs, so it gets one read and no
+	// timer.
 	useEffect(() => {
-		if (
-			state === undefined ||
-			selection !== "consultation" ||
-			selectedConsultation === undefined ||
-			selectedConsultation.paneId === null ||
-			selectedConsultation.state === "closed"
-		) {
+		if (state === undefined || selection !== "consultation" || selectedConsultation === undefined) {
 			setLiveOutput(null);
+			setSessionEntries(null);
+			return;
+		}
+		const consultation = selectedConsultation;
+		const paneId = consultation.paneId;
+		// The session record path the last herdr poll reported for this
+		// Consultation's Agent: herdr names it per pane (ADR 0025).
+		const sessionPath = (): string => {
+			const polled = agentsRef.current;
+			if (polled === null) return "";
+			const match = matchConsultationAgent(consultation, polled);
+			return match === undefined || match === "ambiguous" ? "" : match.sessionId;
+		};
+		const readSessionNow = (): readonly SessionEntry[] | null => {
+			const kind = configRef.current.agents[consultation.agentType]?.kind;
+			const path = sessionPath();
+			const read =
+				kind !== undefined && path !== ""
+					? readSessionExchange(kind, path)
+					: ({ kind: "unavailable" } as const);
+			return read.kind === "readable" ? read.entries : null;
+		};
+		if (paneId === null || consultation.state === "closed") {
+			// A closed Consultation, or one whose Agent pane is gone: one
+			// read of the record, then the captured history stands in.
+			setLiveOutput(null);
+			setSessionEntries(readSessionNow());
 			return;
 		}
 		let active = true;
+		let previousBody: string | null = null;
 		const reader = new HerdrAgentReader(commandRunner);
 		const refresh = async () => {
 			const output = interaction
-				? await reader.readPaneAnsi(
-						selectedConsultation.paneId as string,
-						configRef.current.completionMessageLines,
-					)
-				: await reader.readPane(
-						selectedConsultation.paneId as string,
-						configRef.current.completionMessageLines,
-					);
+				? await reader.readPaneAnsi(paneId, configRef.current.completionMessageLines)
+				: await reader.readPane(paneId, configRef.current.completionMessageLines);
 			if (!active) return;
-			consultationOperations?.recordOutputRead(selectedConsultation.id, output);
-			if (output === null) return;
+			consultationOperations?.recordOutputRead(consultation.id, output);
+			const session = interaction ? null : readSessionNow();
+			if (!active) return;
+			if (output !== null) setLiveOutput(output);
+			setSessionEntries(session);
+			// The body the operator is looking at: the Session view when it
+			// renders, the pane read otherwise. Its growth is what the
+			// follow and the new-output marker watch.
+			const shown =
+				session !== null && session.length > 0
+					? JSON.stringify(session)
+					: interaction
+						? null
+						: output;
+			const changed = shown !== null && shown !== previousBody;
+			previousBody = shown;
 			if (consultationFollowRef.current) {
 				setConsultationScroll(999999);
 				setNewOutput(false);
+			} else if (changed) {
+				setNewOutput(true);
 			}
-			setLiveOutput((previous) => {
-				if (!consultationFollowRef.current && previous !== null && previous !== output)
-					setNewOutput(true);
-				return output;
-			});
 		};
 		outputRefreshRef.current = () => void refresh();
 		void refresh();
@@ -2656,6 +2729,7 @@ export function App({
 									createElement(ConsultationDetail, {
 										lines: consultationLines,
 										ansiLines,
+										bodyTitle: consultationDetailTitle(consultationBody),
 										visibleRows: Math.max(
 											1,
 											detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),

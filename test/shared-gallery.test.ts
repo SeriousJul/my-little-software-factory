@@ -80,6 +80,10 @@ describe("the shared control gallery", () => {
 			"search",
 			"notes",
 			"priority",
+			"session-view",
+			"agent-view-fallback",
+			"captured-history-fallback",
+			"goto",
 			"theme",
 			"theme-fallback",
 			"no-color",
@@ -268,6 +272,38 @@ describe("the shared control gallery", () => {
 		// renderer's own default is not a paint.
 		expect(spanColors(setup, "openai/gpt-5.1")).toEqual([[255, 255, 255]]);
 		expect(spanColors(setup, "Launch Consultation")).toEqual([[255, 255, 255]]);
+	});
+
+	test("the Consultation detail example shows the Session view and its fallbacks", async () => {
+		const setup = await gallery("session-view");
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("session-view"));
+		expect(frame).toContain("Session view:");
+		expect(frame).toContain("❯ review the auth design");
+		expect(frame).toContain("▸ bash: npm test");
+
+		setup.mockInput.pressTab();
+		const fallback = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes("Agent view:") && frameText(f).includes("src/auth.ts"),
+			"the Agent view fallback",
+		);
+		expect(frameText(fallback)).toContain("Agent: reading src/auth.ts");
+		expect(frameText(fallback)).not.toContain("Session view:");
+		setup.mockInput.pressTab();
+		const captured = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes("Captured history:"),
+			"the Captured history fallback",
+		);
+		expect(frameText(captured)).toContain("review the auth design");
+	});
+
+	test("the Goto example shows the hint available and unavailable, with its reason", async () => {
+		const setup = await gallery("goto");
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("goto"));
+		expect(frame).toContain("g Goto");
 	});
 
 	test("Esc leaves the gallery, the way its bar says", async () => {

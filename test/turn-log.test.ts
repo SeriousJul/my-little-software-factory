@@ -11,8 +11,12 @@ import {
 	codexAbortCause,
 	isHeldCause,
 	lastMessageFromLog,
+	readSessionExchange,
 	readSessionTurnEnd,
+	SESSION_ENTRY_COUNT_CAP,
+	SESSION_ENTRY_TEXT_CAP,
 	type SessionTurnRead,
+	sessionFromPiSession,
 	TURN_END_DETAIL_CAP,
 	type TurnEnd,
 	toolTarget,
@@ -861,6 +865,181 @@ describe("readSessionTurnEnd", () => {
 		paths.push(directory);
 		// A directory is not a readable session file.
 		expect(readSessionTurnEnd("pi", directory, null)).toEqual({ kind: "unavailable" });
+	});
+});
+
+describe("sessionFromPiSession", () => {
+	test("keeps the operator's inputs, the agent's text, and one note per tool call, in order", () => {
+		const read = sessionFromPiSession(
+			[
+				line({
+					type: "message",
+					message: { role: "user", content: [{ type: "text", text: "review the auth design" }] },
+				}),
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "inner notes, not the work" },
+							{ type: "text", text: "I will look at the code first." },
+							{
+								type: "toolCall",
+								id: "call-1",
+								name: "bash",
+								arguments: { command: "npm test" },
+							},
+						],
+					},
+				}),
+				line({
+					type: "message",
+					message: { role: "toolResult", toolCallId: "call-1", isError: false },
+				}),
+				line({
+					type: "message",
+					message: { role: "user", content: [{ type: "text", text: "and the tests?" }] },
+				}),
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "All 571 tests pass." }],
+					},
+				}),
+			].join("\n"),
+		);
+		expect(read).toEqual({
+			kind: "readable",
+			entries: [
+				{ kind: "input", text: "review the auth design" },
+				{ kind: "text", text: "I will look at the code first." },
+				{ kind: "tool", name: "bash", target: "npm test", failed: false },
+				{ kind: "input", text: "and the tests?" },
+				{ kind: "text", text: "All 571 tests pass." },
+			],
+		});
+	});
+
+	test("an error result marks only its matching tool note failed", () => {
+		const read = sessionFromPiSession(
+			[
+				line({
+					type: "message",
+					message: {
+						role: "assistant",
+						content: [
+							{ type: "toolCall", id: "a", name: "read", arguments: { path: "src/a.ts" } },
+							{ type: "toolCall", id: "b", name: "bash", arguments: { command: "npm test" } },
+						],
+					},
+				}),
+				line({
+					type: "message",
+					message: { role: "toolResult", toolCallId: "b", isError: true },
+				}),
+			].join("\n"),
+		);
+		expect(read.kind).toBe("readable");
+		if (read.kind !== "readable") return;
+		expect(read.entries).toEqual([
+			{ kind: "tool", name: "read", target: "src/a.ts", failed: false },
+			{ kind: "tool", name: "bash", target: "npm test", failed: true },
+		]);
+	});
+
+	test("a readable record with no messages reads as readable with no rows", () => {
+		expect(sessionFromPiSession(line({ type: "session", id: "s1" }))).toEqual({
+			kind: "readable",
+			entries: [],
+		});
+	});
+
+	test("a malformed line reads as unavailable", () => {
+		expect(sessionFromPiSession("{}\nnot json")).toEqual({ kind: "unavailable" });
+	});
+
+	test("skips a blank line and a record that is not a message", () => {
+		const read = sessionFromPiSession(
+			[
+				line({ type: "compaction", summary: "old" }),
+				"",
+				line({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "here" }] },
+				}),
+			].join("\n"),
+		);
+		expect(read).toEqual({ kind: "readable", entries: [{ kind: "text", text: "here" }] });
+	});
+
+	test("caps one entry's text at the record's reading bound", () => {
+		const long = "x".repeat(SESSION_ENTRY_TEXT_CAP + 100);
+		const read = sessionFromPiSession(
+			line({
+				type: "message",
+				message: { role: "assistant", content: [{ type: "text", text: long }] },
+			}),
+		);
+		expect(read.kind).toBe("readable");
+		if (read.kind !== "readable") return;
+		expect(read.entries).toEqual([
+			{
+				kind: "text",
+				text: `${"x".repeat(SESSION_ENTRY_TEXT_CAP)}[truncated]`,
+			},
+		]);
+	});
+
+	test("keeps the most recent rows when the record outgrows the row cap", () => {
+		const records = [];
+		for (let i = 0; i < SESSION_ENTRY_COUNT_CAP + 5; i += 1)
+			records.push(
+				line({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: `row ${i}` }] },
+				}),
+			);
+		const read = sessionFromPiSession(records.join("\n"));
+		expect(read.kind).toBe("readable");
+		if (read.kind !== "readable") return;
+		expect(read.entries).toHaveLength(SESSION_ENTRY_COUNT_CAP);
+		expect(read.entries[0]).toEqual({ kind: "text", text: `row 5` });
+		expect(read.entries.at(-1)).toEqual({
+			kind: "text",
+			text: `row ${SESSION_ENTRY_COUNT_CAP + 4}`,
+		});
+	});
+});
+
+describe("readSessionExchange", () => {
+	test("reads a pi record through its path", () => {
+		const directory = mkdtempSync(join(tmpdir(), "factory-session-"));
+		paths.push(directory);
+		const path = join(directory, "session.jsonl");
+		writeFileSync(
+			path,
+			line({
+				type: "message",
+				message: { role: "user", content: [{ type: "text", text: "hi" }] },
+			}),
+		);
+		expect(readSessionExchange("pi", path)).toEqual({
+			kind: "readable",
+			entries: [{ kind: "input", text: "hi" }],
+		});
+	});
+
+	test("a kind without a reader reads as unavailable, and an empty path does too", () => {
+		expect(readSessionExchange("codex", "")).toEqual({ kind: "unavailable" });
+		expect(readSessionExchange("cursor", "")).toEqual({ kind: "unavailable" });
+		expect(readSessionExchange("pi", "")).toEqual({ kind: "unavailable" });
+	});
+
+	test("a missing record reads as unavailable", () => {
+		expect(readSessionExchange("pi", join(tmpdir(), "no-such-session.jsonl"))).toEqual({
+			kind: "unavailable",
+		});
 	});
 });
 

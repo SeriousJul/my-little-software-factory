@@ -13,7 +13,7 @@
  * real repository. Random launch identities are canonicalized by
  * ConsultationRunner so the command sequence stays pinnable.
  */
-import { mkdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -360,6 +360,8 @@ const agentListJson = (
 		tab?: string;
 		ws?: string;
 		sess?: string;
+		/** The pi session record path herdr reports for the agent. */
+		record?: string;
 	}>,
 ) =>
 	JSON.stringify({
@@ -372,6 +374,9 @@ const agentListJson = (
 				agent_status: agent.status,
 				session_id: agent.sess ?? `sess-${agent.pane.slice(5)}`,
 				...(agent.seq === undefined ? {} : { sequence: agent.seq }),
+				...(agent.record === undefined
+					? {}
+					: { agent_session: { kind: "path", value: agent.record } }),
 			})),
 		},
 	});
@@ -2183,6 +2188,136 @@ describe("The full Consultation operator flow", () => {
 				},
 			);
 		} finally {
+			state.close();
+		}
+	});
+});
+
+describe("the Consultation detail reads the Agent's session record (ADR 0025)", () => {
+	/** Seed the record file the agent list points at. */
+	function seedRecord(id: string): { dir: string; path: string } {
+		const dir = mkdtempSync(join(tmpdir(), "factory-record-"));
+		const path = join(dir, `${id}.jsonl`);
+		writeFileSync(
+			path,
+			[
+				JSON.stringify({
+					type: "message",
+					message: { role: "user", content: [{ type: "text", text: "review auth" }] },
+				}),
+				JSON.stringify({
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: "The design is sound." }] },
+				}),
+			].join("\n"),
+		);
+		return { dir, path };
+	}
+
+	test("the working detail shows the record's rows, and g focuses the pane without touching the Consultation", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, WORKING_ID);
+		const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
+		const { dir, path } = seedRecord(WORKING_ID);
+		const inner = new FakeRunner();
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "idle", record: path }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					// The Session view stands in for the terminal body as soon
+					// as the poll names the record and a read renders it.
+					await toConsultations(setup, "the Consultation detail with the Session view", (f) =>
+						detailPaneText(f).includes("Session view:"),
+					);
+					const detail = detailPaneText(setup.captureCharFrame());
+					expect(detail).toContain("❯ review auth");
+					expect(detail).toContain("The design is sound.");
+					expect(frameText(setup.captureCharFrame())).toContain("Session view");
+					// The Goto hint sits in the Consultation mode's action bar.
+					expect(actionBarRowOf(setup.captureCharFrame())).toContain("g Goto");
+					// The observation settles the turn on its own; the Session
+					// view stays the body while the Consultation rests.
+					await awaitFrame(
+						setup,
+						(f) => f.includes("State: awaiting-response"),
+						"the settled turn",
+					);
+					// g focuses the pane and reports on the Message line: a
+					// navigation, not a Consultation change.
+					await press(setup, "g", "the focus notice", (f) =>
+						messageRowOf(f).includes("focused the Agent pane"),
+					);
+					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
+					expect(state.consultation(WORKING_ID)?.state).toBe("awaiting-response");
+					expect(state.pendingConsultationResponse(WORKING_ID)).toBeNull();
+				},
+				WIDTH,
+				32,
+				// No initialTickets: the observation loop must poll herdr for
+				// the record path, and it stands down on a test projection.
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			state.close();
+		}
+	});
+
+	test("a closed Consultation shows its record for the after-the-fact review, and g loses its pane when the poll drops it", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const closedId = uid("9");
+		seed(state, closedId);
+		state.setConsultationState(closedId, "closed");
+		const paneId = `pane-${closedId.slice(0, 8)}`;
+		const { dir, path } = seedRecord(closedId);
+		const inner = new FakeRunner();
+		// herdr still lists the Agent as done, with the record it wrote:
+		// the closed detail can read it for the after-the-fact review.
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "done", record: path }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					// The closed Consultation sits in the closed history.
+					await toConsultations(setup, "the consultations view", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("Session view:"),
+						"the record the closed detail shows",
+					);
+					const detail = detailPaneText(setup.captureCharFrame());
+					expect(detail).toContain("❯ review auth");
+					expect(detail).toContain("The design is sound.");
+					// The pane leaves the last poll: the detail keeps the
+					// record it read, and g answers its reason on the Message
+					// line instead of focusing a pane herdr no longer lists.
+					runner.agentListJson = agentListJson([]);
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("Agent status: unknown"),
+						"the poll without the pane",
+					);
+					await press(setup, "g", "the Goto reason", (f) =>
+						messageRowOf(f).includes("the Agent's pane is not alive in the last poll"),
+					);
+					expect(runner.commands()).not.toContain(`herdr agent focus ${paneId}`);
+				},
+				WIDTH,
+				32,
+				// No initialTickets: the observation loop must poll herdr for
+				// the record path, and it stands down on a test projection.
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 			state.close();
 		}
 	});

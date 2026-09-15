@@ -2,11 +2,14 @@
 import { describe, expect, test } from "vitest";
 
 import {
+	availabilityFor,
 	type ControlContext,
+	type ControlDefinition,
 	contextFor,
 	controlForKey,
 	guideControls,
 } from "../src/components/controls.ts";
+import type { Consultation } from "../src/state.ts";
 
 const values: Omit<ControlContext, "mode"> = {
 	listCanMove: true,
@@ -17,6 +20,8 @@ const values: Omit<ControlContext, "mode"> = {
 	messageTruncated: false,
 	consultationTypesConfigured: true,
 };
+
+const consultationWithPane = { paneId: "pane-1" } as unknown as Consultation;
 
 describe("the shared control catalogue", () => {
 	test("x toggles the section under the cursor and is not an Interact alias", () => {
@@ -51,5 +56,33 @@ describe("the shared control catalogue", () => {
 
 		expect(controlForKey({ name: "z" }, context)?.id).toBe("consultation-close");
 		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
+	});
+
+	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {
+		const withAlivePane: Omit<ControlContext, "mode"> = {
+			...values,
+			selectedConsultation: consultationWithPane,
+			consultationPaneAlive: true,
+		};
+		const detail = contextFor("consultation-detail", withAlivePane);
+		const list = contextFor("consultation-list", withAlivePane);
+		const found = controlForKey({ name: "g" }, detail);
+		const control: ControlDefinition | undefined = found;
+
+		expect(control?.id).toBe("consultation-goto");
+		expect(controlForKey({ name: "g" }, list)?.id).toBe("consultation-goto");
+		if (control === undefined) throw new Error("Goto is missing from the catalogue");
+		expect(availabilityFor(control, detail).available).toBe(true);
+		const paneGone = contextFor("consultation-detail", {
+			...withAlivePane,
+			consultationPaneAlive: false,
+		});
+		expect(availabilityFor(control, paneGone)).toEqual({
+			available: false,
+			reason: "the Agent's pane is not alive in the last poll",
+		});
+		expect(availabilityFor(control, contextFor("consultation-detail", values)).available).toBe(
+			false,
+		);
 	});
 });

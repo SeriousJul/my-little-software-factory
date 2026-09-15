@@ -32,6 +32,31 @@ export type TurnLogEntry =
 type ToolEntry = Extract<TurnLogEntry, { kind: "tool" }>;
 
 /**
+ * One row of the Consultation detail's Session view (ADR 0025):
+ * the operator's input, the Agent's text, or one note per tool call.
+ */
+export type SessionEntry =
+	| { kind: "input"; text: string }
+	| { kind: "text"; text: string }
+	| { kind: "tool"; name: string; target: string; failed: boolean };
+
+/**
+ * The result of one live read of an Agent's session record (ADR 0025):
+ * the readable record's conversation in order, capped, or unavailable when
+ * the kind has no reader yet, the record path is missing, or the record
+ * cannot be read. The Consultation detail falls back to its terminal view
+ * on unavailable, and on a readable record that still holds no messages.
+ */
+export type SessionExchangeRead =
+	| { kind: "readable"; entries: SessionEntry[] }
+	| { kind: "unavailable" };
+
+/** The longest one entry's text may grow, cut at the end like the turn-end read. */
+export const SESSION_ENTRY_TEXT_CAP = 2000;
+/** The most recent rows a live read keeps when the record outgrows them. */
+export const SESSION_ENTRY_COUNT_CAP = 400;
+
+/**
  * The turn end cause: why the agent's settled turn ended.
  *
  * A closed six-value vocabulary. A vendor-specific class is mapped into it
@@ -445,6 +470,96 @@ export function readSessionTurnEnd(
 			return turnEndFromCodexSession(raw, startedAt);
 		case "claude":
 			return turnEndFromClaudeSession(raw, startedAt);
+		default:
+			return { kind: "unavailable" };
+	}
+}
+
+/**
+ * Read the session's whole exchange from a pi Agent's record (ADR 0025):
+ * the operator's inputs, the Agent's text, and one note per tool call, in
+ * order. The Session view is live, so every call reads the file again, and
+ * the caps keep a long session within the same bounds the turn-end read
+ * uses. A record with no messages reads as readable with no rows: the
+ * record is fine, it simply holds nothing yet. A line that is not one of
+ * the record's messages is unavailable, in the turn-end reader's sense.
+ */
+export function sessionFromPiSession(jsonl: string): SessionExchangeRead {
+	const entries: SessionEntry[] = [];
+	const toolById = new Map<string, Extract<SessionEntry, { kind: "tool" }>>();
+	for (const line of jsonl.split("\n")) {
+		if (line.trim() === "") continue;
+		let record: unknown;
+		try {
+			record = JSON.parse(line);
+		} catch {
+			return { kind: "unavailable" };
+		}
+		if (!isRecord(record) || record.type !== "message") continue;
+		const message = isRecord(record.message) ? record.message : undefined;
+		if (message === undefined || typeof message.role !== "string") continue;
+		const content = Array.isArray(message.content) ? message.content : [];
+		if (message.role === "user") {
+			for (const part of content) {
+				if (
+					isRecord(part) &&
+					part.type === "text" &&
+					typeof part.text === "string" &&
+					part.text.trim() !== ""
+				)
+					entries.push({ kind: "input", text: capEntryText(part.text) });
+			}
+		} else if (message.role === "assistant") {
+			for (const part of content) {
+				if (!isRecord(part)) continue;
+				if (part.type === "text" && typeof part.text === "string" && part.text.trim() !== "")
+					entries.push({ kind: "text", text: capEntryText(part.text) });
+				else if (part.type === "toolCall" && typeof part.name === "string") {
+					const note: Extract<SessionEntry, { kind: "tool" }> = {
+						kind: "tool",
+						name: part.name,
+						target: toolTarget(part.name, isRecord(part.arguments) ? part.arguments : {}),
+						failed: false,
+					};
+					entries.push(note);
+					if (typeof part.id === "string") toolById.set(part.id, note);
+				}
+			}
+		} else if (message.role === "toolResult") {
+			if (message.isError !== true) continue;
+			const note =
+				typeof message.toolCallId === "string" ? toolById.get(message.toolCallId) : undefined;
+			if (note !== undefined) note.failed = true;
+		}
+	}
+	if (entries.length > SESSION_ENTRY_COUNT_CAP)
+		entries.splice(0, entries.length - SESSION_ENTRY_COUNT_CAP);
+	return { kind: "readable", entries };
+}
+
+/** Cap one entry's text at the record's reading bound, cut at the end. */
+function capEntryText(text: string): string {
+	return text.length > SESSION_ENTRY_TEXT_CAP
+		? `${text.slice(0, SESSION_ENTRY_TEXT_CAP)}[truncated]`
+		: text;
+}
+
+/**
+ * Read the session exchange for one Consultation's Agent, through the reader
+ * its kind owns (ADR 0025). A kind without a reader, an empty record path,
+ * and a record that cannot be read all read as unavailable.
+ */
+export function readSessionExchange(kind: string, sessionPath: string): SessionExchangeRead {
+	if (sessionPath === "") return { kind: "unavailable" };
+	let raw: string;
+	try {
+		raw = readFileSync(sessionPath, "utf8");
+	} catch {
+		return { kind: "unavailable" };
+	}
+	switch (kind) {
+		case "pi":
+			return sessionFromPiSession(raw);
 		default:
 			return { kind: "unavailable" };
 	}
