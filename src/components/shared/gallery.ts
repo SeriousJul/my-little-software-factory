@@ -29,8 +29,14 @@ import { KeyGuide } from "../utility.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
-import { controlInk, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
-import { HERDR_THEME_VERSION, THEME_ROLES, type ThemeRole, unknownThemeWarning } from "./theme.ts";
+import { controlInk, inkForTheme, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
+import {
+	HERDR_THEME_VERSION,
+	resolveTheme,
+	THEME_ROLES,
+	type ThemeRole,
+	unknownThemeWarning,
+} from "./theme.ts";
 import { TypeAheadRow } from "./type-ahead.ts";
 
 /** One example of the gallery: a title, a state word, and the controls it shows. */
@@ -86,7 +92,29 @@ const FOCUSED_CONTROL: Record<string, string> = {
 	priority: "rank",
 	narrow: "draft",
 	"no-color": "no-color-repository",
+	"theme-light": "light-model",
 };
+
+/**
+ * The light theme the gallery's light example shows.
+ *
+ * It is resolved by the same pure rules the startup resolution runs - a light
+ * name in herdr's config, read exactly the way herdr reads it - so the
+ * example cannot drift from what the plane inherits.
+ */
+const GALLERY_LIGHT_THEME = resolveTheme('[theme]\nname = "catppuccin-latte"\n', true).theme;
+
+/** The config the gallery's override example states, and the theme it resolves. */
+const GALLERY_OVERRIDE_CONFIG = [
+	"[theme]",
+	'name = "catppuccin"',
+	"",
+	"[theme.custom]",
+	'accent = "#ffb86c"',
+	'text = "rgb(255, 255, 255)"',
+	'panel_bg = "reset"',
+].join("\n");
+const GALLERY_OVERRIDE_THEME = resolveTheme(GALLERY_OVERRIDE_CONFIG, true).theme;
 
 /** One role's swatch: the role's color under the role's name. */
 function themeSwatchRow(theme: { roles: Record<ThemeRole, string> }): ReactElement {
@@ -584,6 +612,60 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			messageRowElement(
 				{ severity: "warning", text: unknownThemeWarning("frobnicate") },
 				columns.contentWidth,
+			),
+		],
+	},
+	{
+		id: "theme-light",
+		state: "the light theme: a light name in herdr's config, the same controls in that ink",
+		render: (columns, holds, inputActive, wiring) => {
+			const ink = inkForTheme(GALLERY_LIGHT_THEME);
+			return [
+				createElement(
+					"text",
+					{ key: "light-name", fg: paint("text") },
+					truncateToWidth(
+						`theme: ${GALLERY_LIGHT_THEME.name} (${GALLERY_LIGHT_THEME.appearance})`,
+						columns.contentWidth,
+					),
+				),
+				themeSwatchRow(GALLERY_LIGHT_THEME),
+				createElement(TextField, {
+					key: "light-model",
+					label: "Model",
+					value: "openai/gpt-5.1",
+					focused: holds === "light-model",
+					inputActive,
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					ink,
+					...(holds === "light-model"
+						? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
+						: {}),
+				}),
+			];
+		},
+	},
+	{
+		id: "theme-override",
+		state: "custom overrides: the per-token [theme.custom] values on top of the base theme",
+		render: (columns) => [
+			createElement(
+				"text",
+				{ key: "override-config", fg: paint("text") },
+				truncateToWidth(
+					`[theme] names "catppuccin"; [theme.custom] sets accent to #ffb86c, text to rgb(255, 255, 255), panel_bg to reset`,
+					columns.contentWidth,
+				),
+			),
+			themeSwatchRow(GALLERY_OVERRIDE_THEME),
+			createElement(
+				"text",
+				{ key: "override-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"a swatch wears the override where the token holds, and stands without one where the token resolves to `reset`",
+					columns.contentWidth,
+				),
 			),
 		],
 	},

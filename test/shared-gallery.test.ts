@@ -13,7 +13,11 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
-import { HERDR_THEME_VERSION, STANDALONE_THEME } from "../src/components/shared/theme.ts";
+import {
+	BUILTIN_THEMES,
+	HERDR_THEME_VERSION,
+	STANDALONE_THEME,
+} from "../src/components/shared/theme.ts";
 import {
 	awaitFrame,
 	cellColors,
@@ -86,6 +90,8 @@ describe("the shared control gallery", () => {
 			"goto",
 			"theme",
 			"theme-fallback",
+			"theme-light",
+			"theme-override",
 			"no-color",
 			"narrow",
 		]);
@@ -257,6 +263,64 @@ describe("the shared control gallery", () => {
 		// The line is cut by the box, as every row is: the named theme and the
 		// fallback are what must survive.
 		expect(frame).toContain(`unknown theme name "frobnicate"`);
+	});
+
+	test("the light theme example paints the same controls in a light theme's ink", async () => {
+		const setup = await gallery("theme-light");
+		const raw = setup.captureCharFrame();
+		const frame = frameText(raw);
+		expect(frame).toContain("theme: catppuccin-latte (light)");
+		expect(frame).toContain("Model");
+		expect(frame).toContain("openai/gpt-5.1");
+		// The focused field wears the light theme's own pair: its text on its
+		// active-row surface, so a light name in herdr's config reads light.
+		const value = findCell(setup, "openai/gpt-5.1");
+		const cell = cellColors(setup, value.x, value.y);
+		expect(cell.fg).toEqual([0x4c, 0x4f, 0x69]);
+		expect(cell.bg).toEqual([0xe6, 0xe9, 0xef]);
+		// The accent swatch wears the light theme's accent.
+		const swatchRow = rowsOf(raw).findIndex((row) => row.includes(" subtext0 "));
+		expect(swatchRow).toBeGreaterThanOrEqual(0);
+		const swatch = rowSpans(setup, swatchRow).find((span) => span.text.trim() === "accent");
+		if (swatch === undefined || swatch.bg === null) {
+			throw new Error("the light example lost its accent swatch");
+		}
+		expect(hexOf(swatch.bg)).toBe("#1e66f5");
+	});
+
+	test("the override example wears the token values the [theme.custom] section holds", async () => {
+		const setup = await gallery("theme-override");
+		const raw = setup.captureCharFrame();
+		const frame = frameText(raw);
+		expect(frame).toContain('names "catppuccin"');
+		// The swatch row holds every role name at once; the config line above
+		// it names only the overridden tokens.
+		const swatchRow = rowsOf(raw).findIndex((row) => row.includes(" subtext0 "));
+		expect(swatchRow).toBeGreaterThanOrEqual(0);
+		const swatches = rowSpans(setup, swatchRow);
+		// The overridden tokens wear the override's own values...
+		const accent = swatches.find((span) => span.text.trim() === "accent");
+		if (accent === undefined || accent.bg === null) {
+			throw new Error("the override example lost its accent swatch");
+		}
+		expect(hexOf(accent.bg)).toBe("#ffb86c");
+		const text = swatches.find((span) => span.text.trim() === "text");
+		if (text === undefined || text.bg === null) {
+			throw new Error("the override example lost its text swatch");
+		}
+		expect(hexOf(text.bg)).toBe("#ffffff");
+		// ...a token the override drops keeps the base theme, and a token
+		// that resolves to `reset` paints no swatch at all.
+		const subtext = swatches.find((span) => span.text.trim() === "subtext0");
+		if (subtext === undefined || subtext.bg === null) {
+			throw new Error("the override example lost its subtext0 swatch");
+		}
+		expect(hexOf(subtext.bg)).toBe("#a6adc8");
+		// A token that resolves to `reset` paints no swatch of its own: the
+		// surface behind it stands, and the base theme's value never shows.
+		const panel = swatches.find((span) => span.text.trim() === "panel_bg");
+		if (panel === undefined) throw new Error("the override example lost its panel_bg swatch");
+		if (panel.bg !== null) expect(hexOf(panel.bg)).not.toBe(BUILTIN_THEMES["catppuccin"].roles.panel_bg);
 	});
 
 	test("the no-color example paints the same controls with no color", async () => {
