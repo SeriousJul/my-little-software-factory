@@ -14,10 +14,14 @@ import { parse as parseToml } from "smol-toml";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { validateConfigWithWarnings } from "../src/config.ts";
+import type { FetchedTicket, IssueReference } from "../src/domain/ticket.ts";
+import { withIssueReferences } from "../src/domain/ticket.ts";
 import {
 	bumpPriority,
 	compareTicketPriority,
 	effectivePriority,
+	effectivePullRequestPriority,
+	inheritedPriority,
 	PRIORITY_OFF,
 	type TicketPriority,
 } from "../src/priority.ts";
@@ -43,6 +47,7 @@ describe("the rank function", () => {
 			rank: 1,
 			label: "high",
 			source: "override",
+			inheritedFrom: null,
 		});
 	});
 
@@ -57,6 +62,7 @@ describe("the rank function", () => {
 			rank: 0,
 			label: "critical",
 			source: "label",
+			inheritedFrom: null,
 		});
 	});
 
@@ -69,6 +75,7 @@ describe("the rank function", () => {
 			rank: null,
 			label: null,
 			source: "none",
+			inheritedFrom: null,
 		});
 	});
 
@@ -77,6 +84,7 @@ describe("the rank function", () => {
 			rank: null,
 			label: null,
 			source: "none",
+			inheritedFrom: null,
 		});
 	});
 
@@ -85,6 +93,7 @@ describe("the rank function", () => {
 			rank: null,
 			label: "critical",
 			source: "override",
+			inheritedFrom: null,
 		});
 	});
 
@@ -99,6 +108,143 @@ describe("the rank function", () => {
 	});
 });
 
+describe("the inherited rank (ADR 0023)", () => {
+	const refs = {
+		low: { number: 3, labels: ["low"], override: null },
+		critical: { number: 1, labels: ["critical"], override: null },
+		high: { number: 2, labels: ["high"], override: null },
+		urgent: { number: 4, labels: ["urgent"], override: null },
+	};
+
+	test("the highest ranked reference wins, named by its number", () => {
+		expect(inheritedPriority(RANKS, [refs.low, refs.critical])).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 1,
+		});
+	});
+
+	test("a reference's own override beats its labels", () => {
+		expect(inheritedPriority(RANKS, [{ number: 2, labels: ["low"], override: "high" }])).toEqual({
+			rank: 1,
+			label: "high",
+			source: "inherited",
+			inheritedFrom: 2,
+		});
+	});
+
+	test("an override set on the referenced ticket travels through inheritance", () => {
+		expect(
+			inheritedPriority(RANKS, [{ number: 7, labels: ["low"], override: "critical" }]),
+		).toEqual({ rank: 0, label: "critical", source: "inherited", inheritedFrom: 7 });
+	});
+
+	test("a reference whose override is off is unranked, and the next wins", () => {
+		expect(
+			inheritedPriority(RANKS, [
+				{ number: 1, labels: ["critical"], override: PRIORITY_OFF },
+				refs.high,
+			]),
+		).toEqual({ rank: 1, label: "high", source: "inherited", inheritedFrom: 2 });
+	});
+
+	test("a reference with no ranked label and no override carries no rank", () => {
+		expect(inheritedPriority(RANKS, [refs.urgent])).toEqual({
+			rank: null,
+			label: null,
+			source: "none",
+			inheritedFrom: null,
+		});
+	});
+
+	test("no references inherit nothing", () => {
+		expect(inheritedPriority(RANKS, [])).toEqual({
+			rank: null,
+			label: null,
+			source: "none",
+			inheritedFrom: null,
+		});
+	});
+
+	test("a tie at the best rank names the lowest issue number", () => {
+		expect(
+			inheritedPriority(RANKS, [
+				{ number: 9, labels: ["critical"], override: null },
+				{ number: 5, labels: ["critical"], override: null },
+			]),
+		).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 5,
+		});
+	});
+
+	test("the pull request's own override beats the inherited rank", () => {
+		expect(effectivePullRequestPriority(RANKS, "high", ["low"], [refs.critical])).toEqual({
+			rank: 1,
+			label: "high",
+			source: "override",
+			inheritedFrom: null,
+		});
+	});
+
+	test("the pull request's own label beats the inherited rank", () => {
+		expect(effectivePullRequestPriority(RANKS, null, ["high"], [refs.critical])).toEqual({
+			rank: 1,
+			label: "high",
+			source: "label",
+			inheritedFrom: null,
+		});
+	});
+
+	test("the pull request's own off keeps it unranked, not inherited", () => {
+		expect(effectivePullRequestPriority(RANKS, PRIORITY_OFF, [], [refs.critical])).toEqual({
+			rank: null,
+			label: "off",
+			source: "override",
+			inheritedFrom: null,
+		});
+	});
+
+	test("an override the list dropped stays stated when no reference ranks", () => {
+		expect(effectivePullRequestPriority(RANKS, "urgent", [], [refs.urgent])).toEqual({
+			rank: null,
+			label: "urgent",
+			source: "override",
+			inheritedFrom: null,
+		});
+	});
+
+	test("an override the list dropped still lets a ranked reference inherit", () => {
+		expect(effectivePullRequestPriority(RANKS, "urgent", [], [refs.critical])).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 1,
+		});
+	});
+
+	test("an unranked pull request inherits its reference's rank", () => {
+		expect(effectivePullRequestPriority(RANKS, null, [], [refs.critical])).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 1,
+		});
+	});
+
+	test("closing only unranked issues stays unranked", () => {
+		expect(effectivePullRequestPriority(RANKS, null, [], [refs.urgent])).toEqual({
+			rank: null,
+			label: null,
+			source: "none",
+			inheritedFrom: null,
+		});
+	});
+});
+
 /** One comparator input, built from the facts the projections carry. */
 function entry(
 	identity: string,
@@ -106,7 +252,7 @@ function entry(
 	updated = "2026-08-31T10:00:00Z",
 ): { priority: TicketPriority; externalUpdatedAt: string; identity: string } {
 	return {
-		priority: { rank, label: null, source: rank === null ? "none" : "label" },
+		priority: { rank, label: null, source: rank === null ? "none" : "label", inheritedFrom: null },
 		externalUpdatedAt: updated,
 		identity,
 	};
@@ -334,6 +480,275 @@ describe("the operator's override", () => {
 			"github:github.com:I_6",
 			"github:github.com:I_5",
 		]);
+		state.close();
+	});
+});
+
+describe("inherited priority through closed issues (ADR 0023)", () => {
+	const issues = { name: "issues", kind: "github-issues" } as const;
+	const pulls = { name: "pulls", kind: "github-pull-request" } as const;
+
+	const ref = (identity: string, number: number): IssueReference => ({
+		identity,
+		number,
+		repository: "acme/factory",
+	});
+
+	/** One pull request ticket on the shared sample repository. */
+	function pullTicket(
+		identity: string,
+		number: number,
+		references: readonly IssueReference[],
+		over: Partial<FetchedTicket> = {},
+	): FetchedTicket {
+		return {
+			identity,
+			sourceKind: "github-pull-request",
+			externalKey: `#${number}`,
+			sourceState: "open",
+			url: `https://github.com/acme/factory/pulls/${number}`,
+			title: `Pull ${number}`,
+			description: "",
+			labels: [],
+			externalUpdatedAt: "2026-08-31T10:00:00Z",
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+			},
+			attributes: withIssueReferences({ draft: "false" }, [...references]),
+			...over,
+		};
+	}
+
+	function openPullState(path: string): import("../src/state.ts").FactoryState {
+		const state = openFactoryState(path);
+		state.initializeSources([issues, pulls]);
+		return state;
+	}
+
+	test("a pull request takes the highest rank of the issues it closes, live, last known, and fact", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(
+			issues,
+			success([
+				issueTicket("github:github.com:I_5", { labels: ["high"] }),
+				issueTicket("github:github.com:I_6", { labels: ["low"] }),
+			]),
+		);
+		// The PR closes I_5 (live), I_6 (about to leave the source), and I_7,
+		// which no source lists: the read stored its fact.
+		state.applyFetch(pulls, {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [
+				pullTicket("github:github.com:P_7", 7, [
+					ref("github:github.com:I_5", 5),
+					ref("github:github.com:I_6", 6),
+					ref("github:github.com:I_7", 7),
+				]),
+			],
+			referencedIssueFacts: [
+				{
+					identity: "github:github.com:I_7",
+					labels: ["critical"],
+					fetchedAt: "2026-08-31T10:01:00Z",
+				},
+			],
+		});
+		// I_6 leaves the issue source: it stays a last known ticket, ranked by
+		// its stored labels. I_7 keeps its fact.
+		state.applyFetch(issues, success([issueTicket("github:github.com:I_5", { labels: ["high"] })]));
+		const [pr] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((t) => t.identity === "github:github.com:P_7");
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 7,
+		});
+		state.close();
+	});
+
+	test("a snapshot beats a fact for the same issue", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(
+			issues,
+			success([issueTicket("github:github.com:I_5", { labels: ["critical"] })]),
+		);
+		state.applyFetch(pulls, {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_5", 5)])],
+			// The direct read saw a stale label set: the snapshot wins.
+			referencedIssueFacts: [
+				{ identity: "github:github.com:I_5", labels: ["low"], fetchedAt: "2026-08-31T10:01:00Z" },
+			],
+		});
+		const [pr] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((t) => t.identity === "github:github.com:P_7");
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 5,
+		});
+		state.close();
+	});
+
+	test("a Priority override set on the referenced ticket travels through inheritance", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(issues, success([issueTicket("github:github.com:I_5", { labels: ["low"] })]));
+		state.applyFetch(
+			pulls,
+			success([pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_5", 5)])]),
+		);
+		state.setPriorityOverride("github:github.com:I_5", "critical");
+		const [pr] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((t) => t.identity === "github:github.com:P_7");
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 5,
+		});
+		state.close();
+	});
+
+	test("a refresh that changes the pull request's references changes its rank", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(
+			issues,
+			success([
+				issueTicket("github:github.com:I_5", { labels: ["critical"] }),
+				issueTicket("github:github.com:I_6", { labels: ["low"] }),
+			]),
+		);
+		state.applyFetch(
+			pulls,
+			success([pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_5", 5)])]),
+		);
+		const before = state
+			.visibleTickets([], "implement", RANKS)
+			.find((t) => t.identity === "github:github.com:P_7");
+		if (before === undefined) throw new Error("missing pull request ticket");
+		expect(before.priority.rank).toBe(0);
+		// The PR now closes only I_6.
+		state.applyFetch(
+			pulls,
+			success([pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_6", 6)])]),
+		);
+		const after = state
+			.visibleTickets([], "implement", RANKS)
+			.find((t) => t.identity === "github:github.com:P_7");
+		if (after === undefined) throw new Error("missing pull request ticket");
+		expect(after.priority).toEqual({
+			rank: 2,
+			label: "low",
+			source: "inherited",
+			inheritedFrom: 6,
+		});
+		state.close();
+	});
+
+	test("an orphaned fact persists harmlessly", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(issues, success([issueTicket("github:github.com:I_5", { labels: ["low"] })]));
+		state.applyFetch(pulls, {
+			status: "success",
+			fetchedAt: "2026-08-31T10:01:00Z",
+			tickets: [
+				pullTicket("github:github.com:P_7", 7, [
+					ref("github:github.com:I_5", 5),
+					ref("github:github.com:I_7", 7),
+				]),
+			],
+			referencedIssueFacts: [
+				{
+					identity: "github:github.com:I_7",
+					labels: ["critical"],
+					fetchedAt: "2026-08-31T10:01:00Z",
+				},
+			],
+		});
+		// The refresh drops I_7 from the references: the fact is orphaned.
+		state.applyFetch(
+			pulls,
+			success([pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_5", 5)])]),
+		);
+		// A later refresh re-references I_7: the kept fact still carries its
+		// rank, no direct read is needed by the state.
+		state.applyFetch(
+			pulls,
+			success([pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_7", 7)])]),
+		);
+		const [pr] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((t) => t.identity === "github:github.com:P_7");
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 7,
+		});
+		state.close();
+	});
+
+	test("a draft pull request inherits exactly like a ready one", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(
+			issues,
+			success([issueTicket("github:github.com:I_5", { labels: ["critical"] })]),
+		);
+		state.applyFetch(
+			pulls,
+			success([
+				pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_5", 5)], {
+					attributes: withIssueReferences({ draft: "true" }, [ref("github:github.com:I_5", 5)]),
+				}),
+			]),
+		);
+		const [pr] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((t) => t.identity === "github:github.com:P_7");
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 5,
+		});
+		state.close();
+	});
+
+	test("the pull request's own override beats the inherited rank", () => {
+		const state = openPullState(statePath());
+		state.applyFetch(
+			issues,
+			success([issueTicket("github:github.com:I_5", { labels: ["critical"] })]),
+		);
+		state.applyFetch(
+			pulls,
+			success([pullTicket("github:github.com:P_7", 7, [ref("github:github.com:I_5", 5)])]),
+		);
+		state.setPriorityOverride("github:github.com:P_7", "low");
+		const [pr] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((t) => t.identity === "github:github.com:P_7");
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
+			rank: 2,
+			label: "low",
+			source: "override",
+			inheritedFrom: null,
+		});
 		state.close();
 	});
 });

@@ -473,3 +473,273 @@ describe("GitHub ticket source contract", () => {
 		expect(runner.calls[2].secretEnvironmentNames).toEqual(["GH_TOKEN"]);
 	});
 });
+
+describe("pull request reference reads (ADR 0023)", () => {
+	const prSource = source("github-pull-requests");
+
+	/** One pull request node as the search response resolves it. */
+	function pullRequestClosing(over: object = {}): object {
+		return {
+			__typename: "PullRequest",
+			id: "P_7",
+			number: 7,
+			title: "Add a webhook retry",
+			body: "Please review.",
+			url: "https://github.com/acme/factory/pulls/7",
+			state: "OPEN",
+			updatedAt: "2026-08-31T11:00:00Z",
+			isDraft: false,
+			labels: { nodes: [{ name: "ready-for-review" }] },
+			repository: {
+				name: "factory",
+				nameWithOwner: "acme/factory",
+				url: "https://github.com/acme/factory",
+			},
+			...over,
+		};
+	}
+
+	/** One referenced issue node as the search response resolves it. */
+	function referenceIssue(number = 5, over: object = {}): object {
+		return {
+			__typename: "Issue",
+			id: `I_${number}`,
+			number,
+			title: "Use real tickets",
+			labels: { nodes: [{ name: "critical" }] },
+			repository: { name: "factory", nameWithOwner: "acme/factory" },
+			...over,
+		};
+	}
+
+	/** The three search pages a single repository's pull request fetch reads
+		(one per policy branch). */
+	function prPages(...pages: unknown[][]): CommandResult[] {
+		return pages.map((nodes) => page(nodes));
+	}
+
+	/** One canned answer for the batched direct read. */
+	function referenceRead(...entries: (object | null)[]): CommandResult {
+		const data: Record<string, unknown> = {};
+		entries.forEach((entry, index) => {
+			data[`reference${index}`] = entry;
+		});
+		return { code: 0, stdout: JSON.stringify({ data }), stderr: "" };
+	}
+
+	test("a pull request's closing references are stored as source facts", async () => {
+		const runner = new SourceRunner(
+			prPages(
+				[pullRequestClosing({ closingIssuesReferences: { nodes: [referenceIssue(5)] } })],
+				[],
+				[],
+			),
+		);
+		const outcome = await createTicketSource(prSource, runner).fetch(["github:github.com:I_5"]);
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets[0]).toEqual(
+			expect.objectContaining({
+				identity: "github:github.com:P_7",
+				attributes: {
+					draft: "false",
+					closes: JSON.stringify([
+						{
+							identity: "github:github.com:I_5",
+							number: 5,
+							repository: "acme/factory",
+						},
+					]),
+				},
+			}),
+		);
+	});
+
+	test("every reference covered by the snapshot costs no extra request", async () => {
+		const runner = new SourceRunner(
+			prPages(
+				[
+					pullRequestClosing({
+						closingIssuesReferences: { nodes: [referenceIssue(5), referenceIssue(6)] },
+					}),
+				],
+				[],
+				[],
+			),
+		);
+		const outcome = await createTicketSource(prSource, runner).fetch([
+			"github:github.com:I_5",
+			"github:github.com:I_6",
+		]);
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		// The three search queries, nothing else: the snapshot covers both.
+		expect(runner.calls).toHaveLength(3);
+		expect(outcome.referencedIssueFacts).toEqual([
+			{
+				identity: "github:github.com:I_5",
+				labels: ["critical"],
+				fetchedAt: expect.any(String),
+			},
+			{
+				identity: "github:github.com:I_6",
+				labels: ["critical"],
+				fetchedAt: expect.any(String),
+			},
+		]);
+	});
+
+	test("one uncovered reference costs exactly one batched read", async () => {
+		const runner = new SourceRunner([
+			...prPages(
+				[
+					pullRequestClosing({
+						closingIssuesReferences: { nodes: [referenceIssue(5), referenceIssue(6)] },
+					}),
+				],
+				[],
+				[],
+			),
+			referenceRead({
+				id: "I_6",
+				number: 6,
+				title: "Use real tickets",
+				labels: { nodes: [{ name: "high" }] },
+			}),
+		]);
+		const outcome = await createTicketSource(prSource, runner).fetch(["github:github.com:I_5"]);
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(runner.calls).toHaveLength(4);
+		const read = runner.calls[3].args.join(" ");
+		expect(read).toContain("api graphql");
+		// The covered reference is not in the read; the uncovered one is
+		// addressed by its identity.
+		expect(read).toContain("node(id: $ref0Id)");
+		expect(read).toContain("ref0Id=I_6");
+		expect(read).not.toContain("ref1Id");
+		expect(outcome.referencedIssueFacts).toEqual([
+			{
+				identity: "github:github.com:I_5",
+				labels: ["critical"],
+				fetchedAt: expect.any(String),
+			},
+			{
+				identity: "github:github.com:I_6",
+				labels: ["high"],
+				fetchedAt: expect.any(String),
+			},
+		]);
+	});
+
+	test("a reference without an identity is read by repository and number", async () => {
+		const runner = new SourceRunner([
+			...prPages(
+				[
+					pullRequestClosing({
+						closingIssuesReferences: { nodes: [referenceIssue(6, { id: null })] },
+					}),
+				],
+				[],
+				[],
+			),
+			referenceRead({
+				issue: {
+					id: "I_6",
+					number: 6,
+					title: "Use real tickets",
+					labels: { nodes: [{ name: "high" }] },
+				},
+			}),
+		]);
+		const outcome = await createTicketSource(prSource, runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		const read = runner.calls[3].args.join(" ");
+		expect(read).toContain("repository(owner: $ref0Owner, name: $ref0Name)");
+		expect(read).toContain("issue(number: $ref0Number)");
+		expect(read).toContain("ref0Owner=acme");
+		expect(read).toContain("ref0Name=factory");
+		expect(read).toContain("ref0Number=6");
+		expect(outcome.tickets[0]).toEqual(
+			expect.objectContaining({
+				attributes: {
+					draft: "false",
+					closes: JSON.stringify([{ identity: null, number: 6, repository: "acme/factory" }]),
+				},
+			}),
+		);
+		expect(outcome.referencedIssueFacts).toEqual([
+			{
+				identity: "github:github.com:I_6",
+				labels: ["high"],
+				fetchedAt: expect.any(String),
+			},
+		]);
+	});
+
+	test("a failed batched read succeeds the refresh with one warning and no facts", async () => {
+		const runner = new SourceRunner([
+			...prPages(
+				[pullRequestClosing({ closingIssuesReferences: { nodes: [referenceIssue(5)] } })],
+				[],
+				[],
+			),
+			{ code: 1, stdout: "", stderr: "HTTP 500: internal error\n" },
+		]);
+		const outcome = await createTicketSource(prSource, runner).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "success",
+				tickets: [expect.objectContaining({ identity: "github:github.com:P_7" })],
+				warnings: ["referenced issue read failed: GitHub request failed: HTTP 500: internal error"],
+			}),
+		);
+		if (outcome.status !== "success") return;
+		expect(outcome.referencedIssueFacts).toBeUndefined();
+	});
+
+	test("an unresolved reference in a successful read carries no fact", async () => {
+		const runner = new SourceRunner([
+			...prPages(
+				[
+					pullRequestClosing({
+						closingIssuesReferences: { nodes: [referenceIssue(5), referenceIssue(6)] },
+					}),
+				],
+				[],
+				[],
+			),
+			referenceRead({
+				id: "I_5",
+				number: 5,
+				title: "Use real tickets",
+				labels: { nodes: [{ name: "critical" }] },
+			}),
+		]);
+		const outcome = await createTicketSource(prSource, runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		// I_6 did not resolve: its previous fact stays, the outcome carries
+		// only the resolved reference's fact.
+		expect(outcome.referencedIssueFacts).toEqual([
+			{
+				identity: "github:github.com:I_5",
+				labels: ["critical"],
+				fetchedAt: expect.any(String),
+			},
+		]);
+	});
+
+	test("an issue source refresh issues no reference read", async () => {
+		const runner = new SourceRunner([page([issue()])]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		// The single search query: no direct read is issued.
+		expect(runner.calls).toHaveLength(1);
+		for (const call of runner.calls)
+			expect(call.args.join(" ")).not.toContain("FactoryReferenceRead");
+		expect(outcome.referencedIssueFacts).toBeUndefined();
+	});
+});

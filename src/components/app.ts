@@ -2003,7 +2003,11 @@ export function App({
 		const coordinator = new RefreshCoordinator(
 			sources,
 			state,
-			() => {
+			(outcome) => {
+				// The pull request source's one warning line surfaces on the
+				// Message line (ADR 0023).
+				if (outcome?.status === "success")
+					for (const warning of outcome.warnings ?? []) setWarningMessage(warning);
 				replaceTickets();
 				replaceConsultations();
 				// A fetch may have made a ticket actionable: let the observation
@@ -2025,7 +2029,14 @@ export function App({
 			coordinator.stop();
 			coordinatorRef.current = undefined;
 		};
-	}, [state, sources, replaceTickets, replaceConsultations, clearWorkingMessage]);
+	}, [
+		state,
+		sources,
+		replaceTickets,
+		replaceConsultations,
+		clearWorkingMessage,
+		setWarningMessage,
+	]);
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test
 	// must not race a poll.

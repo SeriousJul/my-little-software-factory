@@ -108,20 +108,44 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 	}
 
 	test("a label rank states its label and its own source", () => {
-		const lines = withPriority({ rank: 0, label: "critical", source: "label" });
+		const lines = withPriority({
+			rank: 0,
+			label: "critical",
+			source: "label",
+			inheritedFrom: null,
+		});
 		expect(lines).toContainEqual({
 			text: "Priority: critical (its own label)",
 			fg: roleColor("text"),
 		});
 	});
 
+	test("an inherited rank names the issue that supplied it (ADR 0023)", () => {
+		const lines = withPriority({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: 12,
+		});
+		expect(lines).toContainEqual({
+			text: "Priority: critical (issue #12)",
+			fg: roleColor("text"),
+		});
+	});
+
 	test("an override rank states its label and the operator's source", () => {
-		const lines = withPriority({ rank: 1, label: "high", source: "override" }, "high");
+		const lines = withPriority(
+			{ rank: 1, label: "high", source: "override", inheritedFrom: null },
+			"high",
+		);
 		expect(lines).toContainEqual({ text: "Priority: high (set by you)", fg: roleColor("text") });
 	});
 
 	test("off states the override that forces the ticket unranked", () => {
-		const lines = withPriority({ rank: null, label: "off", source: "override" }, "off");
+		const lines = withPriority(
+			{ rank: null, label: "off", source: "override", inheritedFrom: null },
+			"off",
+		);
 		expect(lines).toContainEqual({ text: "Priority: off (set by you)", fg: roleColor("text") });
 	});
 
@@ -134,7 +158,10 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 		// The stored label left the config list: the rank is none, but the
 		// fact line and the row's choiceValue name the same stored label.
 		const content = detailContent(
-			{ ...base, priority: { rank: null, label: "critical", source: "override" } },
+			{
+				...base,
+				priority: { rank: null, label: "critical", source: "override", inheritedFrom: null },
+			},
 			100,
 			10,
 			undefined,

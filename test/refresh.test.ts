@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { type RefreshClock, RefreshCoordinator } from "../src/refresh.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
+import { issueTicket, success } from "./state-fixture.ts";
 
 const EMPTY: FetchOutcome = { status: "success", fetchedAt: "2026-01-01T00:00:00Z", tickets: [] };
 const RATE_LIMITED: FetchOutcome = { status: "failed", reason: "GitHub rate limit exceeded" };
@@ -12,6 +13,8 @@ class ControlledSource implements TicketSource {
 	readonly kind = "github-issues";
 	readonly refreshIntervalMs: number;
 	calls = 0;
+	/** The live ticket identities the coordinator passed to the last fetch. */
+	lastKnown: readonly string[] = [];
 	private resolvers: Array<(outcome: FetchOutcome) => void> = [];
 
 	constructor(name: string, refreshIntervalMs: number) {
@@ -19,7 +22,8 @@ class ControlledSource implements TicketSource {
 		this.refreshIntervalMs = refreshIntervalMs;
 	}
 
-	fetch(): Promise<FetchOutcome> {
+	fetch(knownTicketIdentities: readonly string[] = []): Promise<FetchOutcome> {
+		this.lastKnown = knownTicketIdentities;
 		this.calls += 1;
 		return new Promise((resolve) => this.resolvers.push(resolve));
 	}
@@ -133,6 +137,26 @@ describe("RefreshCoordinator", () => {
 		expect(slow.calls).toBe(2);
 		coordinator.stop();
 		expect(clock.pending).toBe(0);
+		state.close();
+	});
+
+	test("passes the live ticket identities to the fetch (ADR 0023)", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("issues", 60_000);
+		const clock = new FakeClock();
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		coordinator.start();
+		await turns();
+		// A fresh state holds no live tickets yet.
+		expect(source.lastKnown).toEqual([]);
+		// The first refresh lists one ticket: it is live from here on.
+		source.settle(success([issueTicket("github:github.com:I_5")]));
+		await turns();
+		clock.fireOldest();
+		await turns();
+		expect(source.calls).toBe(2);
+		expect(source.lastKnown).toEqual(["github:github.com:I_5"]);
+		coordinator.stop();
 		state.close();
 	});
 
