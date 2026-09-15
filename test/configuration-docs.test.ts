@@ -1,5 +1,5 @@
 /**
- * The README's configuration documentation is a contract, so it is tested.
+ * The configuration guide's documentation is a contract, so it is tested.
  *
  * The complete example claims it "sets every key the control plane reads,
  * optional keys included, so the example and the key reference agree line for
@@ -15,15 +15,15 @@ import { parse as parseToml } from "smol-toml";
 import { describe, expect, test } from "vitest";
 import { configToToml, validateConfig } from "../src/config.ts";
 
-const README = readFileSync(join(import.meta.dirname, "../README.md"), "utf8");
+const GUIDE = readFileSync(join(import.meta.dirname, "../docs/configuration/index.md"), "utf8");
 
 /** The fenced toml block under the "Complete example" heading. */
 function exampleToml(): string {
-	const heading = README.indexOf("### Complete example");
-	const start = README.indexOf("```toml", heading);
-	const end = README.indexOf("```", start + "```toml".length);
-	expect(start, "the README has no complete config example").toBeGreaterThan(-1);
-	return README.slice(start + "```toml".length, end);
+	const heading = GUIDE.indexOf("## Complete example");
+	const start = GUIDE.indexOf("```toml", heading);
+	const end = GUIDE.indexOf("```", start + "```toml".length);
+	expect(start, "the guide has no complete config example").toBeGreaterThan(-1);
+	return GUIDE.slice(start + "```toml".length, end);
 }
 
 /**
@@ -93,14 +93,14 @@ function groupOf(heading: string): string | null {
 /**
  * The key paths the "Key reference" section documents, by group, and the
  * keys that appear more than once in a group. The sets absorb a duplicate
- * row, so the key-for-key check cannot see one: the README claims the
+ * row, so the key-for-key check cannot see one: the guide claims the
  * example and the reference "agree line for line", and two rows for one key
  * can document two different behaviors while their key sets match.
  */
 function referenceGroups(): { groups: Map<string, Set<string>>; duplicates: string[] } {
-	const start = README.indexOf("### Key reference");
-	const end = README.indexOf("\n## ", start);
-	const section = README.slice(start, end < 0 ? README.length : end);
+	const start = GUIDE.indexOf("## Key reference");
+	const end = GUIDE.indexOf("\n## ", start);
+	const section = GUIDE.slice(start, end < 0 ? GUIDE.length : end);
 	const groups = new Map<string, Set<string>>();
 	const duplicates: string[] = [];
 	let group: string | null = null;
@@ -124,7 +124,7 @@ function referenceGroups(): { groups: Map<string, Set<string>>; duplicates: stri
 	return { groups, duplicates };
 }
 
-describe("the README configuration documentation", () => {
+describe("the configuration guide documentation", () => {
 	const parsed = validateConfig(parseToml(exampleToml()));
 
 	test("the complete example is a config the reader accepts", () => {
