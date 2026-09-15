@@ -129,7 +129,7 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 		});
 		expect(lines).toContainEqual({
 			text: "Priority: critical (issue #12)",
-			fg: COLORS.text,
+			fg: roleColor("text"),
 		});
 	});
 

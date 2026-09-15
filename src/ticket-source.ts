@@ -479,8 +479,10 @@ function labelNamesOf(raw: unknown): string[] | undefined {
 /**
  * The pull request's closing-issue references from a search node (ADR 0023).
  *
- * The references are secondary facts: a reference the response leaves
- * unreadable is skipped, so the readable ones still carry their rank.
+ * The references are secondary facts: a reference without a readable
+ * number is skipped, and a reference the response leaves without a node
+ * identity or a label list keeps an empty value, so the refresh can still
+ * read it directly.
  */
 function parseClosingReferences(raw: unknown, host: string): SearchReference[] {
 	const nodes = (raw as { nodes?: unknown } | undefined)?.nodes;

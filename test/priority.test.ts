@@ -562,8 +562,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		const [pr] = state
 			.visibleTickets([], "implement", RANKS)
 			.filter((t) => t.identity === "github:github.com:P_7");
-		expect(pr).toBeDefined();
-		expect(pr!.priority).toEqual({
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
@@ -590,7 +590,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		const [pr] = state
 			.visibleTickets([], "implement", RANKS)
 			.filter((t) => t.identity === "github:github.com:P_7");
-		expect(pr!.priority).toEqual({
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
@@ -610,7 +611,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		const [pr] = state
 			.visibleTickets([], "implement", RANKS)
 			.filter((t) => t.identity === "github:github.com:P_7");
-		expect(pr!.priority).toEqual({
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
@@ -634,7 +636,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		);
 		const before = state
 			.visibleTickets([], "implement", RANKS)
-			.find((t) => t.identity === "github:github.com:P_7")!;
+			.find((t) => t.identity === "github:github.com:P_7");
+		if (before === undefined) throw new Error("missing pull request ticket");
 		expect(before.priority.rank).toBe(0);
 		// The PR now closes only I_6.
 		state.applyFetch(
@@ -643,7 +646,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		);
 		const after = state
 			.visibleTickets([], "implement", RANKS)
-			.find((t) => t.identity === "github:github.com:P_7")!;
+			.find((t) => t.identity === "github:github.com:P_7");
+		if (after === undefined) throw new Error("missing pull request ticket");
 		expect(after.priority).toEqual({
 			rank: 2,
 			label: "low",
@@ -687,7 +691,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		const [pr] = state
 			.visibleTickets([], "implement", RANKS)
 			.filter((t) => t.identity === "github:github.com:P_7");
-		expect(pr!.priority).toEqual({
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
@@ -713,7 +718,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		const [pr] = state
 			.visibleTickets([], "implement", RANKS)
 			.filter((t) => t.identity === "github:github.com:P_7");
-		expect(pr!.priority).toEqual({
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
@@ -736,7 +742,8 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 		const [pr] = state
 			.visibleTickets([], "implement", RANKS)
 			.filter((t) => t.identity === "github:github.com:P_7");
-		expect(pr!.priority).toEqual({
+		if (pr === undefined) throw new Error("missing pull request ticket");
+		expect(pr.priority).toEqual({
 			rank: 2,
 			label: "low",
 			source: "override",

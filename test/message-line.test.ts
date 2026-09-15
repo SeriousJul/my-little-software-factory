@@ -249,6 +249,44 @@ describe("the permanent Message line", () => {
 		}
 	});
 
+	test("surfaces a failed referenced issue read as one warning on the line (ADR 0023)", async () => {
+		const state = freshState();
+		const source = new FakeSource("pulls", "github-pull-requests", success([issueTicket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					// The first refresh settles cleanly.
+					source.settle(success([issueTicket()]));
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+					// The next refresh fails its direct read: the source still
+					// succeeds, and its one warning line surfaces on the line.
+					setup.mockInput.pressKey("r");
+					await callsReached(source, 2);
+					source.settle({
+						status: "success",
+						fetchedAt: "2026-08-31T10:02:00Z",
+						tickets: [issueTicket()],
+						warnings: ["referenced issue read failed: GitHub rate limit exceeded"],
+					});
+					const frame = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("referenced issue read failed"),
+						"the warning",
+					);
+					expect(messageRowOf(frame).trim()).toBe(
+						"Warning: referenced issue read failed: GitHub rate limit exceeded",
+					);
+					source.settle(success([issueTicket()]));
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: issuesConfig, state, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("runs the facts in priority order, and covered warnings return", async () => {
 		const state = freshState();
 		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
