@@ -152,10 +152,21 @@ Draft persistence belongs to the screen's domain state, not to the field module.
 
 ## Presentation
 
+- The plane inherits its Theme from herdr: the shared Theme module reads herdr's
+  config at startup, resolves the active theme (a light or dark appearance), and
+  every surface paints from that theme's roles. Outside herdr the plane keeps its
+  own fixed dark theme. A no-color presentation, selected by the `NO_COLOR`
+  environment variable, works on top of any theme and is the only presentation
+  axis that is not a theme. See [ADR 0024](../adr/0024-the-control-plane-inherits-the-theme-from-herdr.md).
 - Use tested foreground/background pairs with at least 4.5:1 text contrast and
-  3:1 contrast for essential control indicators.
-- Support light, dark, and no-color presentation. Preserve labels, focus markers,
-  and written state and error indicators when color is absent.
+  3:1 contrast for essential control indicators. The inheritance does not
+  contrast-check a herdr theme: the operator picks it for the terminal they run
+  in, and the plane's own themes keep the tested pairs.
+- Light and dark are the theme's appearance, inherited from herdr's theme;
+  the plane does not pick between them. No-color presentation is the plane's
+  one remaining presentation axis, and it works on top of any theme. Preserve
+  labels, focus markers, and written state and error indicators when color is
+  absent.
 - Keep the focused control and the way out visible at supported small sizes.
   Below a usable size, preserve editing state and provide a readable size message
   and a way out rather than allowing overlapping or hidden controls.

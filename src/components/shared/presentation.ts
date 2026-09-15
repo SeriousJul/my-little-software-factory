@@ -3,42 +3,37 @@
  *
  * A control's meaning never depends on color: each state carries its own
  * written word, and the focus marker is a character as well as a color. The
- * palettes below hold the tested pairs the shared control standard requires -
+ * ink a control paints is derived from the Theme in force: inside herdr the
+ * control plane inherits the theme herdr's config resolved, outside herdr
+ * the standalone theme stands (ADR 0024). The control plane owns the
+ * standalone theme's pairs and holds them to the shared control standard -
  * at least 4.5:1 for text and at least 3:1 for an essential control
- * indicator - so a surface cannot invent a dimmer combination by picking
- * colors by hand. The automated check recomputes every ratio from the hex
- * pairs with the WCAG formula; the numbers below are what the library paints,
- * not what the check trusts.
+ * indicator; the pairs an inherited theme provides are painted as-is, not
+ * contrast-checked, and that limit is recorded in the verification record.
  *
- * The palette is one fact the control plane reads at startup. The dark pairs
- * are the default the plane has always used. `FACTORY_PRESENTATION` pins the
- * choice for a visual check or an automated test, and `mono` drops color for
- * an operator who wants the written information alone.
- *
- * The light presentation is reachable only through that pin, never through the
- * terminal's own scheme: the base panes no shared module owns still paint the
- * fixed dark color system, so an automatic switch would paint a half-light
- * plane. The switch stays gated until those panes take their ink from the
- * presentation; the pin keeps the light pairs exercised in the meantime.
+ * The no-color presentation is the only remaining presentation axis: it
+ * works on top of any theme, paints no color at all, and stands when the
+ * terminal says so through `NO_COLOR`. The `FACTORY_PRESENTATION` pin and
+ * the light/dark presentations are gone: the theme name is the one source
+ * of appearance.
  */
 
+import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnEndCause } from "../../turn-log.ts";
-
-/** The presentations the shared controls draw. */
-export type Presentation = "dark" | "light" | "mono";
+import type { Theme } from "./theme.ts";
 
 /**
- * One text role and the background it is measured against.
+ * One text role and the background it is painted on.
  *
- * `background` is the surface the pair is tested on: a control-plane overlay
- * paints its own `bg` cells, and a base pane paints no background at all, so
- * its text is measured against the terminal's default. The automated check
- * reads the same two fields the library paints from.
+ * `fg` is the painted foreground; `null` paints no color at all, which is
+ * the whole of the no-color presentation and the effect of a role that
+ * resolved to `reset`. `on` is the surface the role paints against: the
+ * theme's value for the surface, or `default` for the terminal's own.
  */
 export interface InkRole {
 	/** The painted foreground. `null` paints no color at all. */
 	fg: string | null;
-	/** The background this pair is measured against. */
+	/** The background this role paints on. */
 	on: string;
 }
 
@@ -46,7 +41,7 @@ export interface InkRole {
 export interface ControlInk {
 	/** Field text and row labels, on the surface the overlay paints. */
 	text: InkRole;
-	/** The focused field's text and its label. */
+	/** The focused field's text and its label. Bold carries the emphasis the bright-text role used to. */
 	focusedText: InkRole;
 	/** A hint or a state word the operator can still act on. */
 	detail: InkRole;
@@ -64,7 +59,7 @@ export interface ControlInk {
 	focusedField: InkRole;
 	/** The surface an overlay paints its box on. */
 	surface: InkRole;
-	/** The terminal default, stated so a pair can be measured against it. */
+	/** The terminal default, stated so a surface knows what it paints on. */
 	defaultBackground: string;
 }
 
@@ -73,42 +68,50 @@ export const MIN_TEXT_CONTRAST = 4.5;
 /** The minimum contrast the standard requires for an essential indicator. */
 export const MIN_INDICATOR_CONTRAST = 3;
 
-const DARK: ControlInk = {
-	text: { fg: "#c9d1d9", on: "#0d1117" },
-	focusedText: { fg: "#e6edf3", on: "#0d1117" },
-	detail: { fg: "#8b949e", on: "#0d1117" },
-	error: { fg: "#f85149", on: "#0d1117" },
-	warning: { fg: "#d29922", on: "#0d1117" },
-	indicator: { fg: "#58a6ff", on: "#0d1117" },
-	selectionText: { fg: "#0d1117", on: "#58a6ff" },
-	selectionBackground: { fg: "#58a6ff", on: "#0d1117" },
-	focusedField: { fg: "#e6edf3", on: "#21262d" },
-	surface: { fg: "#c9d1d9", on: "#0d1117" },
-	defaultBackground: "#0d1117",
-};
+/** A role's foreground in one theme: its color, or no color for `reset`. */
+function foreground(roles: Theme["roles"], role: keyof Theme["roles"]): string | null {
+	return roles[role] === "reset" ? null : roles[role];
+}
 
-const LIGHT: ControlInk = {
-	text: { fg: "#24292f", on: "#f6f8fa" },
-	focusedText: { fg: "#010409", on: "#f6f8fa" },
-	detail: { fg: "#57606a", on: "#f6f8fa" },
-	error: { fg: "#a40e26", on: "#f6f8fa" },
-	warning: { fg: "#7a4b00", on: "#f6f8fa" },
-	indicator: { fg: "#0969da", on: "#f6f8fa" },
-	selectionText: { fg: "#f6f8fa", on: "#0969da" },
-	selectionBackground: { fg: "#0969da", on: "#f6f8fa" },
-	focusedField: { fg: "#010409", on: "#eaeef2" },
-	surface: { fg: "#1f2328", on: "#f6f8fa" },
-	defaultBackground: "#f6f8fa",
-};
+/** A role's surface in one theme: its color, or the terminal default for `reset`. */
+function surface(roles: Theme["roles"], role: keyof Theme["roles"]): string {
+	return roles[role] === "reset" ? "default" : roles[role];
+}
+
+/**
+ * The ink one theme paints with.
+ *
+ * The theme's roles stand for the control's roles: text on the panel
+ * surface, the accent as the indicator, the state colors where the states
+ * read. A role the theme resolves to `reset` paints no color, so the
+ * terminal's own default shows through where the theme says so.
+ */
+export function inkForTheme(theme: Theme): ControlInk {
+	const roles = theme.roles;
+	return {
+		text: { fg: foreground(roles, "text"), on: surface(roles, "panel_bg") },
+		focusedText: { fg: foreground(roles, "text"), on: surface(roles, "panel_bg") },
+		detail: { fg: foreground(roles, "subtext0"), on: surface(roles, "panel_bg") },
+		error: { fg: foreground(roles, "red"), on: surface(roles, "panel_bg") },
+		warning: { fg: foreground(roles, "yellow"), on: surface(roles, "panel_bg") },
+		indicator: { fg: foreground(roles, "accent"), on: surface(roles, "panel_bg") },
+		selectionText: { fg: foreground(roles, "panel_bg"), on: surface(roles, "accent") },
+		selectionBackground: { fg: foreground(roles, "accent"), on: surface(roles, "panel_bg") },
+		focusedField: { fg: foreground(roles, "text"), on: surface(roles, "active_row_bg") },
+		surface: { fg: foreground(roles, "text"), on: surface(roles, "panel_bg") },
+		defaultBackground: surface(roles, "panel_bg"),
+	};
+}
 
 /**
  * The no-color presentation.
  *
  * Every role paints no foreground and no background, so the terminal's own
  * colors stand: nothing is carried by a color, and the labels, the focus
- * marker, and the written state words are the whole message.
+ * marker, and the written state words are the whole message. It works on
+ * top of any theme, because it asks the theme for nothing.
  */
-const MONO: ControlInk = {
+export const NO_COLOR_INK: ControlInk = {
 	text: { fg: null, on: "default" },
 	focusedText: { fg: null, on: "default" },
 	detail: { fg: null, on: "default" },
@@ -122,11 +125,22 @@ const MONO: ControlInk = {
 	defaultBackground: "default",
 };
 
-const PALETTES: Record<Presentation, ControlInk> = {
-	dark: DARK,
-	light: LIGHT,
-	mono: MONO,
-};
+/**
+ * Whether the terminal asks for the no-color presentation.
+ *
+ * The convention is `NO_COLOR`: set to a non-empty value and the plane
+ * paints no color at all, on top of whichever theme the environment
+ * resolves.
+ */
+export function noColorPresentation(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.NO_COLOR !== undefined && env.NO_COLOR !== "";
+}
+
+/** The presentation the control plane draws in: the no-color ink, else the ink of the Theme in force. */
+export function controlInk(): ControlInk {
+	if (noColorPresentation()) return NO_COLOR_INK;
+	return inkForTheme(currentThemeResolution().theme);
+}
 
 /** The written word for a state, so removing color removes nothing. */
 export const STATE_WORDS = {
@@ -189,7 +203,7 @@ export function relativeLuminance(hex: string): number {
  * The WCAG contrast ratio of two colors.
  *
  * The shared check recomputes this from the pairs the library paints, so a
- * declared palette cannot pass by restating the threshold it is judged on.
+ * declared theme cannot pass by restating the threshold it is judged on.
  */
 export function contrastRatio(one: string, other: string): number {
 	const first = relativeLuminance(one);
@@ -218,16 +232,16 @@ export const INDICATOR_ROLES: readonly (keyof ControlInk)[] = [
 ];
 
 /**
- * Every pair in one presentation that fails the standard's contrast.
+ * Every pair in one ink that fails the standard's contrast.
  *
- * The mono presentation paints no colors at all, so it has no pair to measure:
- * its written information is the whole requirement.
+ * The check holds the control plane's own ink to the standard. An ink that
+ * paints no color for a role, or against the terminal default, has no pair
+ * to measure: the written information is the whole requirement there, and
+ * an inherited theme's pairs are painted as the theme states them.
  */
 export function contrastFailures(
-	presentation: Presentation,
+	ink: ControlInk,
 ): Array<{ role: string; ratio: number; required: number }> {
-	const ink = PALETTES[presentation];
-	if (presentation === "mono") return [];
 	const failures: Array<{ role: string; ratio: number; required: number }> = [];
 	for (const role of [...TEXT_ROLES, ...INDICATOR_ROLES]) {
 		const pair = ink[role] as InkRole;
@@ -237,26 +251,4 @@ export function contrastFailures(
 		if (ratio < required) failures.push({ role, ratio, required });
 	}
 	return failures;
-}
-
-/**
- * The presentation the control plane draws in.
- *
- * The terminal's own scheme is never consulted: the light presentation is a
- * pin, not an automatic switch, until the base panes follow it.
- */
-export function currentPresentation(): Presentation {
-	const pinned = process.env.FACTORY_PRESENTATION;
-	if (pinned === "dark" || pinned === "light" || pinned === "mono") return pinned;
-	return "dark";
-}
-
-/** The palette of one presentation. */
-export function inkFor(presentation: Presentation): ControlInk {
-	return PALETTES[presentation];
-}
-
-/** The palette in force for a surface. */
-export function controlInk(): ControlInk {
-	return inkFor(currentPresentation());
 }

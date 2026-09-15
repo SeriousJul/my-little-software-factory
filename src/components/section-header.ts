@@ -2,7 +2,7 @@ import type { MouseEvent } from "@opentui/core";
 import { createElement } from "@opentui/react";
 
 import { padToWidth, truncateToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 export type MainSection = "tickets" | "consultations";
 
@@ -117,8 +117,12 @@ export function SectionHeader({
 		},
 		createElement(
 			"text",
-			{ style: { width: "100%", height: 1 }, fg: expanded ? COLORS.textBright : COLORS.dim },
-			padToWidth(truncateToWidth(text, width), width),
+			{ style: { width: "100%", height: 1 }, fg: expanded ? paint("text") : paint("subtext0") },
+			// An expanded section wears bold: the emphasis the old palette carried
+			// in a brighter text color.
+			expanded
+				? createElement("b", undefined, padToWidth(truncateToWidth(text, width), width))
+				: padToWidth(truncateToWidth(text, width), width),
 		),
 	);
 }

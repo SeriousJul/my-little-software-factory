@@ -331,6 +331,8 @@ interface SharedFieldProps {
 	onRefuse?: (reason: string) => void;
 	/** Reports every text change, with the caret and selection it left behind. */
 	onValueChange?: (facts: FieldFacts) => void;
+	/** The presentation's ink the field paints in. Default: the active control ink. */
+	ink?: ControlInk;
 }
 
 /**
@@ -547,7 +549,7 @@ export interface TextFieldProps extends SharedFieldProps {
 
 /** The Text field: one line of operator text, edited the same way everywhere. */
 export function TextField(props: TextFieldProps): ReactElement {
-	const ink = controlInk();
+	const ink = props.ink ?? controlInk();
 	const node = useRef<InputRenderable | null>(null);
 	const { keyDown, paste, changed, reportFacts, refusal, handle } = useFieldEditing(node, {
 		value: props.value,
@@ -619,7 +621,7 @@ export interface DraftFieldProps extends SharedFieldProps {
 
 /** The Draft field: the operator's own lines, addressed to an Agent. */
 export function DraftField(props: DraftFieldProps): ReactElement {
-	const ink = controlInk();
+	const ink = props.ink ?? controlInk();
 	const node = useRef<TextareaRenderable | null>(null);
 	const { keyDown, paste, changed, reportFacts, refusal, handle } = useFieldEditing(node, {
 		value: props.value,

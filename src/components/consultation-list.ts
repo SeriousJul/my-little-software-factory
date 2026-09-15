@@ -6,7 +6,7 @@ import type { Consultation } from "../state.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 interface ConsultationListProps {
 	consultations: readonly Consultation[];
@@ -58,7 +58,7 @@ export function ConsultationList({
 			onMouse: handleMouse,
 			title: focused ? "❯ Consultations" : "  Consultations",
 			border: true,
-			borderColor: focused ? COLORS.borderFocused : COLORS.border,
+			borderColor: focused ? paint("accent") : paint("surface_dim"),
 			padding: 1,
 			style: {
 				width: geometry.paneCols,
@@ -73,7 +73,7 @@ export function ConsultationList({
 			? [
 					createElement(
 						"text",
-						{ key: "empty", fg: COLORS.dim },
+						{ key: "empty", fg: paint("subtext0") },
 						truncateToWidth(emptyMessage ?? "no Consultations", geometry.usableCols),
 					),
 				]
@@ -100,16 +100,18 @@ function row(consultation: Consultation, selected: boolean, width: number) {
 	const prefix = `${marker}${padToWidth(state, STATE_WIDTH)} `;
 	const suffix = ` ${repo} ${start}`;
 	const available = Math.max(1, width - widthOf(prefix) - widthOf(suffix));
+	// The selected row's prefix and identity wear bold: the emphasis the old
+	// palette carried in a brighter text color.
 	return [
-		createElement("span", { fg: selected ? COLORS.textBright : COLORS.dim }, prefix),
+		selected
+			? createElement("b", { fg: paint("text") }, prefix)
+			: createElement("span", { fg: paint("subtext0") }, prefix),
+		selected
+			? createElement("b", { fg: paint("text") }, truncateToWidth(identity, available))
+			: createElement("span", { fg: paint("text") }, truncateToWidth(identity, available)),
 		createElement(
 			"span",
-			{ fg: selected ? COLORS.textBright : COLORS.text },
-			truncateToWidth(identity, available),
-		),
-		createElement(
-			"span",
-			{ fg: COLORS.dim },
+			{ fg: paint("subtext0") },
 			truncateToWidth(suffix, Math.max(0, width - widthOf(prefix) - available)),
 		),
 	];

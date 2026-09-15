@@ -25,12 +25,12 @@ import { listMouse, listWindow } from "./list-pane.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
-	COLORS,
 	failureBadge,
 	heldBadge,
-	MARKER_COLORS,
-	STATE_COLORS,
+	markerColor,
+	paint,
 	stateBadge,
+	stateColor,
 	taskTypeBadge,
 	taskTypeColor,
 	ticketTaskType,
@@ -102,7 +102,7 @@ export function TicketList({
 			ref: rootRef,
 			title: focused ? "❯ Tickets" : "  Tickets",
 			border: true,
-			borderColor: focused ? COLORS.borderFocused : COLORS.border,
+			borderColor: focused ? paint("accent") : paint("surface_dim"),
 			padding: 1,
 			onMouse: handleMouse,
 			style: {
@@ -122,7 +122,7 @@ export function TicketList({
 			? [
 					createElement(
 						"text",
-						{ key: "empty", fg: COLORS.dim },
+						{ key: "empty", fg: paint("subtext0") },
 						truncateToWidth(emptyMessage, geometry.usableCols),
 					),
 				]
@@ -163,17 +163,17 @@ function rowSpans(
 ): ReactElement[] {
 	const spans: ReactElement[] = [];
 	let budget = usableCols;
-	const trailing: { text: string; fg: string }[] = [];
-	if (atLimit) trailing.push({ text: LIMIT_TEXT, fg: COLORS.statusWarning });
-	if (ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: COLORS.statusWarning });
+	const trailing: { text: string; fg: string | undefined }[] = [];
+	if (atLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
+	if (ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
 
 	if (budget >= SELECTION_WIDTH) {
+		// The selected row's marker and title wear bold: the emphasis the
+		// old palette carried in a brighter text color.
 		spans.push(
-			createElement(
-				"span",
-				{ fg: selected ? COLORS.textBright : COLORS.dim },
-				selected ? "❯ " : "  ",
-			),
+			selected
+				? createElement("b", { fg: paint("text") }, "❯ ")
+				: createElement("span", { fg: paint("subtext0") }, "  "),
 		);
 		budget -= SELECTION_WIDTH;
 	}
@@ -187,13 +187,11 @@ function rowSpans(
 	// is visibly working.
 	if (budget >= BADGE_WIDTH) {
 		if (marker !== null)
-			spans.push(createElement("span", { fg: MARKER_COLORS[marker] }, failureBadge(marker)));
+			spans.push(createElement("span", { fg: markerColor(marker) }, failureBadge(marker)));
 		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
-			spans.push(createElement("span", { fg: COLORS.statusWarning }, heldBadge()));
+			spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
 		else
-			spans.push(
-				createElement("span", { fg: STATE_COLORS[ticket.state] }, stateBadge(ticket.state)),
-			);
+			spans.push(createElement("span", { fg: stateColor(ticket.state) }, stateBadge(ticket.state)));
 		budget -= BADGE_WIDTH;
 	}
 
@@ -205,7 +203,7 @@ function rowSpans(
 	if (ticket.priority.rank !== null) {
 		const rankText = `${ticket.priority.rank + 1} `;
 		if (budget >= widthOf(rankText)) {
-			spans.push(createElement("span", { fg: COLORS.dim }, rankText));
+			spans.push(createElement("span", { fg: paint("subtext0") }, rankText));
 			budget -= widthOf(rankText);
 		}
 	}
@@ -223,7 +221,8 @@ function rowSpans(
 		budget -= badgeWidth;
 	}
 
-	const titleFg = selected ? COLORS.textBright : COLORS.text;
+	const titleEl = (text: string): ReactElement =>
+		createElement(selected ? "b" : "span", { fg: paint("text") }, text);
 	const repoWidth = widthOf(ticket.repository);
 
 	// The trailing markers keep their gaps and their text at the row's end,
@@ -234,21 +233,19 @@ function rowSpans(
 		const repoFits = afterMarkers >= REPO_GAP + repoWidth + TITLE_MINIMUM;
 		let titleField = Math.max(0, afterMarkers - (repoFits ? REPO_GAP + repoWidth : 0));
 		if (titleField >= 1) {
-			spans.push(createElement("span", { fg: titleFg }, " "));
+			spans.push(titleEl(" "));
 			titleField -= 1;
 		}
 		if (titleField > 0) {
-			spans.push(
-				createElement(
-					"span",
-					{ fg: titleFg },
-					padToWidth(truncateToWidth(ticket.title, titleField), titleField),
-				),
-			);
+			spans.push(titleEl(padToWidth(truncateToWidth(ticket.title, titleField), titleField)));
 		}
 		if (repoFits) {
 			spans.push(
-				createElement("span", { fg: COLORS.dim }, `${" ".repeat(REPO_GAP)}${ticket.repository}`),
+				createElement(
+					"span",
+					{ fg: paint("subtext0") },
+					`${" ".repeat(REPO_GAP)}${ticket.repository}`,
+				),
 			);
 		}
 		for (const marker of trailing) {
@@ -265,21 +262,19 @@ function rowSpans(
 	const repoFits = budget >= REPO_GAP + repoWidth + TITLE_MINIMUM;
 	let titleField = Math.max(0, budget - (repoFits ? REPO_GAP + repoWidth : 0));
 	if (titleField >= 1) {
-		spans.push(createElement("span", { fg: titleFg }, " "));
+		spans.push(titleEl(" "));
 		titleField -= 1;
 	}
 	if (titleField > 0) {
-		spans.push(
-			createElement(
-				"span",
-				{ fg: titleFg },
-				padToWidth(truncateToWidth(ticket.title, titleField), titleField),
-			),
-		);
+		spans.push(titleEl(padToWidth(truncateToWidth(ticket.title, titleField), titleField)));
 	}
 	if (repoFits) {
 		spans.push(
-			createElement("span", { fg: COLORS.dim }, `${" ".repeat(REPO_GAP)}${ticket.repository}`),
+			createElement(
+				"span",
+				{ fg: paint("subtext0") },
+				`${" ".repeat(REPO_GAP)}${ticket.repository}`,
+			),
 		);
 	}
 

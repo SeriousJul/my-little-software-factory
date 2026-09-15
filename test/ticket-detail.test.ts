@@ -1,6 +1,5 @@
 /** Deterministic wheel-burst policy tests for the native Ticket detail viewport. */
 import { describe, expect, test } from "vitest";
-import { COLORS } from "../src/components/theme.ts";
 import {
 	type DetailLine,
 	detailContent,
@@ -12,6 +11,7 @@ import {
 import type { ScrollConfig } from "../src/config.ts";
 import { type Handoff, type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
+import { roleColor } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const settings: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
@@ -52,13 +52,13 @@ describe("Ticket detail task profile", () => {
 			thinking: "",
 			contextWindow: "272000",
 		});
-		expect(lines).toContainEqual({ text: "Agent: codex", fg: COLORS.text });
-		expect(lines).toContainEqual({ text: "Model: task-model", fg: COLORS.text });
-		expect(lines).toContainEqual({ text: "Thinking: left to agent", fg: COLORS.dim });
+		expect(lines).toContainEqual({ text: "Agent: codex", fg: roleColor("text") });
+		expect(lines).toContainEqual({ text: "Model: task-model", fg: roleColor("text") });
+		expect(lines).toContainEqual({ text: "Thinking: left to agent", fg: roleColor("subtext0") });
 		// A count the profile names reads like any other value; the digits are
 		// the value, so the detail never reformats them.
-		expect(lines).toContainEqual({ text: "Context: 272000", fg: COLORS.text });
-		expect(lines).toContainEqual({ text: "Environment: live-worktree", fg: COLORS.text });
+		expect(lines).toContainEqual({ text: "Context: 272000", fg: roleColor("text") });
+		expect(lines).toContainEqual({ text: "Environment: live-worktree", fg: roleColor("text") });
 		// The rows read in the order the override panel offers them: where a
 		// Handoff runs, then what it runs with.
 		const order = lines.map((line) => line.text);
@@ -82,20 +82,20 @@ describe("Ticket detail task profile", () => {
 			handoffCount: 1,
 		};
 		const next = detailLines(secondCycle, 100, 10, nextChoice);
-		expect(next).toContainEqual({ text: "Agent: pi", fg: COLORS.text });
-		expect(next).toContainEqual({ text: "Model: left to agent", fg: COLORS.dim });
-		expect(next).toContainEqual({ text: "Environment: live-worktree", fg: COLORS.text });
+		expect(next).toContainEqual({ text: "Agent: pi", fg: roleColor("text") });
+		expect(next).toContainEqual({ text: "Model: left to agent", fg: roleColor("subtext0") });
+		expect(next).toContainEqual({ text: "Environment: live-worktree", fg: roleColor("text") });
 		expect(next.some((line) => line.text.includes("old-cycle-model"))).toBe(false);
 
 		// A ticket inside a cycle shows that cycle's own Handoff, because those
 		// are the settings its running agent started with.
 		const running: Ticket = { ...secondCycle, state: "running" };
 		const shown = detailLines(running, 100, 10, nextChoice);
-		expect(shown).toContainEqual({ text: "Agent: codex", fg: COLORS.text });
-		expect(shown).toContainEqual({ text: "Model: old-cycle-model", fg: COLORS.text });
-		expect(shown).toContainEqual({ text: "Thinking: high", fg: COLORS.text });
-		expect(shown).toContainEqual({ text: "Context: 65536", fg: COLORS.text });
-		expect(shown).toContainEqual({ text: "Environment: worktree", fg: COLORS.text });
+		expect(shown).toContainEqual({ text: "Agent: codex", fg: roleColor("text") });
+		expect(shown).toContainEqual({ text: "Model: old-cycle-model", fg: roleColor("text") });
+		expect(shown).toContainEqual({ text: "Thinking: high", fg: roleColor("text") });
+		expect(shown).toContainEqual({ text: "Context: 65536", fg: roleColor("text") });
+		expect(shown).toContainEqual({ text: "Environment: worktree", fg: roleColor("text") });
 	});
 });
 
@@ -111,23 +111,23 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 		const lines = withPriority({ rank: 0, label: "critical", source: "label" });
 		expect(lines).toContainEqual({
 			text: "Priority: critical (its own label)",
-			fg: COLORS.text,
+			fg: roleColor("text"),
 		});
 	});
 
 	test("an override rank states its label and the operator's source", () => {
 		const lines = withPriority({ rank: 1, label: "high", source: "override" }, "high");
-		expect(lines).toContainEqual({ text: "Priority: high (set by you)", fg: COLORS.text });
+		expect(lines).toContainEqual({ text: "Priority: high (set by you)", fg: roleColor("text") });
 	});
 
 	test("off states the override that forces the ticket unranked", () => {
 		const lines = withPriority({ rank: null, label: "off", source: "override" }, "off");
-		expect(lines).toContainEqual({ text: "Priority: off (set by you)", fg: COLORS.text });
+		expect(lines).toContainEqual({ text: "Priority: off (set by you)", fg: roleColor("text") });
 	});
 
 	test("an unranked ticket with no override reads none, dim", () => {
 		const lines = withPriority(UNRANKED_PRIORITY, null);
-		expect(lines).toContainEqual({ text: "Priority: none", fg: COLORS.dim });
+		expect(lines).toContainEqual({ text: "Priority: none", fg: roleColor("subtext0") });
 	});
 
 	test("a stale override states its stored label, agreeing with the override row", () => {
@@ -142,7 +142,7 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 		);
 		expect(content.lines).toContainEqual({
 			text: "Priority: critical (set by you)",
-			fg: COLORS.text,
+			fg: roleColor("text"),
 		});
 		expect(content.choiceValue).toBe("critical");
 	});

@@ -12,14 +12,18 @@ import { testRender } from "@opentui/react/test-utils";
 import { afterEach, describe, expect, test } from "vitest";
 
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
+import { controlInk } from "../src/components/shared/presentation.ts";
+import { HERDR_THEME_VERSION, STANDALONE_THEME } from "../src/components/shared/theme.ts";
 import {
-	contrastRatio,
-	controlInk,
-	inkFor,
-	MIN_INDICATOR_CONTRAST,
-	MIN_TEXT_CONTRAST,
-} from "../src/components/shared/presentation.ts";
-import { awaitFrame, cellColors, frameText, type Setup, settle } from "./app-harness.ts";
+	awaitFrame,
+	cellColors,
+	frameText,
+	rowSpans,
+	rowsOf,
+	type Setup,
+	settle,
+	spanColors,
+} from "./app-harness.ts";
 
 /** A `[r, g, b]` triplet as the `#rrggbb` the contrast formula reads. */
 const hexOf = (channels: readonly number[]): string =>
@@ -70,7 +74,17 @@ function findCell(setup: Setup, text: string): { x: number; y: number } {
 describe("the shared control gallery", () => {
 	test("shows every state the standard names", async () => {
 		const ids = GALLERY_EXAMPLES.map((example) => example.id);
-		expect(ids).toEqual(["fields", "states", "search", "notes", "priority", "narrow"]);
+		expect(ids).toEqual([
+			"fields",
+			"states",
+			"search",
+			"notes",
+			"priority",
+			"theme",
+			"theme-fallback",
+			"no-color",
+			"narrow",
+		]);
 		const states = GALLERY_EXAMPLES.map((example) => example.state).join(" ");
 		for (const needed of [
 			"normal",
@@ -215,53 +229,45 @@ describe("the shared control gallery", () => {
 		expect(backText).toContain(stateLine("fields"));
 	});
 
-	test("the light presentation carries its own pair on the overlay surface", async () => {
-		const saved = process.env.FACTORY_PRESENTATION;
-		process.env.FACTORY_PRESENTATION = "light";
-		try {
-			const setup = await gallery("fields");
-			const ink = inkFor("light");
-			// The surface behind the box is the light pair's own background:
-			// an overlay that kept a dark box would unread its own ink.
-			expect(hexOf(cellColors(setup, 1, 0).bg)).toBe(ink.surface.on);
-			// Every text the surface paints clears the standard's contrast on
-			// the background it actually landed on, not on one it was only
-			// described against.
-			const required = new Map<string, number>();
-			const textRoles = [
-				ink.text,
-				ink.focusedText,
-				ink.detail,
-				ink.error,
-				ink.warning,
-				ink.selectionText,
-				ink.surface,
-			];
-			const indicatorRoles = [ink.indicator, ink.selectionBackground, ink.focusedField];
-			for (const role of [...textRoles, ...indicatorRoles]) {
-				const fg = role.fg;
-				if (fg === null) continue;
-				const need = textRoles.includes(role) ? MIN_TEXT_CONTRAST : MIN_INDICATOR_CONTRAST;
-				required.set(fg, Math.max(required.get(fg) ?? 0, need));
-			}
-			let measured = 0;
-			const lines = setup.captureSpans().lines;
-			for (let y = 0; y < lines.length; y += 1) {
-				for (const span of lines[y].spans) {
-					if (span.text.trim() === "") continue;
-					const fg = hexOf(span.fg.toInts().slice(0, 3));
-					const need = required.get(fg);
-					if (need === undefined) continue;
-					const bg = hexOf(span.bg.toInts().slice(0, 3));
-					expect(contrastRatio(fg, bg), `${fg} on ${bg} at row ${y}`).toBeGreaterThanOrEqual(need);
-					measured += 1;
-				}
-			}
-			expect(measured).toBeGreaterThan(0);
-		} finally {
-			if (saved === undefined) delete process.env.FACTORY_PRESENTATION;
-			else process.env.FACTORY_PRESENTATION = saved;
-		}
+	test("the theme example states the theme in force and swatches its roles", async () => {
+		const setup = await gallery("theme");
+		const raw = setup.captureCharFrame();
+		expect(frameText(raw)).toContain("theme: standalone (dark)");
+		expect(frameText(raw)).toContain(
+			`built-in definitions vendored from herdr ${HERDR_THEME_VERSION}`,
+		);
+		// The swatch under a role's name is the theme's own color for that
+		// role, so the operator sees the theme the plane will paint in.
+		const swatchRow = rowsOf(raw).findIndex((row) => row.includes(" subtext0 "));
+		expect(swatchRow).toBeGreaterThanOrEqual(0);
+		const swatch = rowSpans(setup, swatchRow).find((span) => span.text.includes("subtext0"));
+		if (swatch === undefined) throw new Error("the swatch row lost its subtext0 swatch");
+		if (swatch.bg === null) throw new Error("the subtext0 swatch painted no background");
+		expect(hexOf(swatch.bg)).toBe(STANDALONE_THEME.roles.subtext0);
+	});
+
+	test("the theme-fallback example shows the warning the Message line carries", async () => {
+		const setup = await gallery("theme-fallback");
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain("Warning:");
+		// The line is cut by the box, as every row is: the named theme and the
+		// fallback are what must survive.
+		expect(frame).toContain(`unknown theme name "frobnicate"`);
+	});
+
+	test("the no-color example paints the same controls with no color", async () => {
+		const setup = await gallery("no-color");
+		const frame = frameText(setup.captureCharFrame());
+		// The same controls a colored panel holds: a field, a selection row,
+		// and an action - with their labels and values.
+		expect(frame).toContain("Model");
+		expect(frame).toContain("openai/gpt-5.1");
+		expect(frame).toContain("❯ Repository");
+		expect(frame).toContain("Launch Consultation");
+		// And none of them paints a foreground: the writing alone stands. The
+		// renderer's own default is not a paint.
+		expect(spanColors(setup, "openai/gpt-5.1")).toEqual([[255, 255, 255]]);
+		expect(spanColors(setup, "Launch Consultation")).toEqual([[255, 255, 255]]);
 	});
 
 	test("Esc leaves the gallery, the way its bar says", async () => {

@@ -1,8 +1,11 @@
 # Shared control verification
 
 Status: the automated checks pass. The keyboard and visual acceptance targets
-are verified in Ghostty and foot, in the dark, light, and no-color
-presentations. The screen-reader target is not verified at all.
+were verified in Ghostty and foot, in the dark and no-color presentations,
+before the control plane began inheriting the Theme from herdr (ADR 0024); the
+terminal walks have not been re-run on the theme-inherited paint, so they are
+recorded as not re-verified for it, not as a pass. The screen-reader target is
+not verified at all.
 
 This record states what was measured, on what, and what was not measured. A
 required check that could not run is recorded as incomplete. It is not a pass,
@@ -41,9 +44,10 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue | `test/consultation-frame.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
-| Contrast of the shared palette's text and indicator pairs, measured with the WCAG formula | `test/shared-presentation.test.ts` | Passed |
-| The light and no-color presentations draw their own pairs; labels, the focus marker, and state words survive without color | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| The overlay surface paints the presentation's own surface role, and every text the surface paints clears the measured contrast on the background it landed on, in dark and light | `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed |
+| The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
+| The no-color presentation strips color and keeps labels, the focus marker, and state words | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The overlay surface paints the theme's own `panel_bg` role, and the text the surface's own rows paint clears the measured contrast on the surface it landed on | `test/reserved-rows.test.ts`, `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed |
+| The plane paints the Theme the environment resolves: the inherited herdr theme's colors on rows, borders, badges, and the Message line, the fallback warning on an unknown name, the standalone theme outside herdr, and `reset` roles and `NO_COLOR` painting no color | `test/theme-resolver.test.ts`, `test/theme-source.test.ts`, `test/theme-frame.test.ts` | Passed |
 | Decorative animation and caret blinking are off by default, and no check depends on a blink or a timer | `test/shared-presentation.test.ts`, the frame suite's bounded waits | Passed |
 | Small and narrow frames keep the focused control and the way out; below a usable size the surface states its size and how to leave | `test/reserved-rows.test.ts`, `test/handoff-frame.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The shared library is required: no screen builds its own field, names a renderer field, or hand-edits a draft string | `test/shared-control-architecture.test.ts` | Passed |
@@ -68,8 +72,8 @@ Every check below runs in `npm test`, which is `npm run lint`,
 | Environment | Required checks | Result |
 | --- | --- | --- |
 | Linux with Ghostty | Keyboard and visual checks | **Verified** on Ghostty 1.3.1-arch2 under Hyprland 0.56.2 on this machine. All four gallery examples walked: typing, caret movement, selection shading, F3 copy (the terminal confirmed the clipboard), a paste refused as a whole with its reason, a taken paste, undo and redo, the F1 Key guide opening and closing, and Esc leaving the gallery. |
-| Linux with foot | Keyboard and visual checks | **Verified** on foot 1.28.0: the same walk, with paste driven by foot's clipboard-paste key; the refused paste kept its value and stated why, the taken paste landed at the caret, the F1 Key guide opened and closed, and Esc left the gallery. `FACTORY_PRESENTATION=mono` on the same window: labels, the focus marker, and the state words survived with the colors off. |
-| A light terminal with the light presentation | Visual checks | **Verified after a fix, under the pin.** The light presentation is reachable only through `FACTORY_PRESENTATION=light`: the automatic switch on the terminal's own scheme is gated, because the base panes no shared module owns still paint the fixed dark color system (decision recorded below). On Ghostty over a light terminal, the first check found the shared overlays unreadable: the light ink painted on a fixed dark surface. The overlays now paint the presentation's own surface role, and the Key guide, the Message line, and the size notice take their ink from the presentation. The gallery's surface and every text it paints are checked span by span in the suite, and the desktop re-check showed the gallery readable on the light terminal. |
+| Linux with foot | Keyboard and visual checks | **Verified** on foot 1.28.0: the same walk, with paste driven by foot's clipboard-paste key; the refused paste kept its value and stated why, the taken paste landed at the caret, the F1 Key guide opened and closed, and Esc left the gallery. `NO_COLOR` set on the same window: labels, the focus marker, and the state words survived with the colors off. **Not re-run** after the plane began inheriting the Theme from herdr (ADR 0024): the paint the walk measured was the fixed dark palette. |
+| A light terminal with herdr's light theme | Visual checks | **Not verified under the theme mechanism.** The earlier check ran under the old `FACTORY_PRESENTATION=light` pin, which ADR 0024 removed: light is now a theme the plane inherits from herdr's config, and the base panes that half-migrated under the pin now paint the theme's roles. The suite checks the gallery's surface and every text it paints span by span, and a desktop re-walk on a light herdr theme is still to be recorded here. |
 | A tmux path on Linux | Keyboard, paste, focus, and rendering checks | **Verified** by `test/tmux-fields.test.ts` on tmux 3.7c: the production gallery on a real pane, keys sent as terminal bytes, the screen read back with `capture-pane`. |
 | Separate GNOME Terminal and Orca environment | Screen-reader operation | **Not verified.** Neither GNOME Terminal nor Orca is installed here, and the standard forbids changing an operator's desktop configuration as an unannounced setup step. No screen-reader claim is made anywhere in this repository. |
 
@@ -78,7 +82,7 @@ Every check below runs in `npm test`, which is `npm run lint`,
 Run it on a machine with a desktop session, then record the versions and results
 in this file. Do not mark the row verified from the automated suite.
 
-1. `npm run gallery` and walk all five examples with `Tab`.
+1. `npm run gallery` and walk all eight examples with `Tab`.
 2. In the `fields` example: type into the focused Context field, press Left,
    Right, Home, End, Shift+Arrow, Ctrl+Arrow, Ctrl+Backspace, Ctrl+Z, Ctrl+Y;
    paste `1e3` and then `42`; paste a long single line and a multi-line draft.
@@ -91,8 +95,8 @@ in this file. Do not mark the row verified from the automated suite.
 5. Check `?`/`F1` (Key guide), `F2` (Message view), `F3` (Copy selection), `Esc`,
    and `Ctrl+C`, and confirm the Action bar names only keys that did what it
    said.
-6. Repeat with a light terminal theme and with the theme's colors turned off
-   (`FACTORY_PRESENTATION=light`, `FACTORY_PRESENTATION=mono`).
+6. Repeat with herdr's light theme active in the config (the plane inherits
+   it on its next startup) and with the colors turned off (`NO_COLOR` set).
 
 ### Screen-reader procedure, not yet run
 
@@ -122,43 +126,65 @@ If the renderer cannot give Orca any of this, stop and return for agreement on a
 renderer change or an equivalent accessible interaction mode. Do not lower the
 requirement to keyboard-only support, and do not claim the baseline complete.
 
-## The gallery's `notes` example (this PR)
+## The gallery's `notes` example
 
 The gallery's `notes` example - the written reason at the width the surface
-names, and the waiting row's dim tone - is new in this PR. The terminal walks
-above were run before it existed: they are recorded as not re-verified for
-that example, not as a pass for it.
+names, and the waiting row's dim tone - joined the gallery earlier in this
+branch's line of work. The terminal walks above were run before it existed:
+they are recorded as not re-verified for that example, not as a pass for it.
 
-## The light presentation: the decision
+## The inherited Theme (issue #55, ADR 0024)
 
-The light presentation is a pin, not an automatic switch. The terminal's own
-scheme is never consulted, and the shared library exposes no path to switch to
-light without `FACTORY_PRESENTATION=light`. The reason is the half-migration:
-the base panes no shared module owns (the Ticket list and detail, the
-Consultation list and detail panes, the Agent pane, and the Live view, with
-their state and task badges) still paint the fixed dark color system, and they
-paint no background. An automatic switch would paint a half-light plane on a
-light terminal, where the shared controls and overlays read but the base panes
-stay light gray on white. The pin keeps the light pairs exercised in the suite
-and in visual checks until the panes follow.
+The control plane now inherits the Theme from herdr. The pure resolver
+(`src/components/shared/theme.ts`) and its machine seam (`src/theme-source.ts`)
+are covered by `test/theme-resolver.test.ts` and `test/theme-source.test.ts`:
+name normalization and aliases, `auto_switch` to `dark_name`, all 18 vendored
+built-in definitions (recorded as taken from herdr 0.9.0), per-token custom
+overrides including `reset`, a bad override dropping only its token, the
+inside-herdr versus outside-herdr defaults, and the `catppuccin` fallback with
+its warning. The app frame seam is covered by `test/theme-frame.test.ts`: the
+real app paints the inherited theme's colors on rows, borders, badges, the
+Message line, and an overlay surface; the fallback warning reaches the Message
+line in the fallback theme's own severity color; the standalone theme stands
+outside herdr; and `reset` roles and `NO_COLOR` paint no color.
+`test/shared-presentation.test.ts` keeps the contrast floor for the standalone
+theme and the no-color integrity, and `test/shared-gallery.test.ts` drives
+the gallery's `theme`, `theme-fallback`, and `no-color` examples. The full
+suite passed in green on this branch.
 
-The blocking follow-up is the full light migration: the base panes and their
-badges take their ink from the presentation, and only then may the switch on
-the terminal's scheme come back. Until that lands, a light terminal reads the
-plane in its dark presentation, which is the one the base panes were built for.
+The recorded limits, stated rather than hidden:
+
+- Inherited theme pairs are **not contrast-checked**. The operator picks a
+  herdr theme for the terminal they run in, and the plane neither tests nor
+  clamps it. The contrast check runs on the standalone theme alone: the
+  vendored set is the plane's data, and no test contrast-checks it.
+- Light `auto_switch` is not followed: the plane resolves the `dark_name`
+  theme and never guesses the host appearance.
+- The terminal walks above (Ghostty, foot) measured the fixed dark paint and
+  have **not been re-run** on the theme-inherited paint, so they are recorded
+  as not re-verified for it. The light-herdr-theme visual walk is new and
+  unrun.
+
+## The light presentation: the decision (superseded)
+
+The light presentation was once a pin, not an automatic switch: reachable only
+through `FACTORY_PRESENTATION=light`, gated because the base panes no shared
+module owned still painted the fixed dark color system. ADR 0024 supersedes
+that decision: the pin and the light/dark presentation concept are removed,
+light is a theme the plane inherits from herdr's config, and the base panes
+now paint the theme's roles. The recorded desktop check under the pin stands
+as history, not as a pass for the theme mechanism.
 
 ## What the implementation still leaves open
 
 The library, and every field, selector, search, form action, form focus route,
 Consultation view, Agent interaction mode, and Consultation confirmation panel
-the control plane owns, are wired to the shared Control catalogue. The
-remaining gaps: the screen-reader path has not been measured (see above), and
-the base panes no shared module owns (the Ticket list and detail, the
-Consultation list and detail panes, the Agent pane, and the Live view, with
-their state and task badges) still paint the fixed dark color system, so a
-pinned light presentation reads its shared controls and overlays, but not those
-panes, on a light terminal. The automatic light switch is gated until the full
-light migration lands (decision recorded above).
+the control plane owns, are wired to the shared Control catalogue, and every
+surface - the base panes included - paints from the shared Theme module (ADR
+0020). The remaining gaps: the screen-reader path has not been measured (see
+above), the terminal walks have not been re-run on the theme-inherited paint
+(see the inherited-Theme record above), and inherited herdr theme pairs are
+not contrast-checked (limit recorded there).
 
 ## The merged Main view (PR 42)
 

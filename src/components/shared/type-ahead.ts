@@ -17,7 +17,7 @@ import type { ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChoiceRow } from "./choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
-import { controlInk, MARKER_WIDTH, STATE_WORDS } from "./presentation.ts";
+import { type ControlInk, controlInk, MARKER_WIDTH, STATE_WORDS } from "./presentation.ts";
 
 /** The search's own label: the row above it already names the value. */
 const SEARCH_LABEL = "Search";
@@ -79,6 +79,8 @@ export interface TypeAheadRowProps {
 	fieldRef?: { current: FieldHandle | null };
 	/** Every change of the search text, match, caret, and selection. */
 	onQueryChange?: (query: string, match: TypeAheadMatch, facts: FieldFacts) => void;
+	/** The presentation's ink the row paints in. Default: the active control ink. */
+	ink?: ControlInk;
 }
 
 /** The shared Type-ahead row: the value, and the editable search under it. */
@@ -124,6 +126,7 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 			// A model list tells its members apart at their end, so the row keeps
 			// the tail of a value wider than its column.
 			clipTail: true,
+			ink: props.ink,
 		}),
 		createElement(
 			"box",
@@ -139,6 +142,7 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 				width: Math.max(1, props.width - (noMatch ? NO_MATCH_CELLS : 0)),
 				labelWidth: props.labelWidth - MARKER_WIDTH,
 				marked: false,
+				ink: props.ink,
 				fieldRef: props.fieldRef,
 				onValueChange: (facts) => {
 					queryRef.current = facts.value;
@@ -147,7 +151,11 @@ export function TypeAheadRow(props: TypeAheadRowProps): ReactElement {
 				},
 			}),
 			noMatch
-				? createElement("text", { fg: controlInk().error.fg ?? undefined }, STATE_WORDS.noMatch)
+				? createElement(
+						"text",
+						{ fg: (props.ink ?? controlInk()).error.fg ?? undefined },
+						STATE_WORDS.noMatch,
+					)
 				: null,
 		),
 	);

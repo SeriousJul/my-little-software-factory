@@ -30,7 +30,6 @@ import { CliRenderEvents } from "@opentui/core";
 import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
 import { describe, expect, test, vi } from "vitest";
-import { COLORS, STATE_COLORS } from "../src/components/theme.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
@@ -55,6 +54,7 @@ import {
 	press,
 	pressArrow,
 	rgb,
+	roleColor,
 	rowsOf,
 	scrollDetailUntil,
 	settle,
@@ -245,8 +245,8 @@ describe("the control plane", () => {
 			// border with the focused color; the list border relaxes.
 			await mouseClick(setup, detailX + 10, paneRow(5));
 			await awaitFrame(setup, detailFocused, "the detail pane to take click focus");
-			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(COLORS.borderFocused));
-			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(COLORS.border));
+			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(roleColor("accent")));
+			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(roleColor("surface_dim")));
 
 			// Click the list pane: the focus moves and the detail border
 			// follows. The first click also gave the detail's scroll box
@@ -254,8 +254,8 @@ describe("the control plane", () => {
 			// focused color.
 			await mouseClick(setup, 10, paneRow(5));
 			await awaitFrame(setup, listFocused, "the list pane to take click focus");
-			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(COLORS.borderFocused));
-			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(COLORS.border));
+			expect(cellColors(setup, 0, paneRow(0)).fg).toEqual(rgb(roleColor("accent")));
+			expect(cellColors(setup, detailX, paneRow(0)).fg).toEqual(rgb(roleColor("surface_dim")));
 		});
 	});
 
@@ -704,8 +704,8 @@ describe("the control plane", () => {
 				expect(line).toBe("│ ❯ [running]   [unknown] Migrate scheduler to acme/ingest │");
 				// The missing-data badge is the only warning-colored text in
 				// the row; the configured types keep the neutral style.
-				expect(spanColors(setup, "[unknown]")).toEqual([rgb(COLORS.statusWarning)]);
-				expect(spanColors(setup, "[running]")).toEqual([rgb(STATE_COLORS.running)]);
+				expect(spanColors(setup, "[unknown]")).toEqual([rgb(roleColor("yellow"))]);
+				expect(spanColors(setup, "[running]")).toEqual([rgb(roleColor("green"))]);
 				// The detail carries the explicit line for the missing data.
 				const detail = detailPaneText(frame);
 				expect(detail).toContain("Handoff task type: unknown");
@@ -719,7 +719,7 @@ describe("the control plane", () => {
 
 	test("configured task types share one neutral badge style", async () => {
 		await withApp(async (setup) => {
-			const neutral = rgb(COLORS.text);
+			const neutral = rgb(roleColor("text"));
 			expect(spanColors(setup, "[implement]")).toEqual([neutral]);
 			expect(spanColors(setup, "[fix]")).toEqual([neutral]);
 			expect(spanColors(setup, "[review]")).toEqual([neutral]);

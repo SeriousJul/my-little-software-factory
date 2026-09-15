@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AppProps } from "../src/components/app.ts";
-import { COLORS } from "../src/components/theme.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
@@ -40,6 +39,7 @@ import {
 	pressQuiet,
 	pressScrollKey,
 	rgb,
+	roleColor,
 	rowsOf,
 	settle,
 	sleep,
@@ -591,7 +591,7 @@ describe("the failure markers", () => {
 				// The pop-in fades in for a little while, so wait it out before
 				// reading the painted colors: mid-fade they are blended.
 				await sleep(250);
-				expect(spanColors(setup, "blocked")).toContainEqual(rgb(COLORS.statusWarning));
+				expect(spanColors(setup, "blocked")).toContainEqual(rgb(roleColor("yellow")));
 				// Enter confirms the Goto: the focus runs, the view closes, and
 				// the ticket stays in flight with the blocked badge standing.
 				await pressReturn(setup, "the focus", (f) => f.includes("focused the agent"));
@@ -1446,8 +1446,8 @@ describe("the decision modal", () => {
 				// pop-in fades in for a little while, so wait it out before
 				// reading the painted colors: mid-fade they are blended.
 				await sleep(250);
-				expect(spanColors(setup, "npm run lint")).toContainEqual(rgb(COLORS.statusWarning));
-				expect(spanColors(setup, "npm test")).toContainEqual(rgb(COLORS.dim));
+				expect(spanColors(setup, "npm run lint")).toContainEqual(rgb(roleColor("yellow")));
+				expect(spanColors(setup, "npm test")).toContainEqual(rgb(roleColor("subtext0")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -2532,14 +2532,18 @@ describe("the leftover environment", () => {
 				// The detail block is one warning the operator can act on: the
 				// fact, its reason, and the key that ends it all carry it.
 				expect(spanColors(setup, "Leftover: herdr workspace ws-1")).toEqual([
-					rgb(COLORS.statusWarning),
+					rgb(roleColor("yellow")),
 				]);
-				expect(spanColors(setup, "press w to clear it")).toEqual([rgb(COLORS.statusWarning)]);
+				expect(spanColors(setup, "press w to clear it")).toEqual([rgb(roleColor("yellow"))]);
 				await openLeftoverPanel(setup);
 				// The panel's guidance is message colour, not warning colour: it
 				// explains the action, it does not report a fact.
-				expect(spanColors(setup, "Retry runs the Close cleanup again.")).toEqual([rgb(COLORS.dim)]);
-				expect(spanColors(setup, "still open: herdr workspace ws-1")).toEqual([rgb(COLORS.dim)]);
+				expect(spanColors(setup, "Retry runs the Close cleanup again.")).toEqual([
+					rgb(roleColor("subtext0")),
+				]);
+				expect(spanColors(setup, "still open: herdr workspace ws-1")).toEqual([
+					rgb(roleColor("subtext0")),
+				]);
 			},
 			WIDTH,
 			HEIGHT,

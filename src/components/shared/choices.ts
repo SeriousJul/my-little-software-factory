@@ -12,7 +12,13 @@ import { Fragment, type ReactElement, useRef, useState } from "react";
 
 import type { ActionRow } from "../modal-chrome.ts";
 import { padToWidth, truncateTailToWidth, truncateToWidth } from "../text.ts";
-import { controlInk, MARKER_WIDTH, markerText, ownNoteCells } from "./presentation.ts";
+import {
+	type ControlInk,
+	controlInk,
+	MARKER_WIDTH,
+	markerText,
+	ownNoteCells,
+} from "./presentation.ts";
 
 /** One row of a form that holds no text: its label and its current value. */
 export interface ChoiceHandle<T> {
@@ -97,11 +103,13 @@ export interface ChoiceRowProps {
 	 * column. Defaults to the row's own cells.
 	 */
 	noteWidth?: number;
+	/** The presentation's ink the row paints in. Default: the active control ink. */
+	ink?: ControlInk;
 }
 
 /** The selector row: a label, a value, and the state word beside them. */
 export function ChoiceRow(props: ChoiceRowProps): ReactElement {
-	const ink = controlInk();
+	const ink = props.ink ?? controlInk();
 	const empty = props.value === "";
 	const color =
 		props.warning === true
@@ -163,8 +171,8 @@ export function actionRowSpans(
 	row: ActionRow,
 	selected: boolean,
 	contentWidth: number,
+	ink: ControlInk = controlInk(),
 ): ReactElement[] {
-	const ink = controlInk();
 	const markerWidth = Math.min(MARKER_WIDTH, contentWidth);
 	const labelWidth = Math.min(ACTION_LABEL_WIDTH, Math.max(0, contentWidth - markerWidth));
 	const detailWidth = Math.max(0, contentWidth - markerWidth - labelWidth);
@@ -200,15 +208,17 @@ export function ActionItem(props: {
 	focused: boolean;
 	width: number;
 	refusal?: string | null;
+	/** The presentation's ink the row paints in. Default: the active control ink. */
+	ink?: ControlInk;
 }): ReactElement {
-	const ink = controlInk();
+	const ink = props.ink ?? controlInk();
 	return createElement(
 		"box",
 		{ key: props.row.key, style: { flexDirection: "column" } },
 		createElement(
 			"text",
 			{ style: { width: "100%", height: 1 } },
-			...actionRowSpans(props.row, props.focused, props.width),
+			...actionRowSpans(props.row, props.focused, props.width, ink),
 		),
 		props.refusal === null || props.refusal === undefined
 			? null

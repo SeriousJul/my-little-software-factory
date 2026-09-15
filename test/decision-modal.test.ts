@@ -7,13 +7,13 @@
  */
 import { describe, expect, test } from "vitest";
 
-import { COLORS } from "../src/components/theme.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
 	awaitFrame,
 	cellColors,
 	rgb,
+	roleColor,
 	rowsOf,
 	sleep,
 	withApp,
@@ -126,7 +126,7 @@ function expectPinnedScrollbar(frame: string): void {
 async function openModal(setup: AppSetup): Promise<string> {
 	setup.mockInput.pressEnter();
 	await awaitFrame(setup, (f) => f.includes("Decision:"), "the decision modal");
-	const bright = rgb(COLORS.textBright);
+	const bright = rgb(roleColor("text"));
 	return awaitFrame(
 		setup,
 		(frame) => {
@@ -209,11 +209,11 @@ describe("the decision modal's scrollbar", () => {
 				expect(body[body.length - 1][SCROLL_COL]).toBe("█");
 				const rows = rowsOf(settled);
 				expect(cellColors(setup, SCROLL_COL, rows.indexOf(body[body.length - 1])).fg).toEqual(
-					rgb(COLORS.textBright),
+					rgb(roleColor("text")),
 				);
 				const trackAt = body.findIndex((row) => row[SCROLL_COL] === "│");
 				expect(cellColors(setup, SCROLL_COL, rows.indexOf(body[trackAt])).fg).toEqual(
-					rgb(COLORS.dim),
+					rgb(roleColor("subtext0")),
 				);
 			},
 			WIDTH,

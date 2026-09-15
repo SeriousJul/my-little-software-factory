@@ -10,11 +10,16 @@
   [src/components/shared](src/components/shared): `fields.ts` for a Text field
   and a Draft field, `choices.ts` for a selector row and a visible action,
   `form.ts` for a form's slots, focus, and control facts, `type-ahead.ts` for a
-  searchable list row, and `presentation.ts` for labels, focus markers, state
-  words, and the tested color pairs. Do not add a separate screen-specific field,
-  focus implementation, or key system, and do not name a renderer field
+  searchable list row, `presentation.ts` for labels, focus markers, state
+  words, and the tested color pairs, and `theme.ts` for the pure Theme
+  resolution. Colors leave the plane through the shared paint layer
+  ([src/components/theme.ts](src/components/theme.ts)): a surface asks it for a
+  role's color, it answers from the Theme the environment resolved (ADR 0024),
+  and no surface holds its own palette. Do not add a separate screen-specific
+  field, focus implementation, key system, or color table, and do not name a
+  renderer field
   (`InputRenderable`, `TextareaRenderable`) outside the library: an automated
-  check rejects all three. Keep domain validation, draft storage, setting
+  check rejects each of them. Keep domain validation, draft storage, setting
   resolution, and Agent operations in the screen that owns them.
 - Run `npm run gallery` to see a control, and add the state a reviewer must see
   to the gallery's examples rather than to a private sketch; the gallery's
@@ -26,9 +31,12 @@
   shared module interface, never as another local implementation, and read the
   open items and the unverified acceptance targets in
   [the verification record](docs/verification/shared-controls.md): the
-  screen-reader path is not verified, and the base panes no shared module owns
-  still paint the fixed dark color system, so the light presentation stays an
-  explicit `FACTORY_PRESENTATION=light` pin until those panes follow it.
+  screen-reader path is not verified, and the terminal walks have not been
+  re-run on the theme-inherited paint. Every surface, the base panes included,
+  paints the Theme the environment resolves (ADR 0024): inherited from herdr's
+  config inside herdr, the standalone theme outside, and the `NO_COLOR`
+  presentation over any theme. Inherited theme pairs are not contrast-checked; the
+  plane's own themes keep the tested pairs.
 - Start bug fixes with a reproduction through the real application flow. Use
   isolated test state and fake external operations, not live Agent work.
 - Check `npm run lint`, `npm run typecheck`, and `npm test` for implementation
