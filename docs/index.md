@@ -18,6 +18,28 @@ hero:
       link: /shared-controls.md
 
 features:
+  - title: Getting started
+    details: The requirements, the install, the first screen, and the
+      repository's commands, from a blank machine to a working control plane.
+    link: /getting-started/index.html
+    linkText: Get started
+  - title: Operation
+    details: The Main view and its controls, the Consultation and the override
+      panel, the decision, missing, and leftover modals, and the Live view,
+      with screenshots of the running app.
+    link: /operation/main-view.html
+    linkText: Read the operation guide
+  - title: Work flow
+    details: "How a ticket becomes a running agent: the setting chains, model
+      discovery, repository resolution, and what happens after a turn
+      settles."
+    link: /work-flow/handoffs.html
+    linkText: Read the work flow guide
+  - title: Configuration
+    details: The complete config example with every key, the key reference,
+      the notes, and the shipped defaults, in one page.
+    link: /configuration/index.html
+    linkText: Read the configuration guide
   - title: Architecture decisions
     details: The ADRs record what the project decided and why, in name order.
       New decisions append to the end of the list.

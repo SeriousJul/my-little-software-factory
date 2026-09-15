@@ -68,7 +68,7 @@ parts it cannot know about your machine: no ticket sources, no repository
 mappings, and no `state-file` key. Everything else is on: the `pi`, `codex`,
 and `claude` agent types, the four workflow task types, the three task rules,
 and one `consult` Consultation type that passes your input straight through.
-The [README key reference](../../README.md#key-reference) names every key,
+The [configuration key reference](../configuration/index.md#key-reference) names every key,
 its default, and what it does.
 
 ## Add a ticket source
