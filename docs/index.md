@@ -11,7 +11,7 @@ hero:
   actions:
     - theme: brand
       text: Get started
-      link: /getting-started/index.html
+      link: /getting-started/prerequisites.html
     - theme: alt
       text: See it in action
       link: /operation/main-view.html
@@ -20,7 +20,7 @@ hero:
 ![The control plane running in a herdr workspace](/hero.png)
 
 <div class="guide-grid">
-  <a class="guide-card" href="/getting-started/index.html">
+  <a class="guide-card" href="/getting-started/prerequisites.html">
     <h3>Getting started</h3>
     <p>The prerequisites, the first launch, and the minimal config, from a blank machine to a working control plane.</p>
   </a>

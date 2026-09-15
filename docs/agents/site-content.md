@@ -8,19 +8,20 @@ Work flow, Configuration, and Development) and the ADRs. The `agents/`,
 the build; the exclusion is declared once in the site config.
 
 Publishing a page is one action: write the file. The sidebar is generated
-from the folder structure at build time: the page lists are always
-automatic, and the group order is the explicit `GROUP_ORDER` list in the site
-config. A guide folder the list does not name still publishes: it appends
-after the named groups, in name order, so no configuration edit is ever
-needed for a new page or a new guide. Renaming a group or reordering it is a
-maintainer edit of that list.
+from the folder structure at build time: the group order is the explicit
+`GROUP_ORDER` list in the site config, and the page order inside a group is
+the explicit `PAGE_ORDER` list. A guide folder or page the lists do not name
+still publishes: it appends in name order after the named groups and pages, so
+no configuration edit is ever needed for a new page or a new guide. Renaming
+or reordering a group or a page is a maintainer edit of those lists.
 
 Two folders are special-cased in the site config. The ADR group shows a
 single entry, the `adr/index.md` landing page that lists every ADR, instead of
 one sidebar row per ADR, so the list stays compact; the ADR pages themselves
-are still published and reachable from the index. The Getting Started group
-is a landing page plus three steps (prerequisites, first launch, minimal
-config).
+are still published and reachable from the index. The Getting Started group is
+the three steps in reading order (prerequisites, first launch, minimal
+config), with no separate landing page: the home page starts from the first
+step.
 
 ## Conventions
 
@@ -62,8 +63,10 @@ config).
   `docs/.vitepress/theme/`. The custom CSS widens the documentation column so
   the wide terminal screenshots read large on high-resolution displays, and it
   lays out the home page: a text-only hero, the full-width herdr screenshot
-  below it, and the guide-card grid. Put new site-wide presentation in that
-  theme, not in a page.
+  below it, and the guide-card grid. The theme also adds an image lightbox:
+  a screenshot opens full-bleed on click and closes on Escape, the backdrop,
+  or the close button (see `lightbox.ts`). Put new site-wide presentation in
+  that theme, not in a page.
 
 ## Verify before pushing
 

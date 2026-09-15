@@ -1,11 +1,11 @@
 # Documentation site verification
 
 Status: the site build passes, and the built output was verified locally on
-2026-09-15, after the sidebar restructure (the Getting Started split, the
-Development group, the compact ADR group, the larger screenshots, and the
-theme). The GitHub Pages deploy has not run yet: it is triggered by the
-push to `main` that merges the change, and the manual checks on the published
-URL below are incomplete until it has.
+2026-09-15, after the sidebar restructure (the Getting Started steps, the
+explicit page order, the Development group, the compact ADR group, the larger
+screenshots, the theme, and the image lightbox). The GitHub Pages deploy has
+not run yet: it is triggered by the push to `main` that merges the change,
+and the manual checks on the published URL below are incomplete until it has.
 
 This record states what was measured, on what, and what was not measured. A
 check that could not run is recorded as incomplete. It is not a pass, and it
@@ -18,7 +18,7 @@ how pages are written.
 ## What was verified locally
 
 Measured on Node 26.8.1 and VitePress 1.6.4, from a clean checkout of the
-branch, on 2026-09-14.
+branch, on 2026-09-15.
 
 | Requirement | How it was checked | Result |
 | --- | --- | --- |
@@ -27,6 +27,9 @@ branch, on 2026-09-14.
 | The sidebar groups the published pages in the order Getting Started, Operation, Work flow, Configuration, Development, ADR, and the ADR group lists the single index entry rather than one row per ADR | The built HTML sidebar of a doc page, read in document order | Passed |
 | The home page renders a text-only hero (name, tagline, two actions), the full-width herdr screenshot below it, and the six-card guide grid, in that order | The built home page HTML, landmarks read in document order | Passed |
 | The screenshots are the larger sizes: the six operation shots are 1620 by 800 and the hero is 2304 by 1120 | The PNG header dimensions of the built assets | Passed |
+| The pages inside a group show in explicit reading order; Getting Started is prerequisites, first launch, minimal config, with no landing row | The built HTML sidebar of a doc page, read in document order | Passed |
+| The home page "Get started" action and the Getting started card link to the first step (prerequisites), not to a landing page | The built home page HTML | Passed |
+| The image lightbox code and styles are bundled into the site build | The built theme chunk contains the lightbox bindings (the `.vp-doc img` selector, the Escape and close handling, the overlay) and the built CSS contains the overlay styles | Passed |
 | A broken internal link fails the build with a readable error naming the page and the link, for a link in the same folder and for a link into a parent folder | A temporary guide page was built with each shape: `[x](./does-not-exist.md)` fails with `Found dead link ./does-not-exist in file temp-guide/intro.md`, and `[x](../does-not-exist.md)` fails with `Found dead link ./../does-not-exist in file temp-guide/intro.md`; both builds exit nonzero | Passed |
 | A newly written guide folder appears in the sidebar without a config edit | A temporary guide folder was built: its pages appeared as a new sidebar group, and the build needed no config change | Passed |
 | The sidebar groups every published page by folder, in the explicit `GROUP_ORDER` | The rendered sidebar of a built page shows the Getting Started, Operation, Work flow, Configuration, Development, and ADR groups, in that order | Passed |
@@ -53,13 +56,21 @@ after the checks, and the final build was rerun clean.
 
 ## What has not been measured
 
+- The interactive image lightbox flow. The lightbox code and CSS are in the
+  build, but the click-to-open and the close paths (Escape, the backdrop, the
+  close button) have not been exercised in a real browser, because the app is
+  tested only at the unit layer and no desktop browser is driven in this
+  environment. Record the result here when it has been checked by hand.
+
 - The GitHub Pages deploy. The site deploy workflow builds on push to `main`
   and publishes to the `gh-pages` branch. It has not run, because the change
   is not merged yet. After the merge, open
   <https://seriousjul.github.io/my-little-software-factory/> and check by hand:
   the home page shows the text hero, the large herdr screenshot, and the guide
-  cards; the sidebar lists the six groups in order with the ADR group collapsed
-  to its index; one Getting Started step, one Development page, and one ADR
-  page each render; the screenshots read large on a wide display; and the
-  excluded folders are absent. Record the result in this section when it has
-  run.
+  cards, and "Get started" opens the prerequisites step; the sidebar lists the
+  six groups in order with the Getting Started steps in reading order and the
+  ADR group collapsed to its index; one Development page and one ADR page each
+  render; a screenshot opens the lightbox full-bleed and closes on Escape, the
+  backdrop, or the close button; the screenshots read large on a wide display;
+  and the excluded folders are absent. Record the result in this section when
+  it has run.
