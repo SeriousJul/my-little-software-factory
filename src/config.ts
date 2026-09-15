@@ -167,6 +167,11 @@ export interface FactoryConfig {
 	repos: Record<string, string>;
 	/** No shipped source points at the maintainer repository. */
 	sources: TicketSourceConfig[];
+	/**
+	 * The Priority label list (ADR 0022): the ordered labels that define the
+	 * priority ranks, first entry highest. Missing or empty ranks no ticket.
+	 */
+	priority?: { labels: string[] };
 	taskRules: TaskRule[];
 	/** An optional state file. Relative paths use the selected config directory. */
 	stateFile?: string;
@@ -214,6 +219,12 @@ export interface LoadedConfig {
 	fromFile: boolean;
 	/** The file was missing: the seam seeded it from the Default configuration. */
 	seeded?: boolean;
+	/**
+	 * The non-blocking config issues the operator must read. The Priority
+	 * section reports its problems here, and the factory starts with no
+	 * ranking when it names that section.
+	 */
+	warnings: string[];
 }
 
 /** Resolve a configured state path relative to the selected config file. */
@@ -244,8 +255,10 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 		throw new ConfigError(`cannot read ${path}: ${String(error)}`);
 	}
 	try {
+		const { config, warnings } = validateConfigWithWarnings(parse(text));
 		return {
-			config: validateConfig(parse(text)),
+			config,
+			warnings,
 			fromFile: true,
 			...(seeded ? { seeded: true } : {}),
 		};
@@ -288,7 +301,32 @@ function readableParseError(error: unknown): string {
 	return firstNonEmptyLine(message) ?? message.trim();
 }
 
+/**
+ * The one structural validation for every source of config: the CLI path
+ * and the editor both call this, so the two cannot disagree about what is
+ * valid.
+ *
+ * A misconfigured Priority section does not throw: the factory must start
+ * with no ranking and report the section, while every other structural
+ * failure here blocks startup with the reason.
+ */
 export function validateConfig(data: unknown): FactoryConfig {
+	return validateConfigWithWarnings(data).config;
+}
+
+/**
+ * The validation with its warnings: the config, plus the non-blocking
+ * issues the operator must read, one line each. The CLI startup prints
+ * these, and the factory starts with the section they name missing.
+ */
+export function validateConfigWithWarnings(data: unknown): {
+	config: FactoryConfig;
+	warnings: string[];
+} {
+	return parseConfig(data);
+}
+
+function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[] } {
 	if (!isRecord(data)) {
 		throw new ConfigError("config: the top level must be a table of key = value pairs");
 	}
@@ -313,6 +351,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 		"completion-message-lines",
 		"max-handoffs-per-ticket",
 		"scroll",
+		"priority",
 		"workflows",
 	]);
 	for (const key of Object.keys(data)) {
@@ -347,6 +386,38 @@ export function validateConfig(data: unknown): FactoryConfig {
 	const sources = validateSources(data.sources ?? data["ticket-sources"]);
 	const taskRules = validateTaskRules(data["task-rules"], taskTypes);
 	const workflows = validateWorkflows(data.workflows, taskTypes, agents);
+	// The Priority section reports its own errors instead of throwing: the
+	// factory must start with no ranking, not refuse to boot, when it is
+	// misconfigured (ADR 0022).
+	const warnings: string[] = [];
+	let priority: FactoryConfig["priority"];
+	const rawPriority = data.priority;
+	if (rawPriority !== undefined) {
+		if (!isRecord(rawPriority)) {
+			warnings.push(
+				`config: [priority] must be a table with a labels list; got ${describeValue(rawPriority)}. The factory starts with no priority ranking`,
+			);
+		} else {
+			const unknownPriorityKeys = Object.keys(rawPriority).filter((key) => key !== "labels");
+			if (unknownPriorityKeys.length > 0) {
+				warnings.push(
+					`config: unknown key${unknownPriorityKeys.length > 1 ? "s" : ""} in [priority]: ${unknownPriorityKeys.join(", ")}. The factory starts with no priority ranking`,
+				);
+			} else if (!Array.isArray(rawPriority.labels)) {
+				warnings.push(
+					`config: [priority] labels must be a list of labels; got ${describeValue(rawPriority.labels)}. The factory starts with no priority ranking`,
+				);
+			} else if (
+				rawPriority.labels.some((label) => typeof label !== "string" || label.trim() === "")
+			) {
+				warnings.push(
+					"config: [priority] labels must all be non-empty strings. The factory starts with no priority ranking",
+				);
+			} else {
+				priority = { labels: rawPriority.labels as string[] };
+			}
+		}
+	}
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
 	const autoHandoff = booleanField(data, "auto-handoff", false);
 	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
@@ -359,7 +430,7 @@ export function validateConfig(data: unknown): FactoryConfig {
 			`config: default-task-type "${defaultTaskType}" does not match any task type`,
 		);
 	}
-	return {
+	const config: FactoryConfig = {
 		defaultAgent,
 		...(defaultModel === undefined ? {} : { defaultModel }),
 		defaultEnvironment: defaultEnvironment as EnvironmentKind,
@@ -379,8 +450,17 @@ export function validateConfig(data: unknown): FactoryConfig {
 		repos,
 		sources,
 		taskRules,
+		...(priority === undefined ? {} : { priority }),
 		...(stateFile === undefined ? {} : { stateFile }),
 	};
+	return { config, warnings };
+}
+
+function describeValue(value: unknown): string {
+	if (value === null) return "null";
+	if (Array.isArray(value)) return "a list";
+	if (typeof value === "object") return "a table";
+	return `a ${typeof value}`;
 }
 
 function validateScroll(value: unknown): ScrollConfig {
@@ -1094,6 +1174,7 @@ export function configToToml(config: FactoryConfig): string {
 		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
 		"completion-message-lines": config.completionMessageLines,
 		"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
+		...(config.priority === undefined ? {} : { priority: { labels: config.priority.labels } }),
 		scroll: {
 			speed: config.scroll.speed,
 			acceleration: config.scroll.acceleration,

@@ -79,6 +79,7 @@ const FOCUSED_CONTROL: Record<string, string> = {
 	states: "launch",
 	search: "type-ahead",
 	notes: "reason",
+	priority: "rank",
 	narrow: "draft",
 };
 
@@ -242,6 +243,92 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					labelWidth: columns.labelWidth,
 					muted: true,
 				}),
+			];
+		},
+	},
+	{
+		id: "priority",
+		state:
+			"the ticket priority: the rank badge, the selector in each state, and the Consultation reason",
+		render: (columns, holds, _inputActive, _wiring) => {
+			const ink = controlInk();
+			// One ticket row per state of the rank badge: the one-cell digit, 1
+			// highest, and an unranked ticket that shows no digit at all.
+			const badge = (key: string, digit: string | null, title: string) =>
+				createElement(
+					"box",
+					{ key, style: { flexDirection: "row", height: 1 } },
+					createElement(
+						"text",
+						{ fg: digit === null ? undefined : (ink.detail.fg ?? undefined) },
+						digit === null ? "   " : `${digit}  `.slice(0, 4),
+					),
+					createElement("text", { fg: ink.text.fg ?? undefined }, title),
+				);
+			return [
+				badge("rank-1", "1", "critical fix"),
+				badge("rank-3", "3", "routine backlog"),
+				badge("rank-none", null, "unranked ticket shows no digit"),
+				// The detail pane's selector on the standard choice row: a rank,
+				// off, and default (clears the override back to the source).
+				createElement(ChoiceRow, {
+					key: "rank",
+					label: "Override",
+					value: "critical",
+					focused: holds === "rank",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+				}),
+				createElement(ChoiceRow, {
+					key: "off",
+					label: "Override",
+					value: "off",
+					focused: holds === "off",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+				}),
+				createElement(ChoiceRow, {
+					key: "default",
+					label: "Override",
+					value: "",
+					focused: holds === "default",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					placeholder: "default",
+				}),
+				// A Consultation selected: the bump is unavailable with its reason.
+				createElement(ChoiceRow, {
+					key: "consultation",
+					label: "Override",
+					value: "",
+					focused: holds === "consultation",
+					width: columns.valueWidth,
+					labelWidth: columns.labelWidth,
+					placeholder: STATE_WORDS.unavailable,
+					error: "a Consultation has no priority: the bump applies to tickets only",
+				}),
+				// The bump messages the Message line carries, top and floor no-ops
+				// included, so a reviewer reads the whole outcome set.
+				createElement(
+					"text",
+					{
+						key: "bump-moved",
+						style: { width: "100%", height: 1 },
+						fg: ink.detail.fg ?? undefined,
+					},
+					truncateToWidth(
+						"bump: = raised to high   - lowered to routine   from the lowest: set to off",
+						columns.contentWidth,
+					),
+				),
+				createElement(
+					"text",
+					{ key: "bump-noop", style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
+					truncateToWidth(
+						"no-op: already at the highest priority   already unranked",
+						columns.contentWidth,
+					),
+				),
 			];
 		},
 	},

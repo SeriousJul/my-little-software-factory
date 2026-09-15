@@ -109,7 +109,9 @@ type ControlKey =
 	| "return"
 	| "escape"
 	| "backspace"
-	| "ctrl+c";
+	| "ctrl+c"
+	| "-"
+	| "=";
 
 export interface ControlAvailability {
 	available: boolean;
@@ -411,6 +413,20 @@ const leftoverClear = (context: ControlContext): ControlAvailability => {
 	if (ticket === undefined) return unavailable("no Ticket is selected");
 	if (ticket.leftover === null)
 		return unavailable(`no leftover environment is recorded for ticket ${ticket.identity}`);
+	return available();
+};
+
+/**
+ * Why the Priority bump and clear answer nothing (ADR 0022).
+ *
+ * The rank belongs to a Ticket, so the Consultation section gets the shared
+ * section reason, and an empty Ticket list gets the selection reason: both
+ * are reasons the operator can act on, not silent keys.
+ */
+const priorityEligibility = (context: ControlContext): ControlAvailability => {
+	if (!ticketBaseMode(context.mode))
+		return unavailable("this control is available only in the Ticket section");
+	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
 	return available();
 };
 
@@ -810,6 +826,36 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...baseModes],
 		availability: (context) =>
 			ticketBaseMode(context.mode) ? leftoverClear(context) : ticketOnly(context),
+	},
+	{
+		id: "bump-priority",
+		label: "Bump priority",
+		// One bump, two directions: `=` raises the rank and `-` lowers it.
+		// From unranked, `-` goes nowhere and `=` takes the lowest rank; from
+		// the lowest rank, `-` takes off; off and unranked share the floor
+		// (ADR 0022). The Detail pane's Override row is the value it moves.
+		keys: () => ["=", "-"],
+		keyLabel: "=/-",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 34,
+		modes: [...baseModes],
+		availability: priorityEligibility,
+		guideNote: "raises or lowers the rank",
+	},
+	{
+		id: "clear-priority",
+		label: "Clear priority",
+		// Backspace gives the Override row its default back: the ticket ranks
+		// by its own labels again (ADR 0022).
+		keys: () => ["backspace"],
+		keyLabel: "⌫",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 33,
+		modes: [...baseModes],
+		availability: priorityEligibility,
+		guideNote: "removes the set rank",
 	},
 	{
 		// The Agent terminal forwards every key to the Agent. Only the

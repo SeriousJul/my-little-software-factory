@@ -70,7 +70,7 @@ function findCell(setup: Setup, text: string): { x: number; y: number } {
 describe("the shared control gallery", () => {
 	test("shows every state the standard names", async () => {
 		const ids = GALLERY_EXAMPLES.map((example) => example.id);
-		expect(ids).toEqual(["fields", "states", "search", "notes", "narrow"]);
+		expect(ids).toEqual(["fields", "states", "search", "notes", "priority", "narrow"]);
 		const states = GALLERY_EXAMPLES.map((example) => example.state).join(" ");
 		for (const needed of [
 			"normal",
@@ -292,6 +292,29 @@ describe("the shared control gallery", () => {
 		// confirm yet, not in the tone of a value it stands on.
 		const waiting = findCell(setup, "anthropic/claude-sonnet-4-5");
 		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg);
+	});
+
+	test("the priority example shows the rank badge, each selector state, and the Consultation reason", async () => {
+		const setup = await gallery("priority", 120, 24);
+		const raw = setup.captureCharFrame();
+		const text = frameText(raw);
+		expect(text).toContain(stateLine("priority"));
+		// The rank badge: the one-cell digit for a ranked row, none for the
+		// unranked one. The raw frame keeps the digit's spacing.
+		expect(raw).toContain("1  critical fix");
+		expect(raw).toContain("3  routine backlog");
+		expect(raw).toContain("   unranked ticket shows no digit");
+		// The selector on the standard choice row, in each of its states.
+		expect(text).toContain("Override critical");
+		expect(text).toContain("Override off");
+		expect(text).toContain("Override default");
+		// A Consultation selected leaves the bump unavailable with its reason.
+		expect(text).toContain(
+			"Error: Override: a Consultation has no priority: the bump applies to tickets only",
+		);
+		// The bump messages the Message line carries, no-ops included.
+		expect(text).toContain("already at the highest priority");
+		expect(text).toContain("already unranked");
 	});
 
 	test("the narrow example holds its columns without painting through them", async () => {

@@ -197,6 +197,19 @@ function rowSpans(
 		budget -= BADGE_WIDTH;
 	}
 
+	// The rank digit (ADR 0022): the 1-based position of the ticket's effective
+	// rank in the config's label list, drawn right after the state badge. It is
+	// absent for an unranked ticket, so a rank column is never a fixed blank.
+	// Each digit takes its own cell, the gap column included, or it drops
+	// when the row is too narrow to keep a readable title beside it.
+	if (ticket.priority.rank !== null) {
+		const rankText = `${ticket.priority.rank + 1} `;
+		if (budget >= widthOf(rankText)) {
+			spans.push(createElement("span", { fg: COLORS.dim }, rankText));
+			budget -= widthOf(rankText);
+		}
+	}
+
 	// The task type badge sits between the state badge and the title. It is
 	// complete or absent: a partial badge could read as another task type,
 	// so the row must hold the whole badge, its gap, and the title minimum,

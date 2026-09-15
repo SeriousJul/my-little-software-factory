@@ -199,8 +199,10 @@ an unexpected key cannot fire while the operator works Consultations. The
 Ticket list and detail move with the row, page and jump keys, focus the detail
 with `l` or `Right` and the list with `h` or `Left`, hand an open ticket off
 with `Enter`, open the decision modal on an awaiting one, the missing modal on
-a ticket whose agent is gone, and the override panel with `e`. `a` toggles
-auto-handoff, `r` refreshes, and `q` quits.
+a ticket whose agent is gone, and the override panel with `e`. `=` and `-`
+bump a ticket's priority up and down through the configured rank, and
+Backspace clears it to the label rank or unranked. `a` toggles auto-handoff,
+`r` refreshes, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -890,6 +892,16 @@ acceleration = 0.8
 # Rows moved by one accelerated wheel event. At least speed.
 maximum-speed = 6
 
+# --- Priority -------------------------------------------------------------
+
+# An ordered list of labels that ranks tickets: the first entry is the
+# highest rank. A ticket that carries one of these labels ranks by it. The
+# operator bumps a rank from the ticket detail, and a bump beats the label.
+# An "off" bump sets the ticket unranked. Omitted: tickets are not ranked
+# and the list keeps its previous order.
+[priority]
+labels = ["critical", "high", "low"]
+
 # --- Agent types ---------------------------------------------------------
 
 # kind is the herdr agent kind. model, thinking, and context-window are
@@ -1109,6 +1121,7 @@ source-kind = "github-issue"
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
+| `priority` | no | none | The ordered priority labels that rank tickets. Omitted: tickets are not ranked and the list keeps its previous order. |
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |
 | `consultation-types` | no | none | The Consultation patterns. |
@@ -1124,6 +1137,12 @@ source-kind = "github-issue"
 | `speed` | no | `1` | Rows moved by one detail key step or one slow wheel event. A whole number of 1 or more. |
 | `acceleration` | no | `0.8` | Wheel-burst acceleration strength. A finite number of 0 or more. `0` keeps wheel movement linear. |
 | `maximum-speed` | no | `6` | Rows moved by one accelerated wheel event. A whole number of 1 or more, at least `speed`. Equal to `speed` also keeps wheel movement linear. |
+
+**`[priority]`** (optional table).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `labels` | yes, when the table is set | - | The ordered priority labels. The first entry is the highest rank. A ticket carrying one ranks by it; an operator bump beats the label, and an `off` bump sets the ticket unranked. |
 
 **`[agents.<name>]`** (one table per agent type).
 
