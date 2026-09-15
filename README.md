@@ -19,7 +19,7 @@ The guides on the site hold everything this screen used to hold:
 
 ## Requirements
 
-- Node 26 or newer, and a current `npm`
+- Node `26.4.0` or newer, and a current `npm`
 - `herdr` on the `PATH`, with a current [ghostty](https://ghostty.org) on the
   `PATH` (herdr runs each Agent's terminal in ghostty), and `git`
 
@@ -33,11 +33,13 @@ ticket sources, and the commands.
 npx SeriousJul/my-little-software-factory
 ```
 
-The control plane reads `~/.config/factory/config.toml`, and ships with a
-working default: one `github-issue` ticket source on this repository, the
-three agent types, the task types, the workflow edges, and the task rules.
-See [the Configuration guide](./docs/configuration/index.md) for the complete
-example and the key reference.
+The control plane reads `~/.config/my-little-software-factory/config.toml`.
+The shipped default carries no ticket sources, no repository mappings, and no
+workflow edges: it holds the three agent types, the four workflow task types,
+the three task rules, and the `consult` Consultation type. The
+[Getting started guide](./docs/getting-started/index.md) shows how to add your
+first ticket source. See [the Configuration guide](./docs/configuration/index.md)
+for the complete example and the key reference.
 
 ## Happy path
 

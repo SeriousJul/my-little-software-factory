@@ -48,8 +48,8 @@ The Ticket list and detail move with the row, page and jump keys, focus the
 detail with `l` or `Right` and the list with `h` or `Left`, hand an open
 ticket off with `Enter`, open the decision modal on an awaiting one, the
 missing modal on a ticket whose agent is gone, and the override panel with
-`e`. `=` and `-` bump a ticket's priority up and down through the configured
-rank, and Backspace clears it to the label rank or unranked. `a` toggles
+`e`. `=`, `+`, and `-` bump a ticket's priority up and down through the
+configured rank, and Backspace clears it to the label rank or unranked. `a` toggles
 auto-handoff, `r` refreshes, and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any

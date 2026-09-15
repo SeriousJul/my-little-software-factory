@@ -17,13 +17,16 @@ import { describe, expect, it } from "vitest";
 import { generateScreenshots, SCREENSHOTS } from "../scripts/screenshot-fixture.ts";
 
 describe("the guide screenshots", () => {
-	it("match the screens the production binary renders", async () => {
-		let regenerated: Map<string, Buffer> | undefined;
+	it("match the screens the production binary renders", async (t) => {
+		let regenerated: Map<string, Buffer>;
 		try {
 			regenerated = await generateScreenshots();
 		} catch (err) {
 			if (err instanceof Error && err.message.includes("cannot open a PTY")) {
-				return; // no pseudo-terminal on this platform
+				// A skipped required check is not a pass: the skip is visible
+				// in the run output, and the images are unverified on this platform.
+				t.skip("no pseudo-terminal on this platform: the guide screenshots are unverified");
+				return;
 			}
 			throw err;
 		}

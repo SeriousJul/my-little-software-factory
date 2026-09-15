@@ -104,7 +104,7 @@ const TICKETS: readonly FetchedTicket[] = [
 	issue(
 		51,
 		"Rank tickets by priority label",
-		"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with = and -.",
+		"Ranked tickets stay ahead of unranked ones. The operator bumps a\npriority with =, +, and -.",
 		["ready-for-agent"],
 		"2026-07-07T06:12:00Z",
 	),
@@ -246,7 +246,7 @@ to = ["merge", "rework"]
 from = "rework"
 to = ["review"]
 
-[[ticket-sources]]
+[[sources]]
 name = "issues"
 kind = "github-issues"
 refresh-interval-seconds = 30
@@ -311,7 +311,7 @@ const GH_STUB = [
 					ghNode(
 						51,
 						"Rank tickets by priority label",
-						"Ranked tickets stay ahead of unranked ones. The operator bumps a priority with = and -.",
+						"Ranked tickets stay ahead of unranked ones. The operator bumps a priority with =, +, and -.",
 						["ready-for-agent"],
 						"2026-07-07T06:12:00Z",
 					),
