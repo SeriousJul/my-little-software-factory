@@ -499,14 +499,16 @@ describe("pull request reference reads (ADR 0023)", () => {
 		};
 	}
 
-	/** One referenced issue node as the search response resolves it. */
+	/**
+	 * One referenced issue node as the search response resolves it. No
+	 * labels: the nested label connection put the search over GitHub's
+	 * possible-node budget (issue #65).
+	 */
 	function referenceIssue(number = 5, over: object = {}): object {
 		return {
 			__typename: "Issue",
 			id: `I_${number}`,
 			number,
-			title: "Use real tickets",
-			labels: { nodes: [{ name: "critical" }] },
 			repository: { name: "factory", nameWithOwner: "acme/factory" },
 			...over,
 		};
@@ -535,7 +537,9 @@ describe("pull request reference reads (ADR 0023)", () => {
 				[],
 			),
 		);
-		const outcome = await createTicketSource(prSource, runner).fetch(["github:github.com:I_5"]);
+		const outcome = await createTicketSource(prSource, runner).fetch([
+			{ identity: "github:github.com:I_5", labels: ["critical"] },
+		]);
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
 		expect(outcome.tickets[0]).toEqual(
@@ -568,8 +572,8 @@ describe("pull request reference reads (ADR 0023)", () => {
 			),
 		);
 		const outcome = await createTicketSource(prSource, runner).fetch([
-			"github:github.com:I_5",
-			"github:github.com:I_6",
+			{ identity: "github:github.com:I_5", labels: ["critical"] },
+			{ identity: "github:github.com:I_6", labels: ["critical"] },
 		]);
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
@@ -607,7 +611,9 @@ describe("pull request reference reads (ADR 0023)", () => {
 				labels: { nodes: [{ name: "high" }] },
 			}),
 		]);
-		const outcome = await createTicketSource(prSource, runner).fetch(["github:github.com:I_5"]);
+		const outcome = await createTicketSource(prSource, runner).fetch([
+			{ identity: "github:github.com:I_5", labels: ["critical"] },
+		]);
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
 		expect(runner.calls).toHaveLength(4);
@@ -740,6 +746,85 @@ describe("pull request reference reads (ADR 0023)", () => {
 		expect(runner.calls).toHaveLength(1);
 		for (const call of runner.calls)
 			expect(call.args.join(" ")).not.toContain("FactoryReferenceRead");
+		expect(outcome.referencedIssueFacts).toBeUndefined();
+	});
+
+	test("the search query carries no labels on the reference nodes (issue #65)", async () => {
+		const runner = new SourceRunner(
+			prPages(
+				[pullRequestClosing({ closingIssuesReferences: { nodes: [referenceIssue(5)] } })],
+				[],
+				[],
+			),
+		);
+		await createTicketSource(prSource, runner).fetch();
+		const call = runner.calls[0];
+		const query = (call.args.find((arg) => arg.startsWith("query=")) ?? "")
+			.replace("query=", "")
+			.replace(/\s+/g, " ");
+		// A nested label connection puts the query over GitHub's 500,000
+		// possible-node budget, so the reference nodes carry no labels.
+		expect(query).toContain(
+			"closingIssuesReferences(first: 100) { nodes { id number repository { name nameWithOwner } } }",
+		);
+	});
+
+	test("uncovered references are read in chunks of 250 (issue #65)", async () => {
+		const answer = (number: number) => ({
+			id: `I_${number}`,
+			number,
+			labels: { nodes: [{ name: "high" }] },
+		});
+		const references = Array.from({ length: 300 }, (_, index) => referenceIssue(101 + index));
+		const runner = new SourceRunner([
+			...prPages([pullRequestClosing({ closingIssuesReferences: { nodes: references } })], [], []),
+			referenceRead(...Array.from({ length: 250 }, (_, index) => answer(101 + index))),
+			referenceRead(...Array.from({ length: 50 }, (_, index) => answer(351 + index))),
+		]);
+		const outcome = await createTicketSource(prSource, runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		// Three search pages, then two read chunks: 250, then 50.
+		expect(runner.calls).toHaveLength(5);
+		const firstRead = runner.calls[3].args.join(" ");
+		const secondRead = runner.calls[4].args.join(" ");
+		expect(firstRead).toContain("ref249Id");
+		expect(firstRead).not.toContain("ref250Id");
+		expect(secondRead).toContain("ref49Id");
+		expect(secondRead).not.toContain("ref50Id");
+		expect(outcome.referencedIssueFacts).toHaveLength(300);
+		expect(outcome.referencedIssueFacts?.[0]).toMatchObject({
+			identity: "github:github.com:I_101",
+			labels: ["high"],
+		});
+		expect(outcome.referencedIssueFacts?.[299]).toMatchObject({
+			identity: "github:github.com:I_400",
+			labels: ["high"],
+		});
+	});
+
+	test("a failed later chunk fails the whole read with one warning (issue #65)", async () => {
+		const references = Array.from({ length: 251 }, (_, index) => referenceIssue(101 + index));
+		const runner = new SourceRunner([
+			...prPages([pullRequestClosing({ closingIssuesReferences: { nodes: references } })], [], []),
+			referenceRead(
+				...Array.from({ length: 250 }, (_, index) => ({
+					id: `I_${101 + index}`,
+					number: 101 + index,
+					labels: { nodes: [{ name: "high" }] },
+				})),
+			),
+			{ code: 1, stdout: "", stderr: "HTTP 500: internal error\n" },
+		]);
+		const outcome = await createTicketSource(prSource, runner).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "success",
+				warnings: ["referenced issue read failed: GitHub request failed: HTTP 500: internal error"],
+			}),
+		);
+		if (outcome.status !== "success") return;
+		// The whole read failed: no facts, so the previous facts stay in place.
 		expect(outcome.referencedIssueFacts).toBeUndefined();
 	});
 });

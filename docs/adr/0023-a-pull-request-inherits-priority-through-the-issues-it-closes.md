@@ -19,16 +19,21 @@ while the pull request that closes it is still open.
 
 **The link is `closingIssuesReferences`, read in the existing search
 query.** One field on the pull request node, no extra request. The
-identities of the referenced issues are stored as a source fact on the
-pull request's membership, and a refresh can change them.
+reference nodes carry the identity, the number, and the repository - and
+no labels, because GitHub's possible-node budget is computed from the
+query's page arguments and a nested label connection exhausts it (see the
+note). The identities of the referenced issues are stored as a source fact
+on the pull request's membership, and a refresh can change them.
 
-**A reference resolves by the issue's identity.** When the issue is or was
-a ticket, its stored labels supply the rank; an issue that left the source
-keeps its last known labels. When the issue is neither, the control plane
-reads it directly by repository and number, batched into one extra request
-per pull request source refresh, and stores the answer as a Referenced
-issue fact: a fact, not a ticket. It takes no row in the Main view and is
-never handed off.
+**A reference resolves by the issue's identity.** When the issue is a live
+ticket, the labels of its newest membership supply the rank. The refresh
+passes the live tickets and those labels to the fetch, and a covered
+reference's stored fact refreshes to them. When the issue is no live
+ticket, the control plane reads it directly by its identity when the
+identity is known, else by repository and number, batched in requests of at
+most 250 references per pull request source refresh, and stores the answer
+as a Referenced issue fact: a fact, not a ticket. It takes no row in the
+Main view and is never handed off.
 
 **The direct fetch covers every reference the snapshot does not, on every
 refresh.** One rule for the never-seen issue and the issue that left the
@@ -36,7 +41,7 @@ source. A referenced issue's labels are as fresh as the last refresh.
 
 **A failed direct fetch never fails the source.** The previous labels stay
 in place, one warning line, and the rest of the refresh applies. The extra
-request runs only when at least one reference is uncovered.
+requests run only when at least one reference is uncovered.
 
 ## Considered options
 
@@ -60,5 +65,18 @@ request runs only when at least one reference is uncovered.
   snapshot beats the Referenced issue fact, and a Priority override set on
   it then travels the link: inheritance reads the issue's effective
   priority, override included.
-- One pull request source refresh can run one extra batched request,
-  bounded by the count of uncovered references.
+- One pull request source refresh can run a small number of extra batched
+  requests, at most 250 references each, so the read stays under GitHub's
+  possible-node budget as the snapshot grows.
+
+## Note
+
+2026-09-15 (issue #65): GitHub validates a query's possible-node count
+against a 500,000 budget before running it, computed from the query's page
+arguments. The original search nested the reference labels inside the
+reference list inside the search page: 100 x 100 x 100 possible nodes, over
+the budget, and every pull request source refresh failed. The decision
+above is amended accordingly: the reference nodes carry no labels, a
+covered reference's fact refreshes from the live ticket's newest membership
+labels, and the direct read is chunked at 250 references per request. The
+rank rule is unchanged.

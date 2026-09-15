@@ -125,6 +125,41 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("lists the live tickets with the labels of their newest membership (ADR 0023)", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA, sourceB]);
+		state.applyFetch(sourceA, success([fetched()]));
+		expect(state.liveTicketLabels()).toEqual([
+			{ identity: "github:github.com:I_5", labels: ["ready-for-agent"] },
+		]);
+		// A second source lists the same ticket with other labels and a
+		// newer update: the newest membership's labels win.
+		state.applyFetch(
+			sourceB,
+			success([
+				{
+					...fetched(),
+					labels: ["needs-work"],
+					externalUpdatedAt: "2026-08-31T11:00:00Z",
+				},
+			]),
+		);
+		expect(state.liveTicketLabels()).toEqual([
+			{ identity: "github:github.com:I_5", labels: ["needs-work"] },
+		]);
+		// A ticket that left one source stays live through the other. The
+		// newest membership (the inactive one, matching the rank read's
+		// rule) still supplies the labels.
+		state.applyFetch(sourceB, success([]));
+		expect(state.liveTicketLabels()).toEqual([
+			{ identity: "github:github.com:I_5", labels: ["needs-work"] },
+		]);
+		// A ticket that leaves every source is no longer live.
+		state.applyFetch(sourceA, success([]));
+		expect(state.liveTicketLabels()).toEqual([]);
+		state.close();
+	});
+
 	test("merges overlapping memberships, lets a healthy source act, and preserves durable handoff state", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
