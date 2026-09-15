@@ -308,6 +308,8 @@ describe("the shared control gallery", () => {
 		expect(text).toContain("Override critical");
 		expect(text).toContain("Override off");
 		expect(text).toContain("Override default");
+		// The written guide line under the row: its keys, and what a step does.
+		expect(text).toContain("→/l steps the value and writes it: a rank, off, or default");
 		// A Consultation selected leaves the bump unavailable with its reason.
 		expect(text).toContain(
 			"Error: Override: a Consultation has no priority: the bump applies to tickets only",

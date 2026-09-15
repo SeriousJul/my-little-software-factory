@@ -14,7 +14,7 @@ import {
 import type { ScrollConfig } from "../config.ts";
 import { isHeldCompletion, type LeftoverEnvironment, type Ticket } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { PRIORITY_OFF, prioritySourceWord } from "../priority.ts";
+import { prioritySourceWord } from "../priority.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { ChoiceRow } from "./shared/choices.ts";
@@ -69,8 +69,10 @@ function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailCh
 /**
  * The fact row of the ticket's effective priority (ADR 0022): the rank's
  * label and where it comes from - the operator's override, or the ticket's
- * own label. `off` states the override that forces the ticket unranked, and
- * an unranked ticket without one reads `none`.
+ * own label. An override that names no rank - `off`, or a label the config
+ * list dropped - states its stored label in the Override row's own words,
+ * so the fact line and the selector row agree on the stored fact. An
+ * unranked ticket without one reads `none`.
  */
 function priorityFact(ticket: Ticket): { text: string; fg: string } {
 	if (ticket.priority.rank !== null) {
@@ -78,8 +80,8 @@ function priorityFact(ticket: Ticket): { text: string; fg: string } {
 		const label = ticket.priority.label ?? "none";
 		return { text: word === null ? label : `${label} (${word})`, fg: COLORS.text };
 	}
-	if (ticket.priority.label === PRIORITY_OFF)
-		return { text: `${PRIORITY_OFF} (set by you)`, fg: COLORS.text };
+	if (ticket.priority.label !== null)
+		return { text: `${ticket.priority.label} (set by you)`, fg: COLORS.text };
 	return { text: "none", fg: COLORS.dim };
 }
 
@@ -406,17 +408,19 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	const content = detailContent(ticket, textCols, handoffLimit, suggestedChoice, priorityOverride);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;
-	// The shared choice row the Priority override states on (ADR 0022): its
-	// value is the stored override, default when the ticket holds none. The
-	// bump and clear controls move it; the row itself renders like the lines
-	// the ScrollBox lays out beside it.
+	// The detail pane's Priority selector on the standard choice row (ADR
+	// 0022): its value is the stored override, default when the ticket holds
+	// none. The Select priority control steps it - the ranks in order, off,
+	// and default - and each step writes the value it shows; the bump and
+	// clear keys move the same value. It wears the pane's focus, because in
+	// the detail pane it is the row the keys act on.
 	const choiceRow =
 		content.choiceIndex === -1
 			? null
 			: createElement(ChoiceRow, {
 					label: "Override",
 					value: content.choiceValue,
-					focused: false,
+					focused: focused,
 					labelWidth: Math.min(10, Math.max(1, textCols - MARKER_WIDTH - 1)),
 					width: Math.max(
 						1,

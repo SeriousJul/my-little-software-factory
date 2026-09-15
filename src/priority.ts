@@ -22,7 +22,12 @@ export type PrioritySource = "override" | "label" | "none";
 export interface TicketPriority {
 	/** The rank's index into the label list, or null for an unranked ticket. */
 	rank: number | null;
-	/** The label of the rank, or `off` when the override forces the ticket unranked. */
+	/**
+	 * The label of the rank, or the override's stored label when it names no
+	 * rank: off, or a label the config list dropped. The ticket is unranked
+	 * either way, and the detail's fact line and Override row state this same
+	 * label, so the two rows agree on the stored fact.
+	 */
 	label: string | null;
 	/** Where the effective rank comes from. */
 	source: PrioritySource;
@@ -34,18 +39,19 @@ export interface TicketPriority {
  * In order: (1) the Priority override - a label from the list, or off, which
  * forces the ticket unranked, (2) the best rank among the ticket's own
  * labels in the list, (3) unranked. An override value that is no longer in
- * the list names no rank, so it ranks nothing: the list owns the scale.
+ * the list names no rank, so it ranks nothing: the list owns the scale. The
+ * stored label stays stated for off and for a dropped label alike, so the
+ * detail's fact line and Override row show the same stored fact.
  */
 export function effectivePriority(
 	labels: readonly string[],
 	override: string | null,
 	ownLabels: readonly string[],
 ): TicketPriority {
-	if (override === PRIORITY_OFF) return { rank: null, label: PRIORITY_OFF, source: "override" };
 	if (override !== null) {
 		const at = labels.indexOf(override);
 		if (at !== -1) return { rank: at, label: override, source: "override" };
-		return { rank: null, label: null, source: "none" };
+		return { rank: null, label: override, source: "override" };
 	}
 	let best: number | null = null;
 	let bestLabel: string | null = null;

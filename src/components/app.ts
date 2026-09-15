@@ -67,7 +67,7 @@ import {
 	normalizeAgentStatus,
 	ObservationCoordinator,
 } from "../observation.ts";
-import { bumpPriority } from "../priority.ts";
+import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import {
@@ -110,6 +110,7 @@ import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts"
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
+import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -1809,6 +1810,14 @@ export function App({
 					if (ticket === undefined) return;
 					clearTicketPriority(ticket);
 				},
+				// `→`/`l` steps the detail pane's Override selector to its next
+				// value, and the step writes what it shows: a rank or off
+				// stores the override, default clears it (ADR 0022).
+				"select-priority": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined) return;
+					selectTicketPriority(ticket);
+				},
 				// `a` answers for the switch itself in the Ticket section, where
 				// the catalog binds it: reaching the state must never depend on
 				// whether a Consultation needs the operator. The Consultation
@@ -1878,6 +1887,25 @@ export function App({
 		state.setPriorityOverride(ticket.identity, null);
 		replaceTickets();
 		setNoticeMessage(`ticket ${ticket.externalKey}: priority cleared to default`);
+	};
+	/**
+	 * One step of the detail pane's Priority selector (ADR 0022): the
+	 * Override row moves to the next value on the standard choice control -
+	 * the ranks in order, off, then default - and the step writes the value
+	 * it shows: a rank or off stores the override, default clears it back to
+	 * the ticket's own labels. A stored value the config list dropped starts
+	 * the walk from the top.
+	 */
+	const selectTicketPriority = (ticket: Ticket) => {
+		if (state === undefined) return;
+		const values = [...(configRef.current.priority?.labels ?? []), PRIORITY_OFF, "default"];
+		const next = cycleChoice(values, state.priorityOverride(ticket.identity) ?? "default", 1);
+		if (next === undefined) return;
+		state.setPriorityOverride(ticket.identity, next === "default" ? null : next);
+		replaceTickets();
+		setNoticeMessage(
+			`ticket ${ticket.externalKey}: priority ${next === "default" ? "cleared to default" : `set to ${next}`}`,
+		);
 	};
 	// A state may already hold tickets when the app boots: read them once at
 	// mount, before any refresh or observation cycle runs.

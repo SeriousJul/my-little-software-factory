@@ -270,7 +270,9 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				badge("rank-3", "3", "routine backlog"),
 				badge("rank-none", null, "unranked ticket shows no digit"),
 				// The detail pane's selector on the standard choice row: a rank,
-				// off, and default (clears the override back to the source).
+				// off, and default (clears the override back to the source). The
+				// keys step the row to the next value, and the step writes what
+				// it shows, so one press stores a rank, off, or the clear.
 				createElement(ChoiceRow, {
 					key: "rank",
 					label: "Override",
@@ -278,6 +280,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					focused: holds === "rank",
 					width: columns.valueWidth,
 					labelWidth: columns.labelWidth,
+					hint: "→/l steps the value and writes it: a rank, off, or default",
 				}),
 				createElement(ChoiceRow, {
 					key: "off",

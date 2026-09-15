@@ -858,6 +858,26 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: "removes the set rank",
 	},
 	{
+		id: "select-priority",
+		label: "Select priority",
+		// The detail pane's Override row is a real selector on the standard
+		// choice control: `→`/`l` steps it to the next value - the ranks in
+		// order, off, then default - and the step writes the value it shows:
+		// a rank or off stores the override, default clears it (ADR 0022).
+		// `←` stays the return to the Ticket list, so the selector takes the
+		// one free direction, and the wrap reaches every value from any of
+		// them. In the detail pane the row shows it, in the list pane the
+		// badge and the Message line do.
+		keys: (mode) => (mode === "ticket-detail" ? ["right", "l"] : []),
+		keyLabel: "→/l",
+		scope: "ticket-detail",
+		actionBar: true,
+		priority: 32,
+		modes: ["ticket-detail"],
+		availability: priorityEligibility,
+		guideNote: "sets the Override: the ranks in order, off, and default",
+	},
+	{
 		// The Agent terminal forwards every key to the Agent. Only the
 		// configured exit key and the emergency exit answer to the plane, so
 		// this mode claims nothing else.

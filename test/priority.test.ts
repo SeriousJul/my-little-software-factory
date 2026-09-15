@@ -80,12 +80,22 @@ describe("the rank function", () => {
 		});
 	});
 
-	test("an override that is no longer in the list names no rank", () => {
+	test("an override that is no longer in the list names no rank, but states its label", () => {
 		expect(effectivePriority(["high"], "critical", [])).toEqual({
 			rank: null,
-			label: null,
-			source: "none",
+			label: "critical",
+			source: "override",
 		});
+	});
+
+	test("a stale override outranks nothing in the comparator", () => {
+		const stale = {
+			priority: effectivePriority(["high"], "critical", []),
+			externalUpdatedAt: "2026-08-31T10:00:00Z",
+			identity: "a",
+		};
+		const ranked = entry("b", 0);
+		expect(compareTicketPriority(stale, ranked)).toBeGreaterThan(0);
 	});
 });
 

@@ -1363,6 +1363,10 @@ export class FactoryState {
 			workspace_id: string | null;
 		}>;
 		const out: HandoffTicket[] = [];
+		// The rank pass is a query per ticket, and a missing list is the common
+		// case: with no Priority labels the order is the stored one, so the
+		// observation tick skips the pass instead of paying it per ticket.
+		const ranked = priorityLabels.length > 0;
 		const rankOf: Array<{
 			priority: ReturnType<typeof effectivePriority>;
 			externalUpdatedAt: string;
@@ -1387,6 +1391,7 @@ export class FactoryState {
 				handoffAttemptId: row.attempt_id,
 				startedAt: row.started_at,
 			});
+			if (!ranked) continue;
 			const facts = [...this.membershipsFor(row.ticket_identity, row.state)].sort(
 				(a, b) =>
 					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
@@ -1402,7 +1407,7 @@ export class FactoryState {
 				identity: row.ticket_identity,
 			});
 		}
-		if (priorityLabels.length === 0) return out;
+		if (!ranked) return out;
 		return out
 			.map((ticket, index) => ({ ticket, order: rankOf[index] }))
 			.sort((left, right) => compareTicketPriority(left.order, right.order))

@@ -130,6 +130,23 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 		expect(lines).toContainEqual({ text: "Priority: none", fg: COLORS.dim });
 	});
 
+	test("a stale override states its stored label, agreeing with the override row", () => {
+		// The stored label left the config list: the rank is none, but the
+		// fact line and the row's choiceValue name the same stored label.
+		const content = detailContent(
+			{ ...base, priority: { rank: null, label: "critical", source: "override" } },
+			100,
+			10,
+			undefined,
+			"critical",
+		);
+		expect(content.lines).toContainEqual({
+			text: "Priority: critical (set by you)",
+			fg: COLORS.text,
+		});
+		expect(content.choiceValue).toBe("critical");
+	});
+
 	test("the override row states the stored value, or default", () => {
 		expect(detailContent(base, 100, 10, undefined, null).choiceValue).toBe("default");
 		expect(detailContent(base, 100, 10, undefined, "high").choiceValue).toBe("high");

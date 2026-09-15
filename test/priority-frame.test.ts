@@ -15,7 +15,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
-import type { FetchOutcome, TicketSource } from "../src/ticket-source.ts";
+import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
 	crossToConsultations,
@@ -24,11 +24,14 @@ import {
 	HEIGHT,
 	messageRowOf,
 	press,
+	pressArrow,
 	settle,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { FakeSource } from "./fake-source.ts";
+import { callsReached } from "./state-fixture.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -39,34 +42,6 @@ function freshState(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-priority-frame-"));
 	paths.push(dir);
 	return openFactoryState(join(dir, "state.sqlite"));
-}
-
-/** A source whose fetches stay in flight until the test settles them. */
-class FakeSource implements TicketSource {
-	readonly name: string;
-	readonly kind: string;
-	readonly refreshIntervalMs = 60_000;
-	calls = 0;
-	private resolvers: Array<() => void> = [];
-	private next: FetchOutcome;
-
-	constructor(name: string, kind: string, next: FetchOutcome) {
-		this.name = name;
-		this.kind = kind;
-		this.next = next;
-	}
-
-	fetch(): Promise<FetchOutcome> {
-		this.calls += 1;
-		return new Promise<FetchOutcome>((resolve) => {
-			this.resolvers.push(() => resolve(this.next));
-		});
-	}
-
-	settle(outcome: FetchOutcome): void {
-		this.next = outcome;
-		for (const resolve of this.resolvers.splice(0)) resolve();
-	}
 }
 
 function ticket(
@@ -116,7 +91,7 @@ const priorityConfig: FactoryConfig = {
 	],
 };
 
-describe("the Priority bump and clear (ADR 0022)", () => {
+describe("the Priority controls (ADR 0022)", () => {
 	test("walks the rank up and down, with a no-op at each end, and clears to default", async () => {
 		const state = freshState();
 		const source = new FakeSource("issues", "github-issues", success([ticket()]));
@@ -212,6 +187,97 @@ describe("the Priority bump and clear (ADR 0022)", () => {
 					);
 					expect(detailPaneText(frame)).toContain("Priority: low (set by you)");
 					await settle(setup);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: priorityConfig, state, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the detail's Override selector writes a rank, off, and the clear to default", async () => {
+		const state = freshState();
+		const source = new FakeSource("issues", "github-issues", success([ticket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "the loading state");
+					source.settle(success([ticket()]));
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+					// The selector lives on the detail pane's Override row.
+					await press(setup, "l", "the detail to take focus", (f) => f.includes("❯ Detail"));
+
+					// `→` from default steps to the first rank and writes it.
+					let frame = await pressArrow(setup, "right", "the selector to the first rank", (f) =>
+						messageRowOf(f).includes("priority set to critical"),
+					);
+					expect(state.priorityOverride("github:github.com:I_5")).toBe("critical");
+					expect(detailPaneText(frame)).toContain("Priority: critical (set by you)");
+					expect(detailPaneText(frame)).toContain("Override critical");
+					expect(frameText(frame)).toContain("[open] 1");
+
+					// `l` takes the next ranks, and the walk continues to off.
+					frame = await press(setup, "l", "the selector to the next rank", (f) =>
+						messageRowOf(f).includes("priority set to high"),
+					);
+					expect(state.priorityOverride("github:github.com:I_5")).toBe("high");
+					frame = await press(setup, "l", "the selector to the lowest rank", (f) =>
+						messageRowOf(f).includes("priority set to low"),
+					);
+					expect(state.priorityOverride("github:github.com:I_5")).toBe("low");
+					frame = await press(setup, "l", "the selector to off", (f) =>
+						messageRowOf(f).includes("priority set to off"),
+					);
+					expect(state.priorityOverride("github:github.com:I_5")).toBe("off");
+					expect(detailPaneText(frame)).toContain("Priority: off (set by you)");
+
+					// One more step wraps to default and clears the override.
+					frame = await pressArrow(setup, "right", "the selector to default", (f) =>
+						messageRowOf(f).includes("priority cleared to default"),
+					);
+					expect(state.priorityOverride("github:github.com:I_5")).toBeNull();
+					expect(detailPaneText(frame)).toContain("Priority: none");
+					expect(detailPaneText(frame)).toContain("Override default");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: priorityConfig, state, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the selector steps a stored label the config list dropped from the top", async () => {
+		const state = freshState();
+		const source = new FakeSource("issues", "github-issues", success([ticket()]));
+		try {
+			await withApp(
+				async (setup) => {
+					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "the loading state");
+					source.settle(success([ticket()]));
+					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
+					// Plant a stored label the config list no longer holds, and
+					// let a refresh re-read the projection: both detail rows
+					// state the same stored label, and the walk to a real value
+					// starts from the top.
+					state.setPriorityOverride("github:github.com:I_5", "urgent");
+					setup.mockInput.pressKey("r");
+					await callsReached(source, 2);
+					source.settle(success([ticket()]));
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Priority: urgent (set by you)"),
+						"the refresh to state the stale label",
+					);
+					await press(setup, "l", "the detail to take focus", (f) => f.includes("❯ Detail"));
+					const frame = await pressArrow(setup, "right", "the selector to the first rank", (f) =>
+						messageRowOf(f).includes("priority set to critical"),
+					);
+					expect(state.priorityOverride("github:github.com:I_5")).toBe("critical");
+					expect(detailPaneText(frame)).toContain("Priority: critical (set by you)");
 				},
 				WIDTH,
 				HEIGHT,
