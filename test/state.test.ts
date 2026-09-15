@@ -515,6 +515,119 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("the same-type hold reads the newest cycle end against the suggestion", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// A ticket whose cycle has never ended holds nothing.
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(false);
+
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision: "auto-closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		// The closed cycle completed implement, and the ticket still suggests
+		// it: the hold is on.
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(true);
+		// The suggestion moved - the label flipped, a new kind of work - and
+		// the hold is off.
+		expect(state.sameTypeHoldActive(identity, "review")).toBe(false);
+
+		// The hold gates the auto-handoff, not the operator: a manual claim
+		// passes it while the hold is on.
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
+		const manual = state.claimHandoff(identity, choice, "open");
+		expect(manual.ok).toBe(true);
+		if (!manual.ok) return;
+		state.settleHandoff(manual.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: manual.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "The agent stopped.",
+			turnLog: textLog("The agent stopped."),
+			completedAt: "2026-08-31T11:35:00Z",
+			cause: "aborted",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: manual.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:40:00Z",
+		});
+		// The newest cycle end is a closed cycle after an aborted turn: the
+		// work did not finish, and the hold is off for the same suggestion.
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(false);
+
+		// The newest cycle end wins: a later completed cycle re-arms the
+		// hold over the aborted one it outlives.
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:41:00Z",
+			tickets: [fetched()],
+		});
+		const third = state.claimHandoff(identity, choice, "open");
+		if (!third.ok) throw new Error(third.reason);
+		state.settleHandoff(third.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: third.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done again.",
+			turnLog: textLog("Done again."),
+			completedAt: "2026-08-31T11:45:00Z",
+			cause: "completed",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: third.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:50:00Z",
+		});
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(true);
+
+		// An abandon whose turn never settled writes its own row without a
+		// cause, and the newest cycle end holds nothing.
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:51:00Z",
+			tickets: [fetched()],
+		});
+		const fourth = state.claimHandoff(identity, choice, "open");
+		if (!fourth.ok) throw new Error(fourth.reason);
+		state.settleHandoff(fourth.claim.attemptId, true);
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: fourth.claim.attemptId,
+			decision: "abandoned",
+			decidedAt: "2026-08-31T11:55:00Z",
+		});
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(false);
+		state.close();
+	});
+
 	test("an open claim waits for the source re-read after a cycle end", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);

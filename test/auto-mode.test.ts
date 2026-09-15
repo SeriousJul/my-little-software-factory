@@ -20,7 +20,7 @@ import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
-import type { TurnLogEntry } from "../src/turn-log.ts";
+import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
 	type AppSetup,
 	awaitFrame,
@@ -141,6 +141,11 @@ interface SeedDetail {
 	contextWindow?: string;
 	turnLog?: TurnLogEntry[];
 	/**
+	 * The cause the seeded turn settles with. The default is the fail-open
+	 * `unknown`; a test that seeds a finished turn names `completed`.
+	 */
+	cause?: TurnEndCause;
+	/**
 	 * The state's clock. Pin it in the past to age the stored handoff, so a
 	 * missing agent is past the startup grace: it died, it did not fail to
 	 * boot.
@@ -193,6 +198,7 @@ function seed(
 				message,
 				turnLog: detail.turnLog ?? [{ kind: "text", text: message }],
 				completedAt: "2026-08-31T11:00:00Z",
+				cause: detail.cause,
 			});
 		}
 	}
@@ -3031,6 +3037,65 @@ describe("the auto dispatch", () => {
 			WIDTH,
 			HEIGHT,
 			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the same-type hold withholds a finished ticket its item still lists", async () => {
+		// ADR 0026: the shape of the loop the hold stops. The implement turn
+		// completes while its item stays open - the follow-up work rides a
+		// pull request, and the work signal the source query filters on is
+		// still up. The auto-close ends the cycle, the source re-read
+		// re-verifies the still-open item, and the open auto-handoff must
+		// hold the ticket instead of re-running the completed type. A pair
+		// ticket with no closed cycle dispatches in the same cycle: the loop
+		// runs, and the finished work does not repeat.
+		const app = seededApp(
+			"awaiting",
+			{ autoHandoff: true, workflows: [] },
+			pairSuccess,
+			"live-worktree",
+			{ cause: "completed" },
+		);
+		stubCheckout(app);
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(pairSuccess);
+				// The first cycles: the turn settles, the auto-close ends the
+				// cycle, and the pair takes the dispatch. The finished ticket
+				// rests open, waiting on the re-read its close provoked.
+				await awaitFrame(
+					setup,
+					(f) =>
+						f.includes("auto: on 0/2") &&
+						ticketRow(f).includes("[open]") &&
+						ticketRow(f, "Watch agent turns").includes("missing"),
+					"the auto close and the pair dispatch",
+				);
+				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-closed");
+				// The re-read lands after the decision: the re-verify gate opens
+				// for the finished ticket, and the next cycle re-runs the
+				// dispatch. The same-type hold withholds it.
+				await settleReverify(app.src, pairSuccess);
+				const held = await settle(setup);
+				expect(ticketRow(held)).toContain("[open]");
+				expect(app.runner.commands().filter((c) => c.startsWith("herdr agent start"))).toEqual([
+					"herdr agent start watch-agent-turns --kind pi --pane pane-1",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 20 },
 		);
 		app.state.close();
 	});

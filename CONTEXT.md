@@ -322,6 +322,11 @@ The condition in which Auto-handoff mode starts no agent by itself, because the 
 It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow route, and the restart. The route block applies in manual mode too, because auto-close types route there, exactly like the Parallel limit.
 _Avoid_: circuit breaker, cooldown, backoff
 
+**Same-type hold**:
+The condition in which the open Auto-handoff withholds a ticket whose newest closed cycle settled a `completed` turn of exactly the task type the ticket now suggests.
+A completed work needs no repeat, and progress needs a new signal. It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends when the suggested task type changes, or the ticket leaves the source list. It gates auto-handoff only; a manual handoff always passes it (ADR 0026).
+_Avoid_: dispatch block, retry gate, backoff
+
 **Task type**:
 A one-word category of work (for example "implement", "fix", "review", or "rework") that selects the prompt template of a handoff and the Task profile its handoffs start on.
 _Avoid_: prompt, template

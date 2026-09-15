@@ -1199,6 +1199,28 @@ export class FactoryState {
 	}
 
 	/**
+	 * The Same-type hold (ADR 0026): the open auto-handoff does not repeat
+	 * completed work. The ticket's newest closed cycle settled a `completed`
+	 * turn of exactly the task type the ticket now suggests: the agent
+	 * finished that kind of work, and the item still lists it because no new
+	 * signal landed - a label flip, an item removal. The check takes the
+	 * suggestion the caller already derived and reads the newest cycle-end
+	 * row, the same row the re-verify gate reads. A cycle closed after an `aborted` or `failed` turn holds
+	 * nothing: that work did not finish, and a retry is the next move. A
+	 * cycle whose turn never settled holds nothing: its row carries no
+	 * cause. It gates the open auto-handoff only; a manual handoff passes.
+	 */
+	sameTypeHoldActive(identity: string, suggestedTaskType: string): boolean {
+		const ended = this.db
+			.prepare(
+				"SELECT task_type, cause FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL ORDER BY decided_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as { task_type: string; cause: string | null } | undefined;
+		if (ended === undefined) return false;
+		return ended.cause === "completed" && ended.task_type === suggestedTaskType;
+	}
+
+	/**
 	 * The names of the sources that hold a membership of one ticket, active
 	 * or not: the list a cycle-end refresh re-reads. A source that has already
 	 * dropped the ticket is on this list, because that is the source whose

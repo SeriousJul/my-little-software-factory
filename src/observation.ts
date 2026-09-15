@@ -1248,6 +1248,12 @@ export class ObservationCoordinator {
 			// list and the ticket does not dispatch, an open one re-verifies and
 			// dispatches. The gate holds the ticket, not a parallel slot.
 			if (!this.state.sourceReverifiedSinceCycleEnd(ticket.identity)) continue;
+			// The Same-type hold (ADR 0026): the ticket's newest closed cycle
+			// completed a turn of the type the ticket now suggests. That work
+			// finished; the item still lists it because no new signal landed.
+			// The dispatch waits for the suggestion to change, and holds the
+			// ticket, not a parallel slot.
+			if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;
 			// The configured settings of the ticket's task profile (ADR 0009): an
