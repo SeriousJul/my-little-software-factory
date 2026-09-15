@@ -2,13 +2,15 @@
 import { describe, expect, test } from "vitest";
 import { COLORS } from "../src/components/theme.ts";
 import {
+	type DetailLine,
+	detailContent,
 	detailLines,
 	newWheelBurst,
 	WHEEL_ACCELERATION_PAUSE_MS,
 	wheelRows,
 } from "../src/components/ticket-detail.ts";
 import type { ScrollConfig } from "../src/config.ts";
-import type { Handoff, Ticket } from "../src/domain/ticket.ts";
+import { type Handoff, type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -94,6 +96,61 @@ describe("Ticket detail task profile", () => {
 		expect(shown).toContainEqual({ text: "Thinking: high", fg: COLORS.text });
 		expect(shown).toContainEqual({ text: "Context: 65536", fg: COLORS.text });
 		expect(shown).toContainEqual({ text: "Environment: worktree", fg: COLORS.text });
+	});
+});
+
+describe("Ticket detail priority fact (ADR 0022)", () => {
+	const base = SAMPLE_TICKETS[0];
+	if (base === undefined) throw new Error("missing sample ticket");
+
+	function withPriority(p: Ticket["priority"], override: string | null = null): DetailLine[] {
+		return detailLines({ ...base, priority: p }, 100, 10, undefined, override);
+	}
+
+	test("a label rank states its label and its own source", () => {
+		const lines = withPriority({ rank: 0, label: "critical", source: "label" });
+		expect(lines).toContainEqual({
+			text: "Priority: critical (its own label)",
+			fg: COLORS.text,
+		});
+	});
+
+	test("an override rank states its label and the operator's source", () => {
+		const lines = withPriority({ rank: 1, label: "high", source: "override" }, "high");
+		expect(lines).toContainEqual({ text: "Priority: high (set by you)", fg: COLORS.text });
+	});
+
+	test("off states the override that forces the ticket unranked", () => {
+		const lines = withPriority({ rank: null, label: "off", source: "override" }, "off");
+		expect(lines).toContainEqual({ text: "Priority: off (set by you)", fg: COLORS.text });
+	});
+
+	test("an unranked ticket with no override reads none, dim", () => {
+		const lines = withPriority(UNRANKED_PRIORITY, null);
+		expect(lines).toContainEqual({ text: "Priority: none", fg: COLORS.dim });
+	});
+
+	test("a stale override states its stored label, agreeing with the override row", () => {
+		// The stored label left the config list: the rank is none, but the
+		// fact line and the row's choiceValue name the same stored label.
+		const content = detailContent(
+			{ ...base, priority: { rank: null, label: "critical", source: "override" } },
+			100,
+			10,
+			undefined,
+			"critical",
+		);
+		expect(content.lines).toContainEqual({
+			text: "Priority: critical (set by you)",
+			fg: COLORS.text,
+		});
+		expect(content.choiceValue).toBe("critical");
+	});
+
+	test("the override row states the stored value, or default", () => {
+		expect(detailContent(base, 100, 10, undefined, null).choiceValue).toBe("default");
+		expect(detailContent(base, 100, 10, undefined, "high").choiceValue).toBe("high");
+		expect(detailContent(base, 100, 10, undefined, "off").choiceValue).toBe("off");
 	});
 });
 

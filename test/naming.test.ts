@@ -3,7 +3,7 @@
  */
 import { describe, expect, test } from "vitest";
 
-import type { Ticket } from "../src/domain/ticket.ts";
+import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
 import {
 	agentNameFor,
 	branchNameFor,
@@ -41,6 +41,7 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	handoffCount: 0,
 	lastCompletion: null,
 	leftover: null,
+	priority: UNRANKED_PRIORITY,
 });
 
 describe("titleSlug", () => {

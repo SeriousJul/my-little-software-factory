@@ -626,7 +626,12 @@ export class ObservationCoordinator {
 			}
 		}
 
-		for (const ticket of this.state.ticketsByState(["awaiting"])) {
+		// The waiting routes read in the priority order, so one freed parallel
+		// slot goes to the highest-ranked route first (ADR 0022).
+		for (const ticket of this.state.ticketsByState(
+			["awaiting"],
+			this.config().priority?.labels ?? [],
+		)) {
 			changed = (await this.handleAwaiting(ticket, slots, autoOn)) || changed;
 			if (this.stopped) return;
 		}
@@ -1223,7 +1228,14 @@ export class ObservationCoordinator {
 		if (this.state.dispatchPauseActive()) return false;
 		const config = this.config();
 		const limit = config.maxParallelAgents;
-		const tickets = this.state.visibleTickets(config.taskRules, config.defaultTaskType);
+		// The open dispatch walks the tickets in the list's priority order, so
+		// a freed parallel slot starts the highest-ranked open ticket first
+		// (ADR 0022).
+		const tickets = this.state.visibleTickets(
+			config.taskRules,
+			config.defaultTaskType,
+			config.priority?.labels ?? [],
+		);
 		let count = liveCount;
 		let any = false;
 		for (const ticket of tickets) {

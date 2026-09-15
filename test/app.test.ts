@@ -1140,21 +1140,36 @@ describe("the control plane", () => {
 					// The guide opens on this mode's section, and the sections
 					// keep the catalogue's order on screen. A hint priority
 					// that moves reorders these rows.
-					const rows = rowsOf(frame);
-					const indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
+					let rows = rowsOf(frame);
+					let indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
 					const modeIdx = indexOf("Current interaction mode");
 					const globalIdx = indexOf("Global controls");
-					const controlPlaneIdx = indexOf("Control plane controls");
 					expect(modeIdx).toBeGreaterThan(0);
 					expect(globalIdx).toBeGreaterThan(modeIdx);
-					expect(controlPlaneIdx).toBeGreaterThan(globalIdx);
 					const modeSection = rows.slice(modeIdx, globalIdx).join("\n");
 					expect(modeSection).toContain("Move");
 					expect(modeSection).toContain("Hand off");
 					// The three meanings of Enter each keep their own row.
 					expect(modeSection).toContain("Live view");
 					expect(modeSection).toContain("Decide");
-					const globalSection = rows.slice(globalIdx, controlPlaneIdx).join("\n");
+
+					// The Control plane header sits below the opening window:
+					// step the guide down until it and the Global section share
+					// the view, then check their order on screen.
+					for (let step = 0; step < 10; step += 1) {
+						if (
+							rowsOf(setup.captureCharFrame()).some((row) => row.includes("Control plane controls"))
+						)
+							break;
+						setup.mockInput.pressKey("j");
+						await settle(setup);
+					}
+					rows = rowsOf(setup.captureCharFrame());
+					indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
+					const scrolledGlobalIdx = indexOf("Global controls");
+					const controlPlaneIdx = indexOf("Control plane controls");
+					expect(controlPlaneIdx).toBeGreaterThan(scrolledGlobalIdx);
+					const globalSection = rows.slice(scrolledGlobalIdx, controlPlaneIdx).join("\n");
 					expect(globalSection).toContain("Quit");
 					// Closing the guide returns to the tickets view.
 					setup.mockInput.pressEscape();

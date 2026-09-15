@@ -769,6 +769,9 @@ describe("factory SQLite state", () => {
 				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
 				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
 		);
+		// The v11 override belongs to the run after this record: a v2 ticket
+		// never stored a Priority override.
+		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
 
@@ -837,6 +840,9 @@ describe("factory SQLite state", () => {
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
 		).run();
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
+		// The v11 override belongs to the run after this record: a v5 ticket
+		// never stored a Priority override.
+		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 5").run();
 		db.prepare(
 			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
@@ -903,6 +909,9 @@ describe("factory SQLite state", () => {
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
 		).run();
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
+		// The v11 override belongs to the run after this record: a v7 ticket
+		// never stored a Priority override.
+		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 7").run();
 		db.prepare(
 			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",

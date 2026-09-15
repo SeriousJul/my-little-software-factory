@@ -36,7 +36,7 @@ export type StartupArgsResult = { ok: true; configPath: string } | { ok: false; 
 
 /** A loaded config, or the one failure line the operator reads instead. */
 export type StartupConfigResult =
-	| { ok: true; config: FactoryConfig; note?: string }
+	| { ok: true; config: FactoryConfig; note?: string; warnings: string[] }
 	| { ok: false; reason: string };
 
 /** An opened state, or the one failure line the operator reads instead. */
@@ -95,11 +95,13 @@ export async function loadStartupConfig(configPath: string): Promise<StartupConf
 			ok: true,
 			config: loaded.config,
 			note: `no config file at ${configPath}; created it from the shipped Default configuration`,
+			warnings: loaded.warnings,
 		};
 	}
 	return {
 		ok: true,
 		config: loaded.config,
+		warnings: loaded.warnings,
 	};
 }
 
@@ -138,6 +140,12 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 
 	const notes: string[] = [];
 	if (loaded.note !== undefined) notes.push(loaded.note);
+	// The config's non-blocking issues: the Priority section reports here
+	// and the factory starts with no ranking, the way a missing model list
+	// only warns (ADR 0022).
+	for (const warning of loaded.warnings) {
+		notes.push(`warning: ${warning}`);
+	}
 
 	const runner = createChildProcessRunner();
 	// The config's model values, checked against what the agent runtimes

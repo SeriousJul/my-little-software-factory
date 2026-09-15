@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
-import type { Ticket } from "../src/domain/ticket.ts";
+import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
 import {
 	checkConsultationStart,
 	closeHandoffEnvironment,
@@ -90,6 +90,7 @@ const ticket: Ticket = {
 	handoffCount: 0,
 	lastCompletion: null,
 	leftover: null,
+	priority: UNRANKED_PRIORITY,
 };
 
 const defaultChoice = {

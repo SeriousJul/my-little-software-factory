@@ -50,6 +50,10 @@ function exampleGroups(config: Record<string, unknown>): Map<string, Set<string>
 			for (const inner of Object.keys(value as Record<string, unknown>)) add("scroll", inner);
 			continue;
 		}
+		if (key === "priority" && typeof value === "object" && value !== null) {
+			for (const inner of Object.keys(value as Record<string, unknown>)) add("priority", inner);
+			continue;
+		}
 		if (namedTables.has(key) && typeof value === "object" && value !== null) {
 			for (const table of Object.values(value as Record<string, unknown>)) {
 				if (typeof table !== "object" || table === null) continue;

@@ -23,6 +23,7 @@ import type {
 } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor } from "./naming.ts";
+import { compareTicketPriority, effectivePriority } from "./priority.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import {
@@ -32,7 +33,7 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -516,6 +517,16 @@ const MIGRATION_V9_TO_V10 = `
 	);
 `;
 
+/**
+ * The v11 step: the Priority override (ADR 0022).
+ *
+ * The override belongs to the ticket, not to the work cycle: a closed cycle
+ * keeps it, and a restart reads it back. Null is the default (no override),
+ * a label name is a rank from the config's Priority list, and `off` forces
+ * the ticket unranked.
+ */
+const MIGRATION_V10_TO_V11 = `ALTER TABLE tickets ADD COLUMN priority_override TEXT;`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -626,6 +637,7 @@ export class FactoryState {
 			if (version < 8) this.db.exec(MIGRATION_V7_TO_V8);
 			if (version < 9) this.db.exec(MIGRATION_V8_TO_V9);
 			if (version < 10) this.db.exec(MIGRATION_V9_TO_V10);
+			if (version < 11) this.db.exec(MIGRATION_V10_TO_V11);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -774,12 +786,24 @@ export class FactoryState {
 	 * running, awaiting) keep their memberships even when every source has
 	 * gone inactive: an agent can close or change its source item while it
 	 * works, and the ticket must stay visible for the decision.
+	 *
+	 * Within its attention group, a ticket's rank orders it: ranked before
+	 * unranked, better rank first, then the newest external update (ADR
+	 * 0022). The group stays ahead, so an awaiting decision never waits
+	 * behind ranked work.
 	 */
-	visibleTickets(rules: readonly TaskRule[], fallbackTaskType: string): Ticket[] {
-		const rows = this.db.prepare("SELECT identity, state, work_cycle FROM tickets").all() as Array<{
+	visibleTickets(
+		rules: readonly TaskRule[],
+		fallbackTaskType: string,
+		priorityLabels: readonly string[] = [],
+	): Ticket[] {
+		const rows = this.db
+			.prepare("SELECT identity, state, work_cycle, priority_override FROM tickets")
+			.all() as Array<{
 			identity: string;
 			state: TicketState;
 			work_cycle: number;
+			priority_override: string | null;
 		}>;
 		const tickets: Ticket[] = [];
 		for (const row of rows) {
@@ -806,6 +830,7 @@ export class FactoryState {
 			)[0];
 			if (facts === undefined) continue;
 			const handoff = this.handoffFor(row.identity);
+			const priority = effectivePriority(priorityLabels, row.priority_override, facts.labels);
 			tickets.push({
 				identity: row.identity,
 				title: facts.title,
@@ -832,13 +857,12 @@ export class FactoryState {
 				actionable,
 				handoffRecoveryRequired: pending,
 				leftover: this.leftoverEnvironment(row.identity),
+				priority,
 			});
 		}
 		return tickets.sort(
 			(left, right) =>
-				attentionGroup(left) - attentionGroup(right) ||
-				right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
-				left.identity.localeCompare(right.identity),
+				attentionGroup(left) - attentionGroup(right) || compareTicketPriority(left, right),
 		);
 	}
 
@@ -914,6 +938,29 @@ export class FactoryState {
 			tabId: row.tab_id,
 			workspaceId: row.workspace_id,
 		};
+	}
+
+	/**
+	 * The ticket's Priority override: a rank label name, `off`, or null for
+	 * the default (ADR 0022).
+	 */
+	priorityOverride(identity: string): string | null {
+		const row = this.db
+			.prepare("SELECT priority_override FROM tickets WHERE identity = ?")
+			.get(identity) as { priority_override: string | null } | undefined;
+		return row?.priority_override ?? null;
+	}
+
+	/**
+	 * Store the ticket's Priority override, or clear it to the default with
+	 * null. The value is the operator's fact on the ticket: the config's
+	 * list owns the scale, and a value that names no rank ranks nothing.
+	 */
+	setPriorityOverride(identity: string, value: string | null): boolean {
+		const result = this.db
+			.prepare("UPDATE tickets SET priority_override = ? WHERE identity = ?")
+			.run(value, identity);
+		return result.changes > 0;
 	}
 
 	/** The total handoffs ever recorded for a ticket, across work cycles. */
@@ -1283,7 +1330,18 @@ export class FactoryState {
 		).map((row) => row.ticket_identity);
 	}
 
-	ticketsByState(states: readonly TicketState[]): HandoffTicket[] {
+	/**
+	 * The tickets in the given states, with their latest handoff.
+	 *
+	 * When a Priority label list is given, the tickets come back in the
+	 * priority order (ADR 0022): ranked before unranked, better rank first,
+	 * then the newest external update. That order is what lets one freed
+	 * parallel slot go to the highest-ranked waiting route.
+	 */
+	ticketsByState(
+		states: readonly TicketState[],
+		priorityLabels: readonly string[] = [],
+	): HandoffTicket[] {
 		const clauses = states.map(() => "?").join(", ");
 		const rows = this.db
 			.prepare(
@@ -1305,6 +1363,15 @@ export class FactoryState {
 			workspace_id: string | null;
 		}>;
 		const out: HandoffTicket[] = [];
+		// The rank pass is a query per ticket, and a missing list is the common
+		// case: with no Priority labels the order is the stored one, so the
+		// observation tick skips the pass instead of paying it per ticket.
+		const ranked = priorityLabels.length > 0;
+		const rankOf: Array<{
+			priority: ReturnType<typeof effectivePriority>;
+			externalUpdatedAt: string;
+			identity: string;
+		}> = [];
 		for (const row of rows) {
 			const choice = jsonChoice(row.choice_json);
 			if (choice === undefined) continue;
@@ -1324,8 +1391,27 @@ export class FactoryState {
 				handoffAttemptId: row.attempt_id,
 				startedAt: row.started_at,
 			});
+			if (!ranked) continue;
+			const facts = [...this.membershipsFor(row.ticket_identity, row.state)].sort(
+				(a, b) =>
+					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
+					a.sourceName.localeCompare(b.sourceName),
+			)[0];
+			rankOf.push({
+				priority: effectivePriority(
+					priorityLabels,
+					this.priorityOverride(row.ticket_identity),
+					facts?.labels ?? [],
+				),
+				externalUpdatedAt: facts?.externalUpdatedAt ?? "",
+				identity: row.ticket_identity,
+			});
 		}
-		return out;
+		if (!ranked) return out;
+		return out
+			.map((ticket, index) => ({ ticket, order: rankOf[index] }))
+			.sort((left, right) => compareTicketPriority(left.order, right.order))
+			.map((entry) => entry.ticket);
 	}
 
 	/**

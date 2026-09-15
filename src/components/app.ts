@@ -67,6 +67,7 @@ import {
 	normalizeAgentStatus,
 	ObservationCoordinator,
 } from "../observation.ts";
+import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import {
@@ -109,6 +110,7 @@ import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts"
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
+import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
 import { COLORS } from "./theme.ts";
@@ -632,7 +634,13 @@ export function App({
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
 		const currentConfig = configRef.current;
-		const next = state.visibleTickets(currentConfig.taskRules, currentConfig.defaultTaskType);
+		// The list orders by the config's Priority label list, so a bump that
+		// re-ranks the operator's ticket reorders the rows in the same pass.
+		const next = state.visibleTickets(
+			currentConfig.taskRules,
+			currentConfig.defaultTaskType,
+			currentConfig.priority?.labels ?? [],
+		);
 		const currentIndex = selectedIndexRef.current;
 		const selectedId = ticketsRef.current[currentIndex]?.identity;
 		const preserved =
@@ -1789,6 +1797,27 @@ export function App({
 					refreshNow();
 				},
 				leftover: openLeftoverPanel,
+				// `=` raises the rank and `-` lowers it (ADR 0022). The catalogue
+				// gated the key, so this runs the movement and reports the
+				// outcome on the Message line, accepted and no-op alike.
+				"bump-priority": ({ context, key }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined) return;
+					bumpTicketPriority(ticket, key.name === "=" ? "up" : "down");
+				},
+				"clear-priority": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined) return;
+					clearTicketPriority(ticket);
+				},
+				// `→`/`l` steps the detail pane's Override selector to its next
+				// value, and the step writes what it shows: a rank or off
+				// stores the override, default clears it (ADR 0022).
+				"select-priority": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined) return;
+					selectTicketPriority(ticket);
+				},
 				// `a` answers for the switch itself in the Ticket section, where
 				// the catalog binds it: reaching the state must never depend on
 				// whether a Consultation needs the operator. The Consultation
@@ -1832,6 +1861,51 @@ export function App({
 			setNoticeMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
 			observationRef.current?.tick();
 		} else setPanel({ kind: "decision", identity: ticket.identity });
+	};
+	/**
+	 * One step of the Priority bump (ADR 0022): the movement the config's
+	 * label list allows, stored as the ticket's override, and the outcome on
+	 * the Message line. An accepted bump re-reads the list, so the badge and
+	 * the order move in the same frame the operator pressed the key; a no-op
+	 * states its reason and changes nothing.
+	 */
+	const bumpTicketPriority = (ticket: Ticket, direction: "up" | "down") => {
+		if (state === undefined) return;
+		const bump = bumpPriority(
+			direction,
+			configRef.current.priority?.labels ?? [],
+			ticket.priority.rank,
+		);
+		setNoticeMessage(`ticket ${ticket.externalKey}: ${bump.message}`);
+		if (bump.kind === "noop") return;
+		state.setPriorityOverride(ticket.identity, bump.value);
+		replaceTickets();
+	};
+	/** Backspace gives the ticket's override its default back (ADR 0022). */
+	const clearTicketPriority = (ticket: Ticket) => {
+		if (state === undefined) return;
+		state.setPriorityOverride(ticket.identity, null);
+		replaceTickets();
+		setNoticeMessage(`ticket ${ticket.externalKey}: priority cleared to default`);
+	};
+	/**
+	 * One step of the detail pane's Priority selector (ADR 0022): the
+	 * Override row moves to the next value on the standard choice control -
+	 * the ranks in order, off, then default - and the step writes the value
+	 * it shows: a rank or off stores the override, default clears it back to
+	 * the ticket's own labels. A stored value the config list dropped starts
+	 * the walk from the top.
+	 */
+	const selectTicketPriority = (ticket: Ticket) => {
+		if (state === undefined) return;
+		const values = [...(configRef.current.priority?.labels ?? []), PRIORITY_OFF, "default"];
+		const next = cycleChoice(values, state.priorityOverride(ticket.identity) ?? "default", 1);
+		if (next === undefined) return;
+		state.setPriorityOverride(ticket.identity, next === "default" ? null : next);
+		replaceTickets();
+		setNoticeMessage(
+			`ticket ${ticket.externalKey}: priority ${next === "default" ? "cleared to default" : `set to ${next}`}`,
+		);
 	};
 	// A state may already hold tickets when the app boots: read them once at
 	// mount, before any refresh or observation cycle runs.
@@ -2546,6 +2620,10 @@ export function App({
 									active: mainSurfaceActive,
 									reservedRows: detailReservedRows,
 									handoffLimit: config.maxHandoffsPerTicket,
+									priorityOverride:
+										state !== undefined && selectedTicket !== undefined
+											? state.priorityOverride(selectedTicket.identity)
+											: null,
 									suggestedChoice:
 										selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
 									scroll: config.scroll,

@@ -1,4 +1,9 @@
-import type { Completion, Handoff, Ticket } from "../src/domain/ticket.ts";
+import {
+	type Completion,
+	type Handoff,
+	type Ticket,
+	UNRANKED_PRIORITY,
+} from "../src/domain/ticket.ts";
 
 function handoff(
 	agentType: string,
@@ -57,6 +62,7 @@ function sample(
 		handoffCount,
 		lastCompletion,
 		leftover: null,
+		priority: UNRANKED_PRIORITY,
 	};
 }
 

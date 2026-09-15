@@ -57,17 +57,21 @@ const config: FactoryConfig = {
 	maxHandoffsPerTicket: 2,
 };
 
-function fetched(identity = "github:github.com:I_5"): FetchedTicket {
+function fetched(
+	identity = "github:github.com:I_5",
+	labels: readonly string[] = ["ready-for-agent"],
+	externalUpdatedAt = "2026-08-31T10:00:00Z",
+): FetchedTicket {
 	return {
 		identity,
 		sourceKind: "github-issue",
 		externalKey: "#5",
 		sourceState: "open",
-		url: "https://github.com/acme/factory/issues/5",
+		url: `https://github.com/acme/factory/issues/${identity.split("I_")[1]}`,
 		title: "Persist source facts",
 		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
-		externalUpdatedAt: "2026-08-31T10:00:00Z",
+		labels: [...labels],
+		externalUpdatedAt,
 		repository: {
 			identity: "github.com/acme/factory",
 			displayName: "acme/factory",
@@ -1852,6 +1856,125 @@ describe("the open dispatch", () => {
 		}
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
+		state.close();
+	});
+});
+
+describe("the priority order (ADR 0022)", () => {
+	/** The priority section the ordering tests read: two ranks, first highest. */
+	const priorityConfig: FactoryConfig = {
+		...config,
+		priority: { labels: ["critical", "high"] },
+	};
+
+	test("the open dispatch walks the open tickets in priority order", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			config: priorityConfig,
+			agents: [],
+		});
+		// Three open tickets: one per rank and one unranked. The parallel
+		// limit is two, so the two highest ranks go out, in order.
+		state.applyFetch(
+			source,
+			success([
+				fetched("github:github.com:I_6", ["high"]),
+				fetched("github:github.com:I_7", []),
+				fetched("github:github.com:I_5", ["critical"]),
+			]),
+		);
+		await coordinator.tick();
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual([
+			"github:github.com:I_5",
+			"github:github.com:I_6",
+			// The unranked ticket waits behind both ranks.
+		]);
+		state.close();
+	});
+
+	test("one freed slot goes to the highest-ranked waiting route", async () => {
+		const singleSeat: FactoryConfig = { ...priorityConfig, maxParallelAgents: 1 };
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			config: singleSeat,
+			agents: [],
+		});
+		// Three awaiting routes: one per rank and one unranked. The one seat
+		// goes to the highest rank; the others wait behind it.
+		state.applyFetch(
+			source,
+			success([
+				fetched("github:github.com:I_5", ["critical"]),
+				fetched("github:github.com:I_6", ["high"]),
+				fetched("github:github.com:I_7", []),
+			]),
+		);
+		settleFor(state, "github:github.com:I_7", "route");
+		settleFor(state, "github:github.com:I_6", "route");
+		settleFor(state, "github:github.com:I_5", "route");
+		await coordinator.tick();
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_5"]);
+		expect(intents[0]).toEqual(expect.objectContaining({ origin: "workflow" }));
+		state.close();
+	});
+
+	test("a waiting route still beats the open dispatch", async () => {
+		const singleSeat: FactoryConfig = { ...priorityConfig, maxParallelAgents: 1 };
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			config: singleSeat,
+			agents: [],
+		});
+		// An unranked awaiting route and a critical open ticket share one seat.
+		// The route is re-tried before the open dispatch, so it takes it.
+		state.applyFetch(
+			source,
+			success([
+				fetched("github:github.com:I_5", ["critical"]),
+				fetched("github:github.com:I_7", []),
+			]),
+		);
+		settleFor(state, "github:github.com:I_7", "route");
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(
+			expect.objectContaining({
+				ticketIdentity: "github:github.com:I_7",
+				origin: "workflow",
+			}),
+		);
+		state.close();
+	});
+
+	test("a refresh that changes a label reorders the open dispatch", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			config: priorityConfig,
+			agents: [],
+		});
+		// I_6 starts unranked, so I_5 (critical) would dispatch ahead of it.
+		state.applyFetch(
+			source,
+			success([
+				fetched("github:github.com:I_5", ["critical"], "2026-08-31T10:00:00Z"),
+				fetched("github:github.com:I_6", [], "2026-08-31T10:30:00Z"),
+			]),
+		);
+		// A re-read promotes I_6 to the top rank. Now both are critical, and
+		// I_6's newer update wins the tie-break over I_5.
+		state.applyFetch(
+			source,
+			success([
+				fetched("github:github.com:I_5", ["critical"], "2026-08-31T10:00:00Z"),
+				fetched("github:github.com:I_6", ["critical"], "2026-08-31T10:30:00Z"),
+			]),
+		);
+		await coordinator.tick();
+		// The refresh moved I_6 from behind I_5 to ahead of it.
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual([
+			"github:github.com:I_6",
+			"github:github.com:I_5",
+		]);
 		state.close();
 	});
 });
