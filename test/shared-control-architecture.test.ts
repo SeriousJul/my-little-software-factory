@@ -87,6 +87,22 @@ describe("the shared control library is the only control implementation", () => 
 		expect(offenders).toEqual([]);
 	});
 
+	test("no screen holds its own color table", () => {
+		// A surface that stores colors of its own paints a palette the shared
+		// paint layer does not own: the theme the environment resolves never
+		// reaches it, and neither does the no-color presentation. Every color
+		// value stands in the shared theme module, the one place the plane's
+		// own colors are data. The raw session screen excepted: it paints the
+		// agent's own ANSI output, which is content, not chrome (ADR 0024).
+		const offenders: string[] = [];
+		for (const file of screens) {
+			if (file === "src/components/ansi-screen.ts") continue;
+			const source = readFileSync(file, "utf8");
+			if (/["']#[0-9a-fA-F]{3,8}["']/u.test(source)) offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
+	});
+
 	test("no screen paints an action row outside the shared row", () => {
 		// `actionRowSpans` is the raw paint of one action row: the marker, the
 		// label column, and the detail, in the shared presentation. A screen

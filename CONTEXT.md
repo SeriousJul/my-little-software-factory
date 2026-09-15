@@ -45,7 +45,7 @@ The on-demand, read-only presentation of a full message that does not fit on the
 _Avoid_: message modal, error popup
 
 **Theme**:
-The set of resolved color roles the control plane inherits from the active herdr theme. A theme carries an appearance: light or dark. It is distinct from the no-color presentation, which is an axis that works on top of any theme.
+The set of resolved color roles every control-plane surface paints in. Inside herdr the control plane inherits the Theme from herdr's active theme; outside herdr it keeps its own fixed dark theme. A theme carries an appearance: light or dark. It is distinct from the no-color presentation, which is an axis that works on top of any theme.
 _Avoid_: palette, color scheme, skin
 
 **Control catalogue**:

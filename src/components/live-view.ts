@@ -35,8 +35,9 @@ import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
 import { type ActionRow, bodyRowSpans, scrollbarRows } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
+import { controlInk } from "./shared/presentation.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 /** The stream's hint: the scroll keys, enter, and esc. No row selection. */
 const STREAM_HINT = "j/k scroll  pgup/pgdn page  home/end  enter goto  esc";
@@ -69,11 +70,11 @@ function streamLines(lines: readonly string[], note: string | null, width: numbe
 	const out: MdLine[] = lines.flatMap((line) => {
 		if (line === "") return [[]];
 		return wrapToWidth(line, width).map<MdLine>((row) => [
-			{ text: row, fg: COLORS.text } satisfies MdSpan,
+			{ text: row, fg: paint("text") } satisfies MdSpan,
 		]);
 	});
 	// A failed read keeps the last lines, with the stale note under them.
-	if (note !== null) out.push([{ text: note, fg: COLORS.dim }]);
+	if (note !== null) out.push([{ text: note, fg: paint("subtext0") }]);
 	return out;
 }
 
@@ -218,7 +219,8 @@ export function LiveView({
 				width: terminalWidth,
 				height: terminalHeight,
 				zIndex: 10,
-				backgroundColor: COLORS.overlay,
+				backgroundColor:
+					controlInk().surface.on === "default" ? undefined : controlInk().surface.on,
 				alignItems: "center",
 				justifyContent: "center",
 			},
@@ -227,7 +229,7 @@ export function LiveView({
 			"box",
 			{
 				border: true,
-				borderColor: COLORS.borderFocused,
+				borderColor: paint("accent"),
 				title: truncateToWidth(`Live: ${title}`, geometry.contentWidth),
 				padding: 1,
 				style: {
@@ -240,8 +242,8 @@ export function LiveView({
 			createElement(
 				"text",
 				{ key: "context" },
-				createElement("span", { fg: COLORS.dim }, truncateToWidth(contextLine, baseWidth)),
-				blocked && createElement("span", { fg: COLORS.statusWarning }, blockedSuffix),
+				createElement("span", { fg: paint("subtext0") }, truncateToWidth(contextLine, baseWidth)),
+				blocked && createElement("span", { fg: paint("yellow") }, blockedSuffix),
 			),
 			...visibleBody.map((line, index) =>
 				createElement(
@@ -259,7 +261,11 @@ export function LiveView({
 				}),
 			),
 			finalLayout.showHint &&
-				createElement("text", { fg: COLORS.dim }, truncateToWidth(hint, geometry.contentWidth)),
+				createElement(
+					"text",
+					{ fg: paint("subtext0") },
+					truncateToWidth(hint, geometry.contentWidth),
+				),
 		),
 	);
 }

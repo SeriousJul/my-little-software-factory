@@ -27,7 +27,7 @@ import { maxScrollOf } from "./geometry.ts";
 import { type MessageFact, messageRowElement } from "./messages.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 /** The smallest terminal width the control plane draws its panes at. */
 const MIN_TERMINAL_WIDTH = 40;
@@ -293,11 +293,11 @@ function messageLineRow(
 /**
  * The full-screen surface every modal and overlay paints on.
  *
- * The surface is the presentation's own surface role, so the ink a surface
- * paints on it is the ink that pair was measured against: the dark ink on the
- * dark surface, the light ink on the light surface. The no-color presentation
- * states no surface of its own and keeps the established dark box, so its
- * terminal-default text stays readable wherever the terminal is.
+ * The surface is the ink's own surface role, so the ink a surface paints on it
+ * is the ink that pair was derived against: the theme's panel surface under
+ * its own text. A surface the theme or the no-color presentation resolves to
+ * the terminal default paints no background at all, so the terminal's own
+ * default shows through.
  */
 function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
 	const surface = controlInk().surface;
@@ -308,7 +308,7 @@ function overlaySurfaceStyle(zIndex: number): Record<string, unknown> {
 		width: "100%",
 		height: "100%",
 		zIndex,
-		backgroundColor: surface.on === "default" ? COLORS.overlay : surface.on,
+		backgroundColor: surface.on === "default" ? undefined : surface.on,
 		flexDirection: "column",
 	};
 }
@@ -369,12 +369,14 @@ export function scrollbarRows(
 }
 
 /** One colored piece of a body row. */
-interface BodySpan {
+export interface BodySpan {
 	text: string;
-	fg: string;
+	fg?: string;
+	/** The emphasis the old palette carried in a brighter text color. */
+	bold?: boolean;
 }
 /**
- * One body row as spans, with a dim track and bright thumb when it scrolls.
+ * One body row as spans, with a dim track and a bold thumb when it scrolls.
  *
  * The scrollbar sits in the row's last column. Without the pad, the thumb
  * and track float behind short lines: a block in the middle of the row reads
@@ -387,13 +389,19 @@ export function bodyRowSpans(
 ): ReactElement[] {
 	const spans: ReactElement[] =
 		parts.length === 0
-			? [createElement("span", { key: "blank", fg: COLORS.dim }, "")]
+			? [createElement("span", { key: "blank" }, "")]
 			: parts.map((span, index) =>
-					createElement(
-						"span",
-						{ key: `part-${index}`, fg: span.fg },
-						truncateToWidth(span.text, width),
-					),
+					span.bold
+						? createElement(
+								"b",
+								{ key: `part-${index}`, fg: span.fg },
+								truncateToWidth(span.text, width),
+							)
+						: createElement(
+								"span",
+								{ key: `part-${index}`, fg: span.fg },
+								truncateToWidth(span.text, width),
+							),
 				);
 	if (thumb !== undefined) {
 		let used = 0;
@@ -401,11 +409,9 @@ export function bodyRowSpans(
 		const pad = Math.max(0, width - used);
 		if (pad > 0) spans.push(createElement("span", { key: "pad" }, " ".repeat(pad)));
 		spans.push(
-			createElement(
-				"span",
-				{ key: "bar", fg: thumb ? COLORS.textBright : COLORS.dim },
-				thumb ? "█" : "│",
-			),
+			thumb
+				? createElement("b", { key: "bar", fg: paint("text") }, "█")
+				: createElement("span", { key: "bar", fg: paint("subtext0") }, "│"),
 		);
 	}
 	return spans;

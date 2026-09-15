@@ -4,8 +4,8 @@
  * The agent's text is raw markdown. The decision modal renders it with a
  * small deterministic rule set, in the shared palette:
  *
- * - Headings: bright text, the "#" marks drop.
- * - Bold: bright text. Italic: normal text.
+ * - Headings: bold text, the "#" marks drop.
+ * - Bold: bold text. Italic: normal text.
  * - Inline code: dim. Code blocks: dim, indented two, the fences drop.
  * - Lists: the marker stays, two cells of indent per level.
  * - Links: the label only, the URL drops. Images: the alt text.
@@ -22,20 +22,21 @@ import { widthOf } from "./text.ts";
 /** One styled piece of a log line. The fg is a palette placeholder until painted. */
 export interface MdSpan {
 	text: string;
-	fg: string;
+	/** A voice name (`normal`, `bright`, `dim`) or a concrete color. */
+	fg?: string;
+	/** The emphasis the old palette carried in a brighter text color. */
+	bold?: boolean;
 }
 
 /** One wrapped line of rendered markdown. An empty list is a blank line. */
 export type MdLine = readonly MdSpan[];
 
-/** The palette the dressing uses: the log's three voices. */
+/** The palette the dressing uses: the log's two voices. */
 export interface MdColors {
-	/** Normal prose. */
-	text: string;
-	/** Headings and bold. */
-	bright: string;
+	/** Normal prose, and headings and bold together with the bold attribute. */
+	text: string | undefined;
 	/** Code, the block version and the inline one. */
-	dim: string;
+	dim: string | undefined;
 }
 
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
@@ -227,8 +228,15 @@ export function renderMarkdown(source: string, width: number, colors: MdColors):
 	return out.map((line) => line.map((span) => paint(span, colors)));
 }
 
-/** Resolve a span's placeholder voice against the palette. */
+/**
+ * Resolve a span's placeholder voice against the palette.
+ *
+ * `bright` keeps the text voice and sets the bold attribute: the emphasis the
+ * old palette carried in a brighter text color. `normal` and a span with no
+ * voice at all take the text voice, and `dim` takes the code voice.
+ */
 function paint(span: MdSpan, colors: MdColors): MdSpan {
-	const fg = span.fg === "bright" ? colors.bright : span.fg === "dim" ? colors.dim : colors.text;
+	if (span.fg === "bright") return { text: span.text, fg: colors.text, bold: true };
+	const fg = span.fg === "dim" ? colors.dim : colors.text;
 	return { text: span.text, fg };
 }

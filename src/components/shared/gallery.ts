@@ -15,18 +15,19 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-
+import { currentThemeResolution } from "../../theme-source.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
 import { contextFor } from "../controls.ts";
-import type { MessageFact } from "../messages.ts";
+import { type MessageFact, messageRowElement } from "../messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "../modal-chrome.ts";
 import { truncateToWidth } from "../text.ts";
-import { COLORS } from "../theme.ts";
+import { paint } from "../theme.ts";
 import { KeyGuide } from "../utility.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
-import { controlInk, STATE_WORDS } from "./presentation.ts";
+import { controlInk, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
+import { HERDR_THEME_VERSION, THEME_ROLES, type ThemeRole, unknownThemeWarning } from "./theme.ts";
 import { TypeAheadRow } from "./type-ahead.ts";
 
 /** One example of the gallery: a title, a state word, and the controls it shows. */
@@ -81,7 +82,28 @@ const FOCUSED_CONTROL: Record<string, string> = {
 	notes: "reason",
 	priority: "rank",
 	narrow: "draft",
+	"no-color": "no-color-repository",
 };
+
+/** One role's swatch: the role's color under the role's name. */
+function themeSwatchRow(theme: { roles: Record<ThemeRole, string> }): ReactElement {
+	return createElement(
+		"text",
+		{ key: "swatches" },
+		...THEME_ROLES.map((role) =>
+			createElement(
+				"span",
+				{
+					key: role,
+					// A role the theme resolves to `reset` paints the terminal's
+					// own default: the name stands without a swatch.
+					bg: theme.roles[role] === "reset" ? undefined : theme.roles[role],
+				},
+				` ${role}  `,
+			),
+		),
+	);
+}
 
 /** The Model list the Type-ahead examples search. */
 export const GALLERY_MODELS = [
@@ -336,6 +358,89 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		},
 	},
 	{
+		id: "theme",
+		state: "the inherited theme",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const resolution = currentThemeResolution();
+			return [
+				createElement(
+					"text",
+					{ key: "theme-name", fg: paint("text") },
+					truncateToWidth(
+						`theme: ${resolution.theme.name} (${resolution.theme.appearance})  ` +
+							`built-in definitions vendored from herdr ${HERDR_THEME_VERSION}`,
+						columns.contentWidth,
+					),
+				),
+				themeSwatchRow(resolution.theme),
+				createElement(
+					"text",
+					{ key: "theme-note", fg: paint("subtext0") },
+					truncateToWidth(
+						"a role that resolves to `reset` shows no swatch: the terminal's default stands",
+						columns.contentWidth,
+					),
+				),
+			];
+		},
+	},
+	{
+		id: "theme-fallback",
+		state: "the fallback warning on the Message line",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(
+				"text",
+				{ key: "fallback-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"inside herdr, a theme the config cannot name falls back and says so once:",
+					columns.contentWidth,
+				),
+			),
+			messageRowElement(
+				{ severity: "warning", text: unknownThemeWarning("frobnicate") },
+				columns.contentWidth,
+			),
+		],
+	},
+	{
+		id: "no-color",
+		state: "the no-color presentation: the same controls, painted with no color",
+		render: (columns, holds, inputActive, wiring) => [
+			createElement(TextField, {
+				key: "no-color-model",
+				label: "Model",
+				value: "openai/gpt-5.1",
+				focused: holds === "no-color-model",
+				inputActive,
+				width: columns.valueWidth,
+				labelWidth: columns.labelWidth,
+				ink: NO_COLOR_INK,
+				...(holds === "no-color-model"
+					? { fieldRef: wiring.fieldRef, onValueChange: wiring.report }
+					: {}),
+			}),
+			createElement(ChoiceRow, {
+				key: "no-color-repository",
+				label: "Repository",
+				value: "my-little-software-factory",
+				focused: holds === "no-color-repository",
+				width: columns.valueWidth,
+				labelWidth: columns.labelWidth,
+				ink: NO_COLOR_INK,
+			}),
+			createElement(
+				"box",
+				{ key: "no-color-actions", style: { flexDirection: "column" } },
+				createElement(ActionItem, {
+					row: { key: "no-color-launch", label: "Launch Consultation" } satisfies ActionRow,
+					focused: holds === "no-color-launch",
+					width: columns.contentWidth,
+					ink: NO_COLOR_INK,
+				}),
+			),
+		],
+	},
+	{
 		id: "narrow",
 		state: "narrow terminal",
 		narrow: true,
@@ -490,7 +595,7 @@ export function Gallery({
 			frame,
 			width: narrow ? 28 : width,
 			title: `Shared controls - ${shown.state}`,
-			borderColor: ink.indicator.fg ?? COLORS.borderFocused,
+			borderColor: ink.indicator.fg ?? paint("accent"),
 			minContentRows: 3,
 			message,
 			bar: { mode: "form-field", context: barContext },

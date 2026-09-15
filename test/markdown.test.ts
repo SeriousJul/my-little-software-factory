@@ -8,7 +8,7 @@ import { type MdLine, renderMarkdown } from "../src/components/markdown.ts";
 import { widthOf } from "../src/components/text.ts";
 
 /** A palette with placeholder voices, so a span's voice is readable. */
-const C = { text: "T", bright: "B", dim: "D" };
+const C = { text: "T", dim: "D" };
 
 /** The line's text, across its spans. */
 function plain(line: MdLine): string {
@@ -31,34 +31,34 @@ function first(source: string, width = 80): MdLine {
 }
 
 describe("the voices", () => {
-	test("a heading is bright and the hash marks drop", () => {
-		expect(one("# Title")).toEqual([[{ text: "Title", fg: "B" }]]);
-		expect(one("#### Deep")).toEqual([[{ text: "Deep", fg: "B" }]]);
+	test("a heading is bold text and the hash marks drop", () => {
+		expect(one("# Title")).toEqual([[{ text: "Title", fg: "T", bold: true }]]);
+		expect(one("#### Deep")).toEqual([[{ text: "Deep", fg: "T", bold: true }]]);
 	});
 
-	test("bold is bright, italic keeps the line's voice", () => {
+	test("bold is bold text, italic keeps the line's voice", () => {
 		const [line] = one("a **bold** and *ital* word");
-		expect(spans(line)).toEqual([
-			["a", "T"],
-			[" ", "B"],
-			["bold", "B"],
-			[" ", "T"],
-			["and", "T"],
-			[" ", "T"],
-			["ital", "T"],
-			[" ", "T"],
-			["word", "T"],
+		expect(line).toEqual([
+			{ text: "a", fg: "T" },
+			{ text: " ", fg: "T", bold: true },
+			{ text: "bold", fg: "T", bold: true },
+			{ text: " ", fg: "T" },
+			{ text: "and", fg: "T" },
+			{ text: " ", fg: "T" },
+			{ text: "ital", fg: "T" },
+			{ text: " ", fg: "T" },
+			{ text: "word", fg: "T" },
 		]);
 	});
 
 	test("the underscore bold and the double asterisk both raise", () => {
-		expect(spans(first("__bold__"))).toEqual([["bold", "B"]]);
-		expect(spans(first("a ***triple*** tail"))).toEqual([
-			["a", "T"],
-			[" ", "B"],
-			["triple", "B"],
-			[" ", "T"],
-			["tail", "T"],
+		expect(first("__bold__")).toEqual([{ text: "bold", fg: "T", bold: true }]);
+		expect(first("a ***triple*** tail")).toEqual([
+			{ text: "a", fg: "T" },
+			{ text: " ", fg: "T", bold: true },
+			{ text: "triple", fg: "T", bold: true },
+			{ text: " ", fg: "T" },
+			{ text: "tail", fg: "T" },
 		]);
 	});
 
@@ -177,8 +177,8 @@ describe("the wrapping", () => {
 
 	test("a wide word keeps its voice across the cut", () => {
 		const lines = one("**abcdefgh**", 5);
-		expect(spans(lines[0] ?? [])).toEqual([["abcde", "B"]]);
-		expect(spans(lines[1] ?? [])).toEqual([["fgh", "B"]]);
+		expect(lines[0]).toEqual([{ text: "abcde", fg: "T", bold: true }]);
+		expect(lines[1]).toEqual([{ text: "fgh", fg: "T", bold: true }]);
 	});
 
 	test("multiple spaces collapse to one", () => {

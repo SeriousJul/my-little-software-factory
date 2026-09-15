@@ -20,11 +20,13 @@ import { paneMouse } from "./pane-mouse.ts";
 import { ChoiceRow } from "./shared/choices.ts";
 import { MARKER_WIDTH, turnEndCauseLine } from "./shared/presentation.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
-import { COLORS, STATE_COLORS, stateBadge, taskTypeColor, ticketTaskType } from "./theme.ts";
+import { paint, stateBadge, stateColor, taskTypeColor, ticketTaskType } from "./theme.ts";
 
 export interface DetailLine {
 	text: string;
-	fg: string;
+	fg: string | undefined;
+	/** The emphasis the old palette carried in a brighter text color. */
+	bold?: boolean;
 }
 
 /**
@@ -74,15 +76,15 @@ function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailCh
  * so the fact line and the selector row agree on the stored fact. An
  * unranked ticket without one reads `none`.
  */
-function priorityFact(ticket: Ticket): { text: string; fg: string } {
+function priorityFact(ticket: Ticket): { text: string; fg: string | undefined } {
 	if (ticket.priority.rank !== null) {
 		const word = prioritySourceWord(ticket.priority);
 		const label = ticket.priority.label ?? "none";
-		return { text: word === null ? label : `${label} (${word})`, fg: COLORS.text };
+		return { text: word === null ? label : `${label} (${word})`, fg: paint("text") };
 	}
 	if (ticket.priority.label !== null)
-		return { text: `${ticket.priority.label} (set by you)`, fg: COLORS.text };
-	return { text: "none", fg: COLORS.dim };
+		return { text: `${ticket.priority.label} (set by you)`, fg: paint("text") };
+	return { text: "none", fg: paint("subtext0") };
 }
 
 export function detailContent(
@@ -94,7 +96,7 @@ export function detailContent(
 ): DetailContent {
 	if (ticket === undefined)
 		return {
-			lines: [{ text: "no ticket selected", fg: COLORS.dim }],
+			lines: [{ text: "no ticket selected", fg: paint("subtext0") }],
 			choiceIndex: -1,
 			choiceValue: "default",
 			rows: 1,
@@ -103,20 +105,21 @@ export function detailContent(
 	// The index of the Priority fact row: the override's choice row is
 	// inserted right after it.
 	let choiceIndex = -1;
-	const pushWrapped = (text: string, fg: string) => {
-		for (const line of wrapToWidth(text, usableCols)) lines.push({ text: line, fg });
+	const pushWrapped = (text: string, fg: string | undefined, bold?: boolean) => {
+		for (const line of wrapToWidth(text, usableCols))
+			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
-	pushWrapped(ticket.title, COLORS.textBright);
-	pushWrapped(ticket.repository, COLORS.text);
-	lines.push({ text: stateBadge(ticket.state), fg: STATE_COLORS[ticket.state] });
+	pushWrapped(ticket.title, paint("text"), true);
+	pushWrapped(ticket.repository, paint("text"));
+	lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
 	const choice = detailChoice(ticket, suggestedChoice);
-	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, COLORS.text);
+	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
 	if (choice !== undefined) {
 		// The Environment rides beside the Agent, the way the override panel
 		// orders its rows: where a Handoff runs, then what it runs with. The
 		// same choice carries it, so an open Ticket shows the Environment Enter
 		// starts in rather than the one a closed cycle happened to use.
-		pushWrapped(`Environment: ${choice.environment}`, COLORS.text);
+		pushWrapped(`Environment: ${choice.environment}`, paint("text"));
 		const left = (value: string) => (value === "" ? "left to agent" : value);
 		// The three settings a Task profile carries, each dim when the
 		// resolved choice leaves it to the Agent.
@@ -125,7 +128,7 @@ export function detailContent(
 			["Thinking", choice.thinking],
 			["Context", choice.contextWindow],
 		] as const) {
-			pushWrapped(`${label}: ${left(value)}`, value === "" ? COLORS.dim : COLORS.text);
+			pushWrapped(`${label}: ${left(value)}`, value === "" ? paint("subtext0") : paint("text"));
 		}
 	}
 	// One explicit task type line for every ticket: the open ticket's
@@ -136,7 +139,7 @@ export function detailContent(
 		`${ticket.state === "open" ? "Suggested" : "Handoff"} task type: ${presentation.value}`,
 		taskTypeColor(presentation),
 	);
-	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, COLORS.text);
+	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
 	// The effective rank and where it comes from, beside the task type the
 	// rank orders: the operator reads what the bump will move from (ADR 0022).
 	const fact = priorityFact(ticket);
@@ -154,10 +157,10 @@ export function detailContent(
 		// of the detail. The block is one warning the operator can act on.
 		pushWrapped(
 			`Leftover: ${leftoverWhere(leftover)} is still open for this ticket`,
-			COLORS.statusWarning,
+			paint("yellow"),
 		);
-		pushWrapped(`since${at}: ${leftover.reason}`, COLORS.statusWarning);
-		pushWrapped("press w to clear it", COLORS.statusWarning);
+		pushWrapped(`since${at}: ${leftover.reason}`, paint("yellow"));
+		pushWrapped("press w to clear it", paint("yellow"));
 	}
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;
@@ -173,8 +176,8 @@ export function detailContent(
 		if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion)) {
 			const causeLine = turnEndCauseLine(completion.cause, completion.detail);
 			for (const wrapped of wrapToWidth(causeLine, usableCols))
-				lines.push({ text: wrapped, fg: COLORS.statusWarning });
-			pushWrapped("no automatic decision runs on this turn", COLORS.statusWarning);
+				lines.push({ text: wrapped, fg: paint("yellow") });
+			pushWrapped("no automatic decision runs on this turn", paint("yellow"));
 		}
 		// The date is the first minute of the stored completion time; the
 		// decision is `pending` until one is made on the turn.
@@ -182,31 +185,31 @@ export function detailContent(
 		const decision = completion.decision ?? "pending";
 		pushWrapped(
 			`Last completion: ${date} ${completion.taskType} by ${completion.agentName} (${completion.agentType}) ${decision}`,
-			COLORS.text,
+			paint("text"),
 		);
 		for (const line of completion.message.split("\n")) {
 			for (const wrapped of wrapToWidth(line, usableCols))
-				lines.push({ text: wrapped, fg: COLORS.dim });
+				lines.push({ text: wrapped, fg: paint("subtext0") });
 		}
 	}
-	pushWrapped(`Source kind: ${ticket.sourceKind}`, COLORS.text);
-	pushWrapped(`External key: ${ticket.externalKey}`, COLORS.text);
-	pushWrapped(`Source state: ${ticket.sourceState}`, COLORS.text);
-	pushWrapped(`Source URL: ${ticket.url}`, COLORS.text);
-	pushWrapped(`Labels: ${ticket.labels.join(", ") || "none"}`, COLORS.text);
+	pushWrapped(`Source kind: ${ticket.sourceKind}`, paint("text"));
+	pushWrapped(`External key: ${ticket.externalKey}`, paint("text"));
+	pushWrapped(`Source state: ${ticket.sourceState}`, paint("text"));
+	pushWrapped(`Source URL: ${ticket.url}`, paint("text"));
+	pushWrapped(`Labels: ${ticket.labels.join(", ") || "none"}`, paint("text"));
 	for (const membership of ticket.memberships) {
 		pushWrapped(
 			`Source ${membership.sourceName}: ${membership.health}`,
-			membership.health === "stale" ? COLORS.statusWarning : COLORS.dim,
+			membership.health === "stale" ? paint("yellow") : paint("subtext0"),
 		);
 	}
-	if (ticket.handoffRecoveryRequired)
-		pushWrapped("Handoff: recovery required", COLORS.statusWarning);
-	lines.push({ text: " ", fg: COLORS.dim });
-	pushWrapped(ticket.description, COLORS.dim);
+	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
+	lines.push({ text: " ", fg: paint("subtext0") });
+	pushWrapped(ticket.description, paint("subtext0"));
 	const truncated = lines.map((line) => ({
 		text: truncateToWidth(line.text, usableCols),
 		fg: line.fg,
+		bold: line.bold,
 	}));
 	return {
 		lines: truncated,
@@ -594,8 +597,8 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			// The native Slider paints its track with background color and its
 			// thumb with foreground color. A fitting detail has a blank but still
 			// reserved gutter.
-			backgroundColor: hasOverflow ? COLORS.dim : "transparent",
-			foregroundColor: hasOverflow ? COLORS.borderFocused : "transparent",
+			backgroundColor: hasOverflow ? (paint("subtext0") ?? "transparent") : "transparent",
+			foregroundColor: hasOverflow ? (paint("accent") ?? "transparent") : "transparent",
 		},
 	};
 
@@ -606,13 +609,13 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			id: "ticket-detail",
 			title: focused ? "❯ Detail" : "  Detail",
 			border: true,
-			borderColor: focused ? COLORS.borderFocused : COLORS.border,
+			borderColor: focused ? paint("accent") : paint("surface_dim"),
 			// A left click gives this scroll box OpenTUI's own focus, and a box
 			// that holds it paints its border with focusedBorderColor instead of
 			// borderColor. That focus outlives the app's pane focus, so the border
 			// would stay blue on a deactivated pane. Pane focus is app state; both
 			// border colors follow it.
-			focusedBorderColor: focused ? COLORS.borderFocused : COLORS.border,
+			focusedBorderColor: focused ? paint("accent") : paint("surface_dim"),
 			// At normal widths the detail keeps one padding cell around text.
 			// At tiny widths, yield right then left padding before the only text
 			// column. The gutter has already yielded there.
@@ -633,7 +636,11 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			style: { flexGrow: 1, flexShrink: 1, overflow: "hidden" },
 		},
 		...lines.flatMap((line, index) => [
-			createElement("text", { key: `detail-${index}`, fg: line.fg }, line.text),
+			createElement(
+				"text",
+				{ key: `detail-${index}`, fg: line.fg },
+				line.bold ? createElement("b", undefined, line.text) : line.text,
+			),
 			...(index === content.choiceIndex && choiceRow !== null
 				? [createElement(Fragment, { key: "priority-override" }, choiceRow)]
 				: []),

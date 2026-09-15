@@ -16,7 +16,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { panelValueCells } from "../src/components/override-panel.ts";
-import { COLORS } from "../src/components/theme.ts";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
@@ -35,6 +34,7 @@ import {
 	press,
 	pressArrow,
 	rgb,
+	roleColor,
 	rowsOf,
 	type Setup,
 	settle,
@@ -1892,7 +1892,7 @@ describe("the override panel", () => {
 
 				const opened = await openPanel(setup);
 				expect(frameText(opened)).toContain("Thinking minimal");
-				expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.text)]);
+				expect(spanColors(setup, "minimal")).toEqual([rgb(roleColor("text"))]);
 
 				await cycleToZed();
 				// The row keeps the level and shows it in the warning color. It
@@ -2024,8 +2024,8 @@ describe("the override panel", () => {
 					line.spans.some((span) => span.text.includes("gpt")),
 				);
 				const valueSpan = modelLine?.spans.find((span) => span.text.includes("gpt"));
-				expect(valueSpan?.fg.toInts().slice(0, 3)).toEqual(rgb(COLORS.textBright));
-				expect(valueSpan?.bg.toInts().slice(0, 3)).toEqual(rgb(COLORS.focusedBackground));
+				expect(valueSpan?.fg.toInts().slice(0, 3)).toEqual(rgb(roleColor("text")));
+				expect(valueSpan?.bg.toInts().slice(0, 3)).toEqual(rgb(roleColor("active_row_bg")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -3171,7 +3171,7 @@ describe("the override panel", () => {
 							`the unset Model row for ${models.length === 0 ? "an empty" : "a non-empty"} list`,
 						);
 						expect(frameText(frame)).toContain(expected);
-						expect(spanColors(setup, placeholder)).not.toContainEqual(rgb(COLORS.statusWarning));
+						expect(spanColors(setup, placeholder)).not.toContainEqual(rgb(roleColor("yellow")));
 					},
 					size.width,
 					size.height,
@@ -3273,7 +3273,7 @@ describe("the override panel", () => {
 					// states why in words at every size the panel renders at.
 					expect(frameText(opened)).toContain("Model gpt-4o");
 					expect(frameText(opened)).toContain("Error: Model:");
-					expect(spanColors(setup, "gpt-4o")).toContainEqual(rgb(COLORS.statusWarning));
+					expect(spanColors(setup, "gpt-4o")).toContainEqual(rgb(roleColor("yellow")));
 					// The thinking level the task type names is supported, so it stays plain.
 					expect(frameText(opened)).toContain("Thinking (unset)");
 					// A search that names a model the agent does hold clears the
@@ -3288,7 +3288,7 @@ describe("the override panel", () => {
 					expect(spanColors(setup, "gpt-4o")).toEqual([]);
 					// The selected row reads in the bright color, never the warning one.
 					expect(spanColors(setup, "anthropic/claude-sonnet-4-5")).toEqual([
-						rgb(COLORS.textBright),
+						rgb(roleColor("text")),
 					]);
 				},
 				size.width,
@@ -3318,7 +3318,7 @@ describe("the override panel", () => {
 					// would be judged against has not arrived, so a model the config
 					// resolved correctly must not read as a handoff that would fail.
 					expect(frameText(opened)).toContain("Model openai/gpt-4o");
-					expect(paintedIn(setup, "openai/gpt-4o", rgb(COLORS.dim))).toBe(true);
+					expect(paintedIn(setup, "openai/gpt-4o", rgb(roleColor("subtext0")))).toBe(true);
 					await moveToModelRow(setup);
 					// The bar still names the row's controls while it waits: the row
 					// holds the config's value, dim, where an empty row shows the
@@ -3335,7 +3335,7 @@ describe("the override panel", () => {
 					await awaitPaintedIn(
 						setup,
 						"openai/gpt-4o",
-						rgb(COLORS.textBright),
+						rgb(roleColor("text")),
 						"the fetched list to confirm the value",
 					);
 					// The bar switches to the Model list row's controls, which take
@@ -3365,7 +3365,7 @@ describe("the override panel", () => {
 				async (setup) => {
 					const opened = await openPanel(setup);
 					expect(frameText(opened)).toContain("Thinking xhigh");
-					expect(paintedIn(setup, "xhigh", rgb(COLORS.text))).toBe(true);
+					expect(paintedIn(setup, "xhigh", rgb(roleColor("text")))).toBe(true);
 					// The agent row is the one selected on open: cycling it left reaches
 					// codex, which declares no level above high.
 					await pressArrow(setup, "left", "the agent to become codex", (f) =>
@@ -3377,7 +3377,7 @@ describe("the override panel", () => {
 					const warned = setup.captureCharFrame();
 					expect(frameText(warned)).toContain("Thinking xhigh");
 					expect(frameText(warned)).toContain("Error: Thinking:");
-					expect(spanColors(setup, "xhigh")).toContainEqual(rgb(COLORS.statusWarning));
+					expect(spanColors(setup, "xhigh")).toContainEqual(rgb(roleColor("yellow")));
 					// The row still takes input: the operator can put a level the new agent
 					// declares on it, and the warning goes with the old value.
 					await moveToThinkingRow(setup);
@@ -3385,7 +3385,7 @@ describe("the override panel", () => {
 						frameText(f).includes("Thinking minimal"),
 					);
 					expect(spanColors(setup, "xhigh")).toEqual([]);
-					expect(spanColors(setup, "minimal")).toEqual([rgb(COLORS.textBright)]);
+					expect(spanColors(setup, "minimal")).toEqual([rgb(roleColor("text"))]);
 				},
 				size.width,
 				size.height,

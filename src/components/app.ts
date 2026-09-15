@@ -79,6 +79,7 @@ import {
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type { Consultation, FactoryState } from "../state.ts";
+import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
@@ -113,7 +114,7 @@ import { type MainSection, SectionHeader } from "./section-header.ts";
 import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 import {
 	detailScrollRoom,
 	leftoverWhere,
@@ -399,7 +400,14 @@ export function App({
 		// What a control that ran did, routed by the severity it named: a copy
 		// that took is news, and a copy the terminal refused is a warning.
 		report: reportMessage,
-	} = useMessageFacts(sourceHealthMessage === "" ? undefined : sourceHealthMessage);
+		// The Theme the control plane paints in, resolved once for the run: the
+		// herdr theme when the app runs inside herdr, the standalone dark theme
+		// otherwise (ADR 0024). A fallback lands on the Message line as a
+		// notice: it never pins the line, so real news takes over.
+	} = useMessageFacts(
+		sourceHealthMessage === "" ? undefined : sourceHealthMessage,
+		currentThemeResolution().warning ?? undefined,
+	);
 	/**
 	 * Write one Consultation outcome onto the shared Message facts.
 	 *
@@ -2423,9 +2431,9 @@ export function App({
 	// rows the size box actually holds.
 	const compactLines = (
 		importantSmallMessage === undefined
-			? [{ text: TOO_SMALL_TEXT, fg: COLORS.statusWarning }]
+			? [{ text: TOO_SMALL_TEXT, fg: paint("yellow") }]
 			: [
-					{ text: TOO_SMALL_TEXT, fg: COLORS.statusWarning },
+					{ text: TOO_SMALL_TEXT, fg: paint("yellow") },
 					{ text: importantSmallMessage, fg: messageColor },
 				]
 	).slice(0, compactLineCount);
@@ -2453,7 +2461,7 @@ export function App({
 		showModeLine &&
 			createElement(
 				"text",
-				{ style: { width: "100%", height: 1, fg: COLORS.dim } },
+				{ style: { width: "100%", height: 1, fg: paint("subtext0") } },
 				padToWidth(truncateToWidth(modeLine, terminalWidth), terminalWidth),
 			),
 		tooSmall

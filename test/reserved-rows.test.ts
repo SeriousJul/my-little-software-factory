@@ -12,8 +12,8 @@
  * own Action bar is the failure this file exists to catch.
  */
 import { describe, expect, test } from "vitest";
+import { contrastRatio, MIN_TEXT_CONTRAST } from "../src/components/shared/presentation.ts";
 import { widthOf } from "../src/components/text.ts";
-import { COLORS } from "../src/components/theme.ts";
 import {
 	actionBarRowOf,
 	cellColors,
@@ -23,6 +23,7 @@ import {
 	messageRowOf,
 	press,
 	rgb,
+	roleColor,
 	rowsOf,
 	type Setup,
 	settle,
@@ -46,6 +47,36 @@ const BORDER_GLYPHS = /[│┌┐└┘├┤──━┃]/;
 
 /** The background a base frame row carries: none, so the terminal default. */
 const BASE_BG: [number, number, number] = [0, 0, 0];
+
+/** A `[r,g,b]` triplet as the `#rrggbb` the contrast formula reads. */
+const hexOf = (channels: readonly number[]): string =>
+	`#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+
+/**
+ * The drawn text keeps its measured contrast on the surface it landed on.
+ *
+ * The surface background is the theme's `panel_bg` and the ink the surface
+ * paints is the theme's own text tone, so the pair is the theme's own pair:
+ * a surface that changed without its measured pairs changing is caught here.
+ */
+async function expectTextClearsItsSurface(setup: Setup, row: number, width: number): Promise<void> {
+	const surface = rgb(roleColor("panel_bg"));
+	const textTones = [roleColor("text"), roleColor("subtext0")].map(rgb);
+	let measured = 0;
+	for (let column = 0; column < width; column += 1) {
+		const cell = cellColors(setup, column, row);
+		if (cell.fg.join() === cell.bg.join()) continue;
+		if (!textTones.some((tone) => tone.join() === cell.fg.join())) continue;
+		// A span that names no background lands on the surface behind it.
+		const bg = cell.bg.join() === surface.join() ? cell.bg : surface;
+		expect(
+			contrastRatio(hexOf(cell.fg), hexOf(bg)),
+			`row ${row} column ${column}`,
+		).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST);
+		measured += 1;
+	}
+	expect(measured, `no text tone was painted on row ${row}`).toBeGreaterThan(0);
+}
 
 /**
  * The frame contract at one size: exactly `height` rows, every row exactly
@@ -153,8 +184,12 @@ describe("the reserved bottom rows at every size", () => {
 				// User story 69: a surface that owns its last two rows paints them
 				// on its own dark surface, so its Message line and its bar read as
 				// part of the surface and not as the frame behind it.
-				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(COLORS.overlay));
-				expect(cellColors(setup, 0, guide - 2).bg).toEqual(rgb(COLORS.overlay));
+				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(roleColor("panel_bg")));
+				expect(cellColors(setup, 0, guide - 2).bg).toEqual(rgb(roleColor("panel_bg")));
+				// And the text those rows paint is measured against that surface:
+				// the surface and its ink are the theme's own pair.
+				await expectTextClearsItsSurface(setup, guide - 1, WIDTH);
+				await expectTextClearsItsSurface(setup, guide - 2, WIDTH);
 				await closeSurface(setup, /Key guide/);
 			},
 			WIDTH,

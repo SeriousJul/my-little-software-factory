@@ -17,7 +17,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
-import { COLORS } from "../src/components/theme.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -42,6 +41,7 @@ import {
 	pressCtrlC,
 	pressF2,
 	rgb,
+	roleColor,
 	rowsOf,
 	settle,
 	sleep,
@@ -130,13 +130,13 @@ describe("the contextual Action bar", () => {
 				expect(bar.endsWith("? Help")).toBe(true);
 				const barRow = rowsOf(frame).length - 1;
 				// Available: the key wears the focus color, the label the text color.
-				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(COLORS.borderFocused));
-				expect(spanColorAt(setup, barRow, "Detail")).toEqual(rgb(COLORS.text));
-				expect(spanColorAt(setup, barRow, "x ")).toEqual(rgb(COLORS.borderFocused));
-				expect(spanColorAt(setup, barRow, "Section")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, barRow, "Detail")).toEqual(rgb(roleColor("text")));
+				expect(spanColorAt(setup, barRow, "x ")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, barRow, "Section")).toEqual(rgb(roleColor("text")));
 				// Unavailable: the whole hint is dim.
-				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(COLORS.dim));
-				expect(spanColorAt(setup, barRow, "c Launch")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, barRow, "c Launch")).toEqual(rgb(roleColor("subtext0")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -1038,12 +1038,12 @@ describe("the contextual Action bar", () => {
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
 				// One ticket, other section collapsed: Move cannot move.
-				expect(spanColorAt(setup, barRow, "↑↓/jk Move")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "↑↓/jk Move")).toEqual(rgb(roleColor("subtext0")));
 				await press(setup, "j", "the move refusal", (f) =>
 					messageRowOf(f).includes("the Ticket list has nowhere to move"),
 				);
 				// No sources: Refresh cannot run.
-				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "r Refresh")).toEqual(rgb(roleColor("subtext0")));
 				const refused = await press(setup, "r", "the refresh refusal", (f) =>
 					messageRowOf(f).includes("no Ticket sources exist"),
 				);
@@ -1061,7 +1061,7 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
 				await press(setup, "return", "the refusal", (f) =>
 					messageRowOf(f).includes("no Ticket is selected"),
 				);
@@ -1083,9 +1083,9 @@ describe("the contextual Action bar", () => {
 				// off does not stand dimmed beside it: a hint whose key runs
 				// something else would point at the wrong control. Override
 				// keeps its dimmed row with the reason.
-				expect(spanColorAt(setup, barRow, "Live view")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, barRow, "Live view")).toEqual(rgb(roleColor("text")));
 				expect(actionBarRowOf(frame)).not.toContain("Enter Hand off");
-				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(roleColor("subtext0")));
 				// e is refused with the handoff reason, and no panel opens.
 				setup.mockInput.pressKey("e");
 				const refused = await settle(setup);
@@ -1121,7 +1121,7 @@ describe("the contextual Action bar", () => {
 						"the stale health warning",
 					);
 					const barRow = rowsOf(frame).length - 1;
-					expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(COLORS.dim));
+					expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
 					await press(setup, "return", "the refusal", (f) =>
 						messageRowOf(f).includes(
 							"Ticket is not actionable because source data is stale, removed, or absent",
@@ -1156,8 +1156,8 @@ describe("the contextual Action bar", () => {
 				);
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(COLORS.dim));
-				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, barRow, "Enter Hand off")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, barRow, "e Override")).toEqual(rgb(roleColor("subtext0")));
 				// The second Enter is refused as a Hand off. The refusal is
 				// an operation Warning, and active progress outranks it
 				// (user story 51), so the Handoff's own Working keeps the

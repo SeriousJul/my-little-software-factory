@@ -22,6 +22,13 @@ const ON_CI = process.env.CI !== undefined;
 export default defineConfig({
 	test: {
 		/**
+		 * The theme isolation: every test starts on the standalone theme in
+		 * color, regardless of whether the test process runs inside a herdr
+		 * pane or on a terminal that sets `NO_COLOR`. A test that needs another
+		 * resolution sets its own environment inside its body.
+		 */
+		setupFiles: ["test/theme-isolation.ts"],
+		/**
 		 * The heaviest test in the suite measured 4804 ms in a parallel run
 		 * at the fork cap below. Six times that is the budget, so a busy
 		 * machine has room and a broken one still fails inside half a minute.

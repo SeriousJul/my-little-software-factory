@@ -12,7 +12,15 @@ import type { AnsiLine } from "./ansi-screen.ts";
 import { windowOf } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
+
+/** One detail line: the text, the color it paints, and the emphasis it wears. */
+export interface ConsultationDetailLine {
+	text: string;
+	fg: string | undefined;
+	/** The emphasis the old palette carried in a brighter text color. */
+	bold?: boolean;
+}
 
 export function consultationDetailLines(
 	consultation: Consultation | undefined,
@@ -23,79 +31,87 @@ export function consultationDetailLines(
 	replacementIds: readonly string[] = [],
 	agentStatus: string | null = null,
 	remainingResources: readonly ConsultationResource[] = [],
-): Array<{ text: string; fg: string }> {
-	if (consultation === undefined) return [{ text: "no Consultation selected", fg: COLORS.dim }];
-	const lines: Array<{ text: string; fg: string }> = [];
-	const push = (text: string, fg: string = COLORS.text) => {
-		for (const line of wrapToWidth(text, width)) lines.push({ text: line, fg });
+): ConsultationDetailLine[] {
+	if (consultation === undefined)
+		return [{ text: "no Consultation selected", fg: paint("subtext0") }];
+	const lines: ConsultationDetailLine[] = [];
+	const push = (text: string, fg: string | undefined = paint("text"), bold?: boolean) => {
+		for (const line of wrapToWidth(text, width))
+			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
-	push(`${consultation.typeName} - ${consultation.repository.displayName}`, COLORS.textBright);
+	push(`${consultation.typeName} - ${consultation.repository.displayName}`, paint("text"), true);
 	push(`State: ${consultation.state}`);
 	push(`Started: ${consultation.createdAt.slice(0, 16).replace("T", " ")}`);
 	push(`Agent: ${consultation.agentType} (${consultation.agentName})`);
 	if (agentStatus !== null)
 		push(
 			`Agent status: ${agentStatus}`,
-			agentStatus === "blocked" || agentStatus === "unknown" ? COLORS.statusWarning : COLORS.dim,
+			agentStatus === "blocked" || agentStatus === "unknown" ? paint("yellow") : paint("subtext0"),
 		);
-	if (consultation.warning !== null) push(`Warning: ${consultation.warning}`, COLORS.statusWarning);
-	if (consultation.failure !== null) push(`Failure: ${consultation.failure}`, COLORS.statusError);
+	if (consultation.warning !== null) push(`Warning: ${consultation.warning}`, paint("yellow"));
+	if (consultation.failure !== null) push(`Failure: ${consultation.failure}`, paint("red"));
 	if (consultation.closeResult !== null)
-		push(`Close result: ${consultation.closeResult}`, COLORS.statusWarning);
+		push(`Close result: ${consultation.closeResult}`, paint("yellow"));
 	const unclosedResources = consultation.resources.filter(
 		(resource) => resource.owned && !resource.confirmedClosed,
 	);
 	if (unclosedResources.length > 0) {
-		push("Unclosed owned resources:", COLORS.statusWarning);
+		push("Unclosed owned resources:", paint("yellow"));
 		for (const resource of unclosedResources)
-			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, COLORS.statusWarning);
+			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, paint("yellow"));
 	}
 	const retainedResources = consultation.resources.filter((resource) => !resource.owned);
 	if (retainedResources.length > 0) {
-		push("Retained shared resources:", COLORS.dim);
+		push("Retained shared resources:", paint("subtext0"));
 		for (const resource of retainedResources)
-			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, COLORS.dim);
+			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, paint("subtext0"));
 	}
 	if (consultation.replacementOf !== null)
-		push(`Replacement of: ${consultation.replacementOf.slice(0, 8)}`, COLORS.dim);
+		push(`Replacement of: ${consultation.replacementOf.slice(0, 8)}`, paint("subtext0"));
 	if (replacementIds.length > 0)
-		push(`Replaced by: ${replacementIds.map((id) => id.slice(0, 8)).join(", ")}`, COLORS.dim);
+		push(
+			`Replaced by: ${replacementIds.map((id) => id.slice(0, 8)).join(", ")}`,
+			paint("subtext0"),
+		);
 	if (remainingResources.length > 0) {
-		push("Remaining resources (recover them in herdr):", COLORS.statusWarning);
+		push("Remaining resources (recover them in herdr):", paint("yellow"));
 		for (const resource of remainingResources)
-			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, COLORS.statusWarning);
+			push(`${resource.kind} ${resource.resourceId} - ${resource.details}`, paint("yellow"));
 	}
 	if (consultation.draft !== "")
 		push(
 			`Response draft${consultation.draftOld ? " (old - review before sending)" : ""}: ${consultation.draft}`,
-			consultation.draftOld ? COLORS.statusWarning : COLORS.dim,
+			consultation.draftOld ? paint("yellow") : paint("subtext0"),
 		);
-	lines.push({ text: " ", fg: COLORS.dim });
+	lines.push({ text: " ", fg: paint("subtext0") });
 	if (liveOutput !== null && consultation.state !== "closed") {
-		push("Agent view:", COLORS.textBright);
-		for (const line of liveOutput.split("\n")) push(line, COLORS.text);
+		push("Agent view:", paint("text"), true);
+		for (const line of liveOutput.split("\n")) push(line);
 	} else {
-		push("Captured history:", COLORS.textBright);
+		push("Captured history:", paint("text"), true);
 		for (const turn of turns) {
-			push(`Input ${turn.acceptedAt.slice(0, 16).replace("T", " ")}: ${turn.input}`, COLORS.text);
+			push(`Input ${turn.acceptedAt.slice(0, 16).replace("T", " ")}: ${turn.input}`);
 			const snapshot = snapshots.find((item) => item.turnId === turn.id);
 			if (snapshot !== undefined) {
-				push(snapshot.partial ? "Captured partial output:" : "Captured output:", COLORS.dim);
-				for (const line of snapshot.text.split("\n")) push(line, COLORS.dim);
-				if (snapshot.truncated) push("[start of snapshot removed]", COLORS.statusWarning);
+				push(snapshot.partial ? "Captured partial output:" : "Captured output:", paint("subtext0"));
+				for (const line of snapshot.text.split("\n")) push(line, paint("subtext0"));
+				if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
 			}
 		}
 		for (const snapshot of snapshots.filter((item) => item.partial)) {
-			push(`Partial output ${snapshot.capturedAt.slice(0, 16).replace("T", " ")}:`, COLORS.dim);
-			for (const line of snapshot.text.split("\n")) push(line, COLORS.dim);
-			if (snapshot.truncated) push("[start of snapshot removed]", COLORS.statusWarning);
+			push(
+				`Partial output ${snapshot.capturedAt.slice(0, 16).replace("T", " ")}:`,
+				paint("subtext0"),
+			);
+			for (const line of snapshot.text.split("\n")) push(line, paint("subtext0"));
+			if (snapshot.truncated) push("[start of snapshot removed]", paint("yellow"));
 		}
 	}
 	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
 }
 
 interface ConsultationDetailProps {
-	lines: readonly { text: string; fg: string }[];
+	lines: readonly ConsultationDetailLine[];
 	visibleRows: number;
 	scroll: number;
 	focused: boolean;
@@ -126,7 +142,11 @@ export function ConsultationDetail({
 	const content =
 		ansiLines === undefined
 			? windowOf(lines, scroll, visibleRows).map((line, index) =>
-					createElement("text", { key: index, fg: line.fg }, line.text),
+					createElement(
+						"text",
+						{ key: index, fg: line.fg },
+						line.bold ? createElement("b", undefined, line.text) : line.text,
+					),
 				)
 			: windowOf(ansiLines, scroll, visibleRows).map((line, index) =>
 					createElement(
@@ -153,7 +173,7 @@ export function ConsultationDetail({
 			onMouse: handleMouse,
 			title: focused ? "❯ Agent view" : "  Agent view",
 			border: true,
-			borderColor: focused ? COLORS.borderFocused : COLORS.border,
+			borderColor: focused ? paint("accent") : paint("surface_dim"),
 			padding: 1,
 			style: { flexGrow: 1, flexShrink: 1, flexDirection: "column", overflow: "hidden" },
 		},

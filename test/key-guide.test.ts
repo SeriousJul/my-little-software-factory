@@ -15,7 +15,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
-import { COLORS } from "../src/components/theme.ts";
 import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
@@ -33,6 +32,7 @@ import {
 	openSurface,
 	press,
 	rgb,
+	roleColor,
 	rowsOf,
 	settle,
 	spanColorAt,
@@ -508,7 +508,7 @@ describe("the in-app Key guide", () => {
 						rows.findIndex((r) => norm(r).includes("Enter Decide")),
 						"Decide",
 					),
-				).toEqual(rgb(COLORS.dim));
+				).toEqual(rgb(roleColor("subtext0")));
 				await closeOverlay(setup, "Key guide", "the guide to close");
 				let bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Hand off");
@@ -530,7 +530,7 @@ describe("the in-app Key guide", () => {
 				);
 				expect(rowOf(rows, "Enter Decide")).toContain("opens the decision on a settled Ticket");
 				const decideRow = rows.findIndex((r) => norm(r).includes("Enter Decide"));
-				expect(spanColorAt(setup, decideRow, "Decide")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, decideRow, "Decide")).toEqual(rgb(roleColor("text")));
 				await closeOverlay(setup, "Key guide", "the guide to close");
 				bar = actionBarRowOf(setup.captureCharFrame());
 				expect(bar).toContain("Enter Decide");
@@ -553,7 +553,7 @@ describe("the in-app Key guide", () => {
 						rows.findIndex((r) => norm(r).includes("Enter Live view")),
 						"Live view",
 					),
-				).toEqual(rgb(COLORS.text));
+				).toEqual(rgb(roleColor("text")));
 				expect(rowOf(rows, "Enter Decide")).toContain(
 					"the selected Ticket has no completion to decide",
 				);
@@ -658,16 +658,18 @@ describe("the in-app Key guide", () => {
 				// color. The Priority rows are available here: a Ticket is
 				// selected.
 				const moveRow = rowOf("Move");
-				expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(COLORS.borderFocused));
-				expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(roleColor("text")));
 				const bumpRow = rowOf("Bump priority");
-				expect(spanColorAt(setup, bumpRow, "=/-")).toEqual(rgb(COLORS.borderFocused));
-				expect(spanColorAt(setup, bumpRow, "Bump priority")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, bumpRow, "=/-")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, bumpRow, "Bump priority")).toEqual(rgb(roleColor("text")));
 				// Unavailable: the key and the label are dim, the reason dim.
 				const refreshRow = rowOf("r Refresh");
-				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(COLORS.dim));
-				expect(spanColorAt(setup, refreshRow, "Refresh")).toEqual(rgb(COLORS.dim));
-				expect(spanColorAt(setup, refreshRow, "no Ticket sources exist")).toEqual(rgb(COLORS.dim));
+				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, refreshRow, "Refresh")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, refreshRow, "no Ticket sources exist")).toEqual(
+					rgb(roleColor("subtext0")),
+				);
 
 				// The Global section sits below the first fold: step the guide
 				// down until its rows can be color-checked.
@@ -676,15 +678,14 @@ describe("the in-app Key guide", () => {
 					if ((await settle(setup)).includes("Emergency exit")) break;
 				}
 				rows = rowsOf(setup.captureCharFrame());
-
 				// Emergency exit is available: the recovery note does not dim
 				// the key.
 				const exitRow = rowOf("Ctrl+C");
-				expect(spanColorAt(setup, exitRow, "Ctrl+C")).toEqual(rgb(COLORS.borderFocused));
-				expect(spanColorAt(setup, exitRow, "Emergency exit")).toEqual(rgb(COLORS.text));
+				expect(spanColorAt(setup, exitRow, "Ctrl+C")).toEqual(rgb(roleColor("accent")));
+				expect(spanColorAt(setup, exitRow, "Emergency exit")).toEqual(rgb(roleColor("text")));
 				// Group headers wear the bright text color.
 				const groupRow = rowOf("Global controls");
-				expect(spanColorAt(setup, groupRow, "Global controls")).toEqual(rgb(COLORS.textBright));
+				expect(spanColorAt(setup, groupRow, "Global controls")).toEqual(rgb(roleColor("text")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -706,7 +707,7 @@ describe("the in-app Key guide", () => {
 					let rows = rowsOf(setup.captureCharFrame());
 					let refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).toContain("every Ticket source is already refreshing");
-					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(COLORS.dim));
+					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
 
 					// The fetch settles while the guide is open: the reason
 					// leaves and the key takes the focus color, live.
@@ -723,7 +724,7 @@ describe("the in-app Key guide", () => {
 					rows = rowsOf(setup.captureCharFrame());
 					refreshRow = rows.findIndex((row) => norm(row).includes("r Refresh"));
 					expect(rows[refreshRow]).not.toContain(" - ");
-					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(COLORS.borderFocused));
+					expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("accent")));
 					// The current section follows the state too: the fetched open
 					// Ticket is selected, so Hand off loses its reason as well.
 					expect(rows.find((row) => norm(row).includes("Enter Hand off"))).not.toContain(

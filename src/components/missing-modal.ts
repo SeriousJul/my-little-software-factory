@@ -29,7 +29,7 @@ import {
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { wrapToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 interface MissingModalProps {
 	title: string;
@@ -128,7 +128,7 @@ export function MissingModal({
 		frame,
 		width: terminalWidth,
 		title,
-		borderColor: COLORS.borderFocused,
+		borderColor: paint("accent"),
 		// Every action row: without one of them the modal has no way out, so
 		// it holds itself back at that size.
 		minContentRows: actions.length,
@@ -139,7 +139,11 @@ export function MissingModal({
 				createElement(
 					"text",
 					{ key: `body-${index}` },
-					...bodyRowSpans([{ text: line, fg: COLORS.dim }], bodyWidth, thumbRows?.has(index)),
+					...bodyRowSpans(
+						[{ text: line, fg: paint("subtext0") }],
+						bodyWidth,
+						thumbRows?.has(index),
+					),
 				),
 			),
 			...actions.map((row, index) =>

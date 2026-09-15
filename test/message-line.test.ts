@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
-import { COLORS } from "../src/components/theme.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -27,6 +26,7 @@ import {
 	press,
 	pressF2,
 	rgb,
+	roleColor,
 	rowsOf,
 	settle,
 	sleep,
@@ -124,7 +124,7 @@ describe("the permanent Message line", () => {
 				const frame = await settle(setup);
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Warning: no Ticket sources exist");
-				expect(spanColorAt(setup, row, "Warning:")).toEqual(rgb(COLORS.statusWarning));
+				expect(spanColorAt(setup, row, "Warning:")).toEqual(rgb(roleColor("yellow")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -164,7 +164,7 @@ describe("the permanent Message line", () => {
 				const frame = await settle(setup);
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Working: refreshing 1 sources");
-				expect(spanColorAt(setup, row, "Working:")).toEqual(rgb(COLORS.statusWorking));
+				expect(spanColorAt(setup, row, "Working:")).toEqual(rgb(roleColor("blue")));
 				source.settle(success([issueTicket()]));
 				await awaitFrame(setup, (f) => messageRowOf(f).trim() === "", "the working to clear");
 			},
@@ -180,7 +180,7 @@ describe("the permanent Message line", () => {
 				const frame = await settle(setup);
 				const row = rowsOf(frame).length - 2;
 				expect(messageRowOf(frame).trim()).toBe("Error: error: the daemon is down");
-				expect(spanColorAt(setup, row, "Error:")).toEqual(rgb(COLORS.statusError));
+				expect(spanColorAt(setup, row, "Error:")).toEqual(rgb(roleColor("red")));
 			},
 			WIDTH,
 			HEIGHT,
@@ -488,7 +488,7 @@ describe("the permanent Message line", () => {
 				);
 				expect(messageRowOf(notice)).not.toContain("Working:");
 				expect(spanColorAt(setup, rowsOf(notice).length - 2, "Warning:")).toEqual(
-					rgb(COLORS.statusWarning),
+					rgb(roleColor("yellow")),
 				);
 				// The notice must not pin the line: a refused control is the reason
 				// the operator just asked for, and it outranks the notice.

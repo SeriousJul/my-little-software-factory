@@ -28,7 +28,7 @@ import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.t
 import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
-import { type MdLine, renderMarkdown } from "./markdown.ts";
+import { type MdColors, type MdLine, renderMarkdown } from "./markdown.ts";
 import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
@@ -41,7 +41,7 @@ import {
 import { ActionItem } from "./shared/choices.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";
 import { truncateToWidth, widthOf } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 interface DecisionModalProps {
 	/** The ticket's title, for the border. */
@@ -179,12 +179,16 @@ export function useModalPopIn(
  * for it. Failed calls wear the warning color.
  */
 export function turnLogBody(entries: readonly TurnLogEntry[], width: number): MdLine[] {
+	// The log's voices are asked of the theme when the log is drawn, the way
+	// every other surface paints at render time: a resolution that changes
+	// after this module loads is the resolution the rows paint.
+	const colors: MdColors = { text: paint("text"), dim: paint("subtext0") };
 	const out: MdLine[] = [];
 	let previousWasText = false;
 	for (const entry of entries) {
 		if (entry.kind === "text") {
 			if (previousWasText) out.push([]);
-			const lines = renderMarkdown(entry.text, width, LOG_COLORS);
+			const lines = renderMarkdown(entry.text, width, colors);
 			if (lines.length === 0) out.push([]);
 			else out.push(...lines);
 			previousWasText = true;
@@ -193,7 +197,7 @@ export function turnLogBody(entries: readonly TurnLogEntry[], width: number): Md
 			out.push([
 				{
 					text: truncateToWidth(`▸ ${note}`, width),
-					fg: entry.failed ? COLORS.statusWarning : COLORS.dim,
+					fg: entry.failed ? paint("yellow") : paint("subtext0"),
 				},
 			]);
 			previousWasText = false;
@@ -201,13 +205,6 @@ export function turnLogBody(entries: readonly TurnLogEntry[], width: number): Md
 	}
 	return out;
 }
-
-/** The log's three voices, in the shared palette. */
-const LOG_COLORS = {
-	text: COLORS.text,
-	bright: COLORS.textBright,
-	dim: COLORS.dim,
-};
 
 export function DecisionModal({
 	title,
@@ -333,7 +330,7 @@ export function DecisionModal({
 		frame,
 		width: terminalWidth,
 		title: `Decision: ${title}`,
-		borderColor: COLORS.borderFocused,
+		borderColor: paint("accent"),
 		// The context row and every action row: without them the modal is
 		// not a decision, so it holds itself back at that size.
 		minContentRows: actions.length + CONTEXT_ROWS + heldRows,
@@ -346,7 +343,7 @@ export function DecisionModal({
 		children: [
 			createElement(
 				"text",
-				{ key: "context", fg: COLORS.dim },
+				{ key: "context", fg: paint("subtext0") },
 				truncateToWidth(contextLine, frame.contentWidth),
 			),
 			...windowOf(body, scroll, bodyRows).map((line, index) =>
@@ -360,7 +357,7 @@ export function DecisionModal({
 				? [
 						createElement(
 							"text",
-							{ key: "held", fg: COLORS.statusWarning },
+							{ key: "held", fg: paint("yellow") },
 							truncateToWidth(turnEndCauseLine(cause, detail), frame.contentWidth),
 						),
 					]

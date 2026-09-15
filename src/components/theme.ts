@@ -1,29 +1,35 @@
 /**
- * Shared palette and badge helpers for the panes.
- * One place for the colors so the list and the detail stay in step.
+ * The paint layer of the control plane.
+ *
+ * One place for the colors the panes paint, so the list and the detail stay
+ * in step: the base panes ask it for a role's color, and it answers from the
+ * Theme in force. Inside herdr the theme is inherited from herdr's config;
+ * outside herdr the standalone theme stands (ADR 0024).
+ *
+ * The emphasis the old palette carried in a brighter text color now rides on
+ * bold: a title or a selected row paints the text role and sets bold, so the
+ * terminal's own definition of emphasis decides how it reads. A role that
+ * resolved to `reset`, and the no-color presentation, paint no color at all,
+ * so the terminal's own default shows through where the theme says so.
  */
-import type { Ticket, TicketMarker, TicketState } from "../domain/ticket.ts";
 
-export const COLORS = {
-	border: "#30363d",
-	borderFocused: "#58a6ff",
-	text: "#c9d1d9",
-	textBright: "#e6edf3",
-	focusedBackground: "#21262d",
-	dim: "#8b949e",
-	/**
-	 * The fixed dark surface of the overlays that carry their own color system.
-	 *
-	 * The shared overlay (one `ModalSurface`) instead paints the presentation's
-	 * own surface role, so the ink it paints is the ink that pair was measured
-	 * against; the no-color presentation keeps this fixed dark box. The base
-	 * panes and Action bar paint no background and follow the terminal's own.
-	 */
-	overlay: "#0d1117",
-	statusError: "#f85149",
-	statusWarning: "#d29922",
-	statusWorking: "#58a6ff",
-} as const;
+import type { Ticket, TicketMarker, TicketState } from "../domain/ticket.ts";
+import { currentThemeResolution } from "../theme-source.ts";
+import { noColorPresentation } from "./shared/presentation.ts";
+import type { ThemeRole } from "./shared/theme.ts";
+
+/**
+ * The color one role paints in the theme in force.
+ *
+ * `reset` paints nothing, and so does the no-color presentation: the
+ * terminal's own default shows through where the theme or the terminal says
+ * so.
+ */
+export function paint(role: ThemeRole): string | undefined {
+	if (noColorPresentation()) return undefined;
+	const value = currentThemeResolution().theme.roles[role];
+	return value === "reset" ? undefined : value;
+}
 
 /**
  * The kinds of news the Message line states.
@@ -41,12 +47,18 @@ export function prefixForSeverity(severity: MessageSeverity): string {
 	return "Info:";
 }
 
-export const STATE_COLORS: Record<TicketState, string> = {
-	open: "#58a6ff",
-	"handed-off": "#d29922",
-	running: "#3fb950",
-	awaiting: "#bc8cff",
+/** The theme role each ticket state badge paints in. */
+const STATE_ROLES: Record<TicketState, ThemeRole> = {
+	open: "blue",
+	"handed-off": "yellow",
+	running: "green",
+	awaiting: "mauve",
 };
+
+/** The color a ticket state badge paints in. */
+export function stateColor(state: TicketState): string | undefined {
+	return paint(STATE_ROLES[state]);
+}
 
 /** The widest badge, "[handed-off]". State badges are padded to this width. */
 export const BADGE_WIDTH = 12;
@@ -56,11 +68,16 @@ export function stateBadge(state: TicketState): string {
 	return `[${state}]`.padEnd(BADGE_WIDTH);
 }
 
-/** The colors of the failure badges a ticket row can hold. */
-export const MARKER_COLORS: Record<TicketMarker, string> = {
-	blocked: "#d29922",
-	missing: "#f85149",
+/** The theme role each failure badge paints in. */
+const MARKER_ROLES: Record<TicketMarker, ThemeRole> = {
+	blocked: "yellow",
+	missing: "red",
 };
+
+/** The color a failure badge paints in. */
+export function markerColor(marker: TicketMarker): string | undefined {
+	return paint(MARKER_ROLES[marker]);
+}
 
 /**
  * The failure badge: `blocked` or `missing` in place of the state badge,
@@ -74,7 +91,7 @@ export function failureBadge(marker: TicketMarker): string {
  * The held badge: a held turn in place of the state badge, padded to the
  * badge width so the row columns stay aligned (ADR 0016). It wears the
  * warning color of the other markers, so a turn that needs the operator
- * looks like a turn that needs the operator (see `COLORS.statusWarning`).
+ * looks like a turn that needs the operator.
  */
 export function heldBadge(): string {
 	return "held".padEnd(BADGE_WIDTH);
@@ -91,7 +108,7 @@ export function heldBadge(): string {
  * handoff presents `unknown`: the value is missing, not a task type.
  */
 export interface TaskTypePresentation {
-	/** The value the list badge and the detail line show. */
+	/** The value the list badge and the detail pane show. */
 	value: string;
 	/** True when no recorded handoff task type exists. */
 	unknown: boolean;
@@ -120,9 +137,9 @@ export function taskTypeBadge(value: string): string {
 
 /**
  * The one foreground of every configured task type badge and of its
- * detail line: the neutral text color, or the warning color when the
- * presented value is the missing `unknown`.
+ * detail line: the text role, or the warning color when the presented
+ * value is the missing `unknown`.
  */
-export function taskTypeColor(presentation: TaskTypePresentation): string {
-	return presentation.unknown ? COLORS.statusWarning : COLORS.text;
+export function taskTypeColor(presentation: TaskTypePresentation): string | undefined {
+	return paint(presentation.unknown ? "yellow" : "text");
 }

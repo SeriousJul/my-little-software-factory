@@ -2,7 +2,6 @@
 import { CliRenderEvents } from "@opentui/core";
 import { describe, expect, test, vi } from "vitest";
 
-import { COLORS } from "../src/components/theme.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -22,6 +21,7 @@ import {
 	press,
 	pressArrow,
 	rgb,
+	roleColor,
 	rowsOf,
 	settle,
 	withApp,
@@ -132,14 +132,14 @@ describe("native Ticket detail viewport", () => {
 				const thumb = thumbRows(initial);
 				expect(thumb).toEqual([detailRow(0)]);
 				expect(cellColors(setup, GUTTER_X, thumb[0])).toEqual({
-					fg: rgb(COLORS.borderFocused),
-					bg: rgb(COLORS.dim),
+					fg: rgb(roleColor("accent")),
+					bg: rgb(roleColor("subtext0")),
 				});
-				expect(cellColors(setup, GUTTER_X, detailRow(2)).bg).toEqual(rgb(COLORS.dim));
+				expect(cellColors(setup, GUTTER_X, detailRow(2)).bg).toEqual(rgb(roleColor("subtext0")));
 
 				await mouseClick(setup, 45, detailRow(3));
 				await awaitFrame(setup, detailFocused, "the detail to take click focus");
-				expect(cellColors(setup, GUTTER_X, thumb[0]).fg).toEqual(rgb(COLORS.borderFocused));
+				expect(cellColors(setup, GUTTER_X, thumb[0]).fg).toEqual(rgb(roleColor("accent")));
 
 				// The track spans the pane's inner rows. The thumb marks the
 				// offset, so the end click lands on the track below it.

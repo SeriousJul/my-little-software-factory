@@ -16,7 +16,7 @@ import {
 	OverridePanel,
 	panelNoteCells,
 } from "../src/components/override-panel.ts";
-import { inkFor } from "../src/components/shared/presentation.ts";
+import { controlInk } from "../src/components/shared/presentation.ts";
 import type { AgentTypeConfig } from "../src/config.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { type FitVerdict, settingFit } from "../src/setting-fit.ts";
@@ -76,14 +76,14 @@ const NO_SETTINGS = { model: "", thinking: "", contextWindow: "" };
 const NO_LIST = { status: "unavailable", cause: "no-list" } as const;
 
 /**
- * The color one shared palette role paints in the presentation these tests run
- * in. A panel that painted a color of its own would not match it.
+ * The color one ink role paints in the ink the panel paints in. A panel that
+ * painted a color of its own would not match it.
  */
 function tone(
 	role: "warning" | "error" | "detail" | "text" | "focusedText" | "indicator",
 ): [number, number, number] {
-	const foreground = inkFor("dark")[role].fg;
-	if (foreground === null) throw new Error(`the dark palette paints no ${role}`);
+	const foreground = controlInk()[role].fg;
+	if (foreground === null) throw new Error(`the ink paints no ${role}`);
 	return rgb(foreground);
 }
 
@@ -537,36 +537,35 @@ describe("the panel's warning rows come from the Setting fit verdicts", () => {
 		);
 	});
 
-	test("the panel's border is the shared indicator tone, and no tone at all in mono", async () => {
+	test("the panel's border is the shared indicator tone, and no tone at all without color", async () => {
+		const indicator = tone("indicator");
 		await withPanel(
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 			INITIAL,
 			async (setup) => {
 				const frame = await settle(setup);
-				expect(borderColorOf(setup, frame)).toEqual(tone("indicator"));
+				expect(borderColorOf(setup, frame)).toEqual(indicator);
 			},
 		);
-		const previous = process.env.FACTORY_PRESENTATION;
-		process.env.FACTORY_PRESENTATION = "mono";
+		process.env.NO_COLOR = "1";
 		try {
 			await withPanel(
 				{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
 				INITIAL,
 				async (setup) => {
 					const frame = await settle(setup);
-					expect(borderColorOf(setup, frame)).not.toEqual(tone("indicator"));
+					expect(borderColorOf(setup, frame)).not.toEqual(indicator);
 				},
 			);
 		} finally {
-			if (previous === undefined) delete process.env.FACTORY_PRESENTATION;
-			else process.env.FACTORY_PRESENTATION = previous;
+			delete process.env.NO_COLOR;
 		}
 	});
 });
 
-test("FACTORY_PRESENTATION=mono keeps a warning row readable without color", async () => {
-	const previous = process.env.FACTORY_PRESENTATION;
-	process.env.FACTORY_PRESENTATION = "mono";
+test("the no-color presentation keeps a warning row readable without color", async () => {
+	const warning = tone("warning");
+	process.env.NO_COLOR = "1";
 	try {
 		await withPanel(
 			{ agentType: "pilot", status: { status: "available", models: ["only-for-pilot/model-y"] } },
@@ -575,7 +574,7 @@ test("FACTORY_PRESENTATION=mono keeps a warning row readable without color", asy
 				const frame = await awaitFrame(
 					setup,
 					(f) => rowsOf(f).some((r) => r.includes("Error: Model:")),
-					"the warning row in the mono presentation",
+					"the warning row in the no-color presentation",
 				);
 				const expected = sentence(
 					settingFit.modelInList({ agentType: "pilot", agent: AGENTS.pilot }, "not-offered/model", [
@@ -586,13 +585,12 @@ test("FACTORY_PRESENTATION=mono keeps a warning row readable without color", asy
 				// sentence under it, so the warning is the writing alone.
 				expect(rowOf(frame, "Model")).toContain("not-offered/model");
 				expect(reasonOf(frame, "Model")).toBe(`Error: Model: ${expected}`);
-				expect(spanColors(setup, "not-offered/model")).not.toContainEqual(tone("warning"));
+				expect(spanColors(setup, "not-offered/model")).not.toContainEqual(warning);
 			},
 			{ width: WIDE, height: HEIGHT },
 		);
 	} finally {
-		if (previous === undefined) delete process.env.FACTORY_PRESENTATION;
-		else process.env.FACTORY_PRESENTATION = previous;
+		delete process.env.NO_COLOR;
 	}
 });
 

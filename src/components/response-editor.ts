@@ -25,7 +25,7 @@ import { DraftField, type FieldHandle } from "./shared/fields.ts";
 import { copySelectionWith, type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk } from "./shared/presentation.ts";
 import { truncateToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 interface ResponseEditorProps {
 	/** The Response draft the Consultation holds, as the plane saved it. */
@@ -147,7 +147,7 @@ export function ResponseEditor({
 		"box",
 		{
 			border: true,
-			borderColor: ink.indicator.fg ?? COLORS.borderFocused,
+			borderColor: ink.indicator.fg ?? paint("accent"),
 			title: "Response",
 			padding: 1,
 			style: { flexDirection: "column", height: Math.max(RESPONSE_EDITOR_ROWS, rows) },

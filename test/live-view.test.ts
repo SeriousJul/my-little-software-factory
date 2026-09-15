@@ -20,7 +20,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { AppProps } from "../src/components/app.ts";
-import { COLORS } from "../src/components/theme.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -37,6 +36,7 @@ import {
 	pressEnterQuiet,
 	pressScrollKey,
 	rgb,
+	roleColor,
 	rowsOf,
 	settle,
 	sleep,
@@ -294,7 +294,9 @@ describe("the Live view on the ticket list", () => {
 				// The pop-in settles before the color is measured.
 				await sleep(250);
 				// Plain text in the palette's prose voice: no ANSI, no styling.
-				expect(spanColors(setup, "line one of the agent work")).toContainEqual(rgb(COLORS.text));
+				expect(spanColors(setup, "line one of the agent work")).toContainEqual(
+					rgb(roleColor("text")),
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -486,7 +488,7 @@ describe("the Live view on the ticket list", () => {
 				);
 				// The last lines stand under the note, and the note is dim.
 				expect(frame).toContain("last good lines");
-				expect(spanColors(setup, "Stale Agent output")).toContainEqual(rgb(COLORS.dim));
+				expect(spanColors(setup, "Stale Agent output")).toContainEqual(rgb(roleColor("subtext0")));
 			},
 			WIDTH,
 			HEIGHT,

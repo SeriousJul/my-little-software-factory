@@ -12,8 +12,7 @@ import {
 } from "../src/components/shared/fields.ts";
 import { ownNoteCells } from "../src/components/shared/presentation.ts";
 import { TypeAheadRow } from "../src/components/shared/type-ahead.ts";
-import { COLORS } from "../src/components/theme.ts";
-import { awaitFrame, frameText, rgb, rowsOf, spanColors } from "./app-harness.ts";
+import { awaitFrame, frameText, rgb, roleColor, rowsOf, spanColors } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -612,8 +611,8 @@ describe("the written reason a control states", () => {
 				expect(frameText(frame)).toContain("Model openai/gpt-4o");
 				// A value the row cannot yet judge keeps the tone of a hint, while
 				// the confirmed one beside it keeps the tone of a value.
-				expect(spanColors(setup, "openai/gpt-4o")).toEqual([rgb(COLORS.dim)]);
-				expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(COLORS.text)]);
+				expect(spanColors(setup, "openai/gpt-4o")).toEqual([rgb(roleColor("subtext0"))]);
+				expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(roleColor("text"))]);
 			},
 		);
 	});

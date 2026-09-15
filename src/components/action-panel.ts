@@ -22,7 +22,7 @@ import type { MessageFact } from "./messages.ts";
 import { type ActionRow, ModalSurface, modalFrame, useActionSelection } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
-import { COLORS } from "./theme.ts";
+import { paint } from "./theme.ts";
 
 interface ActionPanelProps {
 	title: string;
@@ -144,7 +144,7 @@ export function ActionPanel({
 		frame,
 		width: terminalWidth,
 		title,
-		borderColor: COLORS.borderFocused,
+		borderColor: paint("accent"),
 		// Every action row plus one line of body: without them the panel states a
 		// problem with no way to answer it.
 		minContentRows: actions.length + 1,
@@ -154,7 +154,7 @@ export function ActionPanel({
 			...bodyShown.map((line, index) =>
 				createElement(
 					"text",
-					{ key: `body-${index}`, fg: COLORS.dim },
+					{ key: `body-${index}`, fg: paint("subtext0") },
 					truncateToWidth(line, frame.contentWidth),
 				),
 			),

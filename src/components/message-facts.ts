@@ -35,8 +35,14 @@ export type ProgressOwner = WorkingOwner | "none";
  * with the writers the shell dispatches through. The display value (prefix
  * and truncation) stays with the shell, which knows the terminal width.
  */
-export function useMessageFacts(sourceHealth: string | undefined) {
-	const [facts, setFacts] = useState<MessageFacts>({});
+export function useMessageFacts(
+	sourceHealth: string | undefined,
+	/** A notice the app starts with, here the Theme fallback warning. */
+	initialNotice?: string,
+) {
+	const [facts, setFacts] = useState<MessageFacts>(() =>
+		initialNotice === undefined ? {} : { notice: initialNotice },
+	);
 	// The progress lines of the operations that are running right now, oldest
 	// first. One Message line shows the last one written, and a settle returns
 	// the line to whichever operation still runs.
