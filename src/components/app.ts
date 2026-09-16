@@ -1209,6 +1209,27 @@ export function App({
 		if (edge.environment !== undefined) detail.push(`environment ${edge.environment}`);
 		return detail.join(", ");
 	};
+	/**
+	 * The label of one workspace in herdr's own navigator.
+	 *
+	 * Herdr 0.9 keeps one view per attached client, so a CLI focus no longer
+	 * moves the operator's view. A Goto confirmation names the workspace herdr
+	 * shows, and the operator switches there. A read that fails names nothing:
+	 * the line keeps its old shape rather than stating a wrong fact.
+	 */
+	const workspaceLabelOf = async (workspaceId: string): Promise<string | null> => {
+		const result = await commandRunner.run("herdr", ["workspace", "get", workspaceId]);
+		if (result.code !== 0) return null;
+		try {
+			const data = JSON.parse(result.stdout) as {
+				result?: { workspace?: { label?: unknown } };
+			};
+			const label = data.result?.workspace?.label;
+			return typeof label === "string" && label !== "" ? label : null;
+		} catch {
+			return null;
+		}
+	};
 	// Goto: the operator focuses the agent's pane in herdr and the handoff
 	// stays open. The ticket moves awaiting to running; the trace does not
 	// record it, and the next settle refreshes the turn's pending trace.
@@ -1219,7 +1240,7 @@ export function App({
 			setWarningMessage("no agent pane is recorded for this ticket");
 			return;
 		}
-		void commandRunner.run("herdr", ["agent", "focus", paneId]).then((result) => {
+		void commandRunner.run("herdr", ["agent", "focus", paneId]).then(async (result) => {
 			if (result.code !== 0) {
 				setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
 				return;
@@ -1232,9 +1253,20 @@ export function App({
 			});
 			replaceTickets();
 			// The Live view closes on a Goto, so the confirmation stands on the
-			// Message line. The trace does not record a Goto, and a Handoff or
-			// refresh still running stands alone.
-			setNoticeMessage(`focused the agent of ticket ${ticket.identity}`);
+			// Message line as a result, never as a warning. The trace does not
+			// record a Goto, and a Handoff or refresh still running stands
+			// alone. The line names the workspace, and the operator switches
+			// herdr's view there: since herdr 0.9 a CLI focus no longer moves an
+			// attached client's view.
+			const workspaceId = ticket.handoff?.workspaceId ?? null;
+			const label = workspaceId === null ? null : await workspaceLabelOf(workspaceId);
+			reportMessage({
+				severity: "info",
+				text:
+					label === null
+						? `focused the agent of ticket ${ticket.identity}`
+						: `focused the agent of ticket ${ticket.identity} in workspace ${label}`,
+			});
 		});
 	};
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
@@ -1826,14 +1858,27 @@ export function App({
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined || selected.paneId === null) return;
 					// Navigation only (ADR 0025): the Consultation record stays
-					// untouched, and the confirmation stands on the Message line.
-					void commandRunner.run("herdr", ["agent", "focus", selected.paneId]).then((result) => {
-						if (result.code === 0)
-							setNoticeMessage(
-								`focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`,
-							);
-						else setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
-					});
+					// untouched, and the confirmation stands on the Message line
+					// as a result, never as a warning. Since herdr 0.9 a CLI
+					// focus no longer moves an attached client's view, so the
+					// line names the workspace the operator switches to.
+					void commandRunner
+						.run("herdr", ["agent", "focus", selected.paneId])
+						.then(async (result) => {
+							if (result.code !== 0) {
+								setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
+								return;
+							}
+							const workspaceId = selected.workspaceId;
+							const label = workspaceId === null ? null : await workspaceLabelOf(workspaceId);
+							reportMessage({
+								severity: "info",
+								text:
+									label === null
+										? `focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`
+										: `focused the Agent pane for Consultation ${selected.id.slice(0, 8)} in workspace ${label}`,
+							});
+						});
 				},
 				override: openOverride,
 				recover: () => {

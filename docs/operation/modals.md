@@ -41,7 +41,10 @@ without touching the git branch, so pushed work and pull requests survive:
 a worktree handoff loses its worktree checkout and its herdr workspace,
 a live worktree handoff loses its tab.
 The second row, "Goto", focuses the agent's pane so the operator can steer
-it; the ticket returns to `running`. Goto is a state move, not a completion
+it; the ticket returns to `running`. The confirmation on the Message line
+names the workspace the pane lives in, since herdr 0.9 keeps each client's
+own view and a CLI focus no longer moves the operator's view (the Live view
+page carries the full note). Goto is a state move, not a completion
 decision, so the trace does not record it: the turn's pending trace stays
 pending, and the next settle refreshes it with the agent's new last message.
 Then one "Handoff: `<task type>`" row per outgoing workflow edge the

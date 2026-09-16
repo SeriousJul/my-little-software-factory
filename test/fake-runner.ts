@@ -193,6 +193,20 @@ export function workspaceCreateJson(id: string, pane = "pane-w"): string {
 	});
 }
 
+/** A herdr `workspace get` JSON response. */
+export function workspaceGetJson(workspaceId: string, label: string): string {
+	return JSON.stringify({
+		result: {
+			type: "workspace_info",
+			workspace: {
+				focused: false,
+				label,
+				workspace_id: workspaceId,
+			},
+		},
+	});
+}
+
 /** A herdr `tab create` JSON response. */
 /** The created tab's id defaults to the stored handle's id in most fakes. */
 export function tabCreateJson(pane: string, tabId = "tab-1"): string {

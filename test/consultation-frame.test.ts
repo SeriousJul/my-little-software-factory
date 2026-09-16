@@ -59,6 +59,7 @@ import {
 	FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
+	workspaceGetJson,
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
@@ -2255,6 +2256,53 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
 					expect(state.consultation(WORKING_ID)?.state).toBe("awaiting-response");
 					expect(state.pendingConsultationResponse(WORKING_ID)).toBeNull();
+				},
+				WIDTH,
+				32,
+				// No initialTickets: the observation loop must poll herdr for
+				// the record path, and it stands down on a test projection.
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			state.close();
+		}
+	});
+
+	test("g names the workspace in the focus confirmation so the operator can switch herdr's view", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, WORKING_ID);
+		const short = WORKING_ID.slice(0, 8);
+		const paneId = `pane-${short}`;
+		const workspaceId = `ws-${short}`;
+		const label = "factory-consultation-11111111";
+		const { dir, path } = seedRecord(WORKING_ID);
+		const inner = new FakeRunner();
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "idle", record: path }]),
+		);
+		inner.set("herdr", ["workspace", "get", workspaceId], {
+			stdout: workspaceGetJson(workspaceId, label),
+		});
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the Consultation detail with the Session view", (f) =>
+						detailPaneText(f).includes("Session view:"),
+					);
+					// g focuses the pane and answers on the Message line as a
+					// result, never as a warning. Herdr 0.9 keeps each client's
+					// own view, so the line names the workspace the operator
+					// switches to.
+					const frame = await press(setup, "g", "the focus confirmation", (f) =>
+						messageRowOf(f).includes("in workspace"),
+					);
+					expect(messageRowOf(frame)).toContain(
+						`Info: focused the Agent pane for Consultation ${short} in workspace ${label}`,
+					);
+					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
+					expect(runner.commands()).toContain(`herdr workspace get ${workspaceId}`);
 				},
 				WIDTH,
 				32,

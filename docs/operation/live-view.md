@@ -25,7 +25,10 @@ reads nothing.
 
 The action row under the stream is the Goto, and it is pure focus: it
 focuses the agent's pane and closes the screen. It changes no state and
-records no decision. The screen follows the ticket: when the turn settles
+records no decision. The confirmation stands on the Message line and names
+the workspace the pane lives in: since herdr 0.9 each herdr client keeps its
+own view, so a CLI focus no longer moves the operator's view, and the
+operator switches herdr to the named workspace to see the agent. The screen follows the ticket: when the turn settles
 and the factory leaves the decision to the operator, the same box turns
 into the decision, with the turn log and the choice rows; when the agent
 leaves herdr, it carries the missing modal; when the ticket leaves the

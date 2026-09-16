@@ -45,7 +45,13 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	tabCreateJson,
+	workspaceGetJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -581,16 +587,23 @@ describe("the Live view against a running factory", () => {
 			]),
 		});
 		app.runner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
+		app.runner.set("herdr", ["workspace", "get", "ws-1"], {
+			stdout: workspaceGetJson("ws-1", "live-worktree"),
+		});
 
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
-				// Enter confirms the Goto: the focus runs, the view closes.
+				// Enter confirms the Goto: the focus runs, the view closes. The
+				// confirmation is a result, not a warning, and names the
+				// workspace herdr's view must switch to: since herdr 0.9 a CLI
+				// focus no longer moves an attached client's view.
 				const frame = await pressReturn(setup, "the focus", (f) =>
-					f.includes("focused the agent of ticket"),
+					f.includes("in workspace live-worktree"),
 				);
+				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				// The focus is pure: no completion trace exists, and the
 				// ticket is still in flight under its badge.

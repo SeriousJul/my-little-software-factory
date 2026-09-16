@@ -221,7 +221,10 @@ older bodies remain the fallback under the `Agent view` title: the live pane
 output for an open Consultation, the captured history for a closed one. The
 Goto control in the Consultation base modes (`g`) focuses the Agent pane while
 it is alive in the last poll and states its reason otherwise; it is a
-navigation, and it never changes the Consultation.
+navigation, and it never changes the Consultation. Its confirmation is a
+result on the Message line, never a warning, and it names the workspace
+herdr shows, so the operator can switch herdr's view there: since herdr 0.9
+a CLI focus no longer moves an attached client's view.
 
 The automatic suite covers the record's parsing and caps (`test/turn-log.test.ts`),
 the body's selection and rows (`test/consultation-detail.test.ts`), Goto's
