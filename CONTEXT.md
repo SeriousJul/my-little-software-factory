@@ -93,16 +93,16 @@ _Avoid_: input, textarea, free-text row
 
 **Ticket**:
 An actionable unit of work from an external ticket source, carrying the repository it belongs to.
-An issue or pull request is a source fact, not a different factory concept.
+An issue, pull request, security advisory, Dependabot alert, or secret scanning alert is a source fact, not a different factory concept.
 _Avoid_: issue, task
 
 **Ticket source**:
 A configured feed from an external system from which the control plane gets tickets.
-GitHub issues and GitHub pull requests are separate ticket sources.
+GitHub issues, GitHub pull requests, GitHub security advisories, Dependabot alerts, and secret scanning alerts are separate ticket sources.
 _Avoid_: task source, ticket provider
 
 **Source kind**:
-The external form of a ticket, such as a GitHub issue or a GitHub pull request.
+The external form of a ticket: a GitHub issue, a GitHub pull request, a GitHub security advisory, a Dependabot alert, or a secret scanning alert.
 _Avoid_: ticket type
 
 **Source fact**:
