@@ -5,8 +5,10 @@
  * settled snapshot. It never exposes scheduling, storage, or task choice.
  */
 import type { GitHubAuthentication, TicketSourceConfig } from "./config.ts";
+import { isSecuritySourceKind } from "./config.ts";
 import { type FetchedTicket, type IssueReference, withIssueReferences } from "./domain/ticket.ts";
-import { type CommandRunner, commandFailureText } from "./runner.ts";
+import { type CommandOptions, type CommandRunner, commandFailureText } from "./runner.ts";
+import { GitHubSecurityTicketSource } from "./security-source.ts";
 
 /**
  * One Referenced issue fact (ADR 0023): the labels and fetch time the control
@@ -69,7 +71,83 @@ export function createTicketSource(
 	runner: CommandRunner,
 	environment: NodeJS.ProcessEnv = process.env,
 ): TicketSource {
+	// The security feeds read REST endpoints, not GitHub searches (issue #73).
+	if (isSecuritySourceKind(config.kind))
+		return new GitHubSecurityTicketSource(config, runner, environment);
 	return new GitHubTicketSource(config, runner, environment);
+}
+
+/**
+ * The GitHub authentication of one configured source (issue #73 shares it
+ * with the security sources): the existing table of a literal token, a token
+ * environment variable, or an authenticated account. A token travels in the
+ * environment, never in argv.
+ */
+export class GhAuthenticator {
+	private accountToken: string | undefined;
+	private readonly host: string;
+	private readonly auth: GitHubAuthentication | undefined;
+	private readonly runner: CommandRunner;
+	private readonly environment: NodeJS.ProcessEnv;
+
+	constructor(
+		host: string,
+		auth: GitHubAuthentication | undefined,
+		runner: CommandRunner,
+		environment: NodeJS.ProcessEnv,
+	) {
+		this.host = host;
+		this.auth = auth;
+		this.runner = runner;
+		this.environment = environment;
+	}
+
+	async resolve(): Promise<{ ok: true; options: GhOptions } | { ok: false; reason: string }> {
+		if (this.auth === undefined) return { ok: true, options: {} };
+		if (this.auth.token !== undefined) return secretToken(this.auth.token);
+		if (this.auth.tokenEnv !== undefined) {
+			const token = this.environment[this.auth.tokenEnv];
+			if (token === undefined || token === "")
+				return {
+					ok: false,
+					reason: `GitHub token environment variable ${this.auth.tokenEnv} is not set`,
+				};
+			return secretToken(token);
+		}
+		if (this.accountToken !== undefined) return secretToken(this.accountToken);
+		const account = this.auth.account ?? "";
+		const result = await this.runner.run("gh", [
+			"auth",
+			"token",
+			"--hostname",
+			this.host,
+			"--user",
+			account,
+		]);
+		if (result.code !== 0)
+			return {
+				ok: false,
+				reason: `GitHub account ${account} is unavailable: ${commandFailureText(result)}`,
+			};
+		const token =
+			[...result.stdout.split(/\r?\n/)]
+				.reverse()
+				.find((line) => line.trim() !== "")
+				?.trim() ?? "";
+		if (token === "") return { ok: false, reason: `GitHub account ${account} returned no token` };
+		this.accountToken = token;
+		return secretToken(token);
+	}
+}
+
+function secretToken(token: string): {
+	ok: true;
+	options: {
+		env: Record<string, string>;
+		secretEnv: readonly string[];
+	};
+} {
+	return { ok: true, options: { env: { GH_TOKEN: token }, secretEnv: ["GH_TOKEN"] } };
 }
 
 /**
@@ -106,21 +184,20 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
   }
 }`;
 
-type GhOptions = { env?: Record<string, string>; secretEnv?: readonly string[] };
+type GhOptions = CommandOptions;
 
 class GitHubTicketSource implements TicketSource {
 	readonly name: string;
 	readonly kind: string;
 	readonly refreshIntervalMs: number;
-	private accountToken: string | undefined;
 	private readonly config: TicketSourceConfig;
 	private readonly runner: CommandRunner;
-	private readonly environment: NodeJS.ProcessEnv;
+	private readonly authenticator: GhAuthenticator;
 
 	constructor(config: TicketSourceConfig, runner: CommandRunner, environment: NodeJS.ProcessEnv) {
 		this.config = config;
 		this.runner = runner;
-		this.environment = environment;
+		this.authenticator = new GhAuthenticator(config.host, config.auth, runner, environment);
 		this.name = config.name;
 		this.kind = config.kind;
 		this.refreshIntervalMs = config.refreshIntervalSeconds * 1000;
@@ -387,55 +464,8 @@ class GitHubTicketSource implements TicketSource {
 	private async authentication(): Promise<
 		{ ok: true; options: GhOptions } | { ok: false; reason: string }
 	> {
-		const auth = this.config.auth;
-		if (auth === undefined) return { ok: true, options: {} };
-		if (auth.token !== undefined) return secretToken(auth.token);
-		if (auth.tokenEnv !== undefined) {
-			const token = this.environment[auth.tokenEnv];
-			if (token === undefined || token === "")
-				return {
-					ok: false,
-					reason: `GitHub token environment variable ${auth.tokenEnv} is not set`,
-				};
-			return secretToken(token);
-		}
-		return this.accountAuthentication(auth);
+		return this.authenticator.resolve();
 	}
-
-	private async accountAuthentication(
-		auth: GitHubAuthentication,
-	): Promise<{ ok: true; options: GhOptions } | { ok: false; reason: string }> {
-		if (this.accountToken !== undefined) return secretToken(this.accountToken);
-		const result = await this.runner.run("gh", [
-			"auth",
-			"token",
-			"--hostname",
-			this.config.host,
-			"--user",
-			auth.account ?? "",
-		]);
-		if (result.code !== 0)
-			return {
-				ok: false,
-				reason: `GitHub account ${auth.account} is unavailable: ${commandFailureText(result)}`,
-			};
-		const token =
-			[...result.stdout.split(/\r?\n/)]
-				.reverse()
-				.find((line) => line.trim() !== "")
-				?.trim() ?? "";
-		if (token === "")
-			return { ok: false, reason: `GitHub account ${auth.account} returned no token` };
-		this.accountToken = token;
-		return secretToken(token);
-	}
-}
-
-function secretToken(token: string): {
-	ok: true;
-	options: { env: Record<string, string>; secretEnv: readonly string[] };
-} {
-	return { ok: true, options: { env: { GH_TOKEN: token }, secretEnv: ["GH_TOKEN"] } };
 }
 
 type Page =

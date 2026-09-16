@@ -84,7 +84,34 @@ export interface WorkflowEdge {
 	environment?: EnvironmentKind;
 }
 
-export type GitHubSourceKind = "github-issues" | "github-pull-requests";
+export type GitHubSourceKind =
+	| "github-issues"
+	| "github-pull-requests"
+	| "github-security-advisories"
+	| "github-dependabot-alerts"
+	| "github-secret-scanning-alerts";
+
+/**
+ * The security feed source kinds (issue #73). They read the repository
+ * security endpoints as REST calls, not GitHub searches, so they take no
+ * `filter`: a filter there would be silently ignored and misread as applied.
+ */
+export const SECURITY_SOURCE_KINDS = [
+	"github-security-advisories",
+	"github-dependabot-alerts",
+	"github-secret-scanning-alerts",
+] as const;
+
+export function isSecuritySourceKind(kind: string): kind is (typeof SECURITY_SOURCE_KINDS)[number] {
+	return (SECURITY_SOURCE_KINDS as readonly string[]).includes(kind);
+}
+
+/** The source kinds the config validator accepts. */
+const GITHUB_SOURCE_KINDS: readonly string[] = [
+	"github-issues",
+	"github-pull-requests",
+	...SECURITY_SOURCE_KINDS,
+];
 
 export interface GitHubAuthentication {
 	/** A literal token. It is never passed in argv. */
@@ -892,8 +919,18 @@ function validateSources(value: unknown): TicketSourceConfig[] {
 		if (names.has(name)) throw new ConfigError(`config: duplicate source name "${name}"`);
 		names.add(name);
 		const kind = stringField(raw, "kind", where);
-		if (kind !== "github-issues" && kind !== "github-pull-requests") {
-			throw new ConfigError(`config: ${where}.kind: unknown source kind "${kind}"`);
+		if (!(GITHUB_SOURCE_KINDS as readonly string[]).includes(kind)) {
+			throw new ConfigError(
+				`config: ${where}.kind: unknown source kind "${kind}"; use ${GITHUB_SOURCE_KINDS.join(", ")}`,
+			);
+		}
+		// The security feeds are REST endpoints, not GitHub searches. A filter
+		// on one would be silently ignored, so a source that misreads it as
+		// applied never starts (issue #73).
+		if (isSecuritySourceKind(kind) && raw.filter !== undefined) {
+			throw new ConfigError(
+				`config: ${where}.filter: the ${kind} source kind lists its items by state and takes no filter; a filter would be silently ignored`,
+			);
 		}
 		const interval = raw["refresh-interval-seconds"];
 		if (typeof interval !== "number" || !Number.isFinite(interval) || interval <= 0) {
@@ -915,7 +952,7 @@ function validateSources(value: unknown): TicketSourceConfig[] {
 		const auth = raw.auth === undefined ? undefined : validateAuth(raw.auth, `${where}.auth`);
 		return {
 			name,
-			kind,
+			kind: kind as GitHubSourceKind,
 			refreshIntervalSeconds: interval,
 			repositories: [...raw.repositories] as string[],
 			host,
