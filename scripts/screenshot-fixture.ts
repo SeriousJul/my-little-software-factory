@@ -113,8 +113,9 @@ const RUNNING_TICKET = TICKETS[1].identity;
 const AWAITING_TICKET = TICKETS[2].identity;
 
 /** The turn log the settled turn of the awaiting ticket carries. */
-// The awaiting ticket's completed turn: a review of its ranking change, so
-// its decision offers the review's outgoing edges (merge, rework) and the
+// The awaiting ticket's completed turn: a review of its ranking change. The
+// seed stores the review transition's outcome on it, so its decision offers
+// the merge position the written ready-to-ship fact derives, and the
 // in-flight implement ticket's decision (Handoff: review) stays the only
 // place that string appears while the capture runs.
 const TURN_LOG = [
@@ -192,7 +193,9 @@ Labels: {labels}
 Description:
 {description}'''
 thinking = "medium"
-auto-close = false
+[task-types.implement.transition]
+ticket-facts = ["ready-for-review"]
+pull-request-facts = []
 
 [task-types.review]
 agent = "codex"
@@ -205,7 +208,16 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+score-threshold = 90
+[[task-types.review.transition.branches]]
+when = "score-above-threshold"
+ticket-facts = ["ready-to-ship"]
+[[task-types.review.transition.branches]]
+when = "score-below-threshold"
+ticket-facts = ["needs-work"]
 
 [task-types.rework]
 template = '''Rework pull request {external-key}: {title}.
@@ -217,7 +229,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.rework.transition]
+ticket-facts = ["ready-for-review"]
+pull-request-facts = []
 
 [task-types.merge]
 template = '''Merge pull request {external-key}: {title}.
@@ -225,26 +239,45 @@ template = '''Merge pull request {external-key}: {title}.
 Repository: {repository}
 Pull request: {source-url}'''
 thinking = "low"
-auto-close = true
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+auto-advance = true
 
 [consultation-types.grill-with-docs]
 agent = "codex"
 environment = "live-worktree"
 template = "/skill:grill-with-docs {input}"
 
-[[workflows]]
-from = "implement"
-to = ["review"]
-agent = "pi"
-environment = "worktree"
+# The states of the label workflow, in match order: the work that still has
+# to happen outranks the work that is ready to happen on the same ticket.
+[[states]]
+name = "needs-work"
+task-type = "rework"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["needs-work"]
 
-[[workflows]]
-from = "review"
-to = ["merge", "rework"]
+[[states]]
+name = "ready-for-review"
+task-type = "review"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-review"]
 
-[[workflows]]
-from = "rework"
-to = ["review"]
+[[states]]
+name = "ready-to-ship"
+task-type = "merge"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-to-ship"]
+
+[[states]]
+name = "ready-for-agent"
+task-type = "implement"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-agent"]
 
 [[sources]]
 name = "issues"
@@ -285,9 +318,10 @@ const ghNode = (
  */
 const GH_STUB = [
 	"#!/bin/sh",
-	"# Screenshot stub for gh: one fixed search page for the fixture repository.",
+	"# Screenshot stub for gh: one fixed search page for the fixture repository,",
+	"# and the transition label writes, accepted.",
 	"# Shell builtins only: the fixture PATH holds this bin dir and nothing else.",
-	'[ "$1" = "api" ] || exit 1',
+	'[ "$1" = "api" ] || [ "$1" = "issue" ] || exit 1',
 	`printf '%s' '${JSON.stringify({
 		data: {
 			search: {
@@ -338,8 +372,9 @@ exit 0
 /**
  * The `herdr` stub: two live panes. `pane-2` works the in-flight ticket and
  * reports working until the capture touches `done.flag`; `pane-3` holds the
- * Consultation. No agent reports a session, so the settled turn's log is its
- * terminal capture, the fallback the reader is built for.
+ * Consultation. `pane-2` reports a session record: its settled turn reads
+ * its log and its `completed` cause from it, so the plane fires the
+ * implement transition on the settle.
  */
 const HERDR_STUB = `#!/bin/sh
 # Screenshot stub for herdr: the fixture's two live agent panes.
@@ -350,7 +385,9 @@ case "$2" in
 list)
   status="working"
   [ -f "$dir/done.flag" ] && status="done"
-  printf '%s' '{"result":{"agents":[{"pane_id":"pane-2","tab_id":"tab-2","workspace_id":"ws-2","agent":"pi","checkout_path":"/home/seriousjul/src/my-little-software-factory","agent_status":"'
+  printf '%s' '{"result":{"agents":[{"pane_id":"pane-2","tab_id":"tab-2","workspace_id":"ws-2","agent":"pi","checkout_path":"/home/seriousjul/src/my-little-software-factory","agent_session":{"kind":"path","value":"'
+  printf '%s' "$dir"
+  printf '%s' '/session.jsonl"},"agent_status":"'
   printf '%s' "$status"
   printf '%s' '"},{"pane_id":"pane-3","tab_id":"tab-3","workspace_id":"ws-3","agent":"codex","checkout_path":"/home/seriousjul/src/my-little-software-factory","agent_status":"working"}]}}'
   ;;
@@ -428,6 +465,24 @@ function seedState(path: string): void {
 		turnLog: [...TURN_LOG],
 		cause: "completed",
 		completedAt: NOW,
+		// The review transition the plane fired on this completed turn: the
+		// score branch wrote the ship fact, and the machine re-derived the
+		// merge position on the written labels.
+		transition: {
+			fired: true,
+			when: "score-above-threshold",
+			reason: "",
+			ticketFacts: ["ready-to-ship"],
+			pullRequestFacts: [],
+			autoAdvance: false,
+			ticketWrite: { added: ["ready-to-ship"], removed: ["ready-for-agent"] },
+			pullRequestWrite: null,
+			pullRequestIdentity: null,
+			pullRequestKey: null,
+			writeFailure: "",
+			positionTaskType: "merge",
+			positionTicketIdentity: AWAITING_TICKET,
+		},
 	});
 
 	// The Consultation: launched and working in pane-3.
@@ -461,6 +516,27 @@ export function buildFixture(root: string): string {
 	const dir = mkdtempSync(join(root, "factory-screenshots-"));
 	mkdirSync(join(dir, "bin"), { recursive: true });
 	writeFileSync(join(dir, "config.toml"), configToml(dir));
+	// The in-flight agent's session record: one completed turn, stamped on the
+	// fixture clock so the staleness guard reads it as this run's. The
+	// settled turn's log and its `completed` cause come from it.
+	writeFileSync(
+		join(dir, "session.jsonl"),
+		`${JSON.stringify({
+			type: "message",
+			timestamp: NOW,
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [
+					{
+						type: "text",
+						text: "The retry queue is implemented: failed deliveries retry with a bounded backoff and give up after the third attempt.",
+					},
+				],
+			},
+		})}\n`,
+		"utf8",
+	);
 	writeFileSync(join(dir, "bin", "gh"), GH_STUB);
 	writeFileSync(join(dir, "bin", "pi"), PI_STUB);
 	writeFileSync(join(dir, "bin", "herdr"), HERDR_STUB);
@@ -576,7 +652,7 @@ export async function captureScreens(fixtureDir: string): Promise<Map<string, Bu
 		log("live view captured; flagging the turn settled");
 		writeFileSync(join(fixtureDir, "done.flag"), "");
 		// The live decision's implement-to-review row is the first place that
-		// label appears: the awaiting ticket's modal offered merge and rework.
+		// label appears: the awaiting ticket's modal offers the merge position.
 		await session.waitFor((data) => data.includes("Handoff: review"), "the settled turn", 30000);
 		await sleep(400);
 		await session.waitForStable(400, 15000);

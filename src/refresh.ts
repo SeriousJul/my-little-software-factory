@@ -12,6 +12,8 @@ export const SYSTEM_CLOCK: RefreshClock = { setTimeout, clearTimeout };
 export class RefreshCoordinator {
 	private readonly inFlight = new Set<string>();
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** The waiters on a source's in-flight fetch, by source name. */
+	private readonly settling = new Map<string, Set<() => void>>();
 	private stopped = false;
 	private readonly sources: readonly TicketSource[];
 	private readonly state: FactoryState;
@@ -76,6 +78,30 @@ export class RefreshCoordinator {
 		return this.sources.filter((source) => !this.inFlight.has(source.name));
 	}
 
+	/**
+	 * Refresh one source and wait for its fetch to settle (ADR 0027). The
+	 * transition fire needs the pull request's labels fresh before it judges
+	 * them, and the fire runs inside the observation cycle: this does not
+	 * poll, it waits on the fetch the coordinator already owns. A source that
+	 * is already fetching joins that fetch's settlement. A stopped or unknown
+	 * source resolves without fetching.
+	 */
+	refreshAndWait(sourceName: string): Promise<void> {
+		if (this.stopped) return Promise.resolve();
+		if (this.sources.find((source) => source.name === sourceName) === undefined)
+			return Promise.resolve();
+		if (this.inFlight.has(sourceName)) {
+			const resolvers = this.settling.get(sourceName);
+			if (resolvers === undefined) return Promise.resolve();
+			return new Promise<void>((resolve) => resolvers.add(resolve));
+		}
+		const pending = new Promise<void>((resolve) => {
+			this.settling.set(sourceName, new Set([resolve]));
+		});
+		this.refreshNow(sourceName);
+		return pending;
+	}
+
 	refresh(source: TicketSource): void {
 		if (this.stopped || this.inFlight.has(source.name)) return;
 		this.inFlight.add(source.name);
@@ -102,6 +128,15 @@ export class RefreshCoordinator {
 			})
 			.finally(() => {
 				this.inFlight.delete(source.name);
+				// The waiters settle before the shutdown check: a stopped
+				// coordinator still settles the fetch it started, and a waiter
+				// stranded on a stopped fetch would hold the transition fire
+				// open for nothing.
+				const resolvers = this.settling.get(source.name);
+				if (resolvers !== undefined) {
+					this.settling.delete(source.name);
+					for (const resolve of resolvers) resolve();
+				}
 				if (this.stopped) return;
 				this.changed(outcome);
 				this.settled?.(source.name);

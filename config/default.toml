@@ -5,12 +5,19 @@
 # and every new machine starts from this template again.
 #
 # This file is meant to be extended:
-#   - The task types and task rules are the workflow template. Add your own
-#     task types and point your own rules at them.
+#   - The states and the task types' transitions are the workflow machine
+#     (ADR 0027). Add your own states, task types, and transition branches.
 #   - The [[sources]] example below is the one block you uncomment and edit
 #     to add a repository feed.
 #   - The consult Consultation type passes your input straight through to
 #     the agent, so you can start one without configuring.
+#
+# The plane owns the workflow labels (ADR 0027). A ticket's position is the
+# first state whose match holds on it, re-derived on every refresh. When a
+# task completes, the plane fires that task type's transition: it writes the
+# label facts on the ticket and its linked pull request, and the machine
+# re-derives every position from the written labels. The agents never write
+# workflow labels.
 
 default-agent = "pi"
 default-environment = "worktree"
@@ -22,7 +29,6 @@ max-parallel-agents = 2
 agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 20
-workflows = []
 
 [scroll]
 speed = 1
@@ -64,10 +70,44 @@ agent = "pi"
 environment = "live-worktree"
 template = "{input}"
 
-# --- Workflow template: the task types ----------------------------------
-# The four task types of the label workflow and their prompt templates.
-# This template is meant to be extended: add a [task-types.<name>] table
-# per kind of work, and a [[task-rules]] entry that points at it.
+# --- The workflow machine (ADR 0027) --------------------------------------
+# The four states of the label workflow. A state's match names the labels
+# that put a ticket on it; its task is what the plane suggests for a ticket
+# that sits there. Order decides: the first matching state wins.
+
+[[states]]
+name = "ready-for-agent"
+task-type = "implement"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-agent"]
+
+[[states]]
+name = "needs-work"
+task-type = "rework"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["needs-work"]
+
+[[states]]
+name = "ready-for-review"
+task-type = "review"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-for-review"]
+
+[[states]]
+name = "ready-to-ship"
+task-type = "merge"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-to-ship"]
+
+# --- The task types --------------------------------------------------------
+# Each task type is work only: a prompt template and a task profile. The
+# transition hangs off the type that completes it and writes the label facts
+# the machine then reads. The templates carry no label instructions: the
+# plane owns the labels.
 
 [task-types.implement]
 template = '''
@@ -83,11 +123,6 @@ Implement the following {source-kind}.
    - Open a new Pull Request.
    - Link the pull request to the ticket. Successfully merging this pull request may close these issues.
    - List any technical choices made when specifications were not clear.
-   - Add the **`ready-for-review`** label to the pull request.
-   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request. Only the review task sets those.
-
-3. **Update Ticket**
-   - Remove the **`ready-for-agent`** label from the ticket.
 
 Repository: {repository}
 
@@ -99,7 +134,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.review]
 template = '''
@@ -126,9 +163,6 @@ Review pull request {external-key}: {title}.
 
 ### Outcome
 - Post the output as a comment on the pull request.
-- Remove label 'ready-for-review'.
-- Set label to **`ready-to-ship`** if score is 90 or higher.
-- Set label to **`needs-work`** if score is less than 90.
 
 Repository: {repository}
 Pull request: {source-url}
@@ -137,7 +171,16 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+score-threshold = 90
+[[task-types.review.transition.branches]]
+when = "score-above-threshold"
+pull-request-facts = ["ready-to-ship"]
+[[task-types.review.transition.branches]]
+when = "score-below-threshold"
+pull-request-facts = ["needs-work"]
 
 [task-types.rework]
 template = '''
@@ -156,8 +199,6 @@ Rework pull request {external-key}: {title}.
 
 4. **Update Pull Request**
    - Write a summary of your changes in a new comment.
-   - Remove the **`needs-work`** label.
-   - Add the **`ready-for-review`** label.
 
 Repository: {repository}
 Pull request: {source-url}
@@ -166,7 +207,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.merge]
 thinking = "low"
@@ -177,11 +220,10 @@ Merge pull request {external-key}: {title}.
 
 1. **Squash and Merge**
    - Squash and merge the pull request into its base branch.
+   - Close the related ticket if all acceptance criteria are satisfied.
 
 2. **On a Blocked Merge**
    - If the pull request has a merge conflict or a failing CI check, do not merge.
-   - Remove the **`ready-to-ship`** label.
-   - Add the **`needs-work`** label.
    - Post a comment explaining the reason for the blocked merge.
 
 Repository: {repository}
@@ -191,12 +233,20 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+[[task-types.merge.transition.branches]]
+when = "pull-request-open"
+pull-request-facts = ["needs-work"]
+[[task-types.merge.transition.branches]]
+pull-request-facts = []
 
 # --- Ticket sources -------------------------------------------------------
 # No source is active out of the box, so the control plane starts with an
 # empty ticket list on any machine. Add one block per feed: uncomment the
-# example and name your repositories.
+# example and name your repositories. The issue feed lists open issues
+# without pre-labeling: the plane runs in auto mode on whatever it finds.
 
 # [[sources]]
 # name = "my-issues"
@@ -204,25 +254,3 @@ auto-close = false
 # refresh-interval-seconds = 60
 # repositories = ["owner/name"]
 # host = "github.com"
-
-# --- Workflow template: the task rules ------------------------------------
-# The label workflow: each rule suggests a task type for a ticket whose
-# source labels match. Extend with your own rules.
-
-[[task-rules]]
-task-type = "rework"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["needs-work"]
-
-[[task-rules]]
-task-type = "review"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["ready-for-review"]
-
-[[task-rules]]
-task-type = "merge"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["ready-to-ship"]

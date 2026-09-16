@@ -10,7 +10,6 @@ max-parallel-agents = 2
 agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 20
-workflows = []
 
 [repos]
 "github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
@@ -52,6 +51,45 @@ agent = "pi"
 environment = "live-worktree"
 template = "{input}"
 
+# --- The workflow machine (ADR 0027) --------------------------------------
+# The four states of the label workflow. A state's match names the labels
+# that put a ticket on it; its task is what the plane suggests for a ticket
+# that sits there. Order decides: the first matching state wins.
+
+[[states]]
+name = "ready-for-agent"
+task-type = "implement"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-agent"]
+
+[[states]]
+name = "needs-work"
+task-type = "rework"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["needs-work"]
+
+[[states]]
+name = "ready-for-review"
+task-type = "review"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-for-review"]
+
+[[states]]
+name = "ready-to-ship"
+task-type = "merge"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-to-ship"]
+
+# --- The task types --------------------------------------------------------
+# Each task type is work only: a prompt template and a task profile. The
+# transition hangs off the type that completes it and writes the label facts
+# the machine then reads. The templates carry no label instructions: the
+# plane owns the labels.
+
 [task-types.implement]
 template = '''
 Implement the following {source-kind}. 
@@ -66,11 +104,6 @@ Implement the following {source-kind}.
    - Open a new Pull Request.
    - Link the pull request to the ticket. Successfully merging this pull request may close these issues.
    - List any technical choices made when specifications were not clear.
-   - Add the **`ready-for-review`** label to the pull request.
-   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request. Only the review task sets those.
-
-3. **Update Ticket**
-   - Remove the **`ready-for-agent`** label from the ticket.
 
 Repository: {repository}
 
@@ -82,7 +115,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.review]
 template = '''
@@ -109,9 +144,6 @@ Review pull request {external-key}: {title}.
 
 ### Outcome
 - Post the output as a comment on the pull request.
-- Remove label 'ready-for-review'.
-- Set label to **`ready-to-ship`** if score is 90 or higher.
-- Set label to **`needs-work`** if score is less than 90.
 
 Repository: {repository}
 Pull request: {source-url}
@@ -120,7 +152,16 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+score-threshold = 90
+[[task-types.review.transition.branches]]
+when = "score-above-threshold"
+pull-request-facts = ["ready-to-ship"]
+[[task-types.review.transition.branches]]
+when = "score-below-threshold"
+pull-request-facts = ["needs-work"]
 
 [task-types.rework]
 template = '''
@@ -139,8 +180,6 @@ Rework pull request {external-key}: {title}.
 
 4. **Update Pull Request**
    - Write a summary of your changes in a new comment.
-   - Remove the **`needs-work`** label.
-   - Add the **`ready-for-review`** label.
 
 Repository: {repository}
 Pull request: {source-url}
@@ -149,7 +188,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.merge]
 thinking = "low"
@@ -164,8 +205,6 @@ Merge pull request {external-key}: {title}.
 
 2. **On a Blocked Merge**
    - If the pull request has a merge conflict or a failing CI check, do not merge.
-   - Remove the **`ready-to-ship`** label.
-   - Add the **`needs-work`** label.
    - Post a comment explaining the reason for the blocked merge.
 
 Repository: {repository}
@@ -175,7 +214,14 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+[[task-types.merge.transition.branches]]
+when = "pull-request-open"
+pull-request-facts = ["needs-work"]
+[[task-types.merge.transition.branches]]
+pull-request-facts = []
 
 [[sources]]
 name = "factory-issues"
@@ -190,21 +236,3 @@ kind = "github-pull-requests"
 refresh-interval-seconds = 60
 repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions"]
 host = "github.com"
-
-[[task-rules]]
-task-type = "rework"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["needs-work"]
-
-[[task-rules]]
-task-type = "review"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["ready-for-review"]
-
-[[task-rules]]
-task-type = "merge"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["ready-to-ship"]

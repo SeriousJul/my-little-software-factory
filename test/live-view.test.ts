@@ -152,7 +152,12 @@ interface SeededApp {
 function seedInFlight(): FactoryState {
 	const dir = mkdtempSync(join(tmpdir(), "factory-live-state-"));
 	paths.push(dir);
-	const state = openFactoryState(join(dir, "state.sqlite"));
+	// The handoff starts inside the fixture day, so a session record stamped
+	// on it is this run's, not the run before: the staleness guard keeps the
+	// settle's `completed` cause.
+	const state = openFactoryState(join(dir, "state.sqlite"), () =>
+		Date.parse("2026-08-31T10:30:00Z"),
+	);
 	state.initializeSources([source]);
 	state.applyFetch(source, success);
 	const claim = state.claimHandoff(
@@ -188,7 +193,18 @@ function seededApp(extra: Partial<FactoryConfig> = {}): SeededApp {
 	const config = {
 		...BASE_CONFIG,
 		repos: { [repoIdentity]: path },
-		workflows: [{ from: "implement", to: ["review"] }],
+		// The issue-side machine these tests fire: the implement transition
+		// writes the review fact, and the state it lands on offers the review.
+		workflowStates: [
+			{ name: "ready-for-review", taskType: "review", match: { labelsAny: ["ready-for-review"] } },
+		],
+		taskTypes: {
+			...BASE_CONFIG.taskTypes,
+			implement: {
+				...BASE_CONFIG.taskTypes.implement,
+				transition: { ticketFacts: ["ready-for-review"], pullRequestFacts: [] },
+			},
+		},
 		...extra,
 	};
 	const runner = new FakeRunner();
@@ -667,16 +683,25 @@ describe("the Live view against a running factory", () => {
 		app.state.close();
 	});
 
-	test("a settled turn the factory decides for itself keeps streaming", async () => {
+	test("a settled turn whose automatic route cannot start keeps streaming", async () => {
+		// The implement transition auto-advances into the review position: the
+		// factory decides for itself (route), never handing the screen over.
 		const app = seededApp({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
-				implement: { ...BASE_CONFIG.taskTypes.implement, autoClose: true },
+				implement: {
+					...BASE_CONFIG.taskTypes.implement,
+					transition: {
+						ticketFacts: ["ready-for-review"],
+						pullRequestFacts: [],
+						autoAdvance: true,
+					},
+				},
 			},
 		});
 		const checkoutPath = Object.values(app.config.repos)[0];
 		// The checkout is not a repository: the automatic route cannot
-		// start, so the factory keeps deciding and the ticket stays in
+		// start, so the trace rests pending and the ticket stays in
 		// awaiting.
 		app.runner.set("git", ["-C", checkoutPath, "rev-parse", "--git-dir"], {
 			code: 1,
@@ -716,8 +741,8 @@ describe("the Live view against a running factory", () => {
 						},
 					]),
 				});
-				// The settle lands in the state; the screen shows it, the
-				// status line under the overlay does not.
+				// The settle lands in the state; the route's failure holds the
+				// trace pending for the next cycle.
 				const deadline = Date.now() + 2000;
 				while (app.state.ticketState(identity) !== "awaiting" && Date.now() < deadline) {
 					await sleep(20);
@@ -725,12 +750,12 @@ describe("the Live view against a running factory", () => {
 				expect(app.state.ticketState(identity)).toBe("awaiting");
 				const frame = setup.captureCharFrame();
 				// The factory's own decision never hands the screen over:
-				// the stream stands where the operator left it, the one row
-				// stays the Goto, and no handoff row appears.
+				// the stream stands where the operator left it, and no decision
+				// rows appear at all while the route rests.
 				expect(frame).toContain("Live: Persist source facts");
 				expect(frame).toContain("the agent is finishing up");
-				expect(frame).toContain("Goto");
 				expect(frame).not.toContain("Handoff: review");
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
 			},
 			WIDTH,
 			HEIGHT,
@@ -1002,13 +1027,16 @@ describe("the Live view against a running factory", () => {
 	});
 
 	test("the cycle ending while the view is open closes the screen", async () => {
-		// A task type the factory closes by itself, and no workflow: the turn
-		// can only end the cycle, never hand off.
+		// A task type the factory closes by itself: the transition
+		// auto-advances but writes no position, so the turn can only end the
+		// cycle, never hand off.
 		const app = seededApp({
-			workflows: [],
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
-				implement: { ...BASE_CONFIG.taskTypes.implement, autoClose: true },
+				implement: {
+					...BASE_CONFIG.taskTypes.implement,
+					transition: { ticketFacts: [], pullRequestFacts: [], autoAdvance: true },
+				},
 			},
 		});
 		app.runner.set("herdr", ["agent", "list"], {

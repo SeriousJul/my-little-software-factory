@@ -54,6 +54,11 @@ interface DecisionModalProps {
 	cause?: TurnEndCause | null;
 	/** The agent's or provider's text for the cause; empty when none. */
 	detail?: string;
+	/**
+	 * The label facts the settled turn's transition wrote, one line per
+	 * surface (ADR 0027), above the rows that decide on them.
+	 */
+	factLines?: readonly string[];
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	/** The `e` key on a row flagged editable: change its Handoff's settings. */
@@ -212,6 +217,7 @@ export function DecisionModal({
 	entries,
 	cause = null,
 	detail = "",
+	factLines = [],
 	actions,
 	onAction,
 	onEditAction,
@@ -259,19 +265,24 @@ export function DecisionModal({
 	// the rows that decide it.
 	const held = cause !== null && isHeldCause(cause);
 	const heldRows = held ? 1 : 0;
+	// The transition's fact lines stand above the action rows, like the
+	// held-cause row: the rows decide on the facts, so the log yields to
+	// them (ADR 0027).
+	const factRows = factLines.length;
+	const reservedRows = heldRows + factRows;
 	const fullWidthBody = useMemo(
 		() => turnLogBody(entries, finalFrame.contentWidth),
 		[entries, finalFrame.contentWidth],
 	);
 	const hasScrollbar =
-		fullWidthBody.length > logRows(finalFrame.contentRows, actions.length) - heldRows;
+		fullWidthBody.length > logRows(finalFrame.contentRows, actions.length) - reservedRows;
 	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
 	const body = useMemo(() => turnLogBody(entries, bodyWidth), [entries, bodyWidth]);
 	const bodyRows = Math.min(
 		body.length,
-		Math.max(0, logRows(frame.contentRows, actions.length) - heldRows),
+		Math.max(0, logRows(frame.contentRows, actions.length) - reservedRows),
 	);
 	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the
@@ -333,7 +344,7 @@ export function DecisionModal({
 		borderColor: paint("accent"),
 		// The context row and every action row: without them the modal is
 		// not a decision, so it holds itself back at that size.
-		minContentRows: actions.length + CONTEXT_ROWS + heldRows,
+		minContentRows: actions.length + CONTEXT_ROWS + reservedRows,
 		opacity: pop,
 		message,
 		bar: {
@@ -362,6 +373,13 @@ export function DecisionModal({
 						),
 					]
 				: []),
+			...factLines.map((line, index) =>
+				createElement(
+					"text",
+					{ key: `fact-${index}`, fg: paint("blue") },
+					truncateToWidth(line, frame.contentWidth),
+				),
+			),
 			...actions.map((row, index) =>
 				createElement(ActionItem, {
 					key: row.key,

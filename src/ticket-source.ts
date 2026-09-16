@@ -368,7 +368,12 @@ class GitHubTicketSource implements TicketSource {
 			}
 			const scope = `is:open ${this.kindQualifier()} repo:${repository} -label:blocked`;
 			if (this.kind === "github-issues") {
-				queries.push(`${scope} label:ready-for-agent`);
+				// The plane owns the workflow labels (ADR 0027): it writes
+				// `ready-for-agent` itself, so the default query does not
+				// require it. Every open issue enters the machine; a state
+				// match names the task, and the default task type takes
+				// the unlabeled issues.
+				queries.push(scope);
 			} else {
 				// `needs-work` intentionally does not test draft. The review and
 				// merge halves do: a draft cannot be reviewed to a verdict or merged.

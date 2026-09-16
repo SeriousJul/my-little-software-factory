@@ -113,7 +113,10 @@ describe("GitHub ticket sources", () => {
 		const request = runner.calls[0].args.join(" ");
 		expect(request).toContain("is:open is:issue");
 		expect(request).toContain("repo:acme/factory");
-		expect(request).toContain("-label:blocked label:ready-for-agent");
+		// The plane owns the workflow labels (ADR 0027): the default query does
+		// not require a workflow label for a ticket to be seen.
+		expect(request).toContain("-label:blocked");
+		expect(request).not.toContain("label:ready-for-agent");
 	});
 
 	test("reads every page before returning a snapshot", async () => {

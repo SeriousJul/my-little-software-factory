@@ -40,25 +40,21 @@ export const BASE_CONFIG: FactoryConfig = {
 			template:
 				"Implement the following {source-kind}.\n\nRepository: {repository}\n\n" +
 				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
 		},
 		fix: {
 			template:
 				"Fix the following {source-kind}.\n\nRepository: {repository}\n\n" +
 				"{external-key}: {title}\n\nURL: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
 		},
 		review: {
 			template:
 				"Review pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
 				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
 		},
 		rework: {
 			template:
 				"Rework pull request {external-key}: {title}.\n\nRepository: {repository}\n" +
 				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
-			autoClose: false,
 		},
 	},
 	autoHandoff: false,
@@ -67,14 +63,18 @@ export const BASE_CONFIG: FactoryConfig = {
 	completionMessageLines: 200,
 	maxHandoffsPerTicket: 10,
 	scroll: { speed: 1, acceleration: 0.8, maximumSpeed: 6 },
-	workflows: [],
 	repos: {},
 	sources: [],
-	taskRules: [
-		{ taskType: "rework", when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] } },
+	workflowStates: [
 		{
+			name: "needs-work",
+			taskType: "rework",
+			match: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+		},
+		{
+			name: "ready-for-review",
 			taskType: "review",
-			when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+			match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
 		},
 	],
 };

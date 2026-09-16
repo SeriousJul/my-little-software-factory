@@ -144,7 +144,6 @@ describe("the held turn through the real app flow", () => {
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
 			repos: { [repoIdentity]: checkoutPath },
-			workflows: [{ from: "implement", to: ["review"] }],
 			autoHandoff: true,
 			maxParallelAgents: 3,
 		};

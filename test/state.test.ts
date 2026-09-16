@@ -920,6 +920,9 @@ describe("factory SQLite state", () => {
 		);
 		// The v11 override belongs to the run after this record: a v2 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v2 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
@@ -994,6 +997,9 @@ describe("factory SQLite state", () => {
 		db.exec("DROP TABLE referenced_issues;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v5 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 5").run();
 		db.prepare(
@@ -1066,6 +1072,9 @@ describe("factory SQLite state", () => {
 		db.exec("DROP TABLE referenced_issues;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v7 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 7").run();
 		db.prepare(

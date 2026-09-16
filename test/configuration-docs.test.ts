@@ -41,9 +41,9 @@ function exampleGroups(config: Record<string, unknown>): Map<string, Set<string>
 	// A named table group: [agents.<name>], [task-types.<name>], and
 	// [consultation-types.<name>] all document their keys once.
 	const namedTables = new Set(["agents", "task-types", "consultation-types"]);
-	// An array-of-tables group: [[workflows]], [[sources]], and
-	// [[task-rules]]. Their entries carry the group's keys.
-	const tableArrays = new Set(["workflows", "sources", "task-rules"]);
+	// An array-of-tables group: [[states]] and [[sources]]. Their entries
+	// carry the group's keys.
+	const tableArrays = new Set(["states", "sources"]);
 	for (const [key, value] of Object.entries(config)) {
 		add("top", key);
 		if (key === "scroll" && typeof value === "object" && value !== null) {
@@ -57,21 +57,38 @@ function exampleGroups(config: Record<string, unknown>): Map<string, Set<string>
 		if (namedTables.has(key) && typeof value === "object" && value !== null) {
 			for (const table of Object.values(value as Record<string, unknown>)) {
 				if (typeof table !== "object" || table === null) continue;
-				for (const inner of Object.keys(table)) add(key, inner);
+				for (const [inner, innerValue] of Object.entries(table)) {
+					add(key, inner);
+					// [task-types.<name>.transition] documents its keys as
+					// their own group, and so does the branches array under
+					// it, so their keys go there and not under the task type.
+					if (key === "task-types" && inner === "transition" && isPlainTable(innerValue)) {
+						for (const transitionKey of Object.keys(innerValue)) {
+							add("task-types.transition", transitionKey);
+						}
+						const branches = innerValue.branches;
+						if (Array.isArray(branches)) {
+							for (const branch of branches) {
+								if (!isPlainTable(branch)) continue;
+								for (const branchKey of Object.keys(branch)) {
+									add("task-types.transition.branches", branchKey);
+								}
+							}
+						}
+					}
+				}
 			}
 			continue;
 		}
 		if (tableArrays.has(key) && Array.isArray(value)) {
 			for (const entry of value) {
-				if (typeof entry !== "object" || entry === null) continue;
+				if (!isPlainTable(entry)) continue;
 				for (const [inner, innerValue] of Object.entries(entry)) {
 					add(key, inner);
-					// [task-rules.when] documents its conditions as their own
-					// group, so its keys go there and not under the rule.
-					if (inner === "when" && typeof innerValue === "object" && innerValue !== null) {
-						for (const condition of Object.keys(innerValue as Record<string, unknown>)) {
-							add("task-rules.when", condition);
-						}
+					// [states.match] documents its conditions as their own
+					// group, so its keys go there and not under the state.
+					if (inner === "match" && isPlainTable(innerValue)) {
+						for (const condition of Object.keys(innerValue)) add("states.match", condition);
 					}
 				}
 			}
@@ -80,14 +97,19 @@ function exampleGroups(config: Record<string, unknown>): Map<string, Set<string>
 	return groups;
 }
 
+function isPlainTable(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** The group name a reference heading names: `Top level.` becomes `top`. */
 function groupOf(heading: string): string | null {
 	if (heading.startsWith("**Top level.")) return "top";
 	// A heading names its table in code span: **`[agents.<name>]`**,
-	// **`[[workflows]]`**. The trailing prose is part of the same line.
+	// **`[[states]]`**, **`[task-types.<name>.transition]`**. The trailing
+	// prose is part of the same line.
 	const table = heading.replace(/^\*\*/u, "").match(/^`\[+([^\]`]+)\]/u);
 	if (table === null) return null;
-	return table[1].replace(/\.<name>$/u, "");
+	return table[1].split(".<name>").join("");
 }
 
 /**
