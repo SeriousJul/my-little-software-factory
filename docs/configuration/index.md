@@ -365,7 +365,7 @@ source-kind = "github-issue"
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `agent` | yes | - | The agent type to start. It must name an `[agents.*]` table. |
-| `environment` | yes | - | The environment the agent runs in. One of `live-worktree` or `worktree`. |
+| `environment` | no | `worktree` | The environment the agent runs in. One of `live-worktree` or `worktree`. A worktree starts from the repository's `main` branch, or its `HEAD` when the repository has no `main`. |
 | `template` | yes | - | The opening prompt. It contains `{input}` exactly once and no other placeholder. |
 | `model` | no | - | The model, passed through the agent's model template. The agent must define one. |
 | `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values`. |
@@ -443,7 +443,8 @@ The shipped defaults define the three agent types `pi`, `codex`, and
 `merge`, the three task rules of the label workflow - `needs-work`
 pull requests to `rework`, `ready-for-review` to `review`, and
 `ready-to-ship` to `merge` - and one `consult` Consultation type that
-passes your input straight through. They have no ticket sources and no
+passes your input straight through. They carry the three priority labels
+`critical`, `high`, and `low`. They have no ticket sources and no
 repository mappings. `config/development.toml` in this repository
 configures the live development path through `--config`; it carries the
 `grill-with-docs` Consultation type.

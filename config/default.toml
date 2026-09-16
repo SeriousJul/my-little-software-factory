@@ -33,11 +33,11 @@ maximum-speed = 6
 # An ordered list of labels that ranks tickets: the first entry is the
 # highest rank. A ticket that carries one of these labels ranks by it. The
 # operator bumps a rank from the ticket detail, and a bump beats the label.
-# An "off" bump sets the ticket unranked. Omitted: tickets are not ranked
-# and the list keeps its previous order.
-#
-# [priority]
-# labels = ["critical", "high", "low"]
+# An "off" bump sets the ticket unranked. Delete the table: tickets are not
+# ranked and the list keeps its previous order.
+
+[priority]
+labels = ["critical", "high", "low"]
 
 [agents.pi]
 kind = "pi"
@@ -61,7 +61,6 @@ context-window = "--autocompact {value}"
 
 [consultation-types.consult]
 agent = "pi"
-environment = "live-worktree"
 template = "{input}"
 
 # --- Workflow template: the task types ----------------------------------

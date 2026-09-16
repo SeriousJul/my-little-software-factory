@@ -21,6 +21,9 @@ speed = 1
 acceleration = 0.8
 maximum-speed = 6
 
+[priority]
+labels = ["critical", "high", "low"]
+
 [agents.pi]
 kind = "pi"
 model = "--model {value}"
@@ -43,13 +46,11 @@ context-window = "--autocompact {value}"
 
 [consultation-types.grill-with-docs]
 agent = "pi"
-environment = "live-worktree"
 thinking = "xhigh"
 template = "/skill:grill-with-docs {input}"
 
 [consultation-types.free]
 agent = "pi"
-environment = "live-worktree"
 template = "{input}"
 
 [task-types.implement]

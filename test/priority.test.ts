@@ -336,7 +336,8 @@ describe("the bump rules", () => {
 	test("no labels is a no-op", () => {
 		expect(bumpPriority("up", [], null)).toEqual({
 			kind: "noop",
-			message: "no Priority labels are configured",
+			message:
+				"no Priority labels are configured - add a [priority] labels list to the config file",
 		});
 	});
 });
