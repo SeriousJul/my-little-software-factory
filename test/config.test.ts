@@ -134,7 +134,7 @@ describe("the Default configuration", () => {
 		// One neutral Consultation type that passes the operator's input
 		// straight through.
 		expect(config.consultationTypes).toEqual({
-			consult: { agent: "pi", environment: "live-worktree", template: "{input}" },
+			consult: { agent: "pi", environment: "worktree", template: "{input}" },
 		});
 		// No ticket sources, no repository mappings, and no state file entry:
 		// the file works on any machine.
@@ -1286,6 +1286,20 @@ describe("consultation configuration", () => {
 			template: "/skill:grill-with-docs {input}",
 			model: "--model sonnet",
 			thinking: "high",
+		});
+	});
+
+	test("a type without an environment starts in an isolated worktree", () => {
+		const config = validateConfig({
+			...base(),
+			"consultation-types": {
+				consult: { agent: "pi", template: "{input}" },
+			},
+		});
+		expect(config.consultationTypes.consult).toEqual({
+			agent: "pi",
+			environment: "worktree",
+			template: "{input}",
 		});
 	});
 

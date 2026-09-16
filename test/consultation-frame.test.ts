@@ -215,7 +215,9 @@ function stubCheckout(runner: FakeRunner): void {
 /** Stub the full worktree launch sequence at the verified checkout. */
 function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
-	runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: "deadbeef\n" });
+	runner.set("git", ["-C", checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"], {
+		stdout: "deadbeef\n",
+	});
 	runner.set(
 		"herdr",
 		[

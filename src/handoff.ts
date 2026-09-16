@@ -638,12 +638,27 @@ async function startConsultationWorktree(
 			`Consultation branch already exists: ${branch}`,
 			ctx,
 		) as ConsultationHandoffOutcome;
-	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
-	if (head.code !== 0)
-		return failed(
-			`cannot read HEAD in ${checkout}: ${commandFailureText(head)}`,
-			ctx,
-		) as ConsultationHandoffOutcome;
+	// The worktree starts from main, so a Consultation reads the shipped
+	// state of the repository, not the branch the checkout happens to hold.
+	// A repository without a main branch falls back to its HEAD.
+	const main = await ctx.runner.run("git", [
+		"-C",
+		checkout,
+		"rev-parse",
+		"--verify",
+		"--quiet",
+		"main^{commit}",
+	]);
+	let base = main.stdout.trim();
+	if (main.code !== 0 || base === "") {
+		const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
+		if (head.code !== 0)
+			return failed(
+				`cannot read the base revision in ${checkout}: ${commandFailureText(head)}`,
+				ctx,
+			) as ConsultationHandoffOutcome;
+		base = head.stdout.trim();
+	}
 	const created = await ctx.runner.run("herdr", [
 		"worktree",
 		"create",
@@ -652,7 +667,7 @@ async function startConsultationWorktree(
 		"--branch",
 		branch,
 		"--base",
-		head.stdout.trim(),
+		base,
 		"--no-focus",
 	]);
 	if (created.code !== 0) return failedCommand(created, ctx) as ConsultationHandoffOutcome;

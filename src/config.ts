@@ -726,7 +726,10 @@ function validateConsultationTypes(
 		if (agentConfig === undefined)
 			throw new ConfigError(`${where}.agent: unknown agent "${agentName}"`);
 		const agent: ResolvedAgentType = { agentType: agentName, agent: agentConfig };
-		const environment = stringField(raw, "environment", where);
+		// A type that names no environment starts in an isolated worktree, not
+		// in the operator's live checkout.
+		const environment =
+			raw.environment === undefined ? "worktree" : stringField(raw, "environment", where);
 		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(environment))
 			throw new ConfigError(
 				`${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,

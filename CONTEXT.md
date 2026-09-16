@@ -477,3 +477,10 @@ _Avoid_: executor, spawner
 The static site that GitHub Pages publishes from the `docs/` folder.
 It shows the published subset (the ADRs, the standards, and the guides) and keeps the agent instruction, verification, and research folders out of the build.
 _Avoid_: website, docs site, blog
+
+**Worktree base**:
+The commit a new worktree environment is created from.
+It is the remote default branch of the repository's origin after a fresh fetch, and falls back to the local checkout's HEAD when the fetch or the ref is unavailable, with a note on the handoff.
+The default branch comes from the `origin/HEAD` symref, then `origin/main`, then `origin/master`.
+The same rule serves a ticket handoff worktree and a Consultation worktree.
+_Avoid_: base commit, starting point, worktree origin

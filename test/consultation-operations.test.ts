@@ -323,7 +323,9 @@ function stubWorktreeLaunch(
 	const branch = consultationBranchName(id, "grill");
 	stubCheckout(runner, checkout, displayName);
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
-	runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: `${WORKTREE_HEAD}\n` });
+	runner.set("git", ["-C", checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"], {
+		stdout: `${WORKTREE_HEAD}\n`,
+	});
 	runner.set(
 		"herdr",
 		[
@@ -510,7 +512,7 @@ describe("Consultation operations: launch", () => {
 			`git -C ${fixture.checkout} rev-parse --git-dir`,
 			`git -C ${fixture.checkout} remote get-url origin`,
 			`git -C ${fixture.checkout} branch --list ${consultationBranchName(id, "grill")}`,
-			`git -C ${fixture.checkout} rev-parse HEAD`,
+			`git -C ${fixture.checkout} rev-parse --verify --quiet main^{commit}`,
 			`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(id, "grill")} --base ${WORKTREE_HEAD} --no-focus`,
 			`herdr agent start ${agentOf(id)} --kind pi --pane ${LAUNCH.paneId}`,
 			`herdr agent prompt ${agentOf(id)} /grill review auth`,
@@ -519,6 +521,64 @@ describe("Consultation operations: launch", () => {
 			expect.arrayContaining([LAUNCH.workspaceId, LAUNCH.tabId, LAUNCH.paneId, agentOf(id)]),
 		);
 		expect(harness.changes).toBeGreaterThan(0);
+	});
+
+	test("a repository without a main branch starts its worktree from the checkout HEAD", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("2f");
+		const consultation = seed(fixture.state, fixture, id);
+		const branch = consultationBranchName(id, "grill");
+		stubCheckout(runner.inner, fixture.checkout);
+		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
+			stdout: "",
+		});
+		// No main branch: the strict read fails, and the launch falls back to HEAD.
+		runner.inner.set(
+			"git",
+			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"],
+			{ code: 1, stderr: "unknown revision\n" },
+		);
+		runner.inner.set("git", ["-C", fixture.checkout, "rev-parse", "HEAD"], {
+			stdout: `${WORKTREE_HEAD}\n`,
+		});
+		runner.inner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				fixture.checkout,
+				"--branch",
+				branch,
+				"--base",
+				WORKTREE_HEAD,
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
+		);
+		runner.inner.set(
+			"herdr",
+			["agent", "start", agentOf(id), "--kind", "pi", "--pane", LAUNCH.paneId],
+			{ stdout: JSON.stringify({ result: { agent: { session_id: `sess-${id.slice(0, 8)}` } } }) },
+		);
+		runner.inner.set("herdr", ["agent", "prompt", agentOf(id), "/grill review auth"], {
+			code: 0,
+		});
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+
+		expect(current(fixture.state, id)).toMatchObject({
+			state: "working",
+			paneId: LAUNCH.paneId,
+			workspaceId: LAUNCH.workspaceId,
+		});
+		expect(runner.commands()).toContain(`git -C ${fixture.checkout} rev-parse HEAD`);
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${fixture.checkout} --branch ${branch} --base ${WORKTREE_HEAD} --no-focus`,
+		);
 	});
 
 	test("leaves a refused launch failed with the readable reason", async () => {
@@ -531,9 +591,13 @@ describe("Consultation operations: launch", () => {
 		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
 			stdout: "",
 		});
-		runner.inner.set("git", ["-C", fixture.checkout, "rev-parse", "HEAD"], {
-			stdout: `${WORKTREE_HEAD}\n`,
-		});
+		runner.inner.set(
+			"git",
+			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"],
+			{
+				stdout: `${WORKTREE_HEAD}\n`,
+			},
+		);
 		runner.inner.set(
 			"herdr",
 			[
