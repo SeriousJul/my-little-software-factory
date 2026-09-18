@@ -208,13 +208,17 @@ A configured kind of Consultation that selects an Agent type and default Environ
 _Avoid_: quick template, session template
 
 **Consultation state**:
-The position of a Consultation: `opening`, `working`, `awaiting-response`, `missing`, `failed`, `closing`, or `closed`.
+The position of a Consultation: `queued`, `unscheduled`, `opening`, `working`, `awaiting-response`, `missing`, `failed`, `closing`, or `closed`.
 _Avoid_: status, Agent state
 
 **Awaiting response**:
 The Consultation state where the Agent waits for operator input and the operator has not responded or closed the Consultation.
 The Agent waits when it has settled its turn, or when it shows an approval or question UI (Blocked).
 _Avoid_: blocked, idle, done
+
+**Unscheduled**:
+The Consultation state where the Consultation exists but is not started and is not in the Work queue. It waits for the operator to schedule it, start it, or delete it.
+_Avoid_: parked, on hold
 
 **Response draft**:
 Operator input saved for an `awaiting-response` Consultation but not yet accepted by its Agent.
@@ -325,9 +329,19 @@ The config file carries the startup default; the UI toggle is session-only.
 _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
-The maximum number of agents in flight. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, and by a started agent still inside its Startup grace: all of them run or are about to run (ADR 0021).
-It gates auto-handoff only; a manual handoff is always allowed.
+The maximum number of works in flight, counting a ticket Handoff and a Consultation alike. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, by a started agent still inside its Startup grace (ADR 0021), and by a Consultation in `opening` or `working`.
+It gates every start: a manual start that cannot take a seat enters the Work queue instead of starting, and an automatic start waits for a seat.
 _Avoid_: concurrency cap, max agents
+
+**Work queue**:
+The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state.
+When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record.
+_Avoid_: dispatch queue, pending list, execution queue
+
+**Force-dispatch**:
+The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
+It re-runs every start check the normal pickup runs and skips only the cap.
+_Avoid_: manual override, bypass
 
 **Handoff limit**:
 The per-ticket cap on started handoffs that stops the close-and-rehandoff loop.

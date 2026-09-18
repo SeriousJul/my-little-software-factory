@@ -42,3 +42,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0031: A work cycle can close while the agent is still working](./0031-a-work-cycle-can-close-while-the-agent-is-still-working.md)
 - [ADR 0032: The leftover environment is a fact; its cleanup lives in herdr](./0032-the-leftover-environment-is-a-fact-its-cleanup-lives-in-herdr.md)
 - [ADR 0033: Goto is navigation in both sections](./0033-goto-is-navigation-in-both-sections.md)
+- [ADR 0034: The Parallel limit counts Consultations and the Work queue holds the rest](./0034-the-parallel-limit-counts-consultations-and-the-work-queue-holds-the-rest.md)
