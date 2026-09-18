@@ -292,10 +292,22 @@ The condition where a Consultation cannot continue or close without an explicit 
 It stays separate from `awaiting-response`, where the Agent needs ordinary input.
 _Avoid_: awaiting response, blocked
 
+**Close**:
+The operator action that ends live work, key `w` in both sections.
+On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number.
+On a Consultation it stops the Agent and cleans up its resources, keeping the worktree and branch.
+It asks for confirmation when it stops a live agent.
+_Avoid_: stop, kill, abort, cancel
+
 **Force-close**:
 Closing a Consultation record after resource cleanup cannot be confirmed.
 It records the resources that might remain and never removes a worktree or branch.
 _Avoid_: abandon, force delete
+
+**Goto**:
+The control that focuses the Agent's pane in herdr from a Ticket or Consultation row, key `g` in both sections.
+It is navigation: it changes no ticket, work cycle, or Consultation record.
+_Avoid_: jump, follow, attach
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
@@ -426,7 +438,7 @@ _Avoid_: dirty checkout, parallel limit
 
 **Leftover environment**:
 The workspace, tab, or Agent of a ticket's closed Handoff that Herdr still holds after its Close cleanup.
-It is a durable fact on the ticket, visible in its row and in its detail.
+It is a durable fact on the ticket, visible in its row and in its detail, and its cleanup runs in herdr, not in the control plane.
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
 

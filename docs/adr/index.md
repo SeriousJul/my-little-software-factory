@@ -39,3 +39,6 @@ body states the context, the decision, and the consequences.
 - [ADR 0028: The homepage hero is a real herdr capture](./0028-the-homepage-hero-is-a-real-herdr-capture.md)
 - [ADR 0029: Security tickets synthesize severity as labels](./0029-security-tickets-synthesize-severity-as-labels.md)
 - [ADR 0030: A starting ticket wears a spinner in place of its state badge](./0030-a-starting-ticket-wears-a-spinner-in-place-of-its-state-badge.md)
+- [ADR 0031: A work cycle can close while the agent is still working](./0031-a-work-cycle-can-close-while-the-agent-is-still-working.md)
+- [ADR 0032: The leftover environment is a fact; its cleanup lives in herdr](./0032-the-leftover-environment-is-a-fact-its-cleanup-lives-in-herdr.md)
+- [ADR 0033: Goto is navigation in both sections](./0033-goto-is-navigation-in-both-sections.md)
