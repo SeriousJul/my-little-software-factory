@@ -37,3 +37,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0026: Auto-handoff holds a completed task type](./0026-auto-handoff-holds-a-completed-task-type.md)
 - [ADR 0027: The plane owns the workflow machine and its label transitions](./0027-the-plane-owns-the-workflow-machine-and-label-transitions.md)
 - [ADR 0028: The homepage hero is a real herdr capture](./0028-the-homepage-hero-is-a-real-herdr-capture.md)
+- [ADR 0029: Security tickets synthesize severity as labels](./0029-security-tickets-synthesize-severity-as-labels.md)

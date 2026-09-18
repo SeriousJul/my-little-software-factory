@@ -251,9 +251,12 @@ to = ["review"]
 # --- Ticket sources ----------------------------------------------------------------
 
 # name must be unique. kind is "github-issues" or
-# "github-pull-requests". filter is a GitHub search applied to the list.
-# auth takes exactly one of token, token-env, or account.
-# Omitted auth uses gh's current authentication.
+# "github-pull-requests", or one of the security feed kinds
+# "github-security-advisories", "github-dependabot-alerts", and
+# "github-secret-scanning-alerts". filter is a GitHub search applied to the
+# list; the security feed kinds take no filter. auth takes exactly one of
+# token, token-env, or account. Omitted auth uses gh's current
+# authentication.
 [[sources]]
 name = "my-app-issues"
 kind = "github-issues"
@@ -275,6 +278,13 @@ host = "github.com"
 filter = "is:open label:factory"
 [sources.auth]
 account = "my-account"
+
+[[sources]]
+name = "my-app-dependabot-alerts"
+kind = "github-dependabot-alerts"
+refresh-interval-seconds = 300
+repositories = ["SeriousJul/my-app"]
+host = "github.com"
 
 # --- Task rules ----------------------------------------------------------------------
 
@@ -392,12 +402,12 @@ for the match rules and the sibling clone.
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `name` | yes | - | The source name. It must be unique, and it is what a rule's `source-name` matches. |
-| `kind` | yes | - | `github-issues` or `github-pull-requests`. |
+| `kind` | yes | - | `github-issues`, `github-pull-requests`, or one of the security feed kinds `github-security-advisories`, `github-dependabot-alerts`, `github-secret-scanning-alerts`. See the security source note below. |
 | `refresh-interval-seconds` | yes | - | The refresh interval. A positive number. |
 | `repositories` | yes | - | A non-empty list of `owner/name` strings. |
 | `host` | no | `github.com` | The GitHub host. |
-| `filter` | no | - | A GitHub search applied to the list. See the filter note below. |
-| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). |
+| `filter` | no | - | A GitHub search applied to the list. See the filter note below. The security feed kinds reject the key at startup. |
+| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). The security feeds reuse this table. |
 
 **`[[task-rules]]`** (one table per rule, in order).
 
@@ -411,7 +421,7 @@ for the match rules and the sibling clone.
 | Key | Required | What it does |
 | --- | --- | --- |
 | `source-name` | no | The source `name`. |
-| `source-kind` | no | `github-issue` or `github-pull-request`. |
+| `source-kind` | no | `github-issue`, `github-pull-request`, `github-security-advisory`, `github-dependabot-alert`, or `github-secret-scanning-alert`. |
 | `repository` | no | The repository identity, for example `github.com/seriousjul/my-app`. |
 | `labels-all` | no | Every listed label must be present. Case-insensitive. |
 | `labels-any` | no | At least one listed label must be present. Case-insensitive. |
@@ -429,6 +439,47 @@ The `filter` is a GitHub search string. GitHub search applies `AND`, `OR`,
 and `NOT` to search text only, and it has no parenthesized grouping.
 Parentheses, and logical operators next to `label:`-style qualifiers, are
 rejected at startup, so a source never degrades to a healthy-but-empty list.
+The security feed kinds are REST endpoints, not GitHub searches, so they
+take no `filter` at all: a filter there would be silently ignored, and the
+key is rejected at startup instead of misread as applied.
+
+### The security feed sources
+
+The three security kinds read the repository security tab, one call set per
+configured repository, and each item appears in the ticket list as one
+ticket. The item's severity becomes its single ticket label, so the Priority
+label list ranks security tickets; an open secret scanning alert always
+carries the label `critical` (ADR 0029).
+
+- `github-security-advisories` lists the repository's security advisories in
+  `triage`, `draft`, and `published` state; `closed` and `withdrawn`
+  advisories stay out. The ticket's external key is the GHSA id, the title
+  the advisory summary, the description the advisory description plus a block
+  listing each named vulnerable component (ecosystem, package, vulnerable
+  range, patched versions) when the advisory carries one, the label the bare
+  severity word, and the URL the advisory page.
+- `github-dependabot-alerts` lists the open Dependabot alerts; `fixed`,
+  `dismissed`, and `auto_dismissed` alerts stay out. The ticket's external
+  key is the alert's per-repository number, the title the CVE id (or the GHSA
+  id when there is no CVE) plus the embedded advisory summary, the
+  description a composed block (package, ecosystem, manifest path, scope,
+  relationship, vulnerable range, first patched version, severity, CVSS
+  score) followed by the embedded advisory's full description, the label the
+  bare severity word from the embedded advisory with the embedded security
+  vulnerability's severity as the fallback, and the URL the alert page.
+- `github-secret-scanning-alerts` lists the open secret scanning alerts;
+  `closed` and `resolved` alerts stay out. The ticket's external key is the
+  alert's per-repository number, the title the word `Exposed` plus the secret
+  type name, the description a composed block (secret type, file path, line
+  range), the label always `critical` while the alert is open, and the URL
+  the alert page.
+
+The sources share the auth table of the other kinds, and a token with the
+`repo` or `security_events` scope reads all three feeds. The endpoints need
+administrator access to the repository (advisories: owner or security
+manager): a token without access makes the source stale with the readable
+reason, like any failed refresh. The control plane is read-only on all three
+feeds: it never writes labels, states, or dismissals to the security items.
 
 Repository mappings are the one section the control plane writes back: a
 sibling clone records its path there. The write-back is atomic: the config
@@ -440,11 +491,17 @@ write-back: the data round-trips, the comments do not.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
-`merge`, the three task rules of the label workflow - `needs-work`
-pull requests to `rework`, `ready-for-review` to `review`, and
-`ready-to-ship` to `merge` - and one `consult` Consultation type that
-passes your input straight through. They carry the three priority labels
-`critical`, `high`, and `low`. They have no ticket sources and no
-repository mappings. `config/development.toml` in this repository
-configures the live development path through `--config`; it carries the
-`grill-with-docs` Consultation type.
+`merge`, the three security task types `resolve-security-advisory`,
+`resolve-dependabot-alert`, and `resolve-secret-scanning-alert`, the three
+task rules of the label workflow - `needs-work` pull requests to `rework`,
+`ready-for-review` to `review`, and `ready-to-ship` to `merge` - and one
+task rule per security source kind pointing at its task type. They also
+define one `consult` Consultation type that passes your input straight
+through. They carry the three priority labels `critical`, `high`, and `low`.
+They have no ticket sources and no repository mappings: uncommenting one
+security source block is the only setup a fresh install needs. The security
+task types carry `auto-close = true` and `thinking = "high"`: the cycle
+auto-closes on a completed settle, and the completed task type rests the
+ticket while the item still lists upstream. `config/development.toml` in
+this repository configures the live development path through `--config`; it
+carries the `grill-with-docs` Consultation type.

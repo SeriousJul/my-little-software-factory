@@ -32,8 +32,10 @@ the config sets one.
 The shipped Default configuration carries a working control plane and the
 parts it cannot know about your machine: no ticket sources, no repository
 mappings, and no `state-file` key. Everything else is on: the `pi`, `codex`,
-and `claude` agent types, the four workflow task types, the three task rules,
-and one `consult` Consultation type that passes your input straight through.
+and `claude` agent types, the four workflow task types, the three security
+task types, the task rules of the label workflow plus one rule per security
+source kind, and one `consult` Consultation type that passes your input
+straight through.
 The [configuration key reference](../configuration/index.md#key-reference) names every key,
 its default, and what it does.
 
@@ -52,9 +54,14 @@ repositories = ["owner/name", "owner/other"]
 ```
 
 The `name` is what the interface shows. The `kind` is
-`github-issues` or `github-pull-requests`. The `refresh-interval-seconds`
-sets how often the control plane refreshes the source. The source reads the
-labels on each ticket; [the ticket labels](../development/labels.md) name what each label
+`github-issues` or `github-pull-requests`, or one of the security feed kinds
+`github-security-advisories`, `github-dependabot-alerts`, and
+`github-secret-scanning-alerts`: the three kinds read the repository security
+tab, each item appears as one ticket, and the shipped task rules already route
+each kind to its resolve task type. The security feed kinds take no
+`filter`. The `refresh-interval-seconds` sets how often the control plane
+refreshes the source. The source reads the labels on each ticket; [the
+ticket labels](../development/labels.md) name what each label
 means to the control plane.
 
 Repository checkout paths live in the `repos` table, one key per
@@ -70,13 +77,18 @@ Repository checkout paths live in the `repos` table, one key per
 The task types and task rules of the Default configuration form the workflow
 template, and the file marks them as meant to be extended. The template
 carries the four task types `implement`, `review`, `rework`, and `merge`,
-and the three rules of the label workflow:
+plus the three security task types `resolve-security-advisory`,
+`resolve-dependabot-alert`, and `resolve-secret-scanning-alert`, and the
+rules of the label workflow:
 
 | Rule | When | Task type |
 | ---- | ---- | --------- |
 | 1 | A pull request carries the `needs-work` label. | `rework` |
 | 2 | A pull request carries the `ready-for-review` label. | `review` |
 | 3 | A pull request carries the `ready-to-ship` label. | `merge` |
+| 4 | A ticket comes from a `github-security-advisories` source. | `resolve-security-advisory` |
+| 5 | A ticket comes from a `github-dependabot-alerts` source. | `resolve-dependabot-alert` |
+| 6 | A ticket comes from a `github-secret-scanning-alerts` source. | `resolve-secret-scanning-alert` |
 
 Add your own task type with a `[task-types.<name>]` table. The `template`
 carries the prompt body, and the `{placeholders}` name the ticket facts the

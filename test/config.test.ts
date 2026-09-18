@@ -106,16 +106,29 @@ describe("the Default configuration", () => {
 		const { config, fromFile, seeded } = await loadConfigFile(SHIPPED_DEFAULT_CONFIG);
 		expect(fromFile).toBe(true);
 		expect(seeded).toBeUndefined();
-		// The four workflow task types, and the three task rules of the label
-		// workflow.
+		// The four workflow task types, the three security task types, and
+		// the task rules of the label workflow.
 		expect(Object.keys(config.taskTypes).sort()).toEqual([
 			"implement",
 			"merge",
+			"resolve-dependabot-alert",
+			"resolve-secret-scanning-alert",
+			"resolve-security-advisory",
 			"review",
 			"rework",
 		]);
-		for (const task of Object.values(config.taskTypes)) {
-			expect(task.autoClose).toBe(false);
+		for (const name of ["implement", "merge", "review", "rework"]) {
+			expect(config.taskTypes[name].autoClose).toBe(false);
+		}
+		// The security task types auto-close on a completed settle and run on
+		// a high thinking level: one kind of finding per template.
+		for (const name of [
+			"resolve-security-advisory",
+			"resolve-dependabot-alert",
+			"resolve-secret-scanning-alert",
+		]) {
+			expect(config.taskTypes[name].autoClose).toBe(true);
+			expect(config.taskTypes[name].thinking).toBe("high");
 		}
 		expect(config.taskRules).toEqual([
 			{
@@ -129,6 +142,18 @@ describe("the Default configuration", () => {
 			{
 				taskType: "merge",
 				when: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+			},
+			{
+				taskType: "resolve-security-advisory",
+				when: { sourceKind: "github-security-advisory" },
+			},
+			{
+				taskType: "resolve-dependabot-alert",
+				when: { sourceKind: "github-dependabot-alert" },
+			},
+			{
+				taskType: "resolve-secret-scanning-alert",
+				when: { sourceKind: "github-secret-scanning-alert" },
 			},
 		]);
 		// One neutral Consultation type that passes the operator's input
@@ -1071,6 +1096,71 @@ describe("ticket source configuration", () => {
 			},
 			"specify exactly one",
 		);
+	});
+
+	describe("the security feed source kinds (issue #73)", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "x" } },
+		};
+
+		test("each kind validates and reuses the shared source shape", () => {
+			for (const kind of [
+				"github-security-advisories",
+				"github-dependabot-alerts",
+				"github-secret-scanning-alerts",
+			]) {
+				const config = validateConfig({
+					...base,
+					sources: [
+						{
+							name: kind,
+							kind,
+							"refresh-interval-seconds": 300,
+							repositories: ["acme/factory", "acme/portal"],
+							auth: { account: "me" },
+						},
+					],
+				});
+				expect(config.sources).toEqual([
+					{
+						name: kind,
+						kind,
+						refreshIntervalSeconds: 300,
+						repositories: ["acme/factory", "acme/portal"],
+						host: "github.com",
+						auth: { account: "me" },
+					},
+				]);
+			}
+		});
+
+		test("a filter on a security feed is a startup error, not a silent no-op", () => {
+			for (const kind of [
+				"github-security-advisories",
+				"github-dependabot-alerts",
+				"github-secret-scanning-alerts",
+			]) {
+				expectConfigError(
+					{
+						...base,
+						sources: [
+							{
+								name: kind,
+								kind,
+								"refresh-interval-seconds": 300,
+								repositories: ["acme/factory"],
+								filter: "severity:critical",
+							},
+						],
+					},
+					`takes no filter; a filter would be silently ignored`,
+				);
+			}
+		});
 	});
 });
 
