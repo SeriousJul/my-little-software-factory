@@ -262,6 +262,11 @@ The condition where the latest Agent poll failed or was unreadable.
 The last known Consultation states stay visible and cannot become `missing` from that poll.
 _Avoid_: missing Agent, Herdr offline
 
+**Starting**:
+The window during which a ticket's Handoff is claimed and not yet settled, or the ticket is `handed-off`: the agent is being started, or it has started and its work is not yet observed.
+The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the ticket shows its recovery fact instead.
+_Avoid_: boot, launch, pending, startup
+
 **Startup grace**:
 The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.
