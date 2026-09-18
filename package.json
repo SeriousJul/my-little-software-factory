@@ -31,21 +31,21 @@
 		"node": ">=26.4.0"
 	},
 	"dependencies": {
-		"@opentui/core": "^0.5.9",
-		"@opentui/react": "^0.5.9",
-		"react": "^19.2.0",
+		"@opentui/core": "^0.5.11",
+		"@opentui/react": "^0.5.11",
+		"react": "^19.3.0",
 		"smol-toml": "^1.8.0",
 		"string-width": "^8.2.2"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.11",
+		"@biomejs/biome": "^2.5.13",
 		"@stryker-mutator/core": "^10.0.0",
 		"@stryker-mutator/vitest-runner": "^10.0.0",
-		"@types/node": "^26.0.0",
-		"@types/react": "^19.2.0",
+		"@types/node": "^26.6.0",
+		"@types/react": "^19.3.0",
 		"fontkit": "^2.0.4",
-		"typescript": "^5.9.0",
+		"typescript": "^7.0.2",
 		"vitepress": "^1.6.4",
-		"vitest": "^4.1.11"
+		"vitest": "^5.0.1"
 	}
 }
