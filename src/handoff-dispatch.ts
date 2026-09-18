@@ -116,6 +116,9 @@ export async function reportHandoffOutcome(
 		...(outcome.status === "ok" && outcome.notes?.warning !== undefined
 			? [outcome.notes.warning]
 			: []),
+		...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
+			? [outcome.notes.worktreeBase]
+			: []),
 	];
 	reports.clearWorking();
 	if (outcome.status !== "ok") reports.error(lines.join("; "));

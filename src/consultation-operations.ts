@@ -834,6 +834,9 @@ export class ConsultationOperations {
 				? [outcome.notes.warning]
 				: []),
 			...(mappingWarning === undefined ? [] : [mappingWarning]),
+			...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
+				? [outcome.notes.worktreeBase]
+				: []),
 		];
 		if (outcome.status === "failed") {
 			this.state.failConsultationOpening(consultation.id, lines.join("; ") || outcome.reason);

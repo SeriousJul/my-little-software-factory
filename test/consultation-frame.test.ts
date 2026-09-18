@@ -216,8 +216,11 @@ function stubCheckout(runner: FakeRunner): void {
 /** Stub the full worktree launch sequence at the verified checkout. */
 function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
-	runner.set("git", ["-C", checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"], {
-		stdout: "deadbeef\n",
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch and the fetch of its single ref succeeds, so the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
 	});
 	runner.set(
 		"herdr",
@@ -229,7 +232,7 @@ function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 			"--branch",
 			branch,
 			"--base",
-			"deadbeef",
+			"origin/main",
 			"--no-focus",
 		],
 		{ stdout: worktreeCreateJson("ws-new", "pane-c1") },
@@ -550,7 +553,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					await waitForCommands(
 						runner,
 						[
-							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base deadbeef --no-focus`,
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
@@ -649,7 +652,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					await waitForCommands(
 						runner,
 						[
-							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base deadbeef --no-focus`,
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the recovery launch sequence",

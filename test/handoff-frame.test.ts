@@ -106,7 +106,12 @@ function stubWorktreeHandoff(runner: FakeRunner): void {
 			stdout: "",
 		},
 	);
-	runner.set("git", ["-C", path, "rev-parse", "HEAD"], { stdout: "deadbeef\n" });
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch and the fetch of its single ref succeeds, so the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", path, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
+	});
 	runner.set(
 		"herdr",
 		[
@@ -117,7 +122,7 @@ function stubWorktreeHandoff(runner: FakeRunner): void {
 			"--branch",
 			`factory/${first.externalKey.slice(1)}-${firstAgent}`,
 			"--base",
-			"deadbeef",
+			"origin/main",
 			"--no-focus",
 		],
 		{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
@@ -703,13 +708,17 @@ describe("the override panel", () => {
 				const detail = detailPaneText(settled);
 				expect(detail).toContain("Agent: codex");
 				expect(detail).toContain("Environment: worktree");
-				// The worktree sequence ran, based on the read HEAD, not a default.
+				// The worktree sequence ran, based on the fetched remote default
+				// branch, not a default.
 				expect(runner.commands()).toContain(
 					`git -C ${checkout()} branch --list factory/${first.externalKey.slice(1)}-${firstAgent}`,
 				);
-				expect(runner.commands()).toContain(`git -C ${checkout()} rev-parse HEAD`);
 				expect(runner.commands()).toContain(
-					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstAgent} --base deadbeef --no-focus`,
+					`git -C ${checkout()} symbolic-ref refs/remotes/origin/HEAD`,
+				);
+				expect(runner.commands()).toContain(`git -C ${checkout()} fetch origin main`);
+				expect(runner.commands()).toContain(
+					`herdr worktree create --cwd ${checkout()} --branch factory/${first.externalKey.slice(1)}-${firstAgent} --base origin/main --no-focus`,
 				);
 				expect(runner.commands()).toContain(
 					`herdr agent start ${firstAgent} --kind codex --pane pane-wt`,
