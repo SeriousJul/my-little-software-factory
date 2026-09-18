@@ -20,4 +20,3 @@ updates:
       day: "monday"
     # PR-only. A major bump here is a major action version, which is
     # exactly what Dependabot is good at flagging, but a human merges it.
-    auto-merge: false
