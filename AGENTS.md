@@ -10,9 +10,9 @@
   [src/components/shared](src/components/shared): `fields.ts` for a Text field
   and a Draft field, `choices.ts` for a selector row and a visible action,
   `form.ts` for a form's slots, focus, and control facts, `type-ahead.ts` for a
-  searchable list row, `presentation.ts` for labels, focus markers, state
-  words, and the tested color pairs, and `theme.ts` for the pure Theme
-  resolution. Colors leave the plane through the shared paint layer
+  searchable list row, `spinner.ts` for the animated spinner face beside its
+  written word, `presentation.ts` for labels, focus markers, state words, and
+  the tested color pairs, and `theme.ts` for the pure Theme resolution. Colors leave the plane through the shared paint layer
   ([src/components/theme.ts](src/components/theme.ts)): a surface asks it for a
   role's color, it answers from the Theme the environment resolved (ADR 0024),
   and no surface holds its own palette. Do not add a separate screen-specific

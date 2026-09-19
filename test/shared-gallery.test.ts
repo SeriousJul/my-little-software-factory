@@ -13,6 +13,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import {
 	BUILTIN_THEMES,
 	HERDR_THEME_VERSION,
@@ -83,6 +84,7 @@ describe("the shared control gallery", () => {
 			"states",
 			"search",
 			"notes",
+			"spinner",
 			"priority",
 			"session-view",
 			"agent-view-fallback",
@@ -351,6 +353,10 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("openai/gpt-5.1");
 		expect(frame).toContain("❯ Repository");
 		expect(frame).toContain("Launch Consultation");
+		// The spinner face wears the no-color ink too: its written word keeps
+		// standing, and no color of its own shows on the row.
+		expect(frame).toContain("starting");
+		expect(spanColors(setup, "starting")).toEqual([[255, 255, 255]]);
 		// And none of them paints a foreground: the writing alone stands. The
 		// renderer's own default is not a paint.
 		expect(spanColors(setup, "openai/gpt-5.1")).toEqual([[255, 255, 255]]);
@@ -380,6 +386,31 @@ describe("the shared control gallery", () => {
 			"the Captured history fallback",
 		);
 		expect(frameText(captured)).toContain("review the auth design");
+	});
+
+	test("the spinner example wears the animated face beside its written word", async () => {
+		const setup = await gallery("spinner");
+		const raw = setup.captureCharFrame();
+		const frame = frameText(raw);
+		expect(frame).toContain(stateLine("spinner"));
+		// The face the ticket's Starting window wears: its written word, beside
+		// a glyph of its own frames. The mount paints the face on one frame of
+		// its own, so the check takes the glyph from the frame, not from a guess
+		// at where the tick has landed.
+		const row = rowsOf(raw).find((line) => line.includes("starting"));
+		if (row === undefined) throw new Error("the spinner face never painted");
+		const glyph = SPINNER_FRAMES.find((candidate) => row.includes(`${candidate} starting`));
+		if (glyph === undefined) throw new Error(`the face wears no frame of its own:\n${row}`);
+		// The face paints from the Theme in force in the tone a state word wears,
+		// and the note beside it names the frames the face steps through.
+		expect(spanColors(setup, "starting")).toEqual([
+			[
+				Number.parseInt(STANDALONE_THEME.roles.subtext0.slice(1, 3), 16),
+				Number.parseInt(STANDALONE_THEME.roles.subtext0.slice(3, 5), 16),
+				Number.parseInt(STANDALONE_THEME.roles.subtext0.slice(5, 7), 16),
+			],
+		]);
+		expect(frame).toContain(SPINNER_FRAMES.join(" "));
 	});
 
 	test("the Goto example shows the hint available and unavailable, with its reason", async () => {

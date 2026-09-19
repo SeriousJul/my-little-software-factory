@@ -10,7 +10,8 @@ import {
 	type FieldHandle,
 	TextField,
 } from "../src/components/shared/fields.ts";
-import { ownNoteCells } from "../src/components/shared/presentation.ts";
+import { NO_COLOR_INK, ownNoteCells } from "../src/components/shared/presentation.ts";
+import { SPINNER_FRAMES, Spinner } from "../src/components/shared/spinner.ts";
 import { TypeAheadRow } from "../src/components/shared/type-ahead.ts";
 import { awaitFrame, frameText, rgb, roleColor, rowsOf, spanColors } from "./app-harness.ts";
 
@@ -613,6 +614,77 @@ describe("the written reason a control states", () => {
 				// the confirmed one beside it keeps the tone of a value.
 				expect(spanColors(setup, "openai/gpt-4o")).toEqual([rgb(roleColor("subtext0"))]);
 				expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(roleColor("text"))]);
+			},
+		);
+	});
+});
+
+describe("the shared spinner", () => {
+	test("paints the frame it is named beside its written word, in the tone a state word wears", async () => {
+		await withField(
+			createElement(Spinner, { word: "starting", width: 12, frame: 0 }),
+			30,
+			3,
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes(`${SPINNER_FRAMES[0]} starting`),
+					"the first frame beside its word",
+				);
+				// The face holds its slot whole: glyph, a cell of air, the word,
+				// padded to the cells the surface names.
+				const row = rowsOf(frame).find((line) => line.includes("starting"));
+				if (row === undefined) throw new Error("the face never painted its word");
+				expect(row.trim()).toBe(`${SPINNER_FRAMES[0]} starting`);
+				// The face paints the presentation's detail tone: the tone the
+				// shared state words wear, from the Theme in force.
+				expect(spanColors(setup, "starting")).toEqual([rgb(roleColor("subtext0"))]);
+			},
+		);
+	});
+
+	test("under the no-color ink keeps its word and drops its color", async () => {
+		await withField(
+			createElement(Spinner, { word: "starting", width: 12, frame: 2, ink: NO_COLOR_INK }),
+			30,
+			3,
+			async (setup) => {
+				await awaitFrame(
+					setup,
+					(candidate) => candidate.includes(`${SPINNER_FRAMES[2]} starting`),
+					"the face beside its word",
+				);
+				// The word stands as the whole message. The renderer's own default
+				// is the paint, and the default is not a paint: no color of the
+				// face's own shows anywhere on the row.
+				expect(spanColors(setup, "starting")).toEqual([[255, 255, 255]]);
+			},
+		);
+	});
+
+	test("drives its own frames the way the pop-in drives its own", async () => {
+		await withField(
+			createElement(Spinner, { word: "starting", width: 12 }),
+			30,
+			3,
+			async (setup) => {
+				const first = setup.captureCharFrame();
+				const firstGlyph = SPINNER_FRAMES.find((glyph) => first.includes(`${glyph} starting`));
+				// The mount paints the face on one of its frames: the first frame
+				// on a host fast enough, a later one on a host slow enough for a
+				// tick to land before the capture. Never a frame it does not own.
+				expect(firstGlyph).toBeDefined();
+				// The face steps on its own interval without the renderer's
+				// animation engine being asked, so the step shows in the test
+				// renderer too.
+				await awaitFrame(
+					setup,
+					(candidate) =>
+						SPINNER_FRAMES.some(
+							(glyph) => glyph !== firstGlyph && candidate.includes(`${glyph} starting`),
+						),
+					"the face to step to another frame",
+				);
 			},
 		);
 	});
