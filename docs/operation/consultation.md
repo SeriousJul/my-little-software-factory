@@ -22,8 +22,13 @@ its availability and reason.
 - `j` and `k` cross into the Consultation section from the last row of the
 	Ticket list, and back again from its first. Once the cursor holds a
 	Consultation, `c` launches a Consultation, `f` cycles the history filter
-	through open, closed, and all, `z` closes the selected Consultation, and
-	`d` deletes a closed one. `h` or `Left` moves between the section's own
+	through open, closed, and all, `w` closes the selected Consultation, and
+	`d` deletes a closed one. A close that stops a live Agent - an opening,
+	a working, or an awaiting-response Consultation - confirms first: the
+	dialog names the Agent and states that the worktree and branch stay. A
+	`missing` or a `failed` Consultation closes without a dialog. A
+	`closing` one opens the Retry and Force-close recovery panel instead, and
+	a `closed` one refuses. `h` or `Left` moves between the section's own
 	list and the detail pane, and `x` collapses or restores the section under
 	the cursor. The Consultation that needs the operator keeps its attention
 	on the section header: an awaiting response wins, and among the recovery

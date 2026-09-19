@@ -19,6 +19,7 @@ import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
 import type { Consultation } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
+import { ActionPanel } from "../action-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
 import { type ControlContext, contextFor } from "../controls.ts";
@@ -187,8 +188,10 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * One entry per state the standard names, so the list is also the checklist a
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
-/** The Consultation the detail examples render under. */
-function sampleConsultation(state: "working" | "closed"): Consultation {
+/** The Consultation the detail and close-dialog examples render under. */
+function sampleConsultation(
+	state: "opening" | "working" | "awaiting-response" | "closing" | "closed",
+): Consultation {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
 		id: "c1c1c1c1-1111-4111-8111-111111111111",
@@ -674,6 +677,107 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
+		// The close confirmation opens exactly when a close stops a live
+		// Agent. Each of the three live states names its own first line: the
+		// body keeps the worktree and branch whichever state asks.
+		id: "close-dialog-opening",
+		state: "Close confirmation: the Agent is still opening",
+		render: (_columns) => [
+			createElement(ActionPanel, {
+				key: "close-opening",
+				message: null,
+				inputActive: false,
+				title: `Close Consultation ${sampleConsultation("opening").id.slice(0, 8)}?`,
+				bodyLines: [
+					"The Agent is still opening",
+					"Close stops the Agent. The worktree and branch stay.",
+				],
+				actions: [
+					{
+						key: "close",
+						label: "Close",
+						detail: "stop the Agent; the work stays",
+					},
+					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
+				],
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "close-dialog-working",
+		state: "Close confirmation: the Agent is working",
+		render: (_columns) => [
+			createElement(ActionPanel, {
+				key: "close-working",
+				message: null,
+				inputActive: false,
+				title: `Close Consultation ${sampleConsultation("working").id.slice(0, 8)}?`,
+				bodyLines: ["The Agent is working", "Close stops the Agent. The worktree and branch stay."],
+				actions: [
+					{
+						key: "close",
+						label: "Close",
+						detail: "stop the Agent; the work stays",
+					},
+					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
+				],
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "close-dialog-awaiting-response",
+		state: "Close confirmation: the Agent waits for your reply",
+		render: (_columns) => [
+			createElement(ActionPanel, {
+				key: "close-awaiting",
+				message: null,
+				inputActive: false,
+				title: `Close Consultation ${sampleConsultation("awaiting-response").id.slice(0, 8)}?`,
+				bodyLines: [
+					"The Agent has answered and is waiting for your reply",
+					"Close stops the Agent. The worktree and branch stay.",
+				],
+				actions: [
+					{
+						key: "close",
+						label: "Close",
+						detail: "stop the Agent; the work stays",
+					},
+					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
+				],
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
+	},
+	{
+		// The closing Consultation opens the recovery panel instead: the
+		// cleanup already ran and cannot be confirmed, so the rows offer the
+		// retry and the force-close, never the plain close.
+		id: "close-panel-closing",
+		state: "Close recovery: retry and force-close on a closing",
+		render: (_columns) => [
+			createElement(ActionPanel, {
+				key: "close-closing",
+				message: null,
+				inputActive: false,
+				title: `Close Consultation ${sampleConsultation("closing").id.slice(0, 8)}`,
+				bodyLines: ["Cleanup is already in progress. Force-close records remaining resources."],
+				actions: [
+					{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
+					{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
+					{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
+				],
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
+	},
+	{
 		// Goto from either Consultation pane: available while herdr's last
 		// poll still reports the Agent's pane alive, unavailable with its
 		// own reason when the pane is gone.
@@ -1016,7 +1120,7 @@ export function Gallery({
 	});
 	const shown = GALLERY_EXAMPLES[index] ?? GALLERY_EXAMPLES[0];
 	const narrow = shown.narrow === true;
-	const frame = modalFrame(narrow ? 28 : width, height, { rows: 12, margin: 1 });
+	const frame = modalFrame(narrow ? 28 : width, height, { rows: 17, margin: 1 });
 	const columns = galleryColumns(frame.contentWidth);
 	return createElement(
 		"box",
