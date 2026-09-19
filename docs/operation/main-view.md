@@ -1,20 +1,20 @@
 ---
 title: Main view
-description: The Main view's two sections, its counts, its controls, and the layout the terminal shows.
+description: The Main view's three sections, its counts, its controls, and the layout the terminal shows.
 ---
 
 # Main view
 
-![The Main view: the Ticket and Consultation sections on the left, the
-detail of the selected ticket on the right](images/main-view.png)
+![The Main view: the Ticket, Consultation, and Work sections on the left,
+the detail of the selected ticket on the right](images/main-view.png)
 
-The Main view holds two list sections on the left, the Ticket section on
-top and the Consultation section below, and one context-dependent detail
-pane on the right that shows the detail of the item the cursor holds. One
-control catalogue, one Action bar, and one Message line answer for both.
-Both sections start expanded; `x` or a click on a section header collapses
-the section under the cursor to its header row, and the same toggle restores
-it. Up and down move the cursor through the visible rows and cross the
+The Main view holds three list sections on the left, the Ticket section on
+top, the Consultation section below it, and the Work queue section below
+that, and one context-dependent detail pane on the right that shows the
+detail of the item the cursor holds. One control catalogue, one Action bar,
+and one Message line answer for all three. All three sections start
+expanded; `x` or a click on a section header collapses the section under the
+cursor to its header row, and the same toggle restores it. Up and down move the cursor through the visible rows and cross the
 section boundary when the sections are adjacent. The mode the bar and the
 guide state derives from the section that holds the cursor and its focused
 pane.
@@ -22,8 +22,9 @@ pane.
 The Ticket header always shows the pipeline counts - open, running, and
 awaiting - with the held count appended only when it is non-zero. The
 Consultation header carries its attention facts (awaiting response,
-recovery). Both counts are computed from the in-memory projection on each
-render; neither queries the state.
+recovery). The Work queue header carries the queue's depth, the items
+waiting for a free Parallel limit seat. The counts are computed from the
+in-memory projection on each render; none queries the state.
 
 The control plane keeps a contextual Action bar in the last row of the
 terminal. It shows the controls the current interaction mode can run, dims
@@ -71,21 +72,24 @@ The keys the override panel answers with live on the
 
 ## Layout
 
-The Main view is one surface with two list sections, the Ticket section on
-top and the Consultation section below, and one context-dependent detail pane
-on the right (ADR 0019). Both sections start expanded, and the detail pane
-shows the detail of whichever item the cursor holds: the ticket detail on a
-ticket, the Consultation detail on a Consultation. `x` or a click on a header
+The Main view is one surface with three list sections, the Ticket section on
+top, the Consultation section below it, and the Work queue section below
+that, and one context-dependent detail pane on the right (ADR 0019, extended
+by ADR 0034). All three sections start expanded, and the detail pane shows
+the detail of whichever item the cursor holds: the ticket detail on a
+ticket, the Consultation detail on a Consultation, and the captured facts of
+the queued start on a Work queue item. `x` or a click on a header
 toggles the section under the cursor: it shrinks to its header row and its
 rows leave the navigation flow, and the same toggle restores it. A collapsed
 section keeps its list selection, and the selection and detail of a collapsed
 section survive the collapse, so a re-expand shows the same place. The rows
 run: the mode line (while the control plane has state to observe), the
-Ticket header across the full terminal width, the two sections' list panes
-stacked on the left with the Consultation header between them, the detail
-pane on the right, the Message line, and the Action bar. The focused
-section takes the remaining rows after the other section claims its minimum
-of three content rows, so the list the operator works in gets the room. The
+Ticket header across the full terminal width, the three sections' list panes
+stacked on the left with the Consultation and Work headers between them, the
+detail pane on the right, the Message line, and the Action bar. The focused
+section takes the remaining rows after the other sections claim their
+minimum of three content rows, so the list the operator works in gets the
+room. The
 Ticket header always shows the pipeline counts - open, running, and awaiting,
 in the labelled form on a terminal of at least 60 columns and the short form
 below - and appends the held count with its bell marker only when it is
@@ -94,7 +98,8 @@ awaiting-response and recovery counts, the bell marker while the bell rings,
 and "new output" while that fact holds, so a Consultation that needs
 the operator is visible whether the section is expanded or collapsed and no
 free-standing attention line exists. A section that cannot hold its minimum collapses rather than
-vanishing, so both headers keep their counts; below the smallest useful frame
+vanishing, so all three headers keep their counts; below the smallest useful
+frame
 the compact frame drops the panes with a size message.
 
 Two panes side by side, flex-sized to the terminal.
@@ -128,8 +133,9 @@ Switching focus never moves the selection.
 The vertical keys act on the focused pane.
 With the list focused, they move the selection and cross the section boundary
 when the sections are adjacent: from the last row of the Ticket list the next
-down lands on the Consultation list, and the next up from its first row lands
-back on the tickets. Page keys move by one visible
+down lands on the Consultation list, from its last row the next down lands on
+the Work queue list, and a step back up from either first row lands on the
+section above. Page keys move by one visible
 list page, and Home and End select the list edges. With the detail focused,
 the row keys move at the configured speed, PageUp and PageDown retain one row
 of context, and Home and End move to the detail edges. A new selection starts
