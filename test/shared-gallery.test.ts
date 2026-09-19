@@ -91,6 +91,7 @@ describe("the shared control gallery", () => {
 			"agent-view-fallback",
 			"captured-history-fallback",
 			"goto",
+			"work-queue",
 			"theme",
 			"theme-fallback",
 			"theme-light",

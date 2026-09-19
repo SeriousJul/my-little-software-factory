@@ -52,8 +52,7 @@ export function parallelSeatCount({
 	let count = 0;
 	for (const ticket of tickets) {
 		const isListed = ticket.paneId !== null && listed.has(ticket.paneId);
-		const booting =
-			!isListed && now() - Date.parse(ticket.startedAt) < startupGraceMs;
+		const booting = !isListed && now() - Date.parse(ticket.startedAt) < startupGraceMs;
 		if (isListed || booting) {
 			count += 1;
 			counted.add(ticket.ticketIdentity);

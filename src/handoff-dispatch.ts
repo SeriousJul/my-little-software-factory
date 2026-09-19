@@ -404,8 +404,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 					this.state.removeWorkItem(item.ticketIdentity);
 					this.lastPickupWarning.delete(item.ticketIdentity);
 					// The route the item carries is the operator's decision on the turn
-				// it routes from: it lands on the settled turn's trace, like the
-				// direct route's start, once the pickup's handoff is live.
+					// it routes from: it lands on the settled turn's trace, like the
+					// direct route's start, once the pickup's handoff is live.
 					if (item.origin === "workflow" && previousHandoffId !== "") {
 						this.state.applyCompletionDecision({
 							ticketIdentity: item.ticketIdentity,
@@ -415,7 +415,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 						});
 					}
 					this.reports.refresh();
-					this.reports.notice(`${this.ticketName(item.ticketIdentity)} started from the Work queue`);
+					this.reports.notice(
+						`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+					);
 				} else {
 					// The item keeps its place: the attempt record holds the failure,
 					// the ticket keeps its state, and the next free seat retries.
@@ -431,8 +433,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private ticketName(identity: string): string {
 		const title = this.state
 			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
-			.find((candidate) => candidate.identity === identity)
-			?.title;
+			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
 	}
 
@@ -445,8 +446,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// still in the projection, the identity once it is gone.
 		const title = this.state
 			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
-			.find((candidate) => candidate.identity === item.ticketIdentity)
-			?.title;
+			.find((candidate) => candidate.identity === item.ticketIdentity)?.title;
 		this.reports.warning(
 			`queued handoff for ${title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`} was not run: ${reason}`,
 		);
@@ -670,7 +670,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.refresh();
 		await reportHandoffOutcome(outcome, this.reports, this.persistMapping);
 		reportStarted(
-			outcome.status === "failed" ? { ok: false, reason: outcome.reason } : { ok: true, queued: false },
+			outcome.status === "failed"
+				? { ok: false, reason: outcome.reason }
+				: { ok: true, queued: false },
 		);
 		this.inFlight = false;
 		this.drainCleanupQueue();

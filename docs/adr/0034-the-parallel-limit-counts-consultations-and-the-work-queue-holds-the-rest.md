@@ -93,8 +93,10 @@ The considered alternatives:
   holds its seat, so its recover is never capped and can never push the
   count past the cap.
 - The mode line counts both kinds against the one cap, and the left pane
-  gains the queue as a third Section: always visible, its header carrying
-  the depth, its rows selectable into the detail pane.
+  gains the queue as a third Section: its header carries the depth, its
+  rows are selectable into the detail pane, and the Section stays hidden
+  while it is empty and collapsed, so the two-Section frame survives the
+  smallest terminal.
 - The schema grows the durable queue - the Handoff intents and the shared
   order - and the Consultation states gain `queued` and `unscheduled`.
 - With the cap at 0 (unlimited) the queue never engages and every start

@@ -70,10 +70,10 @@
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
-import { parallelSeatCount } from "./seats.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
+import { parallelSeatCount } from "./seats.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
 import {
 	isHeldCause,

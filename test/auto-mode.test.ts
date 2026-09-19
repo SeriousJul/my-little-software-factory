@@ -3643,12 +3643,7 @@ describe("the handoff queue", () => {
 					fetchedAt: new Date(Date.now() + 60_000).toISOString(),
 					tickets: pairMoved.tickets,
 				});
-				await awaitFrame(
-					setup,
-					(f) => f.includes("was not run"),
-					"the pickup warning",
-					5000,
-				);
+				await awaitFrame(setup, (f) => f.includes("was not run"), "the pickup warning", 5000);
 				expect(frameText(setup.captureCharFrame())).toContain(
 					'queued handoff for "Watch agent turns" was not run: the ticket is now open',
 				);

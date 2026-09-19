@@ -1893,3 +1893,76 @@ describe("stored completion trace degradation", () => {
 		]);
 	});
 });
+
+describe("the work queue (ADR 0034)", () => {
+	const enqueue = (state: ReturnType<typeof openFactoryState>, identity: string) => {
+		const result = state.enqueueWork({
+			ticketIdentity: identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+
+	test("items enter in enqueue order, and the queue reports its depth and identities", () => {
+		const state = openFactoryState(":memory:");
+		expect(state.workQueueDepth()).toBe(0);
+		expect(state.workQueueIdentity("t1")).toBeNull();
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.workQueueDepth()).toBe(2);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
+		expect(state.workQueueIdentity("t2")).toBe("t2");
+	});
+
+	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		const refused = state.enqueueWork({
+			ticketIdentity: "t1",
+			origin: "restart",
+			choice,
+			previousMessage: "again",
+		});
+		expect(refused).toEqual({
+			ok: false,
+			reason: "ticket t1 already has a waiting queue item",
+		});
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1"]);
+	});
+
+	test("u and d move one place, and an item at an edge moves nowhere", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		enqueue(state, "t3");
+		// The front item cannot move up, the back item cannot move down.
+		expect(state.moveWorkItem("t1", "up")).toBe(false);
+		expect(state.moveWorkItem("t3", "down")).toBe(false);
+		// d takes the front item behind the middle one; the swap is atomic
+		// on the queue's primary key, so no step of it shares a position.
+		expect(state.moveWorkItem("t1", "down")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1", "t3"]);
+		expect(state.moveWorkItem("t1", "up")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2", "t3"]);
+		// An unknown identity moves nowhere.
+		expect(state.moveWorkItem("t9", "up")).toBe(false);
+	});
+
+	test("removing an item keeps the rest in order, and the ticket is free to wait again", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.removeWorkItem("t1")).toBe(true);
+		expect(state.removeWorkItem("t1")).toBe(false);
+		// The places repack: the surviving item holds the front of the
+		// queue, so the queue never shows a place it does not use.
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0]);
+		// The cancelled start may enqueue again for its ticket.
+		enqueue(state, "t1");
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1"]);
+	});
+});
