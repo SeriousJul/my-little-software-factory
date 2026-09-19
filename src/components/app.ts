@@ -67,7 +67,9 @@ import {
 	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
+	STARTUP_GRACE_MS,
 } from "../observation.ts";
+import { parallelSeatCount } from "../seats.ts";
 import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -377,6 +379,24 @@ export function App({
 	// so the marker it re-checks reads the latest list through a ref.
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
+	/**
+	 * The one count the Parallel limit reads (ADR 0034): the ticket seats,
+	 * the unresolved claims, and the Consultation seats, from the latest
+	 * herdr poll. The dispatch module gates a manual start on it, the
+	 * observation loop's gates gate on the same facts each cycle, and the
+	 * mode line displays it, so the three never disagree.
+	 */
+	const currentSeatCount = (): number => {
+		if (state === undefined) return 0;
+		return parallelSeatCount({
+			tickets: state.ticketsByState(["handed-off", "running"]),
+			openAttempts: state.openAttemptTickets(),
+			consultationSeats: state.consultationSeatCount(),
+			agents: agentsRef.current,
+			now: () => Date.now(),
+			startupGraceMs: STARTUP_GRACE_MS,
+		});
+	};
 	// The herdr seat: one external change to a ticket's environment at a time.
 	// A handoff holds it while herdr builds the environment and starts the
 	// agent. Close cleanups and leftover clears queue behind that work, and a
@@ -479,19 +499,12 @@ export function App({
 	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-	// The mode line carries the auto-handoff state and the live agent count:
-	// the in-flight tickets whose agent was alive in the latest poll, against
-	// the parallel limit. It exists only when the control plane has state to
-	// observe.
-	const liveCount =
-		agents === null
-			? 0
-			: tickets.filter(
-					(ticket) =>
-						(ticket.state === "handed-off" || ticket.state === "running") &&
-						(ticket.handoff?.paneId ?? null) !== null &&
-						agents.some((agent) => agent.paneId === ticket.handoff?.paneId),
-				).length;
+	// The mode line carries the auto-handoff state and the combined seat
+	// count against the one cap (ADR 0034): the ticket seats, the unresolved
+	// claims, and the Consultation seats, from the shared count the gates
+	// read, so the display and the gates never disagree. It exists only when
+	// the control plane has state to observe.
+	const liveCount = state === undefined ? 0 : currentSeatCount();
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
@@ -844,11 +857,13 @@ export function App({
 				state,
 				runner: commandRunner,
 				config: () => configRef.current,
+				seatCount: currentSeatCount,
 				home: homeDir,
 				controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 				working: (text) => setWorkingMessage(text, "handoff"),
 				warning: setWarningMessage,
 				error: setErrorMessage,
+				notice: setNoticeMessage,
 				clearWorking: () => clearWorkingMessage("handoff"),
 				refresh: replaceTickets,
 				starting: (identity, active) => {
@@ -2186,6 +2201,9 @@ export function App({
 			herdr: new HerdrAgentReader(commandRunner),
 			config: () => configRef.current,
 			dispatch: (intent) => dispatch.dispatch(intent),
+			// The Work queue's pickup (ADR 0034): the cycle starts the waiting
+			// manual starts before auto-dispatch, in queue order.
+			pickupWorkQueue: () => dispatch.pickupWorkQueue(),
 			// The cycle's end may have changed the ticket's source item (a merged
 			// pull request, a closed issue): re-read the sources now, so the
 			// ticket is re-verified - or drops off the list - before the next

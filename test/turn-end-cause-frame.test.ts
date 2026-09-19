@@ -285,7 +285,7 @@ describe("the held turn through the real app flow", () => {
 				// counts the held turn, and the message line names it.
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
-				expect(rows[0]).toContain("auto: on 1/3 paused");
+				expect(rows[0]).toContain("auto: on 2/3 paused");
 				// The row is the list's own row in the left column; the detail
 				// pane's title carries the same title in the right column.
 				const rowA = rows.find((row) => row.slice(0, 60).includes("Persist source facts"));

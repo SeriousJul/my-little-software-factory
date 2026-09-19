@@ -760,7 +760,7 @@ describe("pending responses across restart and migration", () => {
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
-		db.exec("DROP TABLE referenced_issues;");
+		db.exec("DROP TABLE referenced_issues; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v4 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -789,7 +789,7 @@ describe("pending responses across restart and migration", () => {
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
-		db.exec("DROP TABLE referenced_issues;");
+		db.exec("DROP TABLE referenced_issues; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v9 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();

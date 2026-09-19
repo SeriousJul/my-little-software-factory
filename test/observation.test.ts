@@ -186,7 +186,7 @@ function rig(options: {
 				if (claim.ok) claims.push(claim.claim.attemptId);
 			}
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-			return { ok: true };
+			return { ok: true, queued: false };
 		},
 		cleanup: async (handoff) => {
 			cleanups.push({
@@ -209,7 +209,7 @@ function rig(options: {
 		state,
 		intents,
 		claims,
-		reportStart: (started: DispatchResult = { ok: true }) => {
+		reportStart: (started: DispatchResult = { ok: true, queued: false }) => {
 			const next = pending.shift();
 			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
 			next(started);
@@ -946,7 +946,7 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: mock().mockResolvedValue({ ok: true }),
+			dispatch: mock().mockResolvedValue({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,
@@ -2417,7 +2417,7 @@ describe("the injectable clock", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
+			dispatch: async () => ({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => false,
@@ -3036,7 +3036,7 @@ describe("an agent that outlives its work cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
+			dispatch: async () => ({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:05:00Z"),
 			mode: () => false,

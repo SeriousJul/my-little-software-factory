@@ -45,7 +45,7 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -62,6 +62,21 @@ export interface SourceDefinition {
 
 export interface HandoffClaim {
 	attemptId: string;
+}
+
+/**
+ * One item of the Work queue (ADR 0034): a manual start that waited for a
+ * Parallel limit seat. The choice is the one the operator captured when the
+ * start was asked, and the origin says what the pickup re-checks when a seat
+ * frees.
+ */
+export interface WorkQueueItem {
+	position: number;
+	ticketIdentity: string;
+	origin: HandoffOrigin;
+	choice: HandoffChoice;
+	previousMessage: string;
+	enqueuedAt: string;
 }
 
 export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reason: string };
@@ -555,6 +570,25 @@ const MIGRATION_V11_TO_V12 = `
 	);
 `;
 
+/**
+ * The v13 step: the Work queue (ADR 0034).
+ *
+ * The durable, ordered list of manual starts waiting for a Parallel limit
+ * seat. The position is the queue order and the ticket identity is unique in
+ * the table: the queue holds at most one item per ticket, and a second
+ * enqueue for a ticket with a waiting item is refused by the state.
+ */
+const MIGRATION_V12_TO_V13 = `
+	CREATE TABLE work_queue (
+		position INTEGER PRIMARY KEY,
+		ticket_identity TEXT NOT NULL UNIQUE,
+		origin TEXT NOT NULL,
+		choice_json TEXT NOT NULL,
+		previous_message TEXT NOT NULL,
+		enqueued_at TEXT NOT NULL
+	);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -572,7 +606,7 @@ export class FactoryState {
 	private leaseToken: string | undefined;
 	readonly path: string;
 	/** The clock for internal timestamps. Tests pin it. */
-	private readonly now: () => number;
+	readonly now: () => number;
 
 	constructor(path: string, now: () => number = () => Date.now()) {
 		this.path = path;
@@ -667,6 +701,7 @@ export class FactoryState {
 			if (version < 10) this.db.exec(MIGRATION_V9_TO_V10);
 			if (version < 11) this.db.exec(MIGRATION_V10_TO_V11);
 			if (version < 12) this.db.exec(MIGRATION_V11_TO_V12);
+			if (version < 13) this.db.exec(MIGRATION_V12_TO_V13);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1489,6 +1524,147 @@ export class FactoryState {
 				.prepare("SELECT ticket_identity FROM handoff_attempts WHERE resolved_at IS NULL")
 				.all() as Array<{ ticket_identity: string }>
 		).map((row) => row.ticket_identity);
+	}
+
+	/**
+	 * The Work queue (ADR 0034), in queue order: the manual starts waiting
+	 * for a Parallel limit seat. Rows that cannot be read back are dropped
+	 * from the projection, exactly as a broken choice_json is elsewhere.
+	 */
+	workQueue(): WorkQueueItem[] {
+		const rows = this.db
+			.prepare(
+				"SELECT position, ticket_identity, origin, choice_json, previous_message, enqueued_at FROM work_queue ORDER BY position ASC",
+			)
+			.all() as Array<{
+				position: number;
+				ticket_identity: string;
+				origin: string;
+				choice_json: string;
+				previous_message: string;
+				enqueued_at: string;
+			}>;
+		const items: WorkQueueItem[] = [];
+		for (const row of rows) {
+			const origin =
+				row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
+					? (row.origin as HandoffOrigin)
+					: undefined;
+			const choice = jsonChoice(row.choice_json);
+			if (origin === undefined || choice === undefined) continue;
+			items.push({
+				position: row.position,
+				ticketIdentity: row.ticket_identity,
+				origin,
+				choice,
+				previousMessage: row.previous_message,
+				enqueuedAt: row.enqueued_at,
+			});
+		}
+		return items;
+	}
+
+	/** The queue's depth: the row count the queue Section's header carries. */
+	workQueueDepth(): number {
+		return (
+			(this.db.prepare("SELECT COUNT(*) AS count FROM work_queue").get() as
+				| { count: number }
+				| undefined)?.count ?? 0
+		);
+	}
+
+	/** The identity of the ticket the queue already waits for, or null. */
+	workQueueIdentity(ticketIdentity: string): string | null {
+		return (
+			(this.db
+				.prepare("SELECT ticket_identity FROM work_queue WHERE ticket_identity = ?")
+				.get(ticketIdentity) as { ticket_identity: string } | undefined)?.ticket_identity ?? null
+		);
+	}
+
+	/**
+	 * Add the start to the end of the queue. The queue holds at most one item
+	 * per ticket: a second add for a ticket that already waits is refused, and
+	 * the first item keeps its place.
+	 */
+	enqueueWork(
+		entry: {
+			ticketIdentity: string;
+			origin: HandoffOrigin;
+			choice: HandoffChoice;
+			previousMessage: string;
+		},
+	): { ok: true } | { ok: false; reason: string } {
+		try {
+			return this.transaction(() => {
+				const existing = this.db
+					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+					.get(entry.ticketIdentity);
+				if (existing !== null && existing !== undefined)
+					return {
+						ok: false,
+						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
+					};
+				this.db
+					.prepare(
+						"INSERT INTO work_queue(position, ticket_identity, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?)",
+					)
+					.run(
+						entry.ticketIdentity,
+						entry.origin,
+						JSON.stringify(entry.choice),
+						entry.previousMessage,
+						new Date(this.now()).toISOString(),
+					);
+				return { ok: true };
+			});
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the handoff: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+	}
+
+	/** Cancel the ticket's waiting item. The ticket keeps its state. */
+	removeWorkItem(ticketIdentity: string): boolean {
+		return (
+			this.db
+				.prepare("DELETE FROM work_queue WHERE ticket_identity = ?")
+				.run(ticketIdentity).changes > 0
+		);
+	}
+
+	/**
+	 * Move the ticket's item one place within the shared queue order, toward
+	 * the front (`up`) or the back (`down`). An item at an edge moves nowhere.
+	 */
+	moveWorkItem(ticketIdentity: string, direction: "up" | "down"): boolean {
+		return this.transaction(() => {
+			const items = this.workQueue();
+			const index = items.findIndex((item) => item.ticketIdentity === ticketIdentity);
+			const target = index + (direction === "up" ? -1 : 1);
+			if (index < 0 || target < 0 || target >= items.length) return false;
+			const swap = this.db.prepare("UPDATE work_queue SET position = ? WHERE ticket_identity = ?");
+			swap.run(items[target].position, ticketIdentity);
+			swap.run(items[index].position, items[target].ticketIdentity);
+			return true;
+		});
+	}
+
+	/**
+	 * The Consultation side of the Parallel limit (ADR 0034): a Consultation
+	 * in `opening` or `working` holds one seat beside the ticket seats; the
+	 * other states hold none.
+	 */
+	consultationSeatCount(): number {
+		return (
+			(this.db
+				.prepare(
+					"SELECT COUNT(*) AS count FROM consultations WHERE state IN ('opening', 'working')",
+				)
+				.get() as { count: number } | undefined)?.count ?? 0
+		);
 	}
 
 	/**
