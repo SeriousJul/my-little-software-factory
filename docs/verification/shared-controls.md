@@ -270,16 +270,24 @@ The automatic suite covers the refusal and the key claim in both Ticket
 modes, the untouched Consultation meanings, and the guard test itself
 (`test/controls.test.ts`), the bar's omission (`test/action-bar.test.ts`),
 the guide's rows and ranges (`test/key-guide.test.ts`), and the frame test
-that presses `d` and `f` in the Ticket list and the Ticket detail, checks
-the refusal on the Message line, and asserts the Consultation section's
-header facts and its rows come back unchanged (`test/main-view-frame.test.ts`).
+that presses `d` and `f` in the Ticket list and again in the Ticket detail,
+checks the refusal on the Message line, and compares both sections' rows and
+both list selections before and after every press, so the refusal is shown
+to change nothing (`test/main-view-frame.test.ts`).
+
+On the rebased catalogue (after ADR 0031 put a `w Close` row in the Ticket
+guide) the counts were re-measured, not computed: the Ticket guide holds 54
+rows at the full width where it held 56 with Delete and History present, the
+scroll ladder walks 35 steps to the bottom row `36-54/54`, and the narrow
+60x12 case holds 75 rows where it held 77. The guide screenshots need no
+regeneration: neither section's Action bar changed, and the Key guide is not
+screenshotted, so `test/screenshot-drift.test.ts` passes against the
+committed images.
 On this branch `bun run lint` and `bun run typecheck` pass, and
 `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`,
-and `test/main-view-frame.test.ts` each pass in isolation. In the full suite
-on this machine the pre-existing flaky frame tests (issues #103, #104) fail
-identically with and without this change (26 failures, the same failing
-set); the flaky files pass when run in isolation, and the skips are the
-recorded 13.
+`test/main-view-frame.test.ts`, and `test/screenshot-drift.test.ts` each pass
+in isolation. The full `bun run test` passes on the rebased branch; the
+recorded skips stay the 13 issues #103 and #104 carry.
 
 The display rule the section asymmetry rests on - the Consultation guide
 names a refused `e Override` dim, while the Ticket guide and bar omit the

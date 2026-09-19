@@ -37,6 +37,7 @@ import {
 	pressScrollKey,
 	rowsOf,
 	settle,
+	stillFrame,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -827,22 +828,38 @@ describe("the merged Main view", () => {
 				async (setup) => {
 					// The Consultation-only keys answer the Ticket section the way
 					// the Ticket-only keys answer the Consultation section: the
-					// key states what is missing, and nothing changes. The Ticket
-					// list refuses first...
+					// key states what is missing, and nothing changes. The frame
+					// holds the proof: every row of both sections, and both list
+					// selections, come back unchanged after each press.
+					const consultationSection = (frame: string) =>
+						rowsOf(frame).filter((row) => row.includes("Consultations") || row.includes("grill"));
+					const ticketSection = (frame: string) => {
+						const rows = rowsOf(frame);
+						const header = rows.findIndex((row) => row.includes("Tickets"));
+						const below = rows.findIndex((row) => row.includes("Consultations"));
+						return stillFrame(rows.slice(header, below).join("\n"));
+					};
+					const unchanged = (before: string, after: string, what: string) => {
+						expect(markerRowOf(after), what).toBe(markerRowOf(before));
+						expect(ticketSection(after), what).toBe(ticketSection(before));
+						expect(consultationSection(after), what).toEqual(consultationSection(before));
+					};
+					// The Ticket list refuses first...
+					const listBefore = await settle(setup);
 					let refusal = await press(setup, "d", "the delete refusal", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
 					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					unchanged(listBefore, refusal, "after d in the Ticket list");
 					refusal = await press(setup, "f", "the history refusal", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
 					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					unchanged(listBefore, refusal, "after f in the Ticket list");
 					// ...and the Ticket detail pane carries the same refusal, the
 					// seeded Consultation untouched by either key.
 					await focusDetail(setup);
 					const detailBefore = await settle(setup);
-					const consultationSection = (frame: string) =>
-						rowsOf(frame).filter((row) => row.includes("Consultations") || row.includes("grill"));
 					refusal = await press(setup, "d", "the delete refusal on the detail pane", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
@@ -854,7 +871,7 @@ describe("the merged Main view", () => {
 					// The refusal changes no Consultation state: the section's header
 					// facts and its rows come back exactly as they were, and its
 					// history filter stays open.
-					expect(consultationSection(refusal)).toEqual(consultationSection(detailBefore));
+					unchanged(detailBefore, refusal, "after d and f on the Ticket detail pane");
 
 					// A Ticket-section control answers the same way in the
 					// Consultation section: the key states what is missing.
