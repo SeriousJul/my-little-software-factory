@@ -1737,6 +1737,174 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(warned()).toBe(2);
 	});
 
+	test("a workflow pickup records the route decision on the turn it routes from", async () => {
+		const rigRef = rig([FIRST]);
+		// The ticket rests on its settled turn, awaiting its route.
+		const stored = await handOff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("awaiting");
+		// The stored workspace still holds: the picked-up route reuses it in a
+		// fresh tab, the way the direct route does.
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: FIRST.workspaceId, checkoutPath: rigRef.checkout }]),
+		});
+		rigRef.runner.set("herdr", ["tab", "create", "--workspace", FIRST.workspaceId, "--no-focus"], {
+			stdout: tabCreateJson("pane-route", "tab-route"),
+		});
+		// The cap is full: the operator's route waits with its captured choice.
+		let held = rigRef.config.maxParallelAgents;
+		const mod = withRunner(rigRef, rigRef.runner, { seatCount: () => held });
+		await expect(
+			mod.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: { ...liveChoice, taskType: "review" },
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// The turn the route came from is still undecided while the item waits.
+		expect(rigRef.state.lastCompletion(FIRST.identity)?.decision).toBeNull();
+		// A seat frees: the pickup runs the route the operator asked for.
+		held = rigRef.config.maxParallelAgents - 1;
+		expect(await mod.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		// The measured copy of the route decision: the predecessor turn's trace
+		// reads handed-off at the pickup, the fact `runRouteHandoff` records when
+		// a route starts in its seat at once (ADR 0034).
+		expect(rigRef.state.lastCompletion(FIRST.identity)?.decision).toBe("handed-off");
+		expect(rigRef.commands()).toContain(
+			`herdr agent start ${FIRST.name} --kind pi --pane pane-route`,
+		);
+		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
+	});
+
+	test("removing a waiting start cancels the pickup the held herdr seat parked", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		// One module owns the seat, the queue, and the cancel, so the parked
+		// intent and its removal meet in the same drain.
+		const gate = gatedRunner(rigRef.runner, (command) => command.startsWith("herdr agent start"));
+		let held = rigRef.config.maxParallelAgents - 1;
+		const mod = withRunner(rigRef, gate.runner, { seatCount: () => held });
+		// SECOND is in flight inside herdr: the module's seat holds while its
+		// agent start waits on the gate.
+		const startedSecond = new Promise<DispatchResult>((resolve) => {
+			void mod.dispatch({
+				origin: "open",
+				ticketIdentity: SECOND.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				onStarted: resolve,
+			});
+		});
+		await gate.waitForArrivals(1);
+		// The cap fills, so FIRST's start waits in the Work queue.
+		held = rigRef.config.maxParallelAgents;
+		await expect(
+			mod.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// A Parallel seat frees while herdr is still busy: the pickup claims
+		// FIRST and parks the start behind the handoff in flight.
+		held = rigRef.config.maxParallelAgents - 1;
+		expect(await mod.pickupWorkQueue()).toBe(1);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		// The claim is in, so the picked-up start enters the Starting window like
+		// any other claim.
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:on`);
+		// The operator cancels the waiting start while its claim sits in the drain.
+		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:off`);
+		// herdr answers the handoff that held the seat, and the drain finds
+		// nothing left: the cancelled start never runs, and its claim is settled.
+		gate.release();
+		await expect(startedSecond).resolves.toEqual({ ok: true, queued: false });
+		expect(rigRef.commands().filter((command) => command.startsWith("herdr agent start"))).toEqual([
+			agentStart(SECOND.name),
+		]);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		// The parked claim settled as failed: nothing is left unresolved, and the
+		// ticket keeps the state it wore while it waited.
+		expect(rigRef.state.openAttemptTickets()).toEqual([]);
+		expect(rigRef.events).not.toContain(`notice:"${FIRST.title}" started from the Work queue`);
+		// The cancel is the operator's own act, so the module adds no warning
+		// line: the removal notice the app writes is the one line it says.
+		expect(
+			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
+		).toHaveLength(0);
+	});
+
+	test("a parked pickup the drain refuses says it once, and the item keeps its place", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		// FIRST rests on its settled turn, awaiting its route.
+		const stored = await handOff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		const gate = gatedRunner(rigRef.runner, (command) => command.startsWith("herdr agent start"));
+		let held = rigRef.config.maxParallelAgents - 1;
+		const mod = withRunner(rigRef, gate.runner, { seatCount: () => held });
+		// SECOND holds the herdr seat inside the gate.
+		const startedSecond = new Promise<DispatchResult>((resolve) => {
+			void mod.dispatch({
+				origin: "open",
+				ticketIdentity: SECOND.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				onStarted: resolve,
+			});
+		});
+		await gate.waitForArrivals(1);
+		// The route for FIRST waits at a full cap, then claims the freed seat and
+		// parks behind the handoff in flight.
+		held = rigRef.config.maxParallelAgents;
+		await expect(
+			mod.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: { ...liveChoice, taskType: "review" },
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		held = rigRef.config.maxParallelAgents - 1;
+		expect(await mod.pickupWorkQueue()).toBe(1);
+		// The operator closes the turn the route was for while its claim sits in
+		// the drain: the ticket is open again.
+		rigRef.state.applyCompletionDecision({
+			ticketIdentity: FIRST.identity,
+			handoffId: stored.handoffId,
+			decision: "closed",
+			decidedAt: "2026-09-01T02:00:00Z",
+		});
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		// The drain re-checks the ticket and refuses the parked run: one line, with
+		// the reason the drain found, and the item keeps its place.
+		gate.release();
+		await startedSecond;
+		const warned = () =>
+			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")).length;
+		await seatReleased();
+		expect(rigRef.events).toContain(
+			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
+		);
+		expect(warned()).toBe(1);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		// The only agent herdr started for FIRST is the handoff that ran its turn;
+		// the refused route started none.
+		expect(rigRef.commands().filter((command) => command === agentStart(FIRST.name))).toHaveLength(
+			1,
+		);
+		expect(rigRef.state.lastCompletion(FIRST.identity)?.decision).toBe("closed");
+		// The next free seat retries the item and the same refusal says nothing
+		// new: the once-per-reason note holds across the drain and the retry.
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		expect(warned()).toBe(1);
+	});
+
 	test("an automatic start at the cap is refused, and the queue stays empty", async () => {
 		const rigRef = rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {

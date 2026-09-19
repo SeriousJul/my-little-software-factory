@@ -1890,6 +1890,41 @@ describe("the work queue (ADR 0034)", () => {
 		expect(state.moveWorkItem("t9", "up")).toBe(false);
 	});
 
+	test("the queue and its order survive the state file being closed and reopened", () => {
+		// The durability claim of #88 is a file-backed fact: an in-memory
+		// database cannot show it, so this walk closes the state and opens the
+		// same file again the way the next control-plane run does.
+		const path = statePath();
+		const state = openFactoryState(path);
+		for (const identity of ["t1", "t2", "t3"]) enqueue(state, identity);
+		// The operator puts the last ask at the front before the plane closes.
+		expect(state.moveWorkItem("t3", "up")).toBe(true);
+		expect(state.moveWorkItem("t3", "up")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t3", "t1", "t2"]);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		const items = reopened.workQueue();
+		expect(items.map((item) => item.ticketIdentity)).toEqual(["t3", "t1", "t2"]);
+		expect(items.map((item) => item.position)).toEqual([0, 1, 2]);
+		// Every fact the waiting start carried comes back: the origin the pickup
+		// re-checks, the choice the operator captured, and the message it routes.
+		expect(items[0]).toEqual(
+			expect.objectContaining({
+				ticketIdentity: "t3",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		);
+		expect(reopened.workQueueDepth()).toBe(3);
+		expect(reopened.hasWorkItem("t1")).toBe(true);
+		// The reopened queue still moves and still answers a cancel.
+		expect(reopened.moveWorkItem("t3", "down")).toBe(true);
+		expect(reopened.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t3", "t2"]);
+		reopened.close();
+	});
+
 	test("removing an item keeps the rest in order, and the ticket is free to wait again", () => {
 		const state = openFactoryState(":memory:");
 		enqueue(state, "t1");

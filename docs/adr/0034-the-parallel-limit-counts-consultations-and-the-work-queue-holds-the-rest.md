@@ -67,8 +67,11 @@ Consultation type's settings from the config. Removing it from the queue
 unschedules it: the record keeps an `unscheduled` state, the Consultation
 section lists it, and the operator schedules it back, starts it, or deletes
 the record there. Removing a Handoff item cancels it: the intent is deleted
-and the ticket keeps its state. One queue item per ticket: a second add of
-the same ticket is refused while the first waits.
+and the ticket keeps its state. The cancel reaches the whole waiting start, so
+it ends a claim the pickup already made and the herdr seat parked: that claim
+settles as failed and the parked run leaves the drain, or a start the operator
+removed would run the moment the seat freed. One queue item per ticket: a
+second add of the same ticket is refused while the first waits.
 
 The considered alternatives:
 
@@ -98,6 +101,9 @@ The considered alternatives:
   superseded by this ADR. The Handoff limit, the Dispatch pause, and the
   Same-type hold keep their roles; the pause and the hold simply never see a
   queued item's pickup, because the pickup is a manual start.
+- A pickup claims like any other start: the claim puts the ticket in the
+  Starting window and the settle takes it out, so a picked-up start wears the
+  same face the operator sees on a start that took its seat at once.
 - The seat count gains a state-based Consultation side. A stuck `opening`
   holds its seat, so its recover is never capped and can never push the
   count past the cap.

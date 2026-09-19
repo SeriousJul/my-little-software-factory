@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FactoryConfig } from "../src/config.ts";
 import { baseChoice } from "../src/handoff.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
@@ -23,14 +24,15 @@ import {
 	frameText,
 	mouseClick,
 	press,
+	pressArrow,
 	rowsOf,
 	settle,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { emptyAgentRunner } from "./fake-runner.ts";
+import { agentListJson, emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { issuesConfig, issueTicket, success } from "./state-fixture.ts";
+import { issuesConfig, issueTicket, seedAwaitingTurn, success } from "./state-fixture.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
@@ -279,6 +281,89 @@ describe("the Work queue section", () => {
 				state,
 				source,
 				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * A route asked at a full cap waits in the queue, through the real decision
+	 * modal (ADR 0034, #92 AC1).
+	 *
+	 * ONE seat, held by a live agent on the second ticket, so the awaiting
+	 * ticket's route cannot take a seat and enters the queue with the choice the
+	 * workflow edge resolved. The observation cycle never picks it up: the cap
+	 * stays full the whole walk.
+	 */
+	test("a decision-row route at a full cap waits in the Work queue with its choice", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const tickets = twoTickets();
+		const outcome = success(tickets);
+		// The first ticket ends its turn and awaits its route; the second holds the
+		// factory's one seat with a live agent.
+		seedAwaitingTurn(state, outcome, FIRST);
+		const held = state.claimHandoff(
+			SECOND,
+			{ ...baseChoice("pi", "live-worktree", "implement") },
+			"open",
+		);
+		if (!held.ok) throw new Error(held.reason);
+		state.settleHandoff(held.claim.attemptId, true, undefined, {
+			paneId: "pane-9",
+			tabId: "tab-9",
+			workspaceId: "ws-9",
+		});
+		const runner = new FakeRunner();
+		runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-9",
+					tabId: "tab-9",
+					workspaceId: "ws-9",
+					agent: "close-the-stale-deploy-branch",
+					status: "working",
+				},
+			]),
+		});
+		const source = new FakeSource("issues", "github-issues", outcome);
+		const config: FactoryConfig = {
+			...issuesConfig,
+			maxParallelAgents: 1,
+			workflows: [{ from: "implement", to: ["review"] }],
+		};
+		try {
+			await withApp(
+				async (setup) => {
+					source.settle(outcome);
+					await awaitFrame(setup, (f) => f.includes("[awaiting]"), "the awaiting ticket");
+					// Enter on the awaiting ticket opens its decision modal.
+					await press(setup, "return", "the decision modal", (f) => f.includes("Decision:"));
+					await pressArrow(setup, "down", "the Goto row", (f) => frameText(f).includes("❯ Goto"));
+					await pressArrow(setup, "down", "the route row", (f) =>
+						frameText(f).includes("❯ Handoff: review"),
+					);
+					// The route cannot take a seat: it enters the queue, and the Message
+					// line says so instead of starting an Agent.
+					const queued = await press(setup, "return", "the route to wait", (f) =>
+						frameText(f).includes("is in the Work queue"),
+					);
+					expect(frameText(queued)).toContain("waiting: 1");
+					expect(runner.commands().filter((c) => c.startsWith("herdr agent start"))).toEqual([]);
+					// The item carries the route's origin and the edge's resolved choice,
+					// and the ticket keeps the state it wears while it waits.
+					const items = state.workQueue();
+					expect(items.map((item) => item.ticketIdentity)).toEqual([FIRST]);
+					expect(items[0]?.origin).toBe("workflow");
+					expect(items[0]?.choice.taskType).toBe("review");
+					expect(state.ticketState(FIRST)).toBe("awaiting");
+					// The trace the route came from is still undecided: the routed
+					// handoff never started.
+					expect(state.lastCompletion(FIRST)?.decision).toBeNull();
+				},
+				WIDTH,
+				34,
+				{ state, config, home, runner, sources: [source] },
 			);
 		} finally {
 			state.close();

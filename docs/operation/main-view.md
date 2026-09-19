@@ -22,8 +22,11 @@ frame. A queued start carries the ticket's title, the start's origin,
 and its place in the queue; the detail pane shows the choice the start
 carried. `u` and `d` move the item under the cursor one place toward the
 front or the back, and `Delete` removes it: the ticket keeps the state it
-wore while it waited. Up and down move the cursor through the visible rows and cross the
-section boundary when the sections are adjacent. The mode the bar and the
+wore while it waited. The removal cancels the start everywhere the factory
+holds it: a claim its pickup already made and the herdr seat parked ends with
+the row, and it never starts an Agent the operator removed. Up and down move
+the cursor through the visible rows and cross the section boundary when the
+sections are adjacent. The mode the bar and the
 guide state derives from the section that holds the cursor and its focused
 pane.
 

@@ -339,7 +339,7 @@ _Avoid_: concurrency cap, max agents
 
 **Work queue**:
 The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state.
-When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record.
+When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record. A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
 
 **Force-dispatch**:
