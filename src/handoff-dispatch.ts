@@ -83,6 +83,16 @@ export interface HandoffDispatchReports {
 	error: (text: string) => void;
 	clearWorking: () => void;
 	refresh: () => void;
+	/**
+	 * The Starting window, as the app holds it (ADR 0030): the ticket
+	 * identities this run claimed and has not yet settled, by ticket identity.
+	 * The module reports the add on the claim and the remove on the settle -
+	 * the agent-started outcome and the failed outcome alike - and the app
+	 * holds the set as UI state. The set is per run and in memory: a module
+	 * this run builds starts from an empty set, so the unresolved attempt a
+	 * crashed run leaves behind never reports.
+	 */
+	starting: (ticketIdentity: string, starting: boolean) => void;
 }
 
 /**
@@ -218,6 +228,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			error: (text) => safeReport(() => options.error(text)),
 			clearWorking: () => safeReport(options.clearWorking),
 			refresh: () => safeReport(options.refresh),
+			starting: (identity, active) => safeReport(() => options.starting(identity, active)),
 		};
 	}
 
@@ -241,6 +252,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 		const claim = this.state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
+		// The claim is in, so the ticket is in the Starting window now: its work
+		// may wait behind the seat, but the add does not wait with it.
+		this.reports.starting(intent.ticketIdentity, true);
 		this.runClaimedHandoff(
 			ticket,
 			intent.choice,
@@ -421,10 +435,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 		void run
 			.then((outcome) => this.finishHandoff(ticket.identity, claim, outcome, reportStarted))
-			.catch((error) => this.failHandoff(claim, reportStarted, error));
+			.catch((error) => this.failHandoff(ticket.identity, claim, reportStarted, error));
 	}
 
 	private failHandoff(
+		identity: string,
 		claim: HandoffClaim,
 		reportStarted: (started: DispatchResult) => void,
 		error: unknown,
@@ -432,6 +447,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (this.stopped) return;
 		const reason = errorMessage(error);
 		this.state.settleHandoff(claim.attemptId, false, reason);
+		this.reports.starting(identity, false);
 		this.reports.refresh();
 		this.reports.clearWorking();
 		this.reports.error(`handoff failed: ${reason}`);
@@ -464,6 +480,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 						agentName: outcome.agent.name,
 					},
 		);
+		this.reports.starting(identity, false);
 		this.reports.refresh();
 		await reportHandoffOutcome(outcome, this.reports, this.persistMapping);
 		reportStarted(
@@ -539,6 +556,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 						? "the ticket no longer exists"
 						: `the ticket is now ${currentState}`;
 				this.state.settleHandoff(next.claim.attemptId, false, movedOn);
+				this.reports.starting(next.ticket.identity, false);
 				this.reports.refresh();
 				this.reports.warning(`queued handoff for "${next.ticket.title}" was not run: ${movedOn}`);
 				// The route the claim was for never started: its caller decides
