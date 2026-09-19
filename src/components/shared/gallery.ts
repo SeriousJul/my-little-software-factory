@@ -16,7 +16,7 @@ import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
-import type { Consultation } from "../../state.ts";
+import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
@@ -29,6 +29,7 @@ import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "../modal
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { KeyGuide } from "../utility.ts";
+import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
@@ -787,6 +788,89 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				width: columns.contentWidth,
 			}),
 		],
+	},
+	{
+		// The Work queue's list (ADR 0034): the rows in queue order with the
+		// origin and the place, the empty state, and the bar the cursor's
+		// own keys come from.
+		id: "work-queue",
+		state: "the Work queue: the waiting starts in queue order, and the empty state",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const items: WorkQueueItem[] = [
+				{
+					position: 0,
+					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
+					origin: "open",
+					choice: {
+						agentType: "pi",
+						environment: "worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					previousMessage: "",
+					enqueuedAt: "2026-02-17T10:00:00.000Z",
+				},
+				{
+					position: 1,
+					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
+					origin: "workflow",
+					choice: {
+						agentType: "pi",
+						environment: "worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					previousMessage: "the workflow named the next task",
+					enqueuedAt: "2026-02-17T10:01:00.000Z",
+				},
+			];
+			const rows: WorkQueueRow[] = items.map((item, index) => ({
+				item,
+				title: index === 0 ? "Add a webhook retry policy" : "Close the stale deploy branch",
+			}));
+			return [
+				createElement(WorkQueueList, {
+					key: "queue",
+					rows,
+					selectedIndex: 0,
+					focused: true,
+					height: 6,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(WorkQueueList, {
+					key: "queue-empty",
+					rows: [],
+					selectedIndex: 0,
+					focused: false,
+					height: 3,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(ActionBar, {
+					key: "queue-bar",
+					mode: "work-queue-list",
+					context: contextFor("work-queue-list", {
+						listCanMove: true,
+						detailCanScroll: false,
+						selectedWorkQueueItem: items[0],
+						workQueueDepth: items.length,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				}),
+			];
+		},
 	},
 	{
 		id: "theme",

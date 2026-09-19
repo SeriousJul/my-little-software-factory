@@ -4,7 +4,7 @@ import { createElement } from "@opentui/react";
 import { padToWidth, truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
-export type MainSection = "tickets" | "consultations";
+export type MainSection = "tickets" | "consultations" | "work";
 
 interface SectionHeaderProps {
 	section: MainSection;
@@ -26,6 +26,8 @@ interface SectionHeaderProps {
 	/** The Consultation counts for the Consultations section's header. */
 	awaitingResponse?: number;
 	recovery?: number;
+	/** The Work queue's depth for the Work section's header (ADR 0034). */
+	waiting?: number;
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
@@ -78,6 +80,7 @@ export function SectionHeader({
 	awaiting = 0,
 	awaitingResponse = 0,
 	recovery = 0,
+	waiting = 0,
 	held = 0,
 	bell = false,
 	heldBell = false,
@@ -92,9 +95,13 @@ export function SectionHeader({
 			? wide
 				? `open: ${open}  running: ${running}  awaiting: ${awaiting}`
 				: `open ${open}  running ${running}  awaiting ${awaiting}`
-			: wide
-				? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
-				: `awaiting ${awaitingResponse}  recovery ${recovery}`;
+			: section === "work"
+				? wide
+					? `waiting: ${waiting}`
+					: `waiting ${waiting}`
+				: wide
+					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
+					: `awaiting ${awaitingResponse}  recovery ${recovery}`;
 	// The section name leads so a truncation never hides it, the held count
 	// shows only when it is above zero (a steady zero holds no row), and the
 	// bells sit by the facts they ring on.
@@ -103,8 +110,11 @@ export function SectionHeader({
 			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
 					heldBell ? "  !!!" : ""
 				}`
-			: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
-	const text = `${expanded ? "▾" : "▸"} ${section === "tickets" ? "Tickets" : "Consultations"}${facts}`;
+			: section === "work"
+				? `  ${counts}`
+				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
+	const name = section === "tickets" ? "Tickets" : section === "work" ? "Work" : "Consultations";
+	const text = `${expanded ? "▾" : "▸"} ${name}${facts}`;
 	const handleMouse = (event: MouseEvent) => {
 		if (!active) return;
 		if (event.type === "down" && event.button === 0) onToggle(section);

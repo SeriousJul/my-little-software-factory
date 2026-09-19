@@ -1589,13 +1589,13 @@ export class FactoryState {
 				"SELECT position, ticket_identity, origin, choice_json, previous_message, enqueued_at FROM work_queue ORDER BY position ASC",
 			)
 			.all() as Array<{
-				position: number;
-				ticket_identity: string;
-				origin: string;
-				choice_json: string;
-				previous_message: string;
-				enqueued_at: string;
-			}>;
+			position: number;
+			ticket_identity: string;
+			origin: string;
+			choice_json: string;
+			previous_message: string;
+			enqueued_at: string;
+		}>;
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
 			const origin =
@@ -1619,18 +1619,22 @@ export class FactoryState {
 	/** The queue's depth: the row count the queue Section's header carries. */
 	workQueueDepth(): number {
 		return (
-			(this.db.prepare("SELECT COUNT(*) AS count FROM work_queue").get() as
-				| { count: number }
-				| undefined)?.count ?? 0
+			(
+				this.db.prepare("SELECT COUNT(*) AS count FROM work_queue").get() as
+					| { count: number }
+					| undefined
+			)?.count ?? 0
 		);
 	}
 
 	/** The identity of the ticket the queue already waits for, or null. */
 	workQueueIdentity(ticketIdentity: string): string | null {
 		return (
-			(this.db
-				.prepare("SELECT ticket_identity FROM work_queue WHERE ticket_identity = ?")
-				.get(ticketIdentity) as { ticket_identity: string } | undefined)?.ticket_identity ?? null
+			(
+				this.db
+					.prepare("SELECT ticket_identity FROM work_queue WHERE ticket_identity = ?")
+					.get(ticketIdentity) as { ticket_identity: string } | undefined
+			)?.ticket_identity ?? null
 		);
 	}
 
@@ -1639,14 +1643,12 @@ export class FactoryState {
 	 * per ticket: a second add for a ticket that already waits is refused, and
 	 * the first item keeps its place.
 	 */
-	enqueueWork(
-		entry: {
-			ticketIdentity: string;
-			origin: HandoffOrigin;
-			choice: HandoffChoice;
-			previousMessage: string;
-		},
-	): { ok: true } | { ok: false; reason: string } {
+	enqueueWork(entry: {
+		ticketIdentity: string;
+		origin: HandoffOrigin;
+		choice: HandoffChoice;
+		previousMessage: string;
+	}): { ok: true } | { ok: false; reason: string } {
 		try {
 			return this.transaction(() => {
 				const existing = this.db
@@ -1680,11 +1682,23 @@ export class FactoryState {
 
 	/** Cancel the ticket's waiting item. The ticket keeps its state. */
 	removeWorkItem(ticketIdentity: string): boolean {
-		return (
-			this.db
+		return this.transaction(() => {
+			const result = this.db
 				.prepare("DELETE FROM work_queue WHERE ticket_identity = ?")
-				.run(ticketIdentity).changes > 0
-		);
+				.run(ticketIdentity);
+			if (result.changes === 0) return false;
+			// Repack the places so the queue stays dense: the item's place in
+			// the queue is its position, and a gap would leave a number the
+			// queue never shows.
+			const remaining = this.db
+				.prepare("SELECT position FROM work_queue ORDER BY position ASC")
+				.all() as Array<{ position: number }>;
+			const set = this.db.prepare("UPDATE work_queue SET position = ? WHERE position = ?");
+			remaining.forEach((row, index) => {
+				if (row.position !== index) set.run(index, row.position);
+			});
+			return true;
+		});
 	}
 
 	/**
@@ -1697,9 +1711,13 @@ export class FactoryState {
 			const index = items.findIndex((item) => item.ticketIdentity === ticketIdentity);
 			const target = index + (direction === "up" ? -1 : 1);
 			if (index < 0 || target < 0 || target >= items.length) return false;
+			// The swap goes through a spare position: the column is the
+			// queue's primary key, and the two rows may not share either
+			// place for a step of the swap.
 			const swap = this.db.prepare("UPDATE work_queue SET position = ? WHERE ticket_identity = ?");
-			swap.run(items[target].position, ticketIdentity);
+			swap.run(-1, ticketIdentity);
 			swap.run(items[index].position, items[target].ticketIdentity);
+			swap.run(items[target].position, ticketIdentity);
 			return true;
 		});
 	}
@@ -1711,11 +1729,13 @@ export class FactoryState {
 	 */
 	consultationSeatCount(): number {
 		return (
-			(this.db
-				.prepare(
-					"SELECT COUNT(*) AS count FROM consultations WHERE state IN ('opening', 'working')",
-				)
-				.get() as { count: number } | undefined)?.count ?? 0
+			(
+				this.db
+					.prepare(
+						"SELECT COUNT(*) AS count FROM consultations WHERE state IN ('opening', 'working')",
+					)
+					.get() as { count: number } | undefined
+			)?.count ?? 0
 		);
 	}
 

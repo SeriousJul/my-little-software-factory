@@ -96,6 +96,7 @@ describe("the shared control gallery", () => {
 			"close-panel-closing",
 			"goto",
 			"ticket-goto",
+			"work-queue",
 			"theme",
 			"theme-fallback",
 			"theme-light",

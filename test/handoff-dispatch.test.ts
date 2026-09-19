@@ -1543,3 +1543,121 @@ describe("the name fact", () => {
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
 });
+
+describe("the Parallel limit and the Work queue", () => {
+	/** Pump the microtasks and timers until the queue holds nothing again. */
+	async function untilQueueDrains(rigRef: Rig): Promise<void> {
+		for (let turn = 0; turn < 200 && rigRef.state.workQueue().length > 0; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+
+	test("a manual start at the cap waits in the queue with its origin and choice, and the ticket keeps its state", async () => {
+		const rigRef = rig([FIRST]);
+		// Every seat is held: the cap is full.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "route it back",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		const items = rigRef.state.workQueue();
+		expect(items).toHaveLength(1);
+		expect(items[0]?.ticketIdentity).toBe(FIRST.identity);
+		expect(items[0]?.origin).toBe("workflow");
+		expect(items[0]?.choice).toEqual(liveChoice);
+		expect(items[0]?.previousMessage).toBe("route it back");
+		// The ticket keeps the state it wears while it waits, and nothing
+		// started: the queue holds the start, not the claim.
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		// Nothing started: the queue holds the start, not the claim.
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(0);
+		expect(rigRef.events).toContain("refresh");
+		expect(rigRef.events).toContain(
+			`notice:handoff of "${FIRST.title}" is in the Work queue; it starts when a seat frees`,
+		);
+	});
+
+	test("a second enqueue for a waiting ticket is refused, and the first item keeps its place", async () => {
+		const rigRef = rig([FIRST]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		const intent = {
+			origin: "open" as const,
+			ticketIdentity: FIRST.identity,
+			choice: liveChoice,
+			previousMessage: "",
+		};
+		await expect(capped.dispatch(intent)).resolves.toEqual({ ok: true, queued: true });
+		await expect(capped.dispatch(intent)).resolves.toEqual({
+			ok: false,
+			reason: "the ticket already has a waiting queue item",
+		});
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		expect(rigRef.events).toContain(
+			`warning:ticket ${FIRST.identity} already has a waiting queue item; the first item keeps its place`,
+		);
+	});
+
+	test("a free seat picks up the queue's head, and the start names the queue", async () => {
+		const rigRef = rig([FIRST]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// One seat frees: the pickup claims the item, and the item leaves
+		// with the start.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
+	});
+
+	test("a pickup the state refuses keeps the item, and the warning says why once", async () => {
+		const rigRef = rig([FIRST]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		// A restart waits for a ticket that is still open: the pickup's
+		// hard check refuses it, and the item keeps its place.
+		await expect(
+			capped.dispatch({
+				origin: "restart",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "again",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		expect(rigRef.events).toContain(
+			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
+		);
+		// The same refusal on the next cycle says nothing new.
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(
+			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
+		).toHaveLength(1);
+	});
+});

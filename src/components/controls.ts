@@ -15,7 +15,7 @@
  * rows may name.
  */
 import type { Ticket } from "../domain/ticket.ts";
-import type { Consultation } from "../state.ts";
+import type { Consultation, WorkQueueItem } from "../state.ts";
 import { widthOf } from "./text.ts";
 
 export type InteractionMode =
@@ -23,6 +23,9 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
+	/** The Work queue's list and detail panes (ADR 0034). */
+	| "work-queue-list"
+	| "work-queue-detail"
 	| "override-list"
 	| "override-model"
 	| "override-text"
@@ -50,6 +53,8 @@ type ControlScope =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
+	| "work-queue-list"
+	| "work-queue-detail"
 	| "override"
 	| "modal"
 	| "utility"
@@ -77,6 +82,7 @@ type ControlKey =
 	| "f"
 	| "g"
 	| "x"
+	| "u"
 	| "d"
 	| "w"
 	| "delete"
@@ -125,6 +131,12 @@ export interface ControlContext {
 	selectedTicket?: Ticket;
 	/** The Consultation the base panes point at, if the list holds one. */
 	selectedConsultation?: Consultation;
+	/**
+	 * The Work queue's item under the cursor, with the queue's depth beside it
+	 * (ADR 0034). The item's own position is the queue order's.
+	 */
+	selectedWorkQueueItem?: WorkQueueItem | null;
+	workQueueDepth?: number;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -346,6 +358,8 @@ function interactionExitLabel(exitKey: string | undefined): string {
 const LIVE_VIEW_NOTE = "opens the Live view on an in-flight Ticket";
 const consultationMode = (mode: InteractionMode): boolean =>
 	mode === "consultation-list" || mode === "consultation-detail";
+const workQueueMode = (mode: InteractionMode): boolean =>
+	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
 /**
@@ -367,7 +381,9 @@ const listMove = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				consultationMode(context.mode)
 					? "the Consultation list has nowhere to move"
-					: "the Ticket list has nowhere to move",
+					: workQueueMode(context.mode)
+						? "the Work queue has nowhere to move"
+						: "the Ticket list has nowhere to move",
 			);
 const detailScroll = (context: ControlContext): ControlAvailability =>
 	context.detailCanScroll
@@ -375,8 +391,27 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				context.mode === "consultation-detail"
 					? "the Consultation detail has nowhere to scroll"
-					: "the Ticket detail has nowhere to scroll",
+					: workQueueMode(context.mode)
+						? "the Work queue detail has nowhere to scroll"
+						: "the Ticket detail has nowhere to scroll",
 			);
+const queueMove =
+	(direction: "up" | "down") =>
+	(context: ControlContext): ControlAvailability => {
+		const item = context.selectedWorkQueueItem;
+		if (item === null || item === undefined)
+			return unavailable("no queue item is under the cursor");
+		const depth = context.workQueueDepth ?? 0;
+		if (direction === "up" && item.position > 0) return available();
+		if (direction === "down" && item.position < depth - 1) return available();
+		return unavailable(
+			direction === "up" ? "the item is first in the queue" : "the item is last in the queue",
+		);
+	};
+const queueRemove = (context: ControlContext): ControlAvailability =>
+	context.selectedWorkQueueItem !== null && context.selectedWorkQueueItem !== undefined
+		? available()
+		: unavailable("no queue item is under the cursor");
 const refresh = (context: ControlContext): ControlAvailability => {
 	if (consultationMode(context.mode))
 		return context.consultationRefreshAvailable === true
@@ -467,7 +502,8 @@ const priorityEligibility = (context: ControlContext): ControlAvailability => {
 
 const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
-const baseModes = [...ticketBaseModes, ...consultationBaseModes] as const;
+const workQueueBaseModes = ["work-queue-list", "work-queue-detail"] as const;
+const baseModes = [...ticketBaseModes, ...consultationBaseModes, ...workQueueBaseModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
 /**
  * The modes one shared form surface runs, one per slot kind.
@@ -566,12 +602,21 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 					? ["up", "down", "j", "k", "tab"]
 					: mode === "consultation-list"
 						? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
-						: ["up", "down", "tab"],
+						: mode === "work-queue-list"
+							? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
+							: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-list", "consultation-list", "override-list", "override-model", "override-text"],
+		modes: [
+			"ticket-list",
+			"consultation-list",
+			"work-queue-list",
+			"override-list",
+			"override-model",
+			"override-text",
+		],
 		availability: listMove,
 	},
 	{
@@ -582,7 +627,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-list",
 		actionBar: true,
 		priority: 75,
-		modes: ["ticket-list", "consultation-list"],
+		modes: ["ticket-list", "consultation-list", "work-queue-list"],
 		availability: available,
 	},
 	{
@@ -593,7 +638,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-detail",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-detail", "consultation-detail"],
+		modes: ["ticket-detail", "consultation-detail", "work-queue-detail"],
 		availability: detailScroll,
 	},
 	{
@@ -618,6 +663,19 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 75,
 		modes: ["consultation-detail"],
+		availability: available,
+	},
+	{
+		// The same pane navigation, named for the section that owns it. Left
+		// returns to the Work queue's list (ADR 0034).
+		id: "queue-list",
+		label: "List",
+		keys: () => ["left", "h"],
+		keyLabel: "←/h",
+		scope: "work-queue-detail",
+		actionBar: true,
+		priority: 75,
+		modes: ["work-queue-detail"],
 		availability: available,
 	},
 	{
@@ -738,7 +796,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "section-toggle",
 		label: "Section",
-		// `x` collapses the section the cursor is in, or expands it back. Both
+		// `x` collapses the section the cursor is in, or expands it back. The
 		// sections stay visible as long as the frame can hold them, so the
 		// toggle is a matter of room, not of access.
 		keys: () => ["x"],
@@ -749,6 +807,43 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...baseModes],
 		availability: available,
 		guideNote: SECTION_TOGGLE_NOTE,
+	},
+	{
+		// The queue's own keys (ADR 0034): `u` and `d` move the item under the
+		// cursor in the queue, and Delete cancels the item's waiting start.
+		// Reordering never changes an item's captured choice, and cancelling
+		// leaves the ticket in the state it keeps while it waits.
+		id: "queue-up",
+		label: "Queue up",
+		keys: () => ["u"],
+		keyLabel: "u",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 60,
+		modes: ["work-queue-list"],
+		availability: queueMove("up"),
+	},
+	{
+		id: "queue-down",
+		label: "Queue down",
+		keys: () => ["d"],
+		keyLabel: "d",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 60,
+		modes: ["work-queue-list"],
+		availability: queueMove("down"),
+	},
+	{
+		id: "queue-remove",
+		label: "Remove",
+		keys: () => ["delete"],
+		keyLabel: "Delete",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 55,
+		modes: ["work-queue-list"],
+		availability: queueRemove,
 	},
 	{
 		id: "launch",
@@ -1073,7 +1168,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Message",
 		// `m` opens the Message view only from the base panes. F2 is the
 		// alias in every interaction mode, so text input keeps its `m`.
-		keys: (mode) => (ticketBaseMode(mode) || consultationMode(mode) ? ["m", "f2"] : ["f2"]),
+		keys: (mode) =>
+			ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode) ? ["m", "f2"] : ["f2"],
 		keyLabel: "m/F2",
 		scope: "global",
 		actionBar: true,
@@ -1408,14 +1504,22 @@ export function availabilityFor(
 }
 
 /** Ticket-section controls have no useful meaning in a Consultation guide. */
-function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefinition): boolean {
-	return (
+function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boolean {
+	if (
 		consultationMode(mode) &&
 		control.scope !== "global" &&
 		(control.scope === "control-plane" ||
 			control.scope === "ticket-list" ||
 			control.scope === "ticket-detail") &&
 		!control.modes.some(consultationMode)
+	)
+		return true;
+	// The Work queue's own keys stay out of the other sections' guides
+	// (ADR 0034): each section's guide names the keys it dispatches, and the
+	// queue's reorder, cancel, and list-focus keys belong to the queue alone.
+	return (
+		!workQueueMode(mode) &&
+		(control.scope === "work-queue-list" || control.scope === "work-queue-detail")
 	);
 }
 
@@ -1466,7 +1570,7 @@ export function guideControls(context: ControlContext): Array<{
 			(control) =>
 				!seen.has(control.id) &&
 				control.guideOnly !== true &&
-				!omitFromConsultationGuide(mode, control) &&
+				!omitFromGuide(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
 		).map((control) => {
@@ -1498,6 +1602,10 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Consultation list";
 		case "consultation-detail":
 			return "Consultation detail";
+		case "work-queue-list":
+			return "Work queue list";
+		case "work-queue-detail":
+			return "Work queue detail";
 		case "override-list":
 			return "Override list row";
 		case "override-model":
@@ -1540,10 +1648,12 @@ function displayKeyLabel(
 		// modes only F1 opens the guide.
 		if (fieldModes.includes(mode)) return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
-		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "F1/?" : "?";
+		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+			return includeAllAliases ? "F1/?" : "?";
 	}
 	if (control.id === "message") {
-		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "m/F2" : "m";
+		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+			return includeAllAliases ? "m/F2" : "m";
 		return "F2";
 	}
 	return control.keyLabel;
