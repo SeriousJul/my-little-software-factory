@@ -192,7 +192,6 @@ export type AppKey =
 	| "c"
 	| "f"
 	| "x"
-	| "z"
 	| "d"
 	| "up"
 	| "down"
@@ -213,6 +212,41 @@ type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
+
+/**
+ * The body of the Consultation close confirmation, for the states in which a
+ * close stops a live Agent: the first line names the Agent that is alive, and
+ * the body states what the close keeps. A Consultation the map does not hold
+ * has no Agent to stop, so it closes directly and never confirms.
+ */
+function consultationCloseConfirmation(consultation: Consultation):
+	| {
+			line: string;
+			body: string;
+			actionDetail: string;
+	  }
+	| undefined {
+	const line =
+		consultation.state === "opening"
+			? "The Agent is still opening"
+			: consultation.state === "working"
+				? "The Agent is working"
+				: consultation.state === "awaiting-response"
+					? "The Agent has answered and is waiting for your reply"
+					: undefined;
+	if (line === undefined) return undefined;
+	return consultation.environment === "worktree"
+		? {
+				line,
+				body: "Close stops the Agent. The worktree and branch stay.",
+				actionDetail: "stop the Agent; the work stays",
+			}
+		: {
+				line,
+				body: "Close stops the Agent. The checkout stays.",
+				actionDetail: "stop the Agent; the checkout stays",
+			};
+}
 export interface AppProps {
 	/**
 	 * The validated config. The production entry always supplies it from the
@@ -1760,18 +1794,13 @@ export function App({
 				"consultation-close": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
-					if (
-						selected.state === "opening" ||
-						selected.state === "working" ||
-						selected.state === "closing"
-					)
-						setPanel({ kind: "consultation-close", identity: selected.id });
-					else if (
-						selected.state === "awaiting-response" ||
-						selected.state === "missing" ||
-						selected.state === "failed"
-					)
+					// A missing or a failed Consultation has no Agent to stop, so it
+					// closes directly. A live Agent confirms first, and a closing
+					// Consultation opens the Recovery panel with the Retry and the
+					// Force-close.
+					if (selected.state === "missing" || selected.state === "failed")
 						closeConsultation(selected);
+					else setPanel({ kind: "consultation-close", identity: selected.id });
 				},
 				"consultation-delete": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -2353,6 +2382,10 @@ export function App({
 		panel !== null && ticketPanel === null
 			? consultationsRef.current.find((item) => item.id === panel.identity)
 			: undefined;
+	const closeConfirmation =
+		panel !== null && panel.kind === "consultation-close" && panelConsultation !== undefined
+			? consultationCloseConfirmation(panelConsultation)
+			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
@@ -2916,33 +2949,43 @@ export function App({
 		panel !== null &&
 			panelConsultation !== undefined &&
 			panel.kind === "consultation-close" &&
+			panelConsultation.state === "closing" &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
 				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}`,
-				bodyLines: [
-					panelConsultation.environment === "worktree"
-						? "The Agent may still be working. Close keeps the worktree and branch."
-						: "The Agent may still be working. Close only on an explicit operator decision.",
-					...(panelConsultation.state === "closing"
-						? ["Cleanup is already in progress. Force-close records remaining resources."]
-						: []),
-				],
+				bodyLines: ["Cleanup is already in progress. Force-close records remaining resources."],
 				actions: [
-					...(panelConsultation.state === "closing"
-						? [
-								{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
-								{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
-							]
-						: [{ key: "close", label: "Close", detail: "stop the Agent and retain the checkout" }]),
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation running" },
+					{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
+					{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
+					{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
 				],
 				onAction: (key) => {
-					if (key === "close" || key === "retry") {
+					if (key === "retry") {
 						setPanel(null);
 						closeConsultation(panelConsultation);
 					}
 					if (key === "force")
 						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
+				},
+				onCancel: () => setPanel(null),
+			}),
+		panel !== null &&
+			panelConsultation !== undefined &&
+			panel.kind === "consultation-close" &&
+			closeConfirmation !== undefined &&
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}?`,
+				bodyLines: [closeConfirmation.line, closeConfirmation.body],
+				actions: [
+					{ key: "close", label: "Close", detail: closeConfirmation.actionDetail },
+					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
+				],
+				onAction: (key) => {
+					if (key === "close") {
+						setPanel(null);
+						closeConsultation(panelConsultation);
+					}
 				},
 				onCancel: () => setPanel(null),
 			}),

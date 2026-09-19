@@ -864,7 +864,7 @@ describe("the merged Main view", () => {
 				await crossToConsultations(setup);
 				const across = await settle(setup);
 				expect(rowsOf(across)[0]).toContain("auto: off");
-				expect(actionBarRowOf(across)).toContain("z Close");
+				expect(actionBarRowOf(across)).toContain("w Close");
 				expect(actionBarRowOf(across)).toContain("x Section");
 			}, state);
 		} finally {
@@ -888,7 +888,7 @@ describe("the merged Main view", () => {
 					for (const hint of [
 						"c Launch",
 						"f History",
-						"z Close",
+						"w Close",
 						"d Delete",
 						"Enter Respond",
 						"x Section",

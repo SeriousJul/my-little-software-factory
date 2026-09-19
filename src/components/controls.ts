@@ -77,7 +77,6 @@ type ControlKey =
 	| "f"
 	| "g"
 	| "x"
-	| "z"
 	| "d"
 	| "delete"
 	| "f1"
@@ -780,9 +779,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "consultation-close",
 		label: "Close",
-		// `z` closes the Consultation: `x` is the shared section toggle.
-		keys: () => ["z"],
-		keyLabel: "z",
+		// `w` closes the Consultation: `x` is the shared section toggle.
+		keys: () => ["w"],
+		keyLabel: "w",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 50,
@@ -1323,7 +1322,6 @@ const KEY_NAMES: Record<string, string> = {
 	e: "e",
 	f: "f",
 	x: "x",
-	z: "z",
 	d: "d",
 	r: "r",
 	a: "a",

@@ -84,6 +84,9 @@ const FORCE_ID = uid("9");
 const CLOSED_ID = uid("0");
 const MISSING_ID = uid("a");
 const AWAITING_ID = uid("b");
+const MISSING_DIRECT_ID = uid("c");
+const FAILED_DIRECT_ID = uid("d");
+const CLOSED_DIRECT_ID = uid("e");
 
 let home = "";
 let checkout = "";
@@ -1036,9 +1039,37 @@ describe("Consultation close and cleanup through the UI", () => {
 							/Agent: pi \(consultation-([0-9a-f]{8})\)/,
 						)?.[1];
 						if (id8 === undefined) throw new Error("no Consultation agent selected");
-						await openConsultationPanel(setup, "z", "the close panel", (f) =>
-							f.includes("Close Consultation"),
-						);
+						if (i === 0) {
+							const current = state
+								.consultations("open")
+								.find((item) => item.id.slice(0, 8) === id8);
+							if (current === undefined) throw new Error(`no record for ${id8}`);
+							// The confirmation names the live Agent and the work the
+							// close keeps; a cancel leaves the state unchanged.
+							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+								f.includes("Close Consultation"),
+							);
+							const dialog = await settle(setup);
+							expect(dialog).toContain(
+								current.state === "opening" ? "The Agent is still opening" : "The Agent is working",
+							);
+							expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
+							await press(
+								setup,
+								"escape",
+								"the panel to close",
+								(f) => !f.includes("Close Consultation"),
+							);
+							expect(state.consultation(current.id)?.state).toBe(current.state);
+							// Reopen the dialog for the confirm.
+							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+								f.includes("Close Consultation"),
+							);
+						} else {
+							await openConsultationPanel(setup, "w", "the close panel", (f) =>
+								f.includes("Close Consultation"),
+							);
+						}
 						await confirmPanel(setup, `the close status for ${id8}`, (f) =>
 							f.includes(`${id8} closed`),
 						);
@@ -1095,7 +1126,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await openConsultationPanel(setup, "z", "the close panel", (f) =>
+					await openConsultationPanel(setup, "w", "the close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await confirmPanel(setup, "the failed cleanup status", (f) =>
@@ -1103,7 +1134,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(state.consultation(FORCE_ID)?.state).toBe("closing");
 					// Retry offers force-close once the cleanup is stuck.
-					await openConsultationPanel(setup, "z", "the recovery close panel", (f) =>
+					await openConsultationPanel(setup, "w", "the recovery close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await pressArrow(setup, "down", "the force-close action to be selected", (f) =>
@@ -1133,6 +1164,80 @@ describe("Consultation close and cleanup through the UI", () => {
 						.consultationResources(FORCE_ID)
 						.filter((resource) => resource.kind === "worktree");
 					expect(worktrees[0]).toMatchObject({ owned: false });
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a missing or a failed Consultation closes directly, without a dialog", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Neither record holds an Agent, so the close has nothing to confirm.
+		seed(state, MISSING_DIRECT_ID, false);
+		seed(state, FAILED_DIRECT_ID, false);
+		state.setConsultationState(MISSING_DIRECT_ID, "missing", "the Agent pane is gone");
+		state.setConsultationState(FAILED_DIRECT_ID, "failed", "herdr refused the launch");
+		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
+		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view", (f) =>
+						detailPaneText(f).includes("State: "),
+					);
+					const closed = (frame: string) =>
+						messageRowOf(frame).includes(`${missing8} closed`) ||
+						messageRowOf(frame).includes(`${failed8} closed`);
+					// The first row closes the moment the key lands: no dialog
+					// stands between the key and the result.
+					await press(setup, "w", "the direct close", closed);
+					// The closed row leaves the open list, so the cursor holds the
+					// other one: it closes directly the same way.
+					const otherMissing = state.consultation(MISSING_DIRECT_ID)?.state === "closed";
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes(`State: ${otherMissing ? "failed" : "missing"}`),
+						"the other Consultation under the cursor",
+					);
+					const frame = await press(setup, "w", "the second direct close", (f) =>
+						messageRowOf(f).includes(`${otherMissing ? failed8 : missing8} closed`),
+					);
+					expect(state.consultation(MISSING_DIRECT_ID)?.state).toBe("closed");
+					expect(state.consultation(FAILED_DIRECT_ID)?.state).toBe("closed");
+					expect(frame).not.toContain("Close Consultation");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("w on a closed Consultation refuses readably", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CLOSED_DIRECT_ID);
+		state.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.beginConsultationClose(CLOSED_DIRECT_ID);
+		state.finishConsultationClose(CLOSED_DIRECT_ID);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view without open history", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
+					await press(setup, "w", "the close refusal", (f) =>
+						f.includes("the selected Consultation is already closed"),
+					);
+					expect(state.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
 				WIDTH,
 				32,
@@ -2030,8 +2135,12 @@ describe("The full Consultation operator flow", () => {
 					);
 					expect(state.consultation(id)?.state).toBe("awaiting-response");
 					expect(bells.count()).toBe(3);
-					// Close takes down the owned workspace.
-					await press(setup, "z", "the closing status", (f) =>
+					// Close stops the live Agent, so the confirmation asks first;
+					// the confirm takes down the owned workspace.
+					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+						f.includes("Close Consultation"),
+					);
+					await confirmPanel(setup, "the closing status", (f) =>
 						f.includes(`${id.slice(0, 8)} closed`),
 					);
 					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
