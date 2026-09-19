@@ -419,7 +419,16 @@ describe("the failure markers", () => {
 	});
 
 	test("a missing agent gets the missing marker and the missing modal", async () => {
-		const app = seededApp("in-flight");
+		const app = seededApp(
+			"in-flight",
+			{},
+			success,
+			"live-worktree",
+			// The agent ran a while before it died: the handoff is past the
+			// startup grace, so the missing agent is not a booted one and
+			// holds no seat.
+			{ stateNow: () => Date.now() - 600_000 },
+		);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -2309,11 +2318,14 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("auto: on 0/2") && ticketRow(f).includes("missing"),
+					(f) => f.includes("auto: on 1/2") && ticketRow(f).includes("missing"),
 					"the dispatch",
 				);
 				// The new agent's pane is not in the faked list: the row wears
 				// the missing badge, and the detail pane shows the handoff.
+				// The mode line holds the booting seat: a started agent inside
+				// its startup grace counts against the parallel limit, from the
+				// same shared seat count the gates read.
 				expect(ticketRow(frame)).toContain("missing");
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
@@ -2427,10 +2439,12 @@ describe("the auto dispatch", () => {
 				// The first cycle dispatches both tickets: the first handoff
 				// runs, the second queues behind it. When the first settles,
 				// the seat frees, and the drain starts the second.
+				// Both started agents are inside their startup grace, so the
+				// mode line holds both booting seats against the cap.
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("auto: on 0/2") &&
+						f.includes("auto: on 2/2") &&
 						ticketRow(f).includes("missing") &&
 						ticketRow(f, "Watch agent turns").includes("missing"),
 					"both dispatches",
@@ -2491,10 +2505,12 @@ describe("the auto dispatch", () => {
 				// The first cycles: the turn settles, the auto-close ends the
 				// cycle, and the pair takes the dispatch. The finished ticket
 				// rests open, waiting on the re-read its close provoked.
+				// The finished ticket holds no seat; the pair's started agent
+				// is inside its startup grace, so the mode line holds one seat.
 				await awaitFrame(
 					setup,
 					(f) =>
-						f.includes("auto: on 0/2") &&
+						f.includes("auto: on 1/2") &&
 						ticketRow(f).includes("[open]") &&
 						ticketRow(f, "Watch agent turns").includes("missing"),
 					"the auto close and the pair dispatch",

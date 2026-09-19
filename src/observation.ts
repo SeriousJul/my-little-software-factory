@@ -44,14 +44,14 @@
  *    route that cannot start leaves the turn for the next cycle.
  * 5. With auto-handoff on, each eligible open ticket - actionable, under
  *    both limits - is handed off on its task profile's configured settings.
- *    The parallel count is the in-flight tickets whose agent was alive in
- *    the latest poll: a blocked agent holds a slot, a missing one does not.
- *    A handoff still in progress, and a started agent that herdr has not
- *    listed yet (still inside the startup grace), hold a slot too: they run
- *    or are about to run, and the limit bounds running agents. Every agent
- *    this cycle itself dispatches - a restart, a route, an open handoff -
- *    holds a slot before the next dispatch of the cycle is measured, so one
- *    cycle never starts more agents than the limit.
+ *    The parallel count is the shared seat count (issue #87, ADR 0034):
+ *    the in-flight tickets the latest poll listed or still holds in their
+ *    startup grace, every in-progress handoff, and every Consultation in
+ *    opening or working - the one source the mode line reads too. A
+ *    missing agent holds no slot, so the restart can refill it. Every
+ *    agent this cycle itself dispatches - a restart, a route, an open
+ *    handoff - holds a slot before the next dispatch of the cycle is
+ *    measured, so one cycle never starts more agents than the limit.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -63,6 +63,7 @@ import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
+import { parallelSeatCount } from "./parallel.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
@@ -301,11 +302,12 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * The parallel slots held: the agents the poll saw alive, the handoffs still
- * in progress, the started agents herdr has not listed yet, and every agent
- * this cycle dispatched. All dispatches of one cycle read the same poll, so
- * each new start must hold a slot before the next dispatch is measured
- * against the parallel limit.
+ * The parallel slots held this cycle: the shared seat count of the poll -
+ * the in-flight tickets it listed or still holds in their startup grace,
+ * every in-progress handoff, and every Consultation in opening or working -
+ * plus every agent this cycle dispatched. All dispatches of one cycle read
+ * the same poll, so each new start must hold a slot before the next dispatch
+ * is measured against the parallel limit.
  */
 interface ParallelSlots {
 	count: number;
@@ -556,26 +558,23 @@ export class ObservationCoordinator {
 		const reclaimed = this.reclaimLiveAgents(byPane);
 		if (this.stopped) return;
 
-		// The parallel slots this poll holds. An in-flight ticket holds one
-		// while its agent is alive in this poll. It also holds one while the
-		// agent has not been listed yet: a handoff still in progress, or a
-		// started agent still inside the startup grace. A missing agent past
-		// the grace holds none, so the restart path can refill the seat.
+		// The parallel slots this poll holds, from the shared seat count
+		// (issue #87, ADR 0034): the in-flight tickets the poll lists or
+		// still holds in their startup grace, every in-progress handoff, and
+		// every Consultation in opening or working. The mode line reads the
+		// same source, so the gates and the line never disagree. A missing
+		// agent past the grace holds no seat, so the restart path can refill
+		// it. Every dispatch of the cycle takes its seat below, so the next
+		// dispatch of the cycle measures against it.
 		const inFlight = this.state.ticketsByState(["handed-off", "running"]);
-		const inProgress = new Set(this.state.openAttemptTickets());
-		const counted = new Set<string>();
-		const slots: ParallelSlots = { count: 0 };
-		for (const ticket of inFlight) {
-			const listed = ticket.paneId !== null && byPane.has(ticket.paneId);
-			const booting = !listed && this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs;
-			if (listed || booting) {
-				slots.count += 1;
-				counted.add(ticket.ticketIdentity);
-			}
-		}
-		for (const identity of inProgress) {
-			if (!counted.has(identity)) slots.count += 1;
-		}
+		const slots: ParallelSlots = {
+			count: parallelSeatCount({
+				state: this.state,
+				agents: probe.agents,
+				now: this.now(),
+				startupGraceMs: this.startupGraceMs,
+			}),
+		};
 
 		// An episode ends when its ticket leaves in-flight: restarts may resume.
 		for (const identity of [...this.restarted]) {
@@ -646,7 +645,6 @@ export class ObservationCoordinator {
 		}
 
 		// Tickets and Consultations share this one successful Herdr list poll.
-		// A Consultation never enters the Ticket parallel count above.
 		const consultationChanged = await this.observeConsultations(probe.agents);
 		changed = consultationChanged || changed;
 		// The Dispatch pause is derived from the traces each cycle and never

@@ -67,7 +67,9 @@ import {
 	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
+	STARTUP_GRACE_MS,
 } from "../observation.ts";
+import { parallelSeatCount } from "../parallel.ts";
 import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -472,19 +474,17 @@ export function App({
 	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-	// The mode line carries the auto-handoff state and the live agent count:
-	// the in-flight tickets whose agent was alive in the latest poll, against
-	// the parallel limit. It exists only when the control plane has state to
+	// The mode line carries the auto-handoff state and the Parallel limit
+	// seat count: the same shared seat count the observation gates read
+	// (issue #87, ADR 0034) - the in-flight tickets the latest successful
+	// poll listed or still holds in their startup grace, every in-progress
+	// handoff, and every Consultation in opening or working - against the
+	// parallel limit. It exists only when the control plane has state to
 	// observe.
 	const liveCount =
-		agents === null
+		state === undefined
 			? 0
-			: tickets.filter(
-					(ticket) =>
-						(ticket.state === "handed-off" || ticket.state === "running") &&
-						(ticket.handoff?.paneId ?? null) !== null &&
-						agents.some((agent) => agent.paneId === ticket.handoff?.paneId),
-				).length;
+			: parallelSeatCount({ state, agents, now: Date.now(), startupGraceMs: STARTUP_GRACE_MS });
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
@@ -2118,6 +2118,9 @@ export function App({
 				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
+			// The mode line's shared seat count and the cycle's gates share this
+			// grace, so the booting seats they count agree.
+			startupGraceMs: STARTUP_GRACE_MS,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
 			onChanged: () => {
 				replaceTickets();
