@@ -62,8 +62,8 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
+import type { HerdrAgent } from "../herdr.ts";
 import {
-	type HerdrAgent,
 	HerdrAgentReader,
 	matchConsultationAgent,
 	normalizeAgentStatus,

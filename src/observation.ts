@@ -63,6 +63,7 @@ import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import { parallelSeatCount } from "./parallel.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
@@ -77,27 +78,6 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-
-/** One agent herdr reports for a pane. */
-export interface HerdrAgent {
-	paneId: string;
-	tabId: string;
-	workspaceId: string;
-	/** Stable Agent session identity when this Herdr version exposes one. */
-	stableSessionId?: string;
-	/** The checkout or working directory when this Herdr version reports it. */
-	checkoutPath?: string;
-	/** Herdr's monotonic state-change sequence when available. */
-	sequence?: number;
-	/** The agent kind herdr detected in the pane. */
-	agent: string;
-	status: string;
-	/**
-	 * The agent's session record path herdr reports, empty when herdr has
-	 * none. The turn log is read from it on settle (ADR 0008).
-	 */
-	sessionId: string;
-}
 
 /** The normalized states the factory reasons about. */
 export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";

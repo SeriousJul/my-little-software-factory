@@ -19,7 +19,7 @@
  * never disagree about the count.
  */
 import type { TicketState } from "./domain/ticket.ts";
-import type { HerdrAgent } from "./observation.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import type { ConsultationState, FactoryState } from "./state.ts";
 
 /** The Consultation states that hold a Parallel limit seat. */
@@ -46,18 +46,23 @@ export function parallelSeatCount(input: ParallelSeatCountInput): number {
 		for (const agent of input.agents) listedPanes.add(agent.paneId);
 	}
 	const inFlight = input.state.ticketsByState(TICKET_SEAT_STATES);
-	const countedTickets = new Set<string>();
+	// One seat per ticket at most: the ticket's own in-flight seat counts
+	// for every unresolved claim it carries.
+	const counted = new Set<string>();
 	let count = 0;
 	for (const ticket of inFlight) {
 		const listed = ticket.paneId !== null && listedPanes.has(ticket.paneId);
 		const booting = !listed && input.now - Date.parse(ticket.startedAt) < input.startupGraceMs;
 		if (listed || booting) {
 			count += 1;
-			countedTickets.add(ticket.ticketIdentity);
+			counted.add(ticket.ticketIdentity);
 		}
 	}
 	for (const identity of input.state.openAttemptTickets()) {
-		if (!countedTickets.has(identity)) count += 1;
+		if (!counted.has(identity)) {
+			count += 1;
+			counted.add(identity);
+		}
 	}
 	count += input.state.consultationsByState(CONSULTATION_SEAT_STATES).length;
 	return count;

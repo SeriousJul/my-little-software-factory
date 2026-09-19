@@ -3,9 +3,9 @@ import { describe, expect, mock, test } from "bun:test";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
+import type { HerdrAgent } from "../src/herdr.ts";
 import {
 	type AgentReader,
-	type HerdrAgent,
 	HerdrAgentReader,
 	normalizeAgentStatus,
 	ObservationCoordinator,

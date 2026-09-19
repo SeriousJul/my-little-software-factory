@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import type { HerdrAgent } from "../src/observation.ts";
+import type { HerdrAgent } from "../src/herdr.ts";
 import { parallelSeatCount } from "../src/parallel.ts";
 import { type ConsultationState, type FactoryState, openFactoryState } from "../src/state.ts";
 
