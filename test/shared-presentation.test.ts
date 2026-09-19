@@ -17,9 +17,10 @@
  * screen, because a control that only means something in color means nothing
  * to an operator who cannot see the color.
  */
+
+import { describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { describe, expect, test } from "vitest";
 
 import { DraftField, TextField } from "../src/components/shared/fields.ts";
 import {

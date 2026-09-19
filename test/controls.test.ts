@@ -1,5 +1,5 @@
 /** The shared catalogue gives each section key one meaning. */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import {
 	availabilityFor,

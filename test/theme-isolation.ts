@@ -13,7 +13,7 @@
  * no-color presentation - sets its own environment and re-resolves inside the
  * test body, and the next test starts clean again.
  */
-import { beforeEach } from "vitest";
+import { beforeEach } from "bun:test";
 
 import { resetThemeResolution } from "../src/theme-source.ts";
 

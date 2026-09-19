@@ -13,11 +13,12 @@
  * the app re-renders, so every test waits for the settle's visible effect
  * before it tears the app down.
  */
+
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
@@ -478,7 +479,7 @@ describe("source-driven frames", () => {
 
 		// These transitions are recorded the way the observation loop records
 		// them: state row updates.
-		const db = new DatabaseSync(state.path);
+		const db = new Database(state.path);
 		db.prepare(
 			"UPDATE tickets SET state = 'running' WHERE identity = 'github:github.com:I_run'",
 		).run();

@@ -15,17 +15,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      # Node stays for the publish itself: the build, the checks, and the docs
+      # all run on Bun, but npm publish is the one step only Node does.
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-          cache: npm
-      - run: npm ci
+      - run: bun install
       # Every failed check stops the publish: a broken build never reaches
       # the registry.
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run docs:build
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run docs:build
       - name: The tag must match the version both packages declare
         run: |
           tag="${GITHUB_REF_NAME#v}"

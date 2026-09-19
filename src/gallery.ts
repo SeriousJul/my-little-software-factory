@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Run the shared control gallery.
  *
@@ -14,11 +14,11 @@ import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
 
 import { Gallery } from "./components/shared/gallery.ts";
-import { isSupportedNodeVersion, MIN_NODE_VERSION } from "./runtime.ts";
+import { isSupportedBunVersion, MIN_BUN_VERSION } from "./runtime.ts";
 
-if (!isSupportedNodeVersion(process.versions.node)) {
+if (!isSupportedBunVersion(Bun.version)) {
 	process.stderr.write(
-		`factory needs Node ${MIN_NODE_VERSION} or newer, but this is Node ${process.versions.node}.\nThe project pins a supported Node in .tool-versions; run it through mise.\n`,
+		`factory needs Bun ${MIN_BUN_VERSION} or newer, but this is Bun ${Bun.version}.\nThe project pins a supported Bun in .tool-versions; run it through mise.\n`,
 	);
 	process.exit(1);
 }

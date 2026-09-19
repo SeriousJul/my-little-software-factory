@@ -26,10 +26,11 @@
  * the test body, and destroys it in a finally, so no test body owns its
  * own cleanup.
  */
+
+import { describe, expect, spyOn, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
 import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
-import { describe, expect, test, vi } from "vitest";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
@@ -1051,7 +1052,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const wheelAt = async (now: number) => {
-					const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+					const clock = spyOn(Date, "now").mockReturnValue(now);
 					try {
 						await mouseWheel(setup, 45, paneRow(3), "down");
 					} finally {

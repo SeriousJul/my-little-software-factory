@@ -43,3 +43,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0032: The leftover environment is a fact; its cleanup lives in herdr](./0032-the-leftover-environment-is-a-fact-its-cleanup-lives-in-herdr.md)
 - [ADR 0033: Goto is navigation in both sections](./0033-goto-is-navigation-in-both-sections.md)
 - [ADR 0034: The Parallel limit counts Consultations and the Work queue holds the rest](./0034-the-parallel-limit-counts-consultations-and-the-work-queue-holds-the-rest.md)
+- [ADR 0035: The control plane runs on Bun](./0035-the-control-plane-runs-on-bun.md)

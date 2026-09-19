@@ -9,7 +9,7 @@
  * success or refusal, so no injectable enters the app. The real system
  * clipboard is not verified by the suite; the test renderer stands in for it.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import {
 	type AppSetup,

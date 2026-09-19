@@ -9,11 +9,12 @@
  * poll interval, so the observation loop and the handoff pipeline run
  * without a herdr session or a source clock.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 // readFileSync is the session-only check: the toggle must not write it.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
@@ -3210,7 +3211,7 @@ describe("the auto decision", () => {
 					"the automatic route",
 				);
 				expect(app.state.lastCompletion(identity)?.decision).toBe("auto-handed-off");
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
 				// The row wears the workflow task's badge.
 				expect(ticketRow(frame)).toContain("[review]");
 				// The prompt carried the settled turn's last message, and the

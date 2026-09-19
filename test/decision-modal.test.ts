@@ -5,7 +5,7 @@
  * the same cell on every row, whether the row is full, short, or blank:
  * a thumb that floats behind short text reads as an artifact.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import type { Ticket } from "../src/domain/ticket.ts";
 import {

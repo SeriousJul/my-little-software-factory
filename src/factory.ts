@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * The control plane entry.
  *
@@ -12,11 +12,11 @@ import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
-import { isSupportedNodeVersion, unsupportedNodeVersionMessage } from "./runtime.ts";
+import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
 import { runStartup } from "./startup.ts";
 
-if (!isSupportedNodeVersion(process.versions.node)) {
-	process.stderr.write(unsupportedNodeVersionMessage(process.versions.node));
+if (!isSupportedBunVersion(Bun.version)) {
+	process.stderr.write(unsupportedBunVersionMessage(Bun.version));
 	process.exit(1);
 }
 

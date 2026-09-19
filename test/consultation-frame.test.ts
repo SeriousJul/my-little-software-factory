@@ -13,10 +13,11 @@
  * real repository. Random launch identities are canonicalized by
  * ConsultationRunner so the command sequence stays pinnable.
  */
+
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
@@ -440,9 +441,7 @@ function stubLiveLaunchNew(runner: FakeRunner): void {
 /** Count the attention-bell bytes the app writes to the terminal. */
 function countBells(): { count: () => number; restore: () => void } {
 	let bells = 0;
-	const spy = vi.spyOn(process.stdout, "write").mockImplementation(((
-		chunk: Uint8Array | string,
-	) => {
+	const spy = spyOn(process.stdout, "write").mockImplementation(((chunk: Uint8Array | string) => {
 		if (String(chunk).includes("\u0007")) bells += 1;
 		return true;
 	}) as typeof process.stdout.write);

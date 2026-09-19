@@ -1,6 +1,7 @@
 /** Rendered-frame coverage for the native Ticket detail viewport. */
+
+import { describe, expect, spyOn, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
-import { describe, expect, test, vi } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
@@ -71,7 +72,7 @@ async function wheelAt(
 	now: number,
 	direction: "up" | "down",
 ): Promise<void> {
-	const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+	const clock = spyOn(Date, "now").mockReturnValue(now);
 	try {
 		await mouseWheel(setup, 45, detailRow(3), direction);
 	} finally {

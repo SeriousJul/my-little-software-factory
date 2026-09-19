@@ -9,10 +9,11 @@
  * fails here, which is how a documented feature and a shipped feature drift
  * apart.
  */
+
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { describe, expect, test } from "vitest";
 import { configToToml, validateConfig } from "../src/config.ts";
 
 const GUIDE = readFileSync(join(import.meta.dirname, "../docs/configuration/index.md"), "utf8");

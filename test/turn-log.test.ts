@@ -2,10 +2,11 @@
  * The turn log: the pi session reader, the tool target rules, the last
  * message, and the capture fallback.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 
 import {
 	codexAbortCause,

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # crash-guard: run a command with crash containment.
 #
-# The test suite spawns `node factory.ts` children. When a runner process
-# dies on a native crash (the node 26.5.0 node:sqlite use-after-free under
-# Stryker is the known case), those children are left orphaned under
-# systemd, and the OS records a crash report for every death. This guard
-# contains both:
+# Run a command whose process tree might die on a native crash - the
+# control plane's OpenTUI native core and its SQLite binding are the class.
+# When such a process dies, the OS records a crash report for the death and
+# any siblings are left orphaned under systemd. This guard contains both:
 #
 # 1. RLIMIT_CORE is set to 0 for the command and everything it spawns.
 #    A crashed process writes no core file, so the OS records no crash

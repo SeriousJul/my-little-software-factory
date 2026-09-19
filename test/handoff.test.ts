@@ -6,10 +6,11 @@
  * command, so a drift in the sequence fails the suite. No test touches a
  * real herdr session.
  */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";

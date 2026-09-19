@@ -4,11 +4,11 @@
  * Each template renders against one fixture ticket of its kind: the key lines
  * stand, and no placeholder stays literal in the prompt an agent receives.
  */
-import { readFileSync } from "node:fs";
 
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { describe, expect, test } from "vitest";
 
 import { validateConfig } from "../src/config.ts";
 import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";

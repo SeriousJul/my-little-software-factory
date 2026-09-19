@@ -10,10 +10,11 @@
  * The frame tests boot the real app through the shared harness; no mock
  * sees a key.
  */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import type { Setup } from "./app-harness.ts";
 import {

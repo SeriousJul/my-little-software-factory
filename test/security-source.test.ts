@@ -5,7 +5,7 @@
  * fetch outcome it returns, and the normalized ticket facts per kind. No
  * test reaches a real GitHub.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import type { TicketSourceConfig } from "../src/config.ts";
 import type {

@@ -11,10 +11,11 @@
  * it shares with close, Replacement bounds and linking, deletion, the Stale
  * Agent output warning, and the ordered interaction input queue.
  */
+
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import {
@@ -1290,7 +1291,7 @@ describe("Consultation operations: response", () => {
 		const id = uid("0");
 		const consultation = seedAwaiting(fixture, id);
 		const harness = makeHarness(fixture, runner);
-		const write = vi.spyOn(fixture.state, "setConsultationDraft").mockImplementation(() => {
+		const write = spyOn(fixture.state, "setConsultationDraft").mockImplementation(() => {
 			throw new Error("SQLITE_BUSY");
 		});
 

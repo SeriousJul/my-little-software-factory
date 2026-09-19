@@ -9,6 +9,8 @@
  * cross references (default agent, default task type, default environment).
  * The error is always one readable line an operator can act on.
  */
+
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
 	mkdirSync,
@@ -23,8 +25,6 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
-
 import {
 	ConfigError,
 	configToToml,
@@ -38,6 +38,7 @@ import {
 } from "../src/config.ts";
 import { THINKING_LEVELS } from "../src/domain/agent.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
 /** The checked-in Default configuration the package ships. */
 const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
@@ -199,7 +200,7 @@ describe("the standard paths", () => {
 			join("/custom/state", "my-little-software-factory", "state.sqlite"),
 		);
 		// With the state home unset, the file lives under the home.
-		vi.stubEnv("XDG_STATE_HOME", "");
+		stubEnv("XDG_STATE_HOME", "");
 		expect(defaultStatePath("/home/op")).toBe(
 			join("/home/op", ".local", "state", "my-little-software-factory", "state.sqlite"),
 		);
@@ -207,7 +208,7 @@ describe("the standard paths", () => {
 });
 
 afterEach(() => {
-	vi.unstubAllEnvs();
+	unstubAllEnvs();
 });
 
 describe("loadConfigFile", () => {
@@ -902,7 +903,7 @@ describe("validateConfig", () => {
 		// holds standard levels in the runtime's own order, and every one of
 		// them fits inside the standard set.
 		const agents = validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"))).agents;
-		expect(agents.pi.thinkingValues).toEqual(THINKING_LEVELS);
+		expect(agents.pi.thinkingValues).toEqual([...THINKING_LEVELS]);
 		expect(agents.codex.thinkingValues).toEqual(["minimal", "low", "medium", "high"]);
 		expect(agents.claude.thinkingValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		for (const agent of Object.values(agents)) {
@@ -1112,7 +1113,7 @@ describe("ticket source configuration", () => {
 				"github-security-advisories",
 				"github-dependabot-alerts",
 				"github-secret-scanning-alerts",
-			]) {
+			] as const) {
 				const config = validateConfig({
 					...base,
 					sources: [

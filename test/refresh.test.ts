@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import { type RefreshClock, RefreshCoordinator } from "../src/refresh.ts";
 import { openFactoryState } from "../src/state.ts";

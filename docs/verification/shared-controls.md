@@ -17,8 +17,8 @@ who owns control behavior.
 
 ## What is verified automatically
 
-Every check below runs in `npm test`, which is `npm run lint`,
-`npm run typecheck`, and the behavior suite together.
+Every check below runs in `bun test`, which is `bun run lint`,
+`bun run typecheck`, and the behavior suite together.
 
 | Requirement | Checked by | Result |
 | --- | --- | --- |
@@ -86,7 +86,7 @@ Every check below runs in `npm test`, which is `npm run lint`,
 Run it on a machine with a desktop session, then record the versions and results
 in this file. Do not mark the row verified from the automated suite.
 
-1. `npm run gallery` and walk every example with `Tab`, the theme examples included.
+1. `bun run gallery` and walk every example with `Tab`, the theme examples included.
 2. In the `fields` example: type into the focused Context field, press Left,
    Right, Home, End, Shift+Arrow, Ctrl+Arrow, Ctrl+Backspace, Ctrl+Z, Ctrl+Y;
    paste `1e3` and then `42`; paste a long single line and a multi-line draft.
@@ -110,7 +110,7 @@ inferred. A frame snapshot, raw PTY bytes, or a passing keyboard test proves
 none of it.
 
 1. On a GNOME session with Orca running, open GNOME Terminal and run
-   `npm run gallery`, then the control plane itself.
+   `bun run gallery`, then the control plane itself.
 2. For each field, ask Orca to read the focused control and confirm it states
    the field's label, its value, and the caret position; then edit and read
    again.

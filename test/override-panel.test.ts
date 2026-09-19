@@ -7,9 +7,10 @@
  * plane tagged for another agent is not an answer this panel may show, whatever
  * the caller above it does about stale answers.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, describe, expect, test } from "vitest";
 import type { ControlContext } from "../src/components/controls.ts";
 import {
 	type AgentModelList,

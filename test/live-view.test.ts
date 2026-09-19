@@ -14,10 +14,11 @@
  * pinned poll interval, so the settles, the markers, and the transforms
  * happen the way they happen in production.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
@@ -860,7 +861,7 @@ describe("the Live view against a running factory", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("Live: Persist source facts");
 				// The new agent is live: the observation loop may already have
 				// marked the in-flight ticket running.
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 				// The stream follows the handoff: the new pane's read, and no
 				// focus, which is the Goto's alone.
@@ -1004,7 +1005,7 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(frame).not.toContain("Override");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 			},
 			WIDTH,
