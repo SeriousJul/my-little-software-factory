@@ -170,9 +170,9 @@ a handoff is in flight keys keep working, and `e` is refused with a warning. A s
 records its attempt, which blocks a further claim on the same ticket, and
 queues its external work until the in-flight handoff settles; the ticket
 moves to `handed-off` only when the handoff settles and its agent starts,
-so claims never race each other. A leftover clear holds that same seat,
-and so does the Close cleanup of any path that runs one: an environment
-change and a handoff never work beside each other.
+so claims never race each other. The Close cleanup of any path that runs
+one holds that same seat: an environment change and a handoff never work
+beside each other.
 
 Above the panes sits a mode line. It shows the auto-handoff state and the
 live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
@@ -195,4 +195,5 @@ count as `Handoffs: 2/2`. Auto-handoff leaves such a ticket open; a manual
 handoff may still pass the limit.
 A ticket whose previous herdr environment is still alive wears a trailing
 `leftover` marker, and its detail pane names the workspace, tab, and pane that
-remain, the reason the control plane knows, and since when. `w` clears it.
+remain, the reason the control plane knows, and since when. The detail states
+that the cleanup runs in herdr, not in the control plane (ADR 0032).

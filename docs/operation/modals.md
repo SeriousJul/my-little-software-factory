@@ -1,6 +1,6 @@
 ---
 title: Modals
-description: The decision modal, the missing modal, and the leftover environment action keys.
+description: The decision modal and the missing modal, and the leftover environment fact.
 ---
 
 # Modals
@@ -84,30 +84,19 @@ previous message. "Abandon" ends the work cycle: the ticket returns to open
 with its cycle number incremented, the handoff's environment is closed,
 and the missing badge clears.
 
-## Leftover environment action keys
+## Leftover environment
 
-`w` on a ticket wearing the `leftover` marker opens the clear panel.
+The control plane offers no clear for a leftover environment (ADR 0032):
+key `w` on a ticket wearing the `leftover` marker changes nothing and opens
+no panel. The leftover stays a durable, visible fact - the `leftover`
+marker in the row, and the detail block that names the workspace, tab, and
+pane that remain, the reason the control plane knows, and since when. The
+block states that the cleanup runs in herdr, not in the control plane, the
+way the Consultation detail does for its remaining resources, so the operator
+knows where the environment still lives and goes there to remove it.
 
-| Key             | What it does                                                        |
-| --------------- | ------------------------------------------------------------------- |
-| `Up` / `Down`  | Move between the choice rows                                      |
-| `Enter`         | Choose the selected row                                            |
-| `Esc`           | Close the panel: nothing runs, the leftover stays recorded          |
-
-"Retry" runs the Close cleanup again. "Force" is a row only where the
-leftover is a checkout, because a forced removal discards uncommitted work
-and stops the agents in the workspace: the control plane never reaches for
-it by itself. A removal that succeeds clears the leftover; a removal that
-fails records the reason again. The git branch survives either way.
-
-A clear ends the environments its cleanup reaches: a workspace removal clears
-the leftovers that named that workspace, a tab close the one that named that
-tab, and a cleanup that ran no command only the fact of its own cycle. Facts
-outside that reach stand. Because a cleanup reaches an environment, it refuses
-a leftover naming the ticket's own live agent: the workspace, tab, or pane
-that agent runs on, and the Message line names what it refused. Close that work
-cycle first, and its own cleanup ends the leftover with it. A clear refused
-because a handoff or another clear is already at herdr reports that too, and
-the operator presses `w` again. A clear holds the handoff seat while it runs,
-and a handoff the operator starts beside one waits for it, so herdr never
-builds an agent in a workspace it is taking away.
+Every close still runs the Close cleanup: a removal that herdr refuses
+records the leftover with its reason, and the close stands. A handoff beside
+its ticket's leftover still starts under the cycle name (ADR 0012): the
+leftover's agent holding the stable name is the case the fact makes visible,
+not a failure of the start.

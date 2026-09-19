@@ -60,8 +60,8 @@ its availability and reason.
 	which the Action bar states while the mode holds the keys; configure
 	`interaction-exit-key` with a function key or `Ctrl` plus one letter.
 
-The override panel and the leftover clear act only in the Ticket section, so
-an unexpected key cannot fire while the operator works Consultations.
+The override panel acts only in the Ticket section, so an unexpected key
+cannot fire while the operator works Consultations.
 
 ## Entry controls
 

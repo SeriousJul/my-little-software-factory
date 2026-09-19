@@ -25,9 +25,10 @@ closes like any other, and it holds a parallel slot while it works.
 What the poll cannot reclaim stays as a fact on the ticket (ADR 0012): a Close
 cleanup that fails, or a handoff that meets its own leftover name, records the
 herdr environment that is still alive, and the ticket wears the `leftover`
-marker until the operator clears it with `w`. That handoff still starts: it
-takes the ticket's cycle name, and it works beside the leftover agent in the
-reused workspace until someone ends it.
+marker until the operator ends the environment in herdr - the control plane
+keeps no clear of its own (ADR 0032). That handoff still starts: it takes the
+ticket's cycle name, and it works beside the leftover agent in the reused
+workspace until someone ends it.
 
 When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The

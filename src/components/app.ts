@@ -89,7 +89,7 @@ import {
 	type TurnLogEntry,
 } from "../turn-log.ts";
 import { ActionBar } from "./action-bar.ts";
-import { ActionPanel, panelBodyCols } from "./action-panel.ts";
+import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
 import {
 	ConsultationDetail,
@@ -124,14 +124,9 @@ import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
-import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
+import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { paint } from "./theme.ts";
-import {
-	detailScrollRoom,
-	leftoverWhere,
-	TicketDetail,
-	type TicketDetailHandle,
-} from "./ticket-detail.ts";
+import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
 
@@ -149,7 +144,6 @@ type Panel =
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "leftover"; identity: string }
 	| { kind: "live"; identity: string };
 
 /**
@@ -200,7 +194,6 @@ export type AppKey =
 	| "x"
 	| "z"
 	| "d"
-	| "w"
 	| "up"
 	| "down"
 	| "left"
@@ -379,8 +372,8 @@ export function App({
 	agentsRef.current = agents;
 	// The herdr seat: one external change to a ticket's environment at a time.
 	// A handoff holds it while herdr builds the environment and starts the
-	// agent. Close cleanups and leftover clears queue behind that work, and a
-	// queued cleanup reserves the seat until every earlier cleanup ends.
+	// agent. Close cleanups queue behind that work, and a queued cleanup
+	// reserves the seat until every earlier cleanup ends.
 	// The no-state test projection has no durable claim or queue. The real
 	// dispatch module owns the seat for every state-backed app.
 	const noStateHandoffInFlightRef = useRef(false);
@@ -921,21 +914,6 @@ export function App({
 		[state],
 	);
 	/**
-	 * Start the Clear action. The dispatch module owns its durable work and
-	 * Message-line reports; this caller only handles an unexpected rejection.
-	 */
-	const clearLeftover = (ticket: Ticket, force: boolean) => {
-		if (handoffDispatch === undefined) {
-			setWarningMessage("no factory state is open, so a leftover environment cannot be cleared");
-			return;
-		}
-		// The module reports guards and cleanup failures on the same Message line
-		// channel as the handoff. The catch is only for an unexpected module error.
-		void handoffDispatch.clearLeftover(ticket.identity, force).catch((error) => {
-			setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
-		});
-	};
-	/**
 	 * Report the outcome of the handoffs that stayed in the App: the no-state test
 	 * projection. State-backed Ticket handoffs report through the dispatch module,
 	 * and both cross the one shared wording in `reportHandoffOutcome`, so the
@@ -951,82 +929,6 @@ export function App({
 			},
 			persistMapping,
 		);
-	/**
-	 * The leftover panel: what still lives in herdr for this ticket, and the
-	 * one action that ends it.
-	 *
-	 * The guidance leads the body, and the rows above the action rows are where
-	 * the variable fact lines scroll, so the meaning of the rows - and the
-	 * branch fact - stays on screen with them however many facts the ticket
-	 * holds. Each fact carries its own reason on the line below its
-	 * environment: one line, cut where the panel really renders it and marked
-	 * with the ellipsis, because the panel is the hint and the detail pane
-	 * carries the whole reason. Rows the window does not hold come back as a
-	 * count from ActionPanel, so nothing leaves the screen silently.
-	 *
-	 * herdr's force is a row of its own, and its guidance stands only while a
-	 * leftover worktree checkout can be discarded: a tab leftover has no
-	 * checkout to force. A forced removal discards the checkout, so the
-	 * control plane never reaches for it on the operator's behalf; the
-	 * operator chooses it with their own hands, and the git branch stays
-	 * either way.
-	 */
-	const createLeftoverPanel = (ticket: Ticket) => {
-		const leftovers = state?.leftoverEnvironments(ticket.identity) ?? [];
-		const forced = leftovers.some((leftover) => leftover.environment === "worktree");
-		const cols = panelBodyCols(terminalWidth);
-		const facts = leftovers.flatMap((leftover) => [
-			// One row per fact and one per reason, with the meaning first: a
-			// long handle list cut at a narrow width loses handles, not the
-			// fact that the environment is still open.
-			truncateWithEllipsis(`still open: ${leftoverWhere(leftover)}`, cols),
-			truncateWithEllipsis(leftover.reason, cols),
-		]);
-		return createElement(ActionPanel, {
-			title: `Leftover environment ${ticket.identity}`,
-			bodyLines: [
-				"Retry runs the Close cleanup again.",
-				...(forced ? ["Force adds --force and discards the checkout."] : []),
-				"The git branch stays either way.",
-				"",
-				...facts,
-			],
-			actions: [
-				{ key: "retry", label: "Retry", detail: "clean the environment up again" },
-				...(forced
-					? [{ key: "force", label: "Force", detail: "remove the checkout by force" }]
-					: []),
-				{ key: "cancel", label: "Cancel", detail: "leave the environment as it is" },
-			],
-			onAction: (key) => {
-				setPanel(null);
-				if (key === "retry" || key === "force") clearLeftover(ticket, key === "force");
-			},
-			onCancel: () => setPanel(null),
-			message: visibleMessage,
-		});
-	};
-	/** Offer the one action that ends a ticket's leftover environment. */
-	const openLeftoverPanel = () => {
-		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) {
-			setWarningMessage("no ticket is selected");
-			return;
-		}
-		if (ticket.leftover === null) {
-			setWarningMessage(`no leftover environment is recorded for ticket ${ticket.identity}`);
-			return;
-		}
-		setPanel({ kind: "leftover", identity: ticket.identity });
-	};
-	// A leftover panel lists the facts it would clear. When the last one is
-	// gone, the panel has nothing to show, and the ticket keys must return at
-	// that moment: the panel closes itself.
-	useEffect(() => {
-		if (panel?.kind !== "leftover") return;
-		const ticket = tickets.find((candidate) => candidate.identity === panel.identity);
-		if (ticket === undefined || ticket.leftover === null) setPanel(null);
-	}, [panel, tickets]);
 	const startHandoff = (ticket: Ticket, choice: HandoffChoice) => {
 		const availability = availabilityFor(
 			controlById("handoff"),
@@ -1921,7 +1823,6 @@ export function App({
 						replaceConsultations();
 					refreshNow();
 				},
-				leftover: openLeftoverPanel,
 				// `+` (or `=`, its unshifted form) raises the rank and `-` lowers
 				// it (ADR 0022). The catalogue gated the key, so this runs the
 				// movement and reports the outcome on the Message line, accepted
@@ -2435,16 +2336,13 @@ export function App({
 			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
-	// live view over an in-flight agent, the missing-agent choice, and the
-	// leftover environment. Everything that reads an open panel goes through
-	// this list, so a new consultation kind can never be taken for a ticket
-	// panel by falling through the exclusions.
+	// live view over an in-flight agent, and the missing-agent choice.
+	// Everything that reads an open panel goes through this list, so a new
+	// consultation kind can never be taken for a ticket panel by falling
+	// through the exclusions.
 	const ticketPanel =
 		panel !== null &&
-		(panel.kind === "decision" ||
-			panel.kind === "live" ||
-			panel.kind === "missing" ||
-			panel.kind === "leftover")
+		(panel.kind === "decision" || panel.kind === "live" || panel.kind === "missing")
 			? panel
 			: null;
 	const panelTicket =
@@ -2484,16 +2382,15 @@ export function App({
 	 *
 	 * Each ticket panel kind says which fact of the ticket it is drawn from,
 	 * and that fact is what can run out from under the modal: the decision the
-	 * observation takes, the leftover environment a clear or a Close cleanup
-	 * ends, the ticket that leaves the projection. A panel that is not drawn
-	 * must not keep holding the keys the ticket panels swallow.
+	 * observation takes, the agent whose pane is gone, the ticket that leaves
+	 * the projection. A panel that is not drawn must not keep holding the keys
+	 * the ticket panels swallow.
 	 */
 	const panelHasNothingToShow =
 		ticketPanel !== null &&
 		(panelTicket === undefined ||
 			(ticketPanel.kind === "decision" && decision === undefined) ||
-			(ticketPanel.kind === "live" && liveMode === "closed") ||
-			(ticketPanel.kind === "leftover" && panelTicket.leftover === null));
+			(ticketPanel.kind === "live" && liveMode === "closed"));
 	useEffect(() => {
 		if (panelHasNothingToShow) setPanel(null);
 	}, [panelHasNothingToShow]);
@@ -2896,8 +2793,8 @@ export function App({
 				onConfirm: confirmOverride,
 				onCancel: cancelOverride,
 			}),
-		// Each ticket panel kind renders its own modal: a leftover panel is neither
-		// a decision nor a missing-agent choice, and must not fall through to one.
+		// Each ticket panel kind renders its own modal: a decision is neither a
+		// live view nor a missing-agent choice, and must not fall through to one.
 		panel !== null &&
 			panelTicket !== undefined &&
 			panel.kind === "decision" &&
@@ -2977,11 +2874,6 @@ export function App({
 				message: visibleMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
-		panel !== null &&
-			panel.kind === "leftover" &&
-			panelTicket !== undefined &&
-			panelTicket.leftover !== null &&
-			createLeftoverPanel(panelTicket),
 		panel !== null &&
 			panel.kind === "consultation-safety" &&
 			panelConsultation !== undefined &&

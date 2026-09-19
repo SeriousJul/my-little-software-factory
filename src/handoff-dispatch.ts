@@ -2,13 +2,13 @@
  * The Handoff dispatch module: one seat for handoffs and environment changes.
  *
  * The module owns the durable claim and settle, the handoff queue, Close
- * cleanup, leftover clearing, and the name knowledge needed by handoff work.
+ * cleanup, and the name knowledge needed by handoff work.
  * It has no React dependency. The App crosses this interface for operator
  * actions and the observation loop crosses the same interface for automatic
  * work.
  */
 import type { FactoryConfig } from "./config.ts";
-import type { EnvironmentKind, LeftoverEnvironment, Ticket, TicketState } from "./domain/ticket.ts";
+import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import {
 	type CloseCleanupOptions,
 	closeCleanupReach,
@@ -73,9 +73,8 @@ export type DispatchResult = { ok: true } | { ok: false; reason: string };
  * test reads the same text the operator reads. The module reports what its own
  * work leaves behind: the Handoff's progress line, the outcome it settles, and
  * the queued handoff the drain refused. The two answers an operator action
- * waits on - a Close cleanup's failure and the Clear action's guard - come back
- * as that action's result instead, so one fact never reaches the Message line
- * twice.
+ * waits on - a Close cleanup's failure - comes back as that action's result
+ * instead, so one fact never reaches the Message line twice.
  */
 export interface HandoffDispatchReports {
 	working: (text: string) => void;
@@ -171,12 +170,6 @@ export interface HandoffDispatch {
 		handoff: StoredHandoffFacts,
 		end: "closed" | "abandoned",
 	): Promise<string | undefined>;
-	/**
-	 * The Clear action, in one queue item. The returned list contains the
-	 * environments herdr could not remove. Guard refusals are reported as
-	 * warnings by the module and return an empty list because no cleanup ran.
-	 */
-	clearLeftover(identity: string, force: boolean): Promise<readonly string[]>;
 	/** True while a Handoff holds the seat. The catalogue fact and the route edit guard. */
 	handoffActive(): boolean;
 	/**
@@ -279,84 +272,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.reports.refresh();
 			return failure;
 		});
-	}
-
-	clearLeftover(identity: string, force: boolean): Promise<readonly string[]> {
-		if (this.inFlight)
-			return Promise.resolve(
-				this.refuseClear(
-					`a handoff is in flight: wait for it to settle before you clear the leftover environment of ticket ${identity}`,
-				),
-			);
-		if (this.cleanupQueued)
-			return Promise.resolve(
-				this.refuseClear(
-					`a leftover clear is already in flight: wait for it to settle before you clear ticket ${identity} again`,
-				),
-			);
-
-		const leftovers = this.state.leftoverEnvironments(identity);
-		if (leftovers.length === 0) {
-			// The fact is gone from the ticket, and the projection may still draw
-			// it: refresh, so the marker and its control leave with it.
-			this.reports.refresh();
-			return Promise.resolve(
-				this.refuseClear(`no leftover environment is recorded for ticket ${identity}`),
-			);
-		}
-
-		const live =
-			this.state.ticketState(identity) === "open"
-				? null
-				: (this.state.latestHandoff(identity) ?? null);
-		const atRisk = live === null ? null : (liveHandleAtRisk(leftovers, live) ?? null);
-		if (atRisk !== null)
-			return Promise.resolve(
-				this.refuseClear(
-					`the agent of ticket ${identity} runs in ${atRisk.text}: close its work cycle before you clear that ${atRisk.what}`,
-				),
-			);
-
-		// One queue item owns the whole retry loop: herdr cannot be asked to take
-		// one environment of a ticket away and a handoff start in the next.
-		return this.queueCleanup(async () => {
-			const failures: string[] = [];
-			for (const leftover of leftovers) {
-				const failure = await this.settleCloseCleanup(
-					identity,
-					{
-						handoffId: leftover.handoffId,
-						environment: leftover.environment,
-						tabId: leftover.tabId,
-						workspaceId: leftover.workspaceId,
-					},
-					{ force },
-				);
-				if (failure !== undefined) failures.push(failure);
-			}
-			return failures;
-		})
-			.then((failures) => {
-				if (failures.length === 0)
-					this.reports.warning(`cleared the leftover environment of ticket ${identity}`);
-				else
-					this.reports.error(
-						`ticket ${identity} still holds a leftover environment: ${failures.join("; ")}`,
-					);
-				return failures;
-			})
-			.catch((error): readonly string[] => {
-				const reason = errorMessage(error);
-				this.reports.error(`clearing the leftover environment failed: ${reason}`);
-				return [reason];
-			})
-			.finally(() => this.reports.refresh());
-	}
-
-	/** Report one guard that stopped the Clear action before it reached herdr. */
-	private refuseClear(reason: string): readonly string[] {
-		this.reports.warning(reason);
-		return [];
 	}
 
 	/** True when either a handoff or a queued environment change owns the seat. */
@@ -653,24 +568,4 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 		case "restart":
 			return state === "handed-off" || state === "running";
 	}
-}
-
-/** The handle a clear would end that the ticket's own live agent runs on. */
-function liveHandleAtRisk(
-	leftovers: readonly LeftoverEnvironment[],
-	live: { paneId: string | null; tabId: string | null; workspaceId: string | null },
-): { text: string; what: string } | null {
-	for (const leftover of leftovers) {
-		if (
-			leftover.environment === "worktree" &&
-			live.workspaceId !== null &&
-			leftover.workspaceId === live.workspaceId
-		)
-			return { text: `herdr workspace ${live.workspaceId}`, what: "workspace" };
-		if (live.tabId !== null && leftover.tabId === live.tabId)
-			return { text: `herdr tab ${live.tabId}`, what: "tab" };
-		if (live.paneId !== null && leftover.paneId === live.paneId)
-			return { text: `herdr pane ${live.paneId}`, what: "pane" };
-	}
-	return null;
 }
