@@ -286,8 +286,9 @@ committed images.
 On this branch `bun run lint` and `bun run typecheck` pass, and
 `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`,
 `test/main-view-frame.test.ts`, and `test/screenshot-drift.test.ts` each pass
-in isolation. The full `bun run test` passes on the rebased branch; the
-recorded skips stay the 13 issues #103 and #104 carry.
+in isolation. The full `bun run test` passes on the rebased branch (1506 pass,
+13 skip, 0 fail): the frame flakes issues #103 and #104 record did not show on
+this run, and the 13 skips are the ones that record already holds.
 
 The display rule the section asymmetry rests on - the Consultation guide
 names a refused `e Override` dim, while the Ticket guide and bar omit the
