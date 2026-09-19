@@ -634,6 +634,92 @@ describe("Consultation launch and monitoring through the UI", () => {
 	});
 });
 
+test("the mode line counts the ticket seat and the Consultation seat against one cap", async () => {
+	// Issue #87: the Parallel limit counts a Consultation alike with a
+	// ticket. The running ticket and the working Consultation each hold
+	// one seat, and the mode line shows the combined count against the one
+	// cap, from the same shared seat count the gates read. When the
+	// Consultation settles to awaiting-response it drops its seat, and the
+	// line holds the ticket's seat alone.
+	const state = openFactoryState(join(home, "state.sqlite"));
+	const ticketSource = { name: "tickets", kind: "test" };
+	const ticketOutcome = {
+		status: "success" as const,
+		fetchedAt: "2026-09-01T10:00:00.000Z",
+		tickets: [
+			{
+				identity: selectedTicket.identity,
+				sourceKind: selectedTicket.sourceKind,
+				externalKey: selectedTicket.externalKey,
+				sourceState: selectedTicket.sourceState,
+				url: selectedTicket.url,
+				title: selectedTicket.title,
+				description: selectedTicket.description,
+				labels: selectedTicket.labels,
+				externalUpdatedAt: selectedTicket.externalUpdatedAt,
+				repository: selectedTicket.repositoryRef,
+				attributes: {},
+			},
+		],
+	};
+	state.initializeSources([ticketSource]);
+	state.applyFetch(ticketSource, ticketOutcome);
+	const claim = state.claimHandoff(
+		selectedTicket.identity,
+		{
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		"open",
+	);
+	if (!claim.ok) throw new Error(claim.reason);
+	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		paneId: "pane-ticket",
+		tabId: "tab-ticket",
+		workspaceId: "ws-ticket",
+	});
+	seed(state, WORKING_ID);
+	const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
+	const inner = new FakeRunner();
+	stubPaneReadText(inner, paneId, "Agent: the review is underway");
+	const runner = new ConsultationRunner(
+		inner,
+		agentListJson([
+			{ pane: "pane-ticket", status: "working" },
+			{ pane: paneId, status: "working" },
+		]),
+	);
+	try {
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("auto: off 2/2"), "the combined seat count");
+				// The Consultation settles to awaiting-response on the idle
+				// poll: that state holds no seat, and the line drops to the
+				// ticket's seat alone.
+				runner.agentListJson = agentListJson([
+					{ pane: "pane-ticket", status: "working" },
+					{ pane: paneId, status: "idle" },
+				]);
+				await toConsultations(setup, "the settled Consultation", (f) =>
+					f.includes("State: awaiting-response"),
+				);
+				await awaitFrame(setup, (f) => f.includes("auto: off 1/2"), "the dropped seat");
+			},
+			WIDTH,
+			32,
+			// No initialTickets: the observation loop must poll herdr for the
+			// seat count's agent list, and it stands down on a test
+			// projection.
+			{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+		);
+	} finally {
+		state.close();
+	}
+});
 describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));

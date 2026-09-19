@@ -175,14 +175,17 @@ one holds that same seat: an environment change and a handoff never work
 beside each other.
 
 Above the panes sits a mode line. It shows the auto-handoff state and the
-live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
-when no limit is set. The count is the in-flight tickets whose agent was
-alive in the latest herdr poll. The `a` key in the Ticket section toggles
-the mode and writes it to the state file at once, so a restart or a dev
-reload finds the mode where the operator left it; a state file the plane
-has just created starts with the mode off (ADR 0036). A write the state
-file refuses reports on the Message line, and the flip stands for the
-session.
+Parallel limit seat count against the parallel limit: `auto: on 2/2`, or
+`auto: off 1` when no limit is set. The count is the one shared
+seat-count source the automatic start gates read: the in-flight tickets
+whose agent was alive in the latest herdr poll, or is still inside its
+startup grace, the handoffs still in progress, and every Consultation in
+`opening` or `working`. The gates and the mode line read the same source,
+so the two never disagree. The `a` key in the Ticket section toggles the
+mode and writes it to the state file at once, so a restart or a dev reload
+finds the mode where the operator left it; a state file the plane has just
+created starts with the mode off (ADR 0036). A write the state file refuses
+reports on the Message line, and the flip stands for the session.
 
 A ticket in the Starting window wears the window's face in the state badge
 slot: the Handoff is claimed and not yet settled, or the ticket is
