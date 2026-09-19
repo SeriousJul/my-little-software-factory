@@ -17,7 +17,11 @@ description: The bun commands of the repository, the shared control gallery, and
 
 `bun run dev` runs the source tree; it reads
 `config/development.toml` through `--config` and watches the tree while it
-runs.
+runs. A change to a watched file restarts the control plane inside the same
+process, so the reload keeps the state file: the run gives the state lease back
+when the watch signals it, and the next boot takes the lease again. Only the
+files the run imports are watched, so the state file and the worktrees never
+trigger a restart.
 
 ## Shared control gallery
 

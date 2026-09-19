@@ -588,6 +588,7 @@ export function openFactoryState(path: string, now?: () => number): FactoryState
 export class FactoryState {
 	private readonly db: Database;
 	private leaseToken: string | undefined;
+	private hasClosed = false;
 	readonly path: string;
 	/** The clock for internal timestamps. Tests pin it. */
 	private readonly now: () => number;
@@ -2783,6 +2784,16 @@ export class FactoryState {
 		};
 	}
 
+	/**
+	 * Take the one-process lease on this state file.
+	 *
+	 * A row whose pid is gone is safe to take over, so a run that died without
+	 * closing never locks the state file. The run that holds the lease must
+	 * still close it: `bun run dev` restarts the entry inside one process, so
+	 * the row a restart leaves behind names the next boot's own pid, and only a
+	 * release before that boot reads it clears the way. See
+	 * `installStateShutdown` in src/startup.ts.
+	 */
 	acquireLease(): void {
 		const owner = randomUUID();
 		const host = os.hostname();
@@ -2830,7 +2841,15 @@ export class FactoryState {
 			.run(this.leaseToken);
 		this.leaseToken = undefined;
 	}
+	/**
+	 * Close the state: give the lease back, fold the journal into the file, and
+	 * drop the connection. Closing twice is a normal path, not an error: the
+	 * shutdown signals and the process exit hook both close, and the signal
+	 * path then ends the run, which fires the exit hook again.
+	 */
 	close(): void {
+		if (this.hasClosed) return;
+		this.hasClosed = true;
 		this.releaseLease();
 		// Fold the WAL into the main file so a closed state file is complete on
 		// its own: Bun's close does not checkpoint the way a final SQLite close

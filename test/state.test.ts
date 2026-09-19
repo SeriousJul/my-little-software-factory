@@ -1584,6 +1584,21 @@ describe("factory SQLite state", () => {
 		second.close();
 	});
 
+	test("closing twice is not an error", () => {
+		const path = statePath();
+		// The shutdown signals and the process exit hook both close the state, so
+		// a run reaches close() more than once. The second close does nothing
+		// rather than reporting a connection it already dropped.
+		const state = openFactoryState(path);
+		state.acquireLease();
+		state.close();
+		expect(() => state.close()).not.toThrow();
+		// The lease is gone and the file is usable again.
+		const next = openFactoryState(path);
+		next.acquireLease();
+		next.close();
+	});
+
 	describe("the turn end cause and the Dispatch pause", () => {
 		const t5 = "github:github.com:I_5";
 		const t6 = "github:github.com:I_6";

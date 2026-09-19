@@ -18,6 +18,7 @@ import { parse as parseToml } from "smol-toml";
 import { defaultConfigPath, validateConfig } from "../src/config.ts";
 import {
 	configPathFromArgs,
+	installStateShutdown,
 	loadStartupConfig,
 	openStartupState,
 	runStartup,
@@ -174,6 +175,94 @@ describe("the startup state open", () => {
 		expect(opened.ok).toBe(false);
 		if (opened.ok) return;
 		expect(opened.reason).toContain(`cannot open factory state at ${at}`);
+	});
+});
+
+describe("the state shutdown", () => {
+	/**
+	 * A process that records what the shutdown attaches to.
+	 *
+	 * The recorder stands in for the real process, so the test pulls the hook it
+	 * wrote instead of sending a signal to the test runner, and the exit it asks
+	 * for is a mark on a list instead of the end of the suite.
+	 */
+	function recordingProcess() {
+		const hooks = new Map<string, () => void>();
+		const exits: number[] = [];
+		return {
+			hooks,
+			exits,
+			on(signal: string, listener: () => void) {
+				hooks.set(signal, listener);
+			},
+			exit(code?: number) {
+				exits.push(code ?? 0);
+			},
+			/** Run one recorded hook the way the process would. */
+			fire(signal: string): void {
+				const hook = hooks.get(signal);
+				expect(hook, `no hook recorded for ${signal}`).toBeDefined();
+				hook?.();
+			},
+		};
+	}
+
+	/** An open state and its lease, at a path of its own. */
+	function leasedState(prefix: string) {
+		const path = inTempDir(prefix)("state.sqlite");
+		const opened = openStartupState(path);
+		if (!opened.ok) throw new Error(opened.reason);
+		return { path, state: opened.state };
+	}
+
+	test("the shutdown writes an exit hook and both end signals", () => {
+		const { state } = leasedState("shutdown-hooks");
+		const target = recordingProcess();
+		installStateShutdown(state, target);
+		expect([...target.hooks.keys()].sort()).toEqual(["SIGHUP", "SIGTERM", "exit"]);
+		state.close();
+	});
+
+	test("the exit hook closes the state", () => {
+		const { path, state } = leasedState("shutdown-exit");
+		const target = recordingProcess();
+		installStateShutdown(state, target);
+		target.fire("exit");
+		// The lease is back on the shelf: the next control plane opens.
+		const next = openStartupState(path);
+		expect(next.ok).toBe(true);
+		if (next.ok) next.state.close();
+	});
+
+	test.each(["SIGTERM", "SIGHUP"])(
+		"a run that ends on %s gives the lease back before it ends",
+		(signal: string) => {
+			const { path, state } = leasedState(`shutdown-${signal}`);
+			const target = recordingProcess();
+			installStateShutdown(state, target);
+			target.fire(signal);
+			// The run asks for the exit, so an app that installs this is still
+			// stoppable by kill instead of shrugging the signal off.
+			expect(target.exits).toEqual([0]);
+			// This is the `bun run dev` shape: the watch reset delivers the signal,
+			// then re-runs the boot in the same process, so the next boot is the one
+			// that would otherwise read this process's own pid in the lease row and
+			// stop with "state database is already in use".
+			const next = openStartupState(path);
+			expect(next.ok).toBe(true);
+			if (next.ok) next.state.close();
+		},
+	);
+
+	test("the signal path and the exit hook together still close once", () => {
+		const { state } = leasedState("shutdown-twice");
+		const target = recordingProcess();
+		installStateShutdown(state, target);
+		// The signal closes the state and ends the run; ending the run fires the
+		// exit hook, which finds the state already closed.
+		target.fire("SIGTERM");
+		expect(() => target.fire("exit")).not.toThrow();
+		expect(target.exits).toEqual([0]);
 	});
 });
 

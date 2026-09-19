@@ -7,7 +7,9 @@
  * load, the model list check, and the state open - live here, where a unit
  * test imports the module and reads the result as a value instead of
  * starting a process or a pseudo-terminal. A startup failure is one of those
- * values: the operator-facing lines plus the exit status.
+ * values: the operator-facing lines plus the exit status. The module also
+ * owns the shutdown install: which process endings close the state, so a test
+ * attaches it to a recorder instead of to a real signal.
  *
  * The boot order is a contract (ADR 0010): load and structurally validate
  * the config, run the model validation, then open the state and the UI. A
@@ -121,6 +123,49 @@ export function openStartupState(statePath: string): StartupStateResult {
 		return { ok: false, reason: message };
 	}
 	return { ok: true, state };
+}
+
+/**
+ * The process the shutdown attaches to: the hooks it writes, and the exit it
+ * asks for. The entry passes the real process; a test passes a recorder.
+ */
+export interface ShutdownProcess {
+	on(signal: string, listener: () => void): unknown;
+	exit(code?: number): void;
+}
+
+/**
+ * Close the state when the run ends, on every path that ends it.
+ *
+ * The exit hook covers the clean end: the operator quits, the renderer goes
+ * away, the process exits. It is not enough on its own for two paths that end
+ * a run without running an exit hook:
+ *
+ * - A `kill` with no signal listener ends the run by the default action. The
+ *   lease then stays held in the state file, and the journal stays unfolded in
+ *   the WAL sidecar.
+ * - `bun run dev` restarts the entry inside the same process. The watch reset
+ *   delivers SIGTERM to the live run, runs no exit hook, and re-runs the boot
+ *   with the same pid, so the lease row the reset leaves behind names the next
+ *   boot's own process: that boot reads "state database is already in use" and
+ *   stops before it draws anything.
+ *
+ * So SIGTERM and SIGHUP close the state too, then ask for the exit: a run that
+ * installs this stays stoppable by `kill`. The close is idempotent, so the
+ * signal path and the exit hook together still close once.
+ *
+ * Install it after the renderer exists. The renderer listens for the same
+ * signals to put the terminal back, and a run ends its listeners in the order
+ * they were written, so the terminal comes back before the exit.
+ */
+export function installStateShutdown(state: FactoryState, target: ShutdownProcess = process): void {
+	const terminate = () => {
+		state.close();
+		target.exit(0);
+	};
+	target.on("exit", () => state.close());
+	target.on("SIGTERM", terminate);
+	target.on("SIGHUP", terminate);
 }
 
 /**

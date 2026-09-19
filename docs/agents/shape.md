@@ -7,12 +7,14 @@ description: The module map of the source tree, for agents working in this repos
 
 - `src/factory.ts`: the entry module. Wires the startup: checks the node
 	version, runs the startup decisions, prints the lines the result carries,
-	and either exits or boots the renderer and mounts the app.
+	and either exits or boots the renderer and mounts the app. Once the renderer
+	exists it wires the shutdown the startup module decides.
 - `src/startup.ts`: the startup decisions. Parses the arguments, loads and
 	validates the config, checks the config's model values against what the
 	agent runtimes report, and opens the state. A startup failure is a value
 	(the operator-facing lines and the exit status), so a test reads it
-	without a process.
+	without a process. It also owns the shutdown install: which process endings
+	close the state and give the lease back.
 - `src/runtime.ts`: the node version gate.
 - `src/config.ts`: config types, strict startup validation, state path
 	resolution, and atomic TOML write-back.
