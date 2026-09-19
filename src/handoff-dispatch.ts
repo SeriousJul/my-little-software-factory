@@ -185,6 +185,14 @@ export interface HandoffDispatch {
 	 */
 	pickupWorkQueue(): Promise<number>;
 	/**
+	 * Drop one ticket's waiting start from the Work queue, and forget the
+	 * pickup warning the module holds for it. The queue's bookkeeping lives
+	 * behind this seam, so an item and its "already warned about this" note
+	 * always leave together: a later re-enqueue of the same ticket can warn
+	 * again with the same reason. Returns whether an item was removed.
+	 */
+	removeQueueItem(ticketIdentity: string): boolean;
+	/**
 	 * The Close cleanup of one ended cycle. Returns the failure reason, or
 	 * undefined. `end` stays on the seam so manual and observation callers share
 	 * the same operation shape; the caller owns the wording of the answer.
@@ -363,6 +371,19 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
+	 * Drop one ticket's waiting start and forget the pickup warning held for it.
+	 * The Work queue's row and the module's once-per-reason note are one fact
+	 * seen twice, so both leave together through here: the operator's cancel,
+	 * the successful pickup, and the restart-race cancellation all clear the
+	 * same way, and a later re-enqueue of the ticket is free to warn again.
+	 */
+	removeQueueItem(ticketIdentity: string): boolean {
+		const removed = this.state.removeWorkItem(ticketIdentity);
+		this.lastPickupWarning.delete(ticketIdentity);
+		return removed;
+	}
+
+	/**
 	 * Claim and run one queue item. Returns whether the item claimed a seat
 	 * this call: a refused claim keeps the item in the queue and says why on
 	 * the Message line, once per reason.
@@ -389,8 +410,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				.ticketsByState(["handed-off", "running"])
 				.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
 			if (inFlight !== undefined && Date.parse(inFlight.startedAt) > Date.parse(item.enqueuedAt)) {
-				this.state.removeWorkItem(item.ticketIdentity);
-				this.lastPickupWarning.delete(item.ticketIdentity);
+				this.removeQueueItem(item.ticketIdentity);
 				this.reports.refresh();
 				this.reports.notice(
 					`${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`,
@@ -424,8 +444,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			item.previousMessage,
 			(started) => {
 				if (started.ok) {
-					this.state.removeWorkItem(item.ticketIdentity);
-					this.lastPickupWarning.delete(item.ticketIdentity);
+					this.removeQueueItem(item.ticketIdentity);
 					// The route the item carries is the operator's decision on the turn
 					// it routes from: it lands on the settled turn's trace, like the
 					// direct route's start, once the pickup's handoff is live.
@@ -465,13 +484,8 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const previous = this.lastPickupWarning.get(item.ticketIdentity);
 		if (previous === reason) return;
 		this.lastPickupWarning.set(item.ticketIdentity, reason);
-		// The name the operator reads on the row: the title while the ticket is
-		// still in the projection, the identity once it is gone.
-		const title = this.state
-			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
-			.find((candidate) => candidate.identity === item.ticketIdentity)?.title;
 		this.reports.warning(
-			`queued handoff for ${title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`} was not run: ${reason}`,
+			`queued handoff for ${this.ticketName(item.ticketIdentity)} was not run: ${reason}`,
 		);
 	}
 

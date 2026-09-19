@@ -16,6 +16,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
+import { baseChoice } from "../src/handoff.ts";
 import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
@@ -27,6 +28,7 @@ import {
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
+	mouseClick,
 	openGuide,
 	openMessageView,
 	openPanel,
@@ -275,6 +277,96 @@ describe("the in-app Key guide", () => {
 			} finally {
 				state.close();
 			}
+		}
+	});
+
+	// The Work queue's list and detail modes are cataloged like every other
+	// base mode. This walks the guide from both queue modes: each names its own
+	// controls (the reorder pair, the cancel, the list return, the queue's own
+	// scroll reason), and no other section's controls reach its current-mode
+	// section. That is the Key-guide half of the Work queue row in the
+	// verification record: the catalogue dispatch and the guide's per-section
+	// key names, measured (ADR 0034).
+	test("names the Work queue modes, and keeps each section's keys in its own guide", async () => {
+		const state = freshState();
+		try {
+			// One waiting start: the guide reads the queue cursor through it.
+			const enqueued = state.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "open",
+				choice: baseChoice("pi", "live-worktree", "implement"),
+				previousMessage: "",
+			});
+			if (!enqueued.ok) throw new Error(enqueued.reason);
+			const runner = new FakeRunner();
+			const tickets = [issueTicket()];
+			const source = new FakeSource("issues", "github-issues", success(tickets));
+			// A zero Parallel limit: the item waits the whole test, so neither the
+			// cap gate nor the pickup empties the queue under the guide.
+			const zeroSeatConfig = { ...issuesConfig, maxParallelAgents: 0 };
+			await withApp(
+				async (setup) => {
+					source.settle(success(tickets));
+					// The Work header stands with its count; it starts collapsed.
+					const header = await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						"the Work header",
+					);
+					expect(header).toContain("▸ Work");
+					// Expand the section: the click lands the cursor on the first row.
+					const workRow = rowsOf(header).findIndex((row) => /\bWork\b/.test(row));
+					await mouseClick(setup, 2, workRow);
+					const list = await awaitFrame(
+						setup,
+						(f) => f.includes("▾ Work") && f.includes("❯ Work queue"),
+						"the expanded Work section",
+					);
+					expect(list).toMatch(/\[open\]\s+Add a webhook retry policy/);
+
+					// The list-mode guide holds the queue's keys and none of the
+					// Ticket section's: the reorder pair and the cancel stand in the
+					// current mode, and no Hand off or Decide row reaches it.
+					const listGuide = rowsOf(await openGuide(setup, "?", "Key guide - Work queue list"));
+					const listIndexOf = (needle: string) =>
+						listGuide.findIndex((row) => norm(row).includes(needle));
+					const listBetween = (top: number, bottom: number) =>
+						listGuide.slice(top + 1, bottom).map(contentOf);
+					const listCurrent = listBetween(
+						listIndexOf("Current interaction mode"),
+						listIndexOf("Global controls"),
+					);
+					expect(listCurrent).toContain("u Queue up - the item is first in the queue");
+					expect(listCurrent).toContain("d Queue down - the item is last in the queue");
+					expect(listCurrent).toContain("Delete Remove");
+					expect(listCurrent.some((row) => row.includes("Hand off"))).toBe(false);
+					expect(listCurrent.some((row) => row.includes("Decide"))).toBe(false);
+					await closeOverlay(setup, "Key guide", "the guide to close");
+
+					// The detail-mode guide: the queue's scroll carries its own
+					// reason, the pane return is named for the queue, and the
+					// list-mode keys (reorder, cancel) leave this mode's section.
+					setup.mockInput.pressKey("l");
+					const detailGuide = rowsOf(await openGuide(setup, "?", "Key guide - Work queue detail"));
+					const detailIndexOf = (needle: string) =>
+						detailGuide.findIndex((row) => norm(row).includes(needle));
+					const detailCurrent = detailGuide
+						.slice(detailIndexOf("Current interaction mode") + 1, detailIndexOf("Global controls"))
+						.map(contentOf);
+					expect(detailCurrent).toContain(
+						"↑↓/jk Scroll - the Work queue detail has nowhere to scroll",
+					);
+					expect(detailCurrent).toContain("←/h List");
+					expect(detailCurrent.some((row) => row.includes("Queue up"))).toBe(false);
+					expect(detailCurrent.some((row) => row.includes("Remove"))).toBe(false);
+					await closeOverlay(setup, "Key guide", "the guide to close");
+				},
+				WIDTH,
+				34,
+				{ config: zeroSeatConfig, state, sources: [source], runner },
+			);
+		} finally {
+			state.close();
 		}
 	});
 

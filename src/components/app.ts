@@ -1702,10 +1702,13 @@ export function App({
 	 * row the list kept clamps to the rows that remain.
 	 */
 	const removeQueueItem = () => {
-		if (state === undefined) return;
+		if (handoffDispatch === undefined) return;
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
-		state.removeWorkItem(item.ticketIdentity);
+		// Route the removal through the module so the waiting start and its
+		// once-per-reason pickup warning leave together (ADR 0034): a bare
+		// state delete would strand the warning and mute a later re-enqueue.
+		handoffDispatch.removeQueueItem(item.ticketIdentity);
 		// The name the operator reads on the line: the title while the ticket
 		// is still in the projection, its identity once it is gone.
 		const title = ticketsRef.current.find(

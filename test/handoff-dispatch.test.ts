@@ -1661,6 +1661,50 @@ describe("the Parallel limit and the Work queue", () => {
 		).toHaveLength(1);
 	});
 
+	test("removing a waiting start clears its warning, so a re-enqueued failure warns again", async () => {
+		const rigRef = rig([FIRST]);
+		// One module holds the once-per-reason note across the whole walk, so
+		// the test reads the same warning bookkeeping the running factory does.
+		let held = rigRef.config.maxParallelAgents;
+		const mod = withRunner(rigRef, rigRef.runner, { seatCount: () => held });
+		// A restart waits at a full cap for a ticket that is still open.
+		await expect(
+			mod.dispatch({
+				origin: "restart",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "again",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// A seat frees: the pickup refuses the open ticket and says so once,
+		// then again on the next cycle with nothing new to report.
+		held = rigRef.config.maxParallelAgents - 1;
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		const warned = () =>
+			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")).length;
+		expect(warned()).toBe(1);
+		// The operator cancels the waiting start through the seam. The item and
+		// its warning leave together, so the cancel does not strand a note.
+		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		// The same start is asked again and the same check refuses it once more.
+		// Because the removal cleared the note, the failure reaches the Message
+		// line again instead of being muted by the earlier warning (ADR 0034).
+		held = rigRef.config.maxParallelAgents;
+		await expect(
+			mod.dispatch({
+				origin: "restart",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "again",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		held = rigRef.config.maxParallelAgents - 1;
+		expect(await mod.pickupWorkQueue()).toBe(0);
+		expect(warned()).toBe(2);
+	});
+
 	test("an automatic start at the cap is refused, and the queue stays empty", async () => {
 		const rigRef = rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
