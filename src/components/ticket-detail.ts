@@ -12,7 +12,12 @@ import {
 } from "react";
 
 import type { ScrollConfig } from "../config.ts";
-import { isHeldCompletion, type LeftoverEnvironment, type Ticket } from "../domain/ticket.ts";
+import {
+	isHeldCompletion,
+	type LeftoverEnvironment,
+	type Ticket,
+	type TicketMarker,
+} from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
 import { prioritySourceWord } from "../priority.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
@@ -23,6 +28,8 @@ import { Spinner } from "./shared/spinner.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import {
 	BADGE_WIDTH,
+	failureBadge,
+	markerColor,
 	paint,
 	STARTING_WORD,
 	stateBadge,
@@ -110,6 +117,7 @@ export function detailContent(
 	suggestedChoice?: HandoffChoice,
 	priorityOverride: string | null = null,
 	starting: boolean = false,
+	marker: TicketMarker | null = null,
 ): DetailContent {
 	if (ticket === undefined)
 		return {
@@ -130,8 +138,12 @@ export function detailContent(
 	pushWrapped(ticket.repository, paint("text"));
 	// The Starting window (ADR 0030) takes the state line's slot in place of
 	// the badge, the same face the list row wears, so the list and the detail
-	// never disagree. The `[handed-off]` badge is never drawn.
+	// never disagree. The `[handed-off]` badge is never drawn: where the
+	// failure marker rules the face out, the marker's own word holds the
+	// slot, the word the row wears beside it.
 	if (starting) lines.push({ text: " ", fg: undefined, spinner: true });
+	else if (marker !== null && ticket.state === "handed-off")
+		lines.push({ text: failureBadge(marker), fg: markerColor(marker) });
 	else lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
 	const choice = detailChoice(ticket, suggestedChoice);
 	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
@@ -253,6 +265,7 @@ export function detailLines(
 	suggestedChoice?: HandoffChoice,
 	priorityOverride: string | null = null,
 	starting: boolean = false,
+	marker: TicketMarker | null = null,
 ): DetailLine[] {
 	return detailContent(
 		ticket,
@@ -261,6 +274,7 @@ export function detailLines(
 		suggestedChoice,
 		priorityOverride,
 		starting,
+		marker,
 	).lines;
 }
 
@@ -412,6 +426,13 @@ interface TicketDetailProps {
 	 * wears the spinner face the list row wears in place of the badge.
 	 */
 	starting: boolean;
+	/**
+	 * The ticket's failure marker from the last observation, the word the list
+	 * row wears in the badge's slot. A `handed-off` ticket outside its window
+	 * wears it here too (ADR 0030): the `[handed-off]` badge is drawn by no
+	 * surface, so the marker that rules the face out takes the slot.
+	 */
+	marker: TicketMarker | null;
 	scroll: ScrollConfig;
 	onFocus: () => void;
 	/**
@@ -437,6 +458,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		priorityOverride,
 		suggestedChoice,
 		starting,
+		marker,
 		scroll,
 		onFocus,
 		scrollSlot,
@@ -457,6 +479,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		suggestedChoice,
 		priorityOverride,
 		starting,
+		marker,
 	);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;

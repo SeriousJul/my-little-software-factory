@@ -34,13 +34,23 @@ export const SPINNER_FRAME_MS = 100;
  * One interval steps the index one frame at a time, wrapping past the last
  * frame back to the first. The index starts at zero, so the mount paints
  * the first frame before any tick can move it.
+ *
+ * Every slot the face stands in takes its frame from here, so the animated
+ * control and a slot that paints the face as written text never disagree on
+ * the frames or on their timing. A slot that owes no motion while no face of
+ * its own is on screen passes `active` false: no interval runs, and the
+ * frame stands where it last stood.
  */
-export function useSpinnerFrame(frameMs: number = SPINNER_FRAME_MS): number {
+export function useSpinnerFrame(
+	active: boolean = true,
+	frameMs: number = SPINNER_FRAME_MS,
+): number {
 	const [frame, setFrame] = useState(0);
 	useEffect(() => {
+		if (!active) return;
 		const id = setInterval(() => setFrame((at) => (at + 1) % SPINNER_FRAMES.length), frameMs);
 		return () => clearInterval(id);
-	}, [frameMs]);
+	}, [frameMs, active]);
 	return frame;
 }
 

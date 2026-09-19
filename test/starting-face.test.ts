@@ -7,10 +7,11 @@
  * detail header wear the animated spinner face beside its written word; the
  * `[handed-off]` badge is never drawn. The timeline is tested with fake
  * external operations and isolated test state: the manual hand-off, the
- * failed start, the auto hand-off, the workflow route, and the restart of a
- * crash remnant, each from the keypress or the dispatch to the first
- * observation. The failure marker outranks the face, and a crash remnant
- * wears its recovery fact, never the spinner.
+ * failed start, the auto hand-off, the workflow route, the restart of a
+ * crash remnant, and a turn that settles under a handed-off ticket, each from
+ * the keypress or the dispatch to the frame the next fact leaves. A failure
+ * marker outranks the face in both surfaces, and a crash remnant wears its
+ * recovery fact, never the spinner.
  *
  * The face steps its braille frame every ~100 ms, so the checks run on the
  * written word beside any of the shared frames; the animation itself is not
@@ -107,6 +108,14 @@ interface SeedDetail {
 	stateNow?: () => number;
 	/** The cause the settled turn takes: the default `completed` leaves the ticket undetermined. */
 	cause?: "completed" | "failed";
+	/**
+	 * The Auto-handoff mode the state file holds before the app mounts.
+	 *
+	 * The mode is factory state (ADR 0036): a test that needs auto mode writes
+	 * it to the state file the way the `a` key does, and the config's
+	 * `auto-handoff` line is no longer read for it.
+	 */
+	autoMode?: boolean;
 }
 
 /**
@@ -169,6 +178,10 @@ function seededApp(
 	detail: SeedDetail = {},
 ): SeededApp {
 	const state = seed(shape, detail);
+	// The operator's choice of the Auto-handoff mode is a fact of the state
+	// file, not of the config (ADR 0036), so the seed writes it before the app
+	// mounts.
+	if (detail.autoMode === true) state.setAutoHandoffMode(true);
 	const home = mkdtempSync(join(tmpdir(), "factory-face-home-"));
 	paths.push(home);
 	const repo = mkdtempSync(join(tmpdir(), "factory-face-repo-"));
@@ -233,11 +246,70 @@ function stubLiveHandoff(runner: FakeRunner, checkout: string): void {
 const gateStart = (runner: FakeRunner): GatedRunner =>
 	gatedRunner(runner, (command) => command.includes("agent start"));
 
+/**
+ * Let the held command reach the gate, then let it go.
+ *
+ * A release that finds nothing inside the gate is no-ops, and the command
+ * that arrives a moment later then waits for a key the test has already
+ * spent, so the walk hangs on the frame that command would have moved. The
+ * test reads its frame first, and the command crosses the process boundary
+ * after it, so the arrival is waited for before the release.
+ */
+const releaseHeld = async (gate: GatedRunner): Promise<void> => {
+	await gate.waitForArrivals(1);
+	gate.release();
+};
+
 /** The herdr agent list where pane-1 works. */
 const workingList = () =>
 	agentListJson([
 		{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
 	]);
+
+/**
+ * The path of a pi session record of one completed turn, the way herdr
+ * reports it. The turn's end sits in the record, so the observation settles
+ * the turn on that read (ADR 0015, ADR 0017).
+ */
+function settledSession(text: string): string {
+	const dir = mkdtempSync(join(tmpdir(), "factory-face-session-"));
+	paths.push(dir);
+	const file = join(dir, "session.jsonl");
+	writeFileSync(
+		file,
+		`${JSON.stringify({
+			type: "message",
+			timestamp: new Date().toISOString(),
+			message: {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text }],
+			},
+		})}\n`,
+		"utf8",
+	);
+	return file;
+}
+
+/** The herdr agent list where pane-1's turn has settled. */
+const settledList = () =>
+	agentListJson([
+		{
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			agent: "pi",
+			status: "done",
+			sessionId: settledSession("The fix is in the layout math."),
+		},
+	]);
+
+/**
+ * Hold the observation loop's one herdr read, so the frame the test reads
+ * stands still until the test lets the next poll land.
+ */
+const gatePoll = (runner: FakeRunner): GatedRunner =>
+	gatedRunner(runner, (command) => command === "herdr agent list");
 
 describe("the Starting window's timeline", () => {
 	test("the manual hand-off wears the face from the keypress to the first observation", async () => {
@@ -264,7 +336,7 @@ describe("the Starting window's timeline", () => {
 				expect(inFlight).toContain("open: 1  running: 0  awaiting: 0");
 				// The start settles into `handed-off`: the face stays, and the
 				// first observation steps the ticket to running in its place.
-				gate.release();
+				await releaseHeld(gate);
 				const running = await awaitFrame(
 					setup,
 					(f) => badgeRow(f).includes("[running]"),
@@ -306,7 +378,7 @@ describe("the Starting window's timeline", () => {
 					(f) => face(f) !== null && messageRowOf(f).includes("Working: handing off"),
 				);
 				expect(face(inFlight)).not.toBeNull();
-				gate.release();
+				await releaseHeld(gate);
 				const failed = await awaitFrame(
 					setup,
 					(f) => badgeRow(f).includes("[open]") && face(f) === null,
@@ -322,7 +394,7 @@ describe("the Starting window's timeline", () => {
 	});
 
 	test("the auto hand-off wears the face while its start stands", async () => {
-		const app = seededApp("open", { autoHandoff: true });
+		const app = seededApp("open", {}, { autoMode: true });
 		stubCheckout(app.runner, checkoutOf(app.config));
 		stubLiveHandoff(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: workingList() });
@@ -338,7 +410,7 @@ describe("the Starting window's timeline", () => {
 					"the dispatched face",
 				);
 				expect(inFlight).not.toContain("[handed-off]");
-				gate.release();
+				await releaseHeld(gate);
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
 			},
 			WIDTH,
@@ -396,7 +468,7 @@ describe("the Starting window's timeline", () => {
 				expect(badgeRow(claimed)).not.toContain("held");
 				// ...and a failed start gives the held face back: the window
 				// closed, and the state rules decide the resting face.
-				gate.release();
+				await releaseHeld(gate);
 				const back = await awaitFrame(
 					setup,
 					(f) => badgeRow(f).includes("held") && face(f) === null,
@@ -417,8 +489,11 @@ describe("the Starting window's timeline", () => {
 		// stands behind it.
 		const app = seededApp(
 			"in-flight",
-			{ autoHandoff: true },
-			{ stateNow: () => Date.now() - 60_000 },
+			{},
+			{
+				stateNow: () => Date.now() - 60_000,
+				autoMode: true,
+			},
 		);
 		stubCheckout(app.runner, checkoutOf(app.config));
 		// The new pane the restart lands in stands in the list: unknown while
@@ -459,7 +534,8 @@ describe("the Starting window's timeline", () => {
 				await gate.waitForArrivals(1);
 				// ...and the start settles into `handed-off` on the new pane.
 				// The missing marker is gone with the old pane, and the row
-				// wears the face until the agent reports a step.
+				// wears the face until the agent reports a step. The arrival is
+				// already proven, so the release stands on its own.
 				gate.release();
 				const restarted = await awaitFrame(setup, (f) => face(f) !== null, "the restart's face");
 				expect(badgeRow(restarted)).not.toContain("missing");
@@ -467,6 +543,82 @@ describe("the Starting window's timeline", () => {
 				// The agent answers working, and the row steps to running.
 				app.runner.set("herdr", ["agent", "list"], { stdout: list("working") });
 				await awaitFrame(setup, (f) => badgeRow(f).includes("[running]"), "the ticket to run");
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), runner: gate.runner },
+		);
+		app.state.close();
+	});
+
+	test("a turn that settles under a handed-off ticket ends the face and takes its resting badge", async () => {
+		const app = seededApp("in-flight");
+		stubCheckout(app.runner, checkoutOf(app.config));
+		// The turn's end sits in the agent's session record, so the settle
+		// needs no startup grace (ADR 0017), and the agent is alive in the
+		// poll, so no recovery fact closes the window.
+		app.runner.set("herdr", ["agent", "list"], { stdout: settledList() });
+		const gate = gatePoll(app.runner);
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The boot frame wears the face: the ticket rests in
+				// `handed-off`, the state the claim settled into, and no
+				// observation has read its work yet.
+				const handedOff = await awaitFrame(setup, (f) => face(f) !== null, "the handed-off face");
+				expect(handedOff).not.toContain("[handed-off]");
+				// The row and the detail header wear it together.
+				expect(faceCount(handedOff)).toBe(2);
+				// The held poll answers: the turn settles, the window closes,
+				// and the row rests on its own badge.
+				await releaseHeld(gate);
+				const resting = await awaitFrame(
+					setup,
+					(f) => badgeRow(f).includes("[awaiting]") && face(f) === null,
+					"the settled turn",
+				);
+				expect(resting).not.toContain("[handed-off]");
+				expect(faceCount(resting)).toBe(0);
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), runner: gate.runner },
+		);
+		app.state.close();
+	});
+
+	test("a blocked agent's marker outranks the face on the first observation", async () => {
+		const app = seededApp("in-flight");
+		stubCheckout(app.runner, checkoutOf(app.config));
+		// A blocked agent works no turn, so the settle path never runs: the
+		// ticket stays `handed-off` under the marker the operator must act on.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "pi",
+					status: "blocked",
+				},
+			]),
+		});
+		const gate = gatePoll(app.runner);
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => face(f) !== null, "the face before the poll");
+				// The poll lands with the agent blocked: the marker takes the
+				// badge's slot, and the motion never hides it, in the row and in
+				// the detail header alike.
+				await releaseHeld(gate);
+				const blocked = await awaitFrame(
+					setup,
+					(f) => badgeRow(f).includes("blocked") && face(f) === null,
+					"the blocked marker",
+				);
+				expect(blocked).not.toContain("[handed-off]");
+				expect(faceCount(blocked)).toBe(0);
 			},
 			WIDTH,
 			HEIGHT,

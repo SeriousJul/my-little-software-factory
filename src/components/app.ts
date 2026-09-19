@@ -2765,6 +2765,7 @@ export function App({
 										selectedTicket !== undefined &&
 										markerOf(selectedTicket) === null &&
 										startingWindow(selectedTicket),
+									marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
 									scroll: config.scroll,
 									onFocus: () => focusPane("detail"),
 									scrollSlot: detailScrollSlot,

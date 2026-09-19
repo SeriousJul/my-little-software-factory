@@ -31,6 +31,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
 import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
@@ -67,17 +68,17 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
+import { BASE_CONFIG } from "./base-config.ts";
+import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /**
  * The braille glyph the spinner face stands on, as a character class.
  *
  * The face steps one glyph every ~100 ms, so an exact row check runs on the
- * word and the glyph class instead of one frame's glyph (ADR 0030).
+ * word and the glyph class instead of one frame's glyph (ADR 0030). The
+ * class is built from the shared frames, so it cannot fall behind them.
  */
-const SPINNER_GLYPH = "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]";
-
-import { BASE_CONFIG } from "./base-config.ts";
-import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+const SPINNER_GLYPH = `[${SPINNER_FRAMES.join("")}]`;
 
 describe("the control plane", () => {
 	test("production starts with no configured ticket sources instead of sample data", async () => {

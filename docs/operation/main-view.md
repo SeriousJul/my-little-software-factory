@@ -209,7 +209,9 @@ clear when the next poll no longer shows the condition. The first poll has
 not landed yet, so no badge appears before it. The failure markers beat the
 Starting window's face the way they beat the state badge: a dead or blocked
 agent is never hidden behind a spinner, and a crash remnant shows its
-recovery fact, not the spinner.
+recovery fact, not the spinner. A `handed-off` ticket under a marker wears
+that marker's own word in the detail's state line too: the `[handed-off]`
+badge is drawn by no surface, and the row and the detail never disagree.
 A ticket that has used up its per-ticket handoff limit wears a trailing
 `handoff limit` marker at the end of the row, and the detail pane shows the
 count as `Handoffs: 2/2`. Auto-handoff leaves such a ticket open; a manual

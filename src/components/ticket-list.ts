@@ -17,12 +17,12 @@
  */
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
-import { type ReactElement, useEffect, useRef, useState } from "react";
+import { type ReactElement, useRef } from "react";
 
 import { isHeldCompletion, type Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
-import { SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerFace } from "./shared/spinner.ts";
+import { spinnerFace, useSpinnerFrame } from "./shared/spinner.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
@@ -48,29 +48,6 @@ const MARKER_GAP = 1;
 const SELECTION_WIDTH = 2;
 /** The row cells a dropped field still owes the title: one gap and one text cell. */
 const TITLE_MINIMUM = 2;
-
-/**
- * The frame the spinner face stands on, stepped by the shared timing.
- *
- * The row is one text renderable, and a text renderable takes no nested
- * control, so the face the row wears is the shared face's written text at
- * this frame, painted as one run the way the state badge is painted. The
- * face drives itself while any visible row wears it, and stands on its first
- * frame the moment the window opens, so a frame snapshot read at the open
- * holds. The word, not the glyph, is the fact (ADR 0030).
- */
-function useStartingFace(active: boolean): number {
-	const [frame, setFrame] = useState(0);
-	useEffect(() => {
-		if (!active) return;
-		const id = setInterval(
-			() => setFrame((at) => (at + 1) % SPINNER_FRAMES.length),
-			SPINNER_FRAME_MS,
-		);
-		return () => clearInterval(id);
-	}, [active]);
-	return frame;
-}
 
 interface TicketListProps {
 	tickets: readonly Ticket[];
@@ -117,9 +94,15 @@ export function TicketList({
 	const rootRef = useRef<BoxRenderable | null>(null);
 
 	const { start, visible } = listWindow(tickets, selectedIndex, visibleRows);
-	// The face steps only while a visible row wears it: a window that is not
-	// on screen owes no motion.
-	const faceFrame = useStartingFace(visible.some((ticket) => starting(ticket)));
+	// The row wears the face as written text, not as a mounted control: the row
+	// is one text renderable, and a text renderable takes no nested control, so
+	// the face is the shared face's text at the shared frame, painted as one run
+	// the way the state badge is painted. The frame comes from the shared
+	// `useSpinnerFrame`, gated on whether a visible row wears it: a window that
+	// is not on screen owes no motion, and the face stands on its first frame
+	// the moment the window opens, so a frame snapshot read at the open holds.
+	// The word, not the glyph, is the fact (ADR 0030).
+	const faceFrame = useSpinnerFrame(visible.some((ticket) => starting(ticket)));
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
