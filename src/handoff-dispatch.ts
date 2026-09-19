@@ -22,7 +22,7 @@ import {
 } from "./handoff.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
-import type { FactoryState, HandoffClaim, HandoffOrigin } from "./state.ts";
+import type { FactoryState, HandoffClaim, HandoffOrigin, WorkQueueItem } from "./state.ts";
 
 /** A renderer callback must not strand a durable claim or the dispatch seat. */
 function safeReport(report: () => void): void {
@@ -59,11 +59,13 @@ export interface HandoffIntent {
 
 /**
  * Whether dispatch accepted the intent: it claimed the Handoff and will run
- * it, now or behind the Handoff already in flight. A refused claim leaves the
- * ticket where it was and says why, and no start follows. Whether the Agent
- * actually started arrives later, on the intent's `onStarted`.
+ * it, now or behind the Handoff already in flight, or it entered the Work
+ * queue at a full Parallel limit and will run when a seat frees. A refused
+ * claim leaves the ticket where it was and says why, and no start follows.
+ * Whether the Agent actually started arrives later, on the intent's
+ * `onStarted`; a queued item answers it from its pickup.
  */
-export type DispatchResult = { ok: true } | { ok: false; reason: string };
+export type DispatchResult = { ok: true; queued: boolean } | { ok: false; reason: string };
 
 /**
  * The Message and projection callbacks the module may call.
@@ -80,6 +82,8 @@ export interface HandoffDispatchReports {
 	working: (text: string) => void;
 	warning: (text: string) => void;
 	error: (text: string) => void;
+	/** The Message line notice: news the operator should see but no error. */
+	notice: (text: string) => void;
 	clearWorking: () => void;
 	refresh: () => void;
 	/**
@@ -140,6 +144,12 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	runner: CommandRunner;
 	/** The current config. A queued handoff reads it when it starts. */
 	config: () => FactoryConfig;
+	/**
+	 * The Parallel limit seats held now, from one shared source (ADR 0034):
+	 * the ticket seats, the unresolved claims, and the Consultation seats.
+	 * A manual start at a full cap enters the Work queue instead of starting.
+	 */
+	seatCount: () => number;
 	home: string;
 	/**
 	 * The herdr workspace the control plane itself runs in, or null outside
@@ -160,6 +170,14 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 export interface HandoffDispatch {
 	/** Every Handoff origin: open, workflow, restart, observation loop. */
 	dispatch(intent: HandoffIntent): Promise<DispatchResult>;
+	/**
+	 * The Work queue's pickup (ADR 0034): the items the free seats take, in
+	 * queue order. A pickup is a manual start: every hard check the claim
+	 * runs still runs, and a pickup that fails one leaves its item in the
+	 * queue with a Message line warning. Returns the items that claimed a
+	 * seat this call. The observation cycle calls it, before auto-dispatch.
+	 */
+	pickupWorkQueue(): Promise<number>;
 	/**
 	 * The Close cleanup of one ended cycle. Returns the failure reason, or
 	 * undefined. `end` stays on the seam so manual and observation callers share
@@ -191,10 +209,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly state: FactoryState;
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
+	private readonly seatCount: () => number;
 	private readonly home: string;
 	private readonly controlPlaneWorkspaceId: string | null | undefined;
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	/**
+	 * The last pickup warning per queue item, so a pickup that keeps failing
+	 * the same check says it once on the Message line, not once per cycle.
+	 */
+	private readonly lastPickupWarning = new Map<string, string>();
 
 	/** True while external handoff work holds the seat. */
 	private inFlight = false;
@@ -215,6 +239,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.state = options.state;
 		this.runner = options.runner;
 		this.config = options.config;
+		this.seatCount = options.seatCount;
 		this.home = options.home;
 		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId;
 		this.persistMapping = options.persistMapping;
@@ -222,6 +247,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			working: (text) => safeReport(() => options.working(text)),
 			warning: (text) => safeReport(() => options.warning(text)),
 			error: (text) => safeReport(() => options.error(text)),
+			notice: (text) => safeReport(() => options.notice(text)),
 			clearWorking: () => safeReport(options.clearWorking),
 			refresh: () => safeReport(options.refresh),
 			starting: (identity, active) => safeReport(() => options.starting(identity, active)),
@@ -246,6 +272,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (ticket === undefined)
 			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
 
+		// The Parallel limit gates every start (ADR 0034): a manual start that
+		// cannot take a seat enters the Work queue instead of starting, and the
+		// ticket keeps the state it wears while it waits.
+		const limit = config.maxParallelAgents;
+		if (limit > 0 && this.seatCount() >= limit) return Promise.resolve(this.enqueueWork(intent));
 		const claim = this.state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
 		// The claim is in, so the ticket is in the Starting window now: its work
@@ -259,7 +290,159 @@ class HandoffDispatchModule implements HandoffDispatch {
 			intent.previousMessage,
 			intent.onStarted,
 		);
-		return Promise.resolve({ ok: true });
+		return Promise.resolve({ ok: true, queued: false });
+	}
+
+	/**
+	 * The cap-full answer for a manual start (ADR 0034): the start waits in the
+	 * Work queue with its origin and captured choice, and the ticket keeps its
+	 * state. The queue holds at most one item per ticket: a second enqueue for
+	 * a ticket that already waits is refused on the Message line, and the
+	 * first item keeps its place.
+	 */
+	private enqueueWork(intent: HandoffIntent): DispatchResult {
+		const existing = this.state.workQueueIdentity(intent.ticketIdentity);
+		if (existing !== null) {
+			this.reports.warning(
+				`ticket ${intent.ticketIdentity} already has a waiting queue item; the first item keeps its place`,
+			);
+			return { ok: false, reason: "the ticket already has a waiting queue item" };
+		}
+		const enqueued = this.state.enqueueWork({
+			ticketIdentity: intent.ticketIdentity,
+			origin: intent.origin,
+			choice: intent.choice,
+			previousMessage: intent.previousMessage,
+		});
+		if (!enqueued.ok) {
+			this.reports.warning(enqueued.reason);
+			return { ok: false, reason: enqueued.reason };
+		}
+		this.reports.refresh();
+		this.reports.notice(
+			`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; it starts when a seat frees`,
+		);
+		return { ok: true, queued: true };
+	}
+
+	/**
+	 * Start the queue's items for the free seats, in queue order (ADR 0034).
+	 *
+	 * A pickup is a manual start: the claim runs every hard check - the
+	 * ticket still holds the state the origin requires, the source is healthy
+	 * and re-read since the last cycle, the attempt ledger is clear - and the
+	 * Setting fit runs inside the handoff itself. The automatic gates, the
+	 * Dispatch pause and the Same-type hold, do not hold a pickup. A pickup
+	 * that fails a check leaves its item in the queue with a Message line
+	 * warning, and the ticket keeps its state; a pickup that starts removes
+	 * its item and names the start on the Message line.
+	 */
+	async pickupWorkQueue(): Promise<number> {
+		const limit = this.config().maxParallelAgents;
+		if (limit === 0) return 0;
+		const freeSeats = limit - this.seatCount();
+		if (freeSeats <= 0) return 0;
+		const items = this.state.workQueue().slice(0, freeSeats);
+		let claimed = 0;
+		for (const item of items) {
+			if (this.stopped) break;
+			if (this.pickupItem(item)) claimed += 1;
+		}
+		if (claimed > 0) this.reports.refresh();
+		return claimed;
+	}
+
+	/**
+	 * Claim and run one queue item. Returns whether the item claimed a seat
+	 * this call: a refused claim keeps the item in the queue and says why on
+	 * the Message line, once per reason.
+	 */
+	private pickupItem(item: WorkQueueItem): boolean {
+		const currentState = this.state.ticketState(item.ticketIdentity);
+		if (currentState === undefined || !handoffAllowsState(item.origin, currentState)) {
+			this.reportPickupFailure(
+				item,
+				currentState === undefined
+					? "the ticket no longer exists"
+					: `the ticket is now ${currentState}`,
+			);
+			return false;
+		}
+		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
+		if (!claim.ok) {
+			this.reportPickupFailure(item, claim.reason);
+			return false;
+		}
+		const ticket = this.state
+			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
+			.find((candidate) => candidate.identity === item.ticketIdentity);
+		if (ticket === undefined) {
+			// The claim's hard checks passed but the projection holds no ticket
+			// to run: settle the claim, keep the item, and say so.
+			this.state.settleHandoff(claim.claim.attemptId, false, "the ticket is no longer visible");
+			this.reports.refresh();
+			this.reportPickupFailure(item, "the ticket is no longer visible");
+			return false;
+		}
+		this.lastPickupWarning.delete(item.ticketIdentity);
+		const previousHandoffId = ticket.handoff?.attemptId ?? "";
+		this.runClaimedHandoff(
+			ticket,
+			item.choice,
+			item.origin,
+			claim.claim,
+			item.previousMessage,
+			(started) => {
+				if (started.ok) {
+					this.state.removeWorkItem(item.ticketIdentity);
+					this.lastPickupWarning.delete(item.ticketIdentity);
+					// The route the item carries is the operator's decision on the turn
+				// it routes from: it lands on the settled turn's trace, like the
+				// direct route's start, once the pickup's handoff is live.
+					if (item.origin === "workflow" && previousHandoffId !== "") {
+						this.state.applyCompletionDecision({
+							ticketIdentity: item.ticketIdentity,
+							handoffId: previousHandoffId,
+							decision: "handed-off",
+							decidedAt: new Date(this.state.now()).toISOString(),
+						});
+					}
+					this.reports.refresh();
+					this.reports.notice(`${this.ticketName(item.ticketIdentity)} started from the Work queue`);
+				} else {
+					// The item keeps its place: the attempt record holds the failure,
+					// the ticket keeps its state, and the next free seat retries.
+					this.reportPickupFailure(item, started.reason);
+				}
+			},
+		);
+		return true;
+	}
+
+	/** The name the operator reads on a line: the ticket's title while the
+	 * ticket is still in the projection, its identity once it is gone. */
+	private ticketName(identity: string): string {
+		const title = this.state
+			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
+			.find((candidate) => candidate.identity === identity)
+			?.title;
+		return title === undefined ? `ticket ${identity}` : `"${title}"`;
+	}
+
+	/** The pickup warning, once per reason per item. */
+	private reportPickupFailure(item: WorkQueueItem, reason: string): void {
+		const previous = this.lastPickupWarning.get(item.ticketIdentity);
+		if (previous === reason) return;
+		this.lastPickupWarning.set(item.ticketIdentity, reason);
+		// The name the operator reads on the row: the title while the ticket is
+		// still in the projection, the identity once it is gone.
+		const title = this.state
+			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
+			.find((candidate) => candidate.identity === item.ticketIdentity)
+			?.title;
+		this.reports.warning(
+			`queued handoff for ${title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`} was not run: ${reason}`,
+		);
 	}
 
 	closeCleanup(
@@ -402,7 +585,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.refresh();
 		await reportHandoffOutcome(outcome, this.reports, this.persistMapping);
 		reportStarted(
-			outcome.status === "failed" ? { ok: false, reason: outcome.reason } : { ok: true },
+			outcome.status === "failed" ? { ok: false, reason: outcome.reason } : { ok: true, queued: false },
 		);
 		this.inFlight = false;
 		this.drainCleanupQueue();

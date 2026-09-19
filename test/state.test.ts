@@ -6,7 +6,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
+import { type ConsultationState, openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
@@ -107,6 +107,68 @@ function success(tickets: FetchedTicket[]) {
 }
 
 describe("factory SQLite state", () => {
+	test("a Consultation in opening or working holds its seat, the other states hold none", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = state.createConsultation({
+			id: "consultation-1",
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: "Review this repository",
+			renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+			agentName: "consultation-11111111",
+			createdAt: "2026-09-01T00:00:00.000Z",
+		});
+		// The state the Consultation is born in already holds the seat.
+		expect(state.consultationSeatCount()).toBe(1);
+		const steps: Array<[next: ConsultationState, seats: number]> = [
+			["working", 1],
+			["awaiting-response", 0],
+			["missing", 0],
+			["failed", 0],
+			["closing", 0],
+			["closed", 0],
+		];
+		for (const [next, seats] of steps) {
+			expect(state.setConsultationState(consultation.id, next)).toBe(true);
+			expect(state.consultationSeatCount()).toBe(seats);
+		}
+		// The closed Consultation holds none; the fresh one in opening holds
+		// one beside it.
+		state.createConsultation({
+			id: "consultation-2",
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: "Review this repository",
+			renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+			agentName: "consultation-22222222",
+			createdAt: "2026-09-01T00:05:00.000Z",
+		});
+		expect(state.consultationSeatCount()).toBe(1);
+		state.close();
+	});
+
 	test("keeps the prior complete snapshot after a source fails and blocks its handoff", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
@@ -835,6 +897,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE checkout_conflict_confirmations;
 			DROP TABLE referenced_issues;
 			DROP TABLE auto_handoff_mode;
+			DROP TABLE work_queue;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -928,9 +991,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
-		// The v13 mode belongs to the run after this record: a v5 file stored
-		// no Auto-handoff mode.
-		db.exec("DROP TABLE auto_handoff_mode;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v5 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1003,9 +1066,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
-		// The v13 mode belongs to the run after this record: a v7 file stored
-		// no Auto-handoff mode.
-		db.exec("DROP TABLE auto_handoff_mode;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v7 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1076,11 +1139,11 @@ describe("factory SQLite state", () => {
 		state.applyFetch(sourceA, success([fetched()]));
 		state.close();
 
-		// Downgrade the record to the v12 shape: the mode table does not exist
-		// yet and the schema cell says twelve, which is exactly what an
-		// upgrade from v12 finds.
+		// Downgrade the record to the v12 shape: the mode table and the Work
+		// queue do not exist yet and the schema cell says twelve, which is
+		// exactly what an upgrade from v12 finds.
 		const db = new Database(path);
-		db.exec("DROP TABLE auto_handoff_mode;");
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		db.prepare("UPDATE schema_version SET version = 12").run();
 		db.close();
 
