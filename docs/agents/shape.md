@@ -25,8 +25,8 @@ description: The module map of the source tree, for agents working in this repos
 	`awaiting`, applies the automatic completion rule, and dispatches open
 	tickets in auto-handoff mode.
 - `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
-	completion traces, completion decisions, handoff attempts, and the
-	process lease.
+	completion traces, completion decisions, handoff attempts, the Auto-handoff
+	mode, and the process lease.
 - `src/task-selection.ts`: ordered task-rule selection.
 - `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
 	profile of each task type, and the agent, model, and thinking one handoff

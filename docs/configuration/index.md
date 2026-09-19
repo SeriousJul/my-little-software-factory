@@ -52,10 +52,7 @@ default-task-type = "implement"
 # ~/.local/state/my-little-software-factory/state.sqlite.
 state-file = "factory.sqlite"
 
-# --- Auto-handoff and limits -----------------------------------------
-
-# Start in auto-handoff mode. The a key toggles it from the Ticket section.
-auto-handoff = false
+# --- Limits ----------------------------------------------------------
 
 # The in-flight works the control plane keeps: a ticket Handoff and a
 # Consultation alike. 0 means unlimited.
@@ -319,7 +316,6 @@ source-kind = "github-issue"
 | `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
 | `state-file` | no | `$XDG_STATE_HOME/my-little-software-factory/state.sqlite`, else `~/.local/state/my-little-software-factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
-| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it from the Ticket section. |
 | `max-parallel-agents` | no | `2` | The one cap over all running work: the in-flight ticket seats and every Consultation in `opening` or `working`. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |

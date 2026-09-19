@@ -512,6 +512,12 @@ describe("the permanent Message line", () => {
 	test("states an operation notice, and lets a refusal take the line back", async () => {
 		await withApp(
 			async (setup) => {
+				// The mode is factory state, not a config default (ADR 0036): the
+				// operator's `a` key is the only way onto it. A plane with no state
+				// draws no mode line, so the flip is not visible here; the notice it
+				// produces is what this test reads.
+				setup.mockInput.pressKey("a");
+				await settle(setup);
 				for (const row of [4, 5, 6]) {
 					await press(setup, "j", "the next ticket", (f) => markerRowOf(f) === row);
 				}
@@ -542,7 +548,7 @@ describe("the permanent Message line", () => {
 			WIDTH,
 			HEIGHT,
 			{
-				config: { ...BASE_CONFIG, autoHandoff: true },
+				config: BASE_CONFIG,
 				runner: new FakeRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},

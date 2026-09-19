@@ -181,9 +181,11 @@ seat-count source the automatic start gates read: the in-flight tickets
 whose agent was alive in the latest herdr poll, or is still inside its
 startup grace, the handoffs still in progress, and every Consultation in
 `opening` or `working`. The gates and the mode line read the same source,
-so the two never disagree. The `a` key toggles the mode for the session
-from the Ticket section; the config's `auto-handoff` key sets the startup
-value only.
+so the two never disagree. The `a` key in the Ticket section toggles the
+mode and writes it to the state file at once, so a restart or a dev reload
+finds the mode where the operator left it; a state file the plane has just
+created starts with the mode off (ADR 0036). A write the state file refuses
+reports on the Message line, and the flip stands for the session.
 
 A blocked agent replaces the state badge in the list row with a `blocked`
 badge: the agent shows an approval or question UI and waits for a human.

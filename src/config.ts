@@ -176,8 +176,6 @@ export interface FactoryConfig {
 	attentionBell: boolean;
 	/** The semantic key which exits Agent interaction mode. */
 	interactionExitKey: InteractionExitKey;
-	/** Whether the control plane auto-hands-off open tickets. Off at startup. */
-	autoHandoff: boolean;
 	/** Agents the control plane keeps in flight; 0 means unlimited. */
 	maxParallelAgents: number;
 	/** How often the control plane polls herdr for agent states. */
@@ -372,7 +370,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		"ticket-sources",
 		"task-rules",
 		"state-file",
-		"auto-handoff",
 		"max-parallel-agents",
 		"agent-poll-interval-seconds",
 		"completion-message-lines",
@@ -446,7 +443,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		}
 	}
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
-	const autoHandoff = booleanField(data, "auto-handoff", false);
 	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
 	const agentPollIntervalSeconds = positiveNumberField(data, "agent-poll-interval-seconds", 5);
 	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
@@ -467,7 +463,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		consultationTypes,
 		attentionBell,
 		interactionExitKey,
-		autoHandoff,
 		maxParallelAgents,
 		agentPollIntervalSeconds,
 		completionMessageLines,
@@ -1209,7 +1204,6 @@ export function configToToml(config: FactoryConfig): string {
 		),
 		"attention-bell": config.attentionBell,
 		"interaction-exit-key": config.interactionExitKey,
-		"auto-handoff": config.autoHandoff,
 		"max-parallel-agents": config.maxParallelAgents,
 		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
 		"completion-message-lines": config.completionMessageLines,

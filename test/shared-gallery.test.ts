@@ -90,6 +90,10 @@ describe("the shared control gallery", () => {
 			"session-view",
 			"agent-view-fallback",
 			"captured-history-fallback",
+			"close-dialog-opening",
+			"close-dialog-working",
+			"close-dialog-awaiting-response",
+			"close-panel-closing",
 			"goto",
 			"ticket-goto",
 			"theme",
@@ -388,6 +392,53 @@ describe("the shared control gallery", () => {
 			"the Captured history fallback",
 		);
 		expect(frameText(captured)).toContain("review the auth design");
+	});
+
+	test("the close dialog examples hold every state a live Agent can be in", async () => {
+		// The dialog examples own a taller frame than the shared one, so the
+		// example opens at the plane's minimum height, where the dialog box
+		// must still hold its title, body, and every action row.
+		const setup = await gallery("close-dialog-opening", 80, 19);
+		let frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("close-dialog-opening"));
+		expect(frame).toContain("Close Consultation c1c1c1c1?");
+		expect(frame).toContain("The Agent is still opening");
+		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
+		expect(frame).toContain("stop the Agent; the work stays");
+		expect(frame).toContain("Cancel");
+
+		setup.mockInput.pressTab();
+		const working = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("close-dialog-working")),
+			"the working state",
+		);
+		frame = frameText(working);
+		expect(frame).toContain("The Agent is working");
+		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
+
+		setup.mockInput.pressTab();
+		const awaiting = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("close-dialog-awaiting-response")),
+			"the awaiting-response state",
+		);
+		frame = frameText(awaiting);
+		expect(frame).toContain("The Agent has answered and is waiting for your reply");
+		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
+
+		setup.mockInput.pressTab();
+		const closing = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("close-panel-closing")),
+			"the closing recovery panel",
+		);
+		frame = frameText(closing);
+		expect(frame).toContain("Close Consultation c1c1c1c1");
+		expect(frame).toContain("Cleanup is already in progress");
+		expect(frame).toContain("Retry");
+		expect(frame).toContain("Force-close");
+		expect(frame).not.toContain("The Agent is working");
 	});
 
 	test("the spinner example wears the animated face beside its written word", async () => {

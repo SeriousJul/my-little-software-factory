@@ -61,7 +61,6 @@ export const BASE_CONFIG: FactoryConfig = {
 			autoClose: false,
 		},
 	},
-	autoHandoff: false,
 	maxParallelAgents: 2,
 	agentPollIntervalSeconds: 5,
 	completionMessageLines: 200,

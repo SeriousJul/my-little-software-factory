@@ -11,7 +11,8 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff in the Ticket section.
+ * `a` toggles auto-handoff in the Ticket section and writes the mode to the
+ * state file at once, so the next run reads it back (ADR 0036).
  *
  * The Main view is one surface with two independently collapsable sections
  * (ADR 0019): both lists stay in the left column, both expanded by default,
@@ -93,6 +94,7 @@ import {
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
+import { consultationClosePanel } from "./consultation-close-panel.ts";
 import {
 	ConsultationDetail,
 	consultationDetailBody,
@@ -194,7 +196,7 @@ export type AppKey =
 	| "c"
 	| "f"
 	| "x"
-	| "z"
+	| "w"
 	| "d"
 	| "up"
 	| "down"
@@ -215,6 +217,7 @@ type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
+
 export interface AppProps {
 	/**
 	 * The validated config. The production entry always supplies it from the
@@ -365,7 +368,11 @@ export function App({
 		lines: readonly string[];
 		note: string | null;
 	} | null>(null);
-	const [autoMode, setAutoMode] = useState<boolean>(() => configProp.autoHandoff);
+	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
+	// operator's last choice back from the state file, so a restart or a dev
+	// reload finds the mode where it was left. A plane with no state has no
+	// durable mode to read, and starts with the mode off.
+	const [autoMode, setAutoMode] = useState<boolean>(() => state?.autoHandoffMode() ?? false);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,
@@ -1060,13 +1067,27 @@ export function App({
 		}
 	};
 	/**
-	 * Toggle auto-handoff for this session. The config's value is the
-	 * startup default only; the toggle never writes the config.
+	 * Toggle the Auto-handoff mode (ADR 0036).
+	 *
+	 * The flip lands in the session at once, and the new mode is written to the
+	 * state file at once: the next startup and the next dev reload read it back.
+	 * A write that fails reports the state file it could not write on the Message
+	 * line, and the in-session flip stands: the operator keeps working in the mode
+	 * they asked for, so the failure is news about the next run, not a refusal of
+	 * this one.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
+		if (state === undefined) return;
+		try {
+			state.setAutoHandoffMode(next);
+		} catch (error) {
+			setErrorMessage(
+				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
+			);
+		}
 	};
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
@@ -1760,18 +1781,13 @@ export function App({
 				"consultation-close": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
-					if (
-						selected.state === "opening" ||
-						selected.state === "working" ||
-						selected.state === "closing"
-					)
-						setPanel({ kind: "consultation-close", identity: selected.id });
-					else if (
-						selected.state === "awaiting-response" ||
-						selected.state === "missing" ||
-						selected.state === "failed"
-					)
+					// A missing or a failed Consultation has no Agent to stop, so it
+					// closes directly. A live Agent confirms first, and a closing
+					// Consultation opens the Recovery panel with the Retry and the
+					// Force-close.
+					if (selected.state === "missing" || selected.state === "failed")
 						closeConsultation(selected);
+					else setPanel({ kind: "consultation-close", identity: selected.id });
 				},
 				"consultation-delete": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -2356,6 +2372,13 @@ export function App({
 		panel !== null && ticketPanel === null
 			? consultationsRef.current.find((item) => item.id === panel.identity)
 			: undefined;
+	// The open close panel's own copy, re-derived from the record on every
+	// render: the record's state picks the shape, so the panel follows the
+	// record without the operator asking.
+	const closePanel =
+		panel !== null && panel.kind === "consultation-close" && panelConsultation !== undefined
+			? consultationClosePanel(panelConsultation)
+			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
@@ -2381,22 +2404,41 @@ export function App({
 	const liveDecision =
 		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;
 	/**
-	 * Whether the open ticket panel has nothing left to show.
+	 * Whether the open panel has nothing left to show.
 	 *
-	 * Each ticket panel kind says which fact of the ticket it is drawn from,
-	 * and that fact is what can run out from under the modal: the decision the
-	 * observation takes, the agent whose pane is gone, the ticket that leaves
-	 * the projection. A panel that is not drawn must not keep holding the keys
-	 * the ticket panels swallow.
+	 * Each panel kind says which fact it is drawn from, and that fact is what
+	 * can run out from under the modal: the decision the observation takes,
+	 * the agent whose pane is gone, the ticket that leaves the projection, and
+	 * the Consultation whose state moves while its close confirmation is open
+	 * (a background refresh that finds the Agent gone makes the record
+	 * `missing`, and neither close branch draws an `missing` record). A panel
+	 * that is not drawn must not keep holding the keys the panels swallow.
 	 */
+	const closePanelHasNothingToShow =
+		panel?.kind === "consultation-close" &&
+		(panelConsultation === undefined || closePanel === undefined);
 	const panelHasNothingToShow =
-		ticketPanel !== null &&
-		(panelTicket === undefined ||
-			(ticketPanel.kind === "decision" && decision === undefined) ||
-			(ticketPanel.kind === "live" && liveMode === "closed"));
+		(ticketPanel !== null &&
+			(panelTicket === undefined ||
+				(ticketPanel.kind === "decision" && decision === undefined) ||
+				(ticketPanel.kind === "live" && liveMode === "closed"))) ||
+		closePanelHasNothingToShow;
+	// The reason the guard stands on the Message line when it drops an open
+	// close panel: the record moved out of the states the panel draws, or it
+	// left the list while the panel was up.
+	const closePanelReleaseNote =
+		closePanelHasNothingToShow === true
+			? panelConsultation === undefined
+				? "the Consultation left the list; the close panel closed"
+				: `the Consultation moved to ${panelConsultation.state}; the close panel closed`
+			: null;
 	useEffect(() => {
+		if (closePanelReleaseNote !== null)
+			// The note is the outcome of the close the operator opened, so it
+			// stands as news, not as a warning the plane wrote on its own.
+			reportMessage({ severity: "info", text: closePanelReleaseNote });
 		if (panelHasNothingToShow) setPanel(null);
-	}, [panelHasNothingToShow]);
+	}, [panelHasNothingToShow, closePanelReleaseNote, reportMessage]);
 
 	// The Live view's stream: while the view shows the stream, a dedicated
 	// refresh reads the pane the ticket's current handoff records at the
@@ -2916,36 +2958,30 @@ export function App({
 					});
 				},
 			}),
+		// One panel element for the Consultation close: the record's state
+		// selects the shape through consultationClosePanel, the recovery rows
+		// while the record is closing and the confirmation rows while a close
+		// would stop a live Agent. A state with no shape never reaches the
+		// render: the guard above already dropped the panel.
 		panel !== null &&
 			panelConsultation !== undefined &&
 			panel.kind === "consultation-close" &&
+			closePanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}`,
-				bodyLines: [
-					panelConsultation.environment === "worktree"
-						? "The Agent may still be working. Close keeps the worktree and branch."
-						: "The Agent may still be working. Close only on an explicit operator decision.",
-					...(panelConsultation.state === "closing"
-						? ["Cleanup is already in progress. Force-close records remaining resources."]
-						: []),
-				],
-				actions: [
-					...(panelConsultation.state === "closing"
-						? [
-								{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
-								{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
-							]
-						: [{ key: "close", label: "Close", detail: "stop the Agent and retain the checkout" }]),
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation running" },
-				],
+				title: closePanel.title,
+				bodyLines: closePanel.bodyLines,
+				actions: closePanel.actions,
 				onAction: (key) => {
-					if (key === "close" || key === "retry") {
+					if (key === "retry") {
+						setPanel(null);
+						closeConsultation(panelConsultation);
+					} else if (key === "force") {
+						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
+					} else if (key === "close") {
 						setPanel(null);
 						closeConsultation(panelConsultation);
 					}
-					if (key === "force")
-						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
 				},
 				onCancel: () => setPanel(null),
 			}),
