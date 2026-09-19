@@ -42,6 +42,7 @@ import {
 	settle,
 	sleep,
 	spanColors,
+	startingFaceOf,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -238,24 +239,6 @@ function seededApp(
 	const runner = new FakeRunner();
 	const src = new FakeSource("issues", "github-issues", outcome);
 	return { state, config, runner, configPath, src };
-}
-
-/**
- * A runner that passes through to a fake runner while holding one command
- * for a fixed time. A frame test uses it to hold the handoff seat: the
- * in-flight handoff keeps the queue blocked while the operator works the
- * ticket behind it, so the drain runs while that ticket is still moving.
- */
-function holding(runner: FakeRunner, command: string, ms: number): CommandRunner {
-	return {
-		run: async (name, args, options) => {
-			if ([name, ...args].join(" ").trim() === command) {
-				await new Promise((resolve) => setTimeout(resolve, ms));
-			}
-			return runner.run(name, args, options);
-		},
-		listModels: (kind) => runner.listModels(kind),
-	};
 }
 
 function propsOf(app: SeededApp): AppProps {
@@ -2301,8 +2284,15 @@ describe("the leftover environment", () => {
 		await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 		await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 		await settleReverify(src, success);
-		// Enter on the open ticket: the leftover does not stop it.
-		await pressReturn(setup, "the handoff", (f) => ticketRow(f).includes("[handed-off]"));
+		// Enter on the open ticket: the leftover does not stop it. The row
+		// wears the Starting window's face on the keypress (ADR 0030), and the
+		// face keeps standing on the settle, so the face with the Working line
+		// cleared is the settle itself.
+		await pressReturn(
+			setup,
+			"the handoff to settle",
+			(f) => startingFaceOf(ticketRow(f)) !== null && !frameText(f).includes("Working:"),
+		);
 	}
 
 	test("a handoff beside its own leftover agent starts anyway and says so", async () => {
@@ -3052,13 +3042,14 @@ describe("the handoff queue", () => {
 		inner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
 			stdout: tabCreateJson("pane-1"),
 		});
-		// Hold the first handoff's agent start: the seat stays busy through
-		// the whole key sequence, so the drain runs after the last key, while
-		// the ticket the queued restart waits on has already moved on.
-		const runner = holding(
+		// Gate the first handoff's agent start: the seat stays busy through
+		// the whole key sequence, and the test releases it after the last key,
+		// so the drain runs after the ticket the queued restart waits on has
+		// already moved on. The gate names the exact start, so the
+		// re-handoff's own start passes through it.
+		const gate = gateOnRunner(
 			inner,
-			"herdr agent start persist-source-facts --kind pi --pane pane-1",
-			4000,
+			(command) => command === "herdr agent start persist-source-facts --kind pi --pane pane-1",
 		);
 		const src = new FakeSource("issues", "github-issues", pairMoved);
 
@@ -3107,11 +3098,15 @@ describe("the handoff queue", () => {
 					frameText(f).includes("❯ Abandon"),
 				);
 				await sleep(150);
-				await pressReturnQuietFor("the abandonment", (f) =>
-					ticketRow(f, "Watch agent turns").includes("[open]"),
-				);
-				// The handoff settles, and the queue drains: the restart's
-				// claim settles as failed, because the ticket is open now.
+				// The abandonment closes the modal. The row does not show the
+				// open badge yet: the queued restart's claim is still in flight,
+				// and the Starting window's face (ADR 0030) wears the state
+				// badge's slot until the drain settles the claim as failed.
+				await pressReturnQuietFor("the abandonment", (f) => !f.includes("Missing:"));
+				// Release the gate: the handoff settles, and the queue drains:
+				// the restart's claim settles as failed, because the ticket is
+				// open now.
+				gate.release();
 				await awaitFrame(
 					setup,
 					(f) => f.includes("was not run"),
@@ -3148,7 +3143,12 @@ describe("the handoff queue", () => {
 				const held = await settle(setup);
 				expect(markerRowOf(held)).toBe(5);
 				await settleReverify(src, pairMoved);
-				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
+				// The re-handoff settles on its new pane, which the agent list
+				// does not carry, so the row ends on its missing marker. The
+				// transient Working line in between is not asserted.
+				await pressReturnQuietFor("the re-handoff to settle", (f) =>
+					ticketRow(f, "Watch agent turns").includes("missing"),
+				);
 				await awaitFrame(
 					setup,
 					() =>
@@ -3173,7 +3173,7 @@ describe("the handoff queue", () => {
 			{
 				config,
 				state,
-				runner,
+				runner: gate.runner,
 				configPath,
 				sources: [src],
 				pollIntervalMs: 60_000,

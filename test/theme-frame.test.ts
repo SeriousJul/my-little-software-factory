@@ -22,6 +22,7 @@ import {
 	rowsOf,
 	settle,
 	spanColorAt,
+	startingFaceOf,
 	withApp,
 } from "./app-harness.ts";
 
@@ -49,9 +50,10 @@ describe.skip("theme inheritance", () => {
 				// ...the selected row's marker wears its text...
 				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
 				expect(spanColorAt(setup, markerRow, "❯")).toEqual([0xf8, 0xf8, 0xf2]);
-				// ...and the state badge wears its yellow.
-				const badgeRow = rows.findIndex((row) => row.includes("[handed-off]"));
-				expect(spanColorAt(setup, badgeRow, "[handed-off]")).toEqual([0xf1, 0xfa, 0x8c]);
+				// ...and the Starting window's face wears the theme's detail
+				// tone, in place of the badge it replaced (ADR 0030).
+				const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
+				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(roleColor("subtext0")));
 				// An overlay surface paints the theme's own panel role: the Key
 				// guide owns its last two rows and paints them on dracula's
 				// panel background, not the terminal's default.
@@ -105,11 +107,12 @@ describe.skip("theme inheritance", () => {
 				// ...the selected row's marker wears the light theme's dark text...
 				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
 				expect(spanColorAt(setup, markerRow, "❯")).toEqual([0x38, 0x3a, 0x42]);
-				// ...and the state badge keeps its written word in the light theme's
-				// yellow. No surface of the plane stays on the old dark palette: the
-				// half-light failure the old pin had is gone.
-				const badgeRow = rows.findIndex((row) => row.includes("[handed-off]"));
-				expect(spanColorAt(setup, badgeRow, "[handed-off]")).toEqual([0xc1, 0x84, 0x01]);
+				// ...and the Starting window's face keeps its written word in
+				// the light theme's detail tone. No surface of the plane stays on
+				// the old dark palette: the half-light failure the old pin had is
+				// gone.
+				const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
+				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(roleColor("subtext0")));
 				// The overlay surface is light as well: the Key guide paints on
 				// one-light's panel, not the terminal's default.
 				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
@@ -169,11 +172,13 @@ describe("the no-color presentation", () => {
 			expect(spanColorAt(setup, borderRow, "─")).toEqual([255, 255, 255]);
 			const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
 			expect(spanColorAt(setup, markerRow, "❯")).toEqual([255, 255, 255]);
-			const badgeRow = rows.findIndex((row) => row.includes("[handed-off]"));
-			expect(spanColorAt(setup, badgeRow, "[handed-off]")).toEqual([255, 255, 255]);
+			// The Starting window's face paints no color either (ADR 0030):
+			// the written word stays, the color drops.
+			const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
+			expect(spanColorAt(setup, faceRow, "starting")).toEqual([255, 255, 255]);
 			// The words the colors would have carried stay on the screen.
 			expect(frame).toContain("Tickets");
-			expect(frame).toContain("[handed-off]");
+			expect(startingFaceOf(frame)).not.toBeNull();
 		});
 	});
 });

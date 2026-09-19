@@ -25,6 +25,8 @@ import {
 	roleColor,
 	rowsOf,
 	settle,
+	startingFaceOf,
+	stillFrame,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -221,7 +223,7 @@ describe("native Ticket detail viewport", () => {
 					await mouseWheel(setup, x, y, "down");
 					const moved = await awaitFrame(
 						setup,
-						(frame) => detailFocused(frame) && frame !== before,
+						(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 						`a detail wheel event over its ${name}`,
 					);
 					expect(markerRowOf(moved)).toBe(3);
@@ -282,7 +284,7 @@ describe("native Ticket detail viewport", () => {
 					frame.includes("Retry policy for webhooks"),
 				);
 				setup.mockInput.pressKey("HOME");
-				expect(await settle(setup)).toBe(home);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
 			},
 			SCROLL_WIDTH,
 			SCROLL_HEIGHT,
@@ -294,10 +296,13 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const top = setup.captureCharFrame();
 				await mouseWheel(setup, 4, paneRow(2), "up");
-				expect(await settle(setup)).toBe(top);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(top));
 
-				await pressArrow(setup, "down", "Down to select the second Ticket", (frame) =>
-					selectedRow(frame).includes("[handed-off]"),
+				await pressArrow(
+					setup,
+					"down",
+					"Down to select the second Ticket",
+					(frame) => startingFaceOf(selectedRow(frame)) !== null,
 				);
 				await pressArrow(setup, "up", "Up to select the first Ticket", (frame) =>
 					selectedRow(frame).includes("[open]"),
@@ -315,7 +320,7 @@ describe("native Ticket detail viewport", () => {
 				);
 				const bottom = setup.captureCharFrame();
 				await mouseWheel(setup, 4, paneRow(3), "down");
-				expect(await settle(setup)).toBe(bottom);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(bottom));
 				await press(setup, "home", "Home to select the first Ticket", (frame) =>
 					selectedRow(frame).includes("Retry polic"),
 				);
@@ -453,7 +458,7 @@ describe("native Ticket detail viewport", () => {
 				await focusDetail(setup);
 				const top = setup.captureCharFrame();
 				await wheelAt(setup, 1_000, "up");
-				expect(await settle(setup)).toBe(top);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(top));
 				const initialAgent = agentRowOf(top);
 				await wheelAt(setup, 1_001, "down");
 				await awaitFrame(
@@ -468,7 +473,7 @@ describe("native Ticket detail viewport", () => {
 				const bottom = setup.captureCharFrame();
 				const bottomDescription = lastDescriptionRow(bottom);
 				await wheelAt(setup, 1_002, "down");
-				expect(await settle(setup)).toBe(bottom);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(bottom));
 				await wheelAt(setup, 1_003, "up");
 				await awaitFrame(
 					setup,

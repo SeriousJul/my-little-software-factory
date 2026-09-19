@@ -42,6 +42,7 @@ import {
 	settle,
 	sleep,
 	spanColors,
+	startingFaceOf,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -241,6 +242,14 @@ function ticketRow(frame: string, title = "Persist source facts"): string {
 	if (row === undefined) throw new Error(`no ticket row for ${title} in frame:\n${frame}`);
 	return row;
 }
+
+/**
+ * The in-flight face the row wears (ADR 0030): the Starting window's
+ * spinner face while the window holds, or the `[running]` badge once the
+ * observation has seen the work.
+ */
+const inFlightFace = (row: string): boolean =>
+	startingFaceOf(row) !== null || row.includes("[running]");
 
 describe("the Live view on the ticket list", () => {
 	test("g on an open ticket refuses with the Consultation section's words", async () => {
@@ -537,7 +546,9 @@ describe("the Live view on the ticket list", () => {
 				);
 				const frame = await pressEscape(setup, "the view to close", (f) => !f.includes("Live:"));
 				// The ticket stays where it is, and nothing ran but the reads.
-				expect(frame).toContain("[handed-off]");
+				// Its `handed-off` state wears the Starting window's face
+				// (ADR 0030), the badge itself never drawn.
+				expect(startingFaceOf(frame)).not.toBeNull();
 				expect(runner.commands().join("\n")).not.toContain("agent focus");
 				expect(runner.commands().every((c) => c === READ_COMMAND("pane-implement"))).toBe(true);
 			},
@@ -631,7 +642,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.state.lastCompletion(identity)).toBeNull();
 				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
-				expect(ticketRow(await settle(setup))).toMatch(/\[(handed-off|running)\]/);
+				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
 			WIDTH,
 			HEIGHT,
@@ -664,7 +675,7 @@ describe("the Live view against a running factory", () => {
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				// `g` is the base-mode Goto (ADR 0033): it focuses the agent's
 				// pane without opening a surface, and the ticket stays in flight
-				// under the badge the poll wears.
+				// under the face the poll wears.
 				const frame = await press(setup, "g", "the focus", (f) =>
 					f.includes("in workspace live-worktree"),
 				);
@@ -673,7 +684,7 @@ describe("the Live view against a running factory", () => {
 				expect(app.state.lastCompletion(identity)).toBeNull();
 				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
-				expect(ticketRow(await settle(setup))).toMatch(/\[(handed-off|running)\]/);
+				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
 			WIDTH,
 			HEIGHT,
