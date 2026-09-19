@@ -52,6 +52,14 @@
  *    this cycle itself dispatches - a restart, a route, an open handoff -
  *    holds a slot before the next dispatch of the cycle is measured, so one
  *    cycle never starts more agents than the limit.
+ * 6. The Work queue (ADR 0034): when a seat frees, the manual starts that
+ *    could not take a seat enter pickup - in queue order, up to the free
+ *    seats, before auto-dispatch fills the rest. A pickup is a manual start:
+ *    every hard check the claim runs still runs, but the Dispatch pause and
+ *    the Same-type hold do not hold it. A pickup that fails a check leaves
+ *    its item in the queue with a Message line warning, and the ticket keeps
+ *    its state. The cap counts every running work in one number: the ticket
+ *    seats above, plus a Consultation in `opening` or `working`.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -65,6 +73,7 @@ import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
+import { parallelSeatCount } from "./seats.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
 import {
 	isHeldCause,
@@ -343,6 +352,12 @@ interface ObservationOptions {
 	 */
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
 	/**
+	 * The Work queue's pickup (ADR 0034): the queue items the free seats take
+	 * this cycle, run before auto-dispatch, in queue order. Returns the items
+	 * that claimed a seat. Absent where the app has no Work queue.
+	 */
+	pickupWorkQueue?: () => Promise<number>;
+	/**
 	 * A cycle of this ticket ended: a close or abandon landed, and the ticket
 	 * returned to open. The agent of the ended cycle may have changed the
 	 * source item, so the app re-reads the ticket's sources now: the ticket
@@ -397,6 +412,7 @@ export class ObservationCoordinator {
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
+	private readonly pickupWorkQueue?: () => Promise<number>;
 	private readonly onCycleEnd?: (ticketIdentity: string) => void;
 	private readonly cleanup: (
 		handoff: HandoffTicket,
@@ -453,6 +469,7 @@ export class ObservationCoordinator {
 		this.herdr = options.herdr;
 		this.config = options.config;
 		this.dispatch = options.dispatch;
+		this.pickupWorkQueue = options.pickupWorkQueue;
 		this.onCycleEnd = options.onCycleEnd;
 		this.cleanup = options.cleanup;
 		this.now = options.now;
@@ -556,26 +573,24 @@ export class ObservationCoordinator {
 		const reclaimed = this.reclaimLiveAgents(byPane);
 		if (this.stopped) return;
 
-		// The parallel slots this poll holds. An in-flight ticket holds one
-		// while its agent is alive in this poll. It also holds one while the
-		// agent has not been listed yet: a handoff still in progress, or a
-		// started agent still inside the startup grace. A missing agent past
-		// the grace holds none, so the restart path can refill the seat.
+		// The parallel slots this poll holds, from the one shared count the
+		// mode line reads too (ADR 0034): an in-flight ticket holds one while
+		// its agent is alive in this poll, or while the agent has not been
+		// listed yet inside the startup grace; an unresolved handoff claim
+		// holds one; and every Consultation in `opening` or `working` holds
+		// one beside the ticket seats. A missing agent past the grace holds
+		// none, so the restart path can refill the seat.
 		const inFlight = this.state.ticketsByState(["handed-off", "running"]);
-		const inProgress = new Set(this.state.openAttemptTickets());
-		const counted = new Set<string>();
-		const slots: ParallelSlots = { count: 0 };
-		for (const ticket of inFlight) {
-			const listed = ticket.paneId !== null && byPane.has(ticket.paneId);
-			const booting = !listed && this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs;
-			if (listed || booting) {
-				slots.count += 1;
-				counted.add(ticket.ticketIdentity);
-			}
-		}
-		for (const identity of inProgress) {
-			if (!counted.has(identity)) slots.count += 1;
-		}
+		const slots: ParallelSlots = {
+			count: parallelSeatCount({
+				tickets: inFlight,
+				openAttempts: this.state.openAttemptTickets(),
+				consultationSeats: this.state.consultationSeatCount(),
+				agents: probe.agents,
+				now: this.now,
+				startupGraceMs: this.startupGraceMs,
+			}),
+		};
 
 		// An episode ends when its ticket leaves in-flight: restarts may resume.
 		for (const identity of [...this.restarted]) {
@@ -641,12 +656,29 @@ export class ObservationCoordinator {
 		// next poll no longer sees it in flight and frees the seat. Slots
 		// taken by the dispatches above are counted in too, so the open
 		// dispatch never fills a slot a route or restart just started.
+
+		// The Work queue starts before auto-dispatch (ADR 0034): when a seat
+		// frees, the operator's waiting starts take it in queue order, up to
+		// the free seats, and only then does auto-dispatch fill the rest. A
+		// pickup is a manual start, so it runs in auto or manual mode alike,
+		// and no automatic gate holds it.
+		if (this.pickupWorkQueue !== undefined) {
+			const picked = await this.pickupWorkQueue();
+			if (this.stopped) return;
+			if (picked > 0) {
+				// The picked agents are not in this poll: each claim holds its
+				// seat before the next dispatch of the cycle is measured.
+				slots.count += picked;
+				changed = true;
+			}
+		}
 		if (autoOn) {
 			changed = this.dispatchOpen(slots.count) || changed;
 		}
 
 		// Tickets and Consultations share this one successful Herdr list poll.
-		// A Consultation never enters the Ticket parallel count above.
+		// A Consultation in `opening` or `working` already holds its seat in
+		// the combined count above (ADR 0034).
 		const consultationChanged = await this.observeConsultations(probe.agents);
 		changed = consultationChanged || changed;
 		// The Dispatch pause is derived from the traces each cycle and never

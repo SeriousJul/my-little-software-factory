@@ -6,7 +6,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
+import { type ConsultationState, openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
@@ -107,6 +107,68 @@ function success(tickets: FetchedTicket[]) {
 }
 
 describe("factory SQLite state", () => {
+	test("a Consultation in opening or working holds its seat, the other states hold none", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = state.createConsultation({
+			id: "consultation-1",
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: "Review this repository",
+			renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+			agentName: "consultation-11111111",
+			createdAt: "2026-09-01T00:00:00.000Z",
+		});
+		// The state the Consultation is born in already holds the seat.
+		expect(state.consultationSeatCount()).toBe(1);
+		const steps: Array<[next: ConsultationState, seats: number]> = [
+			["working", 1],
+			["awaiting-response", 0],
+			["missing", 0],
+			["failed", 0],
+			["closing", 0],
+			["closed", 0],
+		];
+		for (const [next, seats] of steps) {
+			expect(state.setConsultationState(consultation.id, next)).toBe(true);
+			expect(state.consultationSeatCount()).toBe(seats);
+		}
+		// The closed Consultation holds none; the fresh one in opening holds
+		// one beside it.
+		state.createConsultation({
+			id: "consultation-2",
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: "Review this repository",
+			renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+			agentName: "consultation-22222222",
+			createdAt: "2026-09-01T00:05:00.000Z",
+		});
+		expect(state.consultationSeatCount()).toBe(1);
+		state.close();
+	});
+
 	test("keeps the prior complete snapshot after a source fails and blocks its handoff", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
@@ -911,6 +973,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 			DROP TABLE checkout_conflict_confirmations;
 			DROP TABLE referenced_issues;
+			DROP TABLE work_queue;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -1003,7 +1066,7 @@ describe("factory SQLite state", () => {
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
-		db.exec("DROP TABLE referenced_issues;");
+		db.exec("DROP TABLE referenced_issues; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1075,7 +1138,7 @@ describe("factory SQLite state", () => {
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
-		db.exec("DROP TABLE referenced_issues;");
+		db.exec("DROP TABLE referenced_issues; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1828,5 +1891,78 @@ describe("stored completion trace degradation", () => {
 		expect(readStoredLog(trace.path, trace.identity)).toEqual([
 			{ kind: "text", text: "stored wins" },
 		]);
+	});
+});
+
+describe("the work queue (ADR 0034)", () => {
+	const enqueue = (state: ReturnType<typeof openFactoryState>, identity: string) => {
+		const result = state.enqueueWork({
+			ticketIdentity: identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+
+	test("items enter in enqueue order, and the queue reports its depth and identities", () => {
+		const state = openFactoryState(":memory:");
+		expect(state.workQueueDepth()).toBe(0);
+		expect(state.workQueueIdentity("t1")).toBeNull();
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.workQueueDepth()).toBe(2);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
+		expect(state.workQueueIdentity("t2")).toBe("t2");
+	});
+
+	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		const refused = state.enqueueWork({
+			ticketIdentity: "t1",
+			origin: "restart",
+			choice,
+			previousMessage: "again",
+		});
+		expect(refused).toEqual({
+			ok: false,
+			reason: "ticket t1 already has a waiting queue item",
+		});
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1"]);
+	});
+
+	test("u and d move one place, and an item at an edge moves nowhere", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		enqueue(state, "t3");
+		// The front item cannot move up, the back item cannot move down.
+		expect(state.moveWorkItem("t1", "up")).toBe(false);
+		expect(state.moveWorkItem("t3", "down")).toBe(false);
+		// d takes the front item behind the middle one; the swap is atomic
+		// on the queue's primary key, so no step of it shares a position.
+		expect(state.moveWorkItem("t1", "down")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1", "t3"]);
+		expect(state.moveWorkItem("t1", "up")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2", "t3"]);
+		// An unknown identity moves nowhere.
+		expect(state.moveWorkItem("t9", "up")).toBe(false);
+	});
+
+	test("removing an item keeps the rest in order, and the ticket is free to wait again", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.removeWorkItem("t1")).toBe(true);
+		expect(state.removeWorkItem("t1")).toBe(false);
+		// The places repack: the surviving item holds the front of the
+		// queue, so the queue never shows a place it does not use.
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0]);
+		// The cancelled start may enqueue again for its ticket.
+		enqueue(state, "t1");
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1"]);
 	});
 });
