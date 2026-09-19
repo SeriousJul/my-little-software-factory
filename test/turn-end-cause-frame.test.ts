@@ -126,6 +126,9 @@ describe("the held turn through the real app flow", () => {
 		mkdirSync(checkoutPath);
 		const recordPath = join(dir, "session.jsonl");
 		const state = seededState();
+		// The held-turn flow runs unattended: the mode is factory state (ADR 0036),
+		// so the test writes it to the state file the plane reads at startup.
+		state.setAutoHandoffMode(true);
 		// The session file the production reader reads from disk: one
 		// assistant message that failed on the provider's own text, with a
 		// turn log of its own so the fallback never runs. The timestamp is
@@ -148,7 +151,6 @@ describe("the held turn through the real app flow", () => {
 			...BASE_CONFIG,
 			repos: { [repoIdentity]: checkoutPath },
 			workflows: [{ from: "implement", to: ["review"] }],
-			autoHandoff: true,
 			maxParallelAgents: 3,
 		};
 		const src = new FakeSource("issues", "github-issues", {

@@ -11,7 +11,8 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff in the Ticket section.
+ * `a` toggles auto-handoff in the Ticket section and writes the mode to the
+ * state file at once, so the next run reads it back (ADR 0036).
  *
  * The Main view is one surface with two independently collapsable sections
  * (ADR 0019): both lists stay in the left column, both expanded by default,
@@ -363,7 +364,11 @@ export function App({
 		lines: readonly string[];
 		note: string | null;
 	} | null>(null);
-	const [autoMode, setAutoMode] = useState<boolean>(() => configProp.autoHandoff);
+	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
+	// operator's last choice back from the state file, so a restart or a dev
+	// reload finds the mode where it was left. A plane with no state has no
+	// durable mode to read, and starts with the mode off.
+	const [autoMode, setAutoMode] = useState<boolean>(() => state?.autoHandoffMode() ?? false);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,
@@ -1060,13 +1065,27 @@ export function App({
 		}
 	};
 	/**
-	 * Toggle auto-handoff for this session. The config's value is the
-	 * startup default only; the toggle never writes the config.
+	 * Toggle the Auto-handoff mode (ADR 0036).
+	 *
+	 * The flip lands in the session at once, and the new mode is written to the
+	 * state file at once: the next startup and the next dev reload read it back.
+	 * A write that fails reports the state file it could not write on the Message
+	 * line, and the in-session flip stands: the operator keeps working in the mode
+	 * they asked for, so the failure is news about the next run, not a refusal of
+	 * this one.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
+		if (state === undefined) return;
+		try {
+			state.setAutoHandoffMode(next);
+		} catch (error) {
+			setErrorMessage(
+				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
+			);
+		}
 	};
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */

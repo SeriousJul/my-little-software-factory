@@ -177,9 +177,12 @@ beside each other.
 Above the panes sits a mode line. It shows the auto-handoff state and the
 live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
 when no limit is set. The count is the in-flight tickets whose agent was
-alive in the latest herdr poll. The `a` key toggles the mode for the
-session from the Ticket section; the config's `auto-handoff` key sets the
-startup value only.
+alive in the latest herdr poll. The `a` key in the Ticket section toggles
+the mode and writes it to the state file at once, so a restart or a dev
+reload finds the mode where the operator left it; a state file the plane
+has just created starts with the mode off (ADR 0036). A write the state
+file refuses reports on the Message line, and the flip stands for the
+session.
 
 A blocked agent replaces the state badge in the list row with a `blocked`
 badge: the agent shows an approval or question UI and waits for a human.
