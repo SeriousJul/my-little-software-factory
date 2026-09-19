@@ -370,7 +370,7 @@ describe("the in-app Key guide", () => {
 				expect(otherStart).toBeGreaterThan(planeStart);
 				expect(shown.slice(planeStart + 1, otherStart)).toEqual([
 					"f History",
-					"z Close",
+					"w Close",
 					"d Delete",
 					"Enter Respond",
 					"Enter Interact",

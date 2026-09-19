@@ -62,11 +62,16 @@ describe("the shared control catalogue", () => {
 		expect(controlForKey({ name: "a" }, context)).toBeUndefined();
 	});
 
-	test("the Consultation close is z, not the section toggle", () => {
+	test("the Consultation close is w, not the section toggle", () => {
 		const context = contextFor("consultation-detail", values);
 
-		expect(controlForKey({ name: "z" }, context)?.id).toBe("consultation-close");
+		expect(controlForKey({ name: "w" }, context)?.id).toBe("consultation-close");
 		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
+	});
+
+	test("z answers nothing in the Consultation section", () => {
+		for (const mode of ["consultation-list", "consultation-detail"] as const)
+			expect(controlForKey({ name: "z" }, contextFor(mode, values))).toBeUndefined();
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {

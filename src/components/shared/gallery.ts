@@ -19,6 +19,8 @@ import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
 import type { Consultation } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
+import { ActionPanel } from "../action-panel.ts";
+import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
 import { type ControlContext, contextFor } from "../controls.ts";
@@ -62,6 +64,16 @@ export interface GalleryExample {
 	) => ReactElement[];
 	/** Whether this example is drawn at a narrow terminal. */
 	narrow?: boolean;
+	/**
+	 * The rows this example's frame holds, when it needs more than the
+	 * gallery's shared frame.
+	 *
+	 * The shared frame sizes the list and field examples, and an example
+	 * that needs a taller box pays for it here instead of raising the frame
+	 * every other example renders in: the dialog examples hold a full
+	 * confirmation box, which the list rows do not.
+	 */
+	rows?: number;
 }
 
 /**
@@ -187,8 +199,10 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * One entry per state the standard names, so the list is also the checklist a
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
-/** The Consultation the detail examples render under. */
-function sampleConsultation(state: "working" | "closed"): Consultation {
+/** The Consultation the detail and close-dialog examples render under. */
+function sampleConsultation(
+	state: "opening" | "working" | "awaiting-response" | "closing" | "closed",
+): Consultation {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
 		id: "c1c1c1c1-1111-4111-8111-111111111111",
@@ -227,6 +241,33 @@ function sampleConsultation(state: "working" | "closed"): Consultation {
 		pendingResponse: null,
 		resources: [],
 	};
+}
+
+/**
+ * The production close panel the app opens on one Consultation state, for
+ * the close dialog's gallery examples.
+ *
+ * The panel's title, body, and rows come from the same helper the app's
+ * render reads, built from the sample record the example names. A state the
+ * helper answers with no panel has no example to draw, so the throw is a
+ * contributor error, not a state the gallery can reach.
+ */
+function closeDialogElement(
+	state: "opening" | "working" | "awaiting-response" | "closing",
+	key: string,
+): ReactElement {
+	const panel = consultationClosePanel(sampleConsultation(state));
+	if (panel === undefined) throw new Error(`the ${state} Consultation must open a close panel`);
+	return createElement(ActionPanel, {
+		key,
+		message: null,
+		inputActive: false,
+		title: panel.title,
+		bodyLines: panel.bodyLines,
+		actions: panel.actions,
+		onAction: () => undefined,
+		onCancel: () => undefined,
+	});
 }
 
 /** The Ticket the Ticket-Goto example renders under. */
@@ -674,6 +715,38 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
+		// The close confirmation opens exactly when a close stops a live
+		// Agent. Each of the three live states names its own first line, and
+		// the body keeps the worktree and branch whichever state asks. The
+		// example draws the production panel the app opens on this state,
+		// so the gallery's words are the app's words, not a copy of them.
+		id: "close-dialog-opening",
+		state: "Close confirmation: the Agent is still opening",
+		rows: 17,
+		render: (_columns) => [closeDialogElement("opening", "close-opening")],
+	},
+	{
+		id: "close-dialog-working",
+		state: "Close confirmation: the Agent is working",
+		rows: 17,
+		render: (_columns) => [closeDialogElement("working", "close-working")],
+	},
+	{
+		id: "close-dialog-awaiting-response",
+		state: "Close confirmation: the Agent waits for your reply",
+		rows: 17,
+		render: (_columns) => [closeDialogElement("awaiting-response", "close-awaiting")],
+	},
+	{
+		// The closing Consultation opens the recovery panel instead: the
+		// cleanup already ran and cannot be confirmed, so the rows offer the
+		// retry and the force-close, never the plain close.
+		id: "close-panel-closing",
+		state: "Close recovery: retry and force-close on a closing",
+		rows: 17,
+		render: (_columns) => [closeDialogElement("closing", "close-closing")],
+	},
+	{
 		// Goto from either Consultation pane: available while herdr's last
 		// poll still reports the Agent's pane alive, unavailable with its
 		// own reason when the pane is gone.
@@ -1016,7 +1089,10 @@ export function Gallery({
 	});
 	const shown = GALLERY_EXAMPLES[index] ?? GALLERY_EXAMPLES[0];
 	const narrow = shown.narrow === true;
-	const frame = modalFrame(narrow ? 28 : width, height, { rows: 12, margin: 1 });
+	const frame = modalFrame(narrow ? 28 : width, height, {
+		rows: shown.rows ?? 12,
+		margin: 1,
+	});
 	const columns = galleryColumns(frame.contentWidth);
 	return createElement(
 		"box",

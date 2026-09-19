@@ -45,3 +45,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0034: The Parallel limit counts Consultations and the Work queue holds the rest](./0034-the-parallel-limit-counts-consultations-and-the-work-queue-holds-the-rest.md)
 - [ADR 0035: The control plane runs on Bun](./0035-the-control-plane-runs-on-bun.md)
 - [ADR 0036: The Auto-handoff mode is factory state, not a config setting](./0036-the-auto-handoff-mode-is-factory-state.md)
+- [ADR 0037: The Consultation close takes w and confirms on a live Agent](./0037-the-consultation-close-takes-w-and-confirms-on-a-live-agent.md)
