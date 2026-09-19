@@ -761,6 +761,9 @@ describe("pending responses across restart and migration", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode belongs to the run after this record: a v4 file stored
+		// no Auto-handoff mode.
+		db.exec("DROP TABLE auto_handoff_mode;");
 		// The v11 override belongs to the run after this record: a v4 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -790,6 +793,9 @@ describe("pending responses across restart and migration", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode belongs to the run after this record: a v9 file stored
+		// no Auto-handoff mode.
+		db.exec("DROP TABLE auto_handoff_mode;");
 		// The v11 override belongs to the run after this record: a v9 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
