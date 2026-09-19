@@ -1756,29 +1756,17 @@ export class FactoryState {
 	 *
 	 * `closed`, `auto-closed`, and `abandoned` end the work cycle: the
 	 * ticket returns to open with the cycle incremented. A handoff decision
-	 * leaves the state to the handoff that follows it. `goto` is not a
-	 * completion decision: it refocuses the existing agent and moves an
-	 * awaiting ticket back to running, and the trace does not record it. The
-	 * turn's pending trace stays pending, and the next settle refreshes it.
+	 * leaves the state to the handoff that follows it.
 	 *
 	 * A trace decision lands on the handoff's pending row. When the turn
 	 * never settled there is no pending row, and only `abandoned` still
 	 * writes one - once per handoff - so an un-settled cycle leaves a
 	 * complete trace. The ticket state moves only when this call wrote or
-	 * updated the trace (or, for `goto`, moved the state), so a double
-	 * decision can never bump the cycle number twice. Returns whether the
-	 * decision was applied.
+	 * updated the trace, so a double decision can never bump the cycle
+	 * number twice. Returns whether the decision was applied.
 	 */
 	applyCompletionDecision(input: CompletionDecisionInput): boolean {
 		return this.transaction(() => {
-			if (input.decision === "goto") {
-				// A state move only: the trace keeps recording the settled turn,
-				// pending a real decision.
-				const moved = this.db
-					.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
-					.run(input.ticketIdentity);
-				return Number(moved.changes) > 0;
-			}
 			const decided = this.db
 				.prepare(
 					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",

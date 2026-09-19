@@ -352,10 +352,10 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Launch, Section, Refresh, Override, Hand off, Detail, Move,
-				// and Help last. The spec's common controls of the base modes,
-				// Override and Refresh, therefore outlive the Launch entry the
-				// control plane reached for.
+				// clear leftover, Launch, Section, Refresh, Override, Goto,
+				// Hand off, Detail, Move, and Help last. The spec's common
+				// controls of the base modes, Override and Refresh, therefore
+				// outlive the Launch entry the control plane reached for.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -363,6 +363,7 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
+							"g Goto",
 							"x Section",
 							"c Launch",
 							"e Override",
@@ -370,14 +371,15 @@ describe("the contextual Action bar", () => {
 							"? Help",
 						],
 					],
-					// The widths the last review measured: the Launch entry gives
-					// way first, and the spec's common controls stay.
+					// The widths the last review measured: the clear leftover entry
+					// gives way first, and the spec's common controls stay.
 					[
 						100,
 						[
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
+							"g Goto",
 							"x Section",
 							"c Launch",
 							"e Override",
@@ -391,8 +393,8 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
+							"g Goto",
 							"x Section",
-							"c Launch",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -404,15 +406,15 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
-							"x Section",
+							"g Goto",
 							"e Override",
 							"r Refresh",
 							"? Help",
 						],
 					],
-					[75, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"]],
-					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "? Help"]],
-					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "? Help"]],
+					[75, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "g Goto", "e Override", "? Help"]],
+					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "g Goto", "? Help"]],
+					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "g Goto", "? Help"]],
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 					[40, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 				];
@@ -423,7 +425,15 @@ describe("the contextual Action bar", () => {
 					const bar = rows.at(-1) ?? "";
 					for (const hint of kept) expect(bar).toContain(hint);
 					expect(bar.trimEnd().endsWith("? Help")).toBe(true);
-					for (const gone of ["Detail", "Hand off", "Section", "Launch", "Override", "Refresh"]) {
+					for (const gone of [
+						"Detail",
+						"Hand off",
+						"Goto",
+						"Section",
+						"Launch",
+						"Override",
+						"Refresh",
+					]) {
 						if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
 					}
 				}

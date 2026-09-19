@@ -91,6 +91,7 @@ describe("the shared control gallery", () => {
 			"agent-view-fallback",
 			"captured-history-fallback",
 			"goto",
+			"ticket-goto",
 			"theme",
 			"theme-fallback",
 			"theme-light",
@@ -418,6 +419,14 @@ describe("the shared control gallery", () => {
 		const setup = await gallery("goto");
 		const frame = frameText(setup.captureCharFrame());
 		expect(frame).toContain(stateLine("goto"));
+		expect(frame).toContain("g Goto");
+	});
+
+	test("the Ticket Goto example holds the available and refused states", async () => {
+		const setup = await gallery("ticket-goto");
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("ticket-goto"));
+		// The available row states the hint on the in-flight Ticket's bar.
 		expect(frame).toContain("g Goto");
 	});
 

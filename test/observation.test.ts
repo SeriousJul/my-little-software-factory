@@ -994,17 +994,19 @@ describe("missing agents", () => {
 	});
 
 	test("a restart carries the last completion message", async () => {
-		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		const rigHandle = rig({ autoOn: true, agents: [] });
+		const { state, intents, coordinator, advance } = rigHandle;
 		const identity = "github:github.com:I_5";
-		const attempt = settleFor(state, identity, "implement");
-		// The operator went to the agent: the ticket is in flight again on the
-		// same pane, which then disappears from the herdr list.
-		state.applyCompletionDecision({
-			ticketIdentity: identity,
-			handoffId: attempt,
-			decision: "goto",
-			decidedAt: "2026-08-31T11:00:30Z",
-		});
+		settleFor(state, identity, "implement");
+		// The poll sees the agent working on its still-pending turn: the
+		// ticket is in flight again on the same pane, which then disappears
+		// from the herdr list.
+		rigHandle.setAgents([agent("pane-implement", "working")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity }),
+		]);
+		rigHandle.setAgents([]);
 		// The agent ran past the startup grace, then disappeared.
 		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();

@@ -1311,12 +1311,47 @@ describe("the decision modal", () => {
 					"the focus",
 				);
 				// The focus went to the stored pane, and the handoff stayed
-				// open: the ticket is running, and the row wears the missing
-				// badge only because the faked agent list is empty.
+				// open: Goto is navigation (ADR 0033), so the ticket rests in
+				// awaiting until the poll or a decision moves it, and its row
+				// reads the state it wears.
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				const visible = app.state.visibleTickets(app.config.taskRules, app.config.defaultTaskType);
-				expect(visible[0]?.state).toBe("running");
-				expect(ticketRow(await settle(setup))).toContain("missing");
+				expect(visible[0]?.state).toBe("awaiting");
+				expect(ticketRow(await settle(setup))).toContain("[awaiting]");
+				expect(app.state.lastCompletion(identity)?.decision ?? null).toBeNull();
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("g in the base mode focuses the stored pane of an awaiting ticket and moves nothing", async () => {
+		const app = seededApp("awaiting");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				// `g` is the base-mode Goto (ADR 0033): on an awaiting ticket the
+				// recorded pane stands, the focus runs without opening a surface,
+				// and the ticket rests awaiting until the poll or a decision
+				// moves it.
+				setup.mockInput.pressKey("g");
+				await awaitFrame(
+					setup,
+					() => app.runner.commands().includes("herdr agent focus pane-1"),
+					"the focus",
+				);
+				expect(
+					app.state.visibleTickets(app.config.taskRules, app.config.defaultTaskType)[0]?.state,
+				).toBe("awaiting");
+				expect(app.state.lastCompletion(identity)?.decision ?? null).toBeNull();
+				const frame = await settle(setup);
+				expect(ticketRow(frame)).toContain("[awaiting]");
+				expect(frame).not.toContain("Live:");
 			},
 			WIDTH,
 			HEIGHT,

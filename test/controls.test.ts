@@ -9,6 +9,7 @@ import {
 	controlForKey,
 	guideControls,
 } from "../src/components/controls.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import type { Consultation } from "../src/state.ts";
 
 const values: Omit<ControlContext, "mode"> = {
@@ -22,6 +23,16 @@ const values: Omit<ControlContext, "mode"> = {
 };
 
 const consultationWithPane = { paneId: "pane-1" } as unknown as Consultation;
+
+const runningTicketWithPane = {
+	state: "running",
+	handoff: { paneId: "pane-1" },
+} as unknown as Ticket;
+const awaitingTicketWithPane = {
+	state: "awaiting",
+	handoff: { paneId: "pane-1" },
+} as unknown as Ticket;
+const openTicket = { state: "open", handoff: null } as unknown as Ticket;
 
 describe("the shared control catalogue", () => {
 	test("x toggles the section under the cursor and is not an Interact alias", () => {
@@ -84,5 +95,62 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(control, contextFor("consultation-detail", values)).available).toBe(
 			false,
 		);
+	});
+
+	test("g is Goto in both Ticket panes, and it needs the pane the way the Consultation names it", () => {
+		const inFlight: Omit<ControlContext, "mode"> = {
+			...values,
+			selectedTicket: runningTicketWithPane,
+			ticketPaneAlive: true,
+		};
+		const detail = contextFor("ticket-detail", inFlight);
+		const list = contextFor("ticket-list", inFlight);
+		const control: ControlDefinition | undefined = controlForKey({ name: "g" }, detail);
+
+		expect(control?.id).toBe("ticket-goto");
+		expect(controlForKey({ name: "g" }, list)?.id).toBe("ticket-goto");
+		if (control === undefined) throw new Error("Goto is missing from the catalogue");
+		expect(availabilityFor(control, detail).available).toBe(true);
+		// The in-flight Ticket's pane goes away in the last poll: the
+		// Consultation section's own refusal words.
+		const paneGone = contextFor("ticket-detail", { ...inFlight, ticketPaneAlive: false });
+		expect(availabilityFor(control, paneGone)).toEqual({
+			available: false,
+			reason: "the Agent's pane is not alive in the last poll",
+		});
+		// An awaiting Ticket keeps its recorded pane: the poll or a decision
+		// still moves it, and Goto is the way to look in the meantime.
+		const awaiting = contextFor("ticket-detail", {
+			...values,
+			selectedTicket: awaitingTicketWithPane,
+		});
+		expect(availabilityFor(control, awaiting).available).toBe(true);
+		// An open Ticket has no agent at all: the same refusal.
+		const open = contextFor("ticket-list", { ...values, selectedTicket: openTicket });
+		expect(availabilityFor(control, open)).toEqual({
+			available: false,
+			reason: "the Agent's pane is not alive in the last poll",
+		});
+	});
+
+	test("the Ticket guide names Goto in its own section, and the Consultation guide omits it", () => {
+		const ticket = contextFor("ticket-detail", {
+			...values,
+			selectedTicket: runningTicketWithPane,
+			ticketPaneAlive: true,
+		});
+		expect(
+			guideControls(ticket).some(
+				({ group, control }) =>
+					control.id === "ticket-goto" && group === "Current interaction mode",
+			),
+		).toBe(true);
+		const consultation = contextFor("consultation-detail", {
+			...values,
+			selectedConsultation: consultationWithPane,
+			consultationPaneAlive: true,
+		});
+		const ids = guideControls(consultation).map(({ control }) => control.id);
+		expect(ids).not.toContain("ticket-goto");
 	});
 });

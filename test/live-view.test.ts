@@ -243,6 +243,26 @@ function ticketRow(frame: string, title = "Persist source facts"): string {
 }
 
 describe("the Live view on the ticket list", () => {
+	test("g on an open ticket refuses with the Consultation section's words", async () => {
+		const runner = new FakeRunner();
+
+		await withApp(
+			async (setup) => {
+				// The first sample ticket is open: it holds no agent and no
+				// pane, so `g` states the Consultation section's own refusal
+				// on the Message line and focuses nothing.
+				const frame = await press(setup, "g", "the refusal", (f) =>
+					f.includes("the Agent's pane is not alive in the last poll"),
+				);
+				expect(frame).toContain("Warning:");
+				expect(runner.commands()).not.toContain("herdr agent focus");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
+	});
+
 	test("enter on an in-flight ticket opens the Live view above the list", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", [...READ("pane-implement")], {
@@ -608,6 +628,48 @@ describe("the Live view against a running factory", () => {
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				// The focus is pure: no completion trace exists, and the
 				// ticket is still in flight under its badge.
+				expect(app.state.lastCompletion(identity)).toBeNull();
+				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
+				expect(frame).not.toContain("Live:");
+				expect(ticketRow(await settle(setup))).toMatch(/\[(handed-off|running)\]/);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("g in the Ticket base mode focuses the pane and moves no state", async () => {
+		const app = seededApp();
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
+		app.runner.set("herdr", ["workspace", "get", "ws-1"], {
+			stdout: workspaceGetJson("ws-1", "live-worktree"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				// `g` is the base-mode Goto (ADR 0033): it focuses the agent's
+				// pane without opening a surface, and the ticket stays in flight
+				// under the badge the poll wears.
+				const frame = await press(setup, "g", "the focus", (f) =>
+					f.includes("in workspace live-worktree"),
+				);
+				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
+				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				expect(app.state.lastCompletion(identity)).toBeNull();
 				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
