@@ -825,6 +825,27 @@ describe("the merged Main view", () => {
 		try {
 			await booted(
 				async (setup) => {
+					// The Consultation-only keys answer the Ticket section the way
+					// the Ticket-only keys answer the Consultation section: the
+					// key states what is missing, and nothing changes. The Ticket
+					// list refuses first...
+					let refusal = await press(setup, "d", "the delete refusal", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
+					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					refusal = await press(setup, "f", "the history refusal", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
+					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					// ...and the Ticket detail pane carries the same refusal, the
+					// seeded Consultation untouched by either key.
+					await focusDetail(setup);
+					refusal = await press(setup, "d", "the delete refusal on the detail pane", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
+					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					expect(refusal).toContain("grill");
+
 					// A Ticket-section control answers the same way in the
 					// Consultation section: the key states what is missing.
 					await crossToConsultations(setup);
@@ -860,11 +881,13 @@ describe("the merged Main view", () => {
 				expect(rows[2]).toContain("┌─");
 				expect(rows.at(-3)).toContain("└─");
 				expect(actionBarRowOf(frame)).toContain("x Section");
-				// The bar follows the section under the cursor.
+				// The bar follows the section under the cursor, and the
+				// Consultation section's History keeps its bar hint there.
 				await crossToConsultations(setup);
 				const across = await settle(setup);
 				expect(rowsOf(across)[0]).toContain("auto: off");
 				expect(actionBarRowOf(across)).toContain("w Close");
+				expect(actionBarRowOf(across)).toContain("f History");
 				expect(actionBarRowOf(across)).toContain("x Section");
 			}, state);
 		} finally {

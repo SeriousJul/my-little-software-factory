@@ -130,6 +130,10 @@ describe("the contextual Action bar", () => {
 				}
 				// Help stays discoverable at the right end of the row.
 				expect(bar.endsWith("? Help")).toBe(true);
+				// Delete and History belong to the Consultation section's
+				// catalog: the Ticket bar omits the keys the Ticket guide omits.
+				expect(bar).not.toContain("f History");
+				expect(bar).not.toContain("d Delete");
 				const barRow = rowsOf(frame).length - 1;
 				// Available: the key wears the focus color, the label the text color.
 				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(roleColor("accent")));

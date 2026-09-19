@@ -358,6 +358,16 @@ const ticketOnly = (context: ControlContext): ControlAvailability =>
 	ticketBaseMode(context.mode)
 		? available()
 		: unavailable("this control is available only in the Ticket section");
+/** The Consultation section's refusal words, mirrored by consultationOnly. */
+const CONSULTATION_ONLY = "this control is available only in the Consultation section";
+/**
+ * Why a Consultation-section control answers nothing in the Ticket section.
+ *
+ * The reverse of ticketOnly: the key the operator already knows from the
+ * other section states a readable refusal instead of doing nothing at all.
+ */
+const consultationOnly = (context: ControlContext): ControlAvailability =>
+	consultationMode(context.mode) ? available() : unavailable(CONSULTATION_ONLY);
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -811,8 +821,11 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 55,
-		modes: [...consultationBaseModes],
-		availability: available,
+		// A Consultation-section control: in the Ticket section the key states
+		// the section refusal, and the Ticket guide and bar omit the control.
+		modes: [...consultationBaseModes, ...ticketBaseModes],
+		availability: consultationOnly,
+		showInBar: (context) => !ticketBaseMode(context.mode),
 	},
 	{
 		id: "consultation-close",
@@ -834,8 +847,12 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
-		modes: [...consultationBaseModes],
-		availability: consultationDelete,
+		// A Consultation-section control: in the Ticket section the key states
+		// the section refusal, and the Ticket guide and bar omit the control.
+		modes: [...consultationBaseModes, ...ticketBaseModes],
+		availability: (context) =>
+			ticketBaseMode(context.mode) ? unavailable(CONSULTATION_ONLY) : consultationDelete(context),
+		showInBar: (context) => !ticketBaseMode(context.mode),
 	},
 	{
 		id: "consultation-respond",
@@ -1457,6 +1474,16 @@ function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefini
 }
 
 /**
+ * Delete and History keep their catalog place in the Consultation section
+ * alone: the Ticket guide omits them, and the Ticket bar never hints a key
+ * the guide does not name. The key still refuses, in the catalogue's words.
+ */
+const CONSULTATION_SECTION_CONTROLS = new Set(["history", "consultation-delete"]);
+function omitFromTicketGuide(mode: InteractionMode, control: ControlDefinition): boolean {
+	return ticketBaseMode(mode) && CONSULTATION_SECTION_CONTROLS.has(control.id);
+}
+
+/**
  * Whether the Key guide lists this control among the mode's own.
  *
  * The guide is the app's only complete catalog, so it names every meaning of
@@ -1495,6 +1522,7 @@ export function guideControls(context: ControlContext): Array<{
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
+			!omitFromTicketGuide(mode, control) &&
 			isCataloguedInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
@@ -1504,6 +1532,7 @@ export function guideControls(context: ControlContext): Array<{
 				!seen.has(control.id) &&
 				control.guideOnly !== true &&
 				!omitFromConsultationGuide(mode, control) &&
+				!omitFromTicketGuide(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
 		).map((control) => {

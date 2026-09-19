@@ -82,6 +82,56 @@ describe("the shared control catalogue", () => {
 			expect(controlForKey({ name: "z" }, contextFor(mode, values))).toBeUndefined();
 	});
 
+	test("d and f refuse in both Ticket modes, in the Consultation section's words", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const context = contextFor(mode, values);
+			const deleteControl = controlForKey({ name: "d" }, context);
+			const historyControl = controlForKey({ name: "f" }, context);
+			expect(deleteControl?.id).toBe("consultation-delete");
+			expect(historyControl?.id).toBe("history");
+			if (deleteControl === undefined || historyControl === undefined)
+				throw new Error("Delete and History are missing from the catalogue");
+			expect(availabilityFor(deleteControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+			expect(availabilityFor(historyControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+		}
+		// In the Consultation section the keys keep their own meanings.
+		const consultation = contextFor("consultation-list", values);
+		expect(controlForKey({ name: "d" }, consultation)?.id).toBe("consultation-delete");
+		expect(controlForKey({ name: "f" }, consultation)?.id).toBe("history");
+		const closed = contextFor("consultation-list", {
+			...values,
+			selectedConsultation: { state: "closed" } as unknown as Consultation,
+		});
+		const closedDelete = controlForKey({ name: "d" }, closed);
+		const closedHistory = controlForKey({ name: "f" }, closed);
+		if (closedDelete === undefined || closedHistory === undefined)
+			throw new Error("Delete and History are missing from the catalogue");
+		expect(availabilityFor(closedDelete, closed).available).toBe(true);
+		expect(availabilityFor(closedHistory, closed).available).toBe(true);
+	});
+
+	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const ids = guideControls(contextFor(mode, values)).map(({ control }) => control.id);
+			expect(ids).not.toContain("history");
+			expect(ids).not.toContain("consultation-delete");
+		}
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			const entries = guideControls(contextFor(mode, values));
+			for (const id of ["history", "consultation-delete"]) {
+				expect(entries.find(({ control }) => control.id === id)?.group).toBe(
+					"Current interaction mode",
+				);
+			}
+		}
+	});
+
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {
 		const withAlivePane: Omit<ControlContext, "mode"> = {
 			...values,
