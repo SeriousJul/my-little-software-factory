@@ -239,3 +239,54 @@ the pane. It passed in full on this branch.
 The terminal walks above were not re-run on the Session view's paint: they are
 recorded as not re-verified for that body, not as a pass. The screen-reader
 target remains unverified.
+
+## The native row-update corruption (OpenTUI, open as of 0.5.11)
+
+A user report: streaming agent output in the Session view left stale text
+overlapping the new rows, until a text selection cleared it. The reproduction
+is `scripts/repro-tmux-live.ts`: it runs the real control plane inside tmux
+(the byte path is a battle-tested VT) on the repo fixture, streams 120-249
+cell lines from the fixture agent pane at 80 ms, captures the pane every
+100 ms for 40 s, and checks that the visible stream lines stay a contiguous
+run. It also records the exact bytes the app writes (tmux `pipe-pane`), so a
+corrupted frame can be decoded and told apart from a transport or terminal
+defect.
+
+Measured on this machine (Bun 1.4.0, Linux x86-64, tmux 3.7a), 40 s runs:
+
+- `@opentui/core` 0.5.9: 19-30 corrupted captures per run.
+- `@opentui/core` 0.5.11: 0-30 corrupted captures per run; the corruption
+  was measured present in 0.5.11 as well. The upgrade to 0.5.11 landed
+  anyway: it is the newest release, and it carries fixes for the same
+  failure family (a final frame lost behind backpressure, and split diffs
+  misaligned after a resize).
+
+The byte records place the fault in the renderer, not in the transport or
+tmux: the app's own synchronized frames carry the corrupted rows. The
+corruption takes two forms - a row's head truncated with the next row's
+text merged into the same physical row, or a row truncated with the next
+row or rows missing - and the corrupted content persists in the emitted
+frames until the next content update overwrites it. In a streaming view the
+next update heals it within a second; in a static view nothing re-sets the
+row, so the artifact stands until any interaction forces a re-render. A text
+selection does exactly that, which matches the user's report.
+
+The failure signature matches the stale-buffer class of OpenTUI issue 1212
+(fixed for the Node 26 adapter), but the owner-retention mechanism that fix
+added is present in the Bun builds of both 0.5.9 and 0.5.11, and the
+corruption still occurs: the remaining window is a separate native defect,
+or a path the fix did not cover.
+
+Local variations were measured, not reasoned: re-keying the body rows by
+identity (40, 39, 9, 10 corrupted captures), toggling the plane's
+force-full-repaint (29, 0, 10, 9, 29, 29), and pinning the wrapped row
+strings to stable references (20, 30, 30, 29, 29) all landed inside or
+above the 0.5.11 baseline range (0-30); none reduced the rate, and the
+stable-reference change made the worst runs worse, so it was reverted.
+Consolidating the body into one text element rendered wrong and was
+reverted. The force-full-repaint in `src/factory.ts` stays: it is the
+recorded workaround for the drift class of OpenTUI issue 1187.
+
+This is recorded as an open upstream defect, not as a pass. The
+`bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
+0.5.11 (1461 tests).

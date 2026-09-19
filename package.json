@@ -30,8 +30,8 @@
 		"bun": ">=1.3.0"
 	},
 	"dependencies": {
-		"@opentui/core": "^0.5.9",
-		"@opentui/react": "^0.5.9",
+		"@opentui/core": "^0.5.11",
+		"@opentui/react": "^0.5.11",
 		"react": "^19.2.0",
 		"smol-toml": "^1.8.0",
 		"string-width": "^8.2.2"
