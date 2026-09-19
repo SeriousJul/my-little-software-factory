@@ -139,6 +139,11 @@ export interface ControlContext {
 	 * herdr poll. Goto focuses that pane, so it needs it.
 	 */
 	consultationPaneAlive?: boolean;
+	/**
+	 * Whether the selected Ticket's Agent pane is alive in the last herdr
+	 * poll. Goto focuses that pane, so an in-flight Ticket needs it (ADR 0033).
+	 */
+	ticketPaneAlive?: boolean;
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
@@ -408,6 +413,27 @@ const consultationGoto = (context: ControlContext): ControlAvailability =>
 	context.consultationPaneAlive === true
 		? available()
 		: unavailable("the Agent's pane is not alive in the last poll");
+/**
+ * Why Goto answers nothing on a Ticket (ADR 0033): the Ticket needs a
+ * selected row with a handoff pane, an in-flight Ticket needs the Agent's
+ * pane alive in the last herdr poll, and an `awaiting` Ticket keeps its
+ * recorded pane. Goto is navigation: it focuses the pane and leaves the
+ * Ticket, its work cycle, and its traces untouched.
+ */
+const ticketGoto = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	const paneId = ticket.handoff?.paneId;
+	if (paneId === null || paneId === undefined)
+		return unavailable("the Agent's pane is not alive in the last poll");
+	if (ticket.state === "awaiting") return available();
+	if (
+		(ticket.state === "handed-off" || ticket.state === "running") &&
+		context.ticketPaneAlive === true
+	)
+		return available();
+	return unavailable("the Agent's pane is not alive in the last poll");
+};
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -701,6 +727,23 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// all of them whatever the selected Ticket runs, so the guide has to
 		// say what this meaning of Enter is for.
 		guideNote: DECIDE_NOTE,
+	},
+	{
+		id: "ticket-goto",
+		label: "Goto",
+		// `g` focuses the Agent's pane in herdr from either Ticket pane, the
+		// way `g` does from either Consultation pane, and changes nothing
+		// (ADR 0033).
+		keys: () => ["g"],
+		keyLabel: "g",
+		scope: "control-plane",
+		actionBar: true,
+		// Below the Enter meanings, above Override: navigation outranks the
+		// re-read and the one-shot setting, the way it does in the
+		// Consultation section.
+		priority: 68,
+		modes: [...ticketBaseModes],
+		availability: ticketGoto,
 	},
 	{
 		id: "section-toggle",

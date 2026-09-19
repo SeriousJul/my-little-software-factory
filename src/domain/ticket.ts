@@ -25,18 +25,16 @@ export const HANDOFF_ENVIRONMENT_KINDS = ["live-worktree", "worktree"] as const;
  * The trace records the decisions that decide the settled turn:
  * `handed-off` and `auto-handed-off` started a workflow handoff from the
  * awaiting state; `closed` and `auto-closed` ended the work cycle;
- * `abandoned` ended a cycle whose agent went missing. `goto` is a state
- * move, not a completion decision: it refocused the existing agent and
- * moved the ticket back to running, and the trace does not record it. The
- * turn's pending trace stays pending, and the next settle refreshes it.
+ * `abandoned` ended a cycle whose agent went missing. Goto is navigation,
+ * not a decision (ADR 0033): it focuses the agent's pane and records
+ * nothing here.
  */
 export type CompletionDecision =
 	| "closed"
 	| "auto-closed"
 	| "abandoned"
 	| "handed-off"
-	| "auto-handed-off"
-	| "goto";
+	| "auto-handed-off";
 
 /** One settled turn of one handoff, as the control plane stored it. */
 export interface Completion {
@@ -276,8 +274,8 @@ export type TicketMarker = "blocked" | "missing";
  *   work cycle.
  * - awaiting -> handed-off: a workflow handoff or a restart started a new
  *   turn in the same cycle.
- * - awaiting -> running: goto refocused the existing agent, or the poll
- *   saw the agent working again on its still-pending turn.
+ * - awaiting -> running: the poll saw the agent working again on its
+ *   still-pending turn.
  *
  * A settle may land directly from handed-off: an agent can finish inside
  * one poll interval, before a working observation ever saw it. The settle

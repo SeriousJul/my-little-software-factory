@@ -33,7 +33,9 @@ describe("the ticket state machine", () => {
 		expect(canTransition("awaiting", "handed-off")).toBe(true);
 	});
 
-	test("goto refocuses the existing agent", () => {
+	test("the poll can move an awaiting ticket back to running", () => {
+		// The agent works again on its still-pending turn: the poll reopens it
+		// (ADR 0033 left the move to the poll, since Goto is navigation).
 		expect(canTransition("awaiting", "running")).toBe(true);
 	});
 

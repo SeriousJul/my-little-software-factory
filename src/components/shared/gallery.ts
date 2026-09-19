@@ -15,6 +15,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
+import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
 import type { Consultation } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
@@ -226,6 +227,68 @@ function sampleConsultation(state: "working" | "closed"): Consultation {
 		pendingResponse: null,
 		resources: [],
 	};
+}
+
+/** The Ticket the Ticket-Goto example renders under. */
+function sampleTicket(state: "running" | "open"): Ticket {
+	const now = "2026-02-17T10:00:00.000Z";
+	return {
+		identity: "github:github.com:SeriousJul/my-little-software-factory:17",
+		title: "Fix the layout math",
+		repository: "my-little-software-factory",
+		repositoryRef: {
+			identity: "github.com/SeriousJul/my-little-software-factory",
+			displayName: "my-little-software-factory",
+			cloneUrl: "",
+		},
+		state,
+		handoff:
+			state === "running"
+				? {
+						agentType: "pi",
+						environment: "worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+						attemptId: "attempt-t1",
+						paneId: "pane-t1",
+						tabId: "tab-ws-t",
+						workspaceId: "ws-t",
+					}
+				: null,
+		workCycle: 1,
+		handoffCount: 1,
+		lastCompletion: null,
+		description: "",
+		sourceKind: "github-issue",
+		externalKey: "17",
+		sourceState: "open",
+		url: "",
+		labels: [],
+		externalUpdatedAt: now,
+		memberships: [],
+		suggestedTaskType: "implement",
+		actionable: true,
+		handoffRecoveryRequired: false,
+		leftover: null,
+		priority: UNRANKED_PRIORITY,
+	};
+}
+
+/** The Ticket-base-mode context the Ticket-Goto example runs on (ADR 0033). */
+function ticketGotoContext(paneAlive: boolean): ControlContext {
+	return contextFor(paneAlive ? "ticket-detail" : "ticket-list", {
+		selectedTicket: sampleTicket(paneAlive ? "running" : "open"),
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		ticketPaneAlive: paneAlive,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
 }
 
 /** The Consultation-detail context the Goto example runs on. */
@@ -627,6 +690,27 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				key: "goto-unavailable",
 				mode: "consultation-detail",
 				context: gotoContext(false),
+				width: columns.contentWidth,
+			}),
+		],
+	},
+	{
+		// Goto from either Ticket pane (ADR 0033): available on an in-flight
+		// Ticket with the Agent's pane alive in the last poll, refused on an
+		// open Ticket with the Consultation section's own words.
+		id: "ticket-goto",
+		state: "Ticket Goto: available on an alive pane, refused otherwise",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionBar, {
+				key: "ticket-goto-available",
+				mode: "ticket-detail",
+				context: ticketGotoContext(true),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "ticket-goto-unavailable",
+				mode: "ticket-list",
+				context: ticketGotoContext(false),
 				width: columns.contentWidth,
 			}),
 		],

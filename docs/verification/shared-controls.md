@@ -44,6 +44,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue | `test/consultation-frame.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
+| Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
@@ -239,6 +240,36 @@ the pane. It passed in full on this branch.
 The terminal walks above were not re-run on the Session view's paint: they are
 recorded as not re-verified for that body, not as a pass. The screen-reader
 target remains unverified.
+
+## The Ticket section's Goto key (issue #82, ADR 0033)
+
+ADR 0033 makes key `g` a base-mode control of the Ticket section, in both
+base modes: it runs the same focus the Decision modal's and the Live view's
+Goto rows run, confirms on the Message line with the workspace name, and
+changes no record. It is available on an in-flight ticket whose agent is
+alive in the last poll and on an `awaiting` ticket whose handoff recorded a
+pane; elsewhere it refuses with the Consultation's own words. The state move
+the modal Goto carried, `awaiting` back to `running`, is gone from every
+Goto: the poll already makes that move when the agent works again, and the
+badge stays true while the ticket rests.
+
+The automatic suite covers the control's availability, refusal, and dispatch
+(`test/controls.test.ts`), the gallery example a reviewer must see
+(`test/shared-gallery.test.ts`), the Action bar's and the Key guide's rows
+for the new control (`test/action-bar.test.ts`, `test/key-guide.test.ts`),
+the domain and state machines without the `goto` decision
+(`test/domain.test.ts`, `test/state.test.ts`), and the end-to-end frames: `g`
+on an in-flight ticket focuses the pane and moves nothing
+(`test/live-view.test.ts`), `g` on an `awaiting` ticket focuses the recorded
+pane and leaves it `awaiting` (`test/auto-mode.test.ts`), and `g` on an
+`open` ticket refuses on the Message line without focusing anything
+(`test/live-view.test.ts`). The guide screenshots were regenerated on this
+branch (`npm run screenshots`), and the drift check passed. The suite passed
+in full on this branch.
+
+The terminal walks were not re-run on the Action bar's and the Key guide's
+new row: they are recorded as not re-verified for this control, not as a
+pass. The screen-reader target remains unverified.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 

@@ -1071,7 +1071,7 @@ export class ObservationCoordinator {
 		if (decision === "wait") return false;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
 		// truncated is held. No automatic decision runs on it, in auto or
-		// manual mode; the operator's explicit close, goto, or route still
+		// manual mode; the operator's explicit close or route still
 		// works. The ticket rests in awaiting until then.
 		const completion = this.state.lastCompletion(ticket.ticketIdentity);
 		if (isHeldCompletion(completion)) return false;

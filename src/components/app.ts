@@ -628,6 +628,13 @@ export function App({
 	const selectedConsultationPaneAlive =
 		typeof selectedConsultation?.paneId === "string" &&
 		agents?.some((agent) => agent.paneId === selectedConsultation.paneId) === true;
+	// The same fact for the selected Ticket's handoff pane (ADR 0033): Goto
+	// focuses that pane, so an in-flight Ticket needs it alive in the last
+	// poll. An awaiting Ticket keeps its recorded pane instead.
+	const selectedTicketPaneId = selectedTicket?.handoff?.paneId ?? null;
+	const selectedTicketPaneAlive =
+		typeof selectedTicketPaneId === "string" &&
+		agents?.some((agent) => agent.paneId === selectedTicketPaneId) === true;
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
@@ -1249,11 +1256,12 @@ export function App({
 			return null;
 		}
 	};
-	// Goto: the operator focuses the agent's pane in herdr and the handoff
-	// stays open. The ticket moves awaiting to running; the trace does not
-	// record it, and the next settle refreshes the turn's pending trace.
+	// Goto is navigation (ADR 0033): the operator focuses the agent's pane
+	// in herdr and the handoff stays open. The ticket, its work cycle, and
+	// its traces stay exactly where they are: an awaiting ticket rests
+	// awaiting until the poll or a decision moves it, and an in-flight one
+	// stays in flight.
 	const runGoto = (ticket: Ticket) => {
-		if (state === undefined) return;
 		const paneId = ticket.handoff?.paneId ?? null;
 		if (paneId === null) {
 			setWarningMessage("no agent pane is recorded for this ticket");
@@ -1264,19 +1272,12 @@ export function App({
 				setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
 				return;
 			}
-			state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId: ticket.handoff?.attemptId ?? "",
-				decision: "goto",
-				decidedAt: new Date().toISOString(),
-			});
-			replaceTickets();
 			// The Live view closes on a Goto, so the confirmation stands on the
-			// Message line as a result, never as a warning. The trace does not
-			// record a Goto, and a Handoff or refresh still running stands
-			// alone. The line names the workspace, and the operator switches
-			// herdr's view there: since herdr 0.9 a CLI focus no longer moves an
-			// attached client's view.
+			// Message line as a result, never as a warning. A Goto records no
+			// trace, and a Handoff or refresh still running stands alone. The
+			// line names the workspace, and the operator switches herdr's view
+			// there: since herdr 0.9 a CLI focus no longer moves an attached
+			// client's view.
 			const workspaceId = ticket.handoff?.workspaceId ?? null;
 			const label = workspaceId === null ? null : await workspaceLabelOf(workspaceId);
 			reportMessage({
@@ -1673,6 +1674,7 @@ export function App({
 			consultationRefreshAvailable: state !== undefined,
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationPaneAlive: selectedConsultationPaneAlive,
+			ticketPaneAlive: selectedTicketPaneAlive,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
 		});
@@ -1819,6 +1821,13 @@ export function App({
 					if (markerOf(ticket) === "missing")
 						setPanel({ kind: "missing", identity: ticket.identity });
 					else setPanel({ kind: "live", identity: ticket.identity });
+				},
+				// `g` focuses the agent's pane in herdr and changes nothing
+				// (ADR 0033): the catalogue gated the pane, so this runs the
+				// focus and the confirmation stands on the Message line.
+				"ticket-goto": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket !== undefined) runGoto(ticket);
 				},
 				quit: () => renderer.destroy(),
 				detail: () => focusPane("detail"),
