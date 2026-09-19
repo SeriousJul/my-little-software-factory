@@ -11,10 +11,11 @@
  * key -> handoff -> status pipeline runs without touching a real herdr
  * session or the real home directory.
  */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { panelValueCells } from "../src/components/override-panel.ts";
 
 import type { FactoryConfig } from "../src/config.ts";

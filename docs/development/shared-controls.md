@@ -196,8 +196,8 @@ applicable. Use those examples in automated tests so examples cannot become a
 separate imitation of the production controls.
 
 Human and agent contributor instructions link to this standard and to the
-gallery. The gallery command is `npm run gallery`, or
-`node bin/factory-gallery.mjs [example]`, and it draws the production modules.
+gallery. The gallery command is `bun run gallery`, or
+`bun bin/factory-gallery.mjs [example]`, and it draws the production modules.
 The same examples are driven by `test/shared-gallery.test.ts`, so an example
 cannot become an imitation of a control.
 
@@ -300,8 +300,8 @@ and lint, type checks, behavior tests, terminal tests, visual review, and
 screen-reader checks pass. Documentation and a new component directory alone do
 not meet this condition.
 
-The verification commands are `npm run lint`, `npm run typecheck`, `npm test`,
-and `npm run gallery`. The architecture rule is checked by
+The verification commands are `bun run lint`, `bun run typecheck`, `bun test`,
+and `bun run gallery`. The architecture rule is checked by
 `test/shared-control-architecture.test.ts`, which rejects a separate field
 implementation, a hand-edited draft string, and a screen that names a renderer
 field instead of the library. The screen-reader procedure is written down in

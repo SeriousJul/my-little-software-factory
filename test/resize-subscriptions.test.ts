@@ -9,7 +9,7 @@
  * renders. Each test counts the live renderer's listeners, so a nested
  * component that subscribes again fails here (issue #9).
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import {
 	type AppSetup,
 	HEIGHT,

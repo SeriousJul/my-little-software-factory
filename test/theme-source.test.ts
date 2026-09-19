@@ -6,10 +6,11 @@
  * process rule: a running plane holds its resolution and a theme change
  * takes effect at the next startup.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 
 import { BUILTIN_THEMES, STANDALONE_THEME } from "../src/components/shared/theme.ts";
 import {

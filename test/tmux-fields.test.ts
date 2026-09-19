@@ -12,11 +12,12 @@
  * run is not a pass, and a skipped one proves nothing about paste, focus, or
  * rendering.
  */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 /** The gallery's production bin: the same renderer startup an operator gets. */
 const GALLERY_BIN = join(process.cwd(), "bin", "factory-gallery.mjs");
@@ -127,7 +128,7 @@ describe("shared fields through tmux", () => {
 	});
 
 	test("a real terminal path draws the fields, takes ordinary keys, and refuses a bad paste whole", async () => {
-		tmuxSpawn(session, [process.execPath, "--experimental-ffi", GALLERY_BIN, "fields"], 90, 26);
+		tmuxSpawn(session, [process.execPath, GALLERY_BIN, "fields"], 90, 26);
 		try {
 			// The gallery is up and the shared chrome drew its controls. The wait
 			// demands every row the check reads, so a slow runner never hands back a

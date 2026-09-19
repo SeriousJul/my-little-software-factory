@@ -1,5 +1,5 @@
 /** Deterministic wheel-burst policy tests for the native Ticket detail viewport. */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import {
 	type DetailLine,
 	detailContent,

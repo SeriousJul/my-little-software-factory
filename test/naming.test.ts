@@ -1,7 +1,7 @@
 /**
  * The naming tests: the slug, the branch name, and the agent name.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
 import {

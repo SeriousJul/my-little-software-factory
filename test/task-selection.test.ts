@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import type { TaskRule } from "../src/config.ts";
 import type { SourceMembership } from "../src/domain/ticket.ts";

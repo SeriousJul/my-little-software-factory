@@ -5,11 +5,12 @@
  * memberships, source health, handoff claims, completion traces, and the
  * one-process lease.
  */
+
+import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { TaskRule } from "./config.ts";
 import {
 	isStaleAgentOutputWarning,
@@ -567,7 +568,7 @@ export function openFactoryState(path: string, now?: () => number): FactoryState
 }
 
 export class FactoryState {
-	private readonly db: DatabaseSync;
+	private readonly db: Database;
 	private leaseToken: string | undefined;
 	readonly path: string;
 	/** The clock for internal timestamps. Tests pin it. */
@@ -576,7 +577,7 @@ export class FactoryState {
 	constructor(path: string, now: () => number = () => Date.now()) {
 		this.path = path;
 		this.now = now;
-		this.db = new DatabaseSync(path);
+		this.db = new Database(path);
 		try {
 			this.db.exec("PRAGMA foreign_keys = ON");
 			this.db.exec("PRAGMA secure_delete = ON");
@@ -628,7 +629,7 @@ export class FactoryState {
 		return (
 			this.db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-				.get(name) !== undefined
+				.get(name) != null
 		);
 	}
 
@@ -636,9 +637,9 @@ export class FactoryState {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			this.db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
-			const row = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as
-				| { version: number }
-				| undefined;
+			const row = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as {
+				version: number;
+			} | null;
 			const version = row?.version ?? 0;
 			if (version > SCHEMA_VERSION)
 				throw new StateError(`database ${this.path} uses newer schema version ${version}`);
@@ -699,7 +700,7 @@ export class FactoryState {
 				const exists = this.db
 					.prepare("SELECT source_name FROM source_health WHERE source_name = ?")
 					.get(source.name);
-				if (exists === undefined) {
+				if (exists == null) {
 					this.db
 						.prepare(
 							"INSERT INTO source_health(source_name, kind, health, error, last_success) VALUES (?, ?, 'loading', NULL, NULL)",
@@ -778,7 +779,7 @@ export class FactoryState {
 			// The Referenced issue facts covered by the refresh (ADR 0023): each
 			// overwrites the fact it keys, and an orphaned fact - a reference
 			// the refresh no longer carries - is kept and never cleaned up.
-			if (outcome.referencedIssueFacts !== undefined) {
+			if (outcome.referencedIssueFacts != null) {
 				for (const fact of outcome.referencedIssueFacts) {
 					this.db
 						.prepare(`
@@ -860,7 +861,7 @@ export class FactoryState {
 			const ticket = this.db
 				.prepare("SELECT priority_override FROM tickets WHERE identity = ?")
 				.get(reference.identity) as { priority_override: string | null } | undefined;
-			if (ticket !== undefined) {
+			if (ticket != null) {
 				const fact = this.db
 					.prepare(
 						"SELECT labels_json FROM memberships WHERE ticket_identity = ? ORDER BY external_updated_at DESC, source_name LIMIT 1",
@@ -889,7 +890,7 @@ export class FactoryState {
 		const row = this.db
 			.prepare("SELECT source_name FROM source_health WHERE source_name = ?")
 			.get(source.name);
-		if (row === undefined)
+		if (row == null)
 			this.db
 				.prepare("INSERT INTO source_health(source_name, kind, health) VALUES (?, ?, 'loading')")
 				.run(source.name, source.kind);
@@ -958,7 +959,7 @@ export class FactoryState {
 					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
 					a.sourceName.localeCompare(b.sourceName),
 			)[0];
-			if (facts === undefined) continue;
+			if (facts == null) continue;
 			const handoff = this.handoffFor(row.identity);
 			// The pull request's own facts beat the rank its Issue references
 			// carry; an issue ticket, which closes nothing, reads its own chain
@@ -1043,7 +1044,7 @@ export class FactoryState {
 				.prepare(
 					"SELECT attempt_id FROM handoff_attempts WHERE ticket_identity = ? AND resolved_at IS NULL LIMIT 1",
 				)
-				.get(identity) !== undefined
+				.get(identity) != null
 		);
 	}
 
@@ -1061,9 +1062,9 @@ export class FactoryState {
 					workspace_id: string | null;
 			  }
 			| undefined;
-		if (row === undefined) return null;
+		if (row == null) return null;
 		const choice = jsonChoice(row.choice_json);
-		if (choice === undefined) return null;
+		if (choice == null) return null;
 		return {
 			agentType: choice.agentType,
 			environment: choice.environment,
@@ -1131,7 +1132,7 @@ export class FactoryState {
 					decision: string | null;
 			  }
 			| undefined;
-		if (row === undefined) return null;
+		if (row == null) return null;
 		return {
 			taskType: row.task_type,
 			agentType: row.agent_type,
@@ -1165,14 +1166,14 @@ export class FactoryState {
 			.prepare(
 				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
-			.get() as { completed_at: string; rowid: number } | undefined;
-		if (held === undefined) return false;
+			.get() as { completed_at: string; rowid: number } | null;
+		if (held == null) return false;
 		const after = this.db
 			.prepare(
 				"SELECT 1 FROM completion_traces WHERE cause = 'completed' AND (completed_at > ? OR (completed_at = ? AND rowid > ?)) LIMIT 1",
 			)
-			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | undefined;
-		return after === undefined;
+			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | null;
+		return after == null;
 	}
 
 	/**
@@ -1193,14 +1194,14 @@ export class FactoryState {
 				"SELECT MAX(decided_at) AS ended_at FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL",
 			)
 			.get(identity) as { ended_at: string | null } | undefined;
-		if (ended?.ended_at === undefined || ended.ended_at === null) return true;
+		if (ended?.ended_at == null || ended.ended_at === null) return true;
 		const unrefreshed = this.db
 			.prepare(
 				`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name
 				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR h.last_success < ?) LIMIT 1`,
 			)
 			.get(identity, ended.ended_at) as { 1: number } | undefined;
-		return unrefreshed === undefined;
+		return unrefreshed == null;
 	}
 
 	/**
@@ -1221,7 +1222,7 @@ export class FactoryState {
 				"SELECT task_type, cause FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL ORDER BY decided_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as { task_type: string; cause: string | null } | undefined;
-		if (ended === undefined) return false;
+		if (ended == null) return false;
 		return ended.cause === "completed" && ended.task_type === suggestedTaskType;
 	}
 
@@ -1268,7 +1269,7 @@ export class FactoryState {
 				"SELECT herdr_name FROM handoffs WHERE ticket_identity = ? AND herdr_name IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as { herdr_name: string | null } | undefined;
-		if (started?.herdr_name !== undefined && started?.herdr_name !== null) {
+		if (started?.herdr_name != null) {
 			return started.herdr_name;
 		}
 		const row = this.db
@@ -1276,7 +1277,7 @@ export class FactoryState {
 				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? ORDER BY m.active DESC, m.source_name LIMIT 1",
 			)
 			.get(identity) as { title: string } | undefined;
-		return row === undefined ? "" : agentNameFor(row.title);
+		return row == null ? "" : agentNameFor(row.title);
 	}
 
 	/**
@@ -1303,7 +1304,7 @@ export class FactoryState {
 					workspace_id: string | null;
 			  }
 			| undefined;
-		if (row === undefined) return null;
+		if (row == null) return null;
 		const choice = jsonChoice(row.choice_json);
 		return {
 			handoffId: row.attempt_id,
@@ -1336,13 +1337,13 @@ export class FactoryState {
 	}): LeftoverEnvironment | null {
 		return this.transaction(() => {
 			const row =
-				input.handoffId !== undefined && input.handoffId !== null
+				input.handoffId != null
 					? (this.db
 							.prepare(
 								"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? AND attempt_id = ?",
 							)
 							.get(input.ticketIdentity, input.handoffId) as HandoffRow | undefined)
-					: input.paneId !== undefined && input.paneId !== null
+					: input.paneId != null
 						? (this.db
 								.prepare(
 									"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? AND pane_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
@@ -1353,7 +1354,7 @@ export class FactoryState {
 									"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 								)
 								.get(input.ticketIdentity) as HandoffRow | undefined);
-			if (row === undefined) return null;
+			if (row == null) return null;
 			const at = input.at ?? new Date(this.now()).toISOString();
 			const choice = jsonChoice(row.choice_json);
 			// A fact that already stood on this handoff is refreshed: the clear
@@ -1534,7 +1535,7 @@ export class FactoryState {
 		}> = [];
 		for (const row of rows) {
 			const choice = jsonChoice(row.choice_json);
-			if (choice === undefined) continue;
+			if (choice == null) continue;
 			out.push({
 				ticketIdentity: row.ticket_identity,
 				state: row.state,
@@ -1611,7 +1612,7 @@ export class FactoryState {
 			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(handoffId) as { id: string } | undefined;
-			if (pending === undefined) return false;
+			if (pending == null) return false;
 			const moved = this.db
 				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
 				.run(identity);
@@ -1644,13 +1645,13 @@ export class FactoryState {
 			const ticket = this.db
 				.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 				.get(identity) as { state: TicketState; work_cycle: number } | undefined;
-			if (ticket === undefined || ticket.state !== "open") return null;
+			if (ticket == null || ticket.state !== "open") return null;
 			const previous = this.db
 				.prepare(
 					"SELECT choice_json FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 				)
 				.get(identity) as { choice_json: string } | undefined;
-			if (previous === undefined || jsonChoice(previous.choice_json) === undefined) return null;
+			if (previous == null || jsonChoice(previous.choice_json) == null) return null;
 			if (this.hasUnresolvedAttempt(identity)) return null;
 			const moved = this.db
 				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'open'")
@@ -1706,9 +1707,9 @@ export class FactoryState {
 			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(input.handoffId) as { id: string } | undefined;
-			if (handoff === undefined) return;
+			if (handoff == null) return;
 			const choice = jsonChoice(handoff.choice_json);
-			if (pending !== undefined) {
+			if (pending != null) {
 				// A reopened turn settles again: the same trace is refreshed, its
 				// cause and detail overwritten, so a recovered turn reads as the
 				// turn it became.
@@ -1800,7 +1801,7 @@ export class FactoryState {
 			const handoff = this.db
 				.prepare("SELECT work_cycle, choice_json FROM handoffs WHERE attempt_id = ?")
 				.get(input.handoffId) as { work_cycle: number; choice_json: string } | undefined;
-			if (handoff === undefined) return false;
+			if (handoff == null) return false;
 			const choice = jsonChoice(handoff.choice_json);
 			this.db
 				.prepare(
@@ -1850,7 +1851,7 @@ export class FactoryState {
 				const ticket = this.db
 					.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 					.get(ticketIdentity) as { state: TicketState; work_cycle: number } | undefined;
-				if (ticket === undefined) return { ok: false, reason: "ticket no longer exists" };
+				if (ticket == null) return { ok: false, reason: "ticket no longer exists" };
 				if (origin === "open") {
 					if (ticket.state !== "open")
 						return {
@@ -1862,7 +1863,7 @@ export class FactoryState {
 							`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = ? AND m.active = 1 AND h.health = 'healthy' LIMIT 1`,
 						)
 						.get(ticketIdentity);
-					if (eligible === undefined)
+					if (eligible == null)
 						return {
 							ok: false,
 							reason:
@@ -1937,7 +1938,7 @@ export class FactoryState {
 				.get(attemptId) as
 				| { ticket_identity: string; work_cycle: number; choice_json: string }
 				| undefined;
-			if (attempt === undefined) return;
+			if (attempt == null) return;
 			if (agentStarted) {
 				this.db
 					.prepare(
@@ -2015,7 +2016,7 @@ export class FactoryState {
 				.run(randomUUID(), id, input.initialInput, createdAt);
 		});
 		const consultation = this.consultation(id);
-		if (consultation === undefined) throw new StateError(`consultation ${id} was not created`);
+		if (consultation == null) throw new StateError(`consultation ${id} was not created`);
 		return consultation;
 	}
 
@@ -2024,7 +2025,7 @@ export class FactoryState {
 		const row = this.db.prepare("SELECT * FROM consultations WHERE id = ?").get(id) as
 			| ConsultationRow
 			| undefined;
-		return row === undefined ? undefined : this.consultationFromRow(row);
+		return row == null ? undefined : this.consultationFromRow(row);
 	}
 
 	/** List Consultations by operator priority. Closed records are opt-in. */
@@ -2079,7 +2080,7 @@ export class FactoryState {
 				"SELECT identities_json FROM checkout_conflict_confirmations WHERE checkout_path = ?",
 			)
 			.get(checkoutPath) as { identities_json: string } | undefined;
-		if (row === undefined) return [];
+		if (row == null) return [];
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(row.identities_json);
@@ -2182,7 +2183,7 @@ export class FactoryState {
 				| undefined;
 			// Check `row` for existence before the state, so a missing
 			// consultation cannot reach the next line's dereference.
-			if (row === undefined || row.state !== "awaiting-response") return false;
+			if (row == null || row.state !== "awaiting-response") return false;
 			if (row.latest_sequence !== null && sequence <= row.latest_sequence) return false;
 			const pending = this.pendingConsultationResponse(id);
 			this.db
@@ -2312,7 +2313,7 @@ export class FactoryState {
 					created_at: string;
 			  }
 			| undefined;
-		return row === undefined
+		return row == null
 			? null
 			: {
 					id: row.id,
@@ -2338,7 +2339,7 @@ export class FactoryState {
 				.prepare("SELECT state, warning FROM consultations WHERE id = ?")
 				.get(id) as { state: ConsultationState; warning: string | null } | undefined;
 			if (
-				consultation === undefined ||
+				consultation == null ||
 				(consultation.state !== "working" && consultation.state !== "opening")
 			)
 				return false;
@@ -2347,7 +2348,7 @@ export class FactoryState {
 					"SELECT * FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NULL ORDER BY accepted_at DESC LIMIT 1",
 				)
 				.get(id) as ConsultationTurnRow | undefined;
-			if (turn === undefined) return false;
+			if (turn == null) return false;
 			// A null sequence is accepted for older Herdr versions. A known
 			// sequence must be newer than the turn baseline.
 			if (
@@ -2420,7 +2421,7 @@ export class FactoryState {
 		const row = this.db.prepare("SELECT * FROM consultation_turns WHERE id = ?").get(id) as
 			| ConsultationTurnRow
 			| undefined;
-		return row === undefined ? undefined : turnFromRow(row);
+		return row == null ? undefined : turnFromRow(row);
 	}
 
 	consultationTurns(id: string): ConsultationTurn[] {
@@ -2450,7 +2451,7 @@ export class FactoryState {
 				.prepare(
 					"SELECT 1 FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL LIMIT 1",
 				)
-				.get(id) !== undefined
+				.get(id) != null
 		);
 	}
 
@@ -2590,7 +2591,7 @@ export class FactoryState {
 	/** Recovery input is deterministic and never launched automatically. */
 	replacementInput(id: string, limit = 64 * 1024): string {
 		const consultation = this.consultation(id);
-		if (consultation === undefined) return "";
+		if (consultation == null) return "";
 		const parts = [`Original input:\n${consultation.initialInput}`];
 		const turns = this.consultationTurns(id);
 		const snapshots = this.consultationSnapshots(id);
@@ -2599,7 +2600,7 @@ export class FactoryState {
 			const turn = turns[index];
 			const snapshot = snapshots.find((item) => item.turnId === turn.id);
 			parts.push(
-				`\nOperator response:\n${turn.input}${snapshot === undefined ? "" : `\nAgent output:\n${snapshot.text}`}`,
+				`\nOperator response:\n${turn.input}${snapshot == null ? "" : `\nAgent output:\n${snapshot.text}`}`,
 			);
 		}
 		return boundedInput(parts, limit);
@@ -2638,7 +2639,7 @@ export class FactoryState {
 	updateConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
 		this.transaction(() => {
 			const current = this.consultation(id);
-			if (current === undefined) return;
+			if (current == null) return;
 			const moves: Array<[string, string | null, string | null]> = [
 				["pane", current.paneId, details.paneId],
 				["tab", current.tabId, details.tabId ?? null],
@@ -2684,7 +2685,7 @@ export class FactoryState {
 				"SELECT id FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL ORDER BY settled_at DESC LIMIT 1",
 			)
 			.get(id) as { id: string } | undefined;
-		if (turn === undefined) return false;
+		if (turn == null) return false;
 		const bounded = boundedSnapshot(output);
 		const snapshotId = randomUUID();
 		this.transaction(() => {
@@ -2749,8 +2750,8 @@ export class FactoryState {
 		this.transaction(() => {
 			const current = this.db
 				.prepare("SELECT owner_token, pid, host FROM lease WHERE name = 'control-plane'")
-				.get() as { owner_token: string; pid: number; host: string } | undefined;
-			if (current !== undefined && !this.isDeadLocalOwner(current, host))
+				.get() as { owner_token: string; pid: number; host: string } | null;
+			if (current != null && !this.isDeadLocalOwner(current, host))
 				throw new StateError(
 					`state database is already in use by process ${current.pid} on ${current.host}`,
 				);
@@ -2777,13 +2778,13 @@ export class FactoryState {
 	}
 
 	heartbeatLease(): void {
-		if (this.leaseToken === undefined) return;
+		if (this.leaseToken == null) return;
 		this.db
 			.prepare("UPDATE lease SET heartbeat_at = ? WHERE name = 'control-plane' AND owner_token = ?")
 			.run(Date.now(), this.leaseToken);
 	}
 	releaseLease(): void {
-		if (this.leaseToken === undefined) return;
+		if (this.leaseToken == null) return;
 		this.db
 			.prepare("DELETE FROM lease WHERE name = 'control-plane' AND owner_token = ?")
 			.run(this.leaseToken);
@@ -2791,6 +2792,12 @@ export class FactoryState {
 	}
 	close(): void {
 		this.releaseLease();
+		// Fold the WAL into the main file so a closed state file is complete on
+		// its own: Bun's close does not checkpoint the way a final SQLite close
+		// does, and the data otherwise stays in the -wal sidecar.
+		try {
+			this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+		} catch {}
 		this.db.close();
 	}
 

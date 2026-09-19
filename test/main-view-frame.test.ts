@@ -11,10 +11,11 @@
  * the steady counts, the Consultation header the Consultation facts, and one
  * Message line, one Action bar, and one control catalog answer for both.
  */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";

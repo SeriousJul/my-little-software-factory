@@ -15,10 +15,11 @@
  * last-completion line, and the turn's cause in the decision modal above
  * its action rows.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";

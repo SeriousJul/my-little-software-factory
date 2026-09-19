@@ -9,15 +9,15 @@
  * performs production renderer startup. Only this seam can prove which
  * terminal modes the production renderer requests from the host.
  *
- * The PTY is opened through the same node:ffi the OpenTUI native renderer
+ * The PTY is opened through the same `bun:ffi` the OpenTUI native renderer
  * already loads, so no extra dependency is added. The helper is defensive:
  * if the platform cannot open a PTY, `openControlPlanePty` reports that with
  * `null`, and the caller fails the test rather than skipping it, because a
  * skipped required check is not a pass.
  */
 
+import { dlopen } from "bun:ffi";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { dlopen } from "node:ffi";
 import { readSync, writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -55,26 +55,36 @@ function loadPtyLibs(): PtyLibs | null {
 	if (support === undefined) return null;
 	for (const path of support.libcPaths) {
 		try {
-			const { functions } = dlopen(path, {
+			const { symbols } = dlopen(path, {
 				openpty: {
-					arguments: ["pointer", "pointer", "pointer", "pointer", "pointer"],
-					return: "i32",
+					args: ["pointer", "pointer", "pointer", "pointer", "pointer"],
+					returns: "i32",
 				},
-				fcntl: { arguments: ["i32", "i32", "i64"], return: "i32" },
-				close: { arguments: ["i32"], return: "i32" },
-				ioctl: { arguments: ["i32", "i32", "pointer"], return: "i32" },
+				fcntl: { args: ["i32", "i32", "i64"], returns: "i32" },
+				close: { args: ["i32"], returns: "i32" },
+				ioctl: { args: ["i32", "i32", "pointer"], returns: "i32" },
 			});
 			return {
-				openpty: (amaster, aslave) => functions.openpty(amaster, aslave, null, null, null),
-				fcntl: (fd, cmd, arg) => functions.fcntl(fd, cmd, arg),
-				close: (fd) => functions.close(fd),
-				ioctl: (fd, request, winsize) => functions.ioctl(fd, request, winsize),
+				openpty: (amaster, aslave) => symbols.openpty(amaster, aslave, null, null, null),
+				fcntl: (fd, cmd, arg) => symbols.fcntl(fd, cmd, arg),
+				close: (fd) => symbols.close(fd),
+				ioctl: (fd, request, winsize) => symbols.ioctl(fd, request, winsize),
 			};
 		} catch {
 			// Try the next candidate path.
 		}
 	}
 	return null;
+}
+
+/**
+ * Whether this platform can open a PTY at all. `openControlPlanePty` reports a
+ * platform miss as `null`; a test that needs a PTY skips on an unsupported
+ * platform through this synchronous check, because bun's test runner has no
+ * runtime skip inside a test body.
+ */
+export function ptyAvailable(): boolean {
+	return PTY_SUPPORT[process.platform] !== undefined;
 }
 
 export interface PtySession {
@@ -231,9 +241,8 @@ export async function openPty(
 			reading = false;
 			clearInterval(timer);
 			if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-				// The bin wrapper re-runs the entry as its own child, so
-				// killing the wrapper alone would orphan that child. Kill
-				// the whole tree: children first, the wrapper last.
+				// Kill the whole tree, not just the pid, so no helper the
+				// process spawned is left orphaned on the PTY.
 				killProcessTree(child.pid);
 			}
 			libs.close(master);

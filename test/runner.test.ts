@@ -7,10 +7,11 @@
  * and the buffer are small, so a sleep of ten seconds proves the timeout and
  * one hundred kilobytes prove the buffer without waiting ten minutes.
  */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { renderSettingArgs } from "../src/handoff.ts";
 import {

@@ -6,9 +6,10 @@
  * Repository, and input the Agent can actually take, and the launcher states a
  * refusal rather than opening work the factory would reject.
  */
+
+import { describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { describe, expect, test, vi } from "vitest";
 
 import { ConsultationLauncher } from "../src/components/consultation-launcher.ts";
 import type { ControlContext } from "../src/components/controls.ts";
@@ -41,7 +42,7 @@ const BASE_CONTEXT: ControlContext = {
 async function launcher(
 	draft?: { typeName: string; repositoryIdentity: string; input: string } | null,
 ) {
-	const onLaunch = vi.fn();
+	const onLaunch = mock();
 	const setup = await testRender(
 		createElement(ConsultationLauncher, {
 			types,

@@ -7,10 +7,11 @@
  * The assertions read the colors the frame was drawn with, so a theme the
  * plane claims to inherit must be the theme the frame actually paints.
  */
+
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
 
 import {
 	awaitFrame,

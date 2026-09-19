@@ -6,7 +6,7 @@
  * observed through the rendered terminal frame in the app tests, the same
  * way an operator would see it.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import { canTransition, TICKET_STATES } from "../src/domain/ticket.ts";
 

@@ -1,7 +1,8 @@
 /** Shared fields expose one editing baseline to every control-plane caller. */
+
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ChoiceRow } from "../src/components/shared/choices.ts";
 import {
@@ -43,7 +44,7 @@ async function withField(
 
 describe("the shared Draft field", () => {
 	test("paints its visible label and keeps Enter as a newline", async () => {
-		const onValueChange = vi.fn();
+		const onValueChange = mock();
 		await withField(
 			createElement(DraftField, {
 				label: "Initial input",
@@ -194,8 +195,8 @@ describe("the shared Draft field", () => {
 
 describe("the shared Text field", () => {
 	test("refuses a non-digit paste as one operation and states why", async () => {
-		const onValueChange = vi.fn();
-		const onRefuse = vi.fn();
+		const onValueChange = mock();
+		const onRefuse = mock();
 		await withField(
 			createElement(TextField, {
 				label: "Context",
@@ -234,7 +235,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("takes a paste of digits in full, in the same rule that refuses the rest", async () => {
-		const onValueChange = vi.fn();
+		const onValueChange = mock();
 		await withField(
 			createElement(TextField, {
 				label: "Context",
@@ -259,7 +260,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("refuses one typed non-digit and keeps the value and the caret", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -286,7 +287,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("refuses non-ASCII printable characters in a digits field", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -314,7 +315,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("refuses a non-digit paste while a selection is held, and keeps the value, the caret, and the selection", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -352,7 +353,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("enforces a stated character limit, and refuses the crossing edit as a whole", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -436,7 +437,7 @@ describe("the shared Text field", () => {
 
 describe("both key protocols", () => {
 	test("an enhanced terminal's sequences mean the same operations", async () => {
-		const onValueChange = vi.fn();
+		const onValueChange = mock();
 		await withField(
 			createElement(DraftField, {
 				label: "Initial input",
@@ -469,7 +470,7 @@ describe("both key protocols", () => {
 	});
 
 	test("an enhanced terminal keeps a digits field's refusal", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		await withField(
 			createElement(TextField, {
 				label: "Context",

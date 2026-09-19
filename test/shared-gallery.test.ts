@@ -7,9 +7,10 @@
  * a contributor's preview and the operator's screen from becoming two different
  * things, which is the failure the shared control standard names.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, describe, expect, test } from "vitest";
 
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
@@ -443,11 +444,11 @@ describe("the shared control gallery", () => {
 		const ink = controlInk();
 		// The warning row wears the warning tone on its own value.
 		const value = findCell(setup, "openai/gpt-5.1-codex");
-		expect(hexOf(cellColors(setup, value.x, value.y).fg)).toBe(ink.warning.fg);
+		expect(hexOf(cellColors(setup, value.x, value.y).fg)).toBe(ink.warning.fg ?? "");
 		// The waiting row keeps its value in the tone of a setting it cannot
 		// confirm yet, not in the tone of a value it stands on.
 		const waiting = findCell(setup, "anthropic/claude-sonnet-4-5");
-		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg);
+		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg ?? "");
 	});
 
 	test("the priority example shows the rank badge, each selector state, and the Consultation reason", async () => {

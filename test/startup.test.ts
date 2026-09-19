@@ -8,13 +8,13 @@
  * The pseudo-terminal suite (test/executable.test.ts) still pins the shipped
  * bin end to end; these tests pin the words and the order.
  */
+
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
-
 import { defaultConfigPath, validateConfig } from "../src/config.ts";
 import {
 	configPathFromArgs,
@@ -22,6 +22,7 @@ import {
 	openStartupState,
 	runStartup,
 } from "../src/startup.ts";
+import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
 const USAGE = "usage: factory [--config <path>]";
 
@@ -55,7 +56,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
-	vi.unstubAllEnvs();
+	unstubAllEnvs();
 });
 
 /** A valid config body, pointed at the state file the case names. */
@@ -184,7 +185,7 @@ describe("the whole startup", () => {
 
 	test("an invalid config stops before the state opens", async () => {
 		const stateHome = inTempDir("run-config")("state-home");
-		vi.stubEnv("XDG_STATE_HOME", stateHome);
+		stubEnv("XDG_STATE_HOME", stateHome);
 		const at = inTempDir("run-config")("invalid.toml");
 		writeFileSync(at, "default-agent = 42\n", "utf8");
 		const result = await runStartup(["--config", at]);
@@ -224,7 +225,7 @@ describe("the whole startup", () => {
 		// open, which fails last.
 		const emptyBin = inTempDir("run-state-warn")("empty-bin");
 		mkdirSync(emptyBin, { recursive: true });
-		vi.stubEnv("PATH", emptyBin);
+		stubEnv("PATH", emptyBin);
 		const result = await runStartup(["--config", configPath]);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
@@ -256,7 +257,7 @@ describe("the whole startup", () => {
 
 	test("a missing config is seeded from the Default configuration with the note", async () => {
 		const stateHome = inTempDir("run-defaults")("state-home");
-		vi.stubEnv("XDG_STATE_HOME", stateHome);
+		stubEnv("XDG_STATE_HOME", stateHome);
 		const missing = inTempDir("run-defaults")("does-not-exist.toml");
 		const result = await runStartup(["--config", missing]);
 		expect(result.ok).toBe(true);

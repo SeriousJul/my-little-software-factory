@@ -11,9 +11,10 @@
  * The rule is a declared dependency rule, and it is not a behavior test: what
  * the operator sees is checked by the flow tests that drive the real screens.
  */
+
+import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { describe, expect, test } from "vitest";
 
 /** Every TypeScript source file under `src`, the library's own files aside. */
 function sourceFiles(directory: string, keep: (file: string) => boolean = () => true): string[] {

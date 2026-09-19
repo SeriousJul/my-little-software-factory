@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, mock, test } from "bun:test";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
@@ -946,7 +946,7 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: vi.fn().mockResolvedValue({ ok: true }),
+			dispatch: mock().mockResolvedValue({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,

@@ -21,7 +21,7 @@
   (`InputRenderable`, `TextareaRenderable`) outside the library: an automated
   check rejects each of them. Keep domain validation, draft storage, setting
   resolution, and Agent operations in the screen that owns them.
-- Run `npm run gallery` to see a control, and add the state a reviewer must see
+- Run `bun run gallery` to see a control, and add the state a reviewer must see
   to the gallery's examples rather than to a private sketch; the gallery's
   examples are exercised by the suite, so a preview cannot drift from a control.
 - Every control the control plane owns dispatches from the shared Control
@@ -39,7 +39,7 @@
   plane's own themes keep the tested pairs.
 - Start bug fixes with a reproduction through the real application flow. Use
   isolated test state and fake external operations, not live Agent work.
-- Check `npm run lint`, `npm run typecheck`, and `npm test` for implementation
+- Check `bun run lint`, `bun run typecheck`, and `bun test` for implementation
   changes, plus the applicable acceptance checks in the standard. Record what
   could not run as incomplete; do not extend a claim past what was measured.
 - Frame snapshots and keyboard tests do not establish screen-reader support.
@@ -53,7 +53,7 @@
   `hyprctl` (or any other window manager or desktop tool) from a test,
   a script, or by hand while verifying a change.
 - Test the app at the unit test layer, and only at that layer. Run tests
-  with `npm test` and the shared test harness. Use fake external operations
+  with `bun test` and the shared test harness. Use fake external operations
   and isolated test state.
 
 ## Agent skills

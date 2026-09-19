@@ -6,7 +6,7 @@
  * values the panel prefills. These tests pin the chains and the independence
  * of the rows: an agent that changes never drags the model with it.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import type { FactoryConfig } from "../src/config.ts";
 import {

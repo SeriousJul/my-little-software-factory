@@ -7,10 +7,11 @@
  * The ticket carries a label that is not in the Priority list, so it rests
  * unranked and clearing returns it to `none`, not to a label rank.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";

@@ -10,12 +10,13 @@
  * failure, or crash. This test drives the guard with a fake command that
  * crashes and leaves a child behind, the exact topology of the incident.
  */
+
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const GUARD_SCRIPT = fileURLToPath(new URL("../scripts/crash-guard.sh", import.meta.url));
 const WORKLOAD_PATH = join(tmpdir(), "crash-guard-workload.cjs");

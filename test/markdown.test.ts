@@ -2,7 +2,7 @@
  * The light markdown dressing: the deterministic rules the decision modal
  * renders the turn log with.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import { type MdLine, renderMarkdown } from "../src/components/markdown.ts";
 import { widthOf } from "../src/components/text.ts";

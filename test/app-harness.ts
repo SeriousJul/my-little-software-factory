@@ -7,10 +7,11 @@
  * assertion, because the wait ends only when the effect appears or the
  * deadline dumps the last frame.
  */
+
+import { afterEach, beforeEach, expect, spyOn } from "bun:test";
 import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { App, type AppProps } from "../src/components/app.ts";
 import type { ThemeRole } from "../src/components/shared/theme.ts";
@@ -19,6 +20,7 @@ import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import "./theme-isolation.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
 
@@ -34,8 +36,8 @@ const FRAME_POLL_MS = 10;
  * through a command runner. A deadline tuned to a quiet machine fails such a
  * wait by a few hundred ms under load, and the run reads as a broken app
  * rather than a busy one. A test whose effect never arrives still fails, only
- * at this deadline; the runner's own budget (vitest.config.ts) stays above
- * the sum of a test's waits.
+ * at this deadline; the runner's own budget (the test script's `--timeout`)
+ * stays above the sum of a test's waits.
  *
  * CI hosts set `CI`, and their shared runners run the suite under a load the
  * deadline was not tuned for. Doubling it there keeps a slow runner slow
@@ -271,11 +273,11 @@ export const listFocused = (frame: string) =>
 	frame.includes("❯ Tickets") && !frame.includes("❯ Detail");
 
 let errorCalls: string[];
-let errorSpy: ReturnType<typeof vi.spyOn>;
+let errorSpy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
 	errorCalls = [];
-	errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+	errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
 		errorCalls.push(args.map(String).join(" "));
 	});
 });

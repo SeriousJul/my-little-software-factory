@@ -1,9 +1,9 @@
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
@@ -63,7 +63,7 @@ function storedTrace(message = "fallback first\nfallback last"): {
 }
 
 function replaceStoredLog(path: string, identity: string, cell: string | null): void {
-	const db = new DatabaseSync(path);
+	const db = new Database(path);
 	db.prepare("UPDATE completion_traces SET turn_log_json = ? WHERE ticket_identity = ?").run(
 		cell,
 		identity,
@@ -250,7 +250,7 @@ describe("factory SQLite state", () => {
 
 	test("stops with a readable error for a database from a newer schema version", () => {
 		const path = statePath();
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
 		db.prepare("INSERT INTO schema_version(version) VALUES (4)").run();
 		db.close();
@@ -273,10 +273,22 @@ describe("factory SQLite state", () => {
 		state.applyFetch(sourceA, success([fetched()]));
 		state.close();
 
-		// Corrupt the header of the last page: the schema stays readable, but the
-		// integrity check must fail on the damaged data.
+		// Damage a b-tree page's cell count: the file still opens, but the
+		// integrity check must fail on the out-of-range cell pointers. close()
+		// folds the WAL into the main file, so the data pages live there.
 		const buffer = readFileSync(path);
-		buffer[(buffer.byteLength / 4096 - 1) * 4096] = 0;
+		const PAGE = 4096;
+		let damaged = false;
+		for (let page = 1; page * PAGE < buffer.byteLength; page += 1) {
+			const type = buffer[page * PAGE];
+			if (type === 0x02 || type === 0x05 || type === 0x0a || type === 0x0d) {
+				buffer[page * PAGE + 3] = 0x0f;
+				buffer[page * PAGE + 4] = 0xff;
+				damaged = true;
+				break;
+			}
+		}
+		if (!damaged) throw new Error("no b-tree page to damage in the state file");
 		writeFileSync(path, buffer);
 
 		let error: unknown;
@@ -403,7 +415,7 @@ describe("factory SQLite state", () => {
 
 		const [rested] = state.visibleTickets([], "implement");
 		expect(rested.lastCompletion?.message).toBe("Last capture.");
-		const traceCount = new DatabaseSync(path)
+		const traceCount = new Database(path)
 			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
 			.get(ticket.identity) as { n: number };
 		expect(traceCount.n).toBe(1);
@@ -458,7 +470,7 @@ describe("factory SQLite state", () => {
 		expect(second.ok).toBe(true);
 		if (!second.ok) return;
 		state.settleHandoff(second.claim.attemptId, true);
-		const cycles = new DatabaseSync(path)
+		const cycles = new Database(path)
 			.prepare("SELECT work_cycle FROM handoffs WHERE ticket_identity = ? ORDER BY work_cycle")
 			.all(ticket.identity) as Array<{ work_cycle: number }>;
 		expect(cycles).toEqual([{ work_cycle: 1 }, { work_cycle: 2 }]);
@@ -726,7 +738,7 @@ describe("factory SQLite state", () => {
 		expect(running.state).toBe("running");
 		expect(running.lastCompletion?.decision).toBeNull();
 		expect(running.lastCompletion?.message).toBe("Done.");
-		const db = new DatabaseSync(path, { readOnly: true });
+		const db = new Database(path, { readonly: true });
 		const traceCount = db
 			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
 			.get(ticket.identity) as { n: number };
@@ -836,7 +848,7 @@ describe("factory SQLite state", () => {
 
 	test("a v1 database migrates to v2: done becomes awaiting and the traces table appears", () => {
 		const path = statePath();
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec("PRAGMA foreign_keys = ON");
 		db.exec(SCHEMA_V1);
 		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
@@ -860,7 +872,7 @@ describe("factory SQLite state", () => {
 		const state = openFactoryState(path);
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(expect.objectContaining({ state: "awaiting" }));
-		const tables = new DatabaseSync(path)
+		const tables = new Database(path)
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
 			.all() as Array<{ name: string }>;
 		expect(tables.map((t) => t.name)).toContain("completion_traces");
@@ -889,7 +901,7 @@ describe("factory SQLite state", () => {
 
 		// Downgrade the database to v2: a trace without the turn log column
 		// and no later Consultation tables.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec(`
 			DROP TABLE consultation_pending_responses;
 			DROP TABLE consultation_remaining_resources;
@@ -965,7 +977,7 @@ describe("factory SQLite state", () => {
 		// and v8 migrations add, and rewrite the stored choice without the key
 		// the v8 step gives it. A v5 handoff row knows nothing of a leftover or
 		// a herdr name, and a v5 trace carries no settings.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec(
 			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
 				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
@@ -1045,7 +1057,7 @@ describe("factory SQLite state", () => {
 		// Downgrade the record to the v7 shape: drop the column the v8
 		// migration adds, and rewrite a stored choice without the key, which
 		// is exactly what a v7 handoff row holds.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
 		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
 		// The v9 columns belong to the run after this record: a v7 trace never
@@ -1166,7 +1178,7 @@ describe("factory SQLite state", () => {
 		const primed = openFactoryState(path);
 		primed.close();
 		const seedLease = (ownerPid: number, ownerHost: string) => {
-			const db = new DatabaseSync(path);
+			const db = new Database(path);
 			db.prepare(
 				"INSERT OR REPLACE INTO lease(name, owner_token, pid, host, heartbeat_at) " +
 					"VALUES ('control-plane', 'stale-owner', ?, ?, ?)",
@@ -1191,14 +1203,14 @@ describe("factory SQLite state", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
 		// Read the two pragmas on the live connection the state uses.
-		const db = (state as unknown as { db: DatabaseSync }).db;
+		const db = (state as unknown as { db: Database }).db;
 		const journal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
 		const foreignKeys = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
 		expect(journal.journal_mode).toBe("wal");
 		expect(foreignKeys.foreign_keys).toBe(1);
 		// WAL is a durable database property: a second connection, as the
 		// agent's tooling would use, reads the same mode while the state is open.
-		const other = new DatabaseSync(path);
+		const other = new Database(path);
 		expect(
 			(other.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
 		).toBe("wal");
@@ -1677,7 +1689,7 @@ describe("factory SQLite state", () => {
 			});
 			state.close();
 			// A pre-v9 trace: the cell the v9 step added is NULL, not a cause.
-			const db = new DatabaseSync(path);
+			const db = new Database(path);
 			db.prepare("UPDATE completion_traces SET cause = NULL, detail = NULL").run();
 			db.close();
 			const reopened = openFactoryState(path);
@@ -1741,7 +1753,7 @@ describe("factory SQLite state", () => {
 });
 
 describe("stored completion trace degradation", () => {
-	const fallback = [
+	const fallback: TurnLogEntry[] = [
 		{ kind: "text", text: "fallback first" },
 		{ kind: "text", text: "fallback last" },
 	];

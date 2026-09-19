@@ -13,6 +13,6 @@
 		"my-little-software-factory": "0.1.0"
 	},
 	"engines": {
-		"node": ">=26.4.0"
+		"node": ">=18"
 	}
 }

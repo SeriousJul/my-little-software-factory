@@ -1,52 +1,52 @@
 /**
- * Tests for the node version gate.
+ * Tests for the Bun version gate.
  *
  * The gate is pure logic over a version string, so it is tested directly.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import {
 	compareVersions,
-	isSupportedNodeVersion,
-	MIN_NODE_VERSION,
-	unsupportedNodeVersionMessage,
+	isSupportedBunVersion,
+	MIN_BUN_VERSION,
+	unsupportedBunVersionMessage,
 } from "../src/runtime.ts";
 
-describe("the node version gate", () => {
+describe("the bun version gate", () => {
 	test("the requirement matches the OpenTUI native renderer floor", () => {
-		expect(MIN_NODE_VERSION).toBe("26.4.0");
+		expect(MIN_BUN_VERSION).toBe("1.3.0");
 	});
 
 	test("compareVersions orders dotted versions", () => {
-		expect(compareVersions("26.4.0", "26.4.0")).toBe(0);
-		expect(compareVersions("26.5.0", "26.4.0")).toBe(1);
-		expect(compareVersions("26.3.9", "26.4.0")).toBe(-1);
-		expect(compareVersions("27.0.0", "26.4.0")).toBe(1);
-		expect(compareVersions("25.99.99", "26.4.0")).toBe(-1);
+		expect(compareVersions("1.3.0", "1.3.0")).toBe(0);
+		expect(compareVersions("1.4.0", "1.3.0")).toBe(1);
+		expect(compareVersions("1.2.9", "1.3.0")).toBe(-1);
+		expect(compareVersions("2.0.0", "1.3.0")).toBe(1);
+		expect(compareVersions("1.2.99", "1.3.0")).toBe(-1);
 	});
 
 	test("compareVersions treats missing parts as zero", () => {
-		expect(compareVersions("26.4", "26.4.0")).toBe(0);
-		expect(compareVersions("26", "26.4.0")).toBe(-1);
+		expect(compareVersions("1.3", "1.3.0")).toBe(0);
+		expect(compareVersions("1", "1.3.0")).toBe(-1);
 	});
 
-	test("isSupportedNodeVersion accepts the floor and above", () => {
-		expect(isSupportedNodeVersion("26.4.0")).toBe(true);
-		expect(isSupportedNodeVersion("26.5.0")).toBe(true);
-		expect(isSupportedNodeVersion("27.1.2")).toBe(true);
+	test("isSupportedBunVersion accepts the floor and above", () => {
+		expect(isSupportedBunVersion("1.3.0")).toBe(true);
+		expect(isSupportedBunVersion("1.4.0")).toBe(true);
+		expect(isSupportedBunVersion("2.1.2")).toBe(true);
 	});
 
-	test("isSupportedNodeVersion rejects versions below the floor", () => {
-		expect(isSupportedNodeVersion("26.3.9")).toBe(false);
-		expect(isSupportedNodeVersion("22.12.0")).toBe(false);
-		expect(isSupportedNodeVersion("20.0.0")).toBe(false);
+	test("isSupportedBunVersion rejects versions below the floor", () => {
+		expect(isSupportedBunVersion("1.2.9")).toBe(false);
+		expect(isSupportedBunVersion("1.0.0")).toBe(false);
+		expect(isSupportedBunVersion("0.9.0")).toBe(false);
 	});
 
 	test("the failure message names the required version, the actual one, and the reason", () => {
-		const message = unsupportedNodeVersionMessage("22.12.0");
-		expect(message).toContain("Node 26.4.0 or newer");
-		expect(message).toContain("Node 22.12.0");
-		expect(message).toContain("node:ffi");
+		const message = unsupportedBunVersionMessage("1.0.0");
+		expect(message).toContain("Bun 1.3.0 or newer");
+		expect(message).toContain("Bun 1.0.0");
+		expect(message).toContain("FFI");
 		// The operator can act on it: no stack trace, no code path.
 		expect(message).not.toContain("at ");
 	});

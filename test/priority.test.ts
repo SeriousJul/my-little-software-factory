@@ -7,11 +7,12 @@
  * state stores, not as an internal shape. The rank function and the bump
  * rules are the domain's own words, so those are pinned directly.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { afterEach, describe, expect, test } from "vitest";
 
 import { validateConfigWithWarnings } from "../src/config.ts";
 import type { FetchedTicket, IssueReference } from "../src/domain/ticket.ts";
