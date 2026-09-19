@@ -28,7 +28,7 @@ jobs:
       # the registry.
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun test
+      - run: bun run test
       - run: bun run docs:build
       - name: The tag must match the version both packages declare
         run: |
