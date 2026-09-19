@@ -840,11 +840,21 @@ describe("the merged Main view", () => {
 					// ...and the Ticket detail pane carries the same refusal, the
 					// seeded Consultation untouched by either key.
 					await focusDetail(setup);
+					const detailBefore = await settle(setup);
+					const consultationSection = (frame: string) =>
+						rowsOf(frame).filter((row) => row.includes("Consultations") || row.includes("grill"));
 					refusal = await press(setup, "d", "the delete refusal on the detail pane", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
 					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
-					expect(refusal).toContain("grill");
+					refusal = await press(setup, "f", "the history refusal on the detail pane", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
+					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					// The refusal changes no Consultation state: the section's header
+					// facts and its rows come back exactly as they were, and its
+					// history filter stays open.
+					expect(consultationSection(refusal)).toEqual(consultationSection(detailBefore));
 
 					// A Ticket-section control answers the same way in the
 					// Consultation section: the key states what is missing.
