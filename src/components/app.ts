@@ -1801,7 +1801,14 @@ export function App({
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
 		state.removeWorkItem(item.ticketIdentity);
-		setNoticeMessage(`the waiting start for ticket ${item.ticketIdentity} was removed`);
+		// The name the operator reads on the line: the title while the ticket
+		// is still in the projection, its identity once it is gone.
+		const title = ticketsRef.current.find(
+			(candidate) => candidate.identity === item.ticketIdentity,
+		)?.title;
+		setNoticeMessage(
+			`the waiting start for ${title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`} was removed`,
+		);
 		replaceTickets();
 	};
 	const currentBaseMode = (): InteractionMode =>

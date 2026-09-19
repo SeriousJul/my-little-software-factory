@@ -982,6 +982,7 @@ describe("missing agents", () => {
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "restart",
+				automatic: true,
 				ticketIdentity: "github:github.com:I_5",
 				previousMessage: "",
 				choice: expect.objectContaining({ taskType: "implement" }),
@@ -1140,6 +1141,29 @@ describe("missing agents", () => {
 		// Inside the startup grace the agent is booting, not missing: a
 		// restart would double-start the turn even though the limit has room.
 		expect(intents).toHaveLength(1);
+		state.close();
+	});
+
+	test("a missing restart skips a ticket the Work queue already waits for", async () => {
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		const identity = "github:github.com:I_5";
+		handOut(state, identity);
+		// The operator's restart waits in the Work queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: identity,
+				origin: "restart",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		// The automatic restart holds: the missing agent holds no slot, so the
+		// seat is the operator's, and the pickup starts the ticket with the
+		// operator's captured choice, not the automatic one.
+		expect(intents).toHaveLength(0);
 		state.close();
 	});
 

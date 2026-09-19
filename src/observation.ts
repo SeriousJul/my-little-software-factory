@@ -1042,6 +1042,11 @@ export class ObservationCoordinator {
 		if (config.maxParallelAgents > 0 && slots.count >= config.maxParallelAgents) {
 			return false;
 		}
+		// A waiting Work queue item restarts the ticket with the operator's
+		// captured choice (ADR 0034): the automatic restart must not take the
+		// seat the operator asked for, or the item's pickup would start a
+		// second handoff on the ticket it restarted.
+		if (this.state.hasWorkItem(ticket.ticketIdentity)) return false;
 		if (this.restarted.has(ticket.ticketIdentity)) return false;
 		// A Dispatch pause holds the restart: a held failed turn in the factory
 		// stops automatic work until it is decided or a turn completes (ADR
@@ -1055,6 +1060,7 @@ export class ObservationCoordinator {
 		// auto one matches it.
 		const result = await this.dispatch({
 			origin: "restart",
+			automatic: true,
 			ticketIdentity: ticket.ticketIdentity,
 			choice: baseChoice(
 				ticket.agentType,
@@ -1143,6 +1149,7 @@ export class ObservationCoordinator {
 		// inherits the previous Handoff's model, thinking, or context window.
 		const result = await this.dispatch({
 			origin: "workflow",
+			automatic: true,
 			ticketIdentity: ticket.ticketIdentity,
 			choice: resolveHandoffChoice(config, target, edge),
 			previousMessage,
@@ -1313,6 +1320,7 @@ export class ObservationCoordinator {
 			};
 			void this.dispatch({
 				origin: "open",
+				automatic: true,
 				ticketIdentity: ticket.identity,
 				choice,
 				previousMessage: "",

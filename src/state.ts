@@ -605,12 +605,12 @@ export class FactoryState {
 	private readonly db: Database;
 	private leaseToken: string | undefined;
 	readonly path: string;
-	/** The clock for internal timestamps. Tests pin it. */
-	readonly now: () => number;
+	/** The clock for internal timestamps. Tests pin it through the constructor. */
+	private readonly clock: () => number;
 
 	constructor(path: string, now: () => number = () => Date.now()) {
 		this.path = path;
-		this.now = now;
+		this.clock = now;
 		this.db = new Database(path);
 		try {
 			this.db.exec("PRAGMA foreign_keys = ON");
@@ -635,6 +635,11 @@ export class FactoryState {
 				`cannot prepare database ${path}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
+	}
+
+	/** The clock's reading, in milliseconds: the unit the state's timestamps take. */
+	now(): number {
+		return this.clock();
 	}
 
 	/**
@@ -1575,14 +1580,11 @@ export class FactoryState {
 		);
 	}
 
-	/** The identity of the ticket the queue already waits for, or null. */
-	workQueueIdentity(ticketIdentity: string): string | null {
+	/** Whether the queue already waits for the ticket: one item per ticket. */
+	hasWorkItem(ticketIdentity: string): boolean {
 		return (
-			(
-				this.db
-					.prepare("SELECT ticket_identity FROM work_queue WHERE ticket_identity = ?")
-					.get(ticketIdentity) as { ticket_identity: string } | undefined
-			)?.ticket_identity ?? null
+			this.db.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?").get(ticketIdentity) !=
+			null
 		);
 	}
 
