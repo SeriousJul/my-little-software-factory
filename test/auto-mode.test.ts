@@ -145,8 +145,9 @@ interface SeedDetail {
 	 * The Auto-handoff mode the state file holds before the app mounts.
 	 *
 	 * The mode is factory state (ADR 0036), so a test that needs auto mode
-	 * writes it to the state file the way the `a` key does; the config's
-	 * `auto-handoff` line is no longer read for the mode.
+	 * writes it to the state file the way the `a` key does. The key is not
+	 * in the config schema (ADR 0036); a file that still carries it fails
+	 * startup naming the key.
 	 */
 	autoMode?: boolean;
 }
@@ -427,10 +428,10 @@ describe("the mode line and the a key", () => {
 		reopened.close();
 	});
 
-	test("a fresh state file starts with auto off, whatever the config line says", async () => {
+	test("a fresh state file starts with auto off", async () => {
 		// The mode has no config default (ADR 0036): the state file answers for
 		// it, and a file the plane has just created holds the mode off.
-		const app = seededApp("open", { autoHandoff: true });
+		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(

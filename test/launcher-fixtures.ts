@@ -25,7 +25,6 @@ export function launcherConfig(checkout: string): FactoryConfig {
 		},
 		attentionBell: false,
 		interactionExitKey: "f12",
-		autoHandoff: false,
 		maxParallelAgents: 2,
 		agentPollIntervalSeconds: 60,
 		completionMessageLines: 20,
