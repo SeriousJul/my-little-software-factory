@@ -38,18 +38,24 @@ export interface RepositoryMapping {
 }
 
 /**
- * The note the repository resolution carries with its result: a warning
- * worth showing to the operator and, when the resolution bent to a sibling
- * clone, the mapping to persist into the config.
+ * The note the handoff carries with its result: the warning the repository
+ * resolution bent with, the mapping to persist into the config when the
+ * resolution bent to a sibling clone, and the note of a worktree base that
+ * fell back to the local checkout's HEAD.
  *
- * The two travel together through every handoff outcome, so they are one
- * type and a failure of a later step still carries both.
+ * The notes travel together through every handoff outcome, so they are one
+ * type and a failure of a later step still carries them all.
  */
 export interface ResolutionNotes {
 	/** A warning worth showing to the operator, if the resolution bent. */
 	warning?: string;
 	/** A sibling clone was resolved; this mapping belongs in the config. */
 	mappingToWrite?: RepositoryMapping;
+	/**
+	 * The worktree base fell back to the local checkout's HEAD; the note
+	 * names the base actually used (ref name plus short sha) and the reason.
+	 */
+	worktreeBase?: string;
 }
 
 /** A repository resolved to a checkout path on this machine. */

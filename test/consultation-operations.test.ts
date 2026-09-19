@@ -323,8 +323,11 @@ function stubWorktreeLaunch(
 	const branch = consultationBranchName(id, "grill");
 	stubCheckout(runner, checkout, displayName);
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
-	runner.set("git", ["-C", checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"], {
-		stdout: `${WORKTREE_HEAD}\n`,
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch, the fetch of its single ref succeeds, and the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
 	});
 	runner.set(
 		"herdr",
@@ -336,7 +339,7 @@ function stubWorktreeLaunch(
 			"--branch",
 			branch,
 			"--base",
-			WORKTREE_HEAD,
+			"origin/main",
 			"--no-focus",
 		],
 		{ stdout: worktreeCreateJson(handles.workspaceId, handles.paneId) },
@@ -512,8 +515,10 @@ describe("Consultation operations: launch", () => {
 			`git -C ${fixture.checkout} rev-parse --git-dir`,
 			`git -C ${fixture.checkout} remote get-url origin`,
 			`git -C ${fixture.checkout} branch --list ${consultationBranchName(id, "grill")}`,
-			`git -C ${fixture.checkout} rev-parse --verify --quiet main^{commit}`,
-			`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(id, "grill")} --base ${WORKTREE_HEAD} --no-focus`,
+			`git -C ${fixture.checkout} remote get-url origin`,
+			`git -C ${fixture.checkout} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${fixture.checkout} fetch origin main`,
+			`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(id, "grill")} --base origin/main --no-focus`,
 			`herdr agent start ${agentOf(id)} --kind pi --pane ${LAUNCH.paneId}`,
 			`herdr agent prompt ${agentOf(id)} /grill review auth`,
 		]);
@@ -523,7 +528,7 @@ describe("Consultation operations: launch", () => {
 		expect(harness.changes).toBeGreaterThan(0);
 	});
 
-	test("a repository without a main branch starts its worktree from the checkout HEAD", async () => {
+	test("no default branch ref on the remote starts the worktree from the checkout HEAD with a note", async () => {
 		const fixture = makeFixture();
 		const runner = new LifecycleRunner();
 		const id = uid("2f");
@@ -533,11 +538,21 @@ describe("Consultation operations: launch", () => {
 		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
 			stdout: "",
 		});
-		// No main branch: the strict read fails, and the launch falls back to HEAD.
+		// No default branch ref: the symref is not one, and neither tracking
+		// ref verifies, so the launch falls back to the checkout's HEAD.
+		runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			code: 1,
+			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
+		});
 		runner.inner.set(
 			"git",
-			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"],
-			{ code: 1, stderr: "unknown revision\n" },
+			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+			{ code: 1 },
+		);
+		runner.inner.set(
+			"git",
+			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "origin/master^{commit}"],
+			{ code: 1 },
 		);
 		runner.inner.set("git", ["-C", fixture.checkout, "rev-parse", "HEAD"], {
 			stdout: `${WORKTREE_HEAD}\n`,
@@ -576,8 +591,14 @@ describe("Consultation operations: launch", () => {
 			workspaceId: LAUNCH.workspaceId,
 		});
 		expect(runner.commands()).toContain(`git -C ${fixture.checkout} rev-parse HEAD`);
+		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
 		expect(runner.commands()).toContain(
 			`herdr worktree create --cwd ${fixture.checkout} --branch ${branch} --base ${WORKTREE_HEAD} --no-focus`,
+		);
+		// The fallback note names the base actually used and the reason, and
+		// reaches the operator where Consultation warnings already appear.
+		expect(statusTexts(harness).join("\n")).toContain(
+			`the worktree base fell back to HEAD ${WORKTREE_HEAD.slice(0, 7)}: no default branch found on origin (tried the origin/HEAD symref, then origin/main, then origin/master)`,
 		);
 	});
 
@@ -591,13 +612,9 @@ describe("Consultation operations: launch", () => {
 		runner.inner.set("git", ["-C", fixture.checkout, "branch", "--list", branch], {
 			stdout: "",
 		});
-		runner.inner.set(
-			"git",
-			["-C", fixture.checkout, "rev-parse", "--verify", "--quiet", "main^{commit}"],
-			{
-				stdout: `${WORKTREE_HEAD}\n`,
-			},
-		);
+		runner.inner.set("git", ["-C", fixture.checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			stdout: "refs/remotes/origin/main\n",
+		});
 		runner.inner.set(
 			"herdr",
 			[
@@ -608,7 +625,7 @@ describe("Consultation operations: launch", () => {
 				"--branch",
 				branch,
 				"--base",
-				WORKTREE_HEAD,
+				"origin/main",
 				"--no-focus",
 			],
 			{ code: 1, stderr: "herdr refused the worktree\n" },
@@ -1987,7 +2004,7 @@ describe("Consultation operations: Repository serialization", () => {
 		const attempts = runner.attempts;
 		expect(
 			attempts.indexOf(
-				`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(launchId, "grill")} --base ${WORKTREE_HEAD} --no-focus`,
+				`herdr worktree create --cwd ${fixture.checkout} --branch ${consultationBranchName(launchId, "grill")} --base origin/main --no-focus`,
 			),
 		).toBeLessThan(
 			attempts.indexOf(
