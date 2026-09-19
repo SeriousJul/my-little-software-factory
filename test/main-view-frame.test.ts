@@ -242,7 +242,7 @@ function liveConsultationAgents(ids: readonly string[]): FakeRunner {
 }
 
 /** The section header text: the row's left-column half, before the detail. */
-const headerOf = (frame: string, section: "Tickets" | "Consultations"): string =>
+const headerOf = (frame: string, section: "Tickets" | "Consultations" | "Work queue"): string =>
 	rowsOf(frame)
 		.find((row) => row.includes(section))
 		?.split(/┌|│/)[0]
@@ -296,10 +296,11 @@ describe("the merged Main view", () => {
 				expect(rows[0]).toContain("▾ Tickets  open: 5  running: 2  awaiting: 1");
 				expect(headerOf(frame, "Tickets").startsWith("▾")).toBe(true);
 				expect(headerOf(frame, "Consultations").startsWith("▾")).toBe(true);
-				// Both sections own a list box at the same time, and the
+				expect(headerOf(frame, "Work queue").startsWith("▾")).toBe(true);
+				// All three sections own a list box at the same time, and the
 				// steady zero for held keeps its row unclaimed: the held
 				// count shows only above zero.
-				expect(paneTopRows(frame)).toBe(2);
+				expect(paneTopRows(frame)).toBe(3);
 				expect(headerOf(frame, "Tickets")).not.toContain("held");
 				// One detail pane answers for the section under the cursor:
 				// it shows the selected Ticket while the cursor is in the
@@ -465,7 +466,9 @@ describe("the merged Main view", () => {
 						headerOf(f, "Tickets").startsWith("▸"),
 					);
 					expect(headerOf(collapsed, "Consultations").startsWith("▾")).toBe(true);
-					expect(paneTopRows(collapsed)).toBe(1);
+					// The Work queue stays expanded: only the Ticket box gives up
+					// its rows.
+					expect(paneTopRows(collapsed)).toBe(2);
 					expect(detailPaneText(collapsed)).toContain("Retry policy for webhooks");
 					// The step out of the collapsed section crosses to the first
 					// visible Consultation.
@@ -481,10 +484,11 @@ describe("the merged Main view", () => {
 						"the Consultation section to collapse",
 						(f) => headerOf(f, "Consultations").startsWith("▸"),
 					);
-					// Both sections are collapsed now: their headers stay, their
-					// boxes are gone, and the detail keeps the retained row.
+					// The Ticket and the Consultation sections are collapsed now:
+					// their headers stay, their boxes are gone, and the detail
+					// keeps the retained row. Only the Work queue's box remains.
 					expect(headerOf(collapsedAgain, "Tickets").startsWith("▸")).toBe(true);
-					expect(paneTopRows(collapsedAgain)).toBe(0);
+					expect(paneTopRows(collapsedAgain)).toBe(1);
 					expect(detailPaneText(collapsedAgain)).toContain("consultation-cccccccc");
 					const restored = await press(
 						setup,
@@ -493,8 +497,8 @@ describe("the merged Main view", () => {
 						(f) => headerOf(f, "Consultations").startsWith("▾"),
 					);
 					// The Ticket section stayed collapsed: only the Consultation
-					// box came back.
-					expect(paneTopRows(restored)).toBe(1);
+					// box came back, beside the Work queue's own box.
+					expect(paneTopRows(restored)).toBe(2);
 					expect(restored).toContain("┌─❯ Consultations");
 				},
 				state,
@@ -605,7 +609,9 @@ describe("the merged Main view", () => {
 				await press(setup, "x", "the Ticket section to collapse", (f) =>
 					headerOf(f, "Tickets").startsWith("▸"),
 				);
-				expect(paneTopRows(setup.captureCharFrame())).toBe(1);
+				// The Consultation and the Work queue boxes stay, collapsed or
+				// not, beside the Ticket header's row.
+				expect(paneTopRows(setup.captureCharFrame())).toBe(2);
 				// The Ticket header holds its own row above its box: the
 				// collapsed header is row one, below the mode line.
 				await mouseClick(setup, 10, 1);
@@ -618,8 +624,10 @@ describe("the merged Main view", () => {
 				// own list.
 				expect(frame).toContain("┌─❯ Tickets");
 				// A click on the expanded Consultation header collapses the
-				// section, and the cursor stays on the row it held.
-				await mouseClick(setup, 10, 22);
+				// section, and the cursor stays on the row it held. The header
+				// sits one row below the Ticket box, which holds the frame's
+				// remaining rows at this size.
+				await mouseClick(setup, 10, 14);
 				const collapsed = await awaitFrame(
 					setup,
 					(candidate) => headerOf(candidate, "Consultations").startsWith("▸"),
@@ -751,24 +759,25 @@ describe("the merged Main view", () => {
 		try {
 			await booted(
 				async (setup) => {
-					// At the minimum size the mode line, both headers, the Message
-					// line and the Action bar stay permanent, and both sections
-					// still hold a real list box.
+					// At the minimum size the mode line, all three headers, the
+					// Message line and the Action bar stay permanent, and every
+					// section still holds a real list box.
 					const frame = await settle(setup);
 					expect(rowsOf(frame)).toHaveLength(19);
 					expect(rowsOf(frame)[0]).toContain("auto: off");
 					expect(rowsOf(frame)[1]).toContain("Tickets");
-					expect(rowsOf(frame)[9]).toContain("Consultations");
-					expect(paneTopRows(frame)).toBe(2);
+					expect(rowsOf(frame)[7]).toContain("Consultations");
+					expect(rowsOf(frame)[12]).toContain("Work queue");
+					expect(paneTopRows(frame)).toBe(3);
 					expect(actionBarRowOf(frame)).toContain("? Help");
 					expect(messageRowOf(frame)).not.toBe(actionBarRowOf(frame));
 					// The toggle answers at the minimum size, and the room the
-					// collapsed section frees goes to the one that stays.
+					// collapsed section frees goes to the sections that stay.
 					const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
 						headerOf(f, "Tickets").startsWith("▸"),
 					);
 					expect(rowsOf(collapsed)).toHaveLength(19);
-					expect(paneTopRows(collapsed)).toBe(1);
+					expect(paneTopRows(collapsed)).toBe(2);
 					// The collapsed Ticket section keeps its header row, so the
 					// Consultation header and box rise one row.
 					expect(rowsOf(collapsed)[2]).toContain("Consultations");
@@ -795,10 +804,10 @@ describe("the merged Main view", () => {
 				// The Consultation header and box sit below the Ticket
 				// section's: at this size the Ticket section holds the cursor,
 				// so the Consultation box keeps its minimum of three content
-				// rows, and the second seeded row sits on frame row 26.
+				// rows, and the second seeded row sits on frame row 18.
 				// The click moves the cursor, and the Consultation box grows
 				// to the remaining rows, so the selected row rests on 13.
-				await mouseClick(setup, 10, 26);
+				await mouseClick(setup, 10, 18);
 				const selected = await awaitFrame(
 					setup,
 					(f) => rowsOf(f)[13]?.includes("❯ ") === true,
@@ -904,7 +913,8 @@ describe("the merged Main view", () => {
 				// in both sections.
 				expect(rows[0]).toContain("auto: off");
 				expect(rows[1]).toContain("Tickets");
-				expect(rows[22]).toContain("Consultations");
+				expect(rows[14]).toContain("Consultations");
+				expect(rows[22]).toContain("Work queue");
 				expect(rows[2]).toContain("┌─");
 				expect(rows.at(-3)).toContain("└─");
 				expect(actionBarRowOf(frame)).toContain("x Section");
@@ -1073,7 +1083,10 @@ describe("the merged Main view", () => {
 				state,
 				{ sources: [source] },
 				WIDTH,
-				24,
+				// The third section's header row takes the row the two-section
+				// layout gave the Ticket box, so the frame grows the rows the
+				// Ticket box lost: the same box, one row taller.
+				32,
 				liveConsultationAgents([uid("t")]),
 			);
 		} finally {

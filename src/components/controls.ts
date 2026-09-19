@@ -15,7 +15,7 @@
  * rows may name.
  */
 import type { Ticket } from "../domain/ticket.ts";
-import type { Consultation } from "../state.ts";
+import type { Consultation, WorkQueueItem } from "../state.ts";
 import { widthOf } from "./text.ts";
 
 export type InteractionMode =
@@ -23,6 +23,8 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
+	| "work-list"
+	| "work-detail"
 	| "override-list"
 	| "override-model"
 	| "override-text"
@@ -50,6 +52,8 @@ type ControlScope =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
+	| "work-list"
+	| "work-detail"
 	| "override"
 	| "modal"
 	| "utility"
@@ -78,6 +82,7 @@ type ControlKey =
 	| "g"
 	| "x"
 	| "d"
+	| "u"
 	| "w"
 	| "delete"
 	| "f1"
@@ -125,6 +130,12 @@ export interface ControlContext {
 	selectedTicket?: Ticket;
 	/** The Consultation the base panes point at, if the list holds one. */
 	selectedConsultation?: Consultation;
+	/** The Work queue item the base panes point at, if the queue holds one. */
+	selectedWorkQueueItem?: WorkQueueItem;
+	/** The selected Work queue item's position in the shared order, 0-based. */
+	workQueueIndex?: number;
+	/** The Work queue's depth: how many items wait for a seat. */
+	workQueueDepth?: number;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -378,6 +389,33 @@ const CONSULTATION_ONLY = "this control is available only in the Consultation se
  */
 const ticketOnly = (context: ControlContext): ControlAvailability =>
 	ticketBaseMode(context.mode) ? available() : unavailable(TICKET_ONLY);
+const workQueueMode = (mode: InteractionMode): boolean =>
+	mode === "work-list" || mode === "work-detail";
+/**
+ * Why a Work queue row control answers nothing (ADR 0034, issue #88).
+ *
+ * The queue's reorder and removal run on the item under the cursor, whatever
+ * pane the focus holds, so both of the queue's modes dispatch them. An empty
+ * queue refuses the key with the one reason the operator can act on.
+ */
+const workQueueItem = (context: ControlContext): ControlAvailability =>
+	context.selectedWorkQueueItem !== undefined
+		? available()
+		: unavailable("no Work queue item is selected");
+/** Why a queue reorder refuses: no item, or the item is at the edge asked for. */
+const workQueueMove =
+	(direction: -1 | 1) =>
+	(context: ControlContext): ControlAvailability => {
+		if (context.selectedWorkQueueItem === undefined)
+			return unavailable("no Work queue item is selected");
+		const index = context.workQueueIndex ?? 0;
+		const depth = context.workQueueDepth ?? 1;
+		if (direction === -1 && index === 0)
+			return unavailable("the item is already first in the Work queue");
+		if (direction === 1 && index >= depth - 1)
+			return unavailable("the item is already last in the Work queue");
+		return available();
+	};
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -387,7 +425,9 @@ const listMove = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				consultationMode(context.mode)
 					? "the Consultation list has nowhere to move"
-					: "the Ticket list has nowhere to move",
+					: workQueueMode(context.mode)
+						? "the Work queue list has nowhere to move"
+						: "the Ticket list has nowhere to move",
 			);
 const detailScroll = (context: ControlContext): ControlAvailability =>
 	context.detailCanScroll
@@ -395,7 +435,9 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				context.mode === "consultation-detail"
 					? "the Consultation detail has nowhere to scroll"
-					: "the Ticket detail has nowhere to scroll",
+					: context.mode === "work-detail"
+						? "the Work queue detail has nowhere to scroll"
+						: "the Ticket detail has nowhere to scroll",
 			);
 const refresh = (context: ControlContext): ControlAvailability => {
 	if (consultationMode(context.mode))
@@ -505,7 +547,9 @@ const priorityEligibility = (context: ControlContext): ControlAvailability => {
 
 const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
-const baseModes = [...ticketBaseModes, ...consultationBaseModes] as const;
+/** The Work queue's own modes (ADR 0034, issue #88): its list and its item detail. */
+const workQueueModes = ["work-list", "work-detail"] as const;
+const baseModes = [...ticketBaseModes, ...consultationBaseModes, ...workQueueModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
 /**
  * The modes one shared form surface runs, one per slot kind.
@@ -604,12 +648,21 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 					? ["up", "down", "j", "k", "tab"]
 					: mode === "consultation-list"
 						? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
-						: ["up", "down", "tab"],
+						: mode === "work-list"
+							? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
+							: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-list", "consultation-list", "override-list", "override-model", "override-text"],
+		modes: [
+			"ticket-list",
+			"consultation-list",
+			"work-list",
+			"override-list",
+			"override-model",
+			"override-text",
+		],
 		availability: listMove,
 	},
 	{
@@ -620,7 +673,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-list",
 		actionBar: true,
 		priority: 75,
-		modes: ["ticket-list", "consultation-list"],
+		modes: ["ticket-list", "consultation-list", "work-list"],
 		availability: available,
 	},
 	{
@@ -631,8 +684,54 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-detail",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-detail", "consultation-detail"],
+		modes: ["ticket-detail", "consultation-detail", "work-detail"],
 		availability: detailScroll,
+	},
+	// The Work queue's row keys (ADR 0034, issue #88): the reorder and the
+	// removal of the item under the cursor, whatever pane the focus holds.
+	{
+		id: "work-list",
+		label: "List",
+		keys: () => ["left", "h"],
+		keyLabel: "←/h",
+		scope: "work-detail",
+		actionBar: true,
+		priority: 76,
+		modes: ["work-detail"],
+		availability: available,
+	},
+	{
+		id: "work-move-up",
+		label: "Move up",
+		keys: () => ["u"],
+		keyLabel: "u",
+		scope: "work-list",
+		actionBar: true,
+		priority: 74,
+		modes: [...workQueueModes],
+		availability: workQueueMove(-1),
+	},
+	{
+		id: "work-move-down",
+		label: "Move down",
+		keys: () => ["d"],
+		keyLabel: "d",
+		scope: "work-list",
+		actionBar: true,
+		priority: 73,
+		modes: [...workQueueModes],
+		availability: workQueueMove(1),
+	},
+	{
+		id: "work-remove",
+		label: "Remove",
+		keys: () => ["delete"],
+		keyLabel: "Del",
+		scope: "work-list",
+		actionBar: true,
+		priority: 72,
+		modes: [...workQueueModes],
+		availability: workQueueItem,
 	},
 	{
 		id: "tickets",
@@ -1388,6 +1487,7 @@ const KEY_NAMES: Record<string, string> = {
 	f: "f",
 	x: "x",
 	d: "d",
+	u: "u",
 	r: "r",
 	a: "a",
 	m: "m",
@@ -1483,7 +1583,9 @@ function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefini
 		control.scope !== "global" &&
 		(control.scope === "control-plane" ||
 			control.scope === "ticket-list" ||
-			control.scope === "ticket-detail") &&
+			control.scope === "ticket-detail" ||
+			control.scope === "work-list" ||
+			control.scope === "work-detail") &&
 		!control.modes.some(consultationMode)
 	);
 }
@@ -1587,6 +1689,10 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Consultation list";
 		case "consultation-detail":
 			return "Consultation detail";
+		case "work-list":
+			return "Work queue list";
+		case "work-detail":
+			return "Work queue detail";
 		case "override-list":
 			return "Override list row";
 		case "override-model":

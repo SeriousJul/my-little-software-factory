@@ -562,6 +562,16 @@ export class ObservationCoordinator {
 				this.restarted.delete(identity);
 		}
 
+		// The Work queue takes every free seat before the automatic starts do
+		// (ADR 0034, issue #88): a queued item is the operator's own ask, so
+		// the Dispatch pause and the Same-type hold - gates of the automatic
+		// origins - do not see it. Every hard start check still runs inside
+		// the dispatch it crosses.
+		if (this.config().maxParallelAgents > 0) {
+			await this.pickupQueue(slots);
+			if (this.stopped) return;
+		}
+
 		let changed = reclaimed;
 		for (const ticket of inFlight) {
 			if (ticket.paneId === null) continue;
@@ -645,6 +655,63 @@ export class ObservationCoordinator {
 		}
 		if (changed) this.onChanged();
 		this.onAgents?.(probe.agents);
+	}
+
+	/**
+	 * Start the Work queue's items against the cycle's free seats (ADR 0034,
+	 * issue #88).
+	 *
+	 * The queue starts in its shared order, up to the free seats, and a start
+	 * holds its seat for the rest of the cycle, the way a route or a restart
+	 * does. A pickup is a manual start: the dispatch's own claim re-checks
+	 * the ticket state the origin requires, and the handoff re-runs the record
+	 * checks and the Setting fit check before its first external change. The
+	 * automatic gates do not hold it: the Dispatch pause and the Same-type
+	 * hold gate the open dispatch and the route, never a queued item.
+	 *
+	 * A pickup that fails a check leaves the item in the queue and says why
+	 * on the Message line: the ticket keeps its state, and the next cycle
+	 * with a free seat tries again. The item leaves the queue only when the
+	 * agent actually starts, reported later on the intent's `onStarted`.
+	 */
+	private async pickupQueue(slots: ParallelSlots): Promise<void> {
+		const config = this.config();
+		const limit = config.maxParallelAgents;
+		for (const item of this.state.workQueue()) {
+			if (this.stopped) return;
+			if (limit > 0 && slots.count >= limit) return;
+			const result = await this.dispatch({
+				origin: item.origin,
+				ticketIdentity: item.ticketIdentity,
+				choice: item.choice,
+				previousMessage: "",
+				onStarted: (started) => {
+					// A stopped loop settles nothing and reports nothing.
+					if (this.stopped) return;
+					if (started.ok) this.state.removeWorkQueueItem(item.id);
+					// A start that failed keeps the item in the queue; the
+					// dispatch module already put its failure on the Message
+					// line, so the pickup adds no second warning.
+					this.onChanged();
+				},
+			});
+			if (this.stopped) return;
+			if (!result.ok) {
+				// The claim refused the start: the ticket no longer holds the
+				// state the origin requires, or it is no longer actionable. The
+				// item stays in the queue, the ticket keeps its state, and the
+				// Message line says what stood in the way.
+				this.onStatus(
+					"warning",
+					`Work queue pickup of ticket ${item.ticketIdentity} failed: ${result.reason}`,
+				);
+				continue;
+			}
+			// The started or queueing agent is not in this poll, so the cycle's
+			// count holds its seat before the next start is measured.
+			slots.count += 1;
+			this.onStatus("info", `Work queue: handing off ticket ${item.ticketIdentity}`);
+		}
 	}
 
 	/**

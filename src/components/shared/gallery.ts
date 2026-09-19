@@ -16,7 +16,7 @@ import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
-import type { Consultation } from "../../state.ts";
+import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
@@ -30,6 +30,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { KeyGuide } from "../utility.ts";
+import { WorkQueueDetail } from "../work-queue.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
@@ -200,6 +201,18 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * One entry per state the standard names, so the list is also the checklist a
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
+/** A Work queue item the detail examples render, the operator's choice in. */
+function sampleWorkQueueItem(choice: WorkQueueItem["choice"]): WorkQueueItem {
+	return {
+		id: "work-queue-example",
+		kind: "handoff",
+		ticketIdentity: "github:github.com:acme/factory#88",
+		origin: "open",
+		choice,
+		createdAt: "2026-09-19T22:57:00.000Z",
+	};
+}
+
 /** The Consultation the detail and close-dialog examples render under. */
 function sampleConsultation(
 	state: "opening" | "working" | "awaiting-response" | "closing" | "closed",
@@ -733,6 +746,63 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				focused: false,
 				onFocus: () => undefined,
 				onWheel: () => undefined,
+			}),
+		],
+	},
+	// The Work queue item's detail (ADR 0034, issue #88): the captured facts
+	// of the waiting start, in the states the operator reads. The item that
+	// left every setting to the agent shows the defaults' own words, and an
+	// empty queue shows its refusal line.
+	{
+		id: "work-queue-item",
+		state: "Work queue item: the captured facts of the waiting handoff",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-item",
+				item: sampleWorkQueueItem({
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "implement",
+					model: "claude-sonnet-4-5",
+					thinking: "medium",
+					contextWindow: "200000",
+				}),
+				width: columns.contentWidth - 4,
+				focused: false,
+				onFocus: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "work-queue-item-defaults",
+		state: "Work queue item: the settings the agent defaults stand for",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-item-defaults",
+				item: sampleWorkQueueItem({
+					agentType: "",
+					environment: "worktree",
+					taskType: "",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				}),
+				width: columns.contentWidth - 4,
+				focused: false,
+				onFocus: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "work-queue-empty",
+		state: "Work queue detail: the queue holds no item",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-empty",
+				item: undefined,
+				width: columns.contentWidth - 4,
+				focused: false,
+				onFocus: () => undefined,
 			}),
 		],
 	},

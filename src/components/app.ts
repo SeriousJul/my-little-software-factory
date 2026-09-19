@@ -82,7 +82,7 @@ import {
 	supportsModelList,
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
-import type { Consultation, FactoryState } from "../state.ts";
+import type { Consultation, FactoryState, WorkQueueItem } from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import {
@@ -134,6 +134,7 @@ import { ticketCloseDialog } from "./ticket-close.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
+import { WorkQueueDetail, WorkQueueList } from "./work-queue.ts";
 
 type Pane = "list" | "detail";
 interface StatusMessage {
@@ -294,8 +295,18 @@ export function App({
 	const ticketsExpandedRef = useRef(true);
 	const [consultationsExpanded, setConsultationsExpanded] = useState(true);
 	const consultationsExpandedRef = useRef(true);
-	const [selection, setSelection] = useState<"ticket" | "consultation">("ticket");
-	const selectionRef = useRef<"ticket" | "consultation">("ticket");
+	// The Work queue (ADR 0034, issue #88): the manual starts that wait for a
+	// free Parallel limit seat. Durable and ordered in the state file; the
+	// observation cycle starts them before the automatic starts, and the Main
+	// view shows them in the third section below the Consultations.
+	const [workItems, setWorkItems] = useState<WorkQueueItem[]>(() => state?.workQueue() ?? []);
+	const workItemsRef = useRef(workItems);
+	const [workIndex, setWorkIndex] = useState(0);
+	const workIndexRef = useRef(0);
+	const [workExpanded, setWorkExpanded] = useState(true);
+	const workExpandedRef = useRef(true);
+	const [selection, setSelection] = useState<"ticket" | "consultation" | "work">("ticket");
+	const selectionRef = useRef<"ticket" | "consultation" | "work">("ticket");
 	const [consultations, setConsultations] = useState<Consultation[]>(
 		() => state?.consultations("open") ?? [],
 	);
@@ -341,6 +352,7 @@ export function App({
 	configRef.current = config;
 	ticketsExpandedRef.current = ticketsExpanded;
 	consultationsExpandedRef.current = consultationsExpanded;
+	workExpandedRef.current = workExpanded;
 	selectionRef.current = selection;
 	historyFilterRef.current = historyFilter;
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
@@ -565,40 +577,46 @@ export function App({
 	const detailGeometry = usePaneGeometry("detail", detailReservedRows);
 	// The rows a section's box spends on chrome: two borders and two padding
 	// rows. Each section's minimum is three content rows, so its minimum box
-	// is seven rows: both sections at their minimum cost sixteen body rows,
-	// and the minimum terminal holds exactly that (user story 29).
+	// is seven rows. The body rows the boxes share are the body minus the
+	// Ticket header row and the one header row each of the two lower
+	// sections keeps, collapsed or not (a collapsed section keeps its header
+	// as the row it expands from).
 	const SECTION_BOX_CHROME = 4;
 	const MIN_SECTION_BOX_ROWS = 3 + SECTION_BOX_CHROME;
-	let ticketsBoxRows = 0;
-	let consultationsBoxRows = 0;
-	if (!tooSmall) {
-		if (ticketsExpanded && consultationsExpanded) {
-			// The section under the cursor takes the remaining rows after the
-			// other section claims its minimum; at the minimum frame both
-			// hold their minimum.
-			const total = Math.max(0, bodyRows - 2);
-			const other = Math.min(MIN_SECTION_BOX_ROWS, Math.floor(total / 2));
-			const cursorSection = total - other;
-			if (selection === "ticket") {
-				ticketsBoxRows = cursorSection;
-				consultationsBoxRows = other;
-			} else {
-				ticketsBoxRows = other;
-				consultationsBoxRows = cursorSection;
-			}
-		} else if (ticketsExpanded) {
-			// One expanded section owns the whole body: both header rows stay
-			// visible, because a collapsed section keeps its header as the
-			// row it expands from.
-			ticketsBoxRows = Math.max(0, bodyRows - 2);
-		} else if (consultationsExpanded) {
-			consultationsBoxRows = Math.max(0, bodyRows - 2);
-		}
-	}
+	const totalBoxRows = Math.max(0, bodyRows - 3);
+	const expandedSections: Array<{ section: "ticket" | "consultation" | "work"; open: boolean }> = [
+		{ section: "ticket", open: ticketsExpanded },
+		{ section: "consultation", open: consultationsExpanded },
+		{ section: "work", open: workExpanded },
+	];
+	const expandedCount = expandedSections.filter((entry) => entry.open).length;
+	// The expanded section under the cursor takes the remaining rows after
+	// the other expanded sections claim their share; the cursor's section is
+	// the first expanded one when the cursor rests on a collapsed section.
+	const greedySection =
+		expandedSections.find((entry) => entry.open && entry.section === selection)?.section ??
+		expandedSections.find((entry) => entry.open)?.section ??
+		"ticket";
+	// The rows the other expanded sections claim: each takes its share of the
+	// body, capped at the minimum box, and the cursor's section takes what
+	// remains.
+	const otherShare = Math.min(MIN_SECTION_BOX_ROWS, Math.floor(totalBoxRows / expandedCount));
+	const greedyRows =
+		expandedCount <= 1 ? totalBoxRows : totalBoxRows - otherShare * (expandedCount - 1);
+	const rowsFor = (open: boolean, section: "ticket" | "consultation" | "work"): number => {
+		if (!open) return 0;
+		if (expandedCount <= 1) return totalBoxRows;
+		if (section === greedySection) return Math.max(0, greedyRows);
+		return otherShare;
+	};
+	const ticketsBoxRows = rowsFor(ticketsExpanded, "ticket");
+	const consultationsBoxRows = rowsFor(consultationsExpanded, "consultation");
+	const workBoxRows = rowsFor(workExpanded, "work");
 	const ticketsContentRows = ticketsExpanded ? Math.max(1, ticketsBoxRows - SECTION_BOX_CHROME) : 0;
 	const consultationsContentRows = consultationsExpanded
 		? Math.max(1, consultationsBoxRows - SECTION_BOX_CHROME)
 		: 0;
+	const workContentRows = workExpanded ? Math.max(1, workBoxRows - SECTION_BOX_CHROME) : 0;
 	// The Scroll control's availability must agree with the native detail's
 	// own overflow, so it asks the pane for the measurement rather than
 	// repeating the pane's gutter rule here.
@@ -617,6 +635,10 @@ export function App({
 	// the same row.
 	const selectedConsultation =
 		selection === "consultation" ? consultations[consultationIndex] : undefined;
+	// The Work queue item the shared detail pane points at (ADR 0034,
+	// issue #88): its captured facts render while the cursor is on the
+	// Work queue, whatever pane the focus holds.
+	const selectedWorkItem = selection === "work" ? workItems[workIndex] : undefined;
 	// The status the observation last reported for the selected Consultation's
 	// Agent pane: it gates the response editor and the interaction mode.
 	const selectedConsultationAgentStatus =
@@ -728,6 +750,24 @@ export function App({
 			setLiveOutput(null);
 			setSessionEntries(null);
 		}
+	}, [state]);
+	// The Work queue re-read (ADR 0034, issue #88): the items in their shared
+	// order, with the selected row preserved by id, the same rule the other
+	// lists keep. The queue changes on a pickup, a reorder, or a removal,
+	// and every one of them lands here.
+	const replaceWorkQueue = useCallback(() => {
+		if (state === undefined) return;
+		const next = state.workQueue();
+		const currentIndex = workIndexRef.current;
+		const selectedId = workItemsRef.current[currentIndex]?.id;
+		const preserved =
+			selectedId === undefined ? -1 : next.findIndex((item) => item.id === selectedId);
+		const nextIndex =
+			preserved >= 0 ? preserved : Math.max(0, Math.min(currentIndex, next.length - 1));
+		workItemsRef.current = next;
+		workIndexRef.current = nextIndex;
+		setWorkItems(next);
+		setWorkIndex(nextIndex);
 	}, [state]);
 	// The Task profile of every task type (ADR 0009): what the panel prefills,
 	// and what it re-derives when the operator switches the task type row.
@@ -958,6 +998,29 @@ export function App({
 			return;
 		}
 		if (handoffDispatch !== undefined) {
+			// The Parallel limit is full: the manual handoff enters the Work
+			// queue instead of starting (ADR 0034, issue #88). The durable item
+			// is the operator's ask - the ticket keeps its state, and the
+			// observation cycle starts the item when a seat frees, before the
+			// automatic starts.
+			const cap = configRef.current.maxParallelAgents;
+			const seats =
+				state === undefined
+					? 0
+					: parallelSeatCount({
+							state,
+							agents: agentsRef.current,
+							now: Date.now(),
+							startupGraceMs: STARTUP_GRACE_MS,
+						});
+			if (state !== undefined && cap > 0 && seats >= cap) {
+				state.enqueueWorkQueueItem({ ticketIdentity: ticket.identity, origin: "open", choice });
+				replaceWorkQueue();
+				setNoticeMessage(
+					`handoff queued: ticket ${ticket.identity} waits in the Work queue for a free Parallel limit seat`,
+				);
+				return;
+			}
 			void handoffDispatch
 				.dispatch({
 					origin: "open",
@@ -1560,7 +1623,8 @@ export function App({
 	 */
 	const clickSection = (next: MainSection) => {
 		if (flipSectionExpanded(next)) {
-			selectionRef.current = next === "tickets" ? "ticket" : "consultation";
+			selectionRef.current =
+				next === "tickets" ? "ticket" : next === "consultations" ? "consultation" : "work";
 			setSelection(selectionRef.current);
 			focusPane("list");
 		}
@@ -1663,9 +1727,13 @@ export function App({
 					? focusedPaneRef.current === "list"
 						? "consultation-list"
 						: "consultation-detail"
-					: focusedPaneRef.current === "list"
-						? "ticket-list"
-						: "ticket-detail";
+					: selectionRef.current === "work"
+						? focusedPaneRef.current === "list"
+							? "work-list"
+							: "work-detail"
+						: focusedPaneRef.current === "list"
+							? "ticket-list"
+							: "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
 		contextFor(mode, {
 			selectedTicket: ticketsRef.current[selectedIndexRef.current],
@@ -1678,22 +1746,45 @@ export function App({
 			// next expanded one, so the list can move as long as the cursor is not
 			// the sequence's only row.
 			listCanMove: (() => {
-				const t = ticketsRef.current.length;
-				const c = consultationsRef.current.length;
-				const tOpen = ticketsExpandedRef.current;
-				const cOpen = consultationsExpandedRef.current;
+				const sections = [
+					{
+						open: ticketsExpandedRef.current,
+						depth: ticketsRef.current.length,
+						selected: selectionRef.current === "ticket",
+						index: selectedIndexRef.current,
+					},
+					{
+						open: consultationsExpandedRef.current,
+						depth: consultationsRef.current.length,
+						selected: selectionRef.current === "consultation",
+						index: consultationIndexRef.current,
+					},
+					{
+						open: workExpandedRef.current,
+						depth: workItemsRef.current.length,
+						selected: selectionRef.current === "work",
+						index: workIndexRef.current,
+					},
+				];
+				const position = sections.findIndex((entry) => entry.selected);
 				// A cross reaches an empty section too, so the step into it is
-				// always possible while the other section is expanded.
-				if (selectionRef.current === "consultation")
-					return (
-						(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
-					);
-				return (
-					(tOpen && (t > 1 || (cOpen && selectedIndexRef.current >= t - 1))) || (!tOpen && cOpen)
-				);
+				// always possible while the neighbour is expanded.
+				const prior = sections.slice(0, position).some((entry) => entry.open);
+				const later = sections.slice(position + 1).some((entry) => entry.open);
+				const here = sections[position];
+				if (here === undefined) return false;
+				if (!here.open) return prior || later;
+				return here.index > 0 || here.index < here.depth - 1 || prior || later;
 			})(),
 			detailCanScroll:
-				mode === "consultation-detail" ? consultationMaxScroll > 0 : detailMaxScroll > 0,
+				mode === "consultation-detail"
+					? consultationMaxScroll > 0
+					: mode === "work-detail"
+						? false
+						: detailMaxScroll > 0,
+			selectedWorkQueueItem: selectedWorkItem,
+			workQueueIndex: selectionRef.current === "work" ? workIndexRef.current : undefined,
+			workQueueDepth: workItemsRef.current.length,
 			sourceCount: sources.length,
 			refreshingSourceCount: sources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
@@ -1879,9 +1970,16 @@ export function App({
 				detail: () => focusPane("detail"),
 				"consultation-list": () => focusPane("list"),
 				tickets: () => focusPane("list"),
+				"work-list": () => focusPane("list"),
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				"section-toggle": () => toggleSection(),
+				// The Work queue's row keys (ADR 0034, issue #88): the reorder
+				// and the removal of the item under the cursor, whatever pane the
+				// focus holds. The catalogue gated the availability.
+				"work-move-up": () => moveWorkQueueItem(-1),
+				"work-move-down": () => moveWorkQueueItem(1),
+				"work-remove": () => removeWorkQueueItem(),
 				launch: () => {
 					if (Object.keys(configRef.current.consultationTypes).length === 0)
 						setWarningMessage(
@@ -2073,13 +2171,15 @@ export function App({
 			`ticket ${ticket.externalKey}: priority ${next === "default" ? "cleared to default" : `set to ${next}`}`,
 		);
 	};
-	// A state may already hold tickets when the app boots: read them once at
-	// mount, before any refresh or observation cycle runs.
+	// A state may already hold tickets and queued handoffs when the app
+	// boots: read them once at mount, before any refresh or observation
+	// cycle runs.
 	useEffect(() => {
 		if (state === undefined) return;
 		replaceTickets();
 		replaceConsultations();
-	}, [state, replaceTickets, replaceConsultations]);
+		replaceWorkQueue();
+	}, [state, replaceTickets, replaceConsultations, replaceWorkQueue]);
 	// Repository choices are validated before the launcher presents them. A
 	// stale mapping stays hidden instead of letting an operator start in an
 	// unrelated checkout.
@@ -2197,6 +2297,7 @@ export function App({
 					for (const warning of outcome.warnings ?? []) setWarningMessage(warning);
 				replaceTickets();
 				replaceConsultations();
+				replaceWorkQueue();
 				// A fetch may have made a ticket actionable: let the observation
 				// loop act on it now instead of on the next poll.
 				observationRef.current?.tick();
@@ -2221,6 +2322,7 @@ export function App({
 		sources,
 		replaceTickets,
 		replaceConsultations,
+		replaceWorkQueue,
 		clearWorkingMessage,
 		setWarningMessage,
 	]);
@@ -2264,6 +2366,7 @@ export function App({
 			onChanged: () => {
 				replaceTickets();
 				replaceConsultations();
+				replaceWorkQueue();
 			},
 			onAgents: (agents) => setAgents(agents),
 			onConsultationsChanged: replaceConsultations,
@@ -2313,6 +2416,7 @@ export function App({
 		pollIntervalMs,
 		replaceTickets,
 		replaceConsultations,
+		replaceWorkQueue,
 		commandRunner,
 		onReady,
 		clearOperationMessage,
@@ -2329,7 +2433,7 @@ export function App({
 	 * wheels pass through it, so a click in one section never leaves the
 	 * cursor on a row the operator is not looking at.
 	 */
-	function focusListSection(next: "ticket" | "consultation") {
+	function focusListSection(next: "ticket" | "consultation" | "work") {
 		if (selectionRef.current !== next) {
 			selectionRef.current = next;
 			setSelection(next);
@@ -2344,6 +2448,40 @@ export function App({
 	}
 	function moveList(delta: number) {
 		selectTicket(selectedIndexRef.current + delta);
+	}
+	function selectWork(index: number) {
+		const next = clamp(index, 0, Math.max(0, workItemsRef.current.length - 1));
+		if (next === workIndexRef.current) return;
+		workIndexRef.current = next;
+		setWorkIndex(next);
+	}
+	/**
+	 * Reorder the Work queue item under the cursor (ADR 0034, issue #88).
+	 *
+	 * The swap is durable the moment it lands: a restart reads the order back.
+	 * The ticket the item asks for keeps its state; only the pickup order
+	 * moves.
+	 */
+	function moveWorkQueueItem(direction: -1 | 1) {
+		if (state === undefined) return;
+		const item = workItemsRef.current[workIndexRef.current];
+		if (item === undefined) return;
+		if (!state.moveWorkQueueItem(item.id, direction)) return;
+		replaceWorkQueue();
+	}
+	/**
+	 * Remove the Work queue item under the cursor (ADR 0034, issue #88). For
+	 * a Handoff item the removal cancels the intent: the ticket keeps its
+	 * state, and the next cycle never starts it. The Message line says the
+	 * item is gone.
+	 */
+	function removeWorkQueueItem() {
+		if (state === undefined) return;
+		const item = workItemsRef.current[workIndexRef.current];
+		if (item === undefined) return;
+		state.removeWorkQueueItem(item.id);
+		replaceWorkQueue();
+		setNoticeMessage(`ticket ${item.ticketIdentity}: the queued handoff was cancelled`);
 	}
 	function selectConsultation(index: number) {
 		const next = clamp(index, 0, Math.max(0, consultationsRef.current.length - 1));
@@ -2378,12 +2516,23 @@ export function App({
 			setTicketsExpanded(ticketsExpandedRef.current);
 			return ticketsExpandedRef.current;
 		}
-		consultationsExpandedRef.current = !consultationsExpandedRef.current;
-		setConsultationsExpanded(consultationsExpandedRef.current);
-		return consultationsExpandedRef.current;
+		if (section === "consultations") {
+			consultationsExpandedRef.current = !consultationsExpandedRef.current;
+			setConsultationsExpanded(consultationsExpandedRef.current);
+			return consultationsExpandedRef.current;
+		}
+		workExpandedRef.current = !workExpandedRef.current;
+		setWorkExpanded(workExpandedRef.current);
+		return workExpandedRef.current;
 	}
 	function toggleSection() {
-		flipSectionExpanded(selectionRef.current === "ticket" ? "tickets" : "consultations");
+		flipSectionExpanded(
+			selectionRef.current === "ticket"
+				? "tickets"
+				: selectionRef.current === "consultation"
+					? "consultations"
+					: "work",
+		);
 	}
 	/**
 	 * Move the unified cursor by one row. The cursor walks the visible flow,
@@ -2412,15 +2561,68 @@ export function App({
 					}
 					return;
 				}
+				if (delta > 0 && consultationIndexRef.current >= consultationsRef.current.length - 1) {
+					// The cross reaches even an empty Work queue: its empty
+					// message is the row the cursor takes.
+					if (workExpandedRef.current) {
+						selectionRef.current = "work";
+						setSelection("work");
+						selectWork(0);
+					}
+					return;
+				}
 				selectConsultation(consultationIndexRef.current + delta);
 				return;
 			}
 			// The Consultation section is collapsed: the cursor rests on its
-			// boundary, and the only visible step is up to the last Ticket.
-			if (delta < 0 && ticketsExpandedRef.current) {
-				selectionRef.current = "ticket";
-				setSelection("ticket");
-				selectTicket(Math.max(0, ticketsRef.current.length - 1));
+			// boundary, and the visible step crosses to the nearest expanded
+			// section on either side.
+			if (delta < 0) {
+				if (ticketsExpandedRef.current) {
+					selectionRef.current = "ticket";
+					setSelection("ticket");
+					selectTicket(Math.max(0, ticketsRef.current.length - 1));
+				}
+				return;
+			}
+			if (workExpandedRef.current) {
+				selectionRef.current = "work";
+				setSelection("work");
+				selectWork(0);
+			}
+			return;
+		}
+		if (selectionRef.current === "work") {
+			// The Work queue detail has no scroll: the row keys of the item's
+			// list answer instead, whatever pane the focus holds.
+			if (focusedPaneRef.current === "detail") return;
+			if (workExpandedRef.current) {
+				if (delta < 0 && workIndexRef.current === 0) {
+					// The cross reaches even an empty Consultation list: its
+					// empty message is the row the cursor takes.
+					if (consultationsExpandedRef.current) {
+						selectionRef.current = "consultation";
+						setSelection("consultation");
+						selectConsultation(Math.max(0, consultationsRef.current.length - 1));
+					}
+					return;
+				}
+				selectWork(workIndexRef.current + delta);
+				return;
+			}
+			// The Work queue section is collapsed: the cursor rests on its
+			// boundary, and the visible step crosses up to the nearest expanded
+			// section.
+			if (delta < 0) {
+				if (consultationsExpandedRef.current) {
+					selectionRef.current = "consultation";
+					setSelection("consultation");
+					selectConsultation(Math.max(0, consultationsRef.current.length - 1));
+				} else if (ticketsExpandedRef.current) {
+					selectionRef.current = "ticket";
+					setSelection("ticket");
+					selectTicket(Math.max(0, ticketsRef.current.length - 1));
+				}
 			}
 			return;
 		}
@@ -2444,17 +2646,28 @@ export function App({
 			return;
 		}
 		// The Ticket section is collapsed: the cursor rests on its boundary, and
-		// the only visible step is down to the first Consultation.
-		if (delta > 0 && consultationsExpandedRef.current) {
-			selectionRef.current = "consultation";
-			setSelection("consultation");
-			selectConsultation(0);
+		// the visible step crosses down to the nearest expanded section.
+		if (delta > 0) {
+			if (consultationsExpandedRef.current) {
+				selectionRef.current = "consultation";
+				setSelection("consultation");
+				selectConsultation(0);
+			} else if (workExpandedRef.current) {
+				selectionRef.current = "work";
+				setSelection("work");
+				selectWork(0);
+			}
 		}
 	}
 	function movePage(direction: 1 | -1) {
 		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") moveConsultationDetailPage(direction);
 			else selectConsultation(consultationIndexRef.current + direction * consultationsContentRows);
+			return;
+		}
+		if (selectionRef.current === "work") {
+			if (focusedPaneRef.current !== "detail")
+				selectWork(workIndexRef.current + direction * workContentRows);
 			return;
 		}
 		if (focusedPaneRef.current === "detail")
@@ -2469,6 +2682,11 @@ export function App({
 				if (edge === "end") setNewOutput(false);
 			} else if (consultationsExpandedRef.current)
 				selectConsultation(edge === "start" ? 0 : consultationsRef.current.length - 1);
+			return;
+		}
+		if (selectionRef.current === "work") {
+			if (focusedPaneRef.current !== "detail" && workExpandedRef.current)
+				selectWork(edge === "start" ? 0 : workItemsRef.current.length - 1);
 			return;
 		}
 		if (focusedPaneRef.current === "detail") {
@@ -2849,68 +3067,111 @@ export function App({
 													? "no Consultations"
 													: "no open Consultations",
 								}),
+							// The Work queue section (ADR 0034, issue #88): the manual
+							// starts that wait for a free Parallel limit seat, below
+							// the Consultation section.
+							createElement(SectionHeader, {
+								section: "work",
+								expanded: workExpanded,
+								terminalWidth,
+								width: leftCols,
+								depth: workItems.length,
+								active: mainSurfaceActive,
+								onToggle: () => clickSection("work"),
+							}),
+							workExpanded &&
+								createElement(WorkQueueList, {
+									items: workItems,
+									selectedIndex: workIndex,
+									focused: focusedPane === "list" && selection === "work",
+									rows: workBoxRows,
+									active: mainSurfaceActive,
+									onFocus: () => focusListSection("work"),
+									onSelect: (index: number) => {
+										focusListSection("work");
+										selectWork(index);
+									},
+									onMove: (delta) => {
+										// The first wheel spin into a section both moves the cursor
+										// there and selects one adjacent row.
+										focusListSection("work");
+										selectWork(workIndexRef.current + delta);
+									},
+									emptyMessage:
+										state === undefined
+											? "the Work queue requires SQLite state"
+											: "no queued handoffs",
+								}),
 						),
-						selection === "ticket"
-							? createElement(TicketDetail, {
-									ref: detailRef,
-									ticket: selectedTicket,
+						selection === "work"
+							? createElement(WorkQueueDetail, {
+									item: selectedWorkItem,
+									width: consultationWidth,
 									focused: focusedPane === "detail",
 									active: mainSurfaceActive,
-									reservedRows: detailReservedRows,
-									handoffLimit: config.maxHandoffsPerTicket,
-									priorityOverride:
-										state !== undefined && selectedTicket !== undefined
-											? state.priorityOverride(selectedTicket.identity)
-											: null,
-									suggestedChoice:
-										selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
-									starting:
-										selectedTicket !== undefined &&
-										markerOf(selectedTicket) === null &&
-										startingWindow(selectedTicket),
-									marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
-									scroll: config.scroll,
 									onFocus: () => focusPane("detail"),
-									scrollSlot: detailScrollSlot,
 								})
-							: createElement(
-									"box",
-									{ style: { flexGrow: 1, flexDirection: "column" } },
-									createElement(ConsultationDetail, {
-										lines: consultationLines,
-										ansiLines,
-										bodyTitle: consultationDetailTitle(consultationBody),
-										visibleRows: Math.max(
-											1,
-											detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
-										),
-										scroll: consultationDetailScroll,
-										focused: focusedPane === "detail" && !responseEditor,
+							: selection === "ticket"
+								? createElement(TicketDetail, {
+										ref: detailRef,
+										ticket: selectedTicket,
+										focused: focusedPane === "detail",
 										active: mainSurfaceActive,
+										reservedRows: detailReservedRows,
+										handoffLimit: config.maxHandoffsPerTicket,
+										priorityOverride:
+											state !== undefined && selectedTicket !== undefined
+												? state.priorityOverride(selectedTicket.identity)
+												: null,
+										suggestedChoice:
+											selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
+										starting:
+											selectedTicket !== undefined &&
+											markerOf(selectedTicket) === null &&
+											startingWindow(selectedTicket),
+										marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
+										scroll: config.scroll,
 										onFocus: () => focusPane("detail"),
-										onWheel: (delta) => moveVertical(delta),
-									}),
-									responseEditor &&
-										createElement(ResponseEditor, {
-											draft: responseDraft,
-											width: consultationWidth,
-											rows: RESPONSE_EDITOR_ROWS,
-											focused: true,
-											context: controlContextFor("form-field"),
-											inputActive: utility === null,
-											onSend: sendResponseText,
-											onDiscard: discardResponseDraft,
-											onDraftChange: storeResponseDraft,
-											onClose: closeResponseEditor,
-											onHelp: () => openGuide("form-field"),
-											onMessage: () => openMessage("form-field"),
-											onUnavailable: (reason: string) =>
-												setStatus({ kind: "warning", text: reason }),
-											onCopy: reportMessage,
-											message: visibleMessage,
-											onEmergencyExit: () => renderer.destroy(),
+										scrollSlot: detailScrollSlot,
+									})
+								: createElement(
+										"box",
+										{ style: { flexGrow: 1, flexDirection: "column" } },
+										createElement(ConsultationDetail, {
+											lines: consultationLines,
+											ansiLines,
+											bodyTitle: consultationDetailTitle(consultationBody),
+											visibleRows: Math.max(
+												1,
+												detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+											),
+											scroll: consultationDetailScroll,
+											focused: focusedPane === "detail" && !responseEditor,
+											active: mainSurfaceActive,
+											onFocus: () => focusPane("detail"),
+											onWheel: (delta) => moveVertical(delta),
 										}),
-								),
+										responseEditor &&
+											createElement(ResponseEditor, {
+												draft: responseDraft,
+												width: consultationWidth,
+												rows: RESPONSE_EDITOR_ROWS,
+												focused: true,
+												context: controlContextFor("form-field"),
+												inputActive: utility === null,
+												onSend: sendResponseText,
+												onDiscard: discardResponseDraft,
+												onDraftChange: storeResponseDraft,
+												onClose: closeResponseEditor,
+												onHelp: () => openGuide("form-field"),
+												onMessage: () => openMessage("form-field"),
+												onUnavailable: (reason: string) =>
+													setStatus({ kind: "warning", text: reason }),
+												onCopy: reportMessage,
+												message: visibleMessage,
+												onEmergencyExit: () => renderer.destroy(),
+											}),
+									),
 					),
 				),
 		launcher &&
