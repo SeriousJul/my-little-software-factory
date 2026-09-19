@@ -25,12 +25,16 @@ import type { FetchOutcome } from "../src/ticket-source.ts";
 import type { TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import {
 	type AppSetup,
+	actionBarRowOf,
 	awaitFrame,
+	confirmPanel,
 	detailPaneText,
+	focusDetail,
 	frameText,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
+	openSurface,
 	press,
 	pressArrow,
 	pressEnterQuiet,
@@ -94,6 +98,23 @@ function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
 		attributes: {},
 	};
 }
+
+/** The commands that change herdr's or git's state: every read is dropped. */
+function changed(commands: string[]): string[] {
+	return commands.filter(
+		(command) =>
+			!command.startsWith("herdr agent list") &&
+			!command.startsWith("herdr workspace list") &&
+			!command.startsWith("herdr pane"),
+	);
+}
+
+/** herdr's refusal of a removal over a checkout with work in it. */
+const DIRTY_REMOVAL = {
+	code: 1,
+	stderr:
+		'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
+};
 
 const success: FetchOutcome = {
 	status: "success",
@@ -771,6 +792,331 @@ describe("the failure markers", () => {
 				// missing agent still stands out in the badge's place.
 				expect(row).toContain("missing");
 				expect(app.state.ticketState(identity)).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+});
+
+// Key `w` closes the work cycle of the selected Ticket from either Ticket
+// pane (ADR 0031). An open Ticket is refused with its reason; every state that
+// has work behind it asks first, and the dialog states who is alive and what
+// survives. An in-flight cycle ends with no completion trace, because its turn
+// never settled; an `awaiting` one records the closed decision, the same
+// action the Decision modal's Close row offers.
+describe("the Ticket Close key", () => {
+	test("the Action bar names Close on w beside the Ticket section's Goto", async () => {
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{ paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1", agent: "pi", status: "working" },
+			]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => actionBarRowOf(f).includes("w Close"),
+					"the Close hint on the bar",
+				);
+				const bar = actionBarRowOf(frame);
+				// Close and Goto stand beside each other on an in-flight Ticket's
+				// bar (ADR 0031, ADR 0033): the key that stops the work, and the
+				// key that looks at it.
+				expect(bar).toContain("w Close");
+				expect(bar).toContain("g Goto");
+				expect(bar).toContain("Enter Live view");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("w on an in-flight Ticket asks first, and Cancel changes nothing", async () => {
+		const app = seededApp("in-flight", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The pane herdr does not list wears the `missing` marker, which
+				// ADR 0030 puts before the Starting face: the Ticket is in flight
+				// with no Agent to stop, and the close is the way out of it.
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				const before = app.runner.commands();
+				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				const body = frameText(opened);
+				// The first line names who is alive - here, the fact the last
+				// observation saw: herdr no longer lists the pane the handoff
+				// started. The rest states what the Close cleanup ends and leaves.
+				expect(body).toContain("Herdr no longer lists the Agent's pane.");
+				expect(body).toContain(
+					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
+				);
+				expect(body).toContain(
+					"The git branch stays, and the Ticket returns to open in its next cycle.",
+				);
+				expect(body).toContain("No completion record is written: the turn never settled.");
+				expect(body).toContain("❯ Close");
+				// The Cancel row states the same fact about the pane the first line
+				// states: a lost pane is nothing to keep running.
+				expect(body).toContain("Cancel keep the cycle, and its missing pane");
+
+				const cancelled = await pressEscape(
+					setup,
+					"the base view",
+					(f) => !f.includes("Close: Persist source facts"),
+				);
+				await settle(setup);
+				// Cancel is the way out with nothing changed: the ticket, its
+				// cycle, and its record stand, and Cancel ran no herdr command.
+				// (The read-only observation poll continues on its own clock, so
+				// the check names the commands that change state.)
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+				expect(app.state.visibleTickets([], "implement")[0].workCycle).toBe(1);
+				expect(app.state.lastCompletion(identity)).toBe(null);
+				expect(changed(app.runner.commands())).toEqual(changed(before));
+				expect(frameText(cancelled)).not.toContain("❯ Close");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	// The control is a base-mode control of the section, so the Detail pane
+	// answers it exactly as the list does (ADR 0031).
+	test("w closes from the detail pane too, with the same confirmation", async () => {
+		const app = seededApp("in-flight", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The pane herdr does not list wears the `missing` marker, which
+				// ADR 0030 puts before the Starting face: the Ticket is in flight
+				// with no Agent to stop, and the close is the way out of it.
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await focusDetail(setup);
+				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				expect(frameText(opened)).toContain(
+					"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
+				);
+				expect(app.state.ticketState(identity)).toBe("handed-off");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the confirmation names the live-worktree tab, not the worktree checkout", async () => {
+		const app = seededApp("in-flight");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The pane herdr does not list wears the `missing` marker, which
+				// ADR 0030 puts before the Starting face: the Ticket is in flight
+				// with no Agent to stop, and the close is the way out of it.
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				const body = frameText(opened);
+				expect(body).toContain(
+					"Close closes the Agent's herdr tab, and keeps the checkout and the workspace.",
+				);
+				// The checkout removal and its dirty-checkout note belong to the
+				// other Environment, so the dialog does not state them here.
+				expect(body).not.toContain("removes the worktree checkout");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("confirming an in-flight close ends the cycle with no trace and stops the Agent", async () => {
+		const app = seededApp("in-flight", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The pane herdr does not list wears the `missing` marker, which
+				// ADR 0030 puts before the Starting face: the Ticket is in flight
+				// with no Agent to stop, and the close is the way out of it.
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				const frame = await confirmPanel(setup, "the close", (f) =>
+					ticketRow(f).includes("[open]"),
+				);
+				// The cycle ended and the ticket is open with its next number, and
+				// no completion trace exists: the turn never settled.
+				expect(app.state.ticketState(identity)).toBe("open");
+				const [ticket] = app.state.visibleTickets([], "implement");
+				expect(ticket.workCycle).toBe(2);
+				expect(ticket.handoffCount).toBe(1);
+				expect(app.state.lastCompletion(identity)).toBe(null);
+				// The Agent's environment went through the Close cleanup: the
+				// worktree checkout and the workspace behind it, never the branch.
+				const commands = app.runner.commands().join("\n");
+				expect(commands).toContain("herdr worktree remove --workspace ws-1");
+				expect(commands).not.toContain("branch -D");
+				// The closed cycle counts toward the Handoff limit like any other:
+				// the limit counts the handoffs that started, and this one did.
+				expect(detailPaneText(frame)).toContain("Handoffs: 1/10");
+				expect(messageRowOf(frame)).toContain(`ticket ${identity} closed`);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("an in-flight close herdr refuses records the leftover fact", async () => {
+		const app = seededApp("in-flight", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The pane herdr does not list wears the `missing` marker, which
+				// ADR 0030 puts before the Starting face: the Ticket is in flight
+				// with no Agent to stop, and the close is the way out of it.
+				await awaitFrame(setup, (f) => ticketRow(f).includes("missing"), "the missing badge");
+				await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				// The dialog warned about this outcome before the answer was given.
+				expect(frameText(setup.captureCharFrame())).toContain(
+					"a dirty checkout stays as a leftover",
+				);
+				const frame = await confirmPanel(setup, "the close", (f) =>
+					ticketRow(f).includes("leftover"),
+				);
+				// The cycle still ended; what herdr could not remove is the ticket's
+				// fact from there on, and the Message line says so.
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.state.leftoverEnvironment(identity)).toEqual(
+					expect.objectContaining({
+						workspaceId: "ws-1",
+						reason: expect.stringContaining("dirty_worktree_requires_force"),
+					}),
+				);
+				expect(messageRowOf(frame)).toContain("the close cleanup failed");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a cycle that ends from under the open dialog lets the panel go", async () => {
+		// The guard that drops an open panel reads the ticket's live state, and the
+		// Ticket Close confirmation joins it (ADR 0031): a cycle that ends while the
+		// dialog stands leaves the panel with nothing to show, and a panel that is
+		// not drawn must keep holding the keys the base panes answer.
+		const app = seededAppInAutoMode(
+			"in-flight",
+			{ maxHandoffsPerTicket: 1 },
+			success,
+			"worktree",
+			// Past the startup grace: a pane herdr stops listing is a missing Agent,
+			// not one that is still booting.
+			{ stateNow: () => Date.now() - 600_000 },
+		);
+		// Herdr lists the Agent's pane alive, so the observation ends nothing and
+		// the close has a live Agent to ask about.
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "pi",
+					status: "working",
+				},
+			]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The poll sees the live pane and marks the Ticket running.
+				await awaitFrame(
+					setup,
+					(f) => detailPaneText(f).includes("[running]"),
+					"the in-flight ticket",
+				);
+				await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				// The Agent dies while the dialog stands. Auto mode ends the missing
+				// cycle at the handoff limit, so the ticket returns to open under it.
+				app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+				const released = await awaitFrame(
+					setup,
+					(f) =>
+						!frameText(f).includes("Close: Persist source facts") &&
+						ticketRow(f).includes("[open]"),
+					"the panel to let go when its cycle ends",
+				);
+				expect(app.state.ticketState(identity)).toBe("open");
+				// The base pane answers its keys again: no invisible panel swallows them.
+				const refused = await press(setup, "w", "the refusal on the open ticket", (f) =>
+					messageRowOf(f).includes("no work is in flight to close"),
+				);
+				expect(frameText(refused)).not.toContain("Close: Persist source facts");
+				expect(frameText(released)).toContain("[open]");
+			},
+			WIDTH,
+			HEIGHT,
+			{ ...propsOf(app), pollIntervalMs: 100 },
+		);
+		app.state.close();
+	});
+
+	test("confirming an awaiting close records the closed decision, the modal's own row", async () => {
+		const app = seededApp("awaiting", {}, success, "live-worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				const opened = await openSurface(setup, "w", "the Close confirmation", (f) =>
+					f.includes("Close: Persist source facts"),
+				);
+				expect(frameText(opened)).toContain("The turn has settled, and no Agent works.");
+				expect(frameText(opened)).toContain("The closed decision lands on the settled turn.");
+				await confirmPanel(setup, "the close", (f) => ticketRow(f).includes("[open]"));
+				// The settled turn carries the decision, exactly as the Decision
+				// modal's Close row leaves it, and the tab went through the cleanup.
+				expect(app.state.lastCompletion(identity)?.decision).toBe("closed");
+				expect(app.state.ticketState(identity)).toBe("open");
+				expect(app.runner.commands()).toContain("herdr tab close tab-1");
 			},
 			WIDTH,
 			HEIGHT,
@@ -1799,12 +2145,6 @@ describe("the Close cleanup", () => {
 
 describe("the leftover environment", () => {
 	/** The herdr answer that refuses to remove a dirty checkout. */
-	const DIRTY_REMOVAL = {
-		code: 1,
-		stderr:
-			'{"error":{"code":"dirty_worktree_requires_force","message":"fatal: the worktree contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}\n',
-	};
-
 	test("a Close cleanup that fails leaves the ticket carrying the leftover", async () => {
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1841,11 +2181,10 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
-	test("w on a leftover ticket opens no panel and runs no command; the fact stands", async () => {
-		// The key the clear had is free (ADR 0032): a press on a ticket that
-		// holds a leftover environment reaches no control. The acceptance
-		// answer is the absence - no panel, no herdr command, and the leftover
-		// fact untouched.
+	test("w on an open ticket states its reason and runs no command; the fact stands", async () => {
+		// An open ticket holds no work in flight, so key `w` refuses it with that
+		// reason (ADR 0031) and the leftover the closed cycle left keeps standing
+		// as the fact it is: no panel, no herdr command, nothing cleared.
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
@@ -1859,6 +2198,10 @@ describe("the leftover environment", () => {
 				const commandsBefore = app.runner.commands();
 				setup.mockInput.pressKey("w");
 				const frame = await settle(setup);
+				// The refusal is readable on the Message line, in the catalogue's
+				// own words, and no panel opened under it.
+				expect(messageRowOf(frame)).toContain("no work is in flight to close");
+				expect(frame).not.toContain("Close: Persist source facts");
 				// No panel and no reopened decision, and no herdr command ran.
 				expect(frame).not.toContain("Leftover environment");
 				expect(frame).not.toContain("Decision:");

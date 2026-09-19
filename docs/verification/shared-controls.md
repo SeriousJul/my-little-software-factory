@@ -45,6 +45,8 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
+| Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
+| The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
@@ -271,6 +273,62 @@ in full on this branch.
 The terminal walks were not re-run on the Action bar's and the Key guide's
 new row: they are recorded as not re-verified for this control, not as a
 pass. The screen-reader target remains unverified.
+
+## The Ticket section's Close key (issue #83, ADR 0031)
+
+ADR 0031 makes key `w` a base-mode control of the Ticket section, in both base
+modes, on the key ADR 0032 freed. ADR 0037 later gave the same key to the
+Consultation section's close, so `w` closes whichever section holds the cursor:
+the catalogue resolves it per mode, and the Key guide of a Ticket pane lists the
+Consultation close among the control-plane controls it catalogues on its own
+terms, never as this mode's key (`test/controls.test.ts`). It refuses an `open`
+ticket with its reason, and asks first on every state that has work behind it.
+The shared confirmation panel states who is alive - the Agent working, the pane
+herdr no longer lists, or the turn settled - and then what survives, read off
+that ticket's own environment: the worktree checkout and the workspace behind
+it, with a dirty checkout left standing as a leftover, or the live worktree's
+tab alone with the checkout, the workspace, and the tabs beside it kept. The git
+branch stays in every case, and the Cancel row states the same fact about the
+pane that the body's first line states.
+
+The confirmed answer is two closes with one cleanup. An `awaiting` ticket takes
+the Decision modal's own close: the `closed` decision on its settled turn's
+trace, then the Close cleanup - one function, so the modal's row and the key
+cannot drift. An in-flight ticket ends its cycle through a state operation of
+its own that writes no completion trace, because the turn never settled and no
+cause, turn log, or message exists to record. Both wait their turn on the
+shared environment seat, so a close that meets a Handoff of the same ticket
+runs after it settles. The whole close suite measures the two cycle-end gates
+reading the absent row as a cycle end that holds nothing and re-verifies
+nothing, the way they read an abandon without a cause, and the Handoff limit
+counting the closed cycle like any other. Both gates name the newest ended
+cycle as `work_cycle - 1`, and a check pins the invariant that reading stands
+on: the only statements that move a ticket's `work_cycle` are the two cycle ends
+(`test/state.test.ts`).
+
+The automatic suite covers the control's availability, refusal, and queue
+(`test/controls.test.ts`), the dialog's facts (`test/ticket-close.test.ts`),
+the state line and the durable close with its gates
+(`test/domain.test.ts`, `test/state.test.ts`), the seat order and the leftover
+fact through the dispatch interface (`test/handoff-dispatch.test.ts`), the
+gallery's two dialog examples (`test/shared-gallery.test.ts`), the Action
+bar's and the Key guide's rows for the new key (`test/action-bar.test.ts`,
+`test/key-guide.test.ts`), and the end-to-end frames: the refusal on an open
+ticket, the body and Cancel on both environments, the traceless close with its
+cleanup, the refused cleanup's leftover, the awaiting close with its decision,
+and the open dialog that lets go of its keys when the observation ends its cycle
+from under it (`test/auto-mode.test.ts`). The Action bar's ladder and the Key
+guide's row counts are re-measured on the rebased catalogue, where both sections
+hold a Close at priority 50 in their own modes, and the close's frames wait on
+the `missing` marker ADR 0030 puts before the Starting face. The guide
+screenshots were regenerated on this branch (`bun run screenshots`), and the
+drift check passed. The suite passed in full on this branch (1497 pass, 13 skip,
+0 fail), with the checks issues #103 and #104 already record as skipped still
+skipped.
+
+The terminal walks were not re-run on the new key, its bar row, or the dialog:
+they are recorded as not re-verified for this control, not as a pass. The
+screen-reader target remains unverified.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 

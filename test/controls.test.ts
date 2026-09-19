@@ -6,6 +6,7 @@ import {
 	type ControlContext,
 	type ControlDefinition,
 	contextFor,
+	controlById,
 	controlForKey,
 	guideControls,
 } from "../src/components/controls.ts";
@@ -33,6 +34,13 @@ const awaitingTicketWithPane = {
 	handoff: { paneId: "pane-1" },
 } as unknown as Ticket;
 const openTicket = { state: "open", handoff: null } as unknown as Ticket;
+
+/** The guide groups that list one control for one context. */
+function guideGroupsFor(context: ControlContext, id: string): string[] {
+	return guideControls(context)
+		.filter(({ control }) => control.id === id)
+		.map(({ group }) => group);
+}
 
 describe("the shared control catalogue", () => {
 	test("x toggles the section under the cursor and is not an Interact alias", () => {
@@ -136,6 +144,72 @@ describe("the shared control catalogue", () => {
 			available: false,
 			reason: "the Agent's pane is not alive in the last poll",
 		});
+	});
+
+	test("w is Close in both Ticket panes, on every state but open (ADR 0031)", () => {
+		const inFlight: Omit<ControlContext, "mode"> = {
+			...values,
+			selectedTicket: runningTicketWithPane,
+		};
+		const detail = contextFor("ticket-detail", inFlight);
+		const list = contextFor("ticket-list", inFlight);
+		const control: ControlDefinition | undefined = controlForKey({ name: "w" }, detail);
+
+		expect(control?.id).toBe("ticket-close");
+		expect(controlForKey({ name: "w" }, list)?.id).toBe("ticket-close");
+		if (control === undefined) throw new Error("Close is missing from the catalogue");
+		expect(availabilityFor(control, detail).available).toBe(true);
+		// An awaiting ticket has a settled turn to close, and it asks too.
+		expect(
+			availabilityFor(
+				control,
+				contextFor("ticket-list", { ...values, selectedTicket: awaitingTicketWithPane }),
+			).available,
+		).toBe(true);
+		// An open ticket has no work in flight: the refusal the key states.
+		expect(
+			availabilityFor(
+				control,
+				contextFor("ticket-list", { ...values, selectedTicket: openTicket }),
+			),
+		).toEqual({
+			available: false,
+			reason: "the selected Ticket is open: no work is in flight to close",
+		});
+		// No row at all is its own reason, the way every Ticket control names it.
+		expect(availabilityFor(control, contextFor("ticket-list", values)).available).toBe(false);
+	});
+
+	test("a Handoff in flight is no refusal for the Ticket close: the close queues", () => {
+		// ADR 0031 holds the close on the shared environment seat instead of
+		// refusing it, so a hung start still ends in the close asked for.
+		const control = controlById("ticket-close");
+		const context = contextFor("ticket-list", {
+			...values,
+			selectedTicket: runningTicketWithPane,
+			handoffActive: true,
+		});
+		expect(availabilityFor(control, context).available).toBe(true);
+	});
+
+	test("each section's w closes its own section, and only that section claims it", () => {
+		// Both sections answer `w` with their own Close: the Consultation's (ADR
+		// 0032) and the Ticket work cycle's (ADR 0031). A key belongs to one mode,
+		// so the guide lists the other section's Close among the control-plane
+		// controls it catalogues on its own terms, never as this mode's key.
+		const consultation = contextFor("consultation-detail", {
+			...values,
+			selectedConsultation: consultationWithPane,
+		});
+		expect(controlForKey({ name: "w" }, consultation)?.id).toBe("consultation-close");
+		expect(guideGroupsFor(consultation, "consultation-close")).toContain(
+			"Current interaction mode",
+		);
+		expect(guideGroupsFor(consultation, "ticket-close")).toEqual([]);
+		const ticket = contextFor("ticket-list", { ...values, selectedTicket: runningTicketWithPane });
+		expect(controlForKey({ name: "w" }, ticket)?.id).toBe("ticket-close");
+		expect(guideGroupsFor(ticket, "ticket-close")).toContain("Current interaction mode");
+		expect(guideGroupsFor(ticket, "consultation-close")).toEqual(["Control plane controls"]);
 	});
 
 	test("the Ticket guide names Goto in its own section, and the Consultation guide omits it", () => {

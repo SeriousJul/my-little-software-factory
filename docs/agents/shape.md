@@ -73,6 +73,9 @@ description: The module map of the source tree, for agents working in this repos
 	Action bar and control catalogue, the Key guide and Message view, the
 	shared pane geometry, the shared palette, message facts, and
 	display-width-aware text helpers.
+- `src/components/ticket-close.ts`: the Ticket Close dialog's facts. The shell
+	renders them and the gallery shows them, so the confirmation an operator
+	reads and the example a review reads are one definition (ADR 0031).
 - `test/`: the test suite.
 	The seam is the rendered terminal frame and the recorded command sequence.
 	No test touches a real herdr session or a real git repository.

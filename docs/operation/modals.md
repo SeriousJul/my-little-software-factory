@@ -1,6 +1,6 @@
 ---
 title: Modals
-description: The decision modal and the missing modal, and the leftover environment fact.
+description: The decision modal, the Ticket close confirmation, the missing modal, and the leftover environment fact.
 ---
 
 # Modals
@@ -84,11 +84,55 @@ previous message. "Abandon" ends the work cycle: the ticket returns to open
 with its cycle number incremented, the handoff's environment is closed,
 and the missing badge clears.
 
+## Ticket close
+
+Key `w` in either Ticket pane ends the work cycle of the selected ticket
+(ADR 0031). The same key closes the selected Consultation in the Consultation
+section (ADR 0037): a section owns its per-mode keys, so `w` always means the
+Close of the section the cursor is in. On an `open` ticket it refuses with its
+reason: no work is in flight to close. On an in-flight ticket, and on an
+`awaiting` one, it opens the shared confirmation panel first, because every one
+of those states has work behind it to stop.
+
+The panel's first line names who is alive: the Agent working, the Agent that
+has started but is not seen yet, the pane herdr no longer lists, the Agent
+waiting for input, or the turn that settled with nothing working. The rest
+states what survives, read off the environment that ticket's own handoff runs
+in: a worktree close removes the checkout and the herdr workspace behind it,
+and a checkout herdr refuses to remove stays open as a leftover; a
+live-worktree close closes the Agent's tab and keeps the checkout, the
+workspace, and the tabs beside them. The git branch stays in every case, so
+pushed work and pull requests survive, and the ticket returns to open with its
+next cycle number. `Esc`, or the "Cancel" row, leaves the ticket and its work
+exactly as they were, and that row states the same fact about the pane the
+body's first line states.
+
+The confirmed answer runs one of two closes:
+
+- On an `awaiting` ticket, the "Close" row records the `closed` decision on
+  the settled turn's trace and runs the Close cleanup: the same action the
+  Decision modal's Close row offers, one key deep. The modal keeps its row,
+  because it is the close with the turn log beside it.
+- On an in-flight ticket, the cycle ends with no completion trace at all.
+  The turn never settled, so there is no cause, no turn log, and no message
+  to record, and the handoff row stays the record of the work. The ticket
+  returns to open with its cycle incremented, the Agent stops through the
+  same Close cleanup, and the ended cycle counts toward the Handoff limit
+  like any other. Because no row ends that cycle, the re-verify gate and the
+  Same-type hold read it as holding nothing, the way they read an abandon
+  without a cause: no finished turn is asserted, so nothing waits and
+  nothing repeats.
+
+A close that meets a Handoff still building its agent does not refuse and
+does not race it: the whole close takes the shared environment seat, and runs
+when that Handoff settles, so a hung start still ends in the close the
+operator asked for and no cleanup tears down an environment herdr is mid-way
+through building.
+
 ## Leftover environment
 
-The control plane offers no clear for a leftover environment (ADR 0032):
-key `w` on a ticket wearing the `leftover` marker changes nothing and opens
-no panel. The leftover stays a durable, visible fact - the `leftover`
+The control plane offers no clear for a leftover environment (ADR 0032). The
+leftover stays a durable, visible fact - the `leftover`
 marker in the row, and the detail block that names the workspace, tab, and
 pane that remain, the reason the control plane knows, and since when. The
 block states that the cleanup runs in herdr, not in the control plane, the

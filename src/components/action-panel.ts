@@ -1,13 +1,14 @@
 /**
- * The Consultation confirm panel: a read-only message and the rows the
- * operator can confirm on it.
+ * The confirmation panel: a read-only message and the rows the operator can
+ * confirm on it.
  *
- * It serves the Consultation surfaces that predate the control catalogue:
- * closing, deleting, and the live-checkout conflict. The control plane's own
- * decisions render through the decision modal and the missing modal, which
- * share this module's chrome but dispatch their keys through the catalogue.
+ * It serves the surfaces that ask before they act: the Consultation close,
+ * delete, and live-checkout conflict, and the Ticket close the control plane
+ * confirms key `w` behind (ADR 0031). The plane's turn decisions render
+ * through the decision modal and the missing modal, which share this
+ * module's chrome and dispatch.
  *
- * The keys stay the panel's own until the Consultations port lands: up and
+ * The panel dispatches through the catalogue like every other surface: up and
  * down move the action rows, j/k scroll the message, enter confirms the
  * selected action, esc cancels. While it is open, the keys of the app below
  * are disabled.

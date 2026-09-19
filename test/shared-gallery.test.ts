@@ -94,6 +94,8 @@ describe("the shared control gallery", () => {
 			"close-dialog-working",
 			"close-dialog-awaiting-response",
 			"close-panel-closing",
+			"ticket-close",
+			"ticket-close-live-worktree",
 			"goto",
 			"ticket-goto",
 			"theme",
@@ -479,6 +481,45 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain(stateLine("ticket-goto"));
 		// The available row states the hint on the in-flight Ticket's bar.
 		expect(frame).toContain("g Goto");
+	});
+	// The Ticket Close confirmation (ADR 0031): the dialog states who is alive
+	// and what the Close cleanup ends, and the two Environments read
+	// differently, so the reviewer sees both from the gallery.
+	test("the Ticket Close example shows the working Agent and the worktree removal", async () => {
+		const setup = await gallery("ticket-close", 100, 30);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("ticket-close"));
+		expect(frame).toContain("Close: Fix the layout math");
+		expect(frame).toContain("The Agent is working.");
+		expect(frame).toContain(
+			"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
+		);
+		expect(frame).toContain(
+			"The git branch stays, and the Ticket returns to open in its next cycle.",
+		);
+		expect(frame).toContain("No completion record is written: the turn never settled.");
+		// The rows the operator answers with, and the panel's own bar. The row's
+		// detail is cut at the panel's own width, the way every action row cuts.
+		expect(frame).toContain("Close end the work cycle; the ticket returns");
+		expect(frame).toContain("Cancel keep the Agent and its work running");
+		expect(frame).toContain("Esc Cancel");
+		// Nothing of the body scrolled away: the whole warning shows at once.
+		expect(frame).not.toContain("more (j/k)");
+	});
+
+	test("the Ticket Close live-worktree example shows the settled turn and the tab", async () => {
+		const setup = await gallery("ticket-close-live-worktree", 100, 30);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("ticket-close-live-worktree"));
+		expect(frame).toContain("The turn has settled, and no Agent works.");
+		expect(frame).toContain(
+			"Close closes the Agent's herdr tab, and keeps the checkout and the workspace.",
+		);
+		// The worktree's removal note is not this Environment's fact.
+		expect(frame).not.toContain("removes the worktree checkout");
+		expect(frame).toContain("The closed decision lands on the settled turn.");
+		expect(frame).toContain("Cancel keep the turn undecided");
+		expect(frame).not.toContain("more (j/k)");
 	});
 
 	test("Esc leaves the gallery, the way its bar says", async () => {
