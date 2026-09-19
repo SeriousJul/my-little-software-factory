@@ -328,8 +328,8 @@ An unresolved attempt prevents another handoff of the same ticket after a crash.
 _Avoid_: pending ticket, handoff state
 
 **Auto-handoff mode**:
-The session-level mode in which the control plane hands off eligible open tickets by itself and decides their settled turns without the operator, within the configured limits.
-The config file carries the startup default; the UI toggle is session-only.
+The mode of the factory in which the control plane hands off eligible open tickets by itself and decides their settled turns without the operator, within the configured limits.
+The mode is factory state on the state file: it survives a restart and a dev reload, and a fresh state file starts with the mode off. The operator changes it with the `a` key in the Ticket section.
 _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
@@ -474,7 +474,7 @@ The settings are: Agent type, Environment kind, Task type, Model, Thinking level
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, the priority label list, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
+The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the limits, the priority label list, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
 A missing file is seeded from the Default configuration on first run. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 
