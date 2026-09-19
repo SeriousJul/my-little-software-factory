@@ -87,6 +87,7 @@ const AWAITING_ID = uid("b");
 const MISSING_DIRECT_ID = uid("c");
 const FAILED_DIRECT_ID = uid("d");
 const CLOSED_DIRECT_ID = uid("e");
+const CONFIRM_GONE_ID = uid("f");
 
 let home = "";
 let checkout = "";
@@ -1242,6 +1243,67 @@ describe("Consultation close and cleanup through the UI", () => {
 				WIDTH,
 				32,
 				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the close confirmation lets go of the keys when the Agent dies first", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CONFIRM_GONE_ID);
+		state.setConsultationState(CONFIRM_GONE_ID, "working");
+		const gone8 = CONFIRM_GONE_ID.slice(0, 8);
+		// The Agent is alive at first: the observation loop matches its pane,
+		// so the Consultation stays working until the list loses it.
+		const inner = new FakeRunner();
+		// The workspace of the dead Agent holds the Consultation's own tab and
+		// pane alone, so the direct close takes the pane down and finishes.
+		inner.set("herdr", ["tab", "list", "--workspace", `ws-${gone8}`], {
+			stdout: JSON.stringify({ result: { tabs: [{ tab_id: `tab-${gone8}` }] } }),
+		});
+		inner.set("herdr", ["pane", "list", "--workspace", `ws-${gone8}`], {
+			stdout: JSON.stringify({
+				result: { panes: [{ pane_id: `pane-${gone8}`, tab_id: `tab-${gone8}` }] },
+			}),
+		});
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: `pane-${gone8}`, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view", (f) =>
+						detailPaneText(f).includes("State: working"),
+					);
+					// The live Agent asks first: the confirmation stands open.
+					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+						f.includes("Close Consultation"),
+					);
+					// A refresh finds the Agent gone while the dialog is open, so
+					// neither close branch draws any more and the panel must let go
+					// of the keys it took.
+					runner.agentListJson = agentListJson([]);
+					// The main view stands again only once the dead Agent lands in
+					// the list and the panel releases: the wait covers both halves.
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("State: missing"),
+						"the close confirmation to let go of the keys",
+					);
+					// A missing Consultation closes directly: the key reaches the
+					// section, so no invisible panel was holding it.
+					await press(setup, "w", "the direct close after the panel let go", (f) =>
+						messageRowOf(f).includes(`${gone8} closed`),
+					);
+					expect(state.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
+				},
+				WIDTH,
+				32,
+				// The observation loop runs only on the real projection, so this
+				// boot carries no initialTickets, like the settle test above.
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
 			);
 		} finally {
 			state.close();

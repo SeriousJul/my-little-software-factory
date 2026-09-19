@@ -2411,19 +2411,26 @@ export function App({
 	const liveDecision =
 		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;
 	/**
-	 * Whether the open ticket panel has nothing left to show.
+	 * Whether the open panel has nothing left to show.
 	 *
-	 * Each ticket panel kind says which fact of the ticket it is drawn from,
-	 * and that fact is what can run out from under the modal: the decision the
-	 * observation takes, the agent whose pane is gone, the ticket that leaves
-	 * the projection. A panel that is not drawn must not keep holding the keys
-	 * the ticket panels swallow.
+	 * Each panel kind says which fact it is drawn from, and that fact is what
+	 * can run out from under the modal: the decision the observation takes,
+	 * the agent whose pane is gone, the ticket that leaves the projection, and
+	 * the Consultation whose state moves while its close confirmation is open
+	 * (a background refresh that finds the Agent gone makes the record
+	 * `missing`, and neither close branch draws an `missing` record). A panel
+	 * that is not drawn must not keep holding the keys the panels swallow.
 	 */
+	const closePanelHasNothingToShow =
+		panel?.kind === "consultation-close" &&
+		(panelConsultation === undefined ||
+			(panelConsultation.state !== "closing" && closeConfirmation === undefined));
 	const panelHasNothingToShow =
-		ticketPanel !== null &&
-		(panelTicket === undefined ||
-			(ticketPanel.kind === "decision" && decision === undefined) ||
-			(ticketPanel.kind === "live" && liveMode === "closed"));
+		(ticketPanel !== null &&
+			(panelTicket === undefined ||
+				(ticketPanel.kind === "decision" && decision === undefined) ||
+				(ticketPanel.kind === "live" && liveMode === "closed"))) ||
+		closePanelHasNothingToShow;
 	useEffect(() => {
 		if (panelHasNothingToShow) setPanel(null);
 	}, [panelHasNothingToShow]);

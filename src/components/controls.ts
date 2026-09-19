@@ -78,6 +78,7 @@ type ControlKey =
 	| "g"
 	| "x"
 	| "d"
+	| "w"
 	| "delete"
 	| "f1"
 	| "f2"
