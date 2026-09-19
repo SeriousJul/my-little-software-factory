@@ -3069,7 +3069,7 @@ describe("the handoff queue", () => {
 				// Work queue with its captured restart choice.
 				const starts = inner.commands().filter((c) => c.startsWith("herdr agent start"));
 				expect(starts).toEqual(["herdr agent start persist-source-facts --kind pi --pane pane-1"]);
-				expect(state.workQueueIdentity(secondIdentity)).toBe(secondIdentity);
+				expect(state.hasWorkItem(secondIdentity)).toBe(true);
 				// The abandonment ran the Close cleanup on the stored
 				// environment.
 				expect(inner.commands()).toContain("herdr tab close tab-2");

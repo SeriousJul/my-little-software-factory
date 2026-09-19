@@ -163,7 +163,7 @@ afterEach(() => {
  * agent start and the prompt answer with the fake's clean default, and the
  * gate holds nothing until a test asks for a command by prefix.
  */
-function rig(seeds: readonly Seed[] = [FIRST]): Rig {
+function rig(seeds: readonly Seed[] = [FIRST], now: () => number = () => Date.now()): Rig {
 	const home = mkdtempSync(join(tmpdir(), "factory-handoff-dispatch-"));
 	homes.push(home);
 	const checkout = join(home, "src", "factory");
@@ -187,7 +187,7 @@ function rig(seeds: readonly Seed[] = [FIRST]): Rig {
 		],
 		repos: { "github.com/acme/factory": checkout },
 	};
-	const state = new FactoryState(":memory:");
+	const state = new FactoryState(":memory:", now);
 	openStates.push(state);
 	state.initializeSources([source]);
 	state.applyFetch(source, {
@@ -1659,5 +1659,60 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(
 			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
 		).toHaveLength(1);
+	});
+
+	test("an automatic start at the cap is refused, and the queue stays empty", async () => {
+		const rigRef = rig([FIRST]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				automatic: true,
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: false, reason: "the Parallel limit is full" });
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		expect(rigRef.events).not.toContain("refresh");
+	});
+
+	test("a queued restart whose ticket restarted while it waits is cancelled, not double-started", async () => {
+		let clockMs = Date.parse("2026-09-01T00:00:00Z");
+		const rigRef = rig([FIRST], () => clockMs);
+		// The ticket is in flight on a live agent.
+		seedHandoff(rigRef, FIRST);
+		clockMs += 60_000;
+		// The cap is full: the operator's restart waits in the queue.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "restart",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "again",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// A seat frees and the automatic restart takes it: the ticket's handoff
+		// is now newer than the item's enqueue.
+		clockMs += 60_000;
+		seedHandoff(rigRef, FIRST);
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		// The item is gone, and no handoff started behind the ticket the
+		// restart already gave it.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.handoffCount(FIRST.identity)).toBe(2);
+		expect(rigRef.events).toContain(
+			`notice:"${FIRST.title}" restarted while its restart waited in the Work queue; the queue item is removed`,
+		);
+		expect(rigRef.events).not.toContain(`notice:"${FIRST.title}" started from the Work queue`);
 	});
 });

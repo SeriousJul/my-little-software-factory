@@ -48,6 +48,12 @@ export interface HandoffIntent {
 	choice: HandoffChoice;
 	previousMessage: string;
 	/**
+	 * An automatic start (ADR 0034): the open dispatch, the workflow route, the
+	 * restart. It waits for a seat and never enters the Work queue, so a full
+	 * cap refuses it instead of enqueuing, and its own cycle retries it.
+	 */
+	automatic?: boolean;
+	/**
 	 * The result of the handoff's own start, reported once when the claimed
 	 * handoff settles: `{ ok: true }` when the agent is live, `{ ok: false,
 	 * reason }` when it never started. The claim says the dispatch took the
@@ -274,9 +280,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 		// The Parallel limit gates every start (ADR 0034): a manual start that
 		// cannot take a seat enters the Work queue instead of starting, and the
-		// ticket keeps the state it wears while it waits.
+		// ticket keeps the state it wears while it waits. An automatic start
+		// never enters the queue: it is refused, and its own cycle retries it.
 		const limit = config.maxParallelAgents;
-		if (limit > 0 && this.seatCount() >= limit) return Promise.resolve(this.enqueueWork(intent));
+		if (limit > 0 && this.seatCount() >= limit) {
+			if (intent.automatic === true)
+				return Promise.resolve({ ok: false, reason: "the Parallel limit is full" });
+			return Promise.resolve(this.enqueueWork(intent));
+		}
 		const claim = this.state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
 		// The claim is in, so the ticket is in the Starting window now: its work
@@ -301,8 +312,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * first item keeps its place.
 	 */
 	private enqueueWork(intent: HandoffIntent): DispatchResult {
-		const existing = this.state.workQueueIdentity(intent.ticketIdentity);
-		if (existing !== null) {
+		if (this.state.hasWorkItem(intent.ticketIdentity)) {
 			this.reports.warning(
 				`ticket ${intent.ticketIdentity} already has a waiting queue item; the first item keeps its place`,
 			);
@@ -367,6 +377,26 @@ class HandoffDispatchModule implements HandoffDispatch {
 					: `the ticket is now ${currentState}`,
 			);
 			return false;
+		}
+		// A restart whose ticket already wears a handoff newer than the item's
+		// enqueue: the seat the operator asked for was taken by a restart the
+		// operator did not ask for, so the pickup cancels the item instead of
+		// starting a second handoff on a ticket that has a live turn (ADR
+		// 0034). The observation's automatic restart skips a ticket the queue
+		// waits for, so this meets the race that slipped past that skip.
+		if (item.origin === "restart") {
+			const inFlight = this.state
+				.ticketsByState(["handed-off", "running"])
+				.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
+			if (inFlight !== undefined && Date.parse(inFlight.startedAt) > Date.parse(item.enqueuedAt)) {
+				this.state.removeWorkItem(item.ticketIdentity);
+				this.lastPickupWarning.delete(item.ticketIdentity);
+				this.reports.refresh();
+				this.reports.notice(
+					`${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`,
+				);
+				return false;
+			}
 		}
 		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {

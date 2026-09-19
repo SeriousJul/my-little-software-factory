@@ -31,7 +31,9 @@ holds one, the other states hold none. It gates every start:
   row, the restart from the Missing modal, and the Consultation launcher
   submit.
 - An automatic start - the open dispatch, the workflow route, the restart -
-  waits for a seat as before, reading the combined count.
+  waits for a seat as before, reading the combined count: a seat a Consultation
+  takes in a mid-cycle race refuses the start, and its own cycle retries it.
+  An automatic start never enters the queue.
 
 **The Work queue.** A durable, ordered list of starts waiting for a seat:
 the manual Handoff intents (ticket, origin, the operator's choice) and the
@@ -50,6 +52,13 @@ operator's own ask, exactly as a direct manual handoff is today. A pickup
 that fails a check leaves the queue with a Message line warning: the ticket
 keeps its state, and a Consultation whose start fails becomes a `failed`
 record, as it does today.
+
+A pickup of a `restart` item whose ticket already wears a handoff newer than
+the item's enqueue cancels the item: the ticket's turn is back, and the
+pickup would only start a second handoff on it. The observation's automatic
+restart skips a ticket the queue already waits for, so the operator's
+captured choice takes the freed seat, and the cancellation meets the race
+that slips past that skip.
 
 **A queued Consultation is a record, not a bare intent.** A launcher submit
 into a full cap creates the durable Consultation record in `queued` state;

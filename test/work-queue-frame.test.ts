@@ -262,9 +262,10 @@ describe("the Work queue section", () => {
 					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
 					// The cursor holds the first item; Delete cancels its
 					// start. The ticket keeps the state it wears while it
-					// waits, so the Ticket list still draws it.
+					// waits, so the Ticket list still draws it. The line names
+					// the ticket by its title while the projection holds it.
 					await press(setup, "delete", "the first item to cancel", (f) =>
-						f.includes(`waiting start for ticket ${FIRST}`),
+						f.includes(`waiting start for "Add a webhook retry policy"`),
 					);
 					const frame = await settle(setup);
 					expect(frame).toContain("waiting: 1");

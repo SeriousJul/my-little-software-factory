@@ -1909,13 +1909,13 @@ describe("the work queue (ADR 0034)", () => {
 	test("items enter in enqueue order, and the queue reports its depth and identities", () => {
 		const state = openFactoryState(":memory:");
 		expect(state.workQueueDepth()).toBe(0);
-		expect(state.workQueueIdentity("t1")).toBeNull();
+		expect(state.hasWorkItem("t1")).toBe(false);
 		enqueue(state, "t1");
 		enqueue(state, "t2");
 		expect(state.workQueueDepth()).toBe(2);
 		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2"]);
 		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
-		expect(state.workQueueIdentity("t2")).toBe("t2");
+		expect(state.hasWorkItem("t2")).toBe(true);
 	});
 
 	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
