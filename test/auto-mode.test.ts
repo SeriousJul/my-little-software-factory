@@ -1,6 +1,6 @@
 /**
- * The unattended mode through the real UI: the mode line, the session-only
- * `a` toggle, the blocked and missing markers, the missing
+ * The unattended mode through the real UI: the mode line, the `a` toggle that
+ * writes the mode to the state file, the blocked and missing markers, the missing
  * panel (restart / abandon), the decision modal on an awaiting ticket, and
  * the auto dispatch of open tickets.
  *
@@ -10,9 +10,10 @@
  * without a herdr session or a source clock.
  */
 
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-// readFileSync is the session-only check: the toggle must not write it.
+// readFileSync checks the config file: the toggle writes the state file, never it.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AppProps } from "../src/components/app.ts";
@@ -29,6 +30,7 @@ import {
 	frameText,
 	HEIGHT,
 	markerRowOf,
+	messageRowOf,
 	press,
 	pressArrow,
 	pressEnterQuiet,
@@ -40,6 +42,7 @@ import {
 	settle,
 	sleep,
 	spanColors,
+	startingFaceOf,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -139,6 +142,15 @@ interface SeedDetail {
 	 * boot.
 	 */
 	stateNow?: () => number;
+	/**
+	 * The Auto-handoff mode the state file holds before the app mounts.
+	 *
+	 * The mode is factory state (ADR 0036), so a test that needs auto mode
+	 * writes it to the state file the way the `a` key does. The key is not
+	 * in the config schema (ADR 0036); a file that still carries it fails
+	 * startup naming the key.
+	 */
+	autoMode?: boolean;
 }
 
 /**
@@ -210,6 +222,9 @@ function seededApp(
 	detail: SeedDetail = {},
 ): SeededApp {
 	const state = seed(shape, outcome, environment, detail);
+	// The operator's last choice of the mode is a fact of the state file, not
+	// of the config (ADR 0036), so the seed writes it before the app mounts.
+	if (detail.autoMode === true) state.setAutoHandoffMode(true);
 	const path = checkout();
 	const home = mkdtempSync(join(tmpdir(), "factory-auto-home-"));
 	paths.push(home);
@@ -226,24 +241,6 @@ function seededApp(
 	return { state, config, runner, configPath, src };
 }
 
-/**
- * A runner that passes through to a fake runner while holding one command
- * for a fixed time. A frame test uses it to hold the handoff seat: the
- * in-flight handoff keeps the queue blocked while the operator works the
- * ticket behind it, so the drain runs while that ticket is still moving.
- */
-function holding(runner: FakeRunner, command: string, ms: number): CommandRunner {
-	return {
-		run: async (name, args, options) => {
-			if ([name, ...args].join(" ").trim() === command) {
-				await new Promise((resolve) => setTimeout(resolve, ms));
-			}
-			return runner.run(name, args, options);
-		},
-		listModels: (kind) => runner.listModels(kind),
-	};
-}
-
 function propsOf(app: SeededApp): AppProps {
 	return {
 		config: app.config,
@@ -253,6 +250,23 @@ function propsOf(app: SeededApp): AppProps {
 		sources: [app.src],
 		pollIntervalMs: 60_000,
 	};
+}
+
+/**
+ * A seeded app whose state file already holds the Auto-handoff mode.
+ *
+ * The mode is factory state (ADR 0036): the plane reads it off the state file
+ * at startup, so a test that needs auto mode writes it there the way the `a`
+ * key does, instead of carrying a config default.
+ */
+function seededAppInAutoMode(
+	shape: "open" | "in-flight" | "awaiting",
+	extra: Partial<FactoryConfig> = {},
+	outcome: FetchOutcome = success,
+	environment: "live-worktree" | "worktree" = "live-worktree",
+	detail: SeedDetail = {},
+): SeededApp {
+	return seededApp(shape, extra, outcome, environment, { ...detail, autoMode: true });
 }
 
 /**
@@ -325,7 +339,7 @@ function ticketRow(frame: string, title = "Persist source facts"): string {
 }
 
 describe("the mode line and the a key", () => {
-	test("the mode line reports the mode and the in-flight count, and a toggles the session only", async () => {
+	test("the mode line reports the mode, and a writes the mode to the state file", async () => {
 		const app = seededApp("open");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		const before = readFileSync(app.configPath, "utf8");
@@ -335,12 +349,115 @@ describe("the mode line and the a key", () => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
 				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
-				// Session-only: the toggle never writes the config file.
+				// The flip is factory state (ADR 0036): it is on the state file the
+				// moment the key lands, and the toggle never writes the config file.
+				expect(app.state.autoHandoffMode()).toBe(true);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 				await press(setup, "a", "auto off", (f) => f.includes("auto: off 0/2"));
+				expect(app.state.autoHandoffMode()).toBe(false);
 				expect(readFileSync(app.configPath, "utf8")).toBe(before);
 			},
 			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a restart on the same state file finds the mode where the operator left it", async () => {
+		const app = seededApp("open");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const statePath = app.state.path;
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
+				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		// The end of the run: the plane closes its state file, as a restart or a
+		// dev reload does.
+		app.state.close();
+
+		// The next run reads the mode back off the same file, not off the config.
+		const reopened = openFactoryState(statePath);
+		expect(reopened.autoHandoffMode()).toBe(true);
+		const src = new FakeSource("issues", "github-issues", success);
+		await withApp(
+			async (setup) => {
+				src.settle(success);
+				const frame = await awaitFrame(
+					setup,
+					(f) => f.includes("auto: on 0/2"),
+					"the restarted mode line",
+				);
+				expect(frame).not.toContain("auto: off");
+			},
+			WIDTH,
+			HEIGHT,
+			{
+				config: app.config,
+				state: reopened,
+				runner: app.runner,
+				configPath: app.configPath,
+				sources: [src],
+				pollIntervalMs: 60_000,
+			},
+		);
+		reopened.close();
+	});
+
+	test("a fresh state file starts with auto off", async () => {
+		// The mode has no config default (ADR 0036): the state file answers for
+		// it, and a file the plane has just created holds the mode off.
+		const app = seededApp("open");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				const frame = await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
+				expect(frame).not.toContain("auto: on");
+				expect(app.state.autoHandoffMode()).toBe(false);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("a mode write the state file refuses reports, and the flip stands", async () => {
+		const app = seededApp("open");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("auto: off 0/2"), "the mode line");
+				// The real write path, made to fail: the mode table is gone from the
+				// state file, so the plane's next write to it is refused by SQLite.
+				// The busy timeout covers the refresh write still in flight.
+				const damage = new Database(app.state.path);
+				damage.exec("PRAGMA busy_timeout = 5000;");
+				damage.exec("DROP TABLE auto_handoff_mode;");
+				damage.close();
+				await press(setup, "a", "auto on", (f) => f.includes("auto: on 0/2"));
+				// The in-session flip stands, and the failure names the state file
+				// the plane could not write and says how long the flip lives.
+				const frame = await settle(setup);
+				expect(frame).toContain("auto: on 0/2");
+				expect(messageRowOf(frame)).toContain("auto-handoff is on for this session only:");
+				expect(messageRowOf(frame)).toContain(app.state.path);
+				expect(messageRowOf(frame).trim()).toContain("Error:");
+				// The mode line keeps the flipped mode, not the stored one.
+				expect(frameText(setup.captureCharFrame())).toContain("auto: on 0/2");
+			},
+			WIDE_STATUS,
 			HEIGHT,
 			propsOf(app),
 		);
@@ -481,7 +598,16 @@ describe("the failure markers", () => {
 	});
 
 	test("a missing agent gets the missing marker and the missing modal", async () => {
-		const app = seededApp("in-flight");
+		const app = seededApp(
+			"in-flight",
+			{},
+			success,
+			"live-worktree",
+			// The agent ran a while before it died: the handoff is past the
+			// startup grace, so the missing agent is not a booted one and
+			// holds no seat.
+			{ stateNow: () => Date.now() - 600_000 },
+		);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 
 		await withApp(
@@ -494,8 +620,8 @@ describe("the failure markers", () => {
 				);
 				// The missing badge replaces the state badge although no state changed:
 				// manual mode never acts on a missing agent. The missing agent holds no
-				// slot, so the live count is zero.
-				expect(frame).toContain("auto: off 1/2");
+				// slot, so the shared seat count is zero.
+				expect(frame).toContain("auto: off 0/2");
 				expect(ticketRow(frame)).toContain("missing");
 
 				// Enter on the in-flight missing ticket opens the missing modal.
@@ -1851,9 +1977,9 @@ describe("the leftover environment", () => {
 	});
 
 	test("the observation abandons a missing cycle at the limit, and records the failed cleanup", async () => {
-		const app = seededApp(
+		const app = seededAppInAutoMode(
 			"in-flight",
-			{ maxHandoffsPerTicket: 1, autoHandoff: true },
+			{ maxHandoffsPerTicket: 1 },
 			success,
 			"worktree",
 			// The agent ran a while before it died: the handoff is past the
@@ -1938,8 +2064,7 @@ describe("the leftover environment", () => {
 		// No operator key ends this cycle: the observation loop closes the
 		// settled turn itself, and its cleanup is the same call. A tab herdr
 		// will not close is the ticket's fact to carry.
-		const app = seededApp("awaiting", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("awaiting", {
 			workflows: [],
 			maxHandoffsPerTicket: 1,
 		});
@@ -2230,8 +2355,15 @@ describe("the leftover environment", () => {
 		await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 		await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
 		await settleReverify(src, success);
-		// Enter on the open ticket: the leftover does not stop it.
-		await pressReturn(setup, "the handoff", (f) => ticketRow(f).includes("[handed-off]"));
+		// Enter on the open ticket: the leftover does not stop it. The row
+		// wears the Starting window's face on the keypress (ADR 0030), and the
+		// face keeps standing on the settle, so the face with the Working line
+		// cleared is the settle itself.
+		await pressReturn(
+			setup,
+			"the handoff to settle",
+			(f) => startingFaceOf(ticketRow(f)) !== null && !frameText(f).includes("Working:"),
+		);
 	}
 
 	test("a handoff beside its own leftover agent starts anyway and says so", async () => {
@@ -2354,7 +2486,7 @@ describe("the leftover environment", () => {
 
 describe("the auto dispatch", () => {
 	test("auto mode hands off the open ticket on the first cycle", async () => {
-		const app = seededApp("open", { autoHandoff: true });
+		const app = seededAppInAutoMode("open");
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -2376,6 +2508,9 @@ describe("the auto dispatch", () => {
 				);
 				// The new agent's pane is not in the faked list: the row wears
 				// the missing badge, and the detail pane shows the handoff.
+				// The mode line holds the booting seat: a started agent inside
+				// its startup grace counts against the parallel limit, from the
+				// same shared seat count the gates read.
 				expect(ticketRow(frame)).toContain("missing");
 				const commands = app.runner.commands();
 				expect(commands).toContain(`herdr workspace create --cwd ${path} --no-focus`);
@@ -2391,8 +2526,7 @@ describe("the auto dispatch", () => {
 	test("an auto-handoff starts on the settings its task profile resolves", async () => {
 		// ADR 0009: an unattended handoff resolves through the same chain the
 		// panel shows, so the profile's own agent, model, and level start it.
-		const app = seededApp("open", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("open", {
 			defaultModel: "anthropic/claude-sonnet-4-5",
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
@@ -2442,8 +2576,7 @@ describe("the auto dispatch", () => {
 		// ADR 0010: the fit check guards the unattended route too. The fake
 		// reports a pi list without the profile's model, so the dispatch dies
 		// on the check, not inside an agent terminal.
-		const app = seededApp("open", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("open", {
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
 				implement: { ...BASE_CONFIG.taskTypes.implement, model: "gpt-4o" },
@@ -2471,7 +2604,7 @@ describe("the auto dispatch", () => {
 	});
 
 	test("two open tickets dispatch in one cycle, and the queue drains when the seat frees", async () => {
-		const app = seededApp("open", { autoHandoff: true }, pairSuccess);
+		const app = seededAppInAutoMode("open", {}, pairSuccess);
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -2489,6 +2622,8 @@ describe("the auto dispatch", () => {
 				// The first cycle dispatches both tickets: the first handoff
 				// runs, the second queues behind it. When the first settles,
 				// the seat frees, and the drain starts the second.
+				// Both started agents are inside their startup grace, so the
+				// mode line holds both booting seats against the cap.
 				await awaitFrame(
 					setup,
 					(f) =>
@@ -2529,13 +2664,9 @@ describe("the auto dispatch", () => {
 		// hold the ticket instead of re-running the completed type. A pair
 		// ticket with no closed cycle dispatches in the same cycle: the loop
 		// runs, and the finished work does not repeat.
-		const app = seededApp(
-			"awaiting",
-			{ autoHandoff: true, workflows: [] },
-			pairSuccess,
-			"live-worktree",
-			{ cause: "completed" },
-		);
+		const app = seededAppInAutoMode("awaiting", { workflows: [] }, pairSuccess, "live-worktree", {
+			cause: "completed",
+		});
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -2553,6 +2684,8 @@ describe("the auto dispatch", () => {
 				// The first cycles: the turn settles, the auto-close ends the
 				// cycle, and the pair takes the dispatch. The finished ticket
 				// rests open, waiting on the re-read its close provoked.
+				// The finished ticket holds no seat; the pair's started agent
+				// is inside its startup grace, so the mode line holds one seat.
 				await awaitFrame(
 					setup,
 					(f) =>
@@ -2583,8 +2716,7 @@ describe("the auto dispatch", () => {
 		// The same loud rule on the other automatic path: an open Ticket's own
 		// handoff resolves a Model its Agent maps no argument for, so nothing
 		// starts, and the report names the ticket rather than only the reason.
-		const app = seededApp("open", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("open", {
 			defaultModel: "factory-model",
 			agents: { ...BASE_CONFIG.agents, cursor: { kind: "cursor" } },
 			taskTypes: {
@@ -2651,8 +2783,7 @@ describe("the auto decision", () => {
 	test("auto mode routes a settled turn to the workflow target without the operator", async () => {
 		const review = { ...BASE_CONFIG.taskTypes.review };
 		review.template += "\n\nPrevious work message:\n{previous-message}";
-		const app = seededApp("awaiting", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("awaiting", {
 			taskTypes: { ...BASE_CONFIG.taskTypes, review },
 		});
 		stubCheckout(app);
@@ -2710,10 +2841,9 @@ describe("the auto decision", () => {
 		// Story 25 and story 26 on the unattended path: the loop's route resolves
 		// agent, model, and thinking through the target task profile's chain, and
 		// its fit check reads the same resolved value the start carries.
-		const app = seededApp(
+		const app = seededAppInAutoMode(
 			"awaiting",
 			{
-				autoHandoff: true,
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					review: { ...BASE_CONFIG.taskTypes.review, model: "anthropic/claude-review-4" },
@@ -2772,8 +2902,7 @@ describe("the auto decision", () => {
 		// default model. The route can only fail, and it fails before any
 		// external step, so it must leave the turn as undecided as it was: the
 		// trace records a route only once an agent runs.
-		const app = seededApp("awaiting", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("awaiting", {
 			defaultAgent: "claude",
 			defaultModel: "factory-model",
 			agents: { ...BASE_CONFIG.agents, claude: { kind: "claude" } },
@@ -2842,8 +2971,7 @@ describe("the auto decision", () => {
 	test("auto mode closes a settled turn with no workflow route", async () => {
 		// The handoff limit equals the ticket's one handoff: the close is the
 		// limit degrade, and it keeps the open ticket from being re-handed.
-		const app = seededApp("awaiting", {
-			autoHandoff: true,
+		const app = seededAppInAutoMode("awaiting", {
 			workflows: [],
 			maxHandoffsPerTicket: 1,
 		});
@@ -2875,7 +3003,7 @@ describe("the auto decision", () => {
 	});
 
 	test("enter on an awaiting ticket in auto mode reports the factory's decision", async () => {
-		const app = seededApp("awaiting", { autoHandoff: true, maxParallelAgents: 1 }, pairSuccess);
+		const app = seededAppInAutoMode("awaiting", { maxParallelAgents: 1 }, pairSuccess);
 		// The second ticket holds the single parallel seat with a live agent,
 		// so the route waits and the ticket stays awaiting.
 		const claim = app.state.claimHandoff(
@@ -2992,13 +3120,14 @@ describe("the handoff queue", () => {
 		inner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
 			stdout: tabCreateJson("pane-1"),
 		});
-		// Hold the first handoff's agent start: the seat stays busy through
-		// the whole key sequence, so the drain runs after the last key, while
-		// the ticket the queued restart waits on has already moved on.
-		const runner = holding(
+		// Gate the first handoff's agent start: the seat stays busy through
+		// the whole key sequence, and the test releases it after the last key,
+		// so the drain runs after the ticket the queued restart waits on has
+		// already moved on. The gate names the exact start, so the
+		// re-handoff's own start passes through it.
+		const gate = gateOnRunner(
 			inner,
-			"herdr agent start persist-source-facts --kind pi --pane pane-1",
-			4000,
+			(command) => command === "herdr agent start persist-source-facts --kind pi --pane pane-1",
 		);
 		const src = new FakeSource("issues", "github-issues", pairMoved);
 
@@ -3047,13 +3176,19 @@ describe("the handoff queue", () => {
 					frameText(f).includes("❯ Abandon"),
 				);
 				await sleep(150);
+				// The abandonment closes the modal, and the row reads open at
+				// once: the waiting restart never claimed a seat - the cap held
+				// it in the Work queue - so no Starting window covers the badge
+				// (ADR 0034).
 				await pressReturnQuietFor("the abandonment", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);
-				// The abandonment re-reads the ticket's sources: let that
-				// fetch land, so the observation loop ticks and the pickup
+				// Release the gate: the handoff in flight settles and gives its
+				// seat back. The abandonment re-reads the ticket's sources: let
+				// that fetch land, so the observation loop ticks and the pickup
 				// meets the item. The ticket is open now, so the restart's
 				// pickup refuses and the item keeps its place.
+				gate.release();
 				src.settle({
 					status: "success",
 					fetchedAt: new Date(Date.now() + 60_000).toISOString(),
@@ -3092,7 +3227,12 @@ describe("the handoff queue", () => {
 				const held = await settle(setup);
 				expect(markerRowOf(held)).toBe(5);
 				await settleReverify(src, pairMoved);
-				await pressReturnQuietFor("the re-handoff", (f) => f.includes("handing off"));
+				// The re-handoff settles on its new pane, which the agent list
+				// does not carry, so the row ends on its missing marker. The
+				// transient Working line in between is not asserted.
+				await pressReturnQuietFor("the re-handoff to settle", (f) =>
+					ticketRow(f, "Watch agent turns").includes("missing"),
+				);
 				await awaitFrame(
 					setup,
 					() =>
@@ -3117,7 +3257,7 @@ describe("the handoff queue", () => {
 			{
 				config,
 				state,
-				runner,
+				runner: gate.runner,
 				configPath,
 				sources: [src],
 				pollIntervalMs: 60_000,

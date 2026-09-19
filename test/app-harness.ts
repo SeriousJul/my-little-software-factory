@@ -14,6 +14,7 @@ import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
 
 import { App, type AppProps } from "../src/components/app.ts";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { ThemeRole } from "../src/components/shared/theme.ts";
 import { paint } from "../src/components/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
@@ -47,8 +48,46 @@ const FRAME_POLL_MS = 10;
 export const FRAME_DEADLINE_MS = process.env.CI ? 20000 : 10000;
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
-/** The state badge the list pane renders for each ticket state. */
-const STATE_BADGES = TICKET_STATES.map((state) => `[${state}]`);
+/**
+ * The state badge the list pane renders for each resting ticket state.
+ *
+ * `handed-off` is not among them (ADR 0030): the `[handed-off]` badge is
+ * never drawn, and the ticket's Starting window wears the spinner face in
+ * its place instead. The frames the sample data carries a `handed-off`
+ * ticket, so a frame with every badge also carries one face.
+ */
+const STATE_BADGES = TICKET_STATES.filter((state) => state !== "handed-off").map(
+	(state) => `[${state}]`,
+);
+
+/**
+ * The spinner face a ticket's Starting window wears in place of its state
+ * badge (ADR 0030), read off a frame.
+ *
+ * The face steps its braille frame every ~100 ms, so a frame holds exactly
+ * one glyph beside the written word: the check runs on the word and any of
+ * the shared frames, never on one frame's glyph alone. A frame snapshot pins
+ * the first frame the face stands on; the animation itself is not something
+ * the frame snapshots verify.
+ */
+export const startingFaceOf = (frame: string): string | null =>
+	SPINNER_FRAMES.find((glyph) => frame.includes(`${glyph} starting`)) ?? null;
+
+/**
+ * The frame with the animated face standing on its first frame.
+ *
+ * The face steps a braille glyph every ~100 ms, so an exact frame
+ * comparison over that interval reads the glyph, not the screen it sits
+ * in. A stability check or an equality between two captures normalizes the
+ * glyph to the first frame first, so the face reads as the still it is for
+ * the screen: the word beside it carries the fact, the glyph is the motion
+ * (ADR 0030).
+ */
+export const stillFrame = (frame: string): string =>
+	SPINNER_FRAMES.slice(1).reduce(
+		(out, glyph) => out.replaceAll(`${glyph} starting`, `${SPINNER_FRAMES[0]} starting`),
+		frame,
+	);
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -157,11 +196,16 @@ export const agentRowOf = (frame: string): number => {
 			.startsWith("Agent: "),
 	);
 };
-/** Assert every ticket state badge is on screen, read off the frame. */
+/**
+ * Assert every resting ticket state badge is on screen, read off the frame,
+ * and the Starting window wears its spinner face in place of the badge it
+ * replaced (ADR 0030).
+ */
 export function expectStateBadges(frame: string): void {
 	for (const badge of STATE_BADGES) {
 		expect(frame).toContain(badge);
 	}
+	expect(startingFaceOf(frame)).not.toBeNull();
 }
 
 /**

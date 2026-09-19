@@ -12,9 +12,15 @@ import {
 	TextField,
 } from "../src/components/shared/fields.ts";
 import { NO_COLOR_INK, ownNoteCells } from "../src/components/shared/presentation.ts";
-import { SPINNER_FRAMES, Spinner } from "../src/components/shared/spinner.ts";
+import {
+	SPINNER_FRAME_MS,
+	SPINNER_FRAMES,
+	Spinner,
+	spinnerFace,
+	useSpinnerFrame,
+} from "../src/components/shared/spinner.ts";
 import { TypeAheadRow } from "../src/components/shared/type-ahead.ts";
-import { awaitFrame, frameText, rgb, roleColor, rowsOf, spanColors } from "./app-harness.ts";
+import { awaitFrame, frameText, rgb, roleColor, rowsOf, sleep, spanColors } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -688,5 +694,23 @@ describe("the shared spinner", () => {
 				);
 			},
 		);
+	});
+
+	test("owes no motion to a slot that says no face is on screen", async () => {
+		// A slot that paints the face as written text asks the shared frame for
+		// it, and names the gate: an inactive gate starts no interval at all.
+		const StaticFace = (props: { active: boolean }) => {
+			const at = useSpinnerFrame(props.active);
+			return createElement("text", undefined, spinnerFace(at, "starting", 12));
+		};
+		await withField(createElement(StaticFace, { active: false }), 30, 3, async (setup) => {
+			const first = setup.captureCharFrame();
+			expect(first).toContain(`${SPINNER_FRAMES[0]} starting`);
+			// Three frame ticks of wall time pass, and the face stands: the gate
+			// runs no interval, so nothing can move it.
+			await sleep(SPINNER_FRAME_MS * 3);
+			expect(setup.captureCharFrame()).toContain(`${SPINNER_FRAMES[0]} starting`);
+			expect(setup.captureCharFrame()).toBe(first);
+		});
 	});
 });

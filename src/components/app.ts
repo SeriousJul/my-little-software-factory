@@ -11,7 +11,8 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff in the Ticket section.
+ * `a` toggles auto-handoff in the Ticket section and writes the mode to the
+ * state file at once, so the next run reads it back (ADR 0036).
  *
  * The Main view is one surface with two independently collapsable sections
  * (ADR 0019): both lists stay in the left column, both expanded by default,
@@ -61,14 +62,15 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
+import type { HerdrAgent } from "../herdr.ts";
 import {
-	type HerdrAgent,
 	HerdrAgentReader,
 	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
+import { parallelSeatCount } from "../parallel.ts";
 import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -79,7 +81,6 @@ import {
 	errorMessage,
 	supportsModelList,
 } from "../runner.ts";
-import { parallelSeatCount } from "../seats.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
 import type { Consultation, FactoryState, WorkQueueItem } from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
@@ -128,7 +129,7 @@ import { type MainSection, SectionHeader } from "./section-header.ts";
 import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { paint } from "./theme.ts";
+import { inStartingWindow, paint } from "./theme.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
@@ -417,7 +418,11 @@ export function App({
 		lines: readonly string[];
 		note: string | null;
 	} | null>(null);
-	const [autoMode, setAutoMode] = useState<boolean>(() => configProp.autoHandoff);
+	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
+	// operator's last choice back from the state file, so a restart or a dev
+	// reload finds the mode where it was left. A plane with no state has no
+	// durable mode to read, and starts with the mode off.
+	const [autoMode, setAutoMode] = useState<boolean>(() => state?.autoHandoffMode() ?? false);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,
@@ -425,23 +430,22 @@ export function App({
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
 	/**
-	 * The one count the Parallel limit reads (ADR 0034): the ticket seats,
-	 * the unresolved claims, and the Consultation seats, from the latest
-	 * herdr poll. The dispatch module gates a manual start on it, the
-	 * observation loop's gates gate on the same facts each cycle, and the
-	 * mode line displays it, so the three never disagree.
+	 * The one count the Parallel limit reads (issue #87, ADR 0034): the shared
+	 * seat count of the in-flight tickets, the in-progress handoffs, and the
+	 * Consultations in `opening` or `working`, from the latest herdr poll. The
+	 * dispatch module gates a manual start on it, the observation loop gates the
+	 * automatic starts on the same facts each cycle, and the mode line displays
+	 * it, so the three never disagree.
 	 */
-	const currentSeatCount = (): number => {
-		if (state === undefined) return 0;
-		return parallelSeatCount({
-			tickets: state.ticketsByState(["handed-off", "running"]),
-			openAttempts: state.openAttemptTickets(),
-			consultationSeats: state.consultationSeatCount(),
-			agents: agentsRef.current,
-			now: () => Date.now(),
-			startupGraceMs: STARTUP_GRACE_MS,
-		});
-	};
+	const currentSeatCount = (): number =>
+		state === undefined
+			? 0
+			: parallelSeatCount({
+					state,
+					agents: agentsRef.current,
+					now: Date.now(),
+					startupGraceMs: STARTUP_GRACE_MS,
+				});
 	// The herdr seat: one external change to a ticket's environment at a time.
 	// A handoff holds it while herdr builds the environment and starts the
 	// agent. Close cleanups queue behind that work, and a queued cleanup
@@ -544,12 +548,14 @@ export function App({
 	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-	// The mode line carries the auto-handoff state and the combined seat
-	// count against the one cap (ADR 0034): the ticket seats, the unresolved
-	// claims, and the Consultation seats, from the shared count the gates
-	// read, so the display and the gates never disagree. It exists only when
-	// the control plane has state to observe.
-	const liveCount = state === undefined ? 0 : currentSeatCount();
+	// The mode line carries the auto-handoff state and the Parallel limit
+	// seat count: the same shared seat count the observation gates and the
+	// dispatch gate read (issue #87, ADR 0034) - the in-flight tickets the
+	// latest successful poll listed or still holds in their startup grace,
+	// every in-progress handoff, and every Consultation in opening or working
+	// - against the parallel limit. It exists only when the control plane has
+	// state to observe.
+	const liveCount = currentSeatCount();
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
@@ -926,6 +932,14 @@ export function App({
 		if (agent === undefined) return "missing";
 		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
 	};
+	/**
+	 * The Starting window (ADR 0030) one ticket reads from the app's facts:
+	 * the claim this run holds on it, or its `handed-off` state. The row and
+	 * the detail header wear the spinner face it opens in place of the state
+	 * badge, and the failure marker rules it out before it is read.
+	 */
+	const startingWindow = (ticket: Ticket): boolean =>
+		inStartingWindow(ticket, startingTickets.has(ticket.identity));
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
@@ -1101,11 +1115,26 @@ export function App({
 		}
 		// The no-state test projection: no claim, and the settle patches the
 		// ticket list by hand instead of reading it back from SQLite. It has no
-		// queue, so it refuses to run behind a handoff already in flight.
+		// queue, so it refuses to run behind a handoff already in flight. The
+		// Starting window (ADR 0030) is the in-flight handoff itself here: the
+		// add lands on the keypress, and the settle leaves the face to the
+		// `handed-off` state on a start and drops it on a failure.
 		noStateHandoffInFlightRef.current = true;
+		setStartingTickets((current) => {
+			if (current.has(ticket.identity)) return current;
+			const next = new Set(current);
+			next.add(ticket.identity);
+			return next;
+		});
 		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
+				setStartingTickets((current) => {
+					if (!current.has(ticket.identity)) return current;
+					const next = new Set(current);
+					next.delete(ticket.identity);
+					return next;
+				});
 				if (outcome.status !== "failed") {
 					const handoff: Handoff = {
 						agentType: choice.agentType,
@@ -1133,6 +1162,12 @@ export function App({
 				noStateHandoffInFlightRef.current = false;
 			})
 			.catch((error) => {
+				setStartingTickets((current) => {
+					if (!current.has(ticket.identity)) return current;
+					const next = new Set(current);
+					next.delete(ticket.identity);
+					return next;
+				});
 				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				noStateHandoffInFlightRef.current = false;
 			});
@@ -1206,13 +1241,27 @@ export function App({
 		}
 	};
 	/**
-	 * Toggle auto-handoff for this session. The config's value is the
-	 * startup default only; the toggle never writes the config.
+	 * Toggle the Auto-handoff mode (ADR 0036).
+	 *
+	 * The flip lands in the session at once, and the new mode is written to the
+	 * state file at once: the next startup and the next dev reload read it back.
+	 * A write that fails reports the state file it could not write on the Message
+	 * line, and the in-session flip stands: the operator keeps working in the mode
+	 * they asked for, so the failure is news about the next run, not a refusal of
+	 * this one.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
+		if (state === undefined) return;
+		try {
+			state.setAutoHandoffMode(next);
+		} catch (error) {
+			setErrorMessage(
+				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
+			);
+		}
 	};
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
@@ -2337,6 +2386,9 @@ export function App({
 				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
+			// The mode line's shared seat count and the cycle's gates share this
+			// grace, so the booting seats they count agree.
+			startupGraceMs: STARTUP_GRACE_MS,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
 			onChanged: () => {
 				replaceTickets();
@@ -2964,6 +3016,7 @@ export function App({
 									emptyMessage,
 									markerOf,
 									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+									starting: startingWindow,
 									active: mainSurfaceActive,
 									onFocus: () => focusListSection("ticket"),
 									onSelect: (index: number) => {
@@ -3074,6 +3127,11 @@ export function App({
 												: null,
 										suggestedChoice:
 											selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
+										starting:
+											selectedTicket !== undefined &&
+											markerOf(selectedTicket) === null &&
+											startingWindow(selectedTicket),
+										marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
 										scroll: config.scroll,
 										onFocus: () => focusPane("detail"),
 										scrollSlot: detailScrollSlot,

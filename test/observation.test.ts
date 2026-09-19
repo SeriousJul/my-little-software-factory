@@ -3,9 +3,9 @@ import { describe, expect, mock, test } from "bun:test";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
+import type { HerdrAgent } from "../src/herdr.ts";
 import {
 	type AgentReader,
-	type HerdrAgent,
 	HerdrAgentReader,
 	normalizeAgentStatus,
 	ObservationCoordinator,
@@ -13,7 +13,7 @@ import {
 	stripAnsi,
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import { type ConsultationState, type FactoryState, openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
@@ -2530,6 +2530,144 @@ describe("the injectable clock", () => {
 		coordinator.stop();
 		expect(clock.pending).toBe(0);
 		state.close();
+	});
+});
+
+describe("the Consultation parallel seats", () => {
+	/**
+	 * Seed a Consultation in the given state with a stored Agent in the given
+	 * pane, the way a launch records it.
+	 */
+	function consultationIn(
+		state: FactoryState,
+		id: string,
+		paneId: string,
+		stateName: ConsultationState,
+	): void {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: `consultation-${id}`,
+		});
+		state.recordConsultationAgentHandles(id, {
+			paneId,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			sessionId: `session-${id}`,
+		});
+		if (stateName !== "opening") state.setConsultationState(id, stateName);
+	}
+
+	test("a working Consultation holds a seat the open dispatch respects", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			dispatchClaims: true,
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			state.applyFetch(
+				source,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			await coordinator.tick();
+			// Three eligible tickets, a cap of two: the working Consultation
+			// holds one seat, so only one ticket dispatches.
+			expect(intents).toHaveLength(1);
+			await coordinator.tick();
+			// The dispatched handoff's in-progress seat plus the Consultation's
+			// seat fill the cap: the other tickets still wait.
+			expect(intents).toHaveLength(1);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a working Consultation holds a seat the workflow route respects", async () => {
+		const { state, intents, coordinator } = rig({
+			agents: [agent("pane-consult", "working")],
+			config: { maxParallelAgents: 1 },
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			settleFor(state, "github:github.com:I_5", "route");
+			await coordinator.tick();
+			// The route's single edge wants a seat the working Consultation
+			// holds: the ticket rests in awaiting instead of routing.
+			expect(intents).toHaveLength(0);
+			expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a working Consultation holds a seat the restart respects", async () => {
+		const { state, intents, coordinator, advance } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			config: { maxParallelAgents: 1 },
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			handOut(state, "github:github.com:I_5");
+			advance(STARTUP_GRACE_MS + 1);
+			await coordinator.tick();
+			// The missing agent holds no seat, but the working Consultation
+			// holds the one the cap allows: the restart waits.
+			expect(intents).toHaveLength(0);
+			expect(state.ticketState("github:github.com:I_5")).toBe("handed-off");
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a Consultation in any other state holds no seat", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			dispatchClaims: true,
+		});
+		try {
+			consultationIn(state, "consultation-awaiting", "pane-consult", "awaiting-response");
+			state.applyFetch(
+				source,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			await coordinator.tick();
+			// The awaiting-response Consultation holds no seat: the cap of two
+			// still takes two tickets.
+			expect(intents).toHaveLength(2);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("with the cap at 0 the Consultation seats never engage", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			config: { maxParallelAgents: 0 },
+			dispatchClaims: true,
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			state.applyFetch(
+				source,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			await coordinator.tick();
+			// Unlimited: every eligible ticket dispatches, the Consultation
+			// seats included in the count but never against a cap.
+			expect(intents).toHaveLength(3);
+		} finally {
+			state.close();
+		}
 	});
 });
 

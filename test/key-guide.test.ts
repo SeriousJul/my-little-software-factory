@@ -39,6 +39,7 @@ import {
 	rowsOf,
 	settle,
 	spanColorAt,
+	stillFrame,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -878,7 +879,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				await closeOverlay(setup, "Key guide", "the guide to close");
 				let frame = await settle(setup);
-				expect(rowsOf(frame)[markerRowOf(frame)]).toBe(selectedBefore);
+				expect(stillFrame(rowsOf(frame)[markerRowOf(frame)])).toBe(stillFrame(selectedBefore));
 
 				// The detail focus and scroll, on a short terminal where the
 				// detail pane overflows. The list keeps the focus through the
@@ -894,14 +895,19 @@ describe("the in-app Key guide", () => {
 						.map((row) => row.slice(WIDTH / 2 + 2, WIDTH - 2))
 						.join("\n");
 				const detailTop = detailCol(setup.captureCharFrame());
-				await press(setup, "j", "the detail to scroll", (f) => detailCol(f) !== detailTop);
+				await press(
+					setup,
+					"j",
+					"the detail to scroll",
+					(f) => stillFrame(detailCol(f)) !== stillFrame(detailTop),
+				);
 				const detailBefore = detailCol(setup.captureCharFrame());
-				expect(detailBefore).not.toBe(detailTop);
+				expect(stillFrame(detailBefore)).not.toBe(stillFrame(detailTop));
 				await openGuide(setup, "?");
 				await closeOverlay(setup, "Key guide", "the guide to close");
 				frame = await settle(setup);
 				expect(detailFocused(frame)).toBe(true);
-				expect(detailCol(frame)).toBe(detailBefore);
+				expect(stillFrame(detailCol(frame))).toBe(stillFrame(detailBefore));
 				setup.resize(WIDTH, HEIGHT);
 				await settle(setup);
 

@@ -191,13 +191,32 @@ one holds that same seat: an environment change and a handoff never work
 beside each other.
 
 Above the panes sits a mode line. It shows the auto-handoff state and the
-running work against the parallel limit: `auto: on 1/2`, or `auto: off 1`
-when no limit is set. The count is the ticket seats - the in-flight
-tickets whose agent was alive in the latest herdr poll - plus the
-Consultation seats, the Consultations in `opening` or `working` (ADR
-0034). The `a` key toggles the mode for the
-session from the Ticket section; the config's `auto-handoff` key sets the
-startup value only.
+Parallel limit seat count against the parallel limit: `auto: on 2/2`, or
+`auto: off 1` when no limit is set. The count is the one shared
+seat-count source the automatic start gates read: the in-flight tickets
+whose agent was alive in the latest herdr poll, or is still inside its
+startup grace, the handoffs still in progress, and every Consultation in
+`opening` or `working`. The gates and the mode line read the same source,
+so the two never disagree. The `a` key in the Ticket section toggles the
+mode and writes it to the state file at once, so a restart or a dev reload
+finds the mode where the operator left it; a state file the plane has just
+created starts with the mode off (ADR 0036). A write the state file refuses
+reports on the Message line, and the flip stands for the session.
+
+A ticket in the Starting window wears the window's face in the state badge
+slot: the Handoff is claimed and not yet settled, or the ticket is
+`handed-off`. The face is an animated spinner with the written word
+`starting`, and it stands in the list row and the detail pane's state line
+in place of the state badge. The `[handed-off]` badge is never drawn: the
+face wears the badge's slot from the keypress, and the row's timeline is
+`[open]`, face, `[running]` - one face on the way in, one flip when the work
+is observed. The face ends when the observation moves the ticket to
+`running`, when a settle moves it to `awaiting` or held, or when a start
+fails and returns the row to its state with the error line. Every origin
+wears the same face: a manual hand-off, a workflow route, a restart, and an
+auto hand-off. The face is a shared control with a gallery example, and the
+animated glyph is not what the frame snapshots verify: the checks run on the
+written word beside any glyph of the face.
 
 A blocked agent replaces the state badge in the list row with a `blocked`
 badge: the agent shows an approval or question UI and waits for a human.
@@ -206,7 +225,12 @@ against the parallel limit. A missing agent replaces the state badge with a
 `missing` badge: the stored pane is gone or holds no agent, so the work
 stops there until the operator restarts or abandons the cycle. Both badges
 clear when the next poll no longer shows the condition. The first poll has
-not landed yet, so no badge appears before it.
+not landed yet, so no badge appears before it. The failure markers beat the
+Starting window's face the way they beat the state badge: a dead or blocked
+agent is never hidden behind a spinner, and a crash remnant shows its
+recovery fact, not the spinner. A `handed-off` ticket under a marker wears
+that marker's own word in the detail's state line too: the `[handed-off]`
+badge is drawn by no surface, and the row and the detail never disagree.
 A ticket that has used up its per-ticket handoff limit wears a trailing
 `handoff limit` marker at the end of the row, and the detail pane shows the
 count as `Handoffs: 2/2`. Auto-handoff leaves such a ticket open; a manual

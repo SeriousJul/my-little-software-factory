@@ -1725,23 +1725,6 @@ export class FactoryState {
 	}
 
 	/**
-	 * The Consultation side of the Parallel limit (ADR 0034): a Consultation
-	 * in `opening` or `working` holds one seat beside the ticket seats; the
-	 * other states hold none.
-	 */
-	consultationSeatCount(): number {
-		return (
-			(
-				this.db
-					.prepare(
-						"SELECT COUNT(*) AS count FROM consultations WHERE state IN ('opening', 'working')",
-					)
-					.get() as { count: number } | undefined
-			)?.count ?? 0
-		);
-	}
-
-	/**
 	 * The tickets in the given states, with their latest handoff.
 	 *
 	 * When a Priority label list is given, the tickets come back in the
