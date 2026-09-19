@@ -19,14 +19,30 @@ import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { ChoiceRow } from "./shared/choices.ts";
 import { MARKER_WIDTH, turnEndCauseLine } from "./shared/presentation.ts";
+import { Spinner } from "./shared/spinner.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
-import { paint, stateBadge, stateColor, taskTypeColor, ticketTaskType } from "./theme.ts";
+import {
+	BADGE_WIDTH,
+	paint,
+	STARTING_WORD,
+	stateBadge,
+	stateColor,
+	taskTypeColor,
+	ticketTaskType,
+} from "./theme.ts";
 
 export interface DetailLine {
 	text: string;
 	fg: string | undefined;
 	/** The emphasis the old palette carried in a brighter text color. */
 	bold?: boolean;
+	/**
+	 * The state line is the spinner face of the ticket's Starting window
+	 * (ADR 0030). The pane renders the shared spinner control in the line's
+	 * place, so the face the list row wears is the control itself here, and
+	 * the text the line carries is unused.
+	 */
+	spinner?: boolean;
 }
 
 /**
@@ -93,6 +109,7 @@ export function detailContent(
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
 	priorityOverride: string | null = null,
+	starting: boolean = false,
 ): DetailContent {
 	if (ticket === undefined)
 		return {
@@ -111,7 +128,11 @@ export function detailContent(
 	};
 	pushWrapped(ticket.title, paint("text"), true);
 	pushWrapped(ticket.repository, paint("text"));
-	lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
+	// The Starting window (ADR 0030) takes the state line's slot in place of
+	// the badge, the same face the list row wears, so the list and the detail
+	// never disagree. The `[handed-off]` badge is never drawn.
+	if (starting) lines.push({ text: " ", fg: undefined, spinner: true });
+	else lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
 	const choice = detailChoice(ticket, suggestedChoice);
 	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
 	if (choice !== undefined) {
@@ -215,6 +236,7 @@ export function detailContent(
 		text: truncateToWidth(line.text, usableCols),
 		fg: line.fg,
 		bold: line.bold,
+		...(line.spinner === true ? { spinner: true } : {}),
 	}));
 	return {
 		lines: truncated,
@@ -230,8 +252,16 @@ export function detailLines(
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
 	priorityOverride: string | null = null,
+	starting: boolean = false,
 ): DetailLine[] {
-	return detailContent(ticket, usableCols, handoffLimit, suggestedChoice, priorityOverride).lines;
+	return detailContent(
+		ticket,
+		usableCols,
+		handoffLimit,
+		suggestedChoice,
+		priorityOverride,
+		starting,
+	).lines;
 }
 
 /**
@@ -376,6 +406,12 @@ interface TicketDetailProps {
 	priorityOverride: string | null;
 	/** The resolved choice for an open Ticket's suggested Task type. */
 	suggestedChoice?: HandoffChoice;
+	/**
+	 * Whether the ticket's Starting window (ADR 0030) is open against the
+	 * app's facts, with the failure marker already ruled out: the state line
+	 * wears the spinner face the list row wears in place of the badge.
+	 */
+	starting: boolean;
 	scroll: ScrollConfig;
 	onFocus: () => void;
 	/**
@@ -400,6 +436,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		handoffLimit,
 		priorityOverride,
 		suggestedChoice,
+		starting,
 		scroll,
 		onFocus,
 		scrollSlot,
@@ -413,7 +450,14 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 	// The scroll box owns the gutter; see `detailTextCols`.
 	const textCols = detailTextCols(geometry.usableCols);
 	const reserveGutter = textCols < geometry.usableCols;
-	const content = detailContent(ticket, textCols, handoffLimit, suggestedChoice, priorityOverride);
+	const content = detailContent(
+		ticket,
+		textCols,
+		handoffLimit,
+		suggestedChoice,
+		priorityOverride,
+		starting,
+	);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;
 	// The detail pane's Priority selector on the standard choice row (ADR
@@ -641,11 +685,17 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			style: { flexGrow: 1, flexShrink: 1, overflow: "hidden" },
 		},
 		...lines.flatMap((line, index) => [
-			createElement(
-				"text",
-				{ key: `detail-${index}`, fg: line.fg },
-				line.bold ? createElement("b", undefined, line.text) : line.text,
-			),
+			line.spinner === true
+				? createElement(Spinner, {
+						key: `detail-${index}`,
+						word: STARTING_WORD,
+						width: BADGE_WIDTH,
+					})
+				: createElement(
+						"text",
+						{ key: `detail-${index}`, fg: line.fg },
+						line.bold ? createElement("b", undefined, line.text) : line.text,
+					),
 			...(index === content.choiceIndex && choiceRow !== null
 				? [createElement(Fragment, { key: "priority-override" }, choiceRow)]
 				: []),

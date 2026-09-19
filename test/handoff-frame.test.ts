@@ -41,6 +41,7 @@ import {
 	settle,
 	showsTicket,
 	spanColors,
+	startingFaceOf,
 	unfitTones,
 	WIDTH,
 	withApp,
@@ -301,10 +302,19 @@ async function moveToTaskTypeFromModelRow(setup: Setup): Promise<string> {
  * the state badge must read the selected row, not scan the whole frame.
  */
 const selectedRow = (frame: string) => rowsOf(frame)[markerRowOf(frame)];
-const selectedIs = (frame: string, badge: string) => {
-	const index = markerRowOf(frame);
-	return index >= 0 && selectedRow(frame).includes(badge);
-};
+
+/**
+ * True when the selected ticket's handoff has settled in its own row.
+ *
+ * The Starting window's spinner face (ADR 0030) wears the row from the
+ * keypress, so the face says the key registered and only the Working line
+ * clearing under it says the settle landed. A failed settle shows its
+ * reason instead of clearing, so the face there reads with the error, and
+ * the predicate stays false until the line the settle leaves sits on the
+ * Message line.
+ */
+const handoffSettled = (frame: string): boolean =>
+	startingFaceOf(selectedRow(frame)) !== null && !messageRowOf(frame).includes("Working:");
 
 /** Press Enter and wait for the selected ticket to settle as handed off. */
 async function pressEnter(setup: Setup, what: string, text: string): Promise<string> {
@@ -375,11 +385,7 @@ const contextProfileConfig: FactoryConfig = {
 
 async function pressEnterToHandoff(setup: Setup): Promise<string> {
 	setup.mockInput.pressEnter();
-	return awaitFrame(
-		setup,
-		(frame) => selectedIs(frame, "[handed-off]"),
-		"the selected ticket to settle",
-	);
+	return awaitFrame(setup, handoffSettled, "the selected ticket to settle");
 }
 
 describe("the Enter handoff", () => {
@@ -391,8 +397,9 @@ describe("the Enter handoff", () => {
 		await withApp(
 			async (setup) => {
 				const frame = await pressEnterToHandoff(setup);
-				// The selected ticket settled in the list...
-				expect(selectedRow(frame)).toContain("[handed-off]");
+				// The selected ticket settled in the list, its row wearing
+				// the Starting window's face where the badge used to stand...
+				expect(startingFaceOf(selectedRow(frame))).not.toBeNull();
 				// ...and the detail pane carries the handoff facts.
 				const detail = detailPaneText(frame);
 				expect(detail).toContain("Agent: pi");
@@ -519,7 +526,7 @@ describe("the Enter handoff", () => {
 				// Esc closes the view; the ticket stays where it is.
 				setup.mockInput.pressEscape();
 				const closed = await awaitFrame(setup, (f) => !f.includes("Live:"), "the view to close");
-				expect(selectedRow(closed)).toContain("[handed-off]");
+				expect(startingFaceOf(selectedRow(closed))).not.toBeNull();
 
 				// The override panel is refused the same way: e shows the hint.
 				setup.mockInput.pressKey("e");
@@ -564,11 +571,7 @@ describe("the Enter handoff", () => {
 				// The in-flight guard cleared and the app is alive: a retry on
 				// the same ticket runs the handoff to completion.
 				setup.mockInput.pressEnter();
-				const settled = await awaitFrame(
-					setup,
-					(f) => selectedIs(f, "[handed-off]"),
-					"the retry to settle",
-				);
+				const settled = await awaitFrame(setup, handoffSettled, "the retry to settle");
 				// The retry re-resolved the repository: the clone ran this time.
 				expect(runner.commands()).toContain(
 					`git clone https://github.com/acme/billing.git ${join(home, "src", "billing")}`,
@@ -662,7 +665,7 @@ describe("the in-flight guard", () => {
 					(f) => markerRowOf(f) === 3,
 				);
 				// The first handoff still settles, on the ticket it started on.
-				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
+				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 			},
 			WIDTH,
 			HEIGHT,
@@ -770,16 +773,15 @@ describe("the override panel", () => {
 					"the in-flight handoff",
 				);
 				const row = listHalfOf(selectedRow(inFlight));
-				expect(row).toContain("[open]");
+				// The Starting window takes the state badge's slot on the
+				// keypress (ADR 0030)... while the list keeps showing the
+				// suggestion beside it.
+				expect(startingFaceOf(row)).not.toBeNull();
 				expect(row).toContain("[implement]");
 				expect(detailPaneText(inFlight)).toContain("Suggested task type: implement");
 				// Once the handoff settles, the row and the detail wear the
 				// overridden task type, not the suggestion.
-				const settled = await awaitFrame(
-					setup,
-					(frame) => selectedIs(frame, "[handed-off]"),
-					"the handoff to settle",
-				);
+				const settled = await awaitFrame(setup, handoffSettled, "the handoff to settle");
 				const settledRow = listHalfOf(selectedRow(settled));
 				expect(settledRow).toContain("[fix]");
 				expect(settledRow).not.toContain("[implement]");
@@ -821,7 +823,7 @@ describe("the override panel", () => {
 				// the prompt did not get through: the row and the detail keep
 				// the actual overridden task type.
 				const row = listHalfOf(selectedRow(frame));
-				expect(row).toContain("[handed-off]");
+				expect(startingFaceOf(row)).not.toBeNull();
 				expect(row).toContain("[fix]");
 				expect(detailPaneText(frame)).toContain("Handoff task type: fix");
 				// The prompt failure still shows its reason.
@@ -1278,7 +1280,7 @@ describe("the override panel", () => {
 				expect(frameText(opened)).toContain("Thinking low");
 				expect(opened).not.toContain("(unset)");
 				const settled = await pressEnterToHandoff(setup);
-				expect(selectedRow(settled)).toContain("[handed-off]");
+				expect(startingFaceOf(selectedRow(settled))).not.toBeNull();
 				// The default rides on the agent start, where the agent type
 				// maps it to its own flag.
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
@@ -1403,7 +1405,7 @@ describe("the override panel", () => {
 				// The explicit choice rides on, not the new task type's default.
 				expect(frameText(switched)).toContain("Thinking medium");
 				const settled = await pressEnterToHandoff(setup);
-				expect(selectedRow(settled)).toContain("[handed-off]");
+				expect(startingFaceOf(selectedRow(settled))).not.toBeNull();
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("--thinking");
 				expect(start?.args).toContain("medium");
@@ -2211,7 +2213,7 @@ describe("the override panel", () => {
 				// permanent, so the refusal is read from the panel's row.
 				expect(refused).not.toContain("❯ Agent");
 				// The first handoff still settles.
-				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
+				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 			},
 			WIDTH,
 			HEIGHT,
@@ -2246,7 +2248,7 @@ describe("the override panel", () => {
 				);
 				// The handoff itself succeeded: the ticket is handed off... and
 				// the warning sits on the permanent Message line.
-				expect(selectedRow(frame)).toContain("[handed-off]");
+				expect(startingFaceOf(selectedRow(frame))).not.toBeNull();
 				expect(messageRowOf(frame)).toContain("could not persist");
 			},
 			WIDTH,
@@ -2806,7 +2808,7 @@ describe("the override panel", () => {
 				await press(setup, "j", "the selection to reach the model", (f) => f.includes("❯ Model"));
 				await setup.mockInput.typeText("gpt");
 				setup.mockInput.pressEnter();
-				await awaitFrame(setup, (f) => selectedIs(f, "[handed-off]"), "the handoff to settle");
+				await awaitFrame(setup, handoffSettled, "the handoff to settle");
 				const start = runner.calls.find((c) => c.args[0] === "agent" && c.args[1] === "start");
 				expect(start?.args).toContain("gpt");
 			},

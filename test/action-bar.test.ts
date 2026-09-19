@@ -47,6 +47,7 @@ import {
 	settle,
 	sleep,
 	spanColorAt,
+	startingFaceOf,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -575,9 +576,17 @@ describe("the contextual Action bar", () => {
 				// Help: ? opens the guide, F1 closes it.
 				await openGuide(setup, "?");
 				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
-				// Hand off: Enter starts the handoff, and it settles.
-				await press(setup, "return", "the handoff to settle", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("[handed-off]"),
+				// Hand off: Enter starts the handoff, and it settles. The row
+				// takes the Starting window's spinner face on the keypress
+				// (ADR 0030), and the face stays with the settled `handed-off`
+				// state: the settle is the Working line clearing.
+				await press(
+					setup,
+					"return",
+					"the handoff to settle",
+					(f) =>
+						startingFaceOf(rowsOf(f)[markerRowOf(f)] ?? "") !== null &&
+						!messageRowOf(f).includes("Working:"),
 				);
 				expect(runner.commands()).toHaveLength(7);
 			},

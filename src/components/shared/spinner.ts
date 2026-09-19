@@ -44,6 +44,18 @@ export function useSpinnerFrame(frameMs: number = SPINNER_FRAME_MS): number {
 	return frame;
 }
 
+/**
+ * The face as written text at one frame: the braille glyph, a cell of air,
+ * and the word, padded to the width. A slot the face stands in that cannot
+ * mount the control paints this string as a plain run and drives its own
+ * frame with the shared frames and timing, so the face reads the same in
+ * every slot it stands in.
+ */
+export function spinnerFace(frame: number, word: string, width: number): string {
+	const index = ((frame % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length;
+	return padToWidth(truncateToWidth(`${SPINNER_FRAMES[index]} ${word}`, width), width);
+}
+
 export interface SpinnerProps {
 	/** The written word the face carries beside its glyph. */
 	word: string;
@@ -68,10 +80,9 @@ export function Spinner(props: SpinnerProps): ReactElement {
 	const ink = props.ink ?? controlInk();
 	const driven = useSpinnerFrame();
 	const at = props.frame ?? driven;
-	const index = ((at % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length;
-	const face = padToWidth(
-		truncateToWidth(`${SPINNER_FRAMES[index]} ${props.word}`, props.width),
-		props.width,
+	return createElement(
+		"text",
+		{ fg: ink.detail.fg ?? undefined },
+		spinnerFace(at, props.word, props.width),
 	);
-	return createElement("text", { fg: ink.detail.fg ?? undefined }, face);
 }

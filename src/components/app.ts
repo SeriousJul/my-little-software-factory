@@ -127,7 +127,7 @@ import { type MainSection, SectionHeader } from "./section-header.ts";
 import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
-import { paint } from "./theme.ts";
+import { inStartingWindow, paint } from "./theme.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
@@ -789,6 +789,14 @@ export function App({
 		if (agent === undefined) return "missing";
 		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
 	};
+	/**
+	 * The Starting window (ADR 0030) one ticket reads from the app's facts:
+	 * the claim this run holds on it, or its `handed-off` state. The row and
+	 * the detail header wear the spinner face it opens in place of the state
+	 * badge, and the failure marker rules it out before it is read.
+	 */
+	const startingWindow = (ticket: Ticket): boolean =>
+		inStartingWindow(ticket, startingTickets.has(ticket.identity));
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
@@ -962,11 +970,26 @@ export function App({
 		}
 		// The no-state test projection: no claim, and the settle patches the
 		// ticket list by hand instead of reading it back from SQLite. It has no
-		// queue, so it refuses to run behind a handoff already in flight.
+		// queue, so it refuses to run behind a handoff already in flight. The
+		// Starting window (ADR 0030) is the in-flight handoff itself here: the
+		// add lands on the keypress, and the settle leaves the face to the
+		// `handed-off` state on a start and drops it on a failure.
 		noStateHandoffInFlightRef.current = true;
+		setStartingTickets((current) => {
+			if (current.has(ticket.identity)) return current;
+			const next = new Set(current);
+			next.add(ticket.identity);
+			return next;
+		});
 		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
+				setStartingTickets((current) => {
+					if (!current.has(ticket.identity)) return current;
+					const next = new Set(current);
+					next.delete(ticket.identity);
+					return next;
+				});
 				if (outcome.status !== "failed") {
 					const handoff: Handoff = {
 						agentType: choice.agentType,
@@ -994,6 +1017,12 @@ export function App({
 				noStateHandoffInFlightRef.current = false;
 			})
 			.catch((error) => {
+				setStartingTickets((current) => {
+					if (!current.has(ticket.identity)) return current;
+					const next = new Set(current);
+					next.delete(ticket.identity);
+					return next;
+				});
 				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				noStateHandoffInFlightRef.current = false;
 			});
@@ -2664,6 +2693,7 @@ export function App({
 									emptyMessage,
 									markerOf,
 									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+									starting: startingWindow,
 									active: mainSurfaceActive,
 									onFocus: () => focusListSection("ticket"),
 									onSelect: (index: number) => {
@@ -2731,6 +2761,10 @@ export function App({
 											: null,
 									suggestedChoice:
 										selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
+									starting:
+										selectedTicket !== undefined &&
+										markerOf(selectedTicket) === null &&
+										startingWindow(selectedTicket),
 									scroll: config.scroll,
 									onFocus: () => focusPane("detail"),
 									scrollSlot: detailScrollSlot,

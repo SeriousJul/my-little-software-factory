@@ -17,11 +17,12 @@
  */
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
-import { type ReactElement, useRef } from "react";
+import { type ReactElement, useEffect, useRef, useState } from "react";
 
 import { isHeldCompletion, type Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
+import { SPINNER_FRAME_MS, SPINNER_FRAMES, spinnerFace } from "./shared/spinner.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
@@ -29,6 +30,7 @@ import {
 	heldBadge,
 	markerColor,
 	paint,
+	STARTING_WORD,
 	stateBadge,
 	stateColor,
 	taskTypeBadge,
@@ -47,6 +49,29 @@ const SELECTION_WIDTH = 2;
 /** The row cells a dropped field still owes the title: one gap and one text cell. */
 const TITLE_MINIMUM = 2;
 
+/**
+ * The frame the spinner face stands on, stepped by the shared timing.
+ *
+ * The row is one text renderable, and a text renderable takes no nested
+ * control, so the face the row wears is the shared face's written text at
+ * this frame, painted as one run the way the state badge is painted. The
+ * face drives itself while any visible row wears it, and stands on its first
+ * frame the moment the window opens, so a frame snapshot read at the open
+ * holds. The word, not the glyph, is the fact (ADR 0030).
+ */
+function useStartingFace(active: boolean): number {
+	const [frame, setFrame] = useState(0);
+	useEffect(() => {
+		if (!active) return;
+		const id = setInterval(
+			() => setFrame((at) => (at + 1) % SPINNER_FRAMES.length),
+			SPINNER_FRAME_MS,
+		);
+		return () => clearInterval(id);
+	}, [active]);
+	return frame;
+}
+
 interface TicketListProps {
 	tickets: readonly Ticket[];
 	selectedIndex: number;
@@ -58,6 +83,12 @@ interface TicketListProps {
 	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
 	/** Whether the ticket has used up its handoffs: the limit marker. */
 	limitReached: (ticket: Ticket) => boolean;
+	/**
+	 * Whether the ticket's Starting window (ADR 0030) is open against the
+	 * app's facts: the row wears the spinner face in place of its state
+	 * badge while it holds. A failure marker outranks it in the row.
+	 */
+	starting: (ticket: Ticket) => boolean;
 	/** False while an overlay owns input above the panes. */
 	active: boolean;
 	onFocus: () => void;
@@ -73,6 +104,7 @@ export function TicketList({
 	emptyMessage,
 	markerOf,
 	limitReached,
+	starting,
 	active,
 	onFocus,
 	onSelect,
@@ -85,6 +117,9 @@ export function TicketList({
 	const rootRef = useRef<BoxRenderable | null>(null);
 
 	const { start, visible } = listWindow(tickets, selectedIndex, visibleRows);
+	// The face steps only while a visible row wears it: a window that is not
+	// on screen owes no motion.
+	const faceFrame = useStartingFace(visible.some((ticket) => starting(ticket)));
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
@@ -136,6 +171,8 @@ export function TicketList({
 							geometry.usableCols,
 							markerOf(ticket),
 							limitReached(ticket),
+							starting(ticket),
+							faceFrame,
 						),
 					),
 				)),
@@ -160,6 +197,8 @@ function rowSpans(
 	usableCols: number,
 	marker: "blocked" | "missing" | null,
 	atLimit: boolean,
+	starting: boolean,
+	faceFrame: number,
 ): ReactElement[] {
 	const spans: ReactElement[] = [];
 	let budget = usableCols;
@@ -184,10 +223,21 @@ function rowSpans(
 	// must act on, and it outranks the resting state it rests in. It only
 	// appears on an awaiting ticket: a held turn whose agent works again has
 	// left awaiting and shows its state badge, never `held` over an agent that
-	// is visibly working.
+	// is visibly working. The spinner face of the Starting window (ADR 0030)
+	// takes the badge's slot while the window holds; a failure marker beats
+	// it the way it beats the state badge, so a dead or blocked agent is
+	// never hidden behind the motion.
 	if (budget >= BADGE_WIDTH) {
 		if (marker !== null)
 			spans.push(createElement("span", { fg: markerColor(marker) }, failureBadge(marker)));
+		else if (starting)
+			spans.push(
+				createElement(
+					"span",
+					{ fg: paint("subtext0") },
+					spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
+				),
+			);
 		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
 			spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
 		else
