@@ -136,6 +136,18 @@ The search is distinct from the selected Model value. This changes the old
 invisible-search definition; it does not change how the Agent supplies its
 Model list or which Models are valid.
 
+## Spinner
+
+The spinner is the shared face a control wears beside its written word while
+a wait runs: an animated braille glyph that steps one frame every about
+100 ms. The face drives its own frames the way the Decision modal's pop-in
+drives its own progress; it never asks the renderer's animation engine, and
+the mount paints the first frame, so a frame snapshot taken there holds.
+The word carries the meaning: the glyph is the motion, the word is the fact,
+so the no-color presentation keeps the word and drops only the color. The
+surface names the word the face wears; the face paints the shared
+presentation's ink and holds no palette of its own.
+
 ## Draft retention
 
 Closing an editor and discarding its content are different actions.

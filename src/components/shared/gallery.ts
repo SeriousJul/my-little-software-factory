@@ -30,6 +30,7 @@ import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
 import { controlInk, inkForTheme, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
+import { SPINNER_FRAMES, Spinner } from "./spinner.ts";
 import {
 	HERDR_THEME_VERSION,
 	resolveTheme,
@@ -383,6 +384,40 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		},
 	},
 	{
+		// The shared spinner (ADR 0030): the animated face a control wears
+		// beside its written word while a wait runs. The example shows the face
+		// the ticket's Starting window wears - the word `starting` beside the
+		// braille glyph that steps one frame every about 100 ms. The face drives
+		// itself; the word is the fact, so the no-color presentation keeps it.
+		id: "spinner",
+		state: "the spinner: the loading face beside its written word",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(Spinner, {
+				key: "starting",
+				word: "starting",
+				// The cells the ticket row's state badge slot holds, so the face
+				// the reviewer sees here is the face the row will wear.
+				width: 12,
+			}),
+			createElement(
+				"text",
+				{ key: "spinner-frames", fg: paint("subtext0") },
+				truncateToWidth(
+					`the face steps through: ${SPINNER_FRAMES.join(" ")}`,
+					columns.contentWidth,
+				),
+			),
+			createElement(
+				"text",
+				{ key: "spinner-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"one frame every 100 ms; the face drives itself; the word keeps the meaning when the color drops",
+					columns.contentWidth,
+				),
+			),
+		],
+	},
+	{
 		id: "priority",
 		state:
 			"the ticket priority: the rank badge, the selector in each state, and the Consultation reason",
@@ -729,6 +764,14 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				focused: holds === "no-color-repository",
 				width: columns.valueWidth,
 				labelWidth: columns.labelWidth,
+				ink: NO_COLOR_INK,
+			}),
+			// The spinner face in the no-color ink: the written word stands,
+			// and the renderer's default shows through where the color would be.
+			createElement(Spinner, {
+				key: "no-color-starting",
+				word: "starting",
+				width: 12,
 				ink: NO_COLOR_INK,
 			}),
 			createElement(

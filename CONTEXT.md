@@ -266,6 +266,10 @@ The condition where the latest Agent poll failed or was unreadable.
 The last known Consultation states stay visible and cannot become `missing` from that poll.
 _Avoid_: missing Agent, Herdr offline
 
+**Spinner**:
+The animated control of the shared control library: a braille glyph that steps one frame every about 100 ms beside the written word the surface names. It drives its own frames the way the Decision modal's pop-in drives its own, so a frame snapshot taken at the mount reads the first frame and holds. The word carries the meaning, so the no-color presentation keeps it and drops only the color. A ticket in the Starting window wears it in place of its state badge (ADR 0030).
+_Avoid_: progress bar, loader animation, hourglass
+
 **Starting**:
 The window during which a ticket's Handoff is claimed and not yet settled, or the ticket is `handed-off`: the agent is being started, or it has started and its work is not yet observed.
 The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the ticket shows its recovery fact instead.
