@@ -5,7 +5,6 @@ default-environment = "worktree"
 default-task-type = "implement"
 attention-bell = true
 interaction-exit-key = "f12"
-auto-handoff = false
 max-parallel-agents = 1
 agent-poll-interval-seconds = 5
 completion-message-lines = 200

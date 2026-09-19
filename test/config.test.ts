@@ -171,7 +171,6 @@ describe("the Default configuration", () => {
 		expect(Object.keys(config.agents).sort()).toEqual(["claude", "codex", "pi"]);
 		expect(config.defaultAgent).toBe("pi");
 		expect(config.defaultTaskType).toBe("implement");
-		expect(config.autoHandoff).toBe(false);
 		expect(config.maxParallelAgents).toBe(2);
 		expect(config.agentPollIntervalSeconds).toBe(5);
 		expect(config.completionMessageLines).toBe(200);
@@ -1165,7 +1164,7 @@ describe("ticket source configuration", () => {
 	});
 });
 
-describe("auto-handoff config keys", () => {
+describe("limits config keys", () => {
 	/** The minimal config every test in this block breaks in one place. */
 	const base = () => ({
 		"default-agent": "pi",
@@ -1177,7 +1176,6 @@ describe("auto-handoff config keys", () => {
 
 	test("absent keys take the shipped defaults", () => {
 		const config = validateConfig(base());
-		expect(config.autoHandoff).toBe(false);
 		expect(config.maxParallelAgents).toBe(2);
 		expect(config.agentPollIntervalSeconds).toBe(5);
 		expect(config.completionMessageLines).toBe(200);
@@ -1187,8 +1185,11 @@ describe("auto-handoff config keys", () => {
 		expect(config.taskTypes.implement.autoClose).toBe(false);
 	});
 
+	test("a config that still carries the removed auto-handoff key fails startup", () => {
+		expectConfigError({ ...base(), "auto-handoff": false }, 'unknown top-level key "auto-handoff"');
+	});
+
 	test("the new keys validate their types and ranges", () => {
-		expectConfigError({ ...base(), "auto-handoff": "yes" }, "auto-handoff: must be a boolean");
 		expectConfigError(
 			{ ...base(), "max-parallel-agents": -1 },
 			"max-parallel-agents: must be a whole number of 0 or more",
@@ -1214,9 +1215,8 @@ describe("auto-handoff config keys", () => {
 	test("a zero parallel limit means unlimited and a value parses", () => {
 		const zero = validateConfig({ ...base(), "max-parallel-agents": 0 });
 		expect(zero.maxParallelAgents).toBe(0);
-		const three = validateConfig({ ...base(), "max-parallel-agents": 3, "auto-handoff": true });
+		const three = validateConfig({ ...base(), "max-parallel-agents": 3 });
 		expect(three.maxParallelAgents).toBe(3);
-		expect(three.autoHandoff).toBe(true);
 	});
 
 	test("a task type can set auto-close to a boolean only", () => {

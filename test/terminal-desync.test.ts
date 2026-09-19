@@ -282,7 +282,6 @@ function writeConfig(dir: string, statePath: string): string {
 			'default-agent = "pi"',
 			'default-environment = "live-worktree"',
 			'default-task-type = "implement"',
-			"auto-handoff = false",
 			"max-parallel-agents = 2",
 			"agent-poll-interval-seconds = 3600",
 			"completion-message-lines = 200",
