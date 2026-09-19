@@ -114,6 +114,40 @@ describe("GitHub ticket sources", () => {
 		expect(request).toContain("is:open is:issue");
 		expect(request).toContain("repo:acme/factory");
 		expect(request).toContain("-label:blocked label:ready-for-agent");
+		expect(request).toContain("blockedBy(first: 100)");
+	});
+
+	test("an issue blocked by an unclosed issue leaves the snapshot", async () => {
+		const runner = new SourceRunner([
+			page([{ ...issue(5), blockedBy: { nodes: [{ number: 4, state: "OPEN" }] } }, issue(6)]),
+		]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets.map((ticket) => ticket.externalKey)).toEqual(["#6"]);
+	});
+
+	test("an issue blocked only by closed issues stays in the snapshot", async () => {
+		const runner = new SourceRunner([
+			page([{ ...issue(5), blockedBy: { nodes: [{ number: 4, state: "CLOSED" }] } }]),
+		]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets.map((ticket) => ticket.externalKey)).toEqual(["#5"]);
+	});
+
+	test("an unreadable blocked-by link fails the source", async () => {
+		const runner = new SourceRunner([
+			page([{ ...issue(5), blockedBy: { nodes: [{ number: 4 }] } }]),
+		]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				reason: expect.stringContaining("unreadable blocked-by"),
+			}),
+		);
 	});
 
 	test("reads every page before returning a snapshot", async () => {
@@ -189,7 +223,9 @@ describe("GitHub ticket source contract", () => {
 			runner,
 		).fetch();
 		expect(outcome.status).toBe("success");
-		const request = runner.calls[0].args.join(" ");
+		// The search query text, not the whole call: the GraphQL query always
+		// carries the issue's native blocked-by links, whatever the filter is.
+		const request = searchQueryOf(runner.calls[0]);
 		expect(request).toContain("is:issue repo:acme/factory label:epic author:me");
 		expect(request).not.toContain("ready-for-agent");
 		expect(request).not.toContain("blocked");
@@ -200,7 +236,7 @@ describe("GitHub ticket source contract", () => {
 			{ ...source("github-pull-requests"), filter: "label:epic" },
 			prRunner,
 		).fetch();
-		const prRequest = prRunner.calls[0].args.join(" ");
+		const prRequest = searchQueryOf(prRunner.calls[0]);
 		expect(prRequest).toContain("is:pr repo:acme/factory label:epic");
 		expect(prRequest).not.toContain("ready-for-review");
 		expect(prRequest).not.toContain("draft:false");

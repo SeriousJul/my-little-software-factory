@@ -10,7 +10,7 @@ label write stands until the next transition.
 | Label | Meaning |
 | --- | --- |
 | `ready-for-agent` | An open GitHub issue is ready for implementation or another configured task. |
-| `blocked` | The item is not ready for handoff. The default GitHub sources exclude it. |
+| `blocked` | The item is not ready for handoff. The default GitHub sources exclude it. A native `blocked by` link to an open issue excludes the issue the same way, whatever its labels. The app never sees the issue. A closed blocking issue unblocks it. |
 | `ready-for-review` | A non-draft pull request is ready for review. |
 | `ready-to-ship` | A non-draft pull request passed review with a score that reached the review transition's configured threshold (90 in the default machine). It is ready to be squash-merged. |
 | `needs-work` | A pull request needs rework. This takes priority over `ready-for-review` and can apply to a draft. A failed merge of a `ready-to-ship` pull request lands here. |

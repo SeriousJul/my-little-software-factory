@@ -167,6 +167,7 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
       ... on Issue {
         id number title body url state updatedAt
         labels(first: 100) { nodes { name } }
+        blockedBy(first: 100) { nodes { number state } }
         repository { name nameWithOwner url }
       }
       ... on PullRequest {
@@ -419,6 +420,10 @@ class GitHubTicketSource implements TicketSource {
 			for (const node of page.nodes) {
 				const normalized = normalizeGitHubNode(node, this.config);
 				if (!normalized.ok) return { status: "failed", reason: normalized.reason };
+				// An issue blocked by an unclosed issue is not handoff work. The
+				// source drops it the way the `blocked` label does, so the app
+				// never sees it at all.
+				if (normalized.blocked) continue;
 				tickets.push(normalized.ticket);
 				references.push(...normalized.references);
 			}
@@ -635,7 +640,7 @@ function normalizeGitHubNode(
 	node: unknown,
 	config: TicketSourceConfig,
 ):
-	| { ok: true; ticket: FetchedTicket; references: SearchReference[] }
+	| { ok: true; ticket: FetchedTicket; references: SearchReference[]; blocked: boolean }
 	| { ok: false; reason: string } {
 	const item = node as Record<string, unknown>;
 	const expectedTypename = config.kind === "github-issues" ? "Issue" : "PullRequest";
@@ -688,6 +693,12 @@ function normalizeGitHubNode(
 		config.kind === "github-pull-requests"
 			? parseClosingReferences(item.closingIssuesReferences, config.host)
 			: [];
+	// The issue's native "blocked by" links. A pull request carries no
+	// links, and a server that answers without the field blocks nothing:
+	// only a present but unreadable field fails the source.
+	const blocked = isBlockedByOpenIssue(item.blockedBy);
+	if (blocked === undefined)
+		return { ok: false, reason: "GitHub returned an unreadable blocked-by link" };
 	return {
 		ok: true,
 		ticket: {
@@ -711,7 +722,28 @@ function normalizeGitHubNode(
 					: {},
 		},
 		references,
+		blocked,
 	};
+}
+
+/**
+ * Whether the issue is blocked by at least one unclosed issue: GitHub's
+ * native "blocked by" links. A closed blocking issue unblocks. Returns
+ * `undefined` when the field is present but unreadable, `false` when it is
+ * absent.
+ */
+function isBlockedByOpenIssue(link: unknown): boolean | undefined {
+	if (link === undefined || link === null) return false;
+	const nodes = (link as { nodes?: unknown }).nodes;
+	if (!Array.isArray(nodes)) return undefined;
+	let blocked = false;
+	for (const node of nodes) {
+		const item = node as Record<string, unknown> | null;
+		const state = item === null ? undefined : stringOf(item.state);
+		if (state === undefined) return undefined;
+		if (state.toUpperCase() === "OPEN") blocked = true;
+	}
+	return blocked;
 }
 
 function stringOf(value: unknown): string | undefined {
