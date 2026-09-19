@@ -384,6 +384,16 @@ export function App({
 	// The no-state test projection has no durable claim or queue. The real
 	// dispatch module owns the seat for every state-backed app.
 	const noStateHandoffInFlightRef = useRef(false);
+	// The tickets this run claimed and has not yet settled in a handoff
+	// (ADR 0030): the Starting window the row's spinner face reads. The
+	// dispatch module reports the add on the claim and the remove on the
+	// settle, so the set is per run: a restart starts empty, and the
+	// unresolved attempt a crashed run left behind is never in it.
+	const [startingTickets, setStartingTickets] = useState<ReadonlySet<string>>(() => new Set());
+	// The key handlers outlive the render that made the set, so the marker they
+	// check reads the latest set through the ref.
+	const startingTicketsRef = useRef(startingTickets);
+	startingTicketsRef.current = startingTickets;
 	const handoffDispatchRef = useRef<{ state: FactoryState; dispatch: HandoffDispatch } | undefined>(
 		undefined,
 	);
@@ -841,6 +851,15 @@ export function App({
 				error: setErrorMessage,
 				clearWorking: () => clearWorkingMessage("handoff"),
 				refresh: replaceTickets,
+				starting: (identity, active) => {
+					setStartingTickets((current) => {
+						if (current.has(identity) === active) return current;
+						const next = new Set(current);
+						if (active) next.add(identity);
+						else next.delete(identity);
+						return next;
+					});
+				},
 				persistMapping,
 			}),
 		};

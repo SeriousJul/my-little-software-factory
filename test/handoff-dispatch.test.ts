@@ -1,7 +1,7 @@
 /**
  * The Handoff dispatch module tests: the seat, the queues, the durable settle,
- * the Close cleanup, the Clear action, and the name fact, all through the
- * module interface.
+ * the Starting report, the Close cleanup, the Clear action, and the name
+ * fact, all through the module interface.
  *
  * Every test drives `createHandoffDispatch` with the fake runner, an in-memory
  * state database, and a gate that holds one herdr command until the test lets
@@ -141,6 +141,7 @@ function recorder(events: string[]): HandoffDispatchReports {
 		error: (text) => events.push(`error:${text}`),
 		clearWorking: () => events.push("clear-working"),
 		refresh: () => events.push("refresh"),
+		starting: (identity, active) => events.push(`starting:${identity}:${active ? "on" : "off"}`),
 	};
 }
 
@@ -674,6 +675,123 @@ describe("the queue drain", () => {
 		);
 		// The closed cycle's restart never reached herdr.
 		expect(rigRef.held()).toEqual([agentStart(FIRST.name)]);
+	});
+});
+
+describe("the starting report", () => {
+	test("a claim adds the ticket to the set, and the settle removes it", async () => {
+		const rigRef = rig();
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		// The add is the claim's fact: it lands before the work starts to build.
+		expect(rigRef.events.indexOf(`starting:${FIRST.identity}:on`)).toBeLessThan(
+			rigRef.events.indexOf(workingLine(FIRST)),
+		);
+		await rigRef.waitForStarted(FIRST.identity);
+		// The remove is the settle's fact: it stands with the settle, ahead of
+		// the line the outcome leaves.
+		expect(rigRef.events.indexOf(`starting:${FIRST.identity}:off`)).toBeLessThan(
+			rigRef.events.indexOf("clear-working"),
+		);
+	});
+
+	test("a failed settle removes the ticket the same way", async () => {
+		const rigRef = rig();
+		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is unavailable" });
+		await expect(start(rigRef, FIRST, "open")).resolves.toEqual({ ok: true });
+		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
+			ok: false,
+			reason: "herdr is unavailable",
+		});
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:on`);
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:off`);
+	});
+
+	test("a hand-off queued behind the in-flight seat is in the set while it is queued", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		rigRef.hold("herdr agent start");
+		await start(rigRef, FIRST, "open");
+		await start(rigRef, SECOND, "open");
+		await rigRef.waitForArrivals(1);
+		// Both claims are in, so both tickets are in the set while only the
+		// first holds the seat: the second's add did not wait for its work.
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:on`);
+		expect(rigRef.events).toContain(`starting:${SECOND.identity}:on`);
+		expect(rigRef.held()).toEqual([agentStart(FIRST.name)]);
+		await releaseHeld(rigRef, 1);
+		await releaseHeld(rigRef, 2);
+		await rigRef.waitForStarted(SECOND.identity);
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:off`);
+		expect(rigRef.events).toContain(`starting:${SECOND.identity}:off`);
+	});
+
+	test("a queued handoff the drain does not run removes the ticket it added", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		const second = seedHandoff(rigRef, SECOND);
+		settleTurn(rigRef, SECOND, second.handoffId);
+		rigRef.hold("herdr agent start");
+		await start(rigRef, FIRST, "open");
+		await start(rigRef, SECOND, "workflow", undefined, { ...liveChoice, taskType: "review" });
+		// The queued ticket's cycle closes while it waits: the drain settles its
+		// claim as failed without running it.
+		closeCycle(rigRef, SECOND, second.handoffId);
+		await releaseHeld(rigRef, 1);
+		await rigRef.waitForStarted(FIRST.identity);
+		// The drain settles the not-run claim on the microtask after the
+		// settle it follows: its report is the fact we wait for.
+		await rigRef.waitForStarted(SECOND.identity);
+		expect(rigRef.events).toContain(`starting:${SECOND.identity}:on`);
+		expect(rigRef.events).toContain(`starting:${SECOND.identity}:off`);
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:off`);
+	});
+
+	test("after a restart the set is empty: a crash remnant is not in it", async () => {
+		const rigRef = rig();
+		rigRef.hold("herdr agent start");
+		await start(rigRef, FIRST, "open");
+		await rigRef.waitForArrivals(1);
+		// The run dies mid-handoff: the claim stays unresolved in the durable
+		// state, and the module that made it reports its add and never its
+		// remove.
+		rigRef.dispatch.stop();
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:on`);
+		expect(rigRef.events).not.toContain(`starting:${FIRST.identity}:off`);
+		// The new run builds a new module over the same state and a fresh
+		// recorder. The remnant's ticket still claims nothing there: the
+		// durable refusal ends the claim before any report, so the set the new
+		// run holds stays empty.
+		const events: string[] = [];
+		const restarted = createHandoffDispatch({
+			state: rigRef.state,
+			runner: rigRef.runner,
+			config: () => rigRef.config,
+			home: rigRef.home,
+			...recorder(events),
+		});
+		await expect(
+			restarted.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({
+			ok: false,
+			reason: "handoff recovery is required before another handoff",
+		});
+		expect(events).toEqual([]);
+	});
+
+	test("a stopped module reports into nothing while the app tears down", async () => {
+		const rigRef = rig();
+		rigRef.hold("herdr agent start");
+		await start(rigRef, FIRST, "open");
+		await rigRef.waitForArrivals(1);
+		rigRef.dispatch.stop();
+		// The run settles neither the state nor the reports after the stop:
+		// no remove, and no line the settle would have left.
+		rigRef.release();
+		await seatReleased();
+		expect(rigRef.events).toEqual([`starting:${FIRST.identity}:on`, workingLine(FIRST)]);
 	});
 });
 
