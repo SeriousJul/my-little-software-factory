@@ -44,18 +44,6 @@ interface ActionPanelProps {
 
 /** The message column stops at 60 cells: a confirmation line is short. */
 const CONTENT_WIDTH = 60;
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-
-/**
- * The columns the panel gives its message.
- *
- * The caller that builds the body lines clips to this width, so a line the
- * panel would have to wrap or drop is cut where the panel really renders it
- * instead of at a width the panel only has on a wide terminal.
- */
-export const panelBodyCols = (terminalWidth: number): number =>
-	Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
 
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;

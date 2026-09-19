@@ -1715,6 +1715,42 @@ describe("the leftover environment", () => {
 		app.state.close();
 	});
 
+	test("w on a leftover ticket opens no panel and runs no command; the fact stands", async () => {
+		// The key the clear had is free (ADR 0032): a press on a ticket that
+		// holds a leftover environment reaches no control. The acceptance
+		// answer is the absence - no panel, no herdr command, and the leftover
+		// fact untouched.
+		const app = seededApp("awaiting", {}, success, "worktree");
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], DIRTY_REMOVAL);
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("leftover"));
+				const commandsBefore = app.runner.commands();
+				setup.mockInput.pressKey("w");
+				const frame = await settle(setup);
+				// No panel and no reopened decision, and no herdr command ran.
+				expect(frame).not.toContain("Leftover environment");
+				expect(frame).not.toContain("Decision:");
+				expect(app.runner.commands()).toEqual(commandsBefore);
+				// The leftover fact still stands: the marker on the row, the
+				// block in the detail, and its herdr pointer.
+				expect(ticketRow(frame)).toContain("leftover");
+				const detail = detailPaneText(frame);
+				expect(detail).toContain("Leftover: herdr workspace ws-1");
+				expect(detail).toContain("its cleanup runs in herdr");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("a cleanup that cannot run at all is still the ticket's fact", async () => {
 		const app = seededApp("awaiting", {}, success, "worktree");
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });

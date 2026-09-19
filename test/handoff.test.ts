@@ -2446,7 +2446,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
-		expect(reasonOf(outcome)).toContain("clear its leftover environment");
+		expect(reasonOf(outcome)).toContain("end its leftover environment in herdr");
 		expect(
 			runner.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(3);
@@ -2457,7 +2457,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		openedWorktree(runner, "pane-stranger", "ws-stranger");
 		// herdr names the stranger first and the ticket's own leftover pane
 		// after it, on every candidate the handoff asks for. The collision the
-		// operator reads must point at the pane that is the ticket's to clear.
+		// operator reads must point at the pane that is the ticket's to end.
 		const bothHeld = (name: string) =>
 			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
 			`candidates: terminal_id=term_1 pane_id=pane-stranger workspace_id=ws-stranger ` +

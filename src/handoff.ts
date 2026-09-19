@@ -37,7 +37,7 @@
  * pane, and the agent in it alive, and that agent still holds the herdr
  * agent name the ticket's next handoff wants. The handoff does not stop
  * there: it starts under its cycle name, and the leftover environment stays
- * a fact on the ticket for the operator to clear (ADR 0012).
+ * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
 import type { FactoryConfig, WorkflowEdge } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
@@ -1379,7 +1379,7 @@ async function startAgentUnderAvailableName(
  * did, and otherwise herdr's own answer to the last attempt.
  *
  * A collision with the ticket's own leftover names the ticket's own action:
- * clearing the leftover. A collision with a stranger names the stranger:
+ * ending it in herdr. A collision with a stranger names the stranger:
  * herdr's handles, so the operator can find the pane.
  *
  * When a later candidate failed for another reason (a pane that stayed busy
@@ -1400,7 +1400,7 @@ function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOu
 	}
 	const holder = holderText(collision.holder);
 	const reason = collision.own
-		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); clear its leftover environment, then hand off again: ${collision.reason}`
+		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); end its leftover environment in herdr, then hand off again: ${collision.reason}`
 		: `the herdr name ${collision.stableName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
 	return {
 		status: "failed",
