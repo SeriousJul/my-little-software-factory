@@ -156,7 +156,7 @@ _Avoid_: ghost ticket, stub ticket, shadow issue
 
 **Work cycle**:
 One passage of a ticket from `open` through the factory to cycle close.
-A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number.
+A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number. A cycle closed while its Agent still works leaves no Completion trace, and the cycle-end gates read that absence as a cycle end that holds nothing (ADR 0031).
 _Avoid_: ticket generation, run
 
 **Ticket state**:
@@ -302,7 +302,7 @@ _Avoid_: awaiting response, blocked
 
 **Close**:
 The operator action that ends live work, key `w` in both sections.
-On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number.
+On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031).
 On a Consultation it stops the Agent and cleans up its resources, keeping the worktree and branch.
 It asks for confirmation when it stops a live agent.
 _Avoid_: stop, kill, abort, cancel

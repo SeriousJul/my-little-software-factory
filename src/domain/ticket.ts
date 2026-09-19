@@ -272,6 +272,8 @@ export type TicketMarker = "blocked" | "missing";
  *   first: its agent may still be booting.
  * - awaiting -> open: the operator or an auto-close decision closed the
  *   work cycle.
+ * - handed-off/running -> open: the operator closed a work cycle whose turn
+ *   never settled (ADR 0031). No trace row records that end.
  * - awaiting -> handed-off: a workflow handoff or a restart started a new
  *   turn in the same cycle.
  * - awaiting -> running: the poll saw the agent working again on its
@@ -281,11 +283,16 @@ export type TicketMarker = "blocked" | "missing";
  * one poll interval, before a working observation ever saw it. The settle
  * then waits out the startup grace, the window in which a booted agent
  * reports idle before it picks up the prompt and starts working.
+ *
+ * The two in-flight states reach `open` directly, because key `w` closes a
+ * cycle the agent is still working in (ADR 0031). That close ends the cycle
+ * with no completion trace, so the cycle-end gates read no row for it: the
+ * move stands in the state line, and no trace row carries it.
  */
 const TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
 	open: ["handed-off"],
-	"handed-off": ["running", "awaiting"],
-	running: ["awaiting"],
+	"handed-off": ["running", "awaiting", "open"],
+	running: ["awaiting", "open"],
 	awaiting: ["open", "handed-off", "running"],
 };
 

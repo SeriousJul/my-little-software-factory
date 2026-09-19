@@ -1240,20 +1240,21 @@ export class FactoryState {
 	 * re-read since the latest end decision. A ticket whose cycle has never
 	 * ended is verified, and a failed re-read needs no help here: it leaves
 	 * the membership stale, which already makes the ticket unactionable.
+	 *
+	 * A cycle that ended with no trace row is verified too (ADR 0031): the
+	 * in-flight Close records no end decision, because its turn never settled,
+	 * so there is no finished turn whose source item could have moved. The gate
+	 * reads the absent row as a cycle end that asks for no re-read.
 	 */
 	sourceReverifiedSinceCycleEnd(identity: string): boolean {
-		const ended = this.db
-			.prepare(
-				"SELECT MAX(decided_at) AS ended_at FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL",
-			)
-			.get(identity) as { ended_at: string | null } | undefined;
-		if (ended?.ended_at == null || ended.ended_at === null) return true;
+		const ended = this.lastCycleEnd(identity);
+		if (ended === null) return true;
 		const unrefreshed = this.db
 			.prepare(
 				`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name
 				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR h.last_success < ?) LIMIT 1`,
 			)
-			.get(identity, ended.ended_at) as { 1: number } | undefined;
+			.get(identity, ended.decidedAt) as { 1: number } | undefined;
 		return unrefreshed == null;
 	}
 
@@ -1267,16 +1268,16 @@ export class FactoryState {
 	 * row, the same row the re-verify gate reads. A cycle closed after an `aborted` or `failed` turn holds
 	 * nothing: that work did not finish, and a retry is the next move. A
 	 * cycle whose turn never settled holds nothing: its row carries no
-	 * cause. It gates the open auto-handoff only; a manual handoff passes.
+	 * cause. A cycle that ended with no row at all - the in-flight Close, which
+	 * writes no trace (ADR 0031) - holds nothing the same way: the row that
+	 * would say the work finished is not there, and an older cycle's finished
+	 * turn is not this cycle's fact. It gates the open auto-handoff only; a
+	 * manual handoff passes.
 	 */
 	sameTypeHoldActive(identity: string, suggestedTaskType: string): boolean {
-		const ended = this.db
-			.prepare(
-				"SELECT task_type, cause FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL ORDER BY decided_at DESC, rowid DESC LIMIT 1",
-			)
-			.get(identity) as { task_type: string; cause: string | null } | undefined;
-		if (ended == null) return false;
-		return ended.cause === "completed" && ended.task_type === suggestedTaskType;
+		const ended = this.lastCycleEnd(identity);
+		if (ended === null) return false;
+		return ended.cause === "completed" && ended.taskType === suggestedTaskType;
 	}
 
 	/**
@@ -1883,6 +1884,72 @@ export class FactoryState {
 				.run(input.ticketIdentity);
 		}
 		// handed-off and auto-handed-off: the handoff's settle moves the state.
+	}
+
+	/**
+	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
+	 *
+	 * Key `w` runs this on an in-flight ticket. The turn never settled, so the
+	 * close writes no completion trace: there is no cause, no turn log, and no
+	 * message to record, and the handoff row stays the record of the work. The
+	 * ticket returns to open with its cycle incremented, exactly as a closed
+	 * decision leaves it, so the Handoff limit counts the closed cycle like any
+	 * other cycle end.
+	 *
+	 * The move runs only from an in-flight state: an `open` ticket holds no work
+	 * to close, and an `awaiting` one closes through its settled turn's
+	 * decision. A ticket that settled or closed while the close waited over the
+	 * seat changes nothing, and the caller reads that back as a refusal.
+	 */
+	closeWorkCycle(ticketIdentity: string): boolean {
+		return this.transaction(() => {
+			const ticket = this.db
+				.prepare("SELECT state FROM tickets WHERE identity = ?")
+				.get(ticketIdentity) as { state: TicketState } | undefined;
+			if (ticket == null) return false;
+			if (ticket.state !== "handed-off" && ticket.state !== "running") return false;
+			this.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
+				)
+				.run(ticketIdentity);
+			return true;
+		});
+	}
+
+	/**
+	 * The cycle-end decision of the cycle that ended last: the record the two
+	 * cycle-end gates read.
+	 *
+	 * A cycle end lands on the trace of a handoff that ran in it, and only a
+	 * cycle end moves the ticket's `work_cycle` on, so the newest ended cycle is
+	 * `work_cycle - 1` and its end row carries that number. A ticket whose
+	 * newest cycle ended with no row at all - the in-flight Close, which writes
+	 * no trace (ADR 0031) - reads null here, and so does a ticket whose cycle has
+	 * never ended.
+	 *
+	 * Both gates read this one fact, so the absent row and the cause-less row -
+	 * an abandon of a turn that never settled - reach them the same way: as a
+	 * cycle end that asserts nothing about finished work.
+	 */
+	private lastCycleEnd(identity: string): {
+		decidedAt: string;
+		taskType: string;
+		cause: string | null;
+	} | null {
+		const row = this.db
+			.prepare(
+				`SELECT decided_at, task_type, cause FROM completion_traces
+				 WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned')
+				   AND decided_at IS NOT NULL
+				   AND work_cycle = (SELECT work_cycle - 1 FROM tickets WHERE identity = ?)
+				 ORDER BY decided_at DESC, rowid DESC LIMIT 1`,
+			)
+			.get(identity, identity) as
+			| { decided_at: string; task_type: string; cause: string | null }
+			| undefined;
+		if (row == null) return null;
+		return { decidedAt: row.decided_at, taskType: row.task_type, cause: row.cause };
 	}
 
 	/** Claim before the first external command. It rechecks all eligibility atomically. */

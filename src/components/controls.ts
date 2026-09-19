@@ -433,6 +433,25 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 		return available();
 	return unavailable("the Agent's pane is not alive in the last poll");
 };
+/**
+ * Why Close answers nothing on a Ticket (ADR 0031). Key `w` ends the work
+ * cycle of the selected Ticket, in both Ticket base modes. An `open` Ticket
+ * holds no work in flight, so the close refuses it with that reason; every
+ * state the close runs on - `handed-off`, `running`, and `awaiting` - has a
+ * live agent or a settled turn behind it, and both open the confirmation
+ * dialog before anything moves.
+ *
+ * A Handoff in flight is no refusal here: the close takes the shared
+ * environment seat and queues behind that Handoff, so a hung start still ends
+ * in the close the operator asked for (ADR 0031).
+ */
+const ticketClose = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	if (ticket.state === "open")
+		return unavailable("the selected Ticket is open: no work is in flight to close");
+	return available();
+};
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -734,6 +753,24 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 68,
 		modes: [...ticketBaseModes],
 		availability: ticketGoto,
+	},
+	{
+		id: "ticket-close",
+		label: "Close",
+		// `w` ends the selected Ticket's work cycle from either Ticket pane,
+		// behind the shared confirmation panel, the way the Consultation section's
+		// Close asks (ADR 0031). The Decision modal keeps its Close row: it is the
+		// close with the turn log beside it, and `w` is the direct route to that
+		// same action.
+		keys: () => ["w"],
+		keyLabel: "w",
+		scope: "control-plane",
+		actionBar: true,
+		// One ladder place with the Consultation section's Close: below Goto and
+		// the re-read, above the section toggle and the Launch.
+		priority: 50,
+		modes: [...ticketBaseModes],
+		availability: ticketClose,
 	},
 	{
 		id: "section-toggle",
