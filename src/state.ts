@@ -45,7 +45,7 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -555,6 +555,24 @@ const MIGRATION_V11_TO_V12 = `
 	);
 `;
 
+/**
+ * The v13 step: the Auto-handoff mode (ADR 0036).
+ *
+ * The mode says how the factory runs, so it is factory state, not a config
+ * setting: it survives a restart and a dev reload, and the plane reads the
+ * operator's last choice back from this one row. A fresh state file starts
+ * with the mode off. The row is seeded here rather than read with a default,
+ * so every version of the file holds exactly one explicit answer, and an
+ * upgrade from v12 lands the mode off beside the work it already carries.
+ */
+const MIGRATION_V12_TO_V13 = `
+	CREATE TABLE auto_handoff_mode (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL
+	);
+	INSERT INTO auto_handoff_mode(id, enabled) VALUES (1, 0);
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -667,6 +685,7 @@ export class FactoryState {
 			if (version < 10) this.db.exec(MIGRATION_V9_TO_V10);
 			if (version < 11) this.db.exec(MIGRATION_V10_TO_V11);
 			if (version < 12) this.db.exec(MIGRATION_V11_TO_V12);
+			if (version < 13) this.db.exec(MIGRATION_V12_TO_V13);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1147,6 +1166,39 @@ export class FactoryState {
 			detail: row.detail ?? "",
 			decision: row.decision as CompletionDecision | null,
 		};
+	}
+
+	/**
+	 * The Auto-handoff mode of the factory (ADR 0036).
+	 *
+	 * The mode is a durable fact of this state file, never of the config: two
+	 * state files keep separate modes, and two configs that share one state
+	 * file share the mode. A file the migration seeded reads its stored
+	 * answer, and the seed makes a fresh file read off.
+	 */
+	autoHandoffMode(): boolean {
+		const row = this.db.prepare("SELECT enabled FROM auto_handoff_mode WHERE id = 1").get() as
+			| { enabled: number }
+			| undefined;
+		return row?.enabled === 1;
+	}
+
+	/**
+	 * Store the Auto-handoff mode. The write is the fact the next startup and
+	 * the next dev reload read back, so it is durable the moment it returns.
+	 * A write that fails throws a StateError naming the state file.
+	 */
+	setAutoHandoffMode(enabled: boolean): void {
+		try {
+			this.db
+				.prepare(
+					"INSERT INTO auto_handoff_mode(id, enabled) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled",
+				)
+				.run(enabled ? 1 : 0);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the Auto-handoff mode at ${this.path}: ${message}`);
+		}
 	}
 
 	/**

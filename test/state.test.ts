@@ -822,8 +822,8 @@ describe("factory SQLite state", () => {
 		});
 		state.close();
 
-		// Downgrade the database to v2: a trace without the turn log column
-		// and no later Consultation tables.
+		// Downgrade the database to v2: a trace without the turn log column,
+		// and none of the tables the later versions create.
 		const db = new Database(path);
 		db.exec(`
 			DROP TABLE consultation_pending_responses;
@@ -834,6 +834,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 			DROP TABLE checkout_conflict_confirmations;
 			DROP TABLE referenced_issues;
+			DROP TABLE auto_handoff_mode;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -927,6 +928,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode belongs to the run after this record: a v5 file stored
+		// no Auto-handoff mode.
+		db.exec("DROP TABLE auto_handoff_mode;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -999,6 +1003,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode belongs to the run after this record: a v7 file stored
+		// no Auto-handoff mode.
+		db.exec("DROP TABLE auto_handoff_mode;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1019,6 +1026,77 @@ describe("factory SQLite state", () => {
 		const [restored] = reopened.visibleTickets([], "implement");
 		expect(restored.handoff).toEqual(expect.objectContaining({ contextWindow: "" }));
 		reopened.close();
+	});
+
+	test("a fresh state file reads the Auto-handoff mode off (ADR 0036)", () => {
+		const state = openFactoryState(":memory:");
+		expect(state.autoHandoffMode()).toBe(false);
+		state.close();
+	});
+
+	test("the Auto-handoff mode written to a file reads back on that file's reopen", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		expect(state.autoHandoffMode()).toBe(false);
+		state.setAutoHandoffMode(true);
+		expect(state.autoHandoffMode()).toBe(true);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		expect(reopened.autoHandoffMode()).toBe(true);
+		reopened.setAutoHandoffMode(false);
+		reopened.close();
+
+		const reread = openFactoryState(path);
+		expect(reread.autoHandoffMode()).toBe(false);
+		reread.close();
+	});
+
+	test("two state files keep separate Auto-handoff modes", () => {
+		const first = openFactoryState(statePath());
+		const second = openFactoryState(statePath());
+		first.setAutoHandoffMode(true);
+		expect(first.autoHandoffMode()).toBe(true);
+		expect(second.autoHandoffMode()).toBe(false);
+		first.close();
+		second.close();
+	});
+
+	test("a mode write to a state file that is gone reports the file it could not write", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.close();
+		expect(() => state.setAutoHandoffMode(true)).toThrow(/Auto-handoff mode at .*state\.sqlite/);
+	});
+
+	test("a v12 database migrates to v13: the mode lands off on the existing file", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.close();
+
+		// Downgrade the record to the v12 shape: the mode table does not exist
+		// yet and the schema cell says twelve, which is exactly what an
+		// upgrade from v12 finds.
+		const db = new Database(path);
+		db.exec("DROP TABLE auto_handoff_mode;");
+		db.prepare("UPDATE schema_version SET version = 12").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The migration lands the mode off, and the ticket the v12 file held
+		// is untouched.
+		expect(reopened.autoHandoffMode()).toBe(false);
+		expect(reopened.visibleTickets([], "implement")).toEqual([
+			expect.objectContaining({ identity: "github:github.com:I_5" }),
+		]);
+		reopened.setAutoHandoffMode(true);
+		reopened.close();
+
+		const reread = openFactoryState(path);
+		expect(reread.autoHandoffMode()).toBe(true);
+		reread.close();
 	});
 
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {
