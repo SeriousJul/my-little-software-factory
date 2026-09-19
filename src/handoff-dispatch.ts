@@ -316,26 +316,29 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * The cap-full answer for a manual start (ADR 0034): the start waits in the
 	 * Work queue with its origin and captured choice, and the ticket keeps its
 	 * state. The queue holds at most one item per ticket: a second enqueue for
-	 * a ticket that already waits is refused on the Message line, and the
-	 * first item keeps its place.
+	 * a ticket that already waits is refused with the reason on the Message
+	 * line, and the first item keeps its place.
+	 *
+	 * A refusal is reported once, through the returned reason alone: every
+	 * caller of `dispatch` writes an refused result's reason to the Message
+	 * line, so a warning reported here on top of it would only overwrite that
+	 * first line with a shorter copy of the same fact.
 	 */
 	private enqueueWork(intent: HandoffIntent): DispatchResult {
-		if (this.state.hasWorkItem(intent.ticketIdentity)) {
-			this.reports.warning(
-				`ticket ${intent.ticketIdentity} already has a waiting queue item; the first item keeps its place`,
-			);
-			return { ok: false, reason: "the ticket already has a waiting queue item" };
-		}
+		if (this.state.hasWorkItem(intent.ticketIdentity))
+			return {
+				ok: false,
+				reason:
+					`${this.ticketName(intent.ticketIdentity)} already has a waiting queue item; ` +
+					"the first item keeps its place",
+			};
 		const enqueued = this.state.enqueueWork({
 			ticketIdentity: intent.ticketIdentity,
 			origin: intent.origin,
 			choice: intent.choice,
 			previousMessage: intent.previousMessage,
 		});
-		if (!enqueued.ok) {
-			this.reports.warning(enqueued.reason);
-			return { ok: false, reason: enqueued.reason };
-		}
+		if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
 		this.reports.refresh();
 		this.reports.notice(
 			`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; it starts when a seat frees`,
@@ -354,15 +357,19 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * that fails a check leaves its item in the queue with a Message line
 	 * warning, and the ticket keeps its state; a pickup that starts removes
 	 * its item and names the start on the Message line.
+	 *
+	 * An unlimited cap holds a free seat for every waiting start, so it picks
+	 * up the whole queue: an operator who lifts the cap while items wait frees
+	 * them all in the same cycle.
 	 */
 	async pickupWorkQueue(): Promise<number> {
 		const limit = this.config().maxParallelAgents;
-		if (limit === 0) return 0;
-		const freeSeats = limit - this.seatCount();
+		const items = this.state.workQueue();
+		if (items.length === 0) return 0;
+		const freeSeats = limit === 0 ? items.length : limit - this.seatCount();
 		if (freeSeats <= 0) return 0;
-		const items = this.state.workQueue().slice(0, freeSeats);
 		let claimed = 0;
-		for (const item of items) {
+		for (const item of items.slice(0, freeSeats)) {
 			if (this.stopped) break;
 			if (this.pickupItem(item)) claimed += 1;
 		}
@@ -447,7 +454,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 					this.removeQueueItem(item.ticketIdentity);
 					// The route the item carries is the operator's decision on the turn
 					// it routes from: it lands on the settled turn's trace, like the
-					// direct route's start, once the pickup's handoff is live.
+					// direct route's start, once the pickup's handoff is live. One fact,
+					// two paths: `runRouteHandoff` in src/components/app.ts records the
+					// same decision for a route that starts in its seat at once, and the
+					// two copies must move together.
 					if (item.origin === "workflow" && previousHandoffId !== "") {
 						this.state.applyCompletionDecision({
 							ticketIdentity: item.ticketIdentity,

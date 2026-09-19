@@ -119,12 +119,10 @@ interface Rig {
 	intents: HandoffIntent[];
 	/** The attempt ids of the claims the dispatching rig made, in dispatch order. */
 	claims: string[];
-	/**
-	 * Report the start of the oldest dispatch still waiting for one, the way
-	 * the app's handoff settle path does. The loop holds a route's decision
-	 * back to this report.
-	 */
+	/** Report the start of the oldest dispatch still waiting for one. */
 	reportStart: (started?: DispatchResult) => void;
+	/** The loop's own calls and dispatches in order, when the rig records them. */
+	order: string[] | undefined;
 	statuses: Array<{ kind: "info" | "warning" | "error"; text: string }>;
 	cleanups: Array<{ paneId: string | null; tabId: string | null; workspaceId: string | null }>;
 	coordinator: ObservationCoordinator;
@@ -154,6 +152,18 @@ function rig(options: {
 	 * loop-level tests drive the state by hand.
 	 */
 	dispatchClaims?: boolean;
+	/**
+	 * The Work queue's pickup (ADR 0034): the number of waiting starts this
+	 * cycle's free seats take. The coordinator calls it before auto-dispatch
+	 * and holds each picked claim's seat against the later dispatches of the
+	 * same cycle. Absent by default, the way an app without a queue is.
+	 */
+	pickupWorkQueue?: () => Promise<number>;
+	/**
+	 * The loop's own calls and dispatches in order, so a test can see where
+	 * the queue step sits in the cycle.
+	 */
+	order?: string[];
 	startupGraceMs?: number;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
@@ -165,6 +175,8 @@ function rig(options: {
 	state.applyFetch(source, success([fetched()]));
 	const intents: HandoffIntent[] = [];
 	const claims: string[] = [];
+	const order = options.order;
+	const pickup = options.pickupWorkQueue;
 	// The start reports the dispatches still owe the loop. The app answers a
 	// claim first and reports the start when its external work settles, so
 	// the rig holds each report back until a test fires it.
@@ -180,6 +192,7 @@ function rig(options: {
 		config: () => ({ ...config, ...options.config }),
 		onCycleEnd: options.onCycleEnd,
 		dispatch: async (intent) => {
+			order?.push(`dispatch:${intent.origin}`);
 			intents.push(intent);
 			if (options.dispatchClaims) {
 				const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
@@ -188,6 +201,13 @@ function rig(options: {
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
 			return { ok: true, queued: false };
 		},
+		pickupWorkQueue:
+			pickup === undefined
+				? undefined
+				: async () => {
+						order?.push("pickup");
+						return await pickup();
+					},
 		cleanup: async (handoff) => {
 			cleanups.push({
 				paneId: handoff.paneId,
@@ -214,6 +234,7 @@ function rig(options: {
 			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
 			next(started);
 		},
+		order,
 		statuses,
 		cleanups,
 		coordinator,
@@ -1882,6 +1903,46 @@ describe("the open dispatch", () => {
 		}
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("the Work queue takes the free seats before the open dispatch fills the rest", async () => {
+		// The cycle's one order and one count (ADR 0034): the pickup runs
+		// before the open dispatch, and each picked start holds its seat
+		// against the later dispatches of the same cycle, so one cycle never
+		// starts more agents than the cap.
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => 1,
+			order,
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		await coordinator.tick();
+		// The queue's one start takes a seat, and the open dispatch fills only
+		// the seat that is left: the queue ran first, and the picked claim held
+		// its seat across the cycle.
+		expect(order).toEqual(["pickup", "dispatch:open"]);
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(expect.objectContaining({ origin: "open" }));
+		state.close();
+	});
+
+	test("a queue that takes every free seat holds the open dispatch entirely", async () => {
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => config.maxParallelAgents,
+			order,
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		await coordinator.tick();
+		// Both seats go to the queue: the cycle's measurement leaves no room,
+		// and the open dispatch starts nothing past the cap.
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
 		state.close();
 	});
 });

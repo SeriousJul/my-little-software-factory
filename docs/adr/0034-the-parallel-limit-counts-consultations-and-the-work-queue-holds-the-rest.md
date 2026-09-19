@@ -108,5 +108,8 @@ The considered alternatives:
   smallest terminal.
 - The schema grows the durable queue - the Handoff intents and the shared
   order - and the Consultation states gain `queued` and `unscheduled`.
-- With the cap at 0 (unlimited) the queue never engages and every start
-  behaves as before this ADR.
+- With the cap at 0 (unlimited) the queue never engages: a manual start
+  always takes a seat, and every start behaves as before this ADR. When
+  items already wait and the cap turns to 0, the next cycle starts the
+  whole queue: an unlimited cap holds a free seat for every waiting start,
+  so the queue never strands an item the operator staged on it.

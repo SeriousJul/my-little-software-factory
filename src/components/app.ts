@@ -1412,7 +1412,10 @@ export function App({
 				previousMessage: ticket.lastCompletion?.message ?? "",
 				// The routed handoff started: the operator's decision on the turn
 				// it routes from is `handed-off`, and the ticket reads as
-				// handed-off where the agent is.
+				// handed-off where the agent is. One fact, two paths: a route
+				// that waited for a seat records the same decision at its pickup
+				// in `pickupItem` (src/handoff-dispatch.ts), and the two copies
+				// must move together.
 				onStarted: (started) => {
 					if (!started.ok || previousHandoffId === "") return;
 					state?.applyCompletionDecision({

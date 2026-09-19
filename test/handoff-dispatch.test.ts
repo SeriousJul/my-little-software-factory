@@ -1596,14 +1596,46 @@ describe("the Parallel limit and the Work queue", () => {
 			previousMessage: "",
 		};
 		await expect(capped.dispatch(intent)).resolves.toEqual({ ok: true, queued: true });
+		// The refusal is one Message line: the fuller reason rides on the
+		// result, and the module reports nothing on its own, so the caller's
+		// report of the reason cannot overwrite a longer line with a shorter
+		// copy of the same fact.
 		await expect(capped.dispatch(intent)).resolves.toEqual({
 			ok: false,
-			reason: "the ticket already has a waiting queue item",
+			reason: `"${FIRST.title}" already has a waiting queue item; the first item keeps its place`,
 		});
 		expect(rigRef.state.workQueue()).toHaveLength(1);
-		expect(rigRef.events).toContain(
-			`warning:ticket ${FIRST.identity} already has a waiting queue item; the first item keeps its place`,
-		);
+		expect(rigRef.events.filter((event) => event.startsWith("warning:"))).toHaveLength(0);
+		// The enqueue's own notice stands: the second refusal says nothing new
+		// about the first item.
+		expect(rigRef.events.filter((event) => event.startsWith("notice:"))).toHaveLength(1);
+	});
+
+	test("an unlimited cap picks up the whole waiting queue", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		for (const seed of [FIRST, SECOND]) {
+			await expect(
+				capped.dispatch({
+					origin: "open",
+					ticketIdentity: seed.identity,
+					choice: liveChoice,
+					previousMessage: "",
+				}),
+			).resolves.toEqual({ ok: true, queued: true });
+		}
+		expect(rigRef.state.workQueue()).toHaveLength(2);
+		// The operator lifts the cap to 0 (unlimited): an unlimited cap holds a
+		// free seat for every waiting start, so one pickup runs the whole queue
+		// and no item strands (ADR 0034).
+		rigRef.config.maxParallelAgents = 0;
+		expect(await capped.pickupWorkQueue()).toBe(2);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.state.ticketState(SECOND.identity)).toBe("handed-off");
 	});
 
 	test("a free seat picks up the queue's head, and the start names the queue", async () => {
