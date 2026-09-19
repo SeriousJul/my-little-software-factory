@@ -20,6 +20,7 @@ import type { Consultation } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
+import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
 import { type ControlContext, contextFor } from "../controls.ts";
@@ -63,6 +64,16 @@ export interface GalleryExample {
 	) => ReactElement[];
 	/** Whether this example is drawn at a narrow terminal. */
 	narrow?: boolean;
+	/**
+	 * The rows this example's frame holds, when it needs more than the
+	 * gallery's shared frame.
+	 *
+	 * The shared frame sizes the list and field examples, and an example
+	 * that needs a taller box pays for it here instead of raising the frame
+	 * every other example renders in: the dialog examples hold a full
+	 * confirmation box, which the list rows do not.
+	 */
+	rows?: number;
 }
 
 /**
@@ -230,6 +241,33 @@ function sampleConsultation(
 		pendingResponse: null,
 		resources: [],
 	};
+}
+
+/**
+ * The production close panel the app opens on one Consultation state, for
+ * the close dialog's gallery examples.
+ *
+ * The panel's title, body, and rows come from the same helper the app's
+ * render reads, built from the sample record the example names. A state the
+ * helper answers with no panel has no example to draw, so the throw is a
+ * contributor error, not a state the gallery can reach.
+ */
+function closeDialogElement(
+	state: "opening" | "working" | "awaiting-response" | "closing",
+	key: string,
+): ReactElement {
+	const panel = consultationClosePanel(sampleConsultation(state));
+	if (panel === undefined) throw new Error(`the ${state} Consultation must open a close panel`);
+	return createElement(ActionPanel, {
+		key,
+		message: null,
+		inputActive: false,
+		title: panel.title,
+		bodyLines: panel.bodyLines,
+		actions: panel.actions,
+		onAction: () => undefined,
+		onCancel: () => undefined,
+	});
 }
 
 /** The Ticket the Ticket-Goto example renders under. */
@@ -678,81 +716,26 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	},
 	{
 		// The close confirmation opens exactly when a close stops a live
-		// Agent. Each of the three live states names its own first line: the
-		// body keeps the worktree and branch whichever state asks.
+		// Agent. Each of the three live states names its own first line, and
+		// the body keeps the worktree and branch whichever state asks. The
+		// example draws the production panel the app opens on this state,
+		// so the gallery's words are the app's words, not a copy of them.
 		id: "close-dialog-opening",
 		state: "Close confirmation: the Agent is still opening",
-		render: (_columns) => [
-			createElement(ActionPanel, {
-				key: "close-opening",
-				message: null,
-				inputActive: false,
-				title: `Close Consultation ${sampleConsultation("opening").id.slice(0, 8)}?`,
-				bodyLines: [
-					"The Agent is still opening",
-					"Close stops the Agent. The worktree and branch stay.",
-				],
-				actions: [
-					{
-						key: "close",
-						label: "Close",
-						detail: "stop the Agent; the work stays",
-					},
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
-				],
-				onAction: () => undefined,
-				onCancel: () => undefined,
-			}),
-		],
+		rows: 17,
+		render: (_columns) => [closeDialogElement("opening", "close-opening")],
 	},
 	{
 		id: "close-dialog-working",
 		state: "Close confirmation: the Agent is working",
-		render: (_columns) => [
-			createElement(ActionPanel, {
-				key: "close-working",
-				message: null,
-				inputActive: false,
-				title: `Close Consultation ${sampleConsultation("working").id.slice(0, 8)}?`,
-				bodyLines: ["The Agent is working", "Close stops the Agent. The worktree and branch stay."],
-				actions: [
-					{
-						key: "close",
-						label: "Close",
-						detail: "stop the Agent; the work stays",
-					},
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
-				],
-				onAction: () => undefined,
-				onCancel: () => undefined,
-			}),
-		],
+		rows: 17,
+		render: (_columns) => [closeDialogElement("working", "close-working")],
 	},
 	{
 		id: "close-dialog-awaiting-response",
 		state: "Close confirmation: the Agent waits for your reply",
-		render: (_columns) => [
-			createElement(ActionPanel, {
-				key: "close-awaiting",
-				message: null,
-				inputActive: false,
-				title: `Close Consultation ${sampleConsultation("awaiting-response").id.slice(0, 8)}?`,
-				bodyLines: [
-					"The Agent has answered and is waiting for your reply",
-					"Close stops the Agent. The worktree and branch stay.",
-				],
-				actions: [
-					{
-						key: "close",
-						label: "Close",
-						detail: "stop the Agent; the work stays",
-					},
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
-				],
-				onAction: () => undefined,
-				onCancel: () => undefined,
-			}),
-		],
+		rows: 17,
+		render: (_columns) => [closeDialogElement("awaiting-response", "close-awaiting")],
 	},
 	{
 		// The closing Consultation opens the recovery panel instead: the
@@ -760,22 +743,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// retry and the force-close, never the plain close.
 		id: "close-panel-closing",
 		state: "Close recovery: retry and force-close on a closing",
-		render: (_columns) => [
-			createElement(ActionPanel, {
-				key: "close-closing",
-				message: null,
-				inputActive: false,
-				title: `Close Consultation ${sampleConsultation("closing").id.slice(0, 8)}`,
-				bodyLines: ["Cleanup is already in progress. Force-close records remaining resources."],
-				actions: [
-					{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
-					{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
-					{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
-				],
-				onAction: () => undefined,
-				onCancel: () => undefined,
-			}),
-		],
+		rows: 17,
+		render: (_columns) => [closeDialogElement("closing", "close-closing")],
 	},
 	{
 		// Goto from either Consultation pane: available while herdr's last
@@ -1120,7 +1089,10 @@ export function Gallery({
 	});
 	const shown = GALLERY_EXAMPLES[index] ?? GALLERY_EXAMPLES[0];
 	const narrow = shown.narrow === true;
-	const frame = modalFrame(narrow ? 28 : width, height, { rows: 17, margin: 1 });
+	const frame = modalFrame(narrow ? 28 : width, height, {
+		rows: shown.rows ?? 12,
+		margin: 1,
+	});
 	const columns = galleryColumns(frame.contentWidth);
 	return createElement(
 		"box",

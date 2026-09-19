@@ -25,8 +25,9 @@ its availability and reason.
 	through open, closed, and all, `w` closes the selected Consultation, and
 	`d` deletes a closed one. A close that stops a live Agent - an opening,
 	a working, or an awaiting-response Consultation - confirms first: the
-	dialog names the Agent and states that the worktree and branch stay. A
-	`missing` or a `failed` Consultation closes without a dialog. A
+	dialog names the Agent and states what the close keeps, the worktree and
+	branch on a worktree Consultation and the checkout on a live-worktree
+	one. A `missing` or a `failed` Consultation closes without a dialog. A
 	`closing` one opens the Retry and Force-close recovery panel instead, and
 	a `closed` one refuses. `h` or `Left` moves between the section's own
 	list and the detail pane, and `x` collapses or restores the section under

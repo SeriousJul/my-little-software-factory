@@ -395,9 +395,10 @@ describe("the shared control gallery", () => {
 	});
 
 	test("the close dialog examples hold every state a live Agent can be in", async () => {
-		// The dialog box plus its Message line and bar costs sixteen rows, so
-		// the example opens at a terminal that holds them all.
-		const setup = await gallery("close-dialog-opening", 80, 26);
+		// The dialog examples own a taller frame than the shared one, so the
+		// example opens at the plane's minimum height, where the dialog box
+		// must still hold its title, body, and every action row.
+		const setup = await gallery("close-dialog-opening", 80, 19);
 		let frame = frameText(setup.captureCharFrame());
 		expect(frame).toContain(stateLine("close-dialog-opening"));
 		expect(frame).toContain("Close Consultation c1c1c1c1?");

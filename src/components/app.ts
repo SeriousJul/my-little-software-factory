@@ -91,6 +91,7 @@ import {
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
+import { consultationClosePanel } from "./consultation-close-panel.ts";
 import {
 	ConsultationDetail,
 	consultationDetailBody,
@@ -192,6 +193,7 @@ export type AppKey =
 	| "c"
 	| "f"
 	| "x"
+	| "w"
 	| "d"
 	| "up"
 	| "down"
@@ -213,40 +215,6 @@ type Utility =
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
 
-/**
- * The body of the Consultation close confirmation, for the states in which a
- * close stops a live Agent: the first line names the Agent that is alive, and
- * the body states what the close keeps. A Consultation the map does not hold
- * has no Agent to stop, so it closes directly and never confirms.
- */
-function consultationCloseConfirmation(consultation: Consultation):
-	| {
-			line: string;
-			body: string;
-			actionDetail: string;
-	  }
-	| undefined {
-	const line =
-		consultation.state === "opening"
-			? "The Agent is still opening"
-			: consultation.state === "working"
-				? "The Agent is working"
-				: consultation.state === "awaiting-response"
-					? "The Agent has answered and is waiting for your reply"
-					: undefined;
-	if (line === undefined) return undefined;
-	return consultation.environment === "worktree"
-		? {
-				line,
-				body: "Close stops the Agent. The worktree and branch stay.",
-				actionDetail: "stop the Agent; the work stays",
-			}
-		: {
-				line,
-				body: "Close stops the Agent. The checkout stays.",
-				actionDetail: "stop the Agent; the checkout stays",
-			};
-}
 export interface AppProps {
 	/**
 	 * The validated config. The production entry always supplies it from the
@@ -2382,9 +2350,12 @@ export function App({
 		panel !== null && ticketPanel === null
 			? consultationsRef.current.find((item) => item.id === panel.identity)
 			: undefined;
-	const closeConfirmation =
+	// The open close panel's own copy, re-derived from the record on every
+	// render: the record's state picks the shape, so the panel follows the
+	// record without the operator asking.
+	const closePanel =
 		panel !== null && panel.kind === "consultation-close" && panelConsultation !== undefined
-			? consultationCloseConfirmation(panelConsultation)
+			? consultationClosePanel(panelConsultation)
 			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
@@ -2423,17 +2394,29 @@ export function App({
 	 */
 	const closePanelHasNothingToShow =
 		panel?.kind === "consultation-close" &&
-		(panelConsultation === undefined ||
-			(panelConsultation.state !== "closing" && closeConfirmation === undefined));
+		(panelConsultation === undefined || closePanel === undefined);
 	const panelHasNothingToShow =
 		(ticketPanel !== null &&
 			(panelTicket === undefined ||
 				(ticketPanel.kind === "decision" && decision === undefined) ||
 				(ticketPanel.kind === "live" && liveMode === "closed"))) ||
 		closePanelHasNothingToShow;
+	// The reason the guard stands on the Message line when it drops an open
+	// close panel: the record moved out of the states the panel draws, or it
+	// left the list while the panel was up.
+	const closePanelReleaseNote =
+		closePanelHasNothingToShow === true
+			? panelConsultation === undefined
+				? "the Consultation left the list; the close panel closed"
+				: `the Consultation moved to ${panelConsultation.state}; the close panel closed`
+			: null;
 	useEffect(() => {
+		if (closePanelReleaseNote !== null)
+			// The note is the outcome of the close the operator opened, so it
+			// stands as news, not as a warning the plane wrote on its own.
+			reportMessage({ severity: "info", text: closePanelReleaseNote });
 		if (panelHasNothingToShow) setPanel(null);
-	}, [panelHasNothingToShow]);
+	}, [panelHasNothingToShow, closePanelReleaseNote, reportMessage]);
 
 	// The Live view's stream: while the view shows the stream, a dedicated
 	// refresh reads the pane the ticket's current handoff records at the
@@ -2953,43 +2936,27 @@ export function App({
 					});
 				},
 			}),
+		// One panel element for the Consultation close: the record's state
+		// selects the shape through consultationClosePanel, the recovery rows
+		// while the record is closing and the confirmation rows while a close
+		// would stop a live Agent. A state with no shape never reaches the
+		// render: the guard above already dropped the panel.
 		panel !== null &&
 			panelConsultation !== undefined &&
 			panel.kind === "consultation-close" &&
-			panelConsultation.state === "closing" &&
+			closePanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}`,
-				bodyLines: ["Cleanup is already in progress. Force-close records remaining resources."],
-				actions: [
-					{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
-					{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
-					{ key: "cancel", label: "Cancel", detail: "stay in closing state" },
-				],
+				title: closePanel.title,
+				bodyLines: closePanel.bodyLines,
+				actions: closePanel.actions,
 				onAction: (key) => {
 					if (key === "retry") {
 						setPanel(null);
 						closeConsultation(panelConsultation);
-					}
-					if (key === "force")
+					} else if (key === "force") {
 						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
-				},
-				onCancel: () => setPanel(null),
-			}),
-		panel !== null &&
-			panelConsultation !== undefined &&
-			panel.kind === "consultation-close" &&
-			closeConfirmation !== undefined &&
-			createElement(ActionPanel, {
-				message: visibleMessage,
-				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}?`,
-				bodyLines: [closeConfirmation.line, closeConfirmation.body],
-				actions: [
-					{ key: "close", label: "Close", detail: closeConfirmation.actionDetail },
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation" },
-				],
-				onAction: (key) => {
-					if (key === "close") {
+					} else if (key === "close") {
 						setPanel(null);
 						closeConsultation(panelConsultation);
 					}

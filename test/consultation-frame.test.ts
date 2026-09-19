@@ -88,6 +88,7 @@ const MISSING_DIRECT_ID = uid("c");
 const FAILED_DIRECT_ID = uid("d");
 const CLOSED_DIRECT_ID = uid("e");
 const CONFIRM_GONE_ID = uid("f");
+const LIVE_CLOSE_ID = uid("g");
 
 let home = "";
 let checkout = "";
@@ -150,12 +151,13 @@ function seed(
 	agent = true,
 	createdAt = "2026-09-01T10:00:00.000Z",
 	contextWindow = "",
+	environment: "worktree" | "live-worktree" = "worktree",
 ): void {
 	state.createConsultation({
 		id,
 		typeName: "grill",
 		agentType: "pi",
-		environment: "worktree",
+		environment,
 		model: "",
 		thinking: "",
 		contextWindow,
@@ -1285,13 +1287,16 @@ describe("Consultation close and cleanup through the UI", () => {
 					// neither close branch draws any more and the panel must let go
 					// of the keys it took.
 					runner.agentListJson = agentListJson([]);
-					// The main view stands again only once the dead Agent lands in
-					// the list and the panel releases: the wait covers both halves.
-					await awaitFrame(
+					// The release names its reason on the Message line: the record
+					// moved out of the states the panel draws, so the panel stood
+					// down instead of holding keys with nothing to show.
+					const released = await awaitFrame(
 						setup,
-						(f) => detailPaneText(f).includes("State: missing"),
-						"the close confirmation to let go of the keys",
+						(f) =>
+							messageRowOf(f).includes("the Consultation moved to missing; the close panel closed"),
+						"the release reason on the Message line",
 					);
+					expect(detailPaneText(released)).toContain("State: missing");
 					// A missing Consultation closes directly: the key reaches the
 					// section, so no invisible panel was holding it.
 					await press(setup, "w", "the direct close after the panel let go", (f) =>
@@ -1917,6 +1922,52 @@ describe("Consultation live-worktree launch through the UI", () => {
 			state.close();
 		}
 	});
+
+	test("a live-worktree close confirms and names the checkout that stays", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// The live Consultation works in the operator's own checkout, so the
+		// confirmation names the checkout as the resource the close keeps,
+		// not the worktree and branch a worktree Consultation keeps.
+		seed(state, LIVE_CLOSE_ID, true, "2026-09-01T10:00:00.000Z", "", "live-worktree");
+		state.setConsultationState(LIVE_CLOSE_ID, "working");
+		// The Agent is alive at the recorded pane: the observation loop keeps
+		// the record working while the dialog stands.
+		const runner = new ConsultationRunner(
+			new FakeRunner(),
+			agentListJson([{ pane: `pane-${LIVE_CLOSE_ID.slice(0, 8)}`, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view", (f) =>
+						detailPaneText(f).includes("State: working"),
+					);
+					// The live Agent asks first: the confirmation names the Agent
+					// that is alive and the checkout the close keeps.
+					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+						f.includes("Close Consultation"),
+					);
+					const dialog = await settle(setup);
+					expect(dialog).toContain("The Agent is working");
+					expect(dialog).toContain("Close stops the Agent. The checkout stays.");
+					expect(dialog).toContain("stop the Agent; the checkout stays");
+					// A cancel leaves the state unchanged.
+					await press(
+						setup,
+						"escape",
+						"the panel to close",
+						(f) => !f.includes("Close Consultation"),
+					);
+					expect(state.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{ state, runner, config: liveConfigFor(), home },
+			);
+		} finally {
+			state.close();
+		}
+	});
 });
 
 describe("Consultation response gating by observed Agent status", () => {
@@ -2202,6 +2253,12 @@ describe("The full Consultation operator flow", () => {
 					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
 						f.includes("Close Consultation"),
 					);
+					// The awaiting-response state names the Agent that answered and
+					// now waits, and the body keeps the worktree and branch.
+					const dialog = await settle(setup);
+					expect(dialog).toContain("The Agent has answered and is waiting for your reply");
+					expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
+					expect(dialog).toContain("stop the Agent; the work stays");
 					await confirmPanel(setup, "the closing status", (f) =>
 						f.includes(`${id.slice(0, 8)} closed`),
 					);
