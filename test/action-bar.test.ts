@@ -352,10 +352,10 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// clear leftover, Launch, Section, Refresh, Override, Goto,
-				// Hand off, Detail, Move, and Help last. The spec's common
-				// controls of the base modes, Override and Refresh, therefore
-				// outlive the Launch entry the control plane reached for.
+				// Launch, Section, Refresh, Override, Goto, Hand off, Detail,
+				// Move, and Help last. The spec's common controls of the base
+				// modes, Override and Refresh, therefore outlive the Launch
+				// entry the control plane reached for.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -371,8 +371,8 @@ describe("the contextual Action bar", () => {
 							"? Help",
 						],
 					],
-					// The widths the last review measured: the clear leftover entry
-					// gives way first, and the spec's common controls stay.
+					// The widths the last review measured: the spec's common
+					// controls stay.
 					[
 						100,
 						[

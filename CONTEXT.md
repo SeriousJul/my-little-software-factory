@@ -460,11 +460,6 @@ It is a durable fact on the ticket, visible in its row and in its detail, and it
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
 
-**Clear**:
-The one operator action that retries the Close cleanup of a ticket's Leftover environment.
-A forced removal is its own explicit choice within the action, because it discards a dirty checkout and stops the Agents in the workspace.
-_Avoid_: force delete, cleanup retry
-
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
 The panel edits an open Ticket's next Handoff and a handoff the Workflow position suggests alike: `e` on a decision row opens the panel on the settings that row resolved.

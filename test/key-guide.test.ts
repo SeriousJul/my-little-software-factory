@@ -317,9 +317,6 @@ describe("the in-app Key guide", () => {
 					"[consultation-types.<name>] to the config file",
 					"e Override",
 					"r Refresh - no Ticket sources exist",
-					// The reason wraps at this width, one word over the column.
-					"w clear leftover - no leftover environment is recorded for ticket",
-					"github:github.com:I_1",
 					// The Priority bump and clear, each with its own note.
 					"+/- Bump priority - raises or lowers the rank",
 					"⌫ Clear priority - removes the set rank",
@@ -350,8 +347,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 38 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/57`,
+				const ladder = Array.from({ length: 36 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/55`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -753,23 +750,23 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/57");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/55");
 
-				await scrollGuide(setup, "j", "2-20/57");
-				await scrollGuide(setup, "j", "3-21/57");
-				await scrollGuide(setup, "k", "2-20/57");
-				await scrollGuide(setup, "k", "1-19/57");
+				await scrollGuide(setup, "j", "2-20/55");
+				await scrollGuide(setup, "j", "3-21/55");
+				await scrollGuide(setup, "k", "2-20/55");
+				await scrollGuide(setup, "k", "1-19/55");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/57");
+				expect(await settle(setup, 500)).toContain("1-19/55");
 				// Walk to the bottom, one step per frame.
-				const ladder = Array.from({ length: 38 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/57`,
+				const ladder = Array.from({ length: 36 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/55`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("39-57/57");
+				expect(await settle(setup, 500)).toContain("37-55/55");
 			},
 			WIDTH,
 			HEIGHT,
@@ -867,7 +864,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/57"),
+					(f) => actionBarRowOf(f).includes("2-20/55"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -970,7 +967,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/57");
+				expect(bar).toContain("1-19/55");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -986,7 +983,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/57");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/55");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -997,13 +994,13 @@ describe("the in-app Key guide", () => {
 				expect(frame).toContain("Key guide - Ticket list");
 				// The selector's note wraps on this narrow terminal, so the
 				// guide runs three rows longer than at the full width.
-				expect(actionBarRowOf(frame)).toContain("1-4/78");
+				expect(actionBarRowOf(frame)).toContain("1-4/74");
 
-				await scrollGuide(setup, "j", "2-5/78");
+				await scrollGuide(setup, "j", "2-5/74");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/57");
+				expect(actionBarRowOf(frame)).toContain("2-20/55");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -1021,7 +1018,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/57");
+				expect(actionBarRowOf(frame)).toContain("2-20/55");
 			},
 			WIDTH,
 			HEIGHT,

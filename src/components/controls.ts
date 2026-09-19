@@ -79,7 +79,6 @@ type ControlKey =
 	| "x"
 	| "z"
 	| "d"
-	| "w"
 	| "delete"
 	| "f1"
 	| "f2"
@@ -451,15 +450,6 @@ const message = (context: ControlContext): ControlAvailability =>
 	context.messageTruncated
 		? available()
 		: unavailable("the current Message fits on the Message line");
-
-/** The selected Ticket's leftover environment, and the reason one is missing. */
-const leftoverClear = (context: ControlContext): ControlAvailability => {
-	const ticket = context.selectedTicket;
-	if (ticket === undefined) return unavailable("no Ticket is selected");
-	if (ticket.leftover === null)
-		return unavailable(`no leftover environment is recorded for ticket ${ticket.identity}`);
-	return available();
-};
 
 /**
  * Why the Priority bump and clear answer nothing (ADR 0022).
@@ -891,18 +881,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 60,
 		modes: [...baseModes],
 		availability: refresh,
-	},
-	{
-		id: "leftover",
-		label: "clear leftover",
-		keys: () => ["w"],
-		keyLabel: "w",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 35,
-		modes: [...baseModes],
-		availability: (context) =>
-			ticketBaseMode(context.mode) ? leftoverClear(context) : ticketOnly(context),
 	},
 	{
 		id: "bump-priority",
@@ -1380,7 +1358,6 @@ const KEY_NAMES: Record<string, string> = {
 	escape: "Esc",
 	backspace: "Backspace",
 	delete: "Delete",
-	w: "w",
 	"ctrl+c": "Ctrl+C",
 };
 

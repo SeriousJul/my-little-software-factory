@@ -149,8 +149,9 @@ export function detailContent(
 	lines.push({ text: `Priority: ${fact.text}`, fg: fact.fg });
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
-	// and says what the operator can do, so the ticket itself carries the
-	// fact instead of a Message line that fades.
+	// and says where its cleanup lives - in herdr, not in the control plane
+	// (ADR 0032) - so the ticket itself carries the fact instead of a
+	// Message line that fades.
 	const leftover = ticket.leftover;
 	if (leftover !== null) {
 		const at = leftover.at === "" ? "" : ` ${leftover.at.slice(0, 16).replace("T", " ")}`;
@@ -162,7 +163,9 @@ export function detailContent(
 			paint("yellow"),
 		);
 		pushWrapped(`since${at}: ${leftover.reason}`, paint("yellow"));
-		pushWrapped("press w to clear it", paint("yellow"));
+		// The control plane keeps no clear for it; the Consultation detail
+		// states the same pointer for its remaining resources.
+		pushWrapped("its cleanup runs in herdr", paint("yellow"));
 	}
 	if (ticket.lastCompletion !== null) {
 		const completion = ticket.lastCompletion;

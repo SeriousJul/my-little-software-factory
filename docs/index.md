@@ -26,7 +26,7 @@ hero:
   </a>
   <a class="guide-card" href="/operation/main-view.html">
     <h3>Operation</h3>
-    <p>The Main view and its controls, the Consultation and the override panel, the decision and leftover modals, and the Live view.</p>
+    <p>The Main view and its controls, the Consultation and the override panel, the decision and missing modals, and the Live view.</p>
   </a>
   <a class="guide-card" href="/work-flow/handoffs.html">
     <h3>Work flow</h3>
