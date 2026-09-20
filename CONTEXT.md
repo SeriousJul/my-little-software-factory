@@ -360,7 +360,7 @@ _Avoid_: dispatch queue, pending list, execution queue
 **Force-dispatch**:
 The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
 It re-runs every start check the normal pickup runs and skips only the cap.
-A force-dispatch that fails ends as the pickup failure with one difference: the item leaves the queue, the Message line warns, and the ticket keeps its state.
+A force-dispatch that fails leaves the item out of the queue, where a pickup failure keeps it.
 _Avoid_: manual override, bypass
 
 **Handoff limit**:

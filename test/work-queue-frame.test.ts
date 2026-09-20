@@ -32,12 +32,108 @@ import {
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
-import { agentListJson, emptyAgentRunner, FakeRunner } from "./fake-runner.ts";
+import {
+	agentListJson,
+	emptyAgentRunner,
+	FakeRunner,
+	tabCreateJson,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
-import { issuesConfig, issueTicket, seedAwaitingTurn, success } from "./state-fixture.ts";
+import {
+	issuesConfig,
+	issueTicket,
+	seedAwaitingTurn,
+	seedInFlightTurn,
+	success,
+} from "./state-fixture.ts";
 
 const FIRST = "github:github.com:I_5";
 const SECOND = "github:github.com:I_6";
+
+/** The ticket that holds the factory's one seat in the force-dispatch frames. */
+const HELD = FIRST;
+
+/** The open ticket whose start the force-dispatch frames ask for. */
+const FORCED = SECOND;
+
+/** The checkout the forced handoff runs in, under the app's home. */
+const forceCheckout = () => join(home, "src", "billing");
+
+/**
+ * The one-seat state the force-dispatch frames boot on (issue #89): the held
+ * ticket owns the factory's only seat behind a live agent, so the cap is full
+ * the moment the app boots and no cycle can pick the forced item up out from
+ * under a test. The caller owns the state and closes it.
+ */
+function forcedFixture() {
+	const state = openFactoryState(join(home, "state.sqlite"));
+	const heldTicket = issueTicket(HELD);
+	const forcedTicket = issueTicket(FORCED, {
+		externalKey: "#6",
+		url: "https://github.com/acme/factory/issues/6",
+		title: "Close the stale deploy branch",
+	});
+	const outcome = success([heldTicket, forcedTicket]);
+	// The held seat: a real in-flight handoff with a live agent in the list.
+	seedInFlightTurn(state, outcome, HELD);
+	const runner = new FakeRunner();
+	runner.set("herdr", ["agent", "list"], {
+		stdout: agentListJson([
+			{
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				agent: "add-a-webhook-retry-policy",
+				status: "working",
+			},
+		]),
+	});
+	// The forced start crosses these steps on the item's own captured choice.
+	const checkout = forceCheckout();
+	mkdirSync(checkout, { recursive: true });
+	runner.set("git", ["-C", checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", checkout, "remote", "get-url", "origin"], {
+		stdout: "https://github.com/acme/factory.git\n",
+	});
+	runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+	runner.set("herdr", ["workspace", "create", "--cwd", checkout, "--no-focus"], {
+		stdout: workspaceCreateJson("ws-2"),
+	});
+	runner.set("herdr", ["tab", "create", "--workspace", "ws-2", "--cwd", checkout, "--no-focus"], {
+		stdout: tabCreateJson("pane-2", "tab-2"),
+	});
+	return {
+		state,
+		outcome,
+		source: new FakeSource("issues", "github-issues", outcome),
+		runner,
+		config: {
+			...issuesConfig,
+			maxParallelAgents: 1,
+			agentPollIntervalSeconds: 60,
+			repos: { "github.com/acme/factory": checkout },
+		} satisfies FactoryConfig,
+	};
+}
+
+/** Put one waiting item in the queue and boot the app around it. */
+function forceDispatchApp(fixture: ReturnType<typeof forcedFixture>) {
+	const { state, source, runner, config } = fixture;
+	const enqueue = (ticketIdentity: string, origin: "open" | "workflow" | "restart" = "open") => {
+		const result = state.enqueueWork({
+			ticketIdentity,
+			origin,
+			choice: baseChoice("pi", "live-worktree", "implement"),
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+	const boot = (body: Parameters<typeof withApp>[0]): Promise<void> =>
+		withApp(body, WIDTH, 34, { state, config, home, runner, sources: [source] });
+	return { enqueue, boot };
+}
 
 let home = "";
 
@@ -499,6 +595,130 @@ describe("the Work queue section", () => {
 			);
 		} finally {
 			state.close();
+		}
+	});
+
+	/**
+	 * The force-dispatch through the real UI (issue #89, ADR 0034): Enter on a
+	 * queue row starts the item now, over a full Parallel limit. The seat the
+	 * fixture holds is a live agent in the list, so the cap is full from the
+	 * boot, and the frames verify the start, its seat, and the failures' ends.
+	 */
+	test("Enter force-dispatches the item over a full cap, and the seat stands over it", async () => {
+		const fixture = forcedFixture();
+		const { enqueue, boot } = forceDispatchApp(fixture);
+		enqueue(FORCED);
+		try {
+			await boot(async (setup) => {
+				fixture.source.settle(fixture.outcome);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Work") && f.includes("waiting: 1"),
+					"the Work header",
+				);
+				await clickWorkHeader(setup);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("❯ Work queue"),
+					"the queue's row under the cursor",
+				);
+				// The cap is full from the boot: the held seat stands on the line.
+				expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+				const frame = await press(setup, "return", "the force-dispatch message", (f) =>
+					f.includes("force-dispatched"),
+				);
+				// The Message line names the start over the cap, and the seat count
+				// stands over the limit: the held seat plus the new one.
+				expect(messageRowOf(frame)).toContain(
+					`force-dispatched "Close the stale deploy branch" over the Parallel limit`,
+				);
+				expect(frame).toContain("auto: off 2/1");
+				// The item left the queue with the settle, the ticket holds the
+				// handoff, and the start ran the real external steps on the item's
+				// own captured choice.
+				expect(fixture.state.workQueue()).toHaveLength(0);
+				expect(fixture.state.ticketState(FORCED)).toBe("handed-off");
+				expect(fixture.runner.commands().some((command) => command.includes("agent start"))).toBe(
+					true,
+				);
+			});
+		} finally {
+			fixture.state.close();
+		}
+	});
+
+	test("a force-dispatch that fails its start leaves the item and the queue with its warning", async () => {
+		const fixture = forcedFixture();
+		// The herdr the start meets is down: the first external step fails with
+		// herdr's own refusal, before it creates anything.
+		fixture.runner.set("herdr", ["workspace", "list"], {
+			code: 1,
+			stderr: "error: herdr is not running\n",
+		});
+		const { enqueue, boot } = forceDispatchApp(fixture);
+		enqueue(FORCED);
+		try {
+			await boot(async (setup) => {
+				fixture.source.settle(fixture.outcome);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Work") && f.includes("waiting: 1"),
+					"the Work header",
+				);
+				await clickWorkHeader(setup);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("❯ Work queue"),
+					"the queue's row under the cursor",
+				);
+				const frame = await press(setup, "return", "the start's failure on the Message line", (f) =>
+					f.includes("herdr is not running"),
+				);
+				expect(messageRowOf(frame)).toContain("failed: error: herdr is not running");
+				// The ask is answered: the item left the queue, and the ticket keeps
+				// the state the failed start never touched.
+				expect(fixture.state.workQueue()).toHaveLength(0);
+				expect(fixture.state.ticketState(FORCED)).toBe("open");
+			});
+		} finally {
+			fixture.state.close();
+		}
+	});
+
+	test("a force-dispatch the claim refuses leaves the item and the queue with the warning", async () => {
+		const fixture = forcedFixture();
+		const { enqueue, boot } = forceDispatchApp(fixture);
+		// The item's origin requires the open state; the ticket holds an
+		// in-flight state on its seat: the claim the dispatch re-runs refuses
+		// the start.
+		enqueue(HELD, "open");
+		try {
+			await boot(async (setup) => {
+				fixture.source.settle(fixture.outcome);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Work") && f.includes("waiting: 1"),
+					"the Work header",
+				);
+				await clickWorkHeader(setup);
+				await awaitFrame(
+					setup,
+					(f) => f.includes("❯ Work queue"),
+					"the queue's row under the cursor",
+				);
+				const frame = await press(setup, "return", "the claim's refusal on the Message line", (f) =>
+					f.includes("force-dispatch of"),
+				);
+				// The refusal names the state the ticket holds, whatever the boot
+				// settled it in: the in-flight state the seat keeps.
+				expect(messageRowOf(frame)).toContain(`failed: the ticket is now `);
+				// The item left the queue with the refusal, and the ticket keeps its
+				// state and its own failure surface.
+				expect(fixture.state.workQueue()).toHaveLength(0);
+				expect(fixture.state.ticketState(HELD)).not.toBe("open");
+			});
+		} finally {
+			fixture.state.close();
 		}
 	});
 
