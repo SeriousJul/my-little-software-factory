@@ -43,12 +43,16 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue, and Enter opens the recovery surface each broken or stuck state needs (ADR 0038) | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
-| The Consultation-only keys `d` and `f` refuse in both Ticket base modes with the section's own words, claim the key so nothing else answers it, and the Ticket guide and bar omit both controls | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts` | Passed |
+| The Consultation-only keys `d` and `f` refuse in both Ticket base modes with the section's own words, claim the key so nothing else answers it, and the Ticket guide and bar omit both controls; the Consultation Delete stands in neither of the Work queue's modes, where `d` is the queue's own reorder and answers with its own refusal | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts` | Passed |
 | No refused key is hinted by the Action bar unless the Key guide names it, in every base mode (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The Work queue's list and its item detail dispatch from the catalogue: the row keys, `u` and `d` reorder and `Del` removal of the item under the cursor in both of the queue's modes, each with its stated refusal (no item selected, the item already first or last), and the detail's scroll answers where the facts overflow the pane | `test/work-queue-frame.test.ts`, `test/shared-control-architecture.test.ts`, `test/key-guide.test.ts`, `test/action-bar.test.ts` | Passed |
+| The queue's detail states the captured facts - the ticket, the origin, and the choice with its settings left to the agent - and a stored row the reader cannot name stays in view with its damage in place of a repaired start; the gallery holds both states and the empty queue | `test/work-queue-frame.test.ts`, `test/work-queue.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| One queue item per ticket (ADR 0034): the store refuses a second add of a ticket that already waits, and the handoff that reached it reports the refusal on the Message line with the queue's depth unchanged | `test/work-queue.test.ts`, `test/work-queue-frame.test.ts` | Passed |
+| The cursor crosses to and from the Work queue over a section the operator collapsed or the terminal cannot pay for, in both directions, and the Action bar's Move hint agrees with the key | `test/work-queue-frame.test.ts`, `test/main-view-frame.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the queue, and the terminal walks above have not been re-run for it. |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
@@ -425,6 +429,17 @@ redrawn. The suite passed in full on this branch:
 The terminal walks were not re-run for this control's Action bar and Key guide
 row: they are recorded as not re-verified for it, not as a pass. The
 screen-reader target remains unverified.
+
+## The Work queue's rows join the recovery rows (issue #88, ADR 0034)
+
+This PR's queue rows (`u Move up`, `d Move down`, `Del Remove`, and the
+queue's detail rows) and ADR 0038's `Enter Recovery` row now ride the same
+catalogue. The counts are re-measured on the merged catalogue from real
+frames, not computed: the guide holds 59 rows at the full width where the
+recovery row alone measured 55, its scroll ladder walks 40 steps to the
+bottom row `41-59/59`, and the narrow 60x12 case holds 83 rows where it
+held 79 (`test/key-guide.test.ts`). The queue's own guide entries, mode
+names, and refusals stand as recorded above.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 

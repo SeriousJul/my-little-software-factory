@@ -65,6 +65,11 @@ rule, not drift:
   and History (`f`) (issue #85): the Ticket section does not ask the
   operator to learn those keys, and the Ticket bar follows its guide, so it
   hints neither.
+- The Work queue's modes never carry the Consultation section's Delete:
+  its `d` is the queue's own row reorder, and a Consultation control
+  declared in the queue's modes would name a deletion the cursor cannot
+  reach. The catalogue keeps that control in the Ticket and Consultation
+  panes, where its refusal has a meaning the operator owns.
 
 The catalogue states the section ownership once per control
 (`consultationSectionOnly`), and the refusal, the guide, and the bar read

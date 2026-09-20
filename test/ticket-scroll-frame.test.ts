@@ -307,10 +307,11 @@ describe("native Ticket detail viewport", () => {
 				await pressArrow(setup, "up", "Up to select the first Ticket", (frame) =>
 					selectedRow(frame).includes("[open]"),
 				);
-				// The list window holds four rows at this size, so a page from
-				// the first ticket lands on the fifth.
+				// The list window holds five rows at this size: the empty
+				// Consultation and Work queue sections keep their floor boxes,
+				// and a page from the first ticket lands on the sixth.
 				await press(setup, "pagedown", "PageDown to select one list page", (frame) =>
-					selectedRow(frame).includes("Observe"),
+					selectedRow(frame).includes("Keep ti"),
 				);
 				await press(setup, "pageup", "PageUp to return one list page", (frame) =>
 					selectedRow(frame).includes("Retry polic"),

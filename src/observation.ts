@@ -67,7 +67,12 @@ import type { HerdrAgent } from "./herdr.ts";
 import { parallelSeatCount } from "./parallel.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
-import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
+import {
+	type Consultation,
+	type FactoryState,
+	type HandoffTicket,
+	workQueueStartOf,
+} from "./state.ts";
 import {
 	isHeldCause,
 	lastMessageFromLog,
@@ -414,6 +419,12 @@ export class ObservationCoordinator {
 	 */
 	private pauseActive = false;
 	/**
+	 * The last Work queue refusal this loop said per item (issue #88 review).
+	 * A queue the cycle cannot drain is a standing fact, so its warning states
+	 * once and returns only when the reason changes or the item comes back.
+	 */
+	private readonly queueWarnings = new Map<string, string>();
+	/**
 	 * The agents of the last successful list, for the UI's markers. Null
 	 * until the first success: an unreadable herdr must not read as "every
 	 * pane is missing".
@@ -562,6 +573,16 @@ export class ObservationCoordinator {
 				this.restarted.delete(identity);
 		}
 
+		// The Work queue takes every free seat before the automatic starts do
+		// (ADR 0034, issue #88): a queued item is the operator's own ask, so
+		// the Dispatch pause and the Same-type hold - gates of the automatic
+		// origins - do not see it. Every hard start check still runs inside
+		// the dispatch it crosses. The pickup runs on every cycle, including
+		// the unlimited-cap cycle: an operator who lifts the cap while items
+		// wait frees them, it does not strand them.
+		await this.pickupQueue(slots);
+		if (this.stopped) return;
+
 		let changed = reclaimed;
 		for (const ticket of inFlight) {
 			if (ticket.paneId === null) continue;
@@ -645,6 +666,98 @@ export class ObservationCoordinator {
 		}
 		if (changed) this.onChanged();
 		this.onAgents?.(probe.agents);
+	}
+
+	/**
+	 * Start the Work queue's items against the cycle's free seats (ADR 0034,
+	 * issue #88).
+	 *
+	 * The queue starts in its shared order, up to the free seats, and a start
+	 * holds its seat for the rest of the cycle, the way a route or a restart
+	 * does. A pickup is a manual start: the dispatch's own claim re-checks
+	 * the ticket state the origin requires, and the handoff re-runs the record
+	 * checks and the Setting fit check before its first external change. The
+	 * automatic gates do not hold it: the Dispatch pause and the Same-type
+	 * hold gate the open dispatch and the route, never a queued item.
+	 *
+	 * A pickup that fails a check leaves the item in the queue and says why
+	 * on the Message line: the ticket keeps its state, and the next cycle
+	 * with a free seat tries again. The item leaves the queue only when the
+	 * agent actually starts, reported later on the intent's `onStarted`.
+	 *
+	 * The refusal states itself once per item. A queue the cycle cannot drain
+	 * is a standing fact, and a warning repeated every poll would only clear
+	 * the Message line the operator is reading, the way the unreachable-herdr
+	 * and Consultation-recovery notices do: this loop carries the last warning
+	 * it said per item, and says the fact again only when it changes.
+	 */
+	private async pickupQueue(slots: ParallelSlots): Promise<void> {
+		const config = this.config();
+		const limit = config.maxParallelAgents;
+		const items = this.state.workQueue();
+		// An item that left the queue leaves its warning behind with it, so a
+		// re-enqueue of the same ticket states its refusal again.
+		for (const id of [...this.queueWarnings.keys()]) {
+			if (!items.some((item) => item.id === id)) this.queueWarnings.delete(id);
+		}
+		for (const item of items) {
+			if (this.stopped) return;
+			if (limit > 0 && slots.count >= limit) return;
+			const start = workQueueStartOf(item);
+			if (!start.ok) {
+				// A damaged stored row never starts and holds no seat: the queue
+				// keeps it in view, and the operator removes it or repairs the
+				// row's origin with their own hands.
+				this.warnOnce(item.id, `Work queue pickup refused: ${start.reason}`);
+				continue;
+			}
+			const result = await this.dispatch({
+				origin: start.origin,
+				ticketIdentity: start.ticketIdentity,
+				choice: start.choice,
+				previousMessage: "",
+				onStarted: (started) => {
+					// A stopped loop settles nothing and reports nothing.
+					if (this.stopped) return;
+					if (started.ok) this.state.removeWorkQueueItem(item.id);
+					// A start that failed keeps the item in the queue; the
+					// dispatch module already put its failure on the Message
+					// line, so the pickup adds no second warning.
+					this.onChanged();
+				},
+			});
+			if (this.stopped) return;
+			if (!result.ok) {
+				// The claim refused the start: the ticket no longer holds the
+				// state the origin requires, or it is no longer actionable. The
+				// item stays in the queue, the ticket keeps its state, and the
+				// Message line says what stood in the way - once, until the fact
+				// changes.
+				this.warnOnce(
+					item.id,
+					`Work queue pickup of ticket ${start.ticketIdentity} failed: ${result.reason}`,
+				);
+				continue;
+			}
+			this.queueWarnings.delete(item.id);
+			// The started or queueing agent is not in this poll, so the cycle's
+			// count holds its seat before the next start is measured.
+			slots.count += 1;
+			this.onStatus("info", `Work queue: handing off ticket ${start.ticketIdentity}`);
+		}
+	}
+
+	/**
+	 * Say a standing Work queue refusal on the Message line once per item.
+	 *
+	 * The same words for the same item are the same standing fact: they go
+	 * unreported. A new reason, or the same reason after the item left and
+	 * came back, is a new fact, and reports.
+	 */
+	private warnOnce(id: string, text: string): void {
+		if (this.queueWarnings.get(id) === text) return;
+		this.queueWarnings.set(id, text);
+		this.onStatus("warning", text);
 	}
 
 	/**

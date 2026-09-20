@@ -1006,6 +1006,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE checkout_conflict_confirmations;
 			DROP TABLE referenced_issues;
 			DROP TABLE auto_handoff_mode;
+			DROP TABLE work_queue;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -1102,6 +1103,9 @@ describe("factory SQLite state", () => {
 		// The v13 mode belongs to the run after this record: a v5 file stored
 		// no Auto-handoff mode.
 		db.exec("DROP TABLE auto_handoff_mode;");
+		// The v14 queue belongs to the run after this record: a v5 file stored
+		// no Work queue.
+		db.exec("DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1177,6 +1181,9 @@ describe("factory SQLite state", () => {
 		// The v13 mode belongs to the run after this record: a v7 file stored
 		// no Auto-handoff mode.
 		db.exec("DROP TABLE auto_handoff_mode;");
+		// The v14 queue belongs to the run after this record: a v7 file stored
+		// no Work queue.
+		db.exec("DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1252,6 +1259,9 @@ describe("factory SQLite state", () => {
 		// upgrade from v12 finds.
 		const db = new Database(path);
 		db.exec("DROP TABLE auto_handoff_mode;");
+		// The v14 queue belongs to the run after this record: a v12 file stored
+		// no Work queue.
+		db.exec("DROP TABLE work_queue;");
 		db.prepare("UPDATE schema_version SET version = 12").run();
 		db.close();
 

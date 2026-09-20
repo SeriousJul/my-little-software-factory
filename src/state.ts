@@ -45,7 +45,7 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -76,6 +76,54 @@ export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reas
  *   its existing work cycle.
  */
 export type HandoffOrigin = "open" | "workflow" | "restart";
+
+/**
+ * A Handoff that waits for a free Parallel limit seat in the Work queue
+ * (ADR 0034, issue #88).
+ *
+ * The manual start the operator asked for, captured at the enqueue: the
+ * ticket, the origin the pickup re-checks, and the operator's choice. The
+ * ticket keeps its own state while the item waits, and the choice is a
+ * snapshot: the pickup runs the captured choice, not a re-resolution.
+ */
+export interface WorkQueueItem {
+	id: string;
+	kind: "handoff";
+	ticketIdentity: string;
+	/** The origin the pickup's claim re-checks; null when the stored cell cannot be read. */
+	origin: HandoffOrigin | null;
+	/** The operator's choice, captured at the enqueue; null when the stored cell cannot be read. */
+	choice: HandoffChoice | null;
+	/** When the item entered the queue, in ISO time. */
+	createdAt: string;
+}
+
+/** What one stored Work queue item asks the factory to start, once read. */
+export type WorkQueueStart =
+	| { ok: true; ticketIdentity: string; origin: HandoffOrigin; choice: HandoffChoice }
+	| { ok: false; reason: string };
+
+/**
+ * Read a stored Work queue item as the start it asks for.
+ *
+ * A cell neither the column rules nor the choice decoder can read makes the
+ * item unstartable, and the answer names that damage: the queue keeps the row
+ * in view, and the pickup refuses it rather than inventing the origin, the
+ * ticket, or the settings the operator never chose.
+ */
+export function workQueueStartOf(item: WorkQueueItem): WorkQueueStart {
+	if (item.ticketIdentity === "") return { ok: false, reason: "the stored item names no ticket" };
+	if (item.origin === null)
+		return { ok: false, reason: "the stored item's origin is not one the plane knows" };
+	if (item.choice === null)
+		return { ok: false, reason: "the stored item's captured choice is not readable" };
+	return {
+		ok: true,
+		ticketIdentity: item.ticketIdentity,
+		origin: item.origin,
+		choice: item.choice,
+	};
+}
 
 interface SettleTurnInput {
 	ticketIdentity: string;
@@ -573,6 +621,31 @@ const MIGRATION_V12_TO_V13 = `
 	INSERT INTO auto_handoff_mode(id, enabled) VALUES (1, 0);
 `;
 
+/**
+ * The v14 step: the Work queue (ADR 0034, issue #88).
+ *
+ * The durable, ordered list of starts that wait for a free Parallel limit
+ * seat. This issue lands its first item kind, the manual Handoff: the ticket
+ * it asks for, the origin the pickup re-checks, and the operator's choice
+ * captured at the enqueue. One shared order column serves every kind, so the
+ * Consultation item kind the queue gains later rides the same order. The
+ * order is dense positions, re-indexed on every change: the queue is short
+ * by design, and a dense order keeps a reorder or a removal one small write.
+ */
+const MIGRATION_V13_TO_V14 = `
+	CREATE TABLE work_queue (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		ticket_identity TEXT,
+		origin TEXT,
+		choice_json TEXT,
+		queue_order INTEGER NOT NULL,
+		created_at TEXT NOT NULL
+	);
+	-- Every read takes the whole queue in its shared order across kinds, and
+	-- the queue is short by design, so the order carries no index of its own.
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -687,6 +760,7 @@ export class FactoryState {
 			if (version < 11) this.db.exec(MIGRATION_V10_TO_V11);
 			if (version < 12) this.db.exec(MIGRATION_V11_TO_V12);
 			if (version < 13) this.db.exec(MIGRATION_V12_TO_V13);
+			if (version < 14) this.db.exec(MIGRATION_V13_TO_V14);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1278,6 +1352,106 @@ export class FactoryState {
 		const ended = this.lastCycleEnd(identity);
 		if (ended === null) return false;
 		return ended.cause === "completed" && ended.taskType === suggestedTaskType;
+	}
+
+	/**
+	 * Put a manual Handoff into the Work queue (ADR 0034, issue #88).
+	 *
+	 * The item lands at the end of the shared order and is durable the moment
+	 * the write returns: a restart reads the queue and its order back. The
+	 * ticket it asks for is untouched - the enqueue is not a handoff, and the
+	 * ticket keeps its state while the item waits.
+	 *
+	 * The queue holds at most one item per ticket (ADR 0034): a second add of
+	 * a ticket that already waits is refused and answers `null`, and the first
+	 * item keeps its place. A waiting duplicate could never start - its claim
+	 * is refused the moment the first start moves the ticket - so one ask per
+	 * ticket keeps the queue free of an item the operator could never clear.
+	 */
+	enqueueWorkQueueItem(input: {
+		ticketIdentity: string;
+		origin: HandoffOrigin;
+		choice: HandoffChoice;
+	}): WorkQueueItem | null {
+		return this.transaction(() => {
+			const waiting = this.db
+				.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+				.get(input.ticketIdentity);
+			if (waiting !== null && waiting !== undefined) return null;
+			const id = randomUUID();
+			// One clock read serves the stored row and the returned item, so the
+			// `Enqueued:` time the queue shows is the time its row carries.
+			const createdAt = new Date(this.now()).toISOString();
+			const position =
+				(
+					this.db
+						.prepare("SELECT COALESCE(MAX(queue_order), -1) + 1 AS next FROM work_queue")
+						.get() as { next: number } | undefined
+				)?.next ?? 0;
+			this.db
+				.prepare(
+					"INSERT INTO work_queue(id, kind, ticket_identity, origin, choice_json, queue_order, created_at) VALUES (?, 'handoff', ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					input.ticketIdentity,
+					input.origin,
+					JSON.stringify(input.choice),
+					position,
+					createdAt,
+				);
+			return {
+				id,
+				kind: "handoff" as const,
+				ticketIdentity: input.ticketIdentity,
+				origin: input.origin,
+				choice: input.choice,
+				createdAt,
+			};
+		});
+	}
+
+	/** The Work queue in its shared order: the items a freed seat starts next. */
+	workQueue(): WorkQueueItem[] {
+		const rows = this.db
+			.prepare("SELECT * FROM work_queue ORDER BY queue_order, rowid")
+			.all() as WorkQueueRow[];
+		return rows.map(workQueueItemOf);
+	}
+
+	/**
+	 * Move one Work queue item up or down the shared order. The item swaps
+	 * positions with its neighbour; an item at the edge the move asks for
+	 * stays put and the call says so.
+	 */
+	moveWorkQueueItem(id: string, direction: -1 | 1): boolean {
+		return this.transaction(() => {
+			const rows = this.db
+				.prepare("SELECT id, queue_order FROM work_queue ORDER BY queue_order, rowid")
+				.all() as Array<{ id: string; queue_order: number }>;
+			const index = rows.findIndex((row) => row.id === id);
+			const neighbour = index + direction;
+			if (index < 0 || neighbour < 0 || neighbour >= rows.length) return false;
+			this.db
+				.prepare("UPDATE work_queue SET queue_order = ? WHERE id = ?")
+				.run(rows[neighbour].queue_order, id);
+			this.db
+				.prepare("UPDATE work_queue SET queue_order = ? WHERE id = ?")
+				.run(rows[index].queue_order, rows[neighbour].id);
+			return true;
+		});
+	}
+
+	/**
+	 * Remove one Work queue item. For a Handoff item the removal cancels the
+	 * intent: the ticket keeps its state, and the next cycle simply never
+	 * picks the item up. Returns whether the item was there.
+	 */
+	removeWorkQueueItem(id: string): boolean {
+		return this.transaction(() => {
+			const result = this.db.prepare("DELETE FROM work_queue WHERE id = ?").run(id);
+			return Number(result.changes) > 0;
+		});
 	}
 
 	/**
@@ -3126,6 +3300,44 @@ function jsonStringRecord(value: string): Record<string, string> {
 	} catch {
 		return {};
 	}
+}
+
+/** The stored row of a Work queue item (ADR 0034, issue #88). */
+interface WorkQueueRow {
+	id: string;
+	kind: string;
+	ticket_identity: string | null;
+	origin: string | null;
+	choice_json: string | null;
+	queue_order: number;
+	created_at: string;
+}
+
+/**
+ * Read one stored Work queue item back.
+ *
+ * The choice decodes through `jsonChoice`, the one reader of the stored
+ * `choice_json` shape, so the queue and the handoff record cannot drift apart.
+ * A cell neither rule can read stays null: the row keeps its place in the
+ * queue, and `workQueueStartOf` names the damage it cannot start.
+ */
+function workQueueItemOf(row: WorkQueueRow): WorkQueueItem {
+	const origin: HandoffOrigin | null =
+		row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
+			? row.origin
+			: null;
+	// Marker (issue #88 review): `WorkQueueItem` is the handoff shape today,
+	// so every row reads as one. When the queue's second kind ships (the
+	// `queued` Consultation row, PR #102), this reader must branch on
+	// `row.kind` and reject a row whose kind it does not know.
+	return {
+		id: row.id,
+		kind: "handoff",
+		ticketIdentity: row.ticket_identity ?? "",
+		origin,
+		choice: row.choice_json === null ? null : (jsonChoice(row.choice_json) ?? null),
+		createdAt: row.created_at,
+	};
 }
 
 /** A stored handoff row, with the herdr handles it started. */

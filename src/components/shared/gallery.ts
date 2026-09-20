@@ -16,7 +16,7 @@ import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
-import type { Consultation } from "../../state.ts";
+import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
@@ -31,6 +31,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { KeyGuide } from "../utility.ts";
+import { WorkQueueDetail, workQueueDetailLines } from "../work-queue.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
@@ -201,6 +202,21 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * One entry per state the standard names, so the list is also the checklist a
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
+/** A Work queue item the detail examples render, the operator's choice in. */
+function sampleWorkQueueItem(
+	choice: WorkQueueItem["choice"],
+	origin: WorkQueueItem["origin"] = "open",
+): WorkQueueItem {
+	return {
+		id: "work-queue-example",
+		kind: "handoff",
+		ticketIdentity: "github:github.com:acme/factory#88",
+		origin,
+		choice,
+		createdAt: "2026-09-19T22:57:00.000Z",
+	};
+}
+
 /** The Consultation the detail and close-dialog examples render under. */
 function sampleConsultation(
 	state: "opening" | "working" | "awaiting-response" | "missing" | "failed" | "closing" | "closed",
@@ -754,6 +770,93 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				),
 				visibleRows: 7,
 				scroll: 3,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	// The Work queue item's detail (ADR 0034, issue #88): the captured facts
+	// of the waiting start, in the states the operator reads. The item that
+	// left every setting to the agent shows the defaults' own words, and an
+	// empty queue shows its refusal line.
+	{
+		id: "work-queue-item",
+		state: "Work queue item: the captured facts of the waiting handoff",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-item",
+				lines: workQueueDetailLines(
+					sampleWorkQueueItem({
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "implement",
+						model: "claude-sonnet-4-5",
+						thinking: "medium",
+						contextWindow: "200000",
+					}),
+					columns.contentWidth - 4,
+				),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "work-queue-item-defaults",
+		state: "Work queue item: the settings the agent defaults stand for",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-item-defaults",
+				lines: workQueueDetailLines(
+					sampleWorkQueueItem({
+						agentType: "",
+						environment: "worktree",
+						taskType: "",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					}),
+					columns.contentWidth - 4,
+				),
+				visibleRows: 7,
+				scroll: 3,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		// A row the store damaged (issue #88 review): the queue keeps it in
+		// view and says what it cannot read, instead of showing a start with
+		// an invented origin or settings nobody chose. The pickup refuses it.
+		id: "work-queue-item-damaged",
+		state: "Work queue item: a stored row the reader cannot start",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-item-damaged",
+				lines: workQueueDetailLines(sampleWorkQueueItem(null, null), columns.contentWidth - 4),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "work-queue-empty",
+		state: "Work queue detail: the queue holds no item",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-empty",
+				lines: workQueueDetailLines(undefined, columns.contentWidth - 4),
+				visibleRows: 7,
+				scroll: 0,
 				focused: false,
 				onFocus: () => undefined,
 				onWheel: () => undefined,

@@ -13,7 +13,7 @@ import {
 	guideControls,
 } from "../src/components/controls.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import type { Consultation } from "../src/state.ts";
+import type { Consultation, WorkQueueItem } from "../src/state.ts";
 
 const values: Omit<ControlContext, "mode"> = {
 	listCanMove: true,
@@ -116,6 +116,37 @@ describe("the shared control catalogue", () => {
 			throw new Error("Delete and History are missing from the catalogue");
 		expect(availabilityFor(closedDelete, closed).available).toBe(true);
 		expect(availabilityFor(closedHistory, closed).available).toBe(true);
+	});
+
+	test("the Consultation Delete never reaches the Work queue's modes", () => {
+		// The queue's `d` is its own Move down, whatever the Consultation
+		// section's selection stands at. A Consultation control declared in
+		// the queue's modes could delete a Consultation the cursor cannot see
+		// (issue #88 review), so the catalogue keeps the two apart.
+		for (const mode of ["work-list", "work-detail"] as const) {
+			expect(controlsForMode(mode).map((control) => control.id)).not.toContain(
+				"consultation-delete",
+			);
+			const queueValues = {
+				...values,
+				selectedConsultation: { state: "closed" } as unknown as Consultation,
+				selectedWorkQueueItem: { id: "item-1" } as unknown as WorkQueueItem,
+				workQueueDepth: 2,
+			};
+			const queueContext = contextFor(mode, { ...queueValues, workQueueIndex: 0 });
+			expect(controlForKey({ name: "d" }, queueContext)?.id).toBe("work-move-down");
+			expect(availabilityFor(controlById("work-move-down"), queueContext).available).toBe(true);
+			// At the last row the key answers with the queue's own refusal, not
+			// with the Consultation's words.
+			const lastContext = contextFor(mode, { ...queueValues, workQueueIndex: 1 });
+			const refused = controlForKey({ name: "d" }, lastContext);
+			expect(refused?.id).toBe("work-move-down");
+			if (refused === undefined) throw new Error("the queue lost its Move down");
+			expect(availabilityFor(refused, lastContext)).toEqual({
+				available: false,
+				reason: "the item is already last in the Work queue",
+			});
+		}
 	});
 
 	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {

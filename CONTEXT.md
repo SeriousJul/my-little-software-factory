@@ -15,15 +15,15 @@ It observes the factory and issues work to agents.
 _Avoid_: dashboard, UI
 
 **Main view**:
-The always-present base surface of the control plane. It holds two list sections (Ticket and Consultation) on the left, and one context-dependent detail pane on the right that shows the detail of the currently selected item.
+The always-present base surface of the control plane. It holds three list sections (Ticket, Consultation, and Work) on the left, and one context-dependent detail pane on the right that shows the detail of the currently selected item.
 _Avoid_: dashboard, home, screen, primary view
 
 **Section**:
-An independently collapsable list in the Main view. The Ticket section holds the ticket list; the Consultation section holds the Consultation list. Both can be expanded at the same time. A collapsed section shrinks to its header row and its rows are skipped by navigation.
+An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows.
 _Avoid_: tab, pane, view, accordion
 
 **Section header**:
-The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). A click on the header toggles that section.
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle
 
 **Response editor**:
@@ -343,7 +343,7 @@ It gates every start: a manual start that cannot take a seat enters the Work que
 _Avoid_: concurrency cap, max agents
 
 **Work queue**:
-The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state.
+The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state. The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
 When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record.
 _Avoid_: dispatch queue, pending list, execution queue
 
