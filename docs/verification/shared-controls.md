@@ -76,9 +76,9 @@ and `bun run test`.
 | Part | Version |
 | --- | --- |
 | OS | Arch Linux, kernel 7.2.5-3-omarchy |
-| Runtime | Bun 1.4.0 (the pinned minimum is 1.3.0, ADR 0035) |
+| Runtime | Bun 1.4.2 (the pinned minimum is 1.3.0, ADR 0035) |
 | Renderer | OpenTUI `@opentui/core` 0.5.11, `@opentui/react` 0.5.11 |
-| Test runner | `bun:test` (Bun 1.4.0), run through `bun test --isolate` |
+| Test runner | `bun:test` (Bun 1.4.2), run through `bun run test` (`bun test --isolate --parallel`) |
 | Multiplexer (tmux path) | tmux 3.7c |
 
 ## Required acceptance targets and their state
@@ -695,17 +695,18 @@ isolated as the standard states it is:
   (`bunfig.toml`, `[test]`), so the environment clears before every test of
   every file, the files that do not import it through the shared harness
   included.
-- The two no-color frame tests that left `NO_COLOR` set for the worker's
-  remaining files delete it when they end, the way the override panel's
-  already did.
+- The no-color tests that left `NO_COLOR` set for the worker's remaining
+  files delete it when they end: the two frame tests, the shared
+  presentation's two no-color tests, and the override panel's.
 
-The checks pass in full on this branch after the isolation, re-measured:
-`bun run lint` and `bun run typecheck` pass, and `bun test` passes in full
-(1558 pass, 13 skip, 0 fail, twice in a row, about 38 s per run). The 13
-skips are the ones this record already holds as skipped, issues #103 and
-#104. The direct run of the five files that share the no-color tests and
-the badge's frame test passed four times in a row (54 pass, 7 skip, 0
-fail).
+The checks pass in full on this branch after the isolation, re-measured
+after merging origin/main, whose `test:changed` script carries the same
+isolation flags: `bun run lint` and `bun run typecheck` pass, and `bun run
+test` passes in full (1567 pass, 13 skip, 0 fail, twice in a row, about
+38 s per run, on Bun 1.4.2). The 13 skips are the ones this record
+already holds as skipped, issues #103 and #104. The direct run of the
+five files that share the no-color tests and the badge's frame test
+passed four times in a row (57 pass, 7 skip, 0 fail).
 
 The terminal walks were not re-run on the queued badge: they are recorded as
 not re-verified for this change, not as a pass. The screen-reader target

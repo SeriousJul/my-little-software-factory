@@ -16,7 +16,7 @@
 		"dev": "bun --watch src/factory.ts --config config/development.toml",
 		"gallery": "bun bin/factory-gallery.mjs",
 		"test": "bun test --isolate --parallel --timeout=$([ -n \"$CI\" ] && printf 60000 || printf 30000)",
-		"test:changed": "bun test --changed=${TEST_CHANGED_BASE:-origin/main} --isolate --timeout=$([ -n \"$CI\" ] && printf 60000 || printf 30000)",
+		"test:changed": "bun test --changed=${TEST_CHANGED_BASE:-origin/main} --isolate --parallel --timeout=$([ -n \"$CI\" ] && printf 60000 || printf 30000)",
 		"docs:dev": "vitepress dev docs",
 		"docs:build": "vitepress build docs",
 		"docs:preview": "vitepress preview docs",

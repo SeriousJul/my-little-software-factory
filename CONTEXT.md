@@ -285,6 +285,10 @@ The window during which a ticket's Handoff is claimed and not yet settled, or th
 The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the ticket shows its recovery fact instead.
 _Avoid_: boot, launch, pending, startup
 
+**Queue wait**:
+The window in which a ticket's manual start waits in the Work queue for a free Parallel limit seat. The ticket keeps its `open` state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket `open`.
+_Avoid_: queued state, pending, on hold
+
 **Startup grace**:
 The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.
@@ -356,10 +360,6 @@ _Avoid_: concurrency cap, max agents
 The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state. The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
 When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record. A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
-
-**Queue wait**:
-The window in which a ticket's manual start waits in the Work queue for a free Parallel limit seat. The ticket keeps its `open` state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket `open`.
-_Avoid_: queued state, pending, on hold
 
 **Force-dispatch**:
 The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
