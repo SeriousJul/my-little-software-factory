@@ -199,6 +199,19 @@ export interface HandoffDispatch {
 	 */
 	pickupWorkQueue(): Promise<number>;
 	/**
+	 * The force-dispatch of one Work queue item (issue #89, ADR 0034): starts
+	 * the item now, even when the Parallel limit is full. The claim re-runs
+	 * every hard start check the pickup runs - the ticket still holds the state
+	 * the item's origin requires, the source is healthy, the attempt ledger is
+	 * clear - and skips only the cap, so the seat count may stand over the
+	 * limit until the work settles. A failure ends as a pickup failure with the
+	 * one difference the operator asked for: the item leaves the queue, the
+	 * Message line warns, and the ticket keeps its state and its own failure
+	 * surface. A seat a Close cleanup holds while it queues parks the claim, and
+	 * the item leaves only when that parked start settles.
+	 */
+	forceDispatchWorkQueueItem(ticketIdentity: string): void;
+	/**
 	 * Drop one ticket's waiting start from the Work queue, and forget every fact
 	 * the module holds for it: the pickup warning it reports once per reason, and
 	 * the claim a pickup already made and the held herdr seat parked. The queue's
@@ -470,15 +483,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * Settle and drop the parked pickup of a removed Work queue item.
+	 * Settle and drop the parked claim of a removed Work queue item.
 	 *
-	 * A pickup claims its seat before the herdr work can run, and
-	 * `runClaimedHandoff` parks the claim while the herdr seat is held by a
-	 * handoff or a queued Close cleanup. The row and that parked claim are one
-	 * waiting start, so the operator's cancel ends both: the claim settles as
-	 * failed and the intent leaves the drain, or the start the operator removed
-	 * would run the moment the seat freed. Only a pickup's claim answers to the
-	 * row - a manual start that claimed on its own is no one's queue item.
+	 * A pickup or a force-dispatch claims its seat before the herdr work can
+	 * run, and `runClaimedHandoff` parks the claim while the herdr seat is held
+	 * by a handoff or a queued Close cleanup. The row and that parked claim are
+	 * one waiting start, so the operator's cancel ends both: the claim settles
+	 * as failed and the intent leaves the drain, or the start the operator
+	 * removed would run the moment the seat freed. Only a claim made for a row
+	 * answers to the row - a manual start that claimed on its own is no one's
+	 * queue item.
 	 */
 	private cancelParkedPickup(ticketIdentity: string): void {
 		for (let index = this.handoffQueue.length - 1; index >= 0; index -= 1) {
@@ -500,16 +514,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * Claim and run one queue item. Returns whether the item claimed a seat
-	 * this call: a refused claim keeps the item in the queue and says why on
-	 * the Message line, once per reason.
+	 * The claim one queue item crosses before its start (ADR 0034): the race
+	 * check, the state gate, the claim's hard checks, and the Starting window,
+	 * in the order the pickup runs them. It reports no refusal: the answer
+	 * carries the reason, and the caller owns the line, because the pickup
+	 * keeps its failing item in the queue while the force-dispatch leaves it.
+	 * `cancelled` says the item already left through the restart-or-route race
+	 * check, with that check's own line.
 	 */
-	private pickupItem(item: WorkQueueItem): boolean {
+	private claimQueueItem(item: WorkQueueItem): QueueItemClaimResult {
 		// A restart or a route whose ticket already wears a handoff newer than
 		// the item's enqueue: the seat the operator asked for was taken by a
 		// start the operator did not ask for - the automatic restart, or the
-		// automatic route - so the pickup cancels the item instead of starting
-		// a second handoff on a ticket that has a live turn (ADR 0034). The
+		// automatic route - so the item is cancelled instead of a second
+		// handoff starting on a ticket that has a live turn (ADR 0034). The
 		// observation's automatic restart and automatic route skip a ticket the
 		// queue waits for, so this meets the race that slipped past that skip.
 		// It runs before the state gate below: a ticket the race already routed
@@ -527,24 +545,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 						? `${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`
 						: `${this.ticketName(item.ticketIdentity)} routed while its route waited in the Work queue; the queue item is removed`,
 				);
-				return false;
+				return { ok: "cancelled" };
 			}
 		}
 		const currentState = this.state.ticketState(item.ticketIdentity);
 		if (currentState === undefined || !handoffAllowsState(item.origin, currentState)) {
-			this.reportPickupFailure(
-				item,
-				currentState === undefined
-					? "the ticket no longer exists"
-					: `the ticket is now ${currentState}`,
-			);
-			return false;
+			return {
+				ok: false,
+				reason:
+					currentState === undefined
+						? "the ticket no longer exists"
+						: `the ticket is now ${currentState}`,
+			};
 		}
 		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
-		if (!claim.ok) {
-			this.reportPickupFailure(item, claim.reason);
-			return false;
-		}
+		if (!claim.ok) return { ok: false, reason: claim.reason };
 		// A claim is a claim: the picked-up start enters the Starting window
 		// exactly as the direct start above does, so the two claim paths report
 		// the same fact and the row's spinner face does not wait for a seat.
@@ -554,21 +569,40 @@ class HandoffDispatchModule implements HandoffDispatch {
 			.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
 			// The claim's hard checks passed but the projection holds no ticket
-			// to run: settle the claim, keep the item, and say so.
+			// to run: settle the claim and name it; the item's fate is the
+			// caller's, like every other refusal above.
 			this.state.settleHandoff(claim.claim.attemptId, false, "the ticket is no longer visible");
 			this.reports.starting(item.ticketIdentity, false);
 			this.reports.refresh();
-			this.reportPickupFailure(item, "the ticket is no longer visible");
-			return false;
+			return { ok: false, reason: "the ticket is no longer visible" };
 		}
 		this.warnedPickups.delete(item.ticketIdentity);
-		const previousHandoffId = ticket.handoff?.attemptId ?? "";
+		return {
+			ok: true,
+			ticket,
+			claim: claim.claim,
+			previousHandoffId: ticket.handoff?.attemptId ?? "",
+		};
+	}
+
+	/**
+	 * Claim and run one queue item. Returns whether the item claimed a seat
+	 * this call: a refused claim keeps the item in the queue and says why on
+	 * the Message line, once per reason.
+	 */
+	private pickupItem(item: WorkQueueItem): boolean {
+		const claimed = this.claimQueueItem(item);
+		if (claimed.ok === "cancelled") return false;
+		if (claimed.ok === false) {
+			this.reportPickupFailure(item, claimed.reason);
+			return false;
+		}
 		this.runClaimedHandoff(
 			{
-				ticket,
+				ticket: claimed.ticket,
 				choice: item.choice,
 				origin: item.origin,
-				claim: claim.claim,
+				claim: claimed.claim,
 				previousMessage: item.previousMessage,
 				workQueuePickup: true,
 			},
@@ -586,7 +620,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// call `recordRoutedDecision`, so one copy of the fact and one clock
 					// serve a route that starts in its seat and a route that waited.
 					if (item.origin === "workflow") {
-						this.recordRoutedDecision(item.ticketIdentity, previousHandoffId);
+						this.recordRoutedDecision(item.ticketIdentity, claimed.previousHandoffId);
 					}
 					this.reports.refresh();
 					if (rowStands) {
@@ -604,6 +638,79 @@ class HandoffDispatchModule implements HandoffDispatch {
 			},
 		);
 		return true;
+	}
+
+	/**
+	 * The force-dispatch of one Work queue item (issue #89, ADR 0034).
+	 *
+	 * The item starts now, over a full Parallel limit: the claim re-runs every
+	 * hard start check the pickup runs and skips only the cap. A failure ends
+	 * as a pickup failure with the one difference the operator asked for: the
+	 * item leaves the queue, the Message line warns, and the ticket keeps its
+	 * state and its own failure surface. A row that left between the render and
+	 * the key runs no dispatch and says nothing: the catalogue gated the
+	 * availability, so a key this race meets has no answer to give.
+	 */
+	forceDispatchWorkQueueItem(ticketIdentity: string): void {
+		if (this.stopped) return;
+		const item = this.state
+			.workQueue()
+			.find((candidate) => candidate.ticketIdentity === ticketIdentity);
+		if (item === undefined) return;
+		// Measured before the claim, on the shared count: the line states the
+		// start over the cap only when the cap was full at the dispatch.
+		const limit = this.config().maxParallelAgents;
+		const overCap = limit > 0 && this.seatCount() >= limit;
+		const claimed = this.claimQueueItem(item);
+		if (claimed.ok === "cancelled") return;
+		if (claimed.ok === false) {
+			// The claim refused the start: the ticket no longer holds the state
+			// its origin requires, its source is gone, or the ledger is unclear.
+			// The item leaves the queue with the warning the failed pickup
+			// leaves, the pickup's own words for the fact, and the ticket keeps
+			// its state.
+			this.removeQueueItem(item.ticketIdentity);
+			this.reports.warning(
+				`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${claimed.reason}`,
+			);
+			return;
+		}
+		this.runClaimedHandoff(
+			{
+				ticket: claimed.ticket,
+				choice: item.choice,
+				origin: item.origin,
+				claim: claimed.claim,
+				previousMessage: item.previousMessage,
+				workQueuePickup: true,
+			},
+			(started) => {
+				if (started.ok) {
+					// The ask is answered, either way: the item leaves the queue when
+					// the start settles. A row the operator already removed leaves no
+					// second line: the run it ended earns no start line of its own.
+					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
+					if (rowStands) this.removeQueueItem(item.ticketIdentity);
+					if (item.origin === "workflow")
+						this.recordRoutedDecision(item.ticketIdentity, claimed.previousHandoffId);
+					this.reports.refresh();
+					if (rowStands)
+						this.reports.notice(
+							overCap
+								? `force-dispatched ${this.ticketName(item.ticketIdentity)} over the Parallel limit`
+								: `${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+						);
+				} else if (this.state.hasWorkItem(item.ticketIdentity)) {
+					// The ask is answered: a failed start leaves the queue, and the
+					// warning names the operation and the reason, one line for the
+					// failure the handoff's own line already carries.
+					this.removeQueueItem(item.ticketIdentity);
+					this.reports.warning(
+						`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${started.reason}`,
+					);
+				}
+			},
+		);
 	}
 
 	/** The name the operator reads on a line: the ticket's title while the
@@ -947,10 +1054,10 @@ interface ClaimedHandoff {
 	claim: HandoffClaim;
 	previousMessage: string;
 	/**
-	 * True for the claim a Work queue pickup made (ADR 0034): the durable row
-	 * and this claim are one waiting start, so removing the row settles this
-	 * claim and drops this intent. A direct start claims for itself, and its
-	 * parked run is nobody's queue item.
+	 * True for the claim a Work queue pickup or force-dispatch made (ADR 0034):
+	 * the durable row and this claim are one waiting start, so removing the row
+	 * settles this claim and drops this intent. A direct start claims for
+	 * itself, and its parked run is nobody's queue item.
 	 */
 	workQueuePickup?: boolean;
 }
@@ -958,6 +1065,16 @@ interface ClaimedHandoff {
 interface QueuedHandoff extends ClaimedHandoff {
 	onStarted: (started: DispatchResult) => void;
 }
+
+/**
+ * The claim one queue item crosses before its start (ADR 0034): the item's
+ * seat claimed and the ticket the start runs on, or the refusal's reason, or
+ * the race check's cancellation, which already left its item and its line.
+ */
+type QueueItemClaimResult =
+	| { ok: true; ticket: Ticket; claim: HandoffClaim; previousHandoffId: string }
+	| { ok: false; reason: string }
+	| { ok: "cancelled" };
 
 /** A queued handoff may start only from the state its origin claims. */
 function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean {

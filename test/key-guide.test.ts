@@ -348,6 +348,14 @@ describe("the in-app Key guide", () => {
 					expect(listCurrent).toContain("u Queue up - the item is first in the queue");
 					expect(listCurrent).toContain("d Queue down - the item is last in the queue");
 					expect(listCurrent).toContain("Delete Remove");
+					// Enter is the queue's force-dispatch (issue #89), with its note
+					// saying what the start does and where the failure ends. The note
+					// may flow onto its continuation row at this width, so the check
+					// reads the joined rows.
+					expect(listCurrent.some((row) => row.startsWith("Enter Force-dispatch"))).toBe(true);
+					expect(listCurrent.join(" ")).toContain(
+						"starts the item over a full Parallel limit; a failure leaves the queue",
+					);
 					expect(listCurrent.some((row) => row.includes("Hand off"))).toBe(false);
 					expect(listCurrent.some((row) => row.includes("Decide"))).toBe(false);
 					// The Consultation section's `d Delete` and `f History` run on
@@ -375,6 +383,7 @@ describe("the in-app Key guide", () => {
 					expect(detailCurrent).toContain("←/h List");
 					expect(detailCurrent.some((row) => row.includes("Queue up"))).toBe(false);
 					expect(detailCurrent.some((row) => row.includes("Remove"))).toBe(false);
+					expect(detailCurrent.some((row) => row.includes("Force-dispatch"))).toBe(false);
 					// The detail pane holds no queue key of its own for `d` or `f`,
 					// so the Consultation section's two refuse there and appear in
 					// this guide nowhere: the row that would name the key the mode

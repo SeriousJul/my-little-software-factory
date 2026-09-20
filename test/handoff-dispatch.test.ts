@@ -2242,4 +2242,124 @@ describe("the Parallel limit and the Work queue", () => {
 			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now handed-off`,
 		);
 	});
+
+	/**
+	 * The force-dispatch (issue #89, ADR 0034): the claim the operator makes
+	 * on the queue row re-runs the pickup's hard checks and skips only the cap.
+	 * These tests measure the seam's one fact per line: the item leaves the
+	 * queue in every end, the ticket keeps its state, and the Message line says
+	 * the end in the dispatch's own words.
+	 */
+	test("a force-dispatch at a full cap starts the item, and the line names the cap", async () => {
+		const rigRef = rig([FIRST]);
+		// Every seat is held, and it stays held across the start: the seat
+		// count stands over the cap until the work settles.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		capped.forceDispatchWorkQueueItem(FIRST.identity);
+		await untilQueueDrains(rigRef);
+		// The item left with the settle, the start crossed the real external
+		// steps on the item's own captured choice, and the line names the start
+		// over the cap it ran over.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		expect(rigRef.events).toContain(
+			`notice:force-dispatched "${FIRST.title}" over the Parallel limit`,
+		);
+	});
+
+	test("a force-dispatch under a full cap says the pickup's own words", async () => {
+		const rigRef = rig([FIRST]);
+		// One free seat stands: the start runs, and the line may not state a
+		// cap it did not run over.
+		const mod = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(
+			rigRef.state.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "open",
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).toMatchObject({ ok: true });
+		mod.forceDispatchWorkQueueItem(FIRST.identity);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
+		expect(rigRef.events.some((event) => event.includes("over the Parallel limit"))).toBe(false);
+	});
+
+	test("a force-dispatch the claim refuses leaves the queue with the warning", async () => {
+		const rigRef = rig([FIRST]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		// A restart waits for a ticket that is still open: the claim the
+		// force-dispatch re-runs refuses it, the way the pickup's refuses it.
+		await expect(
+			capped.dispatch({
+				origin: "restart",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "again",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		capped.forceDispatchWorkQueueItem(FIRST.identity);
+		// The item left with the refusal, the ticket keeps its state, and the
+		// warning names what stood in the way. No start followed the refusal.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		expect(rigRef.events).toContain(
+			`warning:force-dispatch of "${FIRST.title}" failed: the ticket is now open`,
+		);
+		expect(rigRef.events.filter((event) => event.startsWith("working:"))).toHaveLength(0);
+	});
+
+	test("a force-dispatch that fails its start leaves the queue with the failure's warning", async () => {
+		const rigRef = rig([FIRST]);
+		// The herdr the start meets is down: the first external step fails with
+		// herdr's own refusal, before it creates anything.
+		const broken = new FakeRunner();
+		broken.set("git", ["-C", rigRef.checkout, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		broken.set("git", ["-C", rigRef.checkout, "remote", "get-url", "origin"], {
+			stdout: "https://github.com/acme/factory.git\n",
+		});
+		broken.set("git", ["-C", rigRef.checkout, "rev-parse", "HEAD"], { stdout: "abcdef\n" });
+		broken.set("herdr", ["workspace", "list"], {
+			code: 1,
+			stderr: "error: herdr is not running\n",
+		});
+		const capped = withRunner(rigRef, broken, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		capped.forceDispatchWorkQueueItem(FIRST.identity);
+		await untilQueueDrains(rigRef);
+		// The ask is answered: the item left with the failure, the ticket keeps
+		// its state, and the warning names the operation and herdr's refusal.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		expect(rigRef.events).toContain(
+			`warning:force-dispatch of "${FIRST.title}" failed: error: herdr is not running`,
+		);
+	});
 });

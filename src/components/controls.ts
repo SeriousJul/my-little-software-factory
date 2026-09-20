@@ -444,6 +444,24 @@ const queueRemove = (context: ControlContext): ControlAvailability =>
 	context.selectedWorkQueueItem !== null && context.selectedWorkQueueItem !== undefined
 		? available()
 		: unavailable("no queue item is under the cursor");
+/**
+ * Why Enter answers a Work queue item with the force-dispatch (issue #89,
+ * ADR 0034).
+ *
+ * The force-dispatch is the queue's only meaning of Enter, and it starts the
+ * item now, over a full Parallel limit: every hard start check the pickup
+ * runs still runs, only the cap is skipped. A Handoff already in flight holds
+ * the shared environment seat, and the key refuses rather than queue the item
+ * behind it, the way the Ticket section's Hand off refuses the same fact. A
+ * cleanup that holds the seat while a Handoff does not still lets the key
+ * through: the module parks the claim, and the item leaves the queue when
+ * that parked start settles. An empty queue refuses with the one reason the
+ * operator can act on, like the queue's other row keys.
+ */
+const queueForceDispatch = (context: ControlContext): ControlAvailability => {
+	if (context.handoffActive) return unavailable("a Handoff is active");
+	return queueRemove(context);
+};
 const refresh = (context: ControlContext): ControlAvailability => {
 	if (consultationMode(context.mode))
 		return context.consultationRefreshAvailable === true
@@ -944,6 +962,25 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 55,
 		modes: ["work-queue-list"],
 		availability: queueRemove,
+	},
+	{
+		// Enter on a queue row force-dispatches the item under the cursor
+		// (issue #89, ADR 0034): the start runs now, over a full Parallel
+		// limit, and the dispatch module owns the claim, the row, and every
+		// line the start or its failure leaves.
+		id: "queue-force-dispatch",
+		label: "Force-dispatch",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "work-queue-list",
+		actionBar: true,
+		// Below the queue's row keys, at the primary-action rung the other
+		// sections give their Enter meaning: the bar's packing order stays
+		// total.
+		priority: 70,
+		modes: ["work-queue-list"],
+		availability: queueForceDispatch,
+		guideNote: "starts the item over a full Parallel limit; a failure leaves the queue",
 	},
 	{
 		id: "launch",

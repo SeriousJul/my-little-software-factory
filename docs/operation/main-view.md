@@ -21,8 +21,14 @@ while it is empty and collapsed, so an idle factory keeps its two-Section
 frame. A queued start carries the ticket's title, the start's origin,
 and its place in the queue; the detail pane shows the choice the start
 carried. `u` and `d` move the item under the cursor one place toward the
-front or the back, and `Delete` removes it: the ticket keeps the state it
-wore while it waited. The removal cancels the start everywhere the factory
+front or the back, `Delete` removes it - the ticket keeps the state it
+wore while it waited - and Enter force-dispatches the item under the cursor
+(issue #89, ADR 0034): it starts now, even when the Parallel limit is full,
+and re-runs every start check the queue's pickup runs except the cap, so the
+seat count can stand over the limit until the work settles. A force-dispatch
+that fails leaves the item out of the queue with the failure on the Message
+line, and the ticket keeps its state. The removal cancels the start
+everywhere the factory
 holds it: a claim its pickup already made and the herdr seat parked ends with
 the row, and it never starts an Agent the operator removed. The one exception
 is a start whose work had already reached herdr: that Agent runs, and the
