@@ -18,7 +18,7 @@ These checks run in `npm test` and the docs build.
 | Requirement | Checked by | Result |
 | --- | --- | --- |
 | A missing Config file is seeded at the path from the shipped Default configuration, verbatim, and the load reports that it seeded | `test/config.test.ts`, `test/startup.test.ts` | Passed |
-| The checked-in Default configuration validates through the seam and carries the four workflow task types, the three task rules, the `consult` Consultation type, zero ticket sources, and zero repository mappings | `test/config.test.ts` | Passed |
+| The checked-in Default configuration validates through the seam and carries the four workflow task types with their transitions, the five states of the label machine, the `consult` Consultation type, zero ticket sources, and zero repository mappings | `test/config.test.ts` | Passed |
 | The Default configuration keeps the development config minus the repository mappings, the ticket sources, the personal Consultation type, and the state file entry | diffed against `config/development.toml` by the author | Passed |
 | The default Config path and the default state path live under the project name, and the state path honors the XDG state home | `test/config.test.ts` | Passed |
 | The Node version gate accepts versions at and above the floor, rejects versions below it, and the failure message names the required version, the actual one, and the reason | `test/runtime.test.ts` | Passed |

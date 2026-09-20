@@ -71,6 +71,20 @@ and one `consult` Consultation type that passes your input straight through.
 The [configuration key reference](../configuration/index.md#key-reference) names every key,
 its default, and what it does.
 
+## Upgrading an older install
+
+An install whose Config file still carries `[[task-rules]]` or `workflows`
+is rewritten once, at load (ADR 0027). The rules become states, an edge whose
+target one state offers becomes that task type's transition, the shipped task
+templates are replaced when they match the old seed exactly, and the shipped
+machine's parking state comes over with them. The rewrite is validated before
+anything is written, and it leaves two files beside the config: the
+pre-migration `config.toml.bak`, and `config.toml.migration-report.md`, which
+names every state, transition, dropped edge, and untouched template. A
+failure there stops the control plane with your file unchanged. The start
+line states the migration once, and a config that still carries an old key
+after it is one readable config error.
+
 ## Add a ticket source
 
 The Default configuration holds a commented-out source block where you add
@@ -99,33 +113,60 @@ Repository checkout paths live in the `repos` table, one key per
 "owner/name" = "~/src/name"
 ```
 
-## Extend the workflow template
+## Extend the workflow machine
 
-The task types and task rules of the Default configuration form the workflow
-template, and the file marks them as meant to be extended. The template
-carries the four task types `implement`, `review`, `rework`, and `merge`,
-and the three rules of the label workflow:
+The states and the task-type transitions of the Default configuration are the
+workflow machine, and the file marks them as meant to be extended. The plane
+owns the workflow labels: it reads a ticket's position from the labels it
+carries, and it writes those labels itself when a task completes. The agents
+write no workflow labels, so a prompt template names none.
 
-| Rule | When | Task type |
-| ---- | ---- | --------- |
-| 1 | A pull request carries the `needs-work` label. | `rework` |
-| 2 | A pull request carries the `ready-for-review` label. | `review` |
-| 3 | A pull request carries the `ready-to-ship` label. | `merge` |
+The shipped machine is the label workflow. Its states are ordered and the
+first match wins:
+
+| State | When | Task type |
+| ----- | ---- | --------- |
+| 1 | An open issue carries the `ready-for-agent` label. | `implement` |
+| 2 | A pull request carries the `needs-work` label. | `rework` |
+| 3 | A pull request carries the `ready-for-review` label. | `review` |
+| 4 | A pull request carries the `ready-to-ship` label. | `merge` |
+| 5 | A pull request carries none of them. | none: the plane waits |
+
+A state with no `task-type` is a parking state: the plane suggests nothing
+for a ticket that sits there, and a label write is the only thing that moves
+it. The fifth state is what holds a pull request someone else opened until a
+transition or a human puts it in the machine.
+
+A `[task-types.<name>.transition]` table is what happens when a turn of that
+type completes: the plane writes the transition's labels on the ticket, and on
+the pull request the ticket links, and the machine re-derives every position
+from the labels it wrote. The write is a convergence, not an addition: after
+it runs, the surface wears exactly the labels the transition named, and labels
+outside the machine are left alone. The shipped transitions move an
+implemented issue's pull request to `ready-for-review`, decide a review by its
+score against `score-threshold` (90 in the shipped machine, and the one place
+that number lives), and send a blocked merge back to `needs-work`.
 
 Add your own task type with a `[task-types.<name>]` table. The `template`
 carries the prompt body, and the `{placeholders}` name the ticket facts the
-control plane fills in. Add a rule that routes a ticket to it:
+control plane fills in. Add a state that routes a ticket to it, and a
+transition on the type that completes it:
 
 ```toml
 [task-types.my-type]
 template = "My prompt for {title}."
+[task-types.my-type.transition]
+ticket-facts = ["my-label"]
+pull-request-facts = []
 
-[[task-rules]]
+[[states]]
+name = "mine"
 task-type = "my-type"
-[task-rules.when]
+[states.match]
 source-kind = "github-pull-request"
 labels-any = ["my-label"]
 ```
 
-The rules run in file order, and the first match wins. A ticket no rule
-matches takes the `default-task-type`.
+A ticket no state matches takes the `default-task-type`, and that task type's
+transition fires the same way: the completion behavior follows the task type
+to whatever ticket it runs on.

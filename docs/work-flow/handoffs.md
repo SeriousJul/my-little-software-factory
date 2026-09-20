@@ -16,7 +16,7 @@ because that handoff is the decision being resumed.
 Each setting resolves on its own chain, closest to the handoff first (ADR
 0009):
 
-- Agent: the operator's override, then a workflow edge's pin, then the Task
+- Agent: the operator's override, then a Transition's agent pin, then the Task
   profile's `agent`, then `default-agent`.
 - Model: the operator's override, then the Task profile's `model`, then
   `default-model`, then the agent's own default.
@@ -25,7 +25,7 @@ Each setting resolves on its own chain, closest to the handoff first (ADR
 - Context window: the operator's override, then the Task profile's
   `context-window`, then the agent's own default. It has no top-level
   default, because one count cannot fit every model.
-- Environment: the operator's override, then a workflow edge's pin, then
+- Environment: the operator's override, then a Transition's environment pin, then
   `default-environment`.
 
 A resolved value never disappears on its way to the agent. A handoff fails
@@ -39,7 +39,7 @@ rule and one sentence per unfit cause belong to the Setting fit module
 (`src/setting-fit.ts`), and the config file's field checks, the startup Model
 check, the override panel's warning rows, the handoff, and the Consultation
 start all read it. So a model written for one agent never runs a different one
-quietly, and an edge that reroutes a handoff onto a narrower agent is seen as a
+quietly, and a Transition that reroutes a handoff onto a narrower agent is seen as a
 failure instead of being absorbed as a default. One behavior is
 stricter than before: a setting the resolved agent maps no template for used
 to be dropped quietly, and the agent started on its own default. It now fails

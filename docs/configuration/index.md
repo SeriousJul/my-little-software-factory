@@ -189,6 +189,7 @@ score-threshold = 90
 [[task-types.review.transition.branches]]
 when = "score-above-threshold"
 pull-request-facts = ["ready-to-ship"]
+auto-advance = true
 agent = "codex"
 environment = "worktree"
 [[task-types.review.transition.branches]]
@@ -276,6 +277,14 @@ task-type = "merge"
 [states.match]
 source-kind = "github-pull-request"
 labels-any = ["ready-to-ship"]
+
+# The park: a pull request no state above placed. No task-type, so the plane
+# suggests nothing for it, and a label write is the only engine that moves it.
+[[states]]
+name = "pull-request-unlabeled"
+[states.match]
+source-kind = "github-pull-request"
+labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 
 # --- Repository mappings --------------------------------------------------------
 
@@ -413,7 +422,7 @@ for the match rules and the sibling clone.
 | `refresh-interval-seconds` | yes | - | The refresh interval. A positive number. |
 | `repositories` | yes | - | A non-empty list of `owner/name` strings. |
 | `host` | no | `github.com` | The GitHub host. |
-| `filter` | no | - | A GitHub search applied to the list. See the filter note below. |
+| `filter` | no | - | A GitHub search applied to the list. Omitted: the default policy lists every open item of the source's kind that is not `blocked`, and a pull request that is not a draft unless it carries `needs-work`. See the filter note below. |
 | `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). |
 
 **`[states.match]`** conditions (all optional; omitted conditions are ignored).
@@ -432,7 +441,7 @@ for the match rules and the sibling clone.
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
-| `pull-request-facts` | no | none | The labels the transition writes on the ticket's linked pull request, the same convergence. No linked pull request: the fact is skipped, and the ticket's facts still stand. |
+| `pull-request-facts` | no | none | The labels the transition writes on the ticket's linked pull request, the same convergence. No linked pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own linked pull request: one surface takes both fact lists in one write. |
 | `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the completion's score against. A whole number from 0 to 100. A score branch requires it. |
 | `auto-advance` | no | `false` | The factory decides the completed turn without the operator: the position it derives hands off at any time, and a transition with no position closes the cycle even in manual mode. |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
@@ -453,17 +462,25 @@ for the match rules and the sibling clone.
 ## Notes
 
 A transition's `auto-advance` lets the control plane decide the completions
-of its task type without the operator even in manual mode. The plane fires
-the transition on every completed turn: it writes the label facts, and the
+of its task type without the operator even in manual mode. A branch carries
+its own `auto-advance` to decide one judgment's completion and leave the
+others to the transition's. The plane fires the transition on every completed
+turn: it writes the label facts, and the
 machine re-derives the position from the written labels on the ticket and
-its linked pull request. A derived position hands off while the parallel
-limit and the per-ticket handoff limit have room; a transition that derives
-no position closes the cycle, and a route at either limit degrades the same
-way the open dispatch does. The agents never write workflow labels (ADR
-0027): the plane writes them, and a ticket's position is always re-derived
-from the labels it carries.
+its linked pull request. One ticket that is both the settled ticket and the
+linked pull request - a pull request ticket - is one surface: the plane
+converges it to the two fact lists at once, in one write. A derived position
+hands off while the parallel limit and the per-ticket handoff limit have
+room; a transition that derives no position closes the cycle, and a route at
+either limit degrades the same way the open dispatch does. The agents never
+write workflow labels (ADR 0027): the plane writes them, and a ticket's
+position is always re-derived from the labels it carries.
 
-The `filter` is a GitHub search string. GitHub search applies `AND`, `OR`,
+The `filter` is a GitHub search string. Without one, the source lists what
+the machine needs to see: the plane owns the workflow labels, so an item
+enters the list before it carries any - a pull request the agent just opened
+is invisible to no one, or the transition that labels it can never find it.
+GitHub search applies `AND`, `OR`,
 and `NOT` to search text only, and it has no parenthesized grouping.
 Parentheses, and logical operators next to `label:`-style qualifiers, are
 rejected at startup, so a source never degrades to a healthy-but-empty list.
@@ -478,11 +495,12 @@ write-back: the data round-trips, the comments do not.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
-`merge`, and the four states of the label workflow - `ready-for-agent`
-issues to `implement`, and `needs-work`, `ready-for-review`, and
-`ready-to-ship` pull requests to `rework`, `review`, and `merge` - with the
-transitions that move a ticket between them, and one `consult` Consultation
-type that passes your input straight through. They have no ticket sources
+`merge`, and the five states of the label workflow - `ready-for-agent`
+issues to `implement`, `needs-work`, `ready-for-review`, and `ready-to-ship`
+pull requests to `rework`, `review`, and `merge`, and one parking state for
+a pull request that carries none of them - with the transitions that move a
+ticket between them, and one `consult` Consultation type that passes your
+input straight through. They have no ticket sources
 and no repository mappings. `config/development.toml` in this repository
 configures the live development path through `--config`; it carries the
 `grill-with-docs` Consultation type.

@@ -53,7 +53,7 @@ the stream in the left box is replaced by the turn log of the settled turn,
 in the same dressing the
 [decision modal](modals.md) renders: the agent's text blocks, the tool calls
 as dim notes, and the choice rows under them. The choice rows and their keys
-are the modal's: Close, Goto, and one Handoff row per outgoing workflow edge,
+are the modal's: Close, Goto, and the Handoff row of the position the settled
 with `e` on a Handoff row editing that one handoff before it starts. The
 trace rules are the modal's rules, and the
 [completion guide](../work-flow/completion.md) records what a decision does

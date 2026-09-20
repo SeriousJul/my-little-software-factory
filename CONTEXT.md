@@ -339,8 +339,8 @@ A setting the Agent a Handoff lands on cannot take fails that Handoff with a rea
 _Avoid_: run settings, task settings
 
 **Suggested task type**:
-The Task type proposed for a Ticket's next Handoff by the task of the first matching Workflow state, or by the configured default task type when no state matches.
-An Override can replace it for one Handoff.
+The Task type proposed for a Ticket's next Handoff by the task of the first matching Workflow state, or by the configured default task type when no state matches. A first matching state that offers no task - a parking state - suggests nothing, and Auto-handoff starts no Agent on that Ticket.
+An Override can replace it for one Handoff, and a manual Hand off of a parked Ticket starts the default task type.
 _Avoid_: detected task type, inferred task type
 
 **Workflow**:

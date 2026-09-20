@@ -50,7 +50,7 @@ features:
   - title: Standards
     details: The shared control standard defines the required baseline for
       every control the control plane owns, and the ticket labels define the
-      label vocabulary the control plane reads.
+      label vocabulary the control plane reads and writes.
     link: /shared-controls.md
     linkText: Read the standards
 ---
