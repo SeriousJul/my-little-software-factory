@@ -2300,14 +2300,20 @@ export function App({
 						setWarningMessage("Consultations require SQLite state");
 						return;
 					}
-					// The operations' own refresh and Message line cover every
-					// answer, so the key hands the record over and stops.
-					consultationOperations.schedule(selected);
+					// The operations own the Message line and the Consultation rows,
+					// but the queue rows re-read only here: the item lands at the
+					// queue's tail in the same write the section's Delete path
+					// refreshes, so the schedule path does the same.
+					const scheduled = consultationOperations.schedule(selected);
+					if (scheduled) {
+						replaceTickets();
+					}
 				},
 				// Enter starts the unscheduled record now (issue #91): the pickup
 				// seam with the cap skipped. The operations own every line the
-				// start or its failure leaves, so the key only hands the record
-				// over and says when a race out-waited it.
+				// start or its failure leaves; the key names the cap when the seat
+				// count stood over it at the key, the way the queue's force-
+				// dispatch line does, and says when a race out-waited it.
 				"consultation-start-now": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
@@ -2315,6 +2321,11 @@ export function App({
 						setWarningMessage("Consultations require SQLite state");
 						return;
 					}
+					// The line states only what the key measured, the way the
+					// queue's force-dispatch line does: the cap stands when the
+					// seat count stood over the limit at the key.
+					const cap = configRef.current.maxParallelAgents;
+					const overCap = cap > 0 && currentSeatCount() >= cap;
 					void consultationOperations.pickup(selected.id).then((outcome) => {
 						if (outcome.kind === "moved") {
 							setWarningMessage(
@@ -2324,7 +2335,9 @@ export function App({
 						}
 						if (outcome.kind === "started")
 							setNoticeMessage(
-								`starting Consultation ${selected.id.slice(0, 8)} over the Parallel limit`,
+								overCap
+									? `starting Consultation ${selected.id.slice(0, 8)} over the Parallel limit`
+									: `starting Consultation ${selected.id.slice(0, 8)}`,
 							);
 					});
 				},

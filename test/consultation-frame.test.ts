@@ -3203,7 +3203,11 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						/\bWork\b/.test(row),
 					);
 					expect(headerRow).toBeGreaterThanOrEqual(0);
+					console.log("DEBUG headerRow " + String(headerRow));
+					console.log("DEBUG frame before click:\n" + setup.captureCharFrame());
 					await mouseClick(setup, 2, headerRow);
+					await settle(setup, 300);
+					console.log("DEBUG frame after click:\n" + setup.captureCharFrame());
 					await awaitFrame(
 						setup,
 						(f) => f.includes("❯ Work queue"),
@@ -3361,6 +3365,30 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					expect(state.consultation(id)?.state).toBe("queued");
 					expect(state.workQueue().map(workQueueIdentityOf)).toEqual([id]);
+					// The queue rows re-read in the same key: the item stands in
+					// the Work queue section at the place the line names. The
+					// section still stands expanded from the walk, so the
+					// cursor's cross down from the section's last row lands on
+					// its item.
+					const inQueue = await press(setup, "j", "the cursor in the Work queue", (f) =>
+						f.includes("┌─❯ Work queue"),
+					);
+					expect(inQueue).toContain("consultation");
+					expect(inQueue).toContain(id.slice(0, 8));
+					// The walk back crosses up out of the queue, into the
+					// Consultation section's retained row: the record that the
+					// walk left under the cursor, now `queued`. The cursor is on
+					// the Consultation list only while the Work box title carries
+					// no focus marker.
+					for (let step = 0; step < 10; step += 1) {
+						const frame = setup.captureCharFrame();
+						if (frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Work queue")) break;
+						setup.mockInput.pressKey("k");
+						await settle(setup, 200);
+					}
+					const backFrame = setup.captureCharFrame();
+					expect(backFrame).toContain("┌─❯ Consultations");
+					expect(backFrame).not.toContain("┌─❯ Work queue");
 					// A second `s` says the record already waits: the schedule
 					// refuses in the section's words, and the record stands where
 					// it stands.
@@ -3429,6 +3457,68 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					);
 					expect(state.consultation(id)?.state).not.toBe("unscheduled");
 					expect(state.consultation(seatId)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					pollIntervalMs: 100,
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section starts the unscheduled record now, under the cap", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// The launched Agent's pane joins the poll's list, so the
+					// start the key runs verifies on the next cycle.
+					runner.agentListJson = agentListJson([
+						{ pane: seatPane, status: "working" },
+						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
+					]);
+					// Free the seat the queue walk held: the line then names no
+					// cap, because the seat count stood under the limit at the
+					// key, the way the queue's force-dispatch line does.
+					state.setConsultationState(seatId, "awaiting-response");
+					await awaitFrame(setup, (f) => f.includes("auto: off 0/1"), "the freed seat");
+					const started = await press(setup, "return", "the start-now notice", (f) =>
+						f.includes("starting Consultation"),
+					);
+					const line = messageRowOf(started);
+					expect(line).toContain(`starting Consultation ${id.slice(0, 8)}`);
+					expect(line).not.toContain("over the Parallel limit");
+					// The start took the only free seat.
+					await awaitFrame(setup, (f) => f.includes("auto: off 1/1"), "the start's seat");
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the start-now launch sequence",
+					);
+					expect(state.consultation(id)?.state).not.toBe("unscheduled");
+					expect(state.consultation(seatId)?.state).toBe("awaiting-response");
 				},
 				WIDTH,
 				32,

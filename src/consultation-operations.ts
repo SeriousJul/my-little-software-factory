@@ -342,31 +342,27 @@ export class ConsultationOperations {
 	}
 
 	/**
-	 * Start the Work queue's Consultation when a seat frees (ADR 0034,
-	 * issue #90).
+	 * Start one Consultation that is not started yet: the Work queue's pickup
+	 * of a `queued` record when a seat frees (ADR 0034, issue #90), and the
+	 * operator's start now of an `unscheduled` record, over the Parallel limit
+	 * or under it (issue #91). Both run through this one seam: the cap is the
+	 * scheduler's check, not the start's, and the seat move below is the claim
+	 * in either case.
 	 *
-	 * The pickup is the start a launcher submit queued at a full cap. The
-	 * record already holds the operator's ask, and the pickup re-reads the
+	 * The record already holds the operator's ask, and the start re-reads the
 	 * Consultation type's settings from the config - the record waited for a
-	 * seat, so the start runs on the type the config holds now, not on the
-	 * settings the record captured at the enqueue - before it moves the record
-	 * to `opening` and hands the record to the same opening pipeline a direct
-	 * launch runs: the Setting fit check, the repository resolution, the
-	 * environment, and the Agent.
+	 * seat or the operator's call, so the start runs on the type the config
+	 * holds now, not on the settings the record captured at the enqueue -
+	 * before it moves the record to `opening` and hands the record to the same
+	 * opening pipeline a direct launch runs: the Setting fit check, the
+	 * repository resolution, the environment, and the Agent.
 	 *
 	 * The claim is all the observation cycle waits for. The opening runs on
 	 * behind the answer, the way a claimed handoff's start does: an external
 	 * pipeline that can take as long as a cold clone must not hold every ticket
 	 * poll with it. A start that fails after the claim leaves the record
 	 * `failed` with its reason and its Message line, exactly as a failed launch
-	 * does, and the queue's item went with the claim.
-	 */
-	/**
-	 * Start one Consultation that is not started yet: the Work queue's pickup
-	 * of a `queued` record (ADR 0034, issue #90), and the operator's start
-	 * now of an `unscheduled` record over the Parallel limit (issue #91). Both
-	 * run through this one seam: the cap is the scheduler's check, not the
-	 * start's, and the seat move below is the claim in either case.
+	 * does, and the queue's item went with the claim while one stood.
 	 */
 	pickup(consultationId: string): Promise<ConsultationPickupOutcome> {
 		const current = this.state.consultation(consultationId);
