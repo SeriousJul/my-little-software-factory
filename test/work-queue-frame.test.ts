@@ -179,14 +179,17 @@ function queuedFixture(state: FactoryState) {
 }
 
 // These frames show the waiting, never a running start, so nothing may pick
-// the items up while they walk. A zero Parallel limit keeps the cap gate off
-// (an unlimited cap never enqueues), and the long poll interval holds the
-// observation cycle back: at an unlimited cap `pickupWorkQueue` runs the whole
-// queue, so a cycle that fired mid-frame would empty the section the test is
-// still reading.
+// the items up while they walk. A one-seat cap with a held claim keeps the
+// free-seat figure at zero, so the observation's pickup never runs: the first
+// cycle fires the moment the app boots, before the source settles, and a
+// slower runner lets the cycle meet the settled tickets and claim the queue.
+// The held claim is a durable handoff attempt the fixture stores for the HELD
+// ticket; it holds the seat the same way a live agent would, and the ticket
+// keeps its open state, so the counts and the badge the test reads are the
+// resting ones.
 const zeroSeatConfig: FactoryConfig = {
 	...issuesConfig,
-	maxParallelAgents: 0,
+	maxParallelAgents: 1,
 	agentPollIntervalSeconds: 60,
 };
 
@@ -320,11 +323,20 @@ describe("the Work queue section", () => {
 	test("the waiting ticket wears the queued badge in row and detail, and the cancel gives the open badge back", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);
+		// Seed the tickets into the state before the app boots, then hold the
+		// one seat with a durable claim for the second ticket. The claim keeps
+		// the free-seat figure at zero, so the observation's pickup never runs
+		// and the Waiting badge the test reads is the resting one.
+		const outcome = success(twoTickets());
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		const held = state.claimHandoff(SECOND, baseChoice("pi", "live-worktree", "implement"), "open");
+		if (!held.ok) throw new Error(held.reason);
 		enqueue(FIRST);
 		try {
 			await booted(
 				async (setup) => {
-					source.settle(success(twoTickets()));
+					source.settle(outcome);
 					// The frame the counts hold: the source has settled, so the
 					// badges the assertion reads are the resting ones, not the
 					// loading frame the boot pickup warns over.
