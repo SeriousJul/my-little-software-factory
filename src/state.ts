@@ -3326,6 +3326,10 @@ function workQueueItemOf(row: WorkQueueRow): WorkQueueItem {
 		row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
 			? row.origin
 			: null;
+	// Marker (issue #88 review): `WorkQueueItem` is the handoff shape today,
+	// so every row reads as one. When the queue's second kind ships (the
+	// `queued` Consultation row, PR #102), this reader must branch on
+	// `row.kind` and reject a row whose kind it does not know.
 	return {
 		id: row.id,
 		kind: "handoff",

@@ -449,6 +449,40 @@ const refresh = (context: ControlContext): ControlAvailability => {
 		return unavailable("every Ticket source is already refreshing");
 	return available();
 };
+/**
+ * The one reason a closed record gives for any control that asks it to work.
+ *
+ * The close and the recovery control both refuse a `closed` Consultation, and
+ * the two sentences must not drift: one fact, one string.
+ */
+const CONSULTATION_CLOSED_REASON = "the selected Consultation is already closed";
+/**
+ * Why Enter opens the recovery panel, and why it opens nothing elsewhere.
+ *
+ * One rule, stated per record state: Enter reaches the Agent or the response
+ * on a live record, opens the surface the record needs on a broken or stuck
+ * one, and says so on a closed one. A `closing` record is stuck mid-cleanup,
+ * and its recovery is the close panel's own Retry and Force-close rows, so
+ * this control answers for it too and its behavior sends it there.
+ *
+ * The live states carry a reason rather than staying silent because this is
+ * the first `return` candidate in the Consultation section: a record whose
+ * Agent cannot be reached at all resolves to no available meaning, and then
+ * it is this sentence the operator reads.
+ */
+const consultationRecovery = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (
+		consultation.state === "opening" ||
+		consultation.state === "missing" ||
+		consultation.state === "failed" ||
+		consultation.state === "closing"
+	)
+		return available();
+	if (consultation.state === "closed") return unavailable(CONSULTATION_CLOSED_REASON);
+	return unavailable("the selected Consultation reaches its Agent or its response with Enter");
+};
 const consultationResponse = (context: ControlContext): ControlAvailability =>
 	context.selectedConsultation?.state === "awaiting-response" &&
 	context.consultationAgentStatus !== "blocked"
@@ -517,9 +551,7 @@ const ticketClose = (context: ControlContext): ControlAvailability => {
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
-	return consultation.state === "closed"
-		? unavailable("the selected Consultation is already closed")
-		: available();
+	return consultation.state === "closed" ? unavailable(CONSULTATION_CLOSED_REASON) : available();
 };
 const consultationDelete = (context: ControlContext): ControlAvailability =>
 	context.selectedConsultation?.state === "closed"
@@ -969,6 +1001,26 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// A Consultation-section control: in the Ticket section the key states
 		// the section refusal, and the Ticket guide and bar omit the control.
 		consultationSectionOnly: true,
+	},
+	{
+		id: "consultation-recovery",
+		label: "Recovery",
+		// Enter answers a broken or stuck Consultation with the surface its
+		// state needs. It is cataloged ahead of Respond and Interact on purpose:
+		// a live record resolves to those, because an available meaning outranks
+		// an unavailable one, and a record with no meaning at all reads this
+		// control's reason.
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: [...consultationBaseModes],
+		availability: consultationRecovery,
+		// The Key guide names what this meaning of Enter is for, so a row that
+		// only says "Recovery" cannot be taken for the `r` recovery of an
+		// interrupted opening.
+		guideNote: "opens the recovery surface a broken or stuck Consultation needs",
 	},
 	{
 		id: "consultation-respond",

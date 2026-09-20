@@ -103,6 +103,7 @@ import {
 } from "./consultation-detail.ts";
 import { ConsultationLauncher, type LauncherDraft } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
+import { consultationRecoveryPanel } from "./consultation-recovery-panel.ts";
 import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
 import {
 	availabilityFor,
@@ -157,6 +158,7 @@ type Panel =
 	| { kind: "missing"; identity: string }
 	| { kind: "ticket-close"; identity: string }
 	| { kind: "consultation-close"; identity: string }
+	| { kind: "consultation-recovery"; identity: string }
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
@@ -1590,6 +1592,45 @@ export function App({
 		if (consultation.state !== "opening") return;
 		void consultationOperations?.recover(consultation);
 	};
+	/**
+	 * Whether this record holds no Agent the close could stop.
+	 *
+	 * The two Recovery required states are the two an interrupted run cannot
+	 * bring back: herdr reports no pane, and nothing waits for a reply.
+	 */
+	const consultationHasNoAgent = (consultation: Consultation) =>
+		consultation.state === "missing" || consultation.state === "failed";
+	/**
+	 * Whether this record is one a Replacement continues.
+	 *
+	 * The same two states the close cannot stop: a record with no Agent left
+	 * cannot be reopened, so the launcher replaces it instead, on the durable
+	 * recovery context, and links the new record back here.
+	 */
+	const isReplacedConsultation = consultationHasNoAgent;
+	/**
+	 * Open the launcher as the Replacement launcher of one record.
+	 *
+	 * One path for both ways in: the `c` Launch of a `missing` or a `failed`
+	 * row, and that row's recovery panel. The panel below this one closes, so
+	 * the launcher holds the keys alone.
+	 */
+	const openReplacementLauncher = (consultation: Consultation) => {
+		setPanel(null);
+		setReplacementConsultationId(consultation.id);
+		setLauncher(true);
+	};
+	/**
+	 * Run the close the operator asked for, in the shape the record needs.
+	 *
+	 * A record with no Agent to stop has nothing to confirm, so the close runs
+	 * on the keypress. A live record confirms first, and a `closing` one opens
+	 * its Retry and Force-close recovery rows.
+	 */
+	const runConsultationClose = (consultation: Consultation) => {
+		if (consultationHasNoAgent(consultation)) closeConsultation(consultation);
+		else setPanel({ kind: "consultation-close", identity: consultation.id });
+	};
 	const beginResponse = (consultation: Consultation) => {
 		if (consultation.state !== "awaiting-response") {
 			setStatus({ kind: "warning", text: "the Consultation is not awaiting a response" });
@@ -2028,22 +2069,28 @@ export function App({
 							selectionRef.current === "consultation"
 								? consultationsRef.current[consultationIndexRef.current]
 								: undefined;
-						if (selected?.state === "missing" || selected?.state === "failed")
-							setReplacementConsultationId(selected.id);
-						setLauncher(true);
+						if (selected !== undefined && isReplacedConsultation(selected))
+							openReplacementLauncher(selected);
+						else setLauncher(true);
 					}
 				},
 				history: cycleConsultationHistory,
+				"consultation-recovery": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					// A closing record's recovery is the close panel's own: its Retry
+					// and Force-close rows already answer the stuck cleanup. Every other
+					// broken or stuck state opens the recovery panel, whose rows the
+					// record's state names.
+					setPanel({
+						kind: selected.state === "closing" ? "consultation-close" : "consultation-recovery",
+						identity: selected.id,
+					});
+				},
 				"consultation-close": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
-					// A missing or a failed Consultation has no Agent to stop, so it
-					// closes directly. A live Agent confirms first, and a closing
-					// Consultation opens the Recovery panel with the Retry and the
-					// Force-close.
-					if (selected.state === "missing" || selected.state === "failed")
-						closeConsultation(selected);
-					else setPanel({ kind: "consultation-close", identity: selected.id });
+					runConsultationClose(selected);
 				},
 				"consultation-delete": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -2723,6 +2770,12 @@ export function App({
 		panel !== null && panel.kind === "consultation-close" && panelConsultation !== undefined
 			? consultationClosePanel(panelConsultation)
 			: undefined;
+	// The open recovery panel's own copy, derived the same way: the record's
+	// state names its rows, so the panel follows the record.
+	const recoveryPanel =
+		panel !== null && panel.kind === "consultation-recovery" && panelConsultation !== undefined
+			? consultationRecoveryPanel(panelConsultation)
+			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
 			? decisionFor(panelTicket)
@@ -2761,6 +2814,11 @@ export function App({
 	const closePanelHasNothingToShow =
 		panel?.kind === "consultation-close" &&
 		(panelConsultation === undefined || closePanel === undefined);
+	// The recovery panel reads the same fact: a record that reaches a live
+	// state, or a closed one, has no recovery row left to draw.
+	const recoveryPanelHasNothingToShow =
+		panel?.kind === "consultation-recovery" &&
+		(panelConsultation === undefined || recoveryPanel === undefined);
 	const panelHasNothingToShow =
 		(ticketPanel !== null &&
 			(panelTicket === undefined ||
@@ -2769,23 +2827,26 @@ export function App({
 				// The Close confirmation is drawn from work in flight: a cycle that
 				// ended from under the dialog leaves the panel with nothing to show.
 				(ticketPanel.kind === "ticket-close" && panelTicket.state === "open"))) ||
-		closePanelHasNothingToShow;
+		closePanelHasNothingToShow ||
+		recoveryPanelHasNothingToShow;
 	// The reason the guard stands on the Message line when it drops an open
-	// close panel: the record moved out of the states the panel draws, or it
-	// left the list while the panel was up.
-	const closePanelReleaseNote =
-		closePanelHasNothingToShow === true
+	// Consultation panel: the record moved out of the states the panel draws,
+	// or it left the list while the panel was up. The panel keeps its own name
+	// in the sentence, so the line says which screen let go.
+	const consultationPanelName = panel?.kind === "consultation-recovery" ? "recovery" : "close";
+	const consultationPanelReleaseNote =
+		closePanelHasNothingToShow === true || recoveryPanelHasNothingToShow === true
 			? panelConsultation === undefined
-				? "the Consultation left the list; the close panel closed"
-				: `the Consultation moved to ${panelConsultation.state}; the close panel closed`
+				? `the Consultation left the list; the ${consultationPanelName} panel closed`
+				: `the Consultation moved to ${panelConsultation.state}; the ${consultationPanelName} panel closed`
 			: null;
 	useEffect(() => {
-		if (closePanelReleaseNote !== null)
-			// The note is the outcome of the close the operator opened, so it
+		if (consultationPanelReleaseNote !== null)
+			// The note is the outcome of the operation the operator opened, so it
 			// stands as news, not as a warning the plane wrote on its own.
-			reportMessage({ severity: "info", text: closePanelReleaseNote });
+			reportMessage({ severity: "info", text: consultationPanelReleaseNote });
 		if (panelHasNothingToShow) setPanel(null);
-	}, [panelHasNothingToShow, closePanelReleaseNote, reportMessage]);
+	}, [panelHasNothingToShow, consultationPanelReleaseNote, reportMessage]);
 
 	// The Live view's stream: while the view shows the stream, a dedicated
 	// refresh reads the pane the ticket's current handoff records at the
@@ -3375,6 +3436,36 @@ export function App({
 						text: "Consultation launch cancelled; recover or close it explicitly",
 					});
 				},
+			}),
+		// One panel element for the Consultation recovery: the record's state
+		// names its rows through consultationRecoveryPanel, the retry of an
+		// interrupted opening and the replacement of a record with no Agent.
+		// A `closing` record never reaches this element: its Enter opens the
+		// close panel below, which already carries its recovery rows.
+		panel !== null &&
+			panel.kind === "consultation-recovery" &&
+			panelConsultation !== undefined &&
+			recoveryPanel !== undefined &&
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				title: recoveryPanel.title,
+				bodyLines: recoveryPanel.bodyLines,
+				actions: recoveryPanel.actions,
+				onAction: (key) => {
+					if (key === "recover") {
+						setPanel(null);
+						recoverConsultationOpening(panelConsultation);
+					} else if (key === "replace") {
+						openReplacementLauncher(panelConsultation);
+					} else if (key === "close") {
+						// The close path owns the dialog: an interrupted opening
+						// still holds a live Agent and confirms, and a record with
+						// no Agent closes on this action alone.
+						setPanel(null);
+						runConsultationClose(panelConsultation);
+					}
+				},
+				onCancel: () => setPanel(null),
 			}),
 		// One panel element for the Consultation close: the record's state
 		// selects the shape through consultationClosePanel, the recovery rows

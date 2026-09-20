@@ -300,6 +300,11 @@ The condition where a Consultation cannot continue or close without an explicit 
 It stays separate from `awaiting-response`, where the Agent needs ordinary input.
 _Avoid_: awaiting response, blocked
 
+**Recovery panel**:
+The Consultation confirmation Enter opens on a broken or stuck record, with the rows that record can still take: Recover and Close on an interrupted opening, Replace and Close on a missing or failed one.
+A `closing` Consultation keeps its recovery in the close panel's Retry and Force-close rows instead.
+_Avoid_: error dialog, retry box, close panel
+
 **Close**:
 The operator action that ends live work, key `w` in both sections.
 On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031).

@@ -100,6 +100,9 @@ describe("the shared control gallery", () => {
 			"close-panel-closing",
 			"ticket-close",
 			"ticket-close-live-worktree",
+			"recovery-panel-opening",
+			"recovery-panel-missing",
+			"recovery-panel-failed",
 			"goto",
 			"ticket-goto",
 			"theme",
@@ -445,6 +448,47 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("Retry");
 		expect(frame).toContain("Force-close");
 		expect(frame).not.toContain("The Agent is working");
+	});
+
+	test("the recovery panel examples hold every state that needs recovery", async () => {
+		// The same production panel the Consultation's Enter opens, drawn at
+		// the plane's minimum height where the box must hold its rows.
+		const setup = await gallery("recovery-panel-opening", 80, 19);
+		let frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("recovery-panel-opening"));
+		expect(frame).toContain("Recover Consultation c1c1c1c1");
+		expect(frame).toContain("The Agent never finished opening.");
+		expect(frame).toContain("Recover");
+		expect(frame).toContain("retry the interrupted opening");
+		expect(frame).toContain("Close");
+		// An interrupted opening still holds an Agent, so its close confirms.
+		expect(frame).toContain("stop the Agent; the close confirms");
+		expect(frame).not.toContain("Replace");
+
+		setup.mockInput.pressTab();
+		const missing = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("recovery-panel-missing")),
+			"the missing recovery panel",
+		);
+		frame = frameText(missing);
+		expect(frame).toContain("The Agent is gone from its pane.");
+		expect(frame).toContain("the Agent pane is gone");
+		expect(frame).toContain("Replace");
+		expect(frame).toContain("launch a linked Consultation here");
+		expect(frame).toContain("close the record; nothing to stop");
+
+		setup.mockInput.pressTab();
+		const failed = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("recovery-panel-failed")),
+			"the failed recovery panel",
+		);
+		frame = frameText(failed);
+		expect(frame).toContain("The launch failed before the Agent ran.");
+		expect(frame).toContain("herdr refused the launch");
+		expect(frame).toContain("Replace");
+		expect(frame).toContain("Close");
 	});
 
 	test("the spinner example wears the animated face beside its written word", async () => {

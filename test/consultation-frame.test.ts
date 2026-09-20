@@ -877,6 +877,250 @@ describe("Consultation recovery and replacement through the UI", () => {
 	});
 });
 
+/**
+ * Enter answers the Consultation under the cursor with the surface its state
+ * needs: the Agent or the response on a live record, the recovery panel on a
+ * broken or stuck one, the close panel's retry rows on a record stuck in
+ * cleanup, and a readable refusal on a closed one.
+ */
+describe("Consultation Enter reaches the recovery surface its state needs", () => {
+	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, OPENING_ID, false);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the interrupted opening", (f) =>
+						f.includes("State: opening"),
+					);
+					// The bar names the meaning Enter carries on this row.
+					expect(actionBarRowOf(setup.captureCharFrame())).toContain("Enter Recovery");
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					const panel = await settle(setup);
+					expect(frameText(panel)).toContain("The Agent never finished opening.");
+					expect(frameText(panel)).toContain("Recover");
+					expect(frameText(panel)).toContain("Close");
+					// The panel's first row is the retry the interrupted opening needs:
+					// it runs the same recovery the `r` key runs.
+					await confirmPanel(setup, "the recovered opening to reach working", (f) =>
+						f.includes("State: working"),
+					);
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the recovery launch sequence",
+					);
+					expect(state.consultation(OPENING_ID)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the recovery panel's Close takes an opening Consultation through its dialog", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, OPENING_ID, false);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the interrupted opening", (f) =>
+						f.includes("State: opening"),
+					);
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					// The Close row is the close path, dialog and all: an opening
+					// record still holds an Agent the close must stop.
+					await pressArrow(setup, "down", "the Close row to be selected", (f) =>
+						f.includes("❯ Close"),
+					);
+					const dialog = await confirmPanel(setup, "the close dialog", (f) =>
+						f.includes("Close Consultation"),
+					);
+					expect(frameText(dialog)).toContain("The Agent is still opening");
+					expect(state.consultation(OPENING_ID)?.state).toBe("opening");
+					await press(
+						setup,
+						"escape",
+						"the dialog to close",
+						(f) => !f.includes("Close Consultation"),
+					);
+					expect(state.consultation(OPENING_ID)?.state).toBe("opening");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on a missing Consultation opens the recovery panel, and Replace links its replacement", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, MISSING_ID, false);
+		state.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const expectedInput = state.replacementInput(MISSING_ID);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the missing Consultation", (f) =>
+						f.includes("State: missing"),
+					);
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					const panel = await settle(setup);
+					expect(frameText(panel)).toContain("The Agent is gone from its pane.");
+					expect(frameText(panel)).toContain("the Agent pane is gone");
+					expect(frameText(panel)).toContain("Replace");
+					// Replace opens the launcher on the record's durable recovery
+					// context, not on an empty form.
+					const launcher = await confirmPanel(setup, "the Replacement launcher", (f) =>
+						f.includes("Replacement Consultation"),
+					);
+					expect(frameText(launcher)).toContain("Original input:");
+					await tabUntilSlot(setup, "❯ Launch Consultation");
+					setup.mockInput.pressEnter();
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Replaced by:"),
+						"the missing detail to record the replacement",
+					);
+					await waitForCommands(
+						runner,
+						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
+						"the replacement prompt",
+					);
+					const replacement = state.consultations("open").find((item) => item.id !== MISSING_ID);
+					expect(replacement?.replacementOf).toBe(MISSING_ID);
+					// The replaced record keeps its own state beside the new one.
+					expect(state.consultation(MISSING_ID)?.state).toBe("missing");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the recovery panel's Close retires a failed record without a dialog", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, FAILED_ID, false);
+		state.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		const short = FAILED_ID.slice(0, 8);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the failed Consultation", (f) =>
+						f.includes("State: failed"),
+					);
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					await pressArrow(setup, "down", "the Close row to be selected", (f) =>
+						f.includes("❯ Close"),
+					);
+					// A failed record holds no Agent, so the close runs on the row:
+					// no confirmation stands between it and the result.
+					const frame = await confirmPanel(setup, "the direct close", (f) =>
+						messageRowOf(f).includes(`${short} closed`),
+					);
+					expect(frame).not.toContain("Close Consultation");
+					expect(state.consultation(FAILED_ID)?.state).toBe("closed");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on a closing Consultation opens the close panel's Retry and Force-close", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CLOSE_A_ID);
+		state.beginConsultationClose(CLOSE_A_ID);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the closing Consultation", (f) =>
+						f.includes("State: closing"),
+					);
+					// The stuck cleanup is the record's recovery, so Enter opens the
+					// close panel that already carries its retry rows.
+					await openConsultationPanel(setup, "return", "the close recovery panel", (f) =>
+						f.includes("Close Consultation"),
+					);
+					const panel = await settle(setup);
+					expect(frameText(panel)).toContain("Cleanup is already in progress");
+					expect(frameText(panel)).toContain("Retry");
+					expect(frameText(panel)).toContain("Force-close");
+					expect(state.consultation(CLOSE_A_ID)?.state).toBe("closing");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on a closed Consultation says the record is already closed", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CLOSED_DIRECT_ID);
+		state.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.beginConsultationClose(CLOSED_DIRECT_ID);
+		state.finishConsultationClose(CLOSED_DIRECT_ID);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view without open history", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
+					await press(setup, "return", "the Enter refusal", (f) =>
+						f.includes("the selected Consultation is already closed"),
+					);
+					expect(state.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+});
+
 describe("Consultation responses through the UI", () => {
 	test("a response becomes a turn only after Herdr accepts the prompt", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));

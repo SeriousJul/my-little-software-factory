@@ -46,3 +46,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0035: The control plane runs on Bun](./0035-the-control-plane-runs-on-bun.md)
 - [ADR 0036: The Auto-handoff mode is factory state, not a config setting](./0036-the-auto-handoff-mode-is-factory-state.md)
 - [ADR 0037: The Consultation close takes w and confirms on a live Agent](./0037-the-consultation-close-takes-w-and-confirms-on-a-live-agent.md)
+- [ADR 0038: Enter answers a Consultation with the surface its state needs](./0038-enter-answers-a-consultation-with-the-surface-its-state-needs.md)
