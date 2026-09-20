@@ -52,6 +52,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | The Work queue's list and its item detail dispatch from the catalogue: the row keys, `u` and `d` reorder and `Del` removal of the item under the cursor in both of the queue's modes, each with its stated refusal (no item selected, the item already first or last), and the detail's scroll answers where the facts overflow the pane | `test/work-queue-frame.test.ts`, `test/shared-control-architecture.test.ts`, `test/key-guide.test.ts`, `test/action-bar.test.ts` | Passed |
 | The queue's detail states the captured facts - the ticket, the origin, and the choice with its settings left to the agent - and a stored row the reader cannot name stays in view with its damage in place of a repaired start; the gallery holds both states and the empty queue | `test/work-queue-frame.test.ts`, `test/work-queue.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | One queue item per ticket (ADR 0034): the store refuses a second add of a ticket that already waits, and the handoff that reached it reports the refusal on the Message line with the queue's depth unchanged | `test/work-queue.test.ts`, `test/work-queue-frame.test.ts` | Passed |
+| Force-dispatch (issue #89, ADR 0034): Enter on a queue row starts the item over a full Parallel limit, re-runs every hard start check the pickup runs except the cap, and leaves the seat count over the limit until the work settles; a start that fails leaves the item and the queue with the start's own failure, and a claim the dispatch refuses leaves it with the pickup-style warning, the ticket keeping its state in both cases | `test/work-queue-frame.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the key, and the terminal walks above have not been re-run for it. |
 | The cursor crosses to and from the Work queue over a section the operator collapsed or the terminal cannot pay for, in both directions, and the Action bar's Move hint agrees with the key | `test/work-queue-frame.test.ts`, `test/main-view-frame.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the queue, and the terminal walks above have not been re-run for it. |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
@@ -440,6 +441,46 @@ recovery row alone measured 55, its scroll ladder walks 40 steps to the
 bottom row `41-59/59`, and the narrow 60x12 case holds 83 rows where it
 held 79 (`test/key-guide.test.ts`). The queue's own guide entries, mode
 names, and refusals stand as recorded above.
+
+## Enter force-dispatches a Work queue item over the cap (issue #89, ADR 0034)
+
+Enter on a Work queue row is the force-dispatch: it starts the item now,
+even when the Parallel limit is full. The dispatch runs through the shared
+dispatch module the pickup runs, so every hard start check - the ticket
+still holds the state the item's origin requires, the source is healthy,
+the settings fit - re-runs, and only the cap is skipped. The seat count
+stands over the limit until the work settles, the way the mode line's
+`N/M` already counts the force-dispatched start against the held seat.
+
+A failure ends as a pickup failure with one difference the issue carries:
+the item leaves the queue. A start that fails a check leaves the queue
+with the start's own failure on the Message line, and a claim the dispatch
+refuses leaves it with the pickup-style warning that names what stood in
+the way. The ticket keeps its state and its own failure surface in both
+cases. The catalogue gates the key: a Handoff in flight refuses with the
+Ticket section's own words, an empty queue refuses with the queue's row
+keys' one reason, and a damaged stored row refuses before the dispatch is
+asked.
+
+The counts are re-measured on the merged catalogue from real frames, not
+computed: the guide holds 61 rows at the full width where the issue #88
+record measured 59, its scroll ladder walks 42 steps to the bottom row
+`43-61/61`, and the narrow 60x12 case holds 87 rows where it held 83
+(`test/key-guide.test.ts`). The force-dispatch's note flows onto its
+continuation rows at the widths the catalog wraps, the way every long note
+in the guide does.
+
+The gallery's force-dispatch example holds the bar's states - the hint
+available on an item, dimmed while a Handoff runs and on an empty queue -
+and the Message lines the refusals and the failure carry
+(`test/shared-gallery.test.ts`). The frame tests run the real app flow on
+faked external operations: the start over a full cap with the seat count
+standing over it, the start that fails its first external step, and the
+claim the dispatch refuses (`test/work-queue-frame.test.ts`).
+
+The terminal walks were not re-run for this key's Action bar and Key guide
+row: they are recorded as not re-verified for it, not as a pass. The
+screen-reader target remains unverified.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 

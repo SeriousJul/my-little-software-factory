@@ -149,6 +149,41 @@ describe("the shared control catalogue", () => {
 		}
 	});
 
+	test("Enter is the force-dispatch in both Work queue panes, and it keeps its refusals", () => {
+		// The force-dispatch (issue #89) is the queue's only meaning of Enter,
+		// from either pane. It refuses while a Handoff holds the environment
+		// seat, the way the Ticket section's Hand off does, and on an empty
+		// queue it carries the queue's row keys' one reason.
+		for (const mode of ["work-list", "work-detail"] as const) {
+			const withItem = contextFor(mode, {
+				...values,
+				selectedWorkQueueItem: { id: "item-1" } as unknown as WorkQueueItem,
+				workQueueIndex: 0,
+				workQueueDepth: 1,
+			});
+			const control = controlForKey({ name: "return" }, withItem);
+			expect(control?.id).toBe("work-force-dispatch");
+			if (control === undefined) throw new Error("the queue lost its force-dispatch");
+			expect(availabilityFor(control, withItem)).toEqual({ available: true });
+			const busy = contextFor(mode, { ...withItem, handoffActive: true });
+			expect(availabilityFor(control, busy)).toEqual({
+				available: false,
+				reason: "a Handoff is active",
+			});
+			const empty = contextFor(mode, values);
+			expect(availabilityFor(control, empty)).toEqual({
+				available: false,
+				reason: "no Work queue item is selected",
+			});
+			// The guide names the key in the queue's own section with its note,
+			// whatever the item's facts run.
+			const entry = guideControls(withItem).find(
+				({ control }) => control.id === "work-force-dispatch",
+			);
+			expect(entry?.group).toBe("Current interaction mode");
+		}
+	});
+
 	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {
 		// The guard that keeps the catalogue's display rules in step: a control
 		// the mode dispatches a key for is either available, named in the guide

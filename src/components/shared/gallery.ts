@@ -394,6 +394,31 @@ function ticketGotoContext(paneAlive: boolean): ControlContext {
 	});
 }
 
+/**
+ * The Work queue context the Force-dispatch example runs on (issue #89).
+ *
+ * The bar the example draws is the bar the Work section draws: the same mode,
+ * the same item, and the same refusal facts - a Handoff already in flight, or
+ * no item under the cursor at all.
+ */
+function workForceDispatchContext(
+	handoffActive: boolean,
+	item: WorkQueueItem | undefined,
+): ControlContext {
+	return contextFor("work-list", {
+		selectedWorkQueueItem: item,
+		workQueueIndex: 0,
+		workQueueDepth: item === undefined ? 0 : 1,
+		listCanMove: item !== undefined,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
 /** The Consultation-detail context the Goto example runs on. */
 function gotoContext(paneAlive: boolean): ControlContext {
 	return contextFor("consultation-detail", {
@@ -996,6 +1021,71 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				width: columns.contentWidth,
 			}),
 		],
+	},
+	{
+		// Force-dispatch from the Work queue (ADR 0034, issue #89): Enter on a
+		// queue row starts the item now, over a full Parallel limit. The bar
+		// holds it available on an item, refused while a Handoff runs, refused
+		// on an empty queue, and the Message line carries the warning a failed
+		// force-dispatch leaves behind it: the item leaves the queue, and the
+		// ticket keeps its own failure surface.
+		id: "work-force-dispatch",
+		state:
+			"Force-dispatch: available on an item, refused while a Handoff runs or the queue is empty",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const item = sampleWorkQueueItem({
+				agentType: "pi",
+				environment: "live-worktree",
+				taskType: "implement",
+				model: "",
+				thinking: "",
+				contextWindow: "",
+			});
+			return [
+				// The hint, in its three states: available on an item with a free
+				// seat, dimmed while a Handoff holds the environment seat, and
+				// dimmed on an empty queue.
+				createElement(ActionBar, {
+					key: "force-dispatch-available",
+					mode: "work-list",
+					context: workForceDispatchContext(false, item),
+					width: columns.contentWidth,
+				}),
+				createElement(ActionBar, {
+					key: "force-dispatch-busy",
+					mode: "work-list",
+					context: workForceDispatchContext(true, item),
+					width: columns.contentWidth,
+				}),
+				createElement(ActionBar, {
+					key: "force-dispatch-empty",
+					mode: "work-list",
+					context: workForceDispatchContext(false, undefined),
+					width: columns.contentWidth,
+				}),
+				// The words the refusals carry on the Message line: a refused key
+				// says its catalogue reason on the line the operator already
+				// watches.
+				messageRowElement(
+					{ severity: "warning", text: "a Handoff is active" },
+					columns.contentWidth,
+				),
+				messageRowElement(
+					{ severity: "warning", text: "no Work queue item is selected" },
+					columns.contentWidth,
+				),
+				// The failure path: the claim the force-dispatch re-runs refused the
+				// start, so the item leaves the queue with this warning, and the
+				// ticket keeps its state.
+				messageRowElement(
+					{
+						severity: "warning",
+						text: `Work queue force-dispatch of ticket ${item.ticketIdentity} failed: only open tickets can be handed off (this one is awaiting)`,
+					},
+					columns.contentWidth,
+				),
+			];
+		},
 	},
 	{
 		id: "theme",

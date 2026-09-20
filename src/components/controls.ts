@@ -402,6 +402,24 @@ const workQueueItem = (context: ControlContext): ControlAvailability =>
 	context.selectedWorkQueueItem !== undefined
 		? available()
 		: unavailable("no Work queue item is selected");
+/**
+ * Why Enter answers a Work queue item with the force-dispatch (issue #89).
+ *
+ * The force-dispatch is the queue's only meaning of Enter, and it starts the
+ * item now, over a full Parallel limit: every hard start check the pickup
+ * runs still runs, only the cap is skipped. A Handoff already in flight holds
+ * the shared environment seat, and the key refuses rather than queue the item
+ * behind it, the way the Ticket section's Hand off refuses the same fact. An
+ * empty queue refuses with the one reason the operator can act on, like the
+ * queue's other row keys.
+ */
+const workForceDispatch = (context: ControlContext): ControlAvailability => {
+	if (context.handoffActive) return unavailable("a Handoff is active");
+	return workQueueItem(context);
+};
+/** What the force-dispatch does, for the guide's current section. */
+const FORCE_DISPATCH_NOTE =
+	"starts the item over a full Parallel limit; a failure leaves the queue";
 /** Why a queue reorder refuses: no item, or the item is at the edge asked for. */
 const workQueueMove =
 	(direction: -1 | 1) =>
@@ -773,6 +791,23 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 72,
 		modes: [...workQueueModes],
 		availability: workQueueItem,
+	},
+	{
+		id: "work-force-dispatch",
+		label: "Force-dispatch",
+		// Enter on a queue row force-dispatches the item under the cursor,
+		// whatever pane the focus holds: it starts now, over a full Parallel
+		// limit, the way the queue's other row keys run from either pane.
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "work-list",
+		actionBar: true,
+		// Below the queue's row keys, at the primary-action rung the other
+		// sections give their Enter meaning: the bar's packing order stays total.
+		priority: 70,
+		modes: [...workQueueModes],
+		availability: workForceDispatch,
+		guideNote: FORCE_DISPATCH_NOTE,
 	},
 	{
 		id: "tickets",

@@ -56,8 +56,13 @@ ticket off with `Enter`, open the decision modal on an awaiting one, the
 missing modal on a ticket whose agent is gone, and the override panel with
 `e`. The Work queue's list and its item detail answer the same row, page,
 jump, and focus keys. On a queue row, `u` and `d` move that item up or down
-the shared order, and `Del` takes it out of the queue: a removed Handoff item
-is cancelled, and the ticket it asked for keeps its state. `=`, `+`, and `-`
+the shared order, `Del` takes it out of the queue - a removed Handoff item
+is cancelled, and the ticket it asked for keeps its state - and Enter
+force-dispatches the item: it starts now, even when the Parallel limit is
+full, and re-runs every start check the queue's pickup runs except the cap,
+so the seat count can stand over the limit until the work settles. A
+force-dispatch that fails leaves the item out of the queue with the
+failure on the Message line, and the ticket keeps its state. `=`, `+`, and `-`
 bump a ticket's priority up and down through the configured rank, and
 Backspace clears it to the label rank or unranked. `a` toggles auto-handoff,
 `r` refreshes, `g` goes to the agent's pane, `w` closes the work cycle of the

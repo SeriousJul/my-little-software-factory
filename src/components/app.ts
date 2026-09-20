@@ -82,7 +82,12 @@ import {
 	supportsModelList,
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
-import type { Consultation, FactoryState, WorkQueueItem } from "../state.ts";
+import {
+	type Consultation,
+	type FactoryState,
+	type WorkQueueItem,
+	workQueueStartOf,
+} from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import {
@@ -2056,6 +2061,10 @@ export function App({
 				"work-move-up": () => moveWorkQueueItem(-1),
 				"work-move-down": () => moveWorkQueueItem(1),
 				"work-remove": () => removeWorkQueueItem(),
+				// Enter on a queue row force-dispatches the item under the cursor
+				// over a full Parallel limit (issue #89). The catalogue gated the
+				// availability, so this runs the dispatch and nothing else.
+				"work-force-dispatch": () => forceDispatchWorkQueueItem(),
 				launch: () => {
 					if (Object.keys(configRef.current.consultationTypes).length === 0)
 						setWarningMessage(
@@ -2572,6 +2581,68 @@ export function App({
 		}
 		replaceWorkQueue();
 		setNoticeMessage(`ticket ${item.ticketIdentity}: the queued handoff was cancelled`);
+	}
+	/**
+	 * Enter on a Work queue item: the force-dispatch (ADR 0034, issue #89).
+	 *
+	 * The item starts now, even when the Parallel limit is full: the dispatch
+	 * re-runs every hard start check the pickup runs - the ticket still holds
+	 * the state the item's origin requires, the source is healthy, the settings
+	 * fit - and skips only the cap, so the seat count may stand over it until
+	 * the work settles. The catalogue gated the availability: a Handoff already
+	 * in flight and an empty queue never reach here.
+	 *
+	 * A failure ends as a pickup failure: the item leaves the queue with the
+	 * Message line warning, and the ticket keeps its own state and failure
+	 * surface. The item leaves on a failed start too: the ask is answered, and
+	 * the dispatch module's own line carries the failure, the way a pickup
+	 * leaves it there.
+	 */
+	function forceDispatchWorkQueueItem() {
+		if (state === undefined || handoffDispatch === undefined) return;
+		const item = workItemsRef.current[workIndexRef.current];
+		if (item === undefined) return;
+		const start = workQueueStartOf(item);
+		if (!start.ok) {
+			// A damaged row never starts: the queue keeps it in view, the refusal
+			// names the damage, and the operator removes the item or repairs the
+			// row, the same answer the pickup carries.
+			setWarningMessage(`Work queue force-dispatch refused: ${start.reason}`);
+			return;
+		}
+		void handoffDispatch
+			.dispatch({
+				origin: start.origin,
+				ticketIdentity: start.ticketIdentity,
+				choice: start.choice,
+				previousMessage: "",
+				onStarted: (started) => {
+					// The start settled, either way: the ask is answered and the item
+					// leaves the queue. A failed start already left its own line on
+					// the Message line through the dispatch module, and the ticket
+					// keeps its own failure surface behind it; a clean start names
+					// itself on the line once the working line clears.
+					state.removeWorkQueueItem(item.id);
+					replaceWorkQueue();
+					if (started.ok)
+						setNoticeMessage(
+							`Work queue: force-dispatched ticket ${start.ticketIdentity} over the Parallel limit`,
+						);
+				},
+			})
+			.then((result) => {
+				if (result.ok) return;
+				// The claim refused the start: the ticket no longer holds the state
+				// its origin requires, or it is no longer actionable. The item
+				// leaves the queue, the ticket keeps its state, and the warning
+				// names what stood in the way, the same warning a failed pickup
+				// leaves on the line.
+				state.removeWorkQueueItem(item.id);
+				replaceWorkQueue();
+				setWarningMessage(
+					`Work queue force-dispatch of ticket ${start.ticketIdentity} failed: ${result.reason}`,
+				);
+			});
 	}
 	function selectConsultation(index: number) {
 		const next = clamp(index, 0, Math.max(0, consultationsRef.current.length - 1));

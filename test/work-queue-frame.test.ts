@@ -137,6 +137,25 @@ function seedQueueState() {
 	};
 }
 
+/**
+ * The runner whose handoff fails on its first external step: the workspace
+ * list is not running, so the start the force-dispatch re-runs fails with the
+ * herdr's own refusal, before it creates anything.
+ */
+function failingHandoffRunner() {
+	const runner = emptyAgentRunner();
+	const path = checkout();
+	runner.set("git", ["-C", path, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+	runner.set("git", ["-C", path, "remote", "get-url", "origin"], {
+		stdout: "https://github.com/acme/factory.git\n",
+	});
+	runner.set("herdr", ["workspace", "list"], {
+		code: 1,
+		stderr: "error: herdr is not running\n",
+	});
+	return runner;
+}
+
 /** The command runner the flow would need; the queue may run none of it. */
 function makeRunner() {
 	const runner = emptyAgentRunner();
@@ -181,7 +200,12 @@ const rowSelected = (frame: string, text: string): boolean =>
  * Consultation list crosses to the queue's first item.
  */
 async function toWorkSection(setup: Setup): Promise<void> {
-	await press(setup, "j", "the selection on the first open ticket", (f) => rowSelected(f, FIRST));
+	// The title, not the identity: the identity string is no fact of the
+	// Ticket row, and a queue item for the same ticket would satisfy the
+	// check from its own row before the cursor moved.
+	await press(setup, "j", "the selection on the first open ticket", (f) =>
+		rowSelected(f, FIRST_TITLE),
+	);
 	await press(setup, "j", "the selection on the last ticket", (f) => rowSelected(f, SECOND_TITLE));
 	await press(setup, "j", "the cursor to cross the Consultation section", (f) =>
 		f.includes("❯ Consultations"),
@@ -475,6 +499,151 @@ describe("the Work queue through the UI (issue #88)", () => {
 				},
 				60,
 				19,
+				{
+					config: oneSeatConfig(),
+					runner: makeRunner(),
+					home,
+					configPath,
+					state,
+					sources: [source],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter force-dispatches the item over a full cap, and the seat stands over it", async () => {
+		// The cap holds one seat and the held handoff takes it: the queue's item
+		// cannot start on a free seat, and Enter is the only way to start it
+		// now. The start re-runs every check the pickup runs, skips only the
+		// cap, and the seat count stands over the limit until the work settles.
+		const { state, source } = seedQueueState();
+		state.enqueueWorkQueueItem({ ticketIdentity: FIRST, origin: "open", choice: choice() });
+		const run = makeRunner();
+		try {
+			await withApp(
+				async (setup) => {
+					await toWorkSection(setup);
+					const frame = await press(setup, "return", "the force-dispatch message", (f) =>
+						f.includes("force-dispatched"),
+					);
+					// The Message line names the start, and the mode line's seat
+					// count stands over the cap: the held seat plus the new one.
+					expect(messageRowOf(frame)).toContain(
+						`Work queue: force-dispatched ticket ${FIRST} over the Parallel limit`,
+					);
+					expect(frame).toContain("auto: off 2/1");
+					// The item left the queue with the start settled, and the
+					// ticket holds the handoff: the start ran every check the
+					// pickup runs, on the captured origin and choice. The line
+					// that names the start shows only after the item left, so
+					// the queue is empty here.
+					expect(state.workQueue()).toHaveLength(0);
+					expect(
+						state.visibleTickets([], "implement").find((t) => t.identity === FIRST)?.state,
+					).toBe("handed-off");
+					// The start ran the real external steps: the dispatch crossed
+					// the same seam the pickup runs, on the item's own captured
+					// choice.
+					expect(run.commands().some((command) => command.includes("agent start"))).toBe(true);
+				},
+				WIDTH,
+				HEIGHT,
+				{
+					config: oneSeatConfig(),
+					runner: run,
+					home,
+					configPath,
+					state,
+					sources: [source],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a force-dispatch that fails a start check leaves the item and the queue with its warning", async () => {
+		// The start the force-dispatch runs re-runs the pickup's hard checks, and
+		// a check that fails ends as a pickup failure: the item leaves the
+		// queue, the Message line carries the start's own failure, and the
+		// ticket keeps its state.
+		const { state, source } = seedQueueState();
+		state.enqueueWorkQueueItem({ ticketIdentity: FIRST, origin: "open", choice: choice() });
+		try {
+			await withApp(
+				async (setup) => {
+					await toWorkSection(setup);
+					const frame = await press(
+						setup,
+						"return",
+						"the start's failure on the Message line",
+						(f) => f.includes("herdr is not running"),
+					);
+					expect(messageRowOf(frame)).toContain("herdr is not running");
+					// The item is gone: the ask is answered, and a failure is no
+					// reason to keep waiting behind the cap.
+					await awaitFrame(
+						setup,
+						(f) => !workRows(f).some((row) => row.includes(FIRST)),
+						"the item to leave the queue",
+					);
+					expect(state.workQueue()).toHaveLength(0);
+					// The ticket keeps its state: the failed start touched none
+					// of it.
+					expect(
+						state.visibleTickets([], "implement").find((t) => t.identity === FIRST)?.state,
+					).toBe("open");
+				},
+				WIDTH,
+				HEIGHT,
+				{
+					config: oneSeatConfig(),
+					runner: failingHandoffRunner(),
+					home,
+					configPath,
+					state,
+					sources: [source],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a force-dispatch the claim refuses leaves the item and the queue with the pickup's warning", async () => {
+		// The item's captured origin requires a state the ticket no longer
+		// holds: the claim the dispatch re-runs refuses the start, and the end
+		// is the pickup failure's end - the item leaves the queue, the warning
+		// names what stood in the way, and the ticket keeps its state.
+		const { state, source } = seedQueueState();
+		state.enqueueWorkQueueItem({ ticketIdentity: HELD, origin: "open", choice: choice() });
+		try {
+			await withApp(
+				async (setup) => {
+					await toWorkSection(setup);
+					const frame = await press(
+						setup,
+						"return",
+						"the claim's refusal on the Message line",
+						(f) => f.includes("force-dispatch of ticket"),
+					);
+					// The full reason runs past the 120-column line, so the
+					// check reads the prefix the line pays for.
+					expect(messageRowOf(frame)).toContain(
+						`Work queue force-dispatch of ticket ${HELD} failed: only open tickets can be handed off`,
+					);
+					// The item left the queue with the refusal, and the ticket
+					// keeps its state. The warning that names the ticket shows
+					// only after the item left, so the queue is empty here.
+					expect(state.workQueue()).toHaveLength(0);
+					expect(
+						state.visibleTickets([], "implement").find((t) => t.identity === HELD)?.state,
+					).toBe("handed-off");
+				},
+				WIDTH,
+				HEIGHT,
 				{
 					config: oneSeatConfig(),
 					runner: makeRunner(),

@@ -105,6 +105,7 @@ describe("the shared control gallery", () => {
 			"recovery-panel-failed",
 			"goto",
 			"ticket-goto",
+			"work-force-dispatch",
 			"theme",
 			"theme-fallback",
 			"theme-light",
@@ -529,6 +530,24 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain(stateLine("ticket-goto"));
 		// The available row states the hint on the in-flight Ticket's bar.
 		expect(frame).toContain("g Goto");
+	});
+
+	test("the Force-dispatch example holds the bar's states and the failure line", async () => {
+		// The queue's bar carries more hints than a narrow frame pays for, so
+		// the example opens at a width that keeps the Enter hint on the row.
+		const setup = await gallery("work-force-dispatch", 120, 24);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("work-force-dispatch"));
+		// The available bar states the hint the Work section's bar states: Enter
+		// on a queue row force-dispatches the item under the cursor.
+		expect(frame).toContain("Enter Force-dispatch");
+		// The two refusals the catalogue carries, on the bars that refuse them.
+		expect(frame).toContain("a Handoff is active");
+		expect(frame).toContain("no Work queue item is selected");
+		// The failure path: the warning a failed force-dispatch leaves on the
+		// Message line, the item leaving the queue behind it.
+		expect(frame).toContain("Warning:");
+		expect(frame).toContain("Work queue force-dispatch of ticket");
 	});
 	// The Ticket Close confirmation (ADR 0031): the dialog states who is alive
 	// and what the Close cleanup ends, and the two Environments read
