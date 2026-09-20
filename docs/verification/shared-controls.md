@@ -455,9 +455,10 @@ Consultation section (#84, ADR 0038), and the Consultation-only keys in the
 Ticket section learned to refuse in the section's own words (#85).
 
 The full automated suite passed in full on this branch: lint, typecheck, and
-the behavior suite, run through the package scripts, with 1517 pass, 13
-skip, 0 fail - the same counts the issue #84 record measured on the merged
-catalogue, and the 13 skips are the ones this record already holds as
+the behavior suite, run through the package scripts, with 1555 pass, 13
+skip, 0 fail - re-measured on the merged catalogue after this branch rebased
+onto the Work queue's rows (issue #88), 38 more tests than this pass first
+measured (1517), and the 13 skips are the ones this record already holds as
 skipped. On the versions in the table below.
 
 The gallery holds every state the alignment added or changed, drawn from the
@@ -503,7 +504,7 @@ as a pass:
   above. No screen-reader claim is made for the alignment.
 
 Measured on Arch Linux (kernel 7.2.5-3-omarchy), Bun 1.4.0, Node v26.8.1,
-OpenTUI `@opentui/core` 0.5.11, and tmux 3.7c.
+OpenTUI `@opentui/core` 0.5.11 and `@opentui/react` 0.5.11, and tmux 3.7c.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 
@@ -554,4 +555,4 @@ recorded workaround for the drift class of OpenTUI issue 1187.
 
 This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
-0.5.11 (1461 tests).
+0.5.11 (1555 tests, re-measured on the merged catalogue as of issue #88).
