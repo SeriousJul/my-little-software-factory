@@ -13,7 +13,7 @@ for the release mechanism and the alias package.
 
 ## What is verified automatically
 
-These checks run in `bun test` and the docs build.
+These checks run in `bun run test` and the docs build.
 
 | Requirement | Checked by | Result |
 | --- | --- | --- |

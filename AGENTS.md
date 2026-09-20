@@ -40,7 +40,7 @@
   plane's own themes keep the tested pairs.
 - Start bug fixes with a reproduction through the real application flow. Use
   isolated test state and fake external operations, not live Agent work.
-- Check `bun run lint`, `bun run typecheck`, and `bun test` for implementation
+- Check `bun run lint`, `bun run typecheck`, and `bun run test` for implementation
   changes, plus the applicable acceptance checks in the standard. Record what
   could not run as incomplete; do not extend a claim past what was measured.
 - Frame snapshots and keyboard tests do not establish screen-reader support.
@@ -54,7 +54,7 @@
   `hyprctl` (or any other window manager or desktop tool) from a test,
   a script, or by hand while verifying a change.
 - Test the app at the unit test layer, and only at that layer. Run tests
-  with `bun test` and the shared test harness. Use fake external operations
+  with `bun run test` and the shared test harness. Use fake external operations
   and isolated test state.
 
 ## Agent skills

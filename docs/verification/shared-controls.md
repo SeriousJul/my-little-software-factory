@@ -17,8 +17,8 @@ who owns control behavior.
 
 ## What is verified automatically
 
-Every check below runs in `bun test`, which is `bun run lint`,
-`bun run typecheck`, and the behavior suite together.
+Every check below runs in `bun run lint`, `bun run typecheck`,
+and `bun run test`.
 
 | Requirement | Checked by | Result |
 | --- | --- | --- |
