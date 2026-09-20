@@ -41,7 +41,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | A Response draft stays saved through the existing persistence path | `test/consultation-frame.test.ts`, `test/consultation.test.ts`, `test/state.test.ts` | Passed |
 | Type-ahead shows its search, matches by substring, keeps an unmatched query with `no match`, edits with Backspace, clears with one key, and keeps query and value distinct | `test/shared-gallery.test.ts`, `test/handoff-frame.test.ts`, `test/override-panel.test.ts` | Passed |
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
-| Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue | `test/consultation-frame.test.ts` | Passed |
+| Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue, and Enter opens the recovery surface each broken or stuck state needs (ADR 0038) | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The Consultation-only keys `d` and `f` refuse in both Ticket base modes and in both Work queue modes with the section's own words, claim the key so nothing else answers it, and the guide and bar of each section that does not own them omit both controls | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts`, `test/work-queue-frame.test.ts` | Passed |
 | No refused key is hinted by the Action bar unless the Key guide names it, in every base mode of all three sections (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
@@ -442,6 +442,46 @@ skipped.
 
 The terminal walks were not re-run on the new key, its bar row, or the dialog:
 they are recorded as not re-verified for this control, not as a pass. The
+screen-reader target remains unverified.
+
+## Enter's recovery meaning in the Consultation section (issue #84, ADR 0038)
+
+ADR 0038 gives the Consultation section a third meaning of `Enter`: the key
+opens the surface the selected record's state needs. A `working`, an
+`awaiting-response`, and a blocked Consultation keep Interact, Respond, and
+Interact. An `opening`, a `missing`, or a `failed` one opens the recovery panel,
+whose rows the record's state names: Recover and Close on the interrupted
+opening, Replace and Close on the record with no Agent. A `closing` one opens
+the close panel that already carries its Retry and Force-close, and a `closed`
+one refuses with the reason the close control already stated.
+
+The automatic suite covers the resolution and the reasons
+(`test/controls.test.ts`), the flows through the real application: `Enter`
+opening the panel and each row running its own operation, the Replace row
+carrying the durable recovery context onto the launcher and the link onto the
+new record, the Close row taking the close path with its dialog for a live
+Agent and without one for a record with none, and the closed refusal
+(`test/consultation-frame.test.ts`), and the panel's three states drawn from
+the production module in the gallery (`test/shared-gallery.test.ts`). The Key
+guide names the recovery meaning of `Enter` in the Consultation section, and
+the Action bar's row and reason follow the catalogue
+(`test/key-guide.test.ts`, `test/main-view-frame.test.ts`).
+
+The Action bar's ladder and the Key guide's row counts are re-measured on the
+rebased catalogue, not computed: the guide now holds 55 rows at the full width
+where PR #114 measured 54, its scroll ladder walks 36 steps to the bottom row
+`37-55/55`, the narrow 60x12 case holds 79 rows where it held 75, and the
+Control plane section lists `Enter Recovery` ahead of `Enter Respond` and
+`Enter Interact`. The gallery's example list carries the three recovery states
+beside the two Ticket Close dialogs (`test/shared-gallery.test.ts`). The guide
+screenshots still match the app: the drift check in
+`test/screenshot-drift.test.ts` passed on the merged catalogue, so no image was
+redrawn. The suite passed in full on this branch:
+`bun run lint`, `bun run typecheck`, and `bun run test` (1517 pass, 13 skip,
+0 fail).
+
+The terminal walks were not re-run for this control's Action bar and Key guide
+row: they are recorded as not re-verified for it, not as a pass. The
 screen-reader target remains unverified.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)

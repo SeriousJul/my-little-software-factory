@@ -901,14 +901,14 @@ export async function openSurface(
 }
 
 /**
- * w and d open a confirmation panel over the Consultation detail for the
- * states that need one. The panel's key handler subscribes after the open
+ * w, d, and Enter open a confirmation panel over the Consultation detail for
+ * the states that need one. The panel's key handler subscribes after the open
  * commit, and the next key in the test is the panel's own, so wait for the
  * panel's subscription the same way.
  */
 export async function openConsultationPanel(
 	setup: Setup,
-	key: "w" | "d",
+	key: "w" | "d" | "return",
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<void> {

@@ -40,9 +40,14 @@ the manual Handoff intents (ticket, origin, the operator's choice) and the
 Consultations in `queued` state, one shared order across both kinds. When a
 seat frees, the observation cycle - the single owner of "what may start
 now" - starts the queue before auto-dispatch, up to the free seats, and only
-then lets auto-dispatch fill what remains. The operator reorders the items,
-removes an item, and force-dispatches an item over the cap. Force-dispatch
-re-runs every start check the normal pickup runs and skips only the cap.
+then lets auto-dispatch fill what remains. The pickup runs on every cycle,
+including the cycle whose cap reads 0: an unlimited cap holds a free seat for
+every waiting start, so an operator who lifts the cap while items wait frees
+them, and the queue never strands at a cap that no longer exists.
+
+The operator reorders the items, removes an item, and force-dispatches an
+item over the cap. Force-dispatch re-runs every start check the normal
+pickup runs and skips only the cap.
 
 A pickup is a manual start: every hard check still runs (the ticket still
 holds the state the item's origin requires, the source is healthy, the

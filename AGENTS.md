@@ -26,8 +26,9 @@
   examples are exercised by the suite, so a preview cannot drift from a control.
 - Every control the control plane owns dispatches from the shared Control
   catalogue: the fields, selectors, searches, form actions, and form focus
-  routes, and the Consultation view's list and detail, the Agent interaction
-  mode, and the Consultation confirmation panel. Build missing behavior at the
+  routes, the Consultation view's list and detail, the Work queue's list and
+  item detail, the Agent interaction mode, and the Consultation confirmation
+  panel. Build missing behavior at the
   shared module interface, never as another local implementation, and read the
   open items and the unverified acceptance targets in
   [the verification record](docs/verification/shared-controls.md): the

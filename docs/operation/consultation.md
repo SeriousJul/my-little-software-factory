@@ -49,11 +49,21 @@ its availability and reason.
 	herdr or the repository. Recovery re-checks the stored record, so a config
 	change cannot start an opening Consultation without the settings its record
 	names.
-- `Enter` answers the selected Consultation: it opens the response editor on
-	an awaiting one and Agent interaction on a working or blocked one. The
-	editor stores its draft in SQLite, `Tab` reaches `Send response` and
-	`Enter` runs it, `Enter` inside the field adds a line, `Esc` closes it with
-	the draft saved, and `Discard draft` deletes the saved draft.
+- `Enter` answers the selected Consultation with the surface its state needs
+	(ADR 0038): it opens the response editor on an awaiting one and Agent
+	interaction on a working or blocked one, and it opens the recovery panel on
+	a broken or stuck one. That panel's rows come from the record's state: an
+	`opening` Consultation gets `Recover`, which retries the opening this run
+	left behind, and `Close`, which takes the close path and its dialog; a
+	`missing` or a `failed` one gets `Replace`, which opens the launcher on this
+	record's recovery context and links the new Consultation to it, and `Close`,
+	which retires the record with nothing to stop. A `closing` Consultation
+	opens the close panel that already carries its `Retry` and `Force-close`,
+	and a `closed` one answers nothing: the line states that the selected
+	Consultation is already closed. The editor stores its draft in SQLite,
+	`Tab` reaches `Send response` and `Enter` runs it, `Enter` inside the field
+	adds a line, `Esc` closes it with the draft saved, and `Discard draft`
+	deletes the saved draft.
 - `r` recovers a Consultation whose opening was interrupted, and refreshes the
 	Consultation projection and the Ticket sources otherwise. It remains
 	Refresh even when an awaiting Consultation can also be answered with
