@@ -130,6 +130,10 @@ describe("the contextual Action bar", () => {
 				}
 				// Help stays discoverable at the right end of the row.
 				expect(bar.endsWith("? Help")).toBe(true);
+				// Delete and History belong to the Consultation section's
+				// catalog: the Ticket bar omits the keys the Ticket guide omits.
+				expect(bar).not.toContain("f History");
+				expect(bar).not.toContain("d Delete");
 				const barRow = rowsOf(frame).length - 1;
 				// Available: the key wears the focus color, the label the text color.
 				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(roleColor("accent")));
@@ -353,10 +357,11 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Launch, Section, Refresh, Override, Goto, Hand off, Detail,
-				// Move, and Help last. The spec's common controls of the base
-				// modes, Override and Refresh, therefore outlive the Launch
-				// entry the control plane reached for.
+				// Launch, Section, Close, Refresh, Override, Goto, Hand off,
+				// Detail, Move, and Help last. The spec's common controls of the
+				// base modes, Override and Refresh, therefore outlive the Launch
+				// entry the control plane reached for, and the Ticket's Close
+				// (ADR 0031) keeps the Consultation section's rank.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -365,6 +370,7 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"g Goto",
+							"w Close",
 							"x Section",
 							"c Launch",
 							"e Override",
@@ -381,8 +387,8 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"g Goto",
+							"w Close",
 							"x Section",
-							"c Launch",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -395,7 +401,7 @@ describe("the contextual Action bar", () => {
 							"→/l Detail",
 							"Enter Hand off",
 							"g Goto",
-							"x Section",
+							"w Close",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -432,6 +438,7 @@ describe("the contextual Action bar", () => {
 						"Goto",
 						"Section",
 						"Launch",
+						"Close",
 						"Override",
 						"Refresh",
 					]) {

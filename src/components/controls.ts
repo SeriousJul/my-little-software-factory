@@ -249,6 +249,18 @@ export interface ControlDefinition {
 	 * keys an operator uses most must not stay an undocumented exception.
 	 */
 	guideOnly?: boolean;
+	/**
+	 * The control belongs to the Consultation section alone (issue #85).
+	 *
+	 * Stated once here, and read by every place the section shows: the Ticket
+	 * base modes state the section refusal for the key (availabilityFor), the
+	 * Ticket guide omits the control (omitFromTicketSection), and the Ticket
+	 * bar omits its hint (actionBarControls). A future Consultation-only key
+	 * cannot refuse in the Ticket section and still show up in its guide or
+	 * bar: the three rules read this one marker, and the catalogue guard
+	 * test fails if a refused key is hinted where the guide does not name it.
+	 */
+	consultationSectionOnly?: true;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -362,6 +374,16 @@ const workQueueMode = (mode: InteractionMode): boolean =>
 	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
+/** The Ticket section's refusal words, mirrored by ticketOnly. */
+const TICKET_ONLY = "this control is available only in the Ticket section";
+/**
+ * The Consultation section's refusal words, the mirror of TICKET_ONLY.
+ *
+ * availabilityFor states them for every Consultation-section control in the
+ * Ticket base modes, so the key the operator already knows from the other
+ * section refuses readably instead of doing nothing at all.
+ */
+const CONSULTATION_ONLY = "this control is available only in the Consultation section";
 /**
  * Why a Ticket-section control answers nothing in the Consultation section.
  *
@@ -369,9 +391,7 @@ const ticketBaseMode = (mode: InteractionMode): boolean =>
  * already knows states a readable refusal instead of doing nothing at all.
  */
 const ticketOnly = (context: ControlContext): ControlAvailability =>
-	ticketBaseMode(context.mode)
-		? available()
-		: unavailable("this control is available only in the Ticket section");
+	ticketBaseMode(context.mode) ? available() : unavailable(TICKET_ONLY);
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -468,6 +488,25 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 		return available();
 	return unavailable("the Agent's pane is not alive in the last poll");
 };
+/**
+ * Why Close answers nothing on a Ticket (ADR 0031). Key `w` ends the work
+ * cycle of the selected Ticket, in both Ticket base modes. An `open` Ticket
+ * holds no work in flight, so the close refuses it with that reason; every
+ * state the close runs on - `handed-off`, `running`, and `awaiting` - has a
+ * live agent or a settled turn behind it, and both open the confirmation
+ * dialog before anything moves.
+ *
+ * A Handoff in flight is no refusal here: the close takes the shared
+ * environment seat and queues behind that Handoff, so a hung start still ends
+ * in the close the operator asked for (ADR 0031).
+ */
+const ticketClose = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	if (ticket.state === "open")
+		return unavailable("the selected Ticket is open: no work is in flight to close");
+	return available();
+};
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
@@ -494,8 +533,7 @@ const message = (context: ControlContext): ControlAvailability =>
  * are reasons the operator can act on, not silent keys.
  */
 const priorityEligibility = (context: ControlContext): ControlAvailability => {
-	if (!ticketBaseMode(context.mode))
-		return unavailable("this control is available only in the Ticket section");
+	if (!ticketBaseMode(context.mode)) return unavailable(TICKET_ONLY);
 	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
 	return available();
 };
@@ -794,6 +832,24 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: ticketGoto,
 	},
 	{
+		id: "ticket-close",
+		label: "Close",
+		// `w` ends the selected Ticket's work cycle from either Ticket pane,
+		// behind the shared confirmation panel, the way the Consultation section's
+		// Close asks (ADR 0031). The Decision modal keeps its Close row: it is the
+		// close with the turn log beside it, and `w` is the direct route to that
+		// same action.
+		keys: () => ["w"],
+		keyLabel: "w",
+		scope: "control-plane",
+		actionBar: true,
+		// One ladder place with the Consultation section's Close: below Goto and
+		// the re-read, above the section toggle and the Launch.
+		priority: 50,
+		modes: [...ticketBaseModes],
+		availability: ticketClose,
+	},
+	{
 		id: "section-toggle",
 		label: "Section",
 		// `x` collapses the section the cursor is in, or expands it back. The
@@ -869,8 +925,11 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 55,
-		modes: [...consultationBaseModes],
+		modes: [...baseModes],
 		availability: available,
+		// A Consultation-section control: in the Ticket section the key states
+		// the section refusal, and the Ticket guide and bar omit the control.
+		consultationSectionOnly: true,
 	},
 	{
 		id: "consultation-close",
@@ -892,8 +951,11 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
-		modes: [...consultationBaseModes],
+		modes: [...baseModes],
 		availability: consultationDelete,
+		// A Consultation-section control: in the Ticket section the key states
+		// the section refusal, and the Ticket guide and bar omit the control.
+		consultationSectionOnly: true,
 	},
 	{
 		id: "consultation-respond",
@@ -1337,7 +1399,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	},
 ];
 
-function controlsForMode(mode: InteractionMode): ControlDefinition[] {
+/** Every control the mode dispatches a key for, in the catalogue's order. */
+export function controlsForMode(mode: InteractionMode): ControlDefinition[] {
 	return CONTROL_DEFINITIONS.filter((control) => control.modes.includes(mode));
 }
 
@@ -1354,6 +1417,7 @@ export function actionBarControls(
 	return controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
+			!omitFromTicketSection(mode, control) &&
 			isReachableInMode(mode, control, context) &&
 			(control.showInBar?.(context) ?? true),
 	);
@@ -1500,6 +1564,11 @@ export function availabilityFor(
 	control: ControlDefinition,
 	context: ControlContext,
 ): ControlAvailability {
+	// A Consultation-section control states the section refusal in the Ticket
+	// base modes. The marker is the single place the ownership is written, so
+	// the dispatch, the guide, and the bar all read the same words.
+	if (control.consultationSectionOnly === true && ticketBaseMode(context.mode))
+		return unavailable(CONSULTATION_ONLY);
 	return control.availability(context);
 }
 
@@ -1524,6 +1593,21 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
 }
 
 /**
+ * Whether the Ticket section omits a Consultation-section control from its
+ * guide and its bar.
+ *
+ * Delete and History keep their catalog place in the Consultation section
+ * alone (issue #85): the key still resolves in the Ticket section and
+ * refuses there, in the catalogue's words, but the section that does not
+ * own the control names it nowhere, and the bar hints no key its guide
+ * omits. The rule reads the control's own section marker, so a future
+ * Consultation-only key is omitted from the same two places at once.
+ */
+function omitFromTicketSection(mode: InteractionMode, control: ControlDefinition): boolean {
+	return ticketBaseMode(mode) && control.consultationSectionOnly === true;
+}
+
+/**
  * Whether the Key guide lists this control among the mode's own.
  *
  * The guide is the app's only complete catalog, so it names every meaning of
@@ -1531,7 +1615,10 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
  * a settled one, and an operator on either one has to learn that the other
  * exists (user stories 12 and 16). A control whose keys the mode hands to
  * another control outright, as both utility overlays take F1 and ?, is not a
- * control of this mode, so neither the bar nor the guide may name it.
+ * control of this mode, so neither the bar nor the guide may name it. The one
+ * exception is a key that carries only the other section's refusal: a
+ * Consultation-section control refuses in the Ticket base modes, and the
+ * Ticket section names it in neither its guide nor its bar (issue #85).
  */
 function isCataloguedInMode(
 	mode: InteractionMode,
@@ -1562,6 +1649,7 @@ export function guideControls(context: ControlContext): Array<{
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
+			!omitFromTicketSection(mode, control) &&
 			isCataloguedInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
@@ -1571,6 +1659,7 @@ export function guideControls(context: ControlContext): Array<{
 				!seen.has(control.id) &&
 				control.guideOnly !== true &&
 				!omitFromGuide(mode, control) &&
+				!omitFromTicketSection(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
 		).map((control) => {

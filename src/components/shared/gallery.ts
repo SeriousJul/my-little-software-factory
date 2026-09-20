@@ -28,6 +28,7 @@ import { type MessageFact, messageRowElement } from "../messages.ts";
 import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "../modal-chrome.ts";
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
+import { ticketCloseDialog } from "../ticket-close.ts";
 import { KeyGuide } from "../utility.ts";
 import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
@@ -271,8 +272,11 @@ function closeDialogElement(
 	});
 }
 
-/** The Ticket the Ticket-Goto example renders under. */
-function sampleTicket(state: "running" | "open"): Ticket {
+/** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
+function sampleTicket(
+	state: "running" | "awaiting" | "open",
+	environment: "worktree" | "live-worktree" = "worktree",
+): Ticket {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
 		identity: "github:github.com:SeriousJul/my-little-software-factory:17",
@@ -285,10 +289,11 @@ function sampleTicket(state: "running" | "open"): Ticket {
 		},
 		state,
 		handoff:
-			state === "running"
-				? {
+			state === "open"
+				? null
+				: {
 						agentType: "pi",
-						environment: "worktree",
+						environment,
 						taskType: "implement",
 						model: "",
 						thinking: "",
@@ -297,11 +302,28 @@ function sampleTicket(state: "running" | "open"): Ticket {
 						paneId: "pane-t1",
 						tabId: "tab-ws-t",
 						workspaceId: "ws-t",
-					}
-				: null,
+					},
 		workCycle: 1,
 		handoffCount: 1,
-		lastCompletion: null,
+		// An `awaiting` Ticket holds the settled turn the Close decision records
+		// on, so the confirmation's first line can name the turn that settled.
+		lastCompletion:
+			state === "awaiting"
+				? {
+						taskType: "implement",
+						agentType: "pi",
+						agentName: "fix-the-layout-math",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+						completedAt: now,
+						message: "The turn is done.",
+						turnLog: [{ kind: "text", text: "The turn is done." }],
+						cause: "completed",
+						detail: "",
+						decision: null,
+					}
+				: null,
 		description: "",
 		sourceKind: "github-issue",
 		externalKey: "17",
@@ -746,6 +768,40 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		state: "Close recovery: retry and force-close on a closing",
 		rows: 17,
 		render: (_columns) => [closeDialogElement("closing", "close-closing")],
+	},
+	{
+		// The Ticket Close confirmation (ADR 0031): key `w` on a ticket with work
+		// in flight asks first, and the body names the Agent that is alive and the
+		// Environment the Close cleanup ends. The two Environments read
+		// differently, so the example shows both.
+		id: "ticket-close",
+		state: "Ticket Close: the worktree checkout goes, a dirty one stays",
+		rows: 17,
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionPanel, {
+				key: "close-worktree",
+				message: null,
+				inputActive: false,
+				...ticketCloseDialog(sampleTicket("running")),
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "ticket-close-live-worktree",
+		state: "Ticket Close: the live-worktree tab closes, and the turn has settled",
+		rows: 17,
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionPanel, {
+				key: "close-live-worktree",
+				message: null,
+				inputActive: false,
+				...ticketCloseDialog(sampleTicket("awaiting", "live-worktree")),
+				onAction: () => undefined,
+				onCancel: () => undefined,
+			}),
+		],
 	},
 	{
 		// Goto from either Consultation pane: available while herdr's last

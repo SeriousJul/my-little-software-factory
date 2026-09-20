@@ -45,6 +45,34 @@ OpenTUI's field primitives are candidates for the shared implementation, not
 public escape routes for separate screen-specific editors. Do not create a
 second key definition system that can disagree with dispatch or help.
 
+## The Action bar and the Key guide
+
+The Action bar hints only the keys the Key guide names in the current
+interaction mode, and a key the catalogue names is claimed: the dispatch
+states its refusal on the Message line and nothing else may answer the key.
+A key the current section does not own still refuses there, in the owning
+section's words, so the operator learns the key exists from the other
+section.
+
+The sections differ in what their guides name, and the asymmetry is the
+rule, not drift:
+
+- The Consultation section's guide names every key its modes dispatch,
+  refused keys included: `e` Override appears there dim, because its modes
+  claim the key in the Consultation section and the operator pressing it
+  gets the Ticket section's refusal.
+- The Ticket section's guide omits the Consultation section's Delete (`d`)
+  and History (`f`) (issue #85): the Ticket section does not ask the
+  operator to learn those keys, and the Ticket bar follows its guide, so it
+  hints neither.
+
+The catalogue states the section ownership once per control
+(`consultationSectionOnly`), and the refusal, the guide, and the bar read
+it; neither the bar nor the guide special-cases a control by id. The
+[verification record](../verification/shared-controls.md) carries the
+catalogue-wide guard test that fails if a refused key is hinted by a bar
+whose guide does not name it.
+
 ## Editing and keyboard ownership
 
 Both field kinds must support normal caret and word movement, Home and End,

@@ -13,7 +13,7 @@ import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
-import { runStartup } from "./startup.ts";
+import { installStateShutdown, runStartup } from "./startup.ts";
 
 if (!isSupportedBunVersion(Bun.version)) {
 	process.stderr.write(unsupportedBunVersionMessage(Bun.version));
@@ -28,8 +28,6 @@ if (!startup.ok) {
 	process.exit(startup.exitCode);
 }
 
-process.on("exit", () => startup.state.close());
-
 // Ctrl+C is a documented emergency control. Keep it in the shared control
 // catalogue instead of letting OpenTUI bypass the application.
 // Ticket detail and Ticket list have direct wheel, click, and scrollbar
@@ -42,6 +40,14 @@ const renderer = await createCliRenderer({
 	// for configurable Agent interaction exits.
 	useKittyKeyboard: {},
 });
+// The watch restart of `bun run dev` and a plain `kill` end this run without
+// running an exit hook, so the state lease would stay held by this process and
+// the next boot would refuse to start. The decision of which endings close the
+// state lives in the startup module; the entry only wires it up. It is wired
+// here, once the renderer exists, so the renderer puts the terminal back
+// before the run ends. A run that dies before this line leaves a row whose pid
+// is gone, which the next boot takes over.
+installStateShutdown(startup.state);
 // The native renderer diffs each frame against its model of the screen and
 // marks a model cell as written while it emits the cell's bytes. If the host
 // terminal loses bytes of a frame, the model and the screen diverge and the

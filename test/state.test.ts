@@ -477,6 +477,177 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("an in-flight close ends the cycle and writes no completion trace (ADR 0031)", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		expect(state.ticketState(identity)).toBe("handed-off");
+
+		expect(state.closeWorkCycle(identity)).toBe(true);
+		expect(state.ticketState(identity)).toBe("open");
+		const [ticket] = state.visibleTickets([], "implement");
+		// The cycle the close ended counts like any other cycle end.
+		expect(ticket.workCycle).toBe(2);
+		expect(ticket.handoffCount).toBe(1);
+		// And no completion trace exists: the turn never settled, so the handoff
+		// row is the only record the closed cycle leaves.
+		expect(state.lastCompletion(identity)).toBe(null);
+		state.close();
+		const stored = new Database(path)
+			.prepare("SELECT COUNT(*) AS count FROM completion_traces")
+			.get() as { count: number };
+		expect(stored).toEqual({ count: 0 });
+	});
+
+	test("an in-flight close moves nothing on an open or awaiting ticket", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// An open ticket holds no work to close.
+		expect(state.closeWorkCycle(identity)).toBe(false);
+		expect(state.ticketState(identity)).toBe("open");
+
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		// A settled turn closes through its decision, not through this move.
+		expect(state.closeWorkCycle(identity)).toBe(false);
+		expect(state.ticketState(identity)).toBe("awaiting");
+		expect(state.visibleTickets([], "implement")[0].workCycle).toBe(1);
+		state.close();
+	});
+
+	test("only a cycle end moves the work cycle, the fact the gates count on (ADR 0031)", () => {
+		// `lastCycleEnd` reads the end row of `work_cycle - 1`, so the two gates
+		// name the newest ended cycle exactly. That holds only while nothing else
+		// moves the number: a migration or an import path that raised a ticket's
+		// `work_cycle` would silently point both gates at the wrong row, and no
+		// other check reads this file's SQL. The check is on the statements, so a
+		// new move must be a cycle end or must answer here first.
+		const statements = readFileSync("src/state.ts", "utf8")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => /"UPDATE tickets SET[^"]*work_cycle[^"]*"/u.test(line));
+		// The two ends: the decided close of a settled turn, and the in-flight
+		// Close that writes no trace. Both return the ticket to open.
+		expect([...new Set(statements)]).toEqual([
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\",",
+		]);
+		expect(statements.length).toBe(2);
+		// A cycle's moves that end nothing hold the number: the handoff that starts
+		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const cycleOf = () => state.visibleTickets([], "implement")[0].workCycle;
+		expect(cycleOf()).toBe(1);
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			agentName: "agent-one",
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(state.markTicketRunning(identity)).toBe(true);
+		expect(cycleOf()).toBe(1);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		expect(cycleOf()).toBe(1);
+		// A reclaim of the same agent holds the number too: the cycle it lands in
+		// is the one it works in.
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		expect(cycleOf()).toBe(2);
+		const reclaimed = state.reclaimHandoff(identity, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(reclaimed).not.toBeNull();
+		expect(cycleOf()).toBe(2);
+		state.close();
+	});
+
+	test("the cycle-end gates read an in-flight close as holding nothing (ADR 0031)", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// Cycle 1: a completed turn, closed by decision. That end arms the
+		// re-verify gate and the Same-type hold for the suggestion.
+		const first = state.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.settleHandoff(first.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(false);
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(true);
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
+
+		// Cycle 2: the agent never settles, and the operator closes it over key
+		// `w`. That end writes no row, so it holds nothing and re-verifies
+		// nothing: neither gate falls back to cycle 1's finished turn.
+		const second = state.claimHandoff(identity, choice, "open");
+		if (!second.ok) throw new Error(second.reason);
+		state.settleHandoff(second.claim.attemptId, true);
+		expect(state.closeWorkCycle(identity)).toBe(true);
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(true);
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(false);
+		// A manual handoff passes both gates either way, and the next cycle
+		// starts on the fact the in-flight close left: none.
+		const third = state.claimHandoff(identity, choice, "open");
+		expect(third.ok).toBe(true);
+		state.close();
+	});
+
 	test("the re-verification reads the latest end decision against every listing source", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA, sourceB]);
@@ -1583,6 +1754,21 @@ describe("factory SQLite state", () => {
 		first.close();
 		second.acquireLease();
 		second.close();
+	});
+
+	test("closing twice is not an error", () => {
+		const path = statePath();
+		// The shutdown signals and the process exit hook both close the state, so
+		// a run reaches close() more than once. The second close does nothing
+		// rather than reporting a connection it already dropped.
+		const state = openFactoryState(path);
+		state.acquireLease();
+		state.close();
+		expect(() => state.close()).not.toThrow();
+		// The lease is gone and the file is usable again.
+		const next = openFactoryState(path);
+		next.acquireLease();
+		next.close();
 	});
 
 	describe("the turn end cause and the Dispatch pause", () => {

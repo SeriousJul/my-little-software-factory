@@ -41,6 +41,20 @@ export interface StoredHandoffFacts {
 	workspaceId: string | null;
 }
 
+/**
+ * What one Ticket Close leaves behind.
+ *
+ * The close answers with the two facts its screen words: whether the cycle
+ * ended at all, and what herdr said about the environment it could not remove.
+ * A close that waited over the seat and met a ticket that had moved on is the
+ * refusal, and it ran no command.
+ */
+export type CloseCycleOutcome =
+	/** The cycle ended; `cleanupFailure` is herdr's refusal, when it refused. */
+	| { ended: true; cleanupFailure?: string }
+	/** Nothing moved: the ticket holds no work cycle to close. */
+	| { ended: false; reason: string };
+
 /** The Handoff request crossing the dispatch seam. */
 export interface HandoffIntent {
 	origin: HandoffOrigin;
@@ -204,6 +218,20 @@ export interface HandoffDispatch {
 		handoff: StoredHandoffFacts,
 		end: "closed" | "abandoned",
 	): Promise<string | undefined>;
+	/**
+	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
+	 *
+	 * The cycle's end and the Close cleanup of the environment it ran in are one
+	 * operation on the shared seat: a close that meets a Handoff of the same
+	 * ticket runs after that Handoff settles, so no cleanup tears down an
+	 * environment herdr is still building, and a hung start still ends in the
+	 * close the operator asked for. The durable end writes no completion trace,
+	 * because the turn never settled.
+	 *
+	 * The caller owns the wording of the answer, exactly as it does for
+	 * `closeCleanup`.
+	 */
+	closeWorkCycle(identity: string): Promise<CloseCycleOutcome>;
 	/** True while a Handoff holds the seat. The catalogue fact and the route edit guard. */
 	handoffActive(): boolean;
 	/**
@@ -554,6 +582,28 @@ class HandoffDispatchModule implements HandoffDispatch {
 			const failure = await this.settleCloseCleanup(identity, handoff);
 			this.reports.refresh();
 			return failure;
+		});
+	}
+
+	closeWorkCycle(identity: string): Promise<CloseCycleOutcome> {
+		if (this.stopped)
+			return Promise.resolve({ ended: false, reason: "the dispatch has been stopped" });
+		// One seat item holds the whole close: the cycle ends and its environment
+		// goes, in that order, with no handoff of the same ticket in between them.
+		return this.queueCleanup(async () => {
+			const handoff = this.state.latestHandoff(identity);
+			if (!this.state.closeWorkCycle(identity)) {
+				// The ticket moved on while the close waited: it rests open, or its
+				// turn settled and awaits a decision of its own. One fact, said once.
+				const state = this.state.ticketState(identity) ?? "gone";
+				this.reports.refresh();
+				return { ended: false, reason: `the ticket is ${state}` };
+			}
+			this.reports.refresh();
+			if (handoff === null) return { ended: true };
+			const cleanupFailure = await this.settleCloseCleanup(identity, handoff);
+			this.reports.refresh();
+			return { ended: true, cleanupFailure };
 		});
 	}
 

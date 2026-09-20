@@ -2,11 +2,14 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	actionBarControls,
 	availabilityFor,
 	type ControlContext,
 	type ControlDefinition,
 	contextFor,
+	controlById,
 	controlForKey,
+	controlsForMode,
 	guideControls,
 } from "../src/components/controls.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
@@ -33,6 +36,13 @@ const awaitingTicketWithPane = {
 	handoff: { paneId: "pane-1" },
 } as unknown as Ticket;
 const openTicket = { state: "open", handoff: null } as unknown as Ticket;
+
+/** The guide groups that list one control for one context. */
+function guideGroupsFor(context: ControlContext, id: string): string[] {
+	return guideControls(context)
+		.filter(({ control }) => control.id === id)
+		.map(({ group }) => group);
+}
 
 describe("the shared control catalogue", () => {
 	test("x toggles the section under the cursor and is not an Interact alias", () => {
@@ -72,6 +82,81 @@ describe("the shared control catalogue", () => {
 	test("z answers nothing in the Consultation section", () => {
 		for (const mode of ["consultation-list", "consultation-detail"] as const)
 			expect(controlForKey({ name: "z" }, contextFor(mode, values))).toBeUndefined();
+	});
+
+	test("d and f refuse in both Ticket modes, in the Consultation section's words", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const context = contextFor(mode, values);
+			const deleteControl = controlForKey({ name: "d" }, context);
+			const historyControl = controlForKey({ name: "f" }, context);
+			expect(deleteControl?.id).toBe("consultation-delete");
+			expect(historyControl?.id).toBe("history");
+			if (deleteControl === undefined || historyControl === undefined)
+				throw new Error("Delete and History are missing from the catalogue");
+			expect(availabilityFor(deleteControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+			expect(availabilityFor(historyControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+		}
+		// In the Consultation section the keys keep their own meanings.
+		const consultation = contextFor("consultation-list", values);
+		expect(controlForKey({ name: "d" }, consultation)?.id).toBe("consultation-delete");
+		expect(controlForKey({ name: "f" }, consultation)?.id).toBe("history");
+		const closed = contextFor("consultation-list", {
+			...values,
+			selectedConsultation: { state: "closed" } as unknown as Consultation,
+		});
+		const closedDelete = controlForKey({ name: "d" }, closed);
+		const closedHistory = controlForKey({ name: "f" }, closed);
+		if (closedDelete === undefined || closedHistory === undefined)
+			throw new Error("Delete and History are missing from the catalogue");
+		expect(availabilityFor(closedDelete, closed).available).toBe(true);
+		expect(availabilityFor(closedHistory, closed).available).toBe(true);
+	});
+
+	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {
+		// The guard that keeps the catalogue's display rules in step: a control
+		// the mode dispatches a key for is either available, named in the guide
+		// with its reason, or omitted from the guide and the bar together. A
+		// future Consultation-only key that refuses in the Ticket section and
+		// still shows up in its bar fails here.
+		for (const mode of [
+			"ticket-list",
+			"ticket-detail",
+			"consultation-list",
+			"consultation-detail",
+		] as const) {
+			const context = contextFor(mode, values);
+			const named = new Set(guideControls(context).map(({ control }) => control.id));
+			const hinted = new Set(actionBarControls(mode, context).map((control) => control.id));
+			for (const control of controlsForMode(mode)) {
+				const availability = availabilityFor(control, context);
+				expect(
+					availability.available || named.has(control.id) || !hinted.has(control.id),
+					`${control.id} in ${mode}: the bar hints a key the guide does not name`,
+				).toBe(true);
+			}
+		}
+	});
+
+	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const ids = guideControls(contextFor(mode, values)).map(({ control }) => control.id);
+			expect(ids).not.toContain("history");
+			expect(ids).not.toContain("consultation-delete");
+		}
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			const entries = guideControls(contextFor(mode, values));
+			for (const id of ["history", "consultation-delete"]) {
+				expect(entries.find(({ control }) => control.id === id)?.group).toBe(
+					"Current interaction mode",
+				);
+			}
+		}
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {
@@ -136,6 +221,72 @@ describe("the shared control catalogue", () => {
 			available: false,
 			reason: "the Agent's pane is not alive in the last poll",
 		});
+	});
+
+	test("w is Close in both Ticket panes, on every state but open (ADR 0031)", () => {
+		const inFlight: Omit<ControlContext, "mode"> = {
+			...values,
+			selectedTicket: runningTicketWithPane,
+		};
+		const detail = contextFor("ticket-detail", inFlight);
+		const list = contextFor("ticket-list", inFlight);
+		const control: ControlDefinition | undefined = controlForKey({ name: "w" }, detail);
+
+		expect(control?.id).toBe("ticket-close");
+		expect(controlForKey({ name: "w" }, list)?.id).toBe("ticket-close");
+		if (control === undefined) throw new Error("Close is missing from the catalogue");
+		expect(availabilityFor(control, detail).available).toBe(true);
+		// An awaiting ticket has a settled turn to close, and it asks too.
+		expect(
+			availabilityFor(
+				control,
+				contextFor("ticket-list", { ...values, selectedTicket: awaitingTicketWithPane }),
+			).available,
+		).toBe(true);
+		// An open ticket has no work in flight: the refusal the key states.
+		expect(
+			availabilityFor(
+				control,
+				contextFor("ticket-list", { ...values, selectedTicket: openTicket }),
+			),
+		).toEqual({
+			available: false,
+			reason: "the selected Ticket is open: no work is in flight to close",
+		});
+		// No row at all is its own reason, the way every Ticket control names it.
+		expect(availabilityFor(control, contextFor("ticket-list", values)).available).toBe(false);
+	});
+
+	test("a Handoff in flight is no refusal for the Ticket close: the close queues", () => {
+		// ADR 0031 holds the close on the shared environment seat instead of
+		// refusing it, so a hung start still ends in the close asked for.
+		const control = controlById("ticket-close");
+		const context = contextFor("ticket-list", {
+			...values,
+			selectedTicket: runningTicketWithPane,
+			handoffActive: true,
+		});
+		expect(availabilityFor(control, context).available).toBe(true);
+	});
+
+	test("each section's w closes its own section, and only that section claims it", () => {
+		// Both sections answer `w` with their own Close: the Consultation's (ADR
+		// 0032) and the Ticket work cycle's (ADR 0031). A key belongs to one mode,
+		// so the guide lists the other section's Close among the control-plane
+		// controls it catalogues on its own terms, never as this mode's key.
+		const consultation = contextFor("consultation-detail", {
+			...values,
+			selectedConsultation: consultationWithPane,
+		});
+		expect(controlForKey({ name: "w" }, consultation)?.id).toBe("consultation-close");
+		expect(guideGroupsFor(consultation, "consultation-close")).toContain(
+			"Current interaction mode",
+		);
+		expect(guideGroupsFor(consultation, "ticket-close")).toEqual([]);
+		const ticket = contextFor("ticket-list", { ...values, selectedTicket: runningTicketWithPane });
+		expect(controlForKey({ name: "w" }, ticket)?.id).toBe("ticket-close");
+		expect(guideGroupsFor(ticket, "ticket-close")).toContain("Current interaction mode");
+		expect(guideGroupsFor(ticket, "consultation-close")).toEqual(["Control plane controls"]);
 	});
 
 	test("the Ticket guide names Goto in its own section, and the Consultation guide omits it", () => {

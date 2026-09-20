@@ -130,6 +130,7 @@ import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { inStartingWindow, paint } from "./theme.ts";
+import { ticketCloseDialog } from "./ticket-close.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
@@ -152,6 +153,7 @@ type Panel =
 	| null
 	| { kind: "decision"; identity: string }
 	| { kind: "missing"; identity: string }
+	| { kind: "ticket-close"; identity: string }
 	| { kind: "consultation-close"; identity: string }
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
@@ -1393,25 +1395,8 @@ export function App({
 		// stream resumes for the new agent pane on its next tick.
 		if (!(panel?.kind === "live" && key.startsWith("route:"))) setPanel(null);
 		if (state === undefined) return;
-		const handoffId = ticket.handoff?.attemptId ?? "";
 		if (key === "close") {
-			const applied = state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId,
-				decision: "closed",
-				decidedAt: new Date().toISOString(),
-			});
-			replaceTickets();
-			if (!applied) {
-				setWarningMessage(`ticket ${ticket.identity} already decided`);
-				return;
-			}
-			refreshTicketSources(ticket.identity);
-			// The Close cleanup: the environment of the handoff the decision ends.
-			const stored = state.latestHandoff(ticket.identity);
-			if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
-			// The Close action writes no progress line of its own.
-			clearOperationMessage("none");
+			closeDecidedCycle(ticket);
 			return;
 		}
 		if (key === "goto") {
@@ -1421,6 +1406,98 @@ export function App({
 		const choice = routeChoiceOf(ticket, key);
 		if (choice === null) return;
 		runRouteHandoff(ticket, choice);
+	};
+
+	/**
+	 * Close the work cycle of an `awaiting` Ticket: the `closed` decision on its
+	 * settled turn, then the Close cleanup.
+	 *
+	 * One function runs the close the Decision modal's Close row offers and the
+	 * one key `w` confirms (ADR 0031): the two routes are the same operation, so
+	 * they cannot drift. The Close cleanup goes through the dispatch seat, which
+	 * already holds it behind a Handoff of the same ticket.
+	 */
+	const closeDecidedCycle = (ticket: Ticket) => {
+		if (state === undefined) return;
+		const applied = state.applyCompletionDecision({
+			ticketIdentity: ticket.identity,
+			handoffId: ticket.handoff?.attemptId ?? "",
+			decision: "closed",
+			decidedAt: new Date().toISOString(),
+		});
+		replaceTickets();
+		if (!applied) {
+			setWarningMessage(`ticket ${ticket.identity} already decided`);
+			return;
+		}
+		refreshTicketSources(ticket.identity);
+		// The Close cleanup: the environment of the handoff the decision ends.
+		const stored = state.latestHandoff(ticket.identity);
+		if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
+		// The Close action writes no progress line of its own.
+		clearOperationMessage("none");
+	};
+
+	/**
+	 * Close the work cycle of an in-flight Ticket (ADR 0031).
+	 *
+	 * The turn never settled, so the cycle ends with no completion trace, and
+	 * the Handoff it ran in is stopped by the Close cleanup. The dispatch module
+	 * holds the whole close on the shared environment seat, so a close that met a
+	 * Handoff of the same ticket ran after it settled. A cleanup herdr refused is
+	 * the same failure the other close paths report, and the leftover it leaves
+	 * is the ticket's fact from there on (ADR 0032).
+	 */
+	const closeInFlightCycle = (ticket: Ticket) => {
+		const dispatch = handoffDispatch;
+		if (dispatch === undefined) return;
+		void dispatch.closeWorkCycle(ticket.identity).then(
+			(outcome) => {
+				if (!outcome.ended) {
+					setWarningMessage(`ticket ${ticket.identity} did not close: ${outcome.reason}`);
+					return;
+				}
+				// The ended cycle may have changed the ticket's source item.
+				refreshTicketSources(ticket.identity);
+				if (outcome.cleanupFailure === undefined)
+					// The stop of a live Agent is the fact the operator asked for, so
+					// it reads like the Abandon of a missing one: a warning, not an error.
+					setWarningMessage(`ticket ${ticket.identity} closed`);
+				else
+					setErrorMessage(
+						`ticket ${ticket.identity} closed; the close cleanup failed: ${outcome.cleanupFailure}`,
+					);
+			},
+			(error) =>
+				setErrorMessage(
+					`ticket ${ticket.identity} closed; the close could not be reported: ${errorMessage(error)}`,
+				),
+		);
+	};
+
+	/**
+	 * Run the Close the operator confirmed on `w`.
+	 *
+	 * The route reads the Ticket's state now, not the state the dialog was drawn
+	 * on: the poll can settle the turn, or a decision can land, while the
+	 * confirmation stands. An `awaiting` Ticket runs the Decision modal's Close
+	 * row, and an in-flight one ends its cycle with no completion record.
+	 */
+	const runTicketClose = (asked: Ticket) => {
+		const ticket =
+			ticketsRef.current.find((candidate) => candidate.identity === asked.identity) ?? asked;
+		if (ticket.state === "awaiting") {
+			closeDecidedCycle(ticket);
+			return;
+		}
+		if (ticket.state === "handed-off" || ticket.state === "running") {
+			closeInFlightCycle(ticket);
+			return;
+		}
+		// The cycle ended from under the dialog: nothing is in flight to close. The
+		// refusal reads in the same words the seat close reads it in, so the one
+		// fact a moved Ticket states never has two phrasings.
+		setWarningMessage(`ticket ${ticket.identity} did not close: the ticket is ${ticket.state}`);
 	};
 
 	/**
@@ -1996,6 +2073,23 @@ export function App({
 				"ticket-goto": ({ context }) => {
 					const ticket = context.selectedTicket;
 					if (ticket !== undefined) runGoto(ticket);
+				},
+				// `w` ends the selected Ticket's work cycle (ADR 0031). The catalogue
+				// refused an open Ticket, so every Ticket that reaches here has a live
+				// Agent or a settled turn behind it, and both confirm first: the dialog
+				// states who is alive and what survives, and nothing runs until the
+				// operator answers it.
+				"ticket-close": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined) return;
+					if (state === undefined) {
+						// A work cycle is durable factory state: the projection the App
+						// holds in memory has none to end, and the key says so instead of
+						// opening a dialog that could run nothing.
+						setWarningMessage("closing a Ticket needs SQLite state");
+						return;
+					}
+					setPanel({ kind: "ticket-close", identity: ticket.identity });
 				},
 				quit: () => renderer.destroy(),
 				detail: () => focusPane("detail"),
@@ -2704,13 +2798,16 @@ export function App({
 			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
-	// live view over an in-flight agent, and the missing-agent choice.
-	// Everything that reads an open panel goes through this list, so a new
-	// consultation kind can never be taken for a ticket panel by falling
-	// through the exclusions.
+	// live view over an in-flight agent, the missing-agent choice, and the Close
+	// confirmation. Everything that reads an open panel goes through this list,
+	// so a new consultation kind can never be taken for a ticket panel by
+	// falling through the exclusions.
 	const ticketPanel =
 		panel !== null &&
-		(panel.kind === "decision" || panel.kind === "live" || panel.kind === "missing")
+		(panel.kind === "decision" ||
+			panel.kind === "live" ||
+			panel.kind === "missing" ||
+			panel.kind === "ticket-close")
 			? panel
 			: null;
 	const panelTicket =
@@ -2770,7 +2867,10 @@ export function App({
 		(ticketPanel !== null &&
 			(panelTicket === undefined ||
 				(ticketPanel.kind === "decision" && decision === undefined) ||
-				(ticketPanel.kind === "live" && liveMode === "closed"))) ||
+				(ticketPanel.kind === "live" && liveMode === "closed") ||
+				// The Close confirmation is drawn from work in flight: a cycle that
+				// ended from under the dialog leaves the panel with nothing to show.
+				(ticketPanel.kind === "ticket-close" && panelTicket.state === "open"))) ||
 		closePanelHasNothingToShow;
 	// The reason the guard stands on the Message line when it drops an open
 	// close panel: the record moved out of the states the panel draws, or it
@@ -3315,6 +3415,26 @@ export function App({
 				onMessage: () => openMessage("missing-modal"),
 				onUnavailable: setWarningMessage,
 				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
+		panel !== null &&
+			panel.kind === "ticket-close" &&
+			panelTicket !== undefined &&
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				...ticketCloseDialog(panelTicket, markerOf(panelTicket)),
+				onAction: (key) => {
+					setPanel(null);
+					if (key === "close") runTicketClose(panelTicket);
+				},
+				// Cancel is the way out with nothing changed: the Ticket, its cycle,
+				// and its Agent stay exactly where the dialog found them.
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("action-panel"),
+				onMessage: () => openMessage("action-panel"),
+				onUnavailable: setWarningMessage,
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&

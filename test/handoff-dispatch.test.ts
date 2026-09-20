@@ -1213,6 +1213,73 @@ describe("the outcome wording", () => {
 });
 
 describe("the Close cleanup", () => {
+	// The in-flight Close (ADR 0031): key `w` ends a cycle whose turn never
+	// settled, writes no completion trace, and stops the Agent through the same
+	// cleanup every other close path runs.
+	test("the in-flight Close ends the cycle, writes no trace, and closes the environment", async () => {
+		const rigRef = rig();
+		const stored = seedHandoff(rigRef, FIRST);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+
+		await expect(rigRef.dispatch.closeWorkCycle(FIRST.identity)).resolves.toEqual({
+			ended: true,
+			cleanupFailure: undefined,
+		});
+		// The cycle ended: the ticket rests open with the next number, and the
+		// closed cycle still counts toward the Handoff limit.
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		const [ticket] = rigRef.state.visibleTickets([], "implement");
+		expect(ticket.workCycle).toBe(2);
+		expect(ticket.handoffCount).toBe(1);
+		// No completion trace: the turn never settled, so the handoff row is the
+		// whole record of the work.
+		expect(rigRef.state.lastCompletion(FIRST.identity)).toBe(null);
+		// The Agent's environment went through the Close cleanup.
+		expect(rigRef.commands()).toContain(`herdr tab close ${stored.tabId}`);
+		// And the projection came back once for the end, once for the cleanup.
+		expect(rigRef.events.filter((event) => event === "refresh").length).toBeGreaterThanOrEqual(2);
+	});
+
+	test("the in-flight Close queues behind a Handoff of the same ticket", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		const hung = seedHandoff(rigRef, FIRST);
+		// A restart of the same ticket is building its agent when the operator
+		// asks for the close: the close waits, and a hung start still ends in it.
+		rigRef.hold("herdr agent start");
+		await start(rigRef, FIRST, "restart");
+		await rigRef.waitForArrivals(1);
+		const closed = rigRef.dispatch.closeWorkCycle(FIRST.identity);
+		await seatReleased();
+		// Nothing ran while the Handoff held the seat.
+		expect(rigRef.commands()).not.toContain(`herdr tab close ${hung.tabId}`);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		rigRef.release();
+		await rigRef.waitForStarted(FIRST.identity);
+		await expect(closed).resolves.toEqual({ ended: true, cleanupFailure: undefined });
+		// The Handoff settled first, then the close took the environment it built.
+		const commands = rigRef.commands();
+		expect(commands.indexOf(agentStart(FIRST.name))).toBeLessThan(
+			commands.indexOf(`herdr tab close ${hung.tabId}`),
+		);
+	});
+
+	test("the in-flight Close meets a ticket that settled first and runs nothing", async () => {
+		const rigRef = rig();
+		const stored = seedHandoff(rigRef, FIRST);
+		// The turn settles while the close waits over the seat: the cycle is the
+		// settled turn's to decide now, and this move changes nothing.
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		rigRef.hold("herdr tab close");
+		const closed = rigRef.dispatch.closeWorkCycle(FIRST.identity);
+		rigRef.release();
+		await expect(closed).resolves.toEqual({
+			ended: false,
+			reason: "the ticket is awaiting",
+		});
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("awaiting");
+		expect(rigRef.commands()).not.toContain(`herdr tab close ${stored.tabId}`);
+	});
+
 	test("a cleanup herdr refuses records the leftover fact the ticket carries", async () => {
 		const rigRef = rig();
 		const stored = seedClosedHandoff(rigRef, FIRST);
