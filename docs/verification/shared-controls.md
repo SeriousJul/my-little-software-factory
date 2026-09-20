@@ -17,8 +17,8 @@ who owns control behavior.
 
 ## What is verified automatically
 
-Every check below runs in `bun test`, which is `bun run lint`,
-`bun run typecheck`, and the behavior suite together.
+Every check below runs in `bun run lint`, `bun run typecheck`,
+and `bun run test`.
 
 | Requirement | Checked by | Result |
 | --- | --- | --- |
@@ -50,6 +50,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
 | The Work queue section dispatches its list, detail, reorder, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the Consultation section's `d` and `f` refused there in that section's words and named in neither the queue's guide nor its bar; the Section stays hidden while it is empty and collapsed, and the cursor crosses into it only while it stands | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a manual start asked at a full Parallel limit waits with its origin and captured choice (walked through the real decision modal), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat, the cancel line states only the removal the module measured (nothing claimed for a row its pickup had already taken), the module says nothing on the line for a row the operator removed after its run reached herdr, a picked-up route records its decision on the turn it came from through the one helper the direct route shares, the observation's automatic restart and automatic route skip a ticket the queue already waits for, a pickup of a restarted or routed item whose ticket took its seat in the race that skip misses cancels the item and names the start on the line, and the observation cycle runs the pickup before the open dispatch against the one seat count, in auto mode and in manual mode alike | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
+| Force-dispatch (issue #89, ADR 0034): Enter on a queue row starts the item over a full Parallel limit through the dispatch module's one seam - the claim re-runs every hard start check the pickup runs and skips only the cap, the seat count stands over the limit until the work settles, a failed claim or a failed start leaves the queue with the failure's warning and the ticket keeps its state, and the catalogue refuses the key while a Handoff runs or the queue is empty | `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the key, and the terminal walks above have not been re-run for it. |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
@@ -495,6 +496,53 @@ width where PR #114 measured 54, its scroll ladder walks 36 steps to the
 bottom row `37-55/55`, and the narrow 60x12 case holds 79 rows where it held
 75 (`test/key-guide.test.ts`). The queue's own guide entries, mode names, and
 refusals stand as recorded above.
+
+## Enter force-dispatches a Work queue item over the cap (issue #89, ADR 0034)
+
+Enter on a Work queue row is the force-dispatch: it starts the item now, even
+when the Parallel limit is full. The seam is the dispatch module's own
+`forceDispatchWorkQueueItem`: the claim crosses the one claim path the pickup
+shares - the restart-or-route race check, the state gate, the claim's hard
+checks, and the Starting window - and skips only the cap, which the module
+now owns. The seat count stands over the limit until the work settles, the
+way the mode line's `N/M` already reads the force-dispatched start against
+the shared count.
+
+A failure ends as a pickup failure with the one difference the operator asked
+for: the item leaves the queue. A claim the dispatch refuses - the ticket no
+longer holds the state its origin requires, its source is gone, or the ledger
+is unclear - leaves the queue with the warning that names what stood in the
+way, and a start that fails leaves the queue with the warning that names the
+operation and the failure the handoff's own line carries. The ticket keeps
+its state and its own failure surface in both cases. The success line states
+only the fact the dispatch measured: over the cap when the cap was full at
+the dispatch, the pickup's own words when a free seat stood.
+
+The catalogue gates the key in the queue's list pane: a Handoff in flight
+refuses with the Ticket section's own words, an empty queue refuses with the
+queue's row keys' one reason, and a cleanup that holds the seat while a
+Handoff does not lets it through - the module parks the claim, and the row
+leaves when that parked start settles. The queue's own keys stay out of the
+other sections' guides, so the Ticket guide's row counts stand where the
+issue #88 record measured them: 55 rows at the full width and 79 rows in the
+narrow 60x12 case (`test/key-guide.test.ts`). The queue's own guide gained
+the Enter row with its note, the note flowing onto its continuation rows at
+the widths the catalog wraps, the way every long note in the guide does.
+
+The gallery's force-dispatch example holds the bar's states - the hint
+available on an item, dimmed while a Handoff runs, and dimmed on an empty
+queue - and the Message lines the refusals and the failure carry
+(`test/shared-gallery.test.ts`). The module tests measure the seam's ends on
+faked external operations: the start over a full cap, the start that fails
+its first external step, and the claim the state refuses
+(`test/handoff-dispatch.test.ts`). The frame tests walk the same three ends
+through the real app flow: the start over a full cap with the seat count
+standing over it at `2/1`, the start that meets a down herdr, and the claim
+the state refuses (`test/work-queue-frame.test.ts`).
+
+The terminal walks were not re-run for this key's Action bar and Key guide
+row: they are recorded as not re-verified for it, not as a pass. The
+screen-reader target remains unverified.
 
 ## The aligned control surface (issues #80–#85)
 

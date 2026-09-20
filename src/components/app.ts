@@ -1917,6 +1917,24 @@ export function App({
 		}
 		replaceTickets();
 	};
+	/**
+	 * Enter on a Work queue row (issue #89, ADR 0034): the force-dispatch.
+	 *
+	 * The item starts now, even when the Parallel limit is full: the dispatch
+	 * module re-runs every hard start check the pickup runs and skips only the
+	 * cap, so the seat count may stand over the limit until the work settles.
+	 * The module owns the seam end to end - the claim, the row, and every
+	 * Message line the start or its failure leaves - and the catalogue gated
+	 * the availability: a Handoff already in flight and an empty queue never
+	 * reach here. A seat a Close cleanup holds while it queues parks the claim
+	 * in the module, and the row leaves only when that parked start settles.
+	 */
+	const forceDispatchQueueItem = () => {
+		if (handoffDispatch === undefined) return;
+		const item = workQueueRef.current[workQueueIndexRef.current];
+		if (item === undefined) return;
+		handoffDispatch.forceDispatchWorkQueueItem(item.ticketIdentity);
+	};
 	const currentBaseMode = (): InteractionMode =>
 		interaction
 			? "consultation-interaction"
@@ -2176,6 +2194,11 @@ export function App({
 				"queue-up": () => moveQueueItem("up"),
 				"queue-down": () => moveQueueItem("down"),
 				"queue-remove": () => removeQueueItem(),
+				// Enter on a queue row force-dispatches the item under the cursor over a
+				// full Parallel limit (issue #89). The catalogue gated the availability,
+				// so this runs the dispatch and nothing else; the module owns every line
+				// the start or its failure leaves.
+				"queue-force-dispatch": () => forceDispatchQueueItem(),
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				"section-toggle": () => toggleSection(),

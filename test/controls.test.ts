@@ -160,6 +160,51 @@ describe("the shared control catalogue", () => {
 		}
 	});
 
+	test("Enter is the force-dispatch on a queue row, and it keeps its refusals", () => {
+		// The force-dispatch (issue #89) is the queue's only meaning of Enter, in
+		// the pane that holds the rows. It refuses while a Handoff holds the
+		// environment seat, the way the Ticket section's Hand off does, and on an
+		// empty queue it carries the queue's row keys' one reason.
+		const control = controlForKey({ name: "return" }, contextFor("work-queue-list", queueValues));
+		expect(control?.id).toBe("queue-force-dispatch");
+		if (control === undefined) throw new Error("the queue lost its force-dispatch");
+		expect(availabilityFor(control, contextFor("work-queue-list", queueValues))).toEqual({
+			available: true,
+		});
+		const busy = contextFor("work-queue-list", { ...queueValues, handoffActive: true });
+		expect(availabilityFor(control, busy)).toEqual({
+			available: false,
+			reason: "a Handoff is active",
+		});
+		const empty = contextFor("work-queue-list", values);
+		expect(availabilityFor(control, empty)).toEqual({
+			available: false,
+			reason: "no queue item is under the cursor",
+		});
+		// The key the other section's Enter answers is a different control: the
+		// queue's Enter reaches only the queue's list pane.
+		for (const mode of [
+			"ticket-list",
+			"ticket-detail",
+			"consultation-list",
+			"consultation-detail",
+			"work-queue-detail",
+		] as const) {
+			expect(
+				controlsForMode(mode).some((candidate) => candidate.id === "queue-force-dispatch"),
+			).toBe(false);
+		}
+		// The guide names the key in the queue's own section with its note,
+		// whatever the item's facts run.
+		const entry = guideControls(contextFor("work-queue-list", queueValues)).find(
+			({ control }) => control.id === "queue-force-dispatch",
+		);
+		expect(entry?.group).toBe("Current interaction mode");
+		expect(entry?.control.guideNote).toBe(
+			"starts the item over a full Parallel limit; a failure leaves the queue",
+		);
+	});
+
 	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {
 		for (const mode of ["ticket-list", "ticket-detail"] as const) {
 			const ids = guideControls(contextFor(mode, values)).map(({ control }) => control.id);

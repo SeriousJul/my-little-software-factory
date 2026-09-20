@@ -979,6 +979,79 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		},
 	},
 	{
+		// The force-dispatch from the Work queue (issue #89, ADR 0034): Enter on
+		// a queue row starts the item now, over a full Parallel limit. The bar
+		// holds the hint available on an item, dimmed while a Handoff runs, and
+		// dimmed on an empty queue, and the Message lines carry the words the
+		// refusals and the failure leave: the item leaves the queue, and the
+		// ticket keeps its state and its own failure surface.
+		id: "work-force-dispatch",
+		state:
+			"Force-dispatch: available on an item, refused while a Handoff runs or the queue is empty",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const item: WorkQueueItem = {
+				position: 0,
+				ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
+				origin: "open",
+				choice: {
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				previousMessage: "",
+				enqueuedAt: "2026-02-17T10:00:00.000Z",
+			};
+			const bar = (key: string, handoffActive: boolean, selected: WorkQueueItem | null) =>
+				createElement(ActionBar, {
+					key,
+					mode: "work-queue-list",
+					context: contextFor("work-queue-list", {
+						listCanMove: selected !== null,
+						detailCanScroll: false,
+						selectedWorkQueueItem: selected,
+						workQueueDepth: selected === null ? 0 : 1,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				});
+			return [
+				// The hint in its three states: available on an item, dimmed while a
+				// Handoff holds the environment seat, and dimmed on an empty queue.
+				bar("force-dispatch-available", false, item),
+				bar("force-dispatch-busy", true, item),
+				bar("force-dispatch-empty", false, null),
+				// The words the refusals carry on the Message line: a refused key
+				// says its catalogue reason on the line the operator already
+				// watches.
+				messageRowElement(
+					{ severity: "warning", text: "a Handoff is active" },
+					columns.contentWidth,
+				),
+				messageRowElement(
+					{ severity: "warning", text: "no queue item is under the cursor" },
+					columns.contentWidth,
+				),
+				// The failure path: the claim the force-dispatch re-runs refused the
+				// start, so the item leaves the queue with this warning, and the
+				// ticket keeps its state.
+				messageRowElement(
+					{
+						severity: "warning",
+						text: `force-dispatch of "Add a webhook retry policy" failed: only open tickets can be handed off`,
+					},
+					columns.contentWidth,
+				),
+			];
+		},
+	},
+	{
 		id: "theme",
 		state: "the inherited theme",
 		render: (columns, _holds, _inputActive, _wiring) => {
