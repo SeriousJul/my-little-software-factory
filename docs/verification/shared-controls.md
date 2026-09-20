@@ -625,9 +625,39 @@ before this badge took the word in the Ticket section.
 The automatic suite covers the badge in both surfaces, its open-role paint,
 the unchanged open count, the open badge the ticket without a waiting start
 keeps, the origin the queue row keeps, and the open badge the cancel gives
-back (`test/work-queue-frame.test.ts`). The suite passed in full on this
-branch (1558 pass, 13 skip, 0 fail), and the 13 skips are the ones this
-record already holds as skipped.
+back (`test/work-queue-frame.test.ts`).
+
+The badge's first cut of that test asserted its expected color through the
+paint layer, which reads the test process's environment at the instant of the
+assertion. The test files share one worker's environment and run beside
+one another, and the no-color tests of the other files hold `NO_COLOR` while
+they run, so a frame the app repaints inside that window wears no paint at
+all: the expected color resolved `undefined`, and the frame the assertion
+read could paint white. The environment the plane resolves from is now as
+isolated as the standard states it is:
+
+- `roleColor` in the shared harness resolves the standalone theme through
+  the pure resolver instead of the paint layer, so an expected color never
+  reads the environment (`unfitTones` resolves through it and kept its
+  meaning).
+- The test script spreads the files across worker processes
+  (`bun test --isolate --parallel`), so a `NO_COLOR` one file's test holds
+  never reaches a frame another file's app paints.
+- The theme isolation preloads into every test file
+  (`bunfig.toml`, `[test]`), so the environment clears before every test of
+  every file, the files that do not import it through the shared harness
+  included.
+- The two no-color frame tests that left `NO_COLOR` set for the worker's
+  remaining files delete it when they end, the way the override panel's
+  already did.
+
+The checks pass in full on this branch after the isolation, re-measured:
+`bun run lint` and `bun run typecheck` pass, and `bun test` passes in full
+(1558 pass, 13 skip, 0 fail, twice in a row, about 38 s per run). The 13
+skips are the ones this record already holds as skipped, issues #103 and
+#104. The direct run of the five files that share the no-color tests and
+the badge's frame test passed four times in a row (54 pass, 7 skip, 0
+fail).
 
 The terminal walks were not re-run on the queued badge: they are recorded as
 not re-verified for this change, not as a pass. The screen-reader target

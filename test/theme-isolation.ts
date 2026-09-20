@@ -11,7 +11,14 @@
  * resolution forgotten, so each test starts on the standalone theme in color.
  * A test that needs another resolution - an inherited herdr theme, the
  * no-color presentation - sets its own environment and re-resolves inside the
- * test body, and the next test starts clean again.
+ * test body, and the next test starts clean again. The clearing holds for
+ * every test file: this module preloads into each of them (the `[test]`
+ * section of `bunfig.toml`), so a file that never imports it through the
+ * shared harness starts clean as well. A variable one file's test body
+ * still holds stands for the files that run beside it in the same worker,
+ * so a test that sets `NO_COLOR` deletes it when it ends, and the test
+ * script spreads the files across worker processes (`--parallel`) so the
+ * environment is separate to begin with.
  */
 import { beforeEach } from "bun:test";
 
