@@ -1945,6 +1945,35 @@ describe("the open dispatch", () => {
 		expect(intents).toEqual([]);
 		state.close();
 	});
+
+	/**
+	 * ADR 0034 says a pickup is a manual start, so it runs "in auto or manual
+	 * mode alike", and the cycle places the step outside the `autoOn` branch.
+	 * This walks that placement: with Auto-handoff off the queue still takes the
+	 * free seats, and the automatic dispatches stay held (issue #92).
+	 */
+	test("the queue picks up with Auto-handoff off, and the automatic dispatches stay held", async () => {
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: false,
+			agents: [],
+			pickupWorkQueue: async () => 1,
+			order,
+		});
+		// Two open tickets, and a settled awaiting ticket whose type would route
+		// in auto mode: with Auto-handoff off only the queue's pickup may start.
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched(), fetched("github:github.com:I_7", [])]),
+		);
+		settleFor(state, "github:github.com:I_7", "implement");
+		await coordinator.tick();
+		// The pickup ran, and nothing else did: the open dispatch and the
+		// awaiting route both sit behind the `autoOn` gate.
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
+		state.close();
+	});
 });
 
 describe("the priority order (ADR 0022)", () => {

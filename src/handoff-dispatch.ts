@@ -204,10 +204,24 @@ export interface HandoffDispatch {
 	 * the claim a pickup already made and the held herdr seat parked. The queue's
 	 * bookkeeping lives behind this seam, so a row, its note, and its parked claim
 	 * always leave together: a later re-enqueue of the same ticket can warn again
-	 * with the same reason, and a start the operator removed never runs. Returns
-	 * whether an item was removed.
+	 * with the same reason, and a start that had not reached herdr never runs. A
+	 * run already inside herdr cannot be recalled, so it finishes and the cancelled
+	 * row earns no success line (ADR 0034).
+	 *
+	 * The answer says whether a row left: false reports that the row had already
+	 * gone, which is how a start that answers late reads the operator's cancel.
 	 */
 	removeQueueItem(ticketIdentity: string): boolean;
+	/**
+	 * Record the operator's `handed-off` decision on the turn a routed start came
+	 * from (ADR 0034). One implementation holds both paths of the same fact:
+	 * `runRouteHandoff` in the Main view for a route that starts in its own seat
+	 * at once, and the queue pickup for a route whose start waited for a seat. It
+	 * stamps the state's clock, so the two paths cannot disagree about when the
+	 * decision landed, and a blank predecessor - a turn that never settled -
+	 * records nothing.
+	 */
+	recordRoutedDecision(ticketIdentity: string, previousHandoffId: string): void;
 	/**
 	 * The Close cleanup of one ended cycle. Returns the failure reason, or
 	 * undefined. `end` stays on the seam so manual and observation callers share
@@ -416,12 +430,31 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * all three leave together through here: the operator's cancel, the
 	 * successful pickup, and the restart-race cancellation all clear the same
 	 * way, and a later re-enqueue of the ticket is free to warn again.
+	 *
+	 * The false answer is a fact too: the row had already left, which is how the
+	 * answer of a pickup whose work was already inside herdr knows the operator
+	 * cancelled the start it can no longer recall.
 	 */
 	removeQueueItem(ticketIdentity: string): boolean {
 		const removed = this.state.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
 		this.lastPickupWarning.delete(ticketIdentity);
 		return removed;
+	}
+
+	/**
+	 * Write the routed start's decision on the turn it routes from. One copy of
+	 * the fact serves both paths that route: the Main view's own start and the
+	 * queue pickup of a start that waited for a seat.
+	 */
+	recordRoutedDecision(ticketIdentity: string, previousHandoffId: string): void {
+		if (previousHandoffId === "") return;
+		this.state.applyCompletionDecision({
+			ticketIdentity,
+			handoffId: previousHandoffId,
+			decision: "handed-off",
+			decidedAt: new Date(this.state.now()).toISOString(),
+		});
 	}
 
 	/**
@@ -523,25 +556,26 @@ class HandoffDispatchModule implements HandoffDispatch {
 			},
 			(started) => {
 				if (started.ok) {
-					this.removeQueueItem(item.ticketIdentity);
+					// Whether the row still stands when the start answers is the
+					// operator's cancel seen from the module: a run already inside herdr
+					// cannot be recalled, so it finishes, keeps the row gone, and earns no
+					// "started from the Work queue" line for a start the operator ended.
+					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
+					if (rowStands) this.removeQueueItem(item.ticketIdentity);
 					// The route the item carries is the operator's decision on the turn
 					// it routes from: it lands on the settled turn's trace, like the
-					// direct route's start, once the pickup's handoff is live. One fact,
-					// two paths: `runRouteHandoff` in src/components/app.ts records the
-					// same decision for a route that starts in its seat at once, and the
-					// two copies must move together.
-					if (item.origin === "workflow" && previousHandoffId !== "") {
-						this.state.applyCompletionDecision({
-							ticketIdentity: item.ticketIdentity,
-							handoffId: previousHandoffId,
-							decision: "handed-off",
-							decidedAt: new Date(this.state.now()).toISOString(),
-						});
+					// direct route's start, once the pickup's handoff is live. Both paths
+					// call `recordRoutedDecision`, so one copy of the fact and one clock
+					// serve a route that starts in its seat and a route that waited.
+					if (item.origin === "workflow") {
+						this.recordRoutedDecision(item.ticketIdentity, previousHandoffId);
 					}
 					this.reports.refresh();
-					this.reports.notice(
-						`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
-					);
+					if (rowStands) {
+						this.reports.notice(
+							`${this.ticketName(item.ticketIdentity)} started from the Work queue`,
+						);
+					}
 				} else if (this.state.hasWorkItem(item.ticketIdentity)) {
 					// The item keeps its place: the attempt record holds the failure,
 					// the ticket keeps its state, and the next free seat retries. A

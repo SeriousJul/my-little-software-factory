@@ -1972,6 +1972,53 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(warned()).toBe(1);
 	});
 
+	/**
+	 * The narrow window ADR 0034 states: a pickup whose run is already inside
+	 * herdr cannot be recalled, so an operator's cancel that lands after the start
+	 * left the queue ends the row and nothing else. The start still runs, and the
+	 * removed row earns no "started from the Work queue" line for a start the
+	 * operator ended (issue #92).
+	 */
+	test("a cancel that reaches a row whose pickup is inside herdr keeps the line quiet", async () => {
+		const rigRef = rig([FIRST]);
+		const gate = gatedRunner(rigRef.runner, (command) => command.startsWith("herdr agent start"));
+		let held = rigRef.config.maxParallelAgents;
+		const mod = withRunner(rigRef, gate.runner, { seatCount: () => held });
+		// The cap is full: the manual start waits in the Work queue.
+		await expect(
+			mod.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// A seat frees and the pickup takes it: the claim is in, and the start
+		// reaches herdr, where the gate holds it. The row still waits - a pickup
+		// removes it only when the start answers - so the cancel can still land.
+		held = rigRef.config.maxParallelAgents - 1;
+		expect(await mod.pickupWorkQueue()).toBe(1);
+		await gate.waitForArrivals(1);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		// The operator cancels the waiting start while its run is inside herdr.
+		expect(mod.removeQueueItem(FIRST.identity)).toBe(true);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		// herdr answers. The run is not recalled: the ticket rests handed-off, the
+		// starting window closes, and the line names no queue start.
+		gate.release();
+		for (let turn = 0; turn < 200 && rigRef.state.ticketState(FIRST.identity) !== "handed-off"; ) {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			turn += 1;
+		}
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		expect(rigRef.events).not.toContain(`notice:"${FIRST.title}" started from the Work queue`);
+		expect(rigRef.events).toContain(`starting:${FIRST.identity}:off`);
+		// A re-enqueue of the same ticket is a fresh waiting start, so the same
+		// reason reaches the Message line again: the cancel cleared the note.
+		expect(rigRef.state.hasWorkItem(FIRST.identity)).toBe(false);
+	});
+
 	test("an automatic start at the cap is refused, and the queue stays empty", async () => {
 		const rigRef = rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {

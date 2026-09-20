@@ -48,7 +48,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
 | The Work queue section dispatches its list, detail, reorder, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide; the Section stays hidden while it is empty and collapsed, and the cursor crosses into it only while it stands | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a manual start asked at a full Parallel limit waits with its origin and captured choice (walked through the real decision modal), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat, a picked-up route records its decision on the turn it came from, and the observation cycle runs the pickup before the open dispatch against the one seat count | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
+| The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a manual start asked at a full Parallel limit waits with its origin and captured choice (walked through the real decision modal), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat and says nothing on the line for a row the operator removed after its run reached herdr, a picked-up route records its decision on the turn it came from through the one helper the direct route shares, and the observation cycle runs the pickup before the open dispatch against the one seat count, in auto mode and in manual mode alike | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
@@ -73,10 +73,10 @@ Every check below runs in `bun test`, which is `bun run lint`,
 
 | Part | Version |
 | --- | --- |
-| OS | Arch Linux, kernel 7.2.3-arch1-3 |
-| Node | v26.8.1 (the pinned minimum is 26.4.0) |
-| Renderer | OpenTUI `@opentui/core` 0.5.9, `@opentui/react` 0.5.9 |
-| Test runner | vitest 4.1.11 |
+| OS | Arch Linux, kernel 7.2.5-3-omarchy |
+| Runtime | Bun 1.4.0 (the pinned minimum is 1.3.0, ADR 0035) |
+| Renderer | OpenTUI `@opentui/core` 0.5.11, `@opentui/react` 0.5.11 |
+| Test runner | `bun:test` (Bun 1.4.0), run through `bun test --isolate` |
 | Multiplexer (tmux path) | tmux 3.7c |
 
 ## Required acceptance targets and their state

@@ -1623,17 +1623,6 @@ export class FactoryState {
 		return items;
 	}
 
-	/** The queue's depth: the row count the queue Section's header carries. */
-	workQueueDepth(): number {
-		return (
-			(
-				this.db.prepare("SELECT COUNT(*) AS count FROM work_queue").get() as
-					| { count: number }
-					| undefined
-			)?.count ?? 0
-		);
-	}
-
 	/** Whether the queue already waits for the ticket: one item per ticket. */
 	hasWorkItem(ticketIdentity: string): boolean {
 		return (

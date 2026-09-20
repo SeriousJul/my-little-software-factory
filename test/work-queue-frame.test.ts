@@ -77,9 +77,17 @@ function queuedFixture(state: FactoryState) {
 	return { state, source, enqueue, runner };
 }
 
-// A zero Parallel limit: the queue holds its items the whole frame test,
-// because neither the cap gate nor the pickup runs at a limit of zero.
-const zeroSeatConfig = { ...issuesConfig, maxParallelAgents: 0 };
+// These frames show the waiting, never a running start, so nothing may pick
+// the items up while they walk. A zero Parallel limit keeps the cap gate off
+// (an unlimited cap never enqueues), and the long poll interval holds the
+// observation cycle back: at an unlimited cap `pickupWorkQueue` runs the whole
+// queue, so a cycle that fired mid-frame would empty the section the test is
+// still reading.
+const zeroSeatConfig: FactoryConfig = {
+	...issuesConfig,
+	maxParallelAgents: 0,
+	agentPollIntervalSeconds: 60,
+};
 
 const booted = (
 	body: Parameters<typeof withApp>[0],
@@ -294,7 +302,8 @@ describe("the Work queue section", () => {
 	 * ONE seat, held by a live agent on the second ticket, so the awaiting
 	 * ticket's route cannot take a seat and enters the queue with the choice the
 	 * workflow edge resolved. The observation cycle never picks it up: the cap
-	 * stays full the whole walk.
+	 * stays full the whole walk, and the long poll interval holds even the
+	 * cycle's first pass back, so no pickup races the modal walk.
 	 */
 	test("a decision-row route at a full cap waits in the Work queue with its choice", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
@@ -330,6 +339,7 @@ describe("the Work queue section", () => {
 		const config: FactoryConfig = {
 			...issuesConfig,
 			maxParallelAgents: 1,
+			agentPollIntervalSeconds: 60,
 			workflows: [{ from: "implement", to: ["review"] }],
 		};
 		try {
@@ -408,6 +418,42 @@ describe("the Work queue section", () => {
 						"the Work section to hide",
 					);
 					expect(workHeaderRow(empty)).toBe(-1);
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The queue's own cursor, not the other section's, states the adjacency
+	 * (ADR 0034): a direct click on the Work header lands the cursor on a one-row
+	 * queue the Consultation cursor never walked through, and up still crosses out
+	 * of it. The row count alone used to hold the answer, so that up refused.
+	 */
+	test("a one-row queue still crosses up after a direct click on its header", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						"the Work header",
+					);
+					await clickWorkHeader(setup);
+					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
+					const up = await press(setup, "k", "the cursor to cross to the Consultations", (f) =>
+						f.includes("┌─❯ Consultations"),
+					);
+					expect(up).toContain("❯ Consultations");
+					expect(frameText(up)).not.toContain("nowhere to move");
 				},
 				state,
 				source,

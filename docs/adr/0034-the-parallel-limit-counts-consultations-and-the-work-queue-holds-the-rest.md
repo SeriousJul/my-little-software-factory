@@ -70,7 +70,11 @@ the record there. Removing a Handoff item cancels it: the intent is deleted
 and the ticket keeps its state. The cancel reaches the whole waiting start, so
 it ends a claim the pickup already made and the herdr seat parked: that claim
 settles as failed and the parked run leaves the drain, or a start the operator
-removed would run the moment the seat freed. One queue item per ticket: a
+removed would run the moment the seat freed. One window stays open by physics,
+not by choice: a pickup whose run already reached herdr cannot be recalled, so
+that Agent starts, its ticket moves on, and the removed row says nothing on the
+Message line - the module reports a queue start only for a row that still
+waited when the start answered. One item per ticket: a
 second add of the same ticket is refused while the first waits.
 
 The considered alternatives:
@@ -104,6 +108,11 @@ The considered alternatives:
 - A pickup claims like any other start: the claim puts the ticket in the
   Starting window and the settle takes it out, so a picked-up start wears the
   same face the operator sees on a start that took its seat at once.
+- The decision a routed start leaves on the turn it routes from has one owner,
+  the dispatch module's `recordRoutedDecision`, and both paths call it: the
+  Main view's own route and the queue pickup of a route that waited for a seat.
+  The state's clock stamps both, so the two records of the fact cannot drift
+  apart in words or in time.
 - The seat count gains a state-based Consultation side. A stuck `opening`
   holds its seat, so its recover is never capped and can never push the
   count past the cap.

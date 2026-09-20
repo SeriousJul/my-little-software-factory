@@ -820,7 +820,10 @@ export function App({
 							lines.push({ text: line, fg: paint("text") });
 					}
 					lines.push({
-						text: "u/d reorder   Delete removes the waiting start",
+						// The three keys run in the queue's list, not in this pane:
+						// the detail says where they answer instead of hinting keys the
+						// mode it stands in never dispatches.
+						text: "In the list: u/d reorder, Delete removes the start",
 						fg: paint("subtext0"),
 					});
 					return lines;
@@ -1538,18 +1541,13 @@ export function App({
 				previousMessage: ticket.lastCompletion?.message ?? "",
 				// The routed handoff started: the operator's decision on the turn
 				// it routes from is `handed-off`, and the ticket reads as
-				// handed-off where the agent is. One fact, two paths: a route
-				// that waited for a seat records the same decision at its pickup
-				// in `pickupItem` (src/handoff-dispatch.ts), and the two copies
-				// must move together.
+				// handed-off where the agent is. The dispatch module holds that one
+				// fact (`recordRoutedDecision`): the queue pickup of a start that
+				// waited for a seat records the same decision through it, on the
+				// same clock, so the two paths cannot drift.
 				onStarted: (started) => {
 					if (!started.ok || previousHandoffId === "") return;
-					state?.applyCompletionDecision({
-						ticketIdentity: ticket.identity,
-						handoffId: previousHandoffId,
-						decision: "handed-off",
-						decidedAt: new Date().toISOString(),
-					});
+					handoffDispatch.recordRoutedDecision(ticket.identity, previousHandoffId);
 					replaceTickets();
 				},
 			})
@@ -1886,11 +1884,19 @@ export function App({
 				// always possible while the other section is expanded. The Work
 				// queue's header row stays visible while it holds a row, so the
 				// cross into it counts while the queue is not empty.
-				if (selectionRef.current === "queue")
+				if (selectionRef.current === "queue") {
+					// Up out of the queue crosses into the Consultation section, or into
+					// the Ticket section while the Consultation section is collapsed, and
+					// the cross opens at the queue's own first row. Where the other
+					// section happens to hold its cursor says nothing about where this
+					// one stands: a direct click on the Work header can land the cursor on
+					// the only row of a queue the Consultation cursor never touched.
+					const crossUp = cOpen || tOpen;
 					return (
-						(wOpen && (w > 1 || (consultationIndexRef.current === c - 1 && cOpen))) ||
-						(!wOpen && cOpen)
+						(wOpen && (w > 1 || (workQueueIndexRef.current === 0 && crossUp))) ||
+						(!wOpen && crossUp)
 					);
+				}
 				if (selectionRef.current === "consultation")
 					return (
 						(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)

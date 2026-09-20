@@ -16,6 +16,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
+import type { FactoryConfig } from "../src/config.ts";
 import { baseChoice } from "../src/handoff.ts";
 import type { Setup } from "./app-harness.ts";
 import {
@@ -302,9 +303,16 @@ describe("the in-app Key guide", () => {
 			const runner = new FakeRunner();
 			const tickets = [issueTicket()];
 			const source = new FakeSource("issues", "github-issues", success(tickets));
-			// A zero Parallel limit: the item waits the whole test, so neither the
-			// cap gate nor the pickup empties the queue under the guide.
-			const zeroSeatConfig = { ...issuesConfig, maxParallelAgents: 0 };
+			// These frames read the waiting item, never a running start. A zero
+			// Parallel limit keeps the cap gate off, and the long poll interval holds
+			// the observation cycle back: at an unlimited cap `pickupWorkQueue` runs
+			// the whole queue, so a cycle that fired mid-test would empty the queue
+			// under the guide.
+			const zeroSeatConfig: FactoryConfig = {
+				...issuesConfig,
+				maxParallelAgents: 0,
+				agentPollIntervalSeconds: 60,
+			};
 			await withApp(
 				async (setup) => {
 					source.settle(success(tickets));

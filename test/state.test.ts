@@ -2032,11 +2032,14 @@ describe("the work queue (ADR 0034)", () => {
 
 	test("items enter in enqueue order, and the queue reports its depth and identities", () => {
 		const state = openFactoryState(":memory:");
-		expect(state.workQueueDepth()).toBe(0);
+		// The depth is the projection's row count, the same number the Work
+		// section's header carries: a second count read off the table could
+		// disagree with the rows an operator sees when a damaged row drops out.
+		expect(state.workQueue()).toHaveLength(0);
 		expect(state.hasWorkItem("t1")).toBe(false);
 		enqueue(state, "t1");
 		enqueue(state, "t2");
-		expect(state.workQueueDepth()).toBe(2);
+		expect(state.workQueue()).toHaveLength(2);
 		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2"]);
 		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
 		expect(state.hasWorkItem("t2")).toBe(true);
@@ -2103,7 +2106,7 @@ describe("the work queue (ADR 0034)", () => {
 				previousMessage: "",
 			}),
 		);
-		expect(reopened.workQueueDepth()).toBe(3);
+		expect(reopened.workQueue()).toHaveLength(3);
 		expect(reopened.hasWorkItem("t1")).toBe(true);
 		// The reopened queue still moves and still answers a cancel.
 		expect(reopened.moveWorkItem("t3", "down")).toBe(true);
