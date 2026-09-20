@@ -185,6 +185,45 @@ so the no-color presentation keeps the word and drops only the color. The
 surface names the word the face wears; the face paints the shared
 presentation's ink and holds no palette of its own.
 
+## The Body pane and the Decision region
+
+The near-fullscreen decision surfaces - the Decision modal and the Live
+view's settled sub-mode - lay their box out in two regions, per
+[ADR 0039](../adr/0039-the-modal-body-is-a-pane-and-its-decisions-a-bounded-region.md):
+
+- The Body pane is bordered and titled, and holds one body by itself: the
+  Turn log, or the Agent view of a live turn. Its border title names the
+  body that shows. An empty body states its reason as one row inside the
+  pane, and the pane keeps its chrome.
+- The Decision region holds the rows the operator confirms: the held cause
+  row and the decision rows. The pane's bottom border is the boundary; the
+  region gets no chrome of its own. It is bounded and scrolls: it shows as
+  many rows as the box has room for once the log has paid its floor, and it
+  states its range on the Action bar behind the selection's hint.
+
+The regions take their rows in a stated payment order: the context row,
+then the held cause row, then the pane's chrome, then the Decision region,
+then the log. The log keeps a floor of three rows, drops it to one after the
+pane has yielded its chrome, and only then does the surface stand down to
+the size message. The pane yields its chrome before the log yields rows:
+padding first, border second.
+
+The pane and the box paint one border ink: the control ink's indicator, the
+checked essential-indicator pair. No surface states its own border color.
+
+The region's selection, its wrap, its auto-scroll, its visible window, and
+its range text are a control behavior, so they live in the shared library's
+region module (`region.ts`, beside the field, the selector row, and the
+form), and the catalogue's `scroll-turn-log` is `scroll-body`: the body it
+scrolls may be the Agent view. The Live view is a shared-chrome surface
+([ADR 0040](../adr/0040-every-near-fullscreen-surface-is-shared-chrome.md)):
+it renders on the modal surface with its Message line and its Action bar, its
+stream sub-mode answers to its own `live-view` catalogue mode, and its
+settled sub-mode dispatches in the `decision-modal` mode, with the border
+re-titling `Live:` to `Decision:` on settle. A surface that paints decision
+rows without the library's region state is refused by the architecture
+check, with the shared chrome as the one stated exemption.
+
 ## Draft retention
 
 Closing an editor and discarding its content are different actions.
@@ -340,7 +379,9 @@ not meet this condition.
 The verification commands are `bun run lint`, `bun run typecheck`, `bun run test`,
 and `bun run gallery`. The architecture rule is checked by
 `test/shared-control-architecture.test.ts`, which rejects a separate field
-implementation, a hand-edited draft string, and a screen that names a renderer
-field instead of the library. The screen-reader procedure is written down in
+implementation, a hand-edited draft string, a screen that names a renderer
+field instead of the library, and a surface that paints decision rows without
+the library's region state, the shared chrome being the one stated
+exemption. The screen-reader procedure is written down in
 [the verification record](../verification/shared-controls.md); it has not been
 run, and no result is claimed for it.

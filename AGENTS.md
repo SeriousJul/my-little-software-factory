@@ -9,9 +9,10 @@
 - Use and extend the shared control library in
   [src/components/shared](src/components/shared): `fields.ts` for a Text field
   and a Draft field, `choices.ts` for a selector row and a visible action,
-  `form.ts` for a form's slots, focus, and control facts, `type-ahead.ts` for a
-  searchable list row, `spinner.ts` for the animated spinner face beside its
-  written word, `presentation.ts` for labels, focus markers, state words, and
+  `form.ts` for a form's slots, focus, and control facts, `region.ts` for the
+  Decision region's selection, wrap, auto-scroll, visible window, and range
+  text, `type-ahead.ts` for a searchable list row, `spinner.ts` for the
+  animated spinner face beside its written word, `presentation.ts` for labels, focus markers, state words, and
   the tested color pairs, and `theme.ts` for the pure Theme resolution. Colors leave the plane through the shared paint layer
   ([src/components/theme.ts](src/components/theme.ts)): a surface asks it for a
   role's color, it answers from the Theme the environment resolved (ADR 0024),
@@ -27,8 +28,8 @@
 - Every control the control plane owns dispatches from the shared Control
   catalogue: the fields, selectors, searches, form actions, and form focus
   routes, the Consultation view's list and detail, the Work queue's list and
-  item detail, the Agent interaction mode, and the Consultation confirmation
-  panel. Build missing behavior at the
+  item detail, the Agent interaction mode, the Consultation confirmation
+  panel, and the Live view's mode. Build missing behavior at the
   shared module interface, never as another local implementation, and read the
   open items and the unverified acceptance targets in
   [the verification record](docs/verification/shared-controls.md): the

@@ -706,6 +706,39 @@ This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
 0.5.11 (1554 pass, 13 skip, re-measured on this branch's merged catalogue).
 
+## The Body pane, the Decision region, and the Live view's chrome (issues #121-#125, ADR 0039 and ADR 0040)
+
+This branch carries the written rules the pane's work stands on, not a
+measurement of the pane: the shared control standard states the Body pane,
+the Decision region, their payment order, and the one border-ink rule, and
+names the region module in the library's module list; the architecture check
+refuses a surface that paints decision rows without the library's region
+state, naming the offender by file, with the shared chrome as the one stated
+exemption (`test/shared-control-architecture.test.ts`); and the agent
+instructions name the Live view's mode in the catalogue surface list. The
+pane's implementation (issues #121-#125) is where the targets below get
+measured; this branch records them as unverified, not as a pass.
+
+The record carries the pane's new unverified targets, stated rather than
+measured:
+
+- The nested border at the declared minimum: the pane's border inside the
+  modal's box at the plane's declared minimum, with the pane's chrome
+  yielded - padding first, border second - before the surface stands down to
+  the size message. **Not verified:** it is a terminal and visual walk, and
+  no walk has run for it.
+- The Live view's bar and Message line: the shared-chrome rows the Live view
+  gains (ADR 0040), with the bar's hints following the mode and the border
+  re-titling `Live:` to `Decision:` on settle. **Not verified:** the terminal
+  walks have not been run for them.
+- The screen-reader path: **remains unverified**, as recorded above. No
+  screen-reader claim is made for the pane or the Live view's chrome.
+
+The record's existing open items stand: the terminal walks have not been
+re-run on the theme-inherited paint, the light-herdr-theme visual walk is
+unrun, and the inherited herdr theme pairs are not contrast-checked. Nothing
+in this section claims a pass for what was not measured.
+
 ## The queued badge of the Queue wait
 
 A ticket whose manual start waits in the Work queue wears the `queued`
