@@ -519,6 +519,68 @@ describe("the mode line and the a key", () => {
 		);
 		app.state.close();
 	});
+
+	test("a working Consultation holds its seat beside the ticket seat on the mode line", async () => {
+		const app = seededApp("in-flight");
+		// The Consultation starts in opening and takes its confirmed Agent with
+		// it into working, so the poll keeps it where it is.
+		app.state.createConsultation({
+			id: "consultation-1",
+			typeName: "grill-with-docs",
+			agentType: "pi",
+			environment: "worktree",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+			template: "/skill:grill-with-docs {input}",
+			initialInput: "Review this repository",
+			renderedOpeningPrompt: "/skill:grill-with-docs Review this repository",
+			repository: {
+				identity: repoIdentity,
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+			agentName: "consultation-11111111",
+			createdAt: "2026-08-31T09:50:00.000Z",
+		});
+		app.state.setConsultationAgent("consultation-1", {
+			paneId: "pane-2",
+			tabId: "tab-2",
+			workspaceId: "ws-2",
+		});
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+				{
+					paneId: "pane-2",
+					tabId: "tab-2",
+					workspaceId: "ws-2",
+					agent: "consultation-11111111",
+					status: "working",
+				},
+			]),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The ticket seat and the Consultation seat fill the limit of
+				// two in one number on the mode line.
+				await awaitFrame(setup, (f) => f.includes("auto: off 2/2"), "the mode line");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
 });
 
 describe("the failure markers", () => {
@@ -579,7 +641,7 @@ describe("the failure markers", () => {
 				);
 				// The missing badge replaces the state badge although no state changed:
 				// manual mode never acts on a missing agent. The missing agent holds no
-				// slot, so the live count is zero.
+				// slot, so the shared seat count is zero.
 				expect(frame).toContain("auto: off 0/2");
 				expect(ticketRow(frame)).toContain("missing");
 
@@ -3457,29 +3519,35 @@ describe("the handoff queue", () => {
 					frameText(f).includes("❯ Abandon"),
 				);
 				await sleep(150);
-				// The abandonment closes the modal. The row does not show the
-				// open badge yet: the queued restart's claim is still in flight,
-				// and the Starting window's face (ADR 0030) wears the state
-				// badge's slot until the drain settles the claim as failed.
-				await pressReturnQuietFor("the abandonment", (f) => !f.includes("Missing:"));
-				// Release the gate: the handoff settles, and the queue drains:
-				// the restart's claim settles as failed, because the ticket is
-				// open now.
-				gate.release();
-				await awaitFrame(
-					setup,
-					(f) => f.includes("was not run"),
-					"the drained queue warning",
-					5000,
+				// The abandonment closes the modal, and the row reads open at
+				// once: the waiting restart never claimed a seat - the cap held
+				// it in the Work queue - so no Starting window covers the badge
+				// (ADR 0034).
+				await pressReturnQuietFor("the abandonment", (f) =>
+					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);
+				// Release the gate: the handoff in flight settles and gives its
+				// seat back. The abandonment re-reads the ticket's sources: let
+				// that fetch land, so the observation loop ticks and the pickup
+				// meets the item. The ticket is open now, so the restart's
+				// pickup refuses and the item keeps its place.
+				gate.release();
+				src.settle({
+					status: "success",
+					fetchedAt: new Date(Date.now() + 60_000).toISOString(),
+					tickets: pairMoved.tickets,
+				});
+				await awaitFrame(setup, (f) => f.includes("was not run"), "the pickup warning", 5000);
 				expect(frameText(setup.captureCharFrame())).toContain(
 					'queued handoff for "Watch agent turns" was not run: the ticket is now open',
 				);
 
-				// The queue held exactly one handoff: the open ticket's.
-				// No agent started for the ticket that moved on.
+				// The open ticket's handoff started once; no agent started for
+				// the ticket that moved on, and its item still waits in the
+				// Work queue with its captured restart choice.
 				const starts = inner.commands().filter((c) => c.startsWith("herdr agent start"));
 				expect(starts).toEqual(["herdr agent start persist-source-facts --kind pi --pane pane-1"]);
+				expect(state.hasWorkItem(secondIdentity)).toBe(true);
 				// The abandonment ran the Close cleanup on the stored
 				// environment.
 				expect(inner.commands()).toContain("herdr tab close tab-2");

@@ -34,18 +34,12 @@ const MIN_TERMINAL_WIDTH = 40;
 /**
  * The smallest terminal height the control plane draws its panes at.
  *
- * Every Main view Section keeps its header row at any size, and the body
- * below the full-width Ticket header hands its rows out from there: the
- * Section under the cursor reserves its minimum box of three content rows -
- * seven rows with the box's two borders and two padding rows - and the
- * sections below it reserve their minimum while they hold rows, or one
- * content row - five rows - while they hold none. A Section the body cannot
- * pay even its floor collapses rather than vanishes, so the shortest frame
- * that still draws a usable list is the one that holds the cursor's Section
- * at its minimum beside the three headers and the permanent mode line,
- * Message line, and Action bar: thirteen rows. Nineteen rows is the declared
- * minimum because it also holds a second Section at its floor box; below it
- * the panes give way to the size frame.
+ * Both Main sections start expanded, and each must shrink to its usable
+ * minimum instead of disappearing: a section costs one header row, and its
+ * box costs two border rows and two padding rows around its three minimum
+ * content rows. The two sections cost sixteen body rows, and the permanent
+ * Message line, Action bar, and mode line add three more: nineteen rows is
+ * the shortest terminal that holds both sections at their minimum.
  */
 const MIN_TERMINAL_HEIGHT = 19;
 /** The row every surface's Message line owns. */

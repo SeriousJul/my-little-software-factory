@@ -31,7 +31,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { KeyGuide } from "../utility.ts";
-import { WorkQueueDetail, workQueueDetailLines } from "../work-queue.ts";
+import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
@@ -202,21 +202,6 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * One entry per state the standard names, so the list is also the checklist a
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
-/** A Work queue item the detail examples render, the operator's choice in. */
-function sampleWorkQueueItem(
-	choice: WorkQueueItem["choice"],
-	origin: WorkQueueItem["origin"] = "open",
-): WorkQueueItem {
-	return {
-		id: "work-queue-example",
-		kind: "handoff",
-		ticketIdentity: "github:github.com:acme/factory#88",
-		origin,
-		choice,
-		createdAt: "2026-09-19T22:57:00.000Z",
-	};
-}
-
 /** The Consultation the detail and close-dialog examples render under. */
 function sampleConsultation(
 	state: "opening" | "working" | "awaiting-response" | "missing" | "failed" | "closing" | "closed",
@@ -776,93 +761,6 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 			}),
 		],
 	},
-	// The Work queue item's detail (ADR 0034, issue #88): the captured facts
-	// of the waiting start, in the states the operator reads. The item that
-	// left every setting to the agent shows the defaults' own words, and an
-	// empty queue shows its refusal line.
-	{
-		id: "work-queue-item",
-		state: "Work queue item: the captured facts of the waiting handoff",
-		render: (columns, _holds, _inputActive, _wiring) => [
-			createElement(WorkQueueDetail, {
-				key: "work-queue-item",
-				lines: workQueueDetailLines(
-					sampleWorkQueueItem({
-						agentType: "pi",
-						environment: "live-worktree",
-						taskType: "implement",
-						model: "claude-sonnet-4-5",
-						thinking: "medium",
-						contextWindow: "200000",
-					}),
-					columns.contentWidth - 4,
-				),
-				visibleRows: 7,
-				scroll: 0,
-				focused: false,
-				onFocus: () => undefined,
-				onWheel: () => undefined,
-			}),
-		],
-	},
-	{
-		id: "work-queue-item-defaults",
-		state: "Work queue item: the settings the agent defaults stand for",
-		render: (columns, _holds, _inputActive, _wiring) => [
-			createElement(WorkQueueDetail, {
-				key: "work-queue-item-defaults",
-				lines: workQueueDetailLines(
-					sampleWorkQueueItem({
-						agentType: "",
-						environment: "worktree",
-						taskType: "",
-						model: "",
-						thinking: "",
-						contextWindow: "",
-					}),
-					columns.contentWidth - 4,
-				),
-				visibleRows: 7,
-				scroll: 3,
-				focused: false,
-				onFocus: () => undefined,
-				onWheel: () => undefined,
-			}),
-		],
-	},
-	{
-		// A row the store damaged (issue #88 review): the queue keeps it in
-		// view and says what it cannot read, instead of showing a start with
-		// an invented origin or settings nobody chose. The pickup refuses it.
-		id: "work-queue-item-damaged",
-		state: "Work queue item: a stored row the reader cannot start",
-		render: (columns, _holds, _inputActive, _wiring) => [
-			createElement(WorkQueueDetail, {
-				key: "work-queue-item-damaged",
-				lines: workQueueDetailLines(sampleWorkQueueItem(null, null), columns.contentWidth - 4),
-				visibleRows: 7,
-				scroll: 0,
-				focused: false,
-				onFocus: () => undefined,
-				onWheel: () => undefined,
-			}),
-		],
-	},
-	{
-		id: "work-queue-empty",
-		state: "Work queue detail: the queue holds no item",
-		render: (columns, _holds, _inputActive, _wiring) => [
-			createElement(WorkQueueDetail, {
-				key: "work-queue-empty",
-				lines: workQueueDetailLines(undefined, columns.contentWidth - 4),
-				visibleRows: 7,
-				scroll: 0,
-				focused: false,
-				onFocus: () => undefined,
-				onWheel: () => undefined,
-			}),
-		],
-	},
 	{
 		// The close confirmation opens exactly when a close stops a live
 		// Agent. Each of the three live states names its own first line, and
@@ -996,6 +894,89 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				width: columns.contentWidth,
 			}),
 		],
+	},
+	{
+		// The Work queue's list (ADR 0034): the rows in queue order with the
+		// origin and the place, the empty state, and the bar the cursor's
+		// own keys come from.
+		id: "work-queue",
+		state: "the Work queue: the waiting starts in queue order, and the empty state",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const items: WorkQueueItem[] = [
+				{
+					position: 0,
+					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
+					origin: "open",
+					choice: {
+						agentType: "pi",
+						environment: "worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					previousMessage: "",
+					enqueuedAt: "2026-02-17T10:00:00.000Z",
+				},
+				{
+					position: 1,
+					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
+					origin: "workflow",
+					choice: {
+						agentType: "pi",
+						environment: "worktree",
+						taskType: "implement",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					},
+					previousMessage: "the workflow named the next task",
+					enqueuedAt: "2026-02-17T10:01:00.000Z",
+				},
+			];
+			const rows: WorkQueueRow[] = items.map((item, index) => ({
+				item,
+				title: index === 0 ? "Add a webhook retry policy" : "Close the stale deploy branch",
+			}));
+			return [
+				createElement(WorkQueueList, {
+					key: "queue",
+					rows,
+					selectedIndex: 0,
+					focused: true,
+					height: 6,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(WorkQueueList, {
+					key: "queue-empty",
+					rows: [],
+					selectedIndex: 0,
+					focused: false,
+					height: 3,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(ActionBar, {
+					key: "queue-bar",
+					mode: "work-queue-list",
+					context: contextFor("work-queue-list", {
+						listCanMove: true,
+						detailCanScroll: false,
+						selectedWorkQueueItem: items[0],
+						workQueueDepth: items.length,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				}),
+			];
+		},
 	},
 	{
 		id: "theme",

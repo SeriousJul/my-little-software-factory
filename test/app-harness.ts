@@ -472,6 +472,9 @@ function scrollKeyInput(key: string): string {
 	if (key === "pagedown") return "\u001b[6~";
 	if (key === "home") return "HOME";
 	if (key === "end") return "END";
+	// The mock types a word it does not know as literal text, so the Delete
+	// key goes out as its escape sequence like the page keys do.
+	if (key === "delete") return "\u001b[3~";
 	return key;
 }
 

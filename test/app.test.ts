@@ -370,10 +370,8 @@ describe("the control plane", () => {
 	test("the list pane window slides when the tickets overflow the pane", async () => {
 		await withApp(
 			async (setup) => {
-				// The pane shows five rows at this height: the Work queue is
-				// empty, so it collapses to its header and the five rows it
-				// held fall to the Ticket list. The rows carry their state and
-				// task type
+				// The pane shows four rows at this height: the first four
+				// tickets only. The rows carry their state and task type
 				// badges as their identity, so a slide is visible in the
 				// badges even where a title wraps or truncates. The
 				// handed-off ticket wears its Starting window's spinner face
@@ -397,8 +395,7 @@ describe("the control plane", () => {
 					(rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "").includes("Ticket id"),
 				);
 				expect(frame).toContain("Observe the agent");
-				expect(frame).toContain("Drop the legacy");
-				expect(frame).not.toContain("Migrate scheduler");
+				expect(frame).not.toContain("Drop the legacy");
 			},
 			WIDTH,
 			19,
@@ -520,13 +517,11 @@ describe("the control plane", () => {
 				for (const row of rows) {
 					expect(row.length).toBe(75);
 				} // Row 0 carries the section header and the detail's top border, and
-				// the Ticket box runs from row 2 to row 11, and the
-				// Consultation and Work queue headers and floor boxes take
-				// the rows below it. The split puts the
+				// the Ticket box runs from row 1 to row 14. The split puts the
 				// list box on columns 0-36 and the detail box on 37-74. At an
 				// odd width a "50%" list would take 38 columns, and the shared
 				// geometry would then lay text one cell off the rendered box.
-				for (const row of rows.slice(2, 10)) {
+				for (const row of rows.slice(2, 14)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -930,11 +925,10 @@ describe("the control plane", () => {
 			async (setup) => {
 				const selectedState = (frame: string) =>
 					rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "";
-				// One page is five visible rows at this height: the empty
-				// Consultation and Work queue sections hold their floor boxes,
-				// and the page lands on the sixth ticket.
+				// One page is four visible rows at this height: the page lands
+				// on the fifth ticket.
 				await press(setup, "pagedown", "the list to move one visible page", (frame) =>
-					selectedState(frame).includes("Keep ti"),
+					selectedState(frame).includes("Observe th"),
 				);
 				await press(setup, "end", "the list to select its last ticket", (frame) =>
 					selectedState(frame).includes("Ticket id i"),

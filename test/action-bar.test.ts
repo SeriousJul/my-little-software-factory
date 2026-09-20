@@ -1057,21 +1057,16 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// The cursor walks the expanded sections' rows, so the list
 				// only stops when every visible row is the cursor's own.
-				// Cross to the Consultation list and collapse its section, then
-				// cross into the Work queue and collapse it too, and come back
-				// to the only Ticket: nothing is left to move into.
+				// Cross to the Consultation list, collapse its section, and
+				// come back to the only Ticket: nothing is left to move into.
 				await press(setup, "j", "the Consultation list", (f) => f.includes("┌─❯ Consultations"));
 				await press(setup, "x", "the Consultation section to collapse", (f) =>
 					f.includes("▸ Consultations"),
 				);
-				await press(setup, "j", "the Work queue list", (f) => f.includes("┌─❯ Work queue"));
-				await press(setup, "x", "the Work queue section to collapse", (f) =>
-					f.includes("▸ Work queue"),
-				);
 				await press(setup, "k", "the Ticket list", (f) => f.includes("┌─❯ Tickets"));
 				const frame = await settle(setup);
 				const barRow = rowsOf(frame).length - 1;
-				// One ticket, both other sections collapsed: Move cannot move.
+				// One ticket, other section collapsed: Move cannot move.
 				expect(spanColorAt(setup, barRow, "↑↓/jk Move")).toEqual(rgb(roleColor("subtext0")));
 				await press(setup, "j", "the move refusal", (f) =>
 					messageRowOf(f).includes("the Ticket list has nowhere to move"),

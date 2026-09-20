@@ -29,16 +29,6 @@ const choice = {
 };
 
 /**
- * Enqueue and require the item: a refused add (ADR 0034, one item per
- * waiting ticket) is the test's own failure, not a fact it probes.
- */
-function enqueue(state: FactoryState, ticketIdentity: string, chosen = choice) {
-	const item = state.enqueueWorkQueueItem({ ticketIdentity, origin: "open", choice: chosen });
-	if (item === null) throw new Error(`the store refused the enqueue of ${ticketIdentity}`);
-	return item;
-}
-
-/**
  * The task types the awaiting rule reasons about:
  * - review auto-closes and has no route: it closes at any time.
  * - route auto-closes with one and only one edge: it routes while there is
@@ -129,12 +119,10 @@ interface Rig {
 	intents: HandoffIntent[];
 	/** The attempt ids of the claims the dispatching rig made, in dispatch order. */
 	claims: string[];
-	/**
-	 * Report the start of the oldest dispatch still waiting for one, the way
-	 * the app's handoff settle path does. The loop holds a route's decision
-	 * back to this report.
-	 */
+	/** Report the start of the oldest dispatch still waiting for one. */
 	reportStart: (started?: DispatchResult) => void;
+	/** The loop's own calls and dispatches in order, when the rig records them. */
+	order: string[] | undefined;
 	statuses: Array<{ kind: "info" | "warning" | "error"; text: string }>;
 	cleanups: Array<{ paneId: string | null; tabId: string | null; workspaceId: string | null }>;
 	coordinator: ObservationCoordinator;
@@ -164,8 +152,18 @@ function rig(options: {
 	 * loop-level tests drive the state by hand.
 	 */
 	dispatchClaims?: boolean;
-	/** The result the fake dispatch returns for an intent, ok by default. */
-	dispatchOutcome?: (intent: HandoffIntent) => DispatchResult;
+	/**
+	 * The Work queue's pickup (ADR 0034): the number of waiting starts this
+	 * cycle's free seats take. The coordinator calls it before auto-dispatch
+	 * and holds each picked claim's seat against the later dispatches of the
+	 * same cycle. Absent by default, the way an app without a queue is.
+	 */
+	pickupWorkQueue?: () => Promise<number>;
+	/**
+	 * The loop's own calls and dispatches in order, so a test can see where
+	 * the queue step sits in the cycle.
+	 */
+	order?: string[];
 	startupGraceMs?: number;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
@@ -177,6 +175,8 @@ function rig(options: {
 	state.applyFetch(source, success([fetched()]));
 	const intents: HandoffIntent[] = [];
 	const claims: string[] = [];
+	const order = options.order;
+	const pickup = options.pickupWorkQueue;
 	// The start reports the dispatches still owe the loop. The app answers a
 	// claim first and reports the start when its external work settles, so
 	// the rig holds each report back until a test fires it.
@@ -192,14 +192,22 @@ function rig(options: {
 		config: () => ({ ...config, ...options.config }),
 		onCycleEnd: options.onCycleEnd,
 		dispatch: async (intent) => {
+			order?.push(`dispatch:${intent.origin}`);
 			intents.push(intent);
 			if (options.dispatchClaims) {
 				const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 				if (claim.ok) claims.push(claim.claim.attemptId);
 			}
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-			return options.dispatchOutcome?.(intent) ?? { ok: true };
+			return { ok: true, queued: false };
 		},
+		pickupWorkQueue:
+			pickup === undefined
+				? undefined
+				: async () => {
+						order?.push("pickup");
+						return await pickup();
+					},
 		cleanup: async (handoff) => {
 			cleanups.push({
 				paneId: handoff.paneId,
@@ -221,11 +229,12 @@ function rig(options: {
 		state,
 		intents,
 		claims,
-		reportStart: (started: DispatchResult = { ok: true }) => {
+		reportStart: (started: DispatchResult = { ok: true, queued: false }) => {
 			const next = pending.shift();
 			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
 			next(started);
 		},
+		order,
 		statuses,
 		cleanups,
 		coordinator,
@@ -958,7 +967,7 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: mock().mockResolvedValue({ ok: true }),
+			dispatch: mock().mockResolvedValue({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,
@@ -994,6 +1003,7 @@ describe("missing agents", () => {
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "restart",
+				automatic: true,
 				ticketIdentity: "github:github.com:I_5",
 				previousMessage: "",
 				choice: expect.objectContaining({ taskType: "implement" }),
@@ -1157,6 +1167,29 @@ describe("missing agents", () => {
 		state.close();
 	});
 
+	test("a missing restart skips a ticket the Work queue already waits for", async () => {
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		const identity = "github:github.com:I_5";
+		handOut(state, identity);
+		// The operator's restart waits in the Work queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: identity,
+				origin: "restart",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		// The automatic restart holds: the missing agent holds no slot, so the
+		// seat is the operator's, and the pickup starts the ticket with the
+		// operator's captured choice, not the automatic one.
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
 	test("a missing agent past the startup grace does not hold a parallel slot", async () => {
 		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
@@ -1269,6 +1302,26 @@ describe("the awaiting rule", () => {
 		expect(
 			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to implement"),
 		).toBe(true);
+		state.close();
+	});
+
+	test("an automatic route skips a ticket the Work queue already waits for", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "route");
+		// The operator's route waits in the Work queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "workflow",
+				choice,
+				previousMessage: "settled the turn",
+			}),
+		).toEqual({ ok: true });
+		await coordinator.tick();
+		// The automatic route holds: the seat is the operator's, and the
+		// pickup starts the ticket with the operator's captured choice, not
+		// the automatic one. It mirrors the skip the automatic restart keeps.
+		expect(intents).toHaveLength(0);
 		state.close();
 	});
 
@@ -1872,323 +1925,73 @@ describe("the open dispatch", () => {
 		expect(intents).toHaveLength(0);
 		state.close();
 	});
-});
 
-describe("the Work queue pickup (ADR 0034, issue #88)", () => {
+	test("the Work queue takes the free seats before the open dispatch fills the rest", async () => {
+		// The cycle's one order and one count (ADR 0034): the pickup runs
+		// before the open dispatch, and each picked start holds its seat
+		// against the later dispatches of the same cycle, so one cycle never
+		// starts more agents than the cap.
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => 1,
+			order,
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		await coordinator.tick();
+		// The queue's one start takes a seat, and the open dispatch fills only
+		// the seat that is left: the queue ran first, and the picked claim held
+		// its seat across the cycle.
+		expect(order).toEqual(["pickup", "dispatch:open"]);
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(expect.objectContaining({ origin: "open" }));
+		state.close();
+	});
+
+	test("a queue that takes every free seat holds the open dispatch entirely", async () => {
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => config.maxParallelAgents,
+			order,
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		await coordinator.tick();
+		// Both seats go to the queue: the cycle's measurement leaves no room,
+		// and the open dispatch starts nothing past the cap.
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
+		state.close();
+	});
+
 	/**
-	 * Hold both parallel seats with in-progress handoffs that herdr has not
-	 * listed yet: inside the startup grace each one holds its seat.
+	 * ADR 0034 says a pickup is a manual start, so it runs "in auto or manual
+	 * mode alike", and the cycle places the step outside the `autoOn` branch.
+	 * This walks that placement: with Auto-handoff off the queue still takes the
+	 * free seats, and the automatic dispatches stay held (issue #92).
 	 */
-	function fillSeats(state: FactoryState): void {
-		for (const identity of ["github:github.com:I_5", "github:github.com:I_6"]) {
-			const claim = state.claimHandoff(identity, choice, "open");
-			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
-				paneId: `pane-${identity}`,
-				tabId: "tab-1",
-				workspaceId: "ws-1",
-			});
-		}
-	}
-
-	test("a full cap holds the pickup, and the item waits in the queue", async () => {
-		const { state, intents, statuses, coordinator } = rig({ autoOn: true, agents: [] });
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		fillSeats(state);
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		await coordinator.tick();
-		// Both seats are held: the queued item starts nothing, and the open
-		// dispatch finds no room either.
-		expect(intents).toHaveLength(0);
-		expect(state.workQueue()).toHaveLength(1);
-		expect(statuses).toEqual([]);
-		state.close();
-	});
-
-	test("free seats start the items in their shared order", async () => {
-		const { state, intents, statuses, coordinator, reportStart } = rig({
-			autoOn: true,
-			agents: [],
-		});
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		const first = enqueue(state, "github:github.com:I_7");
-		const second = enqueue(state, "github:github.com:I_6", { ...choice, taskType: "review" });
-		await coordinator.tick();
-		// Both seats stand free: both items start, in the shared order, each
-		// with the captured origin and choice, before any automatic start.
-		expect(intents.map((intent) => intent.ticketIdentity)).toEqual([
-			"github:github.com:I_7",
-			"github:github.com:I_6",
-		]);
-		expect(intents[0]).toEqual(expect.objectContaining({ origin: "open", choice }));
-		expect(intents[1]).toEqual(
-			expect.objectContaining({ choice: { ...choice, taskType: "review" } }),
-		);
-		// The items wait in the queue until each start reports back.
-		expect(state.workQueue().map((item) => item.id)).toEqual([first.id, second.id]);
-		reportStart({ ok: true });
-		reportStart({ ok: true });
-		expect(state.workQueue()).toHaveLength(0);
-		expect(statuses.filter((status) => status.text.includes("handing off ticket"))).toHaveLength(2);
-		state.close();
-	});
-
-	test("a start that fails keeps the item in the queue", async () => {
-		// One seat: the pickup's start holds it, so the automatic open
-		// dispatch finds no room and the intents stay the queue's own.
-		const { state, intents, coordinator, reportStart } = rig({
-			autoOn: true,
-			agents: [],
-			config: { maxParallelAgents: 1 },
-		});
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		const item = enqueue(state, "github:github.com:I_7");
-		await coordinator.tick();
-		expect(intents).toHaveLength(1);
-		reportStart({ ok: false, reason: "the pane start failed" });
-		// The ticket keeps its state, the item stays, and the next cycle with
-		// a free seat tries it again.
-		expect(state.workQueue().map((entry) => entry.id)).toEqual([item.id]);
-		state.close();
-	});
-
-	test("a refused claim keeps the item and says why", async () => {
-		const { state, intents, statuses, coordinator } = rig({
-			autoOn: false,
-			agents: [],
-			dispatchOutcome: () => ({ ok: false, reason: "the Ticket is no longer open" }),
-		});
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		const item = enqueue(state, "github:github.com:I_7");
-		await coordinator.tick();
-		expect(intents).toHaveLength(1);
-		// The refusal leaves the item in the queue and its warning on the
-		// Message line: the ticket keeps its state, the pickup adds no seat.
-		expect(state.workQueue().map((entry) => entry.id)).toEqual([item.id]);
-		expect(statuses).toEqual([
-			{
-				kind: "warning",
-				text: "Work queue pickup of ticket github:github.com:I_7 failed: the Ticket is no longer open",
-			},
-		]);
-		state.close();
-	});
-
-	test("the pickup takes the last seat before the open dispatch", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		// One seat held, one free.
-		const claim = state.claimHandoff("github:github.com:I_5", choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-held",
-			tabId: "tab-1",
-			workspaceId: "ws-1",
-		});
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		await coordinator.tick();
-		// The queued item - the operator's own ask - takes the free seat, and
-		// the automatic open dispatch finds none left this cycle.
-		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_7"]);
-		state.close();
-	});
-
-	test("the pickup runs in manual mode, where the open dispatch does not", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		await coordinator.tick();
-		// Manual mode holds the automatic starts, never the queue: the freed
-		// seat goes to the queued item.
-		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_7"]);
-		state.close();
-	});
-
-	test("an unlimited cap drains the queue instead of stranding it", async () => {
-		// The cap the operator lifted to 0 after the items queued: 0 holds no
-		// seat at all, so every waiting start has a free seat, and the queue
-		// empties in its order rather than freezing at its old depth.
+	test("the queue picks up with Auto-handoff off, and the automatic dispatches stay held", async () => {
+		const order: string[] = [];
 		const { state, intents, coordinator } = rig({
 			autoOn: false,
 			agents: [],
-			config: { maxParallelAgents: 0 },
+			pickupWorkQueue: async () => 1,
+			order,
 		});
+		// Two open tickets, and a settled awaiting ticket whose type would route
+		// in auto mode: with Auto-handoff off only the queue's pickup may start.
 		state.applyFetch(
 			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			success([fetched("github:github.com:I_6"), fetched(), fetched("github:github.com:I_7", [])]),
 		);
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_6",
-			origin: "open",
-			choice: { ...choice, taskType: "review" },
-		});
+		settleFor(state, "github:github.com:I_7", "implement");
 		await coordinator.tick();
-		expect(intents.map((intent) => intent.ticketIdentity)).toEqual([
-			"github:github.com:I_7",
-			"github:github.com:I_6",
-		]);
-		state.close();
-	});
-
-	test("the Dispatch pause does not hold the queue", async () => {
-		// A held failed trace pauses the automatic starts (ADR 0016). The
-		// queue carries the operator's own ask, so the pause never sees it.
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		settleForCause(state, "github:github.com:I_6", "route", "failed");
-		expect(state.dispatchPauseActive()).toBe(true);
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		await coordinator.tick();
-		// The pause still holds: the only start this cycle is the queue's own.
-		expect(state.dispatchPauseActive()).toBe(true);
-		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_7"]);
-		state.close();
-	});
-
-	test("the Same-type hold does not hold the queue", async () => {
-		// The ticket's newest closed cycle finished a turn of the type it now
-		// suggests, and the sources re-read it since: the automatic open
-		// dispatch holds that ticket (ADR 0026), and the queue does not.
-		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
-		state.applyFetch(source, success([fetched()]));
-		const attempt = settleForCause(state, "github:github.com:I_5", "implement", "completed");
-		state.applyCompletionDecision({
-			ticketIdentity: "github:github.com:I_5",
-			handoffId: attempt,
-			decision: "closed",
-			decidedAt: "2026-08-31T11:30:00Z",
-		});
-		state.applyFetch(source, {
-			status: "success",
-			fetchedAt: "2026-08-31T11:31:00Z",
-			tickets: [fetched()],
-		});
-		expect(state.sourceReverifiedSinceCycleEnd("github:github.com:I_5")).toBe(true);
-		expect(state.sameTypeHoldActive("github:github.com:I_5", "implement")).toBe(true);
-		// The gate stands: with an empty queue the automatic dispatch starts
-		// nothing at all.
-		await coordinator.tick();
-		expect(intents).toHaveLength(0);
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_5",
-			origin: "open",
-			choice,
-		});
-		await coordinator.tick();
-		// The queued ask starts on the gate the automatic origin must wait for.
-		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_5"]);
-		state.close();
-	});
-
-	test("a standing refusal states itself once", async () => {
-		// A ticket that left every source can never start: the item stays, and
-		// the warning is a standing fact the loop says once, the way the
-		// unreachable-herdr and Consultation-recovery notices do.
-		let refusals = 0;
-		const { state, intents, statuses, coordinator } = rig({
-			autoOn: false,
-			agents: [],
-			dispatchOutcome: () => {
-				refusals += 1;
-				return {
-					ok: false,
-					reason:
-						refusals <= 3 ? "the Ticket is not actionable" : "the Ticket's source is unhealthy",
-				};
-			},
-		});
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		const item = enqueue(state, "github:github.com:I_7");
-		await coordinator.tick();
-		await coordinator.tick();
-		await coordinator.tick();
-		// Three cycles tried the item, and one line stands for the refusal.
-		expect(intents).toHaveLength(3);
-		expect(state.workQueue().map((entry) => entry.id)).toEqual([item.id]);
-		expect(statuses).toEqual([
-			{
-				kind: "warning",
-				text: "Work queue pickup of ticket github:github.com:I_7 failed: the Ticket is not actionable",
-			},
-		]);
-		// A changed reason is a new fact, and states itself again.
-		await coordinator.tick();
-		expect(statuses.map((status) => status.text)).toEqual([
-			"Work queue pickup of ticket github:github.com:I_7 failed: the Ticket is not actionable",
-			"Work queue pickup of ticket github:github.com:I_7 failed: the Ticket's source is unhealthy",
-		]);
-		state.close();
-	});
-
-	test("a removed item clears its refusal", async () => {
-		const { state, intents, statuses, coordinator } = rig({
-			autoOn: false,
-			agents: [],
-			dispatchOutcome: () => ({ ok: false, reason: "the Ticket is not actionable" }),
-		});
-		state.applyFetch(
-			source,
-			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
-		);
-		const item = enqueue(state, "github:github.com:I_7");
-		await coordinator.tick();
-		expect(statuses).toHaveLength(1);
-		// The operator cancels the item, then asks for the same start again.
-		// The new item is a new ask, and its refusal states itself again.
-		state.removeWorkQueueItem(item.id);
-		state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		await coordinator.tick();
-		expect(intents).toHaveLength(2);
-		expect(statuses).toHaveLength(2);
+		// The pickup ran, and nothing else did: the open dispatch and the
+		// awaiting route both sit behind the `autoOn` gate.
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
 		state.close();
 	});
 });
@@ -2750,7 +2553,7 @@ describe("the injectable clock", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
+			dispatch: async () => ({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => false,
@@ -3507,7 +3310,7 @@ describe("an agent that outlives its work cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
+			dispatch: async () => ({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:05:00Z"),
 			mode: () => false,
