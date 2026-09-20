@@ -18,19 +18,28 @@ stays closed. Its border reads `Decision: <ticket title>`, and the
 first row under the border names the context: repository, task type,
 agent, completion time.
 
-The body is the turn log of the settled turn, in order. The agent's text
+The body is the turn log of the settled turn, in its own pane titled
+`Turn log`. The log holds the agent's messages in order. The agent's text
 blocks carry light markdown dressing: headings render bright without their
 hashes, bold renders bright, code renders dim, lists keep their markers
 and indent per level, links keep their label. Each tool call is one dim
 note, `▸ name: target`; a failed call wears the warning color. The agent's
 thinking text is not shown. The log comes from the agent's session record
 (ADR 0008); when no session is known, the terminal capture stands in. The
-modal opens at the bottom, where the agent's conclusion is, and a
+pane opens at the bottom, where the agent's conclusion is, and a
 proportional scrollbar shows the position when the log is longer than the
-window.
+window. A log the trace does not record shows its reason as one dim row in
+the pane, and the pane keeps its border and title.
+
+Below the pane, the choice rows stand in their region, pinned to the box's
+floor. The region is bounded: it shows as many rows as the box has room
+for, and when it holds more rows than that it scrolls, with the range of
+the rows it shows riding the Action bar behind the selection's hint. A held
+turn stands one warning row between the pane and its rows: the cause the
+turn ended on, and the agent's text for it.
 
 The modal offers the choices the state allows. `Up` and `Down` move between
-the choice rows; `j` and `k` scroll the turn log one row, with the page and
+the choice rows; `j` and `k` scroll the body one row, with the page and
 jump keys as aliases. `Enter` chooses the selected row, `e` edits the
 selected Handoff row's settings before it starts, and `Esc` closes the
 modal: nothing runs, and the ticket stays awaiting. The shared Action bar at

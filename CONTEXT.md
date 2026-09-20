@@ -79,7 +79,7 @@ _Avoid_: action bar, action region, button row, footer
 
 **Live view**:
 The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
-When the turn settles it becomes the Decision modal; when the agent goes missing it becomes the Missing modal.
+When the turn settles for the operator, the same screen carries the decision: the border re-titles from `Live:` to `Decision:` in place, the Body pane holds the Turn log, and the Decision region stands at the box's floor. When the agent goes missing it carries the Missing modal. A settled turn the factory decides for itself keeps the streaming body under the `Live:` border.
 _Avoid_: watch, live log, agent stream
 
 **Missing modal**:

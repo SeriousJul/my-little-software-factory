@@ -3538,7 +3538,8 @@ export function App({
 		// The Live view streams the agent's terminal while the ticket is in
 		// flight. When the turn settles and the factory waits for the
 		// operator, the same box carries the decision sub-mode: the turn
-		// log, the decision's rows, and their keys.
+		// log in the pane, the decision's rows in the region, and their keys,
+		// the border re-titled by the shared chrome.
 		panel !== null &&
 			panel.kind === "live" &&
 			panelTicket !== undefined &&
@@ -3554,20 +3555,30 @@ export function App({
 						: liveStream === null
 							? { kind: "stream" as const, lines: [], note: null }
 							: { kind: "stream" as const, lines: liveStream.lines, note: liveStream.note },
-				actions:
-					liveDecision !== undefined
-						? liveDecision.actions
-						: [
-								{
-									key: "goto",
-									label: "Goto",
-									detail: "focus the agent's pane; the handoff stays open",
-								},
-							],
-				decideable: liveDecision !== undefined,
+				cause: liveDecision?.cause ?? null,
+				detail: liveDecision?.detail ?? "",
+				actions: liveDecision?.actions ?? [],
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
+				// The streaming sub-mode's Goto: the decision's own Goto row's
+				// behavior, so the two paths cannot drift.
+				onGoto: () => runDecisionAction(panelTicket, "goto"),
 				onCancel: () => setPanel(null),
+				context: {
+					...ticketContext,
+					// The view's own ticket is the Goto's pane fact, whatever
+					// the list below points at.
+					selectedTicket: panelTicket,
+					ticketPaneAlive:
+						panelTicket.handoff?.paneId !== null &&
+						agents?.some((agent) => agent.paneId === panelTicket.handoff?.paneId) === true,
+				},
+				inputActive: utility === null,
+				onHelp: () => openGuide(liveMode === "decision" ? "decision-modal" : "live-view"),
+				onMessage: () => openMessage(liveMode === "decision" ? "decision-modal" : "live-view"),
+				onUnavailable: setWarningMessage,
+				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&
 			panelTicket !== undefined &&

@@ -1499,21 +1499,22 @@ export function Gallery({
 			frame,
 			width: narrow ? 28 : width,
 			title: `Shared controls - ${shown.state}`,
-			borderColor: ink.indicator.fg ?? paint("accent"),
-			minContentRows: 3,
+			body: {
+				above: [
+					createElement(
+						"text",
+						{ key: "state", fg: ink.detail.fg ?? undefined },
+						truncateToWidth(
+							`state: ${shown.state}  (Tab shows the next example; ${ids.length} in all)`,
+							frame.contentWidth,
+						),
+					),
+				],
+				below: shown.render(columns, FOCUSED_CONTROL[shown.id] ?? shown.id, inputActive, wiring),
+				minRows: 3,
+			},
 			message,
 			bar: { mode: "form-field", context: barContext },
-			children: [
-				createElement(
-					"text",
-					{ key: "state", fg: ink.detail.fg ?? undefined },
-					truncateToWidth(
-						`state: ${shown.state}  (Tab shows the next example; ${ids.length} in all)`,
-						frame.contentWidth,
-					),
-				),
-				...shown.render(columns, FOCUSED_CONTROL[shown.id] ?? shown.id, inputActive, wiring),
-			],
 		}),
 		guideOpen &&
 			createElement(KeyGuide, {

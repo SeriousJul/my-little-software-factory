@@ -20,8 +20,9 @@ import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
-import { type ActionRow, ModalSurface, modalFrame, useActionSelection } from "./modal-chrome.ts";
+import { type ActionRow, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
+import { useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -93,7 +94,9 @@ export function ActionPanel({
 		: Math.min(wrapped.length, bodyRows);
 	const maxBodyScroll = Math.max(0, wrapped.length - shownBodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
-	const selection = useActionSelection(actions);
+	// The panel's rows are the region's: the shared selection, its wrap, and
+	// its window, with every row shown, the way the decision's region does.
+	const selection = useDecisionRegion(actions, actions.length);
 	const actionContext = contextFor("action-panel", {
 		...(context ?? {
 			listCanMove: false,
@@ -104,6 +107,7 @@ export function ActionPanel({
 			messageTruncated: false,
 			consultationTypesConfigured: false,
 		}),
+		actionRowCount: actions.length,
 	});
 	useControlDispatch({
 		mode: "action-panel",
@@ -133,28 +137,30 @@ export function ActionPanel({
 		frame,
 		width: terminalWidth,
 		title,
-		borderColor: paint("accent"),
 		// Every action row plus one line of body: without them the panel states a
 		// problem with no way to answer it.
-		minContentRows: actions.length + 1,
+		body: {
+			above: [],
+			below: [
+				...bodyShown.map((line, index) =>
+					createElement(
+						"text",
+						{ key: `body-${index}`, fg: paint("subtext0") },
+						truncateToWidth(line, frame.contentWidth),
+					),
+				),
+				...selection.window.map((row) =>
+					createElement(ActionItem, {
+						key: row.key,
+						row,
+						focused: actions[selection.at] === row,
+						width: frame.contentWidth,
+					}),
+				),
+			],
+			minRows: actions.length + 1,
+		},
 		message,
 		bar: { mode: "action-panel", context: actionContext },
-		children: [
-			...bodyShown.map((line, index) =>
-				createElement(
-					"text",
-					{ key: `body-${index}`, fg: paint("subtext0") },
-					truncateToWidth(line, frame.contentWidth),
-				),
-			),
-			...actions.map((row, index) =>
-				createElement(ActionItem, {
-					key: row.key,
-					row,
-					focused: index === selection.at,
-					width: frame.contentWidth,
-				}),
-			),
-		],
 	});
 }
