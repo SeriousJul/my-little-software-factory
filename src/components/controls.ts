@@ -549,7 +549,16 @@ const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
 /** The Work queue's own modes (ADR 0034, issue #88): its list and its item detail. */
 const workQueueModes = ["work-list", "work-detail"] as const;
-const baseModes = [...ticketBaseModes, ...consultationBaseModes, ...workQueueModes] as const;
+/**
+ * The modes one control of the Consultation section answers: the two base
+ * sections' panes, never the Work queue's. On the queue's rows `d` is the
+ * item's own Move down, and a Consultation control declared in the queue's
+ * modes could run against a Consultation the cursor cannot even see (issue
+ * #88 review); in the Ticket section the key still resolves and refuses, in
+ * the section's own words.
+ */
+const consultationSectionModes = [...ticketBaseModes, ...consultationBaseModes] as const;
+const baseModes = [...consultationSectionModes, ...workQueueModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
 /**
  * The modes one shared form surface runs, one per slot kind.
@@ -955,7 +964,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
-		modes: [...baseModes],
+		modes: [...consultationSectionModes],
 		availability: consultationDelete,
 		// A Consultation-section control: in the Ticket section the key states
 		// the section refusal, and the Ticket guide and bar omit the control.

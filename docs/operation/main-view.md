@@ -24,8 +24,12 @@ The Ticket header always shows the pipeline counts - open, running, and
 awaiting - with the held count appended only when it is non-zero. The
 Consultation header carries its attention facts (awaiting response,
 recovery). The Work queue header carries the queue's depth, the items
-waiting for a free Parallel limit seat. The counts are computed from the
-in-memory projection on each render; none queries the state.
+waiting for a free Parallel limit seat. A manual handoff that cannot take a
+seat enters that queue instead of starting, and the queue holds at most one
+item per ticket: a handoff of a ticket that already waits is refused, the
+first item keeps its place, and the Message line says so. The counts are
+computed from the in-memory projection on each render; none queries the
+state.
 
 The control plane keeps a contextual Action bar in the last row of the
 terminal. It shows the controls the current interaction mode can run, dims

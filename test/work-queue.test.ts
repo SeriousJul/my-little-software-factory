@@ -12,8 +12,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import { openFactoryState, type WorkQueueItem, workQueueStartOf } from "../src/state.ts";
+import type { HandoffChoice } from "../src/handoff.ts";
+import {
+	type FactoryState,
+	openFactoryState,
+	type WorkQueueItem,
+	workQueueStartOf,
+} from "../src/state.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -43,19 +48,25 @@ const choiceB = {
 	contextWindow: "200000",
 };
 
+/**
+ * Enqueue where the answer must be an item: a refusal is the test's own
+ * failure, and one distinct ticket per item keeps every ask startable.
+ */
+function enqueue(
+	state: FactoryState,
+	ticketIdentity: string,
+	choice: HandoffChoice,
+): WorkQueueItem {
+	const item = state.enqueueWorkQueueItem({ ticketIdentity, origin: "open", choice });
+	if (item === null) throw new Error(`the store refused the enqueue of ${ticketIdentity}`);
+	return item;
+}
+
 describe("the Work queue's durable order (issue #88)", () => {
 	test("enqueue lands at the end and carries the captured ask", () => {
 		const state = openFactoryState(statePath());
-		const first = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_6",
-			origin: "open",
-			choice: choiceA,
-		});
-		const second = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice: choiceB,
-		});
+		const first = enqueue(state, "github:github.com:I_6", choiceA);
+		const second = enqueue(state, "github:github.com:I_7", choiceB);
 		const queue = state.workQueue();
 		expect(queue).toHaveLength(2);
 		expect(queue.map((item) => item.id)).toEqual([first.id, second.id]);
@@ -91,15 +102,41 @@ describe("the Work queue's durable order (issue #88)", () => {
 		state.close();
 	});
 
-	test("move swaps with the neighbour, and the edges say no", () => {
+	test("one item per ticket: the second add of a waiting ticket is refused", () => {
+		// ADR 0034: a waiting ticket stands in the queue once. A second item
+		// for it could never start - its claim is refused the moment the first
+		// pickup moves the ticket - so the store refuses the add and the first
+		// item keeps its place.
 		const state = openFactoryState(statePath());
-		const [a, b, c] = [choiceA, choiceB, choiceA].map((choice) =>
+		const first = enqueue(state, "github:github.com:I_6", choiceA);
+		expect(
 			state.enqueueWorkQueueItem({
 				ticketIdentity: "github:github.com:I_6",
-				origin: "open",
-				choice,
+				origin: "restart",
+				choice: choiceB,
 			}),
+		).toBeNull();
+		expect(state.workQueue().map((item) => item.id)).toEqual([first.id]);
+		expect(state.workQueue()[0]).toEqual(
+			expect.objectContaining({ origin: "open", choice: choiceA }),
 		);
+		// The refusal leaves nothing else standing: after the first ask is
+		// removed, the same ticket can ask again.
+		expect(state.removeWorkQueueItem(first.id)).toBe(true);
+		const again = enqueue(state, "github:github.com:I_6", choiceB);
+		expect(state.workQueue().map((item) => item.id)).toEqual([again.id]);
+		state.close();
+	});
+
+	test("move swaps with the neighbour, and the edges say no", () => {
+		const state = openFactoryState(statePath());
+		const [a, b, c] = (
+			[
+				["github:github.com:I_6", choiceA],
+				["github:github.com:I_7", choiceB],
+				["github:github.com:I_8", choiceA],
+			] as const
+		).map(([identity, choice]) => enqueue(state, identity, choice));
 		// a, b, c.
 		expect(state.workQueue().map((item) => item.id)).toEqual([a.id, b.id, c.id]);
 		expect(state.moveWorkQueueItem(b.id, -1)).toBe(true);
@@ -117,16 +154,8 @@ describe("the Work queue's durable order (issue #88)", () => {
 
 	test("remove deletes the item, and removing a gone item says so", () => {
 		const state = openFactoryState(statePath());
-		const a = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_6",
-			origin: "open",
-			choice: choiceA,
-		});
-		const b = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice: choiceB,
-		});
+		const a = enqueue(state, "github:github.com:I_6", choiceA);
+		const b = enqueue(state, "github:github.com:I_7", choiceB);
 		expect(state.removeWorkQueueItem(a.id)).toBe(true);
 		expect(state.workQueue().map((item) => item.id)).toEqual([b.id]);
 		// Removing an item that is not there says so: the store's answer is
@@ -139,21 +168,9 @@ describe("the Work queue's durable order (issue #88)", () => {
 	test("the order and the content stand across a restart", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
-		const a = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_6",
-			origin: "open",
-			choice: choiceA,
-		});
-		const b = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice: choiceB,
-		});
-		const c = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_8",
-			origin: "open",
-			choice: choiceA,
-		});
+		const a = enqueue(state, "github:github.com:I_6", choiceA);
+		const b = enqueue(state, "github:github.com:I_7", choiceB);
+		const c = enqueue(state, "github:github.com:I_8", choiceA);
 		expect(state.moveWorkQueueItem(c.id, -1)).toBe(true);
 		expect(state.removeWorkQueueItem(b.id)).toBe(true);
 		state.close();
@@ -182,11 +199,7 @@ describe("the Work queue's durable order (issue #88)", () => {
 	test("a damaged stored row stays damaged, visible, and unstartable", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
-		const item = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_6",
-			origin: "open",
-			choice: choiceB,
-		});
+		const item = enqueue(state, "github:github.com:I_6", choiceB);
 		state.close();
 
 		// Damage the stored cells outside the store, the way a corrupt row
@@ -221,6 +234,7 @@ describe("the Work queue's durable order (issue #88)", () => {
 			origin: "restart",
 			choice: choiceA,
 		});
+		if (item === null) throw new Error("the first enqueue of a fresh ticket cannot be refused");
 		state.close();
 		const db = new Database(path);
 		db.exec(`UPDATE work_queue SET ticket_identity = NULL WHERE id = '${item.id}'`);

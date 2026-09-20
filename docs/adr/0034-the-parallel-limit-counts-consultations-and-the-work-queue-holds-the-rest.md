@@ -96,8 +96,14 @@ The considered alternatives:
   holds its seat, so its recover is never capped and can never push the
   count past the cap.
 - The mode line counts both kinds against the one cap, and the left pane
-  gains the queue as a third Section: always visible, its header carrying
-  the depth, its rows selectable into the detail pane.
+  gains the queue as a third Section: its header carries the depth, its
+  rows are selectable into the detail pane, and the Section stays hidden
+  while it is empty and collapsed, so an idle factory keeps its
+  two-Section frame at the smallest terminal. That hidden rule is issue
+  #88's amendment in place of the earlier `always visible` wording, and
+  PR #102 ships it with the frame walk that proves it; issue #88's own
+  queue landed the Section with its header present at every depth, and
+  criterion 2 of that ticket stands met in those two parts.
 - The schema grows the durable queue - the Handoff intents and the shared
   order - and the Consultation states gain `queued` and `unscheduled`.
 - With the cap at 0 (unlimited) the queue never engages and every start

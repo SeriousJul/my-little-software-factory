@@ -29,6 +29,16 @@ const choice = {
 };
 
 /**
+ * Enqueue and require the item: a refused add (ADR 0034, one item per
+ * waiting ticket) is the test's own failure, not a fact it probes.
+ */
+function enqueue(state: FactoryState, ticketIdentity: string, chosen = choice) {
+	const item = state.enqueueWorkQueueItem({ ticketIdentity, origin: "open", choice: chosen });
+	if (item === null) throw new Error(`the store refused the enqueue of ${ticketIdentity}`);
+	return item;
+}
+
+/**
  * The task types the awaiting rule reasons about:
  * - review auto-closes and has no route: it closes at any time.
  * - route auto-closes with one and only one edge: it routes while there is
@@ -1911,16 +1921,8 @@ describe("the Work queue pickup (ADR 0034, issue #88)", () => {
 			source,
 			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
 		);
-		const first = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
-		const second = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_6",
-			origin: "open",
-			choice: { ...choice, taskType: "review" },
-		});
+		const first = enqueue(state, "github:github.com:I_7");
+		const second = enqueue(state, "github:github.com:I_6", { ...choice, taskType: "review" });
 		await coordinator.tick();
 		// Both seats stand free: both items start, in the shared order, each
 		// with the captured origin and choice, before any automatic start.
@@ -1953,11 +1955,7 @@ describe("the Work queue pickup (ADR 0034, issue #88)", () => {
 			source,
 			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
 		);
-		const item = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
+		const item = enqueue(state, "github:github.com:I_7");
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
 		reportStart({ ok: false, reason: "the pane start failed" });
@@ -1977,11 +1975,7 @@ describe("the Work queue pickup (ADR 0034, issue #88)", () => {
 			source,
 			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
 		);
-		const item = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
+		const item = enqueue(state, "github:github.com:I_7");
 		await coordinator.tick();
 		expect(intents).toHaveLength(1);
 		// The refusal leaves the item in the queue and its warning on the
@@ -2149,11 +2143,7 @@ describe("the Work queue pickup (ADR 0034, issue #88)", () => {
 			source,
 			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
 		);
-		const item = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
+		const item = enqueue(state, "github:github.com:I_7");
 		await coordinator.tick();
 		await coordinator.tick();
 		await coordinator.tick();
@@ -2185,11 +2175,7 @@ describe("the Work queue pickup (ADR 0034, issue #88)", () => {
 			source,
 			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
 		);
-		const item = state.enqueueWorkQueueItem({
-			ticketIdentity: "github:github.com:I_7",
-			origin: "open",
-			choice,
-		});
+		const item = enqueue(state, "github:github.com:I_7");
 		await coordinator.tick();
 		expect(statuses).toHaveLength(1);
 		// The operator cancels the item, then asks for the same start again.

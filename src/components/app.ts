@@ -537,11 +537,20 @@ export function App({
 	// poll listed or still holds in their startup grace, every in-progress
 	// handoff, and every Consultation in opening or working - against the
 	// parallel limit. It exists only when the control plane has state to
-	// observe.
-	const liveCount =
+	// observe. One function answers the count at the current clock: the mode
+	// line, the handoff gate, and any later reader take their seats from it,
+	// so the number the operator reads and the gate that queues a handoff
+	// cannot disagree.
+	const seatCountNow = (liveAgents: readonly HerdrAgent[] | null): number =>
 		state === undefined
 			? 0
-			: parallelSeatCount({ state, agents, now: Date.now(), startupGraceMs: STARTUP_GRACE_MS });
+			: parallelSeatCount({
+					state,
+					agents: liveAgents,
+					now: Date.now(),
+					startupGraceMs: STARTUP_GRACE_MS,
+				});
+	const liveCount = seatCountNow(agents);
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
@@ -1038,17 +1047,22 @@ export function App({
 			// observation cycle starts the item when a seat frees, before the
 			// automatic starts.
 			const cap = configRef.current.maxParallelAgents;
-			const seats =
-				state === undefined
-					? 0
-					: parallelSeatCount({
-							state,
-							agents: agentsRef.current,
-							now: Date.now(),
-							startupGraceMs: STARTUP_GRACE_MS,
-						});
+			const seats = seatCountNow(agentsRef.current);
 			if (state !== undefined && cap > 0 && seats >= cap) {
-				state.enqueueWorkQueueItem({ ticketIdentity: ticket.identity, origin: "open", choice });
+				// One queue item per ticket (ADR 0034): the store refuses a
+				// second add of a ticket that already waits, and the refusal
+				// says so instead of stacking an item that could never start.
+				const enqueued = state.enqueueWorkQueueItem({
+					ticketIdentity: ticket.identity,
+					origin: "open",
+					choice,
+				});
+				if (enqueued === null) {
+					setWarningMessage(
+						`handoff refused: ticket ${ticket.identity} already waits in the Work queue`,
+					);
+					return;
+				}
 				replaceWorkQueue();
 				setNoticeMessage(
 					`handoff queued: ticket ${ticket.identity} waits in the Work queue for a free Parallel limit seat`,

@@ -1361,13 +1361,23 @@ export class FactoryState {
 	 * the write returns: a restart reads the queue and its order back. The
 	 * ticket it asks for is untouched - the enqueue is not a handoff, and the
 	 * ticket keeps its state while the item waits.
+	 *
+	 * The queue holds at most one item per ticket (ADR 0034): a second add of
+	 * a ticket that already waits is refused and answers `null`, and the first
+	 * item keeps its place. A waiting duplicate could never start - its claim
+	 * is refused the moment the first start moves the ticket - so one ask per
+	 * ticket keeps the queue free of an item the operator could never clear.
 	 */
 	enqueueWorkQueueItem(input: {
 		ticketIdentity: string;
 		origin: HandoffOrigin;
 		choice: HandoffChoice;
-	}): WorkQueueItem {
+	}): WorkQueueItem | null {
 		return this.transaction(() => {
+			const waiting = this.db
+				.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+				.get(input.ticketIdentity);
+			if (waiting !== null && waiting !== undefined) return null;
 			const id = randomUUID();
 			// One clock read serves the stored row and the returned item, so the
 			// `Enqueued:` time the queue shows is the time its row carries.

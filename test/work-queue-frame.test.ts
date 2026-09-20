@@ -249,6 +249,17 @@ describe("the Work queue through the UI (issue #88)", () => {
 					expect(
 						state.visibleTickets([], "implement").find((t) => t.identity === FIRST)?.state,
 					).toBe("open");
+					// One queue item per ticket (ADR 0034): the same ask issued
+					// again at the same full cap is refused, the Message line
+					// names the waiting ticket, and the queue's depth holds.
+					const refused = await press(setup, "return", "the second handoff refused", (f) =>
+						f.includes("handoff refused"),
+					);
+					expect(messageRowOf(refused)).toContain(
+						`handoff refused: ticket ${FIRST} already waits in the Work queue`,
+					);
+					expect(refused).toContain("depth: 1");
+					expect(state.workQueue()).toHaveLength(1);
 				},
 				WIDTH,
 				HEIGHT,

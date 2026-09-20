@@ -338,7 +338,7 @@ It gates every start: a manual start that cannot take a seat enters the Work que
 _Avoid_: concurrency cap, max agents
 
 **Work queue**:
-The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state.
+The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state. The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
 When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record.
 _Avoid_: dispatch queue, pending list, execution queue
 
