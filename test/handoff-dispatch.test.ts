@@ -29,7 +29,7 @@ import {
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
 import type { CommandRunner } from "../src/runner.ts";
-import { FactoryState, type HandoffOrigin } from "../src/state.ts";
+import { FactoryState, type HandoffOrigin, workQueueIdentityOf } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
@@ -1634,10 +1634,11 @@ describe("the Parallel limit and the Work queue", () => {
 		).resolves.toEqual({ ok: true, queued: true });
 		const items = rigRef.state.workQueue();
 		expect(items).toHaveLength(1);
-		expect(items[0]?.ticketIdentity).toBe(FIRST.identity);
-		expect(items[0]?.origin).toBe("workflow");
-		expect(items[0]?.choice).toEqual(liveChoice);
-		expect(items[0]?.previousMessage).toBe("route it back");
+		if (items[0]?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
+		expect(items[0].ticketIdentity).toBe(FIRST.identity);
+		expect(items[0].origin).toBe("workflow");
+		expect(items[0].choice).toEqual(liveChoice);
+		expect(items[0].previousMessage).toBe("route it back");
 		// The ticket keeps the state it wears while it waits, and nothing
 		// started: the queue holds the start, not the claim.
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
@@ -2360,6 +2361,289 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
 		expect(rigRef.events).toContain(
 			`warning:force-dispatch of "${FIRST.title}" failed: error: herdr is not running`,
+		);
+	});
+});
+
+describe("the Work queue's Consultation pickup (ADR 0034, issue #90)", () => {
+	const repository = {
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		cloneUrl: "https://github.com/acme/factory.git",
+		path: "/tmp/factory",
+	};
+
+	/** A `queued` Consultation with its queue item, the way the submit makes one. */
+	function queuedConsultation(state: FactoryState, id: string): string {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: `consultation-${id.slice(0, 8)}`,
+			createdAt: "2026-09-19T23:00:00.000Z",
+			initialState: "queued",
+		});
+		return id;
+	}
+
+	test("a full cap holds the pickup, and the item waits", async () => {
+		const rigRef = rig([]);
+		const calls: string[] = [];
+		const module = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(await module.pickupWorkQueue()).toBe(0);
+		// The seat is held: the Consultation item starts nothing, and the item
+		// waits in the shared order.
+		expect(calls).toEqual([]);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+	});
+
+	test("a freed seat starts the item, and the item leaves the queue", async () => {
+		const rigRef = rig([]);
+		const calls: string[] = [];
+		const module = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => 0,
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		const id = queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(await module.pickupWorkQueue()).toBe(1);
+		// The seat stands free: the pickup crosses to the Consultation side and
+		// the claim takes the pointer in its own write, so the queue is empty
+		// and the answer holds the seat for the rest of the cycle.
+		expect(calls).toEqual([id]);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toContain("notice:Work queue: opening Consultation 22222222");
+	});
+
+	test("the pickup's start holds the cycle's seat from the items behind it", async () => {
+		const rigRef = rig([]);
+		const calls: string[] = [];
+		const module = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		const first = queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		const second = queuedConsultation(rigRef.state, "33333333-1111-4111-8111-111111111111");
+		// The shared order is first in, first started: the leading item takes
+		// the one free seat, and the second item waits for the next cycle.
+		expect(await module.pickupWorkQueue()).toBe(1);
+		expect(calls).toEqual([first]);
+		expect(rigRef.state.workQueue().map(workQueueIdentityOf)).toEqual([second]);
+	});
+
+	test("a failed pickup removes the item, and says nothing on its own", async () => {
+		const rigRef = rig([]);
+		const module = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => 0,
+			pickupConsultation: () => {
+				return Promise.resolve({ kind: "failed" });
+			},
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(await module.pickupWorkQueue()).toBe(0);
+		// The record is the ask, and it failed with its reason: the Consultation
+		// operations already put that on the Message line, so the pickup removes
+		// the item and adds no second word.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		// The only word is the projection refresh: no second Message line after
+		// the failure the Consultation operations already said.
+		expect(rigRef.events).toEqual(["refresh"]);
+	});
+
+	test("a moved pickup removes the item and names the record it found", async () => {
+		const rigRef = rig([]);
+		const module = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => 0,
+			pickupConsultation: () => {
+				return Promise.resolve({ kind: "moved" });
+			},
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(await module.pickupWorkQueue()).toBe(0);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toEqual([
+			"refresh",
+			"warning:Work queue pickup of Consultation 22222222 was not run: the record is no longer queued",
+		]);
+	});
+
+	test("a module without a Consultation side leaves the item standing", async () => {
+		const rigRef = rig([]);
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		// The item is not this run's to clear: it stands for a later module that
+		// holds the side, and the seat it would have held stays free.
+		expect(await rigRef.dispatch.pickupWorkQueue()).toBe(0);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		expect(rigRef.events).toEqual([]);
+	});
+});
+
+describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0034)", () => {
+	const repository = {
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		cloneUrl: "https://github.com/acme/factory.git",
+		path: "/tmp/factory",
+	};
+
+	/** Pump the timers until the queue holds nothing again. */
+	async function untilQueueDrains(rigRef: Rig): Promise<void> {
+		for (let turn = 0; turn < 200 && rigRef.state.workQueue().length > 0; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+
+	/** A `queued` Consultation with its queue item, the way the submit makes one. */
+	function queuedConsultation(state: FactoryState, id: string): string {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: `consultation-${id.slice(0, 8)}`,
+			createdAt: "2026-09-19T23:00:00.000Z",
+			initialState: "queued",
+		});
+		return id;
+	}
+
+	test("a force-dispatch at a full cap starts the Consultation, and the line names the cap", async () => {
+		const rigRef = rig([]);
+		const calls: string[] = [];
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		const id = queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		capped.forceDispatchWorkQueueItem(id);
+		await untilQueueDrains(rigRef);
+		// The seam ran the start with no cap in front of it, the claim took the
+		// pointer out of the queue, and the line names the cap it ran over.
+		expect(calls).toEqual([id]);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toContain(
+			"notice:force-dispatched Consultation 22222222 over the Parallel limit",
+		);
+	});
+
+	test("a force-dispatch under a full cap says the pickup's own words", async () => {
+		const rigRef = rig([]);
+		const mod = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+			pickupConsultation: () => Promise.resolve({ kind: "started" }),
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		mod.forceDispatchWorkQueueItem("22222222-1111-4111-8111-111111111111");
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toContain("notice:Work queue: opening Consultation 22222222");
+		expect(rigRef.events.some((event) => event.includes("over the Parallel limit"))).toBe(false);
+	});
+
+	test("a force-dispatch the record out-waits names the record it found", async () => {
+		const rigRef = rig([]);
+		const mod = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+			pickupConsultation: () => Promise.resolve({ kind: "moved" }),
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		mod.forceDispatchWorkQueueItem("22222222-1111-4111-8111-111111111111");
+		await untilQueueDrains(rigRef);
+		// The record left the queue's wait before the seam ran: the row is gone,
+		// and the warning says the fact once.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toEqual([
+			"refresh",
+			"warning:Work queue pickup of Consultation 22222222 was not run: the record is no longer queued",
+		]);
+	});
+
+	test("a force-dispatch whose start fails says nothing on its own", async () => {
+		const rigRef = rig([]);
+		const mod = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+			pickupConsultation: () => Promise.resolve({ kind: "failed" }),
+		});
+		queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		mod.forceDispatchWorkQueueItem("22222222-1111-4111-8111-111111111111");
+		await untilQueueDrains(rigRef);
+		// The failure ends as a pickup failure: the item left with it, and the
+		// Consultation operations' own line carries the reason, so the module
+		// adds no second word.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.events).toEqual(["refresh"]);
+	});
+
+	test("a force-dispatch on a row the queue no longer holds runs nothing", async () => {
+		const rigRef = rig([]);
+		const calls: string[] = [];
+		const mod = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		const id = queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(rigRef.state.removeConsultationWorkItem(id)).toBe(true);
+		mod.forceDispatchWorkQueueItem(id);
+		expect(calls).toEqual([]);
+		expect(rigRef.events).toEqual([]);
+	});
+
+	test("the row's identity names the item across kinds", async () => {
+		const rigRef = rig([FIRST]);
+		const calls: string[] = [];
+		const mod = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+			pickupConsultation: (id) => {
+				calls.push(id);
+				return Promise.resolve({ kind: "started" });
+			},
+		});
+		expect(
+			rigRef.state.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "open",
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).toMatchObject({ ok: true });
+		const id = queuedConsultation(rigRef.state, "22222222-1111-4111-8111-111111111111");
+		expect(rigRef.state.workQueue()).toHaveLength(2);
+		// The two columns are unique and disjoint: each identity names exactly
+		// its row, and the Consultation's force-dispatch runs its own seam.
+		mod.forceDispatchWorkQueueItem(id);
+		await untilQueueDrains(rigRef);
+		expect(calls).toEqual([id]);
+		expect(rigRef.state.workQueue()).toEqual([
+			expect.objectContaining({ kind: "handoff", ticketIdentity: FIRST.identity }),
+		]);
+		expect(rigRef.events).toContain(
+			"notice:force-dispatched Consultation 22222222 over the Parallel limit",
 		);
 	});
 });

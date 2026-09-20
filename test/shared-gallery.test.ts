@@ -101,8 +101,11 @@ describe("the shared control gallery", () => {
 			"recovery-panel-failed",
 			"goto",
 			"ticket-goto",
+			"consultation-detail-queued",
 			"work-queue",
 			"work-force-dispatch",
+			"work-queue-item-consultation",
+			"work-queue-item-consultation-gone",
 			"theme",
 			"theme-fallback",
 			"theme-light",
@@ -537,6 +540,9 @@ describe("the shared control gallery", () => {
 		// Message line, the item leaving the queue behind it.
 		expect(frame).toContain("Warning:");
 		expect(frame).toContain(`force-dispatch of "Add a webhook retry policy" failed`);
+		// The Consultation item's line (issue #90): the item's own force-
+		// dispatch names the cap it ran over, standing while a Handoff runs.
+		expect(frame).toContain("force-dispatched Consultation c1c1c1c1 over the Parallel limit");
 	});
 
 	test("the Ticket Goto example holds the available and refused states", async () => {

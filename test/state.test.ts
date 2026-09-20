@@ -6,7 +6,14 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, SCHEMA_V1, SCHEMA_VERSION, StateError } from "../src/state.ts";
+import {
+	type FactoryState,
+	openFactoryState,
+	SCHEMA_V1,
+	SCHEMA_VERSION,
+	StateError,
+	workQueueIdentityOf,
+} from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
@@ -2152,7 +2159,7 @@ describe("the work queue (ADR 0034)", () => {
 		enqueue(state, "t1");
 		enqueue(state, "t2");
 		expect(state.workQueue()).toHaveLength(2);
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1", "t2"]);
 		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
 		expect(state.hasWorkItem("t2")).toBe(true);
 	});
@@ -2170,7 +2177,7 @@ describe("the work queue (ADR 0034)", () => {
 			ok: false,
 			reason: "ticket t1 already has a waiting queue item",
 		});
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1"]);
 	});
 
 	test("u and d move one place, and an item at an edge moves nowhere", () => {
@@ -2184,9 +2191,9 @@ describe("the work queue (ADR 0034)", () => {
 		// d takes the front item behind the middle one; the swap is atomic
 		// on the queue's primary key, so no step of it shares a position.
 		expect(state.moveWorkItem("t1", "down")).toBe(true);
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1", "t3"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2", "t1", "t3"]);
 		expect(state.moveWorkItem("t1", "up")).toBe(true);
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2", "t3"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1", "t2", "t3"]);
 		// An unknown identity moves nowhere.
 		expect(state.moveWorkItem("t9", "up")).toBe(false);
 	});
@@ -2201,12 +2208,12 @@ describe("the work queue (ADR 0034)", () => {
 		// The operator puts the last ask at the front before the plane closes.
 		expect(state.moveWorkItem("t3", "up")).toBe(true);
 		expect(state.moveWorkItem("t3", "up")).toBe(true);
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t3", "t1", "t2"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t3", "t1", "t2"]);
 		state.close();
 
 		const reopened = openFactoryState(path);
 		const items = reopened.workQueue();
-		expect(items.map((item) => item.ticketIdentity)).toEqual(["t3", "t1", "t2"]);
+		expect(items.map(workQueueIdentityOf)).toEqual(["t3", "t1", "t2"]);
 		expect(items.map((item) => item.position)).toEqual([0, 1, 2]);
 		// Every fact the waiting start carried comes back: the origin the pickup
 		// re-checks, the choice the operator captured, and the message it routes.
@@ -2222,7 +2229,7 @@ describe("the work queue (ADR 0034)", () => {
 		expect(reopened.hasWorkItem("t1")).toBe(true);
 		// The reopened queue still moves and still answers a cancel.
 		expect(reopened.moveWorkItem("t3", "down")).toBe(true);
-		expect(reopened.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t3", "t2"]);
+		expect(reopened.workQueue().map(workQueueIdentityOf)).toEqual(["t1", "t3", "t2"]);
 		reopened.close();
 	});
 
@@ -2234,10 +2241,255 @@ describe("the work queue (ADR 0034)", () => {
 		expect(state.removeWorkItem("t1")).toBe(false);
 		// The places repack: the surviving item holds the front of the
 		// queue, so the queue never shows a place it does not use.
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2"]);
 		expect(state.workQueue().map((item) => item.position)).toEqual([0]);
 		// The cancelled start may enqueue again for its ticket.
 		enqueue(state, "t1");
-		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1"]);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2", "t1"]);
+	});
+});
+
+describe("the Work queue's Consultation items (ADR 0034, issue #90)", () => {
+	const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
+	const repository = {
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		cloneUrl: "https://github.com/acme/factory.git",
+		path: "/tmp/factory",
+	};
+
+	/** A `queued` Consultation, born with its Work queue item. */
+	function queuedConsultation(state: FactoryState, id: string, createdAt?: string) {
+		return state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: `consultation-${id.slice(0, 8)}`,
+			createdAt: createdAt ?? "2026-09-19T23:00:00.000Z",
+			initialState: "queued",
+		});
+	}
+
+	/** Enqueue one handoff item the way the operator's start does. */
+	const enqueue = (state: FactoryState, identity: string) => {
+		const result = state.enqueueWork({
+			ticketIdentity: identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+
+	test("a queued Consultation is born with its queue item, and an opening one without", () => {
+		const state = openFactoryState(":memory:");
+		const queued = queuedConsultation(state, uid("q"));
+		const opening = state.createConsultation({
+			id: uid("o"),
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: "consultation-o",
+			createdAt: "2026-09-19T23:01:00.000Z",
+		});
+		expect(queued.state).toBe("queued");
+		expect(opening.state).toBe("opening");
+		// The record and the pointer commit together: the one item the queue
+		// holds is the one the queued record owns.
+		expect(state.workQueue()).toHaveLength(1);
+		expect(state.workQueue()[0]).toEqual(
+			expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
+		);
+	});
+
+	test("the handoff and Consultation items share one order, and the reorder crosses kinds", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "github:github.com:I_6");
+		const consultation = queuedConsultation(state, uid("q"));
+		// The handoff item was enqueued first, so it leads: the Consultation
+		// item lands behind it in the same order.
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			"github:github.com:I_6",
+			consultation.id,
+		]);
+		// The reorder crosses kinds: the Consultation item moves ahead of the
+		// handoff item, and the swap is the shared order's one rule.
+		expect(state.moveWorkItem(consultation.id, "up")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			consultation.id,
+			"github:github.com:I_6",
+		]);
+		expect(state.moveWorkItem(consultation.id, "down")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			"github:github.com:I_6",
+			consultation.id,
+		]);
+	});
+
+	test("one Consultation item per waiting record: the second add is refused", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		const first = state.workQueue().map(workQueueIdentityOf);
+		expect(first).toHaveLength(1);
+		expect(state.enqueueConsultationWork(consultation.id)).toEqual({
+			ok: false,
+			reason: `consultation ${consultation.id} already has a waiting queue item`,
+		});
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(first);
+	});
+
+	test("a row with no identity or with both identities cannot commit", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.close();
+		// The CHECK holds every row to exactly one identity: a row with neither
+		// names no start, and one with both is not a row the plane can read, so
+		// the constraint keeps either from ever committing.
+		const db = new Database(path);
+		expect(() =>
+			db
+				.prepare(
+					"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (-1, NULL, NULL, NULL, NULL, '', '2026-09-19T23:03:00.000Z')",
+				)
+				.run(),
+		).toThrow();
+		expect(() =>
+			db
+				.prepare(
+					"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (-2, 'both', 'also-both', 'open', '{}', '', '2026-09-19T23:03:00.000Z')",
+				)
+				.run(),
+		).toThrow();
+		db.close();
+	});
+
+	test("beginConsultationStart moves a queued record to opening, and nothing else", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(state.beginConsultationStart(consultation.id)).toBe(true);
+		expect(state.consultation(consultation.id)?.state).toBe("opening");
+		// The claim took the pointer in the same write: the queue is empty, and
+		// the move ran once - a second pickup of the same record is refused, so
+		// two loops cannot start one Consultation twice.
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.beginConsultationStart(consultation.id)).toBe(false);
+		expect(state.consultation(consultation.id)?.state).toBe("opening");
+		// A record that left the queue's wait before the pickup ran starts
+		// nothing.
+		const opening = state.createConsultation({
+			id: uid("o"),
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: "consultation-o",
+			createdAt: "2026-09-19T23:02:00.000Z",
+		});
+		expect(state.beginConsultationStart(opening.id)).toBe(false);
+	});
+
+	test("updateConsultationTypeSettings re-reads the type, and the input never changes", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(
+			state.updateConsultationTypeSettings(consultation.id, {
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+			}),
+		).toBe(true);
+		const updated = state.consultation(consultation.id);
+		expect(updated).toEqual(
+			expect.objectContaining({
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+				initialInput: "review auth",
+				state: "queued",
+			}),
+		);
+	});
+
+	test("updateConsultationTypeSettings touches a queued record only", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		// The record left the wait before the pickup's write reached it: a
+		// close or a claim that won the race keeps its settings untouched.
+		expect(state.beginConsultationStart(consultation.id)).toBe(true);
+		const opening = state.consultation(consultation.id);
+		expect(
+			state.updateConsultationTypeSettings(consultation.id, {
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+			}),
+		).toBe(false);
+		expect(state.consultation(consultation.id)).toEqual(opening);
+	});
+
+	test("every write that ends a record's wait takes its pointer out of the queue", () => {
+		const state = openFactoryState(":memory:");
+		const claimed = queuedConsultation(state, uid("a"));
+		const closed = queuedConsultation(state, uid("b"));
+		const deleted = queuedConsultation(state, uid("c"));
+		expect(state.workQueue()).toHaveLength(3);
+		// The pickup's seat: the claim and the pointer's removal are one write,
+		// so no cycle that dies between them leaves an item behind.
+		expect(state.beginConsultationStart(claimed.id)).toBe(true);
+		// The close: the operator abandoned the ask, so its item goes with it.
+		expect(state.beginConsultationClose(closed.id)).toBe(true);
+		state.finishConsultationClose(closed.id);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([deleted.id]);
+		// The delete of a record whose pointer outlived it takes that pointer
+		// too: the queue never lists an item that names no record.
+		expect(state.beginConsultationClose(deleted.id)).toBe(true);
+		state.finishConsultationClose(deleted.id);
+		expect(state.deleteConsultation(deleted.id)).toBe(true);
+		expect(state.workQueue()).toHaveLength(0);
+	});
+
+	test("removing the queue item leaves the record queued, and the record's item stands across a restart", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(state.removeConsultationWorkItem(consultation.id)).toBe(true);
+		// The record keeps its ask and its state: the removal is the item's,
+		// not the record's, and the ask stands behind the pointer it loses.
+		expect(state.consultation(consultation.id)?.state).toBe("queued");
+		expect(state.removeConsultationWorkItem(consultation.id)).toBe(false);
+		const second = queuedConsultation(state, uid("s"));
+		state.close();
+
+		const again = openFactoryState(path);
+		expect(again.workQueue()).toHaveLength(1);
+		expect(again.workQueue()[0]).toEqual(
+			expect.objectContaining({ kind: "consultation", consultationId: second.id }),
+		);
+		expect(again.consultation(second.id)?.state).toBe("queued");
+		again.close();
 	});
 });
