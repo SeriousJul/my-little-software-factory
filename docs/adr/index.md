@@ -47,3 +47,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0036: The Auto-handoff mode is factory state, not a config setting](./0036-the-auto-handoff-mode-is-factory-state.md)
 - [ADR 0037: The Consultation close takes w and confirms on a live Agent](./0037-the-consultation-close-takes-w-and-confirms-on-a-live-agent.md)
 - [ADR 0038: Enter answers a Consultation with the surface its state needs](./0038-enter-answers-a-consultation-with-the-surface-its-state-needs.md)
+- [ADR 0039: The modal's body is a pane and its decisions a bounded region](./0039-the-modal-body-is-a-pane-and-its-decisions-a-bounded-region.md)
+- [ADR 0040: Every near-fullscreen surface is shared chrome](./0040-every-near-fullscreen-surface-is-shared-chrome.md)

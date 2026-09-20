@@ -67,6 +67,16 @@ The near-fullscreen Interaction mode above an awaiting ticket: the turn log, the
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
+**Body pane**:
+The bordered, titled region of a modal's box that holds one body by itself: the Turn log, or the Agent view of a live turn.
+Its border title names the body that shows.
+_Avoid_: section, turn log pane, log block, transcript pane, detail pane
+
+**Decision region**:
+The rows a modal pins to its floor: the held cause row and the Completion decision rows the operator confirms.
+It is bounded, so the Body pane always keeps its rows.
+_Avoid_: action bar, action region, button row, footer
+
 **Live view**:
 The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
 When the turn settles it becomes the Decision modal; when the agent goes missing it becomes the Missing modal.
