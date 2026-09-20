@@ -309,4 +309,70 @@ describe("the shared control catalogue", () => {
 		const ids = guideControls(consultation).map(({ control }) => control.id);
 		expect(ids).not.toContain("ticket-goto");
 	});
+
+	/**
+	 * Enter answers a Consultation with the surface its state needs: the Agent
+	 * or the response on a live one, and the recovery panel on a broken or
+	 * stuck one. A closed record answers nothing, in words.
+	 */
+	const consultationIn = (state: Consultation["state"]) =>
+		contextFor("consultation-list", {
+			...values,
+			selectedConsultation: { id: "c1", state, paneId: "pane-1" } as unknown as Consultation,
+		});
+
+	test("Enter opens the recovery panel on every broken or stuck Consultation", () => {
+		for (const state of ["opening", "missing", "failed", "closing"] as const) {
+			const context = consultationIn(state);
+			const control = controlForKey({ name: "return" }, context);
+			if (control === undefined) throw new Error(`Enter answers nothing on a ${state}`);
+			expect(control.id).toBe("consultation-recovery");
+			expect(availabilityFor(control, context).available).toBe(true);
+		}
+	});
+
+	test("Enter keeps Respond and Interact on a live Consultation", () => {
+		// An awaiting Agent takes the response; a blocked one takes the
+		// Agent, and a working one takes the Agent, whatever the recovery
+		// control's own reason says.
+		const awaiting = contextFor("consultation-list", {
+			...values,
+			selectedConsultation: {
+				state: "awaiting-response",
+				paneId: "pane-1",
+			} as unknown as Consultation,
+			consultationAgentStatus: "idle",
+		});
+		expect(controlForKey({ name: "return" }, awaiting)?.id).toBe("consultation-respond");
+		const blocked = contextFor("consultation-list", {
+			...awaiting,
+			consultationAgentStatus: "blocked",
+		});
+		expect(controlForKey({ name: "return" }, blocked)?.id).toBe("consultation-interact");
+		const working = contextFor("consultation-detail", consultationIn("working"));
+		expect(controlForKey({ name: "return" }, working)?.id).toBe("consultation-interact");
+	});
+
+	test("Enter on a closed Consultation says it is already closed", () => {
+		const context = consultationIn("closed");
+		const control = controlById("consultation-recovery");
+		expect(controlForKey({ name: "return" }, context)?.id).toBe("consultation-recovery");
+		expect(availabilityFor(control, context)).toEqual({
+			available: false,
+			reason: "the selected Consultation is already closed",
+		});
+	});
+
+	test("the Key guide names the recovery meaning of Enter in the Consultation section", () => {
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			const context = contextFor(mode, consultationIn("opening"));
+			const entry = guideControls(context).find(
+				({ control }) => control.id === "consultation-recovery",
+			);
+			expect(entry?.group).toBe("Current interaction mode");
+			if (entry === undefined) throw new Error("the guide holds no recovery row");
+			expect(entry.control.keyLabel).toBe("Enter");
+			expect(entry.control.guideNote).toContain("recovery");
+		}
+	});
 });

@@ -934,15 +934,18 @@ describe("the merged Main view", () => {
 					);
 					const rows = overlayRows(await settle(setup));
 					// The Consultation controls the merged Main view reached for,
-					// each named once with the key the section accepts.
+					// each named once with the key the section accepts. The section's
+					// own tail sits past the first window, so the scroll step below
+					// reads it: the Recovery row of Enter joins the two live meanings,
+					// and the refresh keeps the last row of the group.
 					for (const hint of [
 						"c Launch",
 						"f History",
 						"w Close",
 						"d Delete",
+						"Enter Recovery",
 						"Enter Respond",
 						"x Section",
-						"r Refresh",
 					])
 						expect(rows.filter((row) => row.includes(hint))).toHaveLength(1);
 					// The guide states no second Message or Help control: the
@@ -951,7 +954,13 @@ describe("the merged Main view", () => {
 					// ADR 0025), so one scroll step brings its tail into view.
 					setup.mockInput.pressKey("j");
 					const scrolled = overlayRows(await settle(setup));
-					expect(scrolled.filter((row) => row.includes("m/F2 Message"))).toHaveLength(1);
+					// The recovery row's reason takes a line of its own, so the
+					// section's tail sits two steps down from where it did before
+					// Enter learned its third meaning.
+					expect(scrolled.filter((row) => row.includes("r Refresh"))).toHaveLength(1);
+					setup.mockInput.pressKey("j");
+					const tail = overlayRows(await settle(setup));
+					expect(tail.filter((row) => row.includes("m/F2 Message"))).toHaveLength(1);
 					expect(scrolled.filter((row) => row.includes("? Help"))).toHaveLength(1);
 				},
 				state,
