@@ -938,7 +938,12 @@ export function App({
 	 */
 	const queueWait = (ticket: Ticket): boolean =>
 		ticket.state === "open" &&
-		workQueue.some((item) => item.origin === "open" && item.ticketIdentity === ticket.identity);
+		workQueue.some(
+			(item) =>
+				item.kind === "handoff" &&
+				item.origin === "open" &&
+				item.ticketIdentity === ticket.identity,
+		);
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)

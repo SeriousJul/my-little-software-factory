@@ -78,7 +78,7 @@ and `bun run test`.
 | OS | Arch Linux, kernel 7.2.5-3-omarchy |
 | Runtime | Bun 1.4.2 (the pinned minimum is 1.3.0, ADR 0035) |
 | Renderer | OpenTUI `@opentui/core` 0.5.11, `@opentui/react` 0.5.11 |
-| Test runner | `bun:test` (Bun 1.4.2), run through `bun run test` (`bun test --isolate --parallel`) |
+| Test runner | `bun:test` (Bun 1.4.2), run through `bun run test` (`bun test --parallel --isolate`) |
 | Multiplexer (tmux path) | tmux 3.7c |
 
 ## Required acceptance targets and their state
@@ -736,8 +736,8 @@ isolated as the standard states it is:
   the pure resolver instead of the paint layer, so an expected color never
   reads the environment (`unfitTones` resolves through it and kept its
   meaning).
-- The test script spreads the files across worker processes
-  (`bun test --isolate --parallel`), so a `NO_COLOR` one file's test holds
+- The full-suite script spreads the files across worker processes
+  (`bun test --parallel --isolate`), so a `NO_COLOR` one file's test holds
   never reaches a frame another file's app paints.
 - The theme isolation preloads into every test file
   (`bunfig.toml`, `[test]`), so the environment clears before every test of
@@ -748,13 +748,14 @@ isolated as the standard states it is:
   presentation's two no-color tests, and the override panel's.
 
 The checks pass in full on this branch after the isolation, re-measured
-after merging origin/main, whose `test:changed` script carries the same
-isolation flags: `bun run lint` and `bun run typecheck` pass, and `bun run
-test` passes in full (1567 pass, 13 skip, 0 fail, twice in a row, about
-38 s per run, on Bun 1.4.2). The 13 skips are the ones this record
-already holds as skipped, issues #103 and #104. The direct run of the
-five files that share the no-color tests and the badge's frame test
-passed four times in a row (57 pass, 7 skip, 0 fail).
+on the tree merged with origin/main, which rebuilt the Work queue item
+as a union the badge's predicate narrows to its handoff kind: `bun run
+lint` and `bun run typecheck` pass, and `bun run test` passes in full
+(1607 pass, 13 skip, 0 fail, twice in a row, about 38 s per run, on Bun
+1.4.2). The 13 skips are the ones this record already holds as skipped,
+issues #103 and #104. The direct run of the five files that share the
+no-color tests and the badge's frame test passed four times in a row
+(57 pass, 7 skip, 0 fail).
 
 The terminal walks were not re-run on the queued badge: they are recorded as
 not re-verified for this change, not as a pass. The screen-reader target
