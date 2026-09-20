@@ -79,7 +79,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | OS | Arch Linux, kernel 7.2.5-3-omarchy |
 | Node | v26.8.1 (the pinned minimum is 26.4.0) |
 | Renderer | OpenTUI `@opentui/core` 0.5.11, `@opentui/react` 0.5.11 |
-| Test runner | vitest 4.1.11 |
+| Test runner | `bun test`, Bun 1.4.0 |
 | Multiplexer (tmux path) | tmux 3.7c |
 
 ## Required acceptance targets and their state
