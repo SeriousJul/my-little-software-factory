@@ -22,6 +22,7 @@ import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
 import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
+import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
 import { type ControlContext, contextFor } from "../controls.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
@@ -202,7 +203,7 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  */
 /** The Consultation the detail and close-dialog examples render under. */
 function sampleConsultation(
-	state: "opening" | "working" | "awaiting-response" | "closing" | "closed",
+	state: "opening" | "working" | "awaiting-response" | "missing" | "failed" | "closing" | "closed",
 ): Consultation {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
@@ -234,8 +235,8 @@ function sampleConsultation(
 		draft: "",
 		draftUpdatedAt: null,
 		draftOld: false,
-		failure: null,
-		warning: null,
+		failure: state === "failed" ? "herdr refused the launch" : null,
+		warning: state === "missing" ? "the Agent pane is gone" : null,
 		replacementOf: null,
 		closeResult: null,
 		attentionAt: null,
@@ -259,6 +260,29 @@ function closeDialogElement(
 ): ReactElement {
 	const panel = consultationClosePanel(sampleConsultation(state));
 	if (panel === undefined) throw new Error(`the ${state} Consultation must open a close panel`);
+	return createElement(ActionPanel, {
+		key,
+		message: null,
+		inputActive: false,
+		title: panel.title,
+		bodyLines: panel.bodyLines,
+		actions: panel.actions,
+		onAction: () => undefined,
+		onCancel: () => undefined,
+	});
+}
+
+/**
+ * The production recovery panel the app opens on one Consultation state, for
+ * the recovery panel's gallery examples.
+ *
+ * The example draws the module the screen draws, so the words a reviewer reads
+ * here are the words the application writes: a written-out copy of a panel can
+ * drift from it, and this one cannot.
+ */
+function recoveryDialogElement(state: "opening" | "missing" | "failed", key: string): ReactElement {
+	const panel = consultationRecoveryPanel(sampleConsultation(state));
+	if (panel === undefined) throw new Error(`the ${state} Consultation must open a recovery panel`);
 	return createElement(ActionPanel, {
 		key,
 		message: null,
@@ -801,6 +825,32 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				onCancel: () => undefined,
 			}),
 		],
+	},
+	{
+		// Enter on an interrupted opening: the panel offers the retry of the
+		// opening this run left behind, and the close that confirms first
+		// because the Agent may still be alive.
+		id: "recovery-panel-opening",
+		state: "Consultation recovery: retry the opening, or close",
+		rows: 17,
+		render: (_columns) => [recoveryDialogElement("opening", "recovery-opening")],
+	},
+	{
+		// Enter on a missing Agent: no pane and nothing to stop, so the rows
+		// are the Replacement that carries this record's context, and the
+		// direct close.
+		id: "recovery-panel-missing",
+		state: "Consultation recovery: replace, or close directly",
+		rows: 17,
+		render: (_columns) => [recoveryDialogElement("missing", "recovery-missing")],
+	},
+	{
+		// Enter on a failed launch: the same two rows, and the record's own
+		// failure under the first line.
+		id: "recovery-panel-failed",
+		state: "Consultation recovery: a failed launch",
+		rows: 17,
+		render: (_columns) => [recoveryDialogElement("failed", "recovery-failed")],
 	},
 	{
 		// Goto from either Consultation pane: available while herdr's last
