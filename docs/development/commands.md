@@ -9,6 +9,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | --------------------- | ----------------------------------------------------- |
 | `bun run dev`         | Start the control plane in watch mode                  |
 | `bun test`            | Run the full test suite                                |
+| `bun run test:changed`| Run only the test files the current changes affect     |
 | `bun run gallery`     | Run the shared control gallery, using the real modules |
 | `bun run lint`        | Lint and check formatting with Biome                   |
 | `bun run fmt`         | Lint, format, and fix with Biome                       |
@@ -22,6 +23,20 @@ process, so the reload keeps the state file: the run gives the state lease back
 when the watch signals it, and the next boot takes the lease again. Only the
 files the run imports are watched, so the state file and the worktrees never
 trigger a restart.
+
+## Scoped run
+
+`bun run test:changed` is the suite, scoped: it runs only the test files that
+the current changes can affect, so a change to one or two files keeps the run
+short. It is a speed tool for iteration; the push gate stays the full suite.
+
+The base ref defaults to `origin/main` and is overridable with the
+`TEST_CHANGED_BASE` environment variable, so work based on another branch
+scopes against its real base: `TEST_CHANGED_BASE=origin/feature bun run
+test:changed`. The run covers committed changes against the base, uncommitted
+edits, and untracked test files, and it works on a detached head, so a herdr
+worktree gets the same tool. A clean, up-to-date worktree matches nothing, and
+the run says so.
 
 ## Shared control gallery
 
