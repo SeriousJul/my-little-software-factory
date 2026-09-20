@@ -42,6 +42,7 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | Type-ahead shows its search, matches by substring, keeps an unmatched query with `no match`, edits with Backspace, clears with one key, and keeps query and value distinct | `test/shared-gallery.test.ts`, `test/handoff-frame.test.ts`, `test/override-panel.test.ts` | Passed |
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue, and Enter opens the recovery surface each broken or stuck state needs (ADR 0038) | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| Consultation close is key `w` in both Consultation modes (#80): a closed record refuses readably, a `missing` or a `failed` one closes directly, a live Agent stops behind the shared panel, a `closing` one opens the panel with its retry and force-close, and the Ticket section's `w` stays its own Close in each section's guide and bar | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The Consultation-only keys `d` and `f` refuse in both Ticket base modes and in both Work queue modes with the section's own words, claim the key so nothing else answers it, and the guide and bar of each section that does not own them omit both controls | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts`, `test/work-queue-frame.test.ts` | Passed |
 | No refused key is hinted by the Action bar unless the Key guide names it, in every base mode of all three sections (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
@@ -484,6 +485,80 @@ The terminal walks were not re-run for this control's Action bar and Key guide
 row: they are recorded as not re-verified for it, not as a pass. The
 screen-reader target remains unverified.
 
+## The Work queue's rows join the recovery rows (issue #88, ADR 0034)
+
+The queue's controls (the reorder pair, the removal, and the shared move and
+scroll rows its detail reuses) and ADR 0038's `Enter Recovery` row now ride
+the same catalogue. The counts are re-measured on this branch's merged
+catalogue from real frames, not computed: the guide holds 55 rows at the full
+width where PR #114 measured 54, its scroll ladder walks 36 steps to the
+bottom row `37-55/55`, and the narrow 60x12 case holds 79 rows where it held
+75 (`test/key-guide.test.ts`). The queue's own guide entries, mode names, and
+refusals stand as recorded above.
+
+## The aligned control surface (issues #80–#85)
+
+The acceptance pass over the finished close and goto alignment, per the
+shared control standard. The alignment gave the two sections the same
+discipline on the same keys: the Consultation close moved to `w` with its
+confirmation on a live Agent (#80), the leftover clear was removed while the
+leftover stayed a fact herdr clears (#81), the Ticket Goto took `g` as pure
+navigation (#82, ADR 0033), the Ticket Close took `w` with its confirmation
+dialog (#83, ADR 0031), `Enter` gained its recovery meaning in the
+Consultation section (#84, ADR 0038), and the Consultation-only keys in the
+Ticket section learned to refuse in the section's own words (#85).
+
+The full automated suite passed in full on this branch: lint, typecheck, and
+the behavior suite, run through the package scripts, with 1554 pass, 13
+skip, 0 fail - re-measured on this branch's merged catalogue, 37 more tests
+than this pass first measured (1517), and the 13 skips are the ones this
+record already holds as skipped. On the versions in the table below.
+
+The gallery holds every state the alignment added or changed, drawn from the
+production modules, and `test/shared-gallery.test.ts` walks each one:
+
+- `ticket-goto`: the Ticket Goto available on an alive pane and refused
+  otherwise, as two rows of the real Action bar.
+- `ticket-close` and `ticket-close-live-worktree`: the Ticket Close dialog
+  on an in-flight ticket (the worktree checkout goes, a dirty one stays)
+  and on an `awaiting` ticket with the live worktree.
+- `close-dialog-awaiting-response` beside `close-dialog-opening`,
+  `close-dialog-working`, and `close-panel-closing`: the Consultation close
+  dialog on an `awaiting-response` record, and the panel the `closing` one
+  opens instead.
+- `recovery-panel-opening`, `recovery-panel-missing`, and
+  `recovery-panel-failed`: the Consultation recovery panels on their states.
+
+The Action bar names only keys that did what they said, in every mode the
+alignment touched, by the automated checks rather than by this pass's walk:
+in the four base modes the catalogue-wide guard fails if a bar hint names a
+key the mode refuses while its guide does not name it, and the per-mode
+tests press each aligned key where dispatch claims it - `g` in the Ticket
+and the Consultation panes, `w` in each section's own modes, and `Enter` on
+the broken and stuck Consultations - and check the operation, while the
+refused keys refuse on the Message line and leave every row unchanged
+(`test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`,
+`test/main-view-frame.test.ts`, `test/live-view.test.ts`,
+`test/auto-mode.test.ts`, `test/consultation-frame.test.ts`).
+
+The required checks this pass could not run are recorded as incomplete, not
+as a pass:
+
+- The gallery walk over the new states was not performed in a terminal on
+  this pass; the states stand verified by the automated gallery suite only.
+  Incomplete against the gallery-walk criterion.
+- The terminal walks (Ghostty, foot) were not re-run on the aligned Action
+  bar and Key guide rows, so the visual confirmation that the bar names
+  only keys that did what they said was not observed in a terminal on this
+  pass. Incomplete for the alignment, in the standing sense recorded for
+  the earlier changes.
+- The light-herdr-theme visual walk remains unverified under the theme
+  mechanism, and the screen-reader path remains unverified, as recorded
+  above. No screen-reader claim is made for the alignment.
+
+Measured on Arch Linux (kernel 7.2.5-3-omarchy), Bun 1.4.0, OpenTUI
+`@opentui/core` 0.5.11 and `@opentui/react` 0.5.11, and tmux 3.7c.
+
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 
 A user report: streaming agent output in the Session view left stale text
@@ -533,4 +608,4 @@ recorded workaround for the drift class of OpenTUI issue 1187.
 
 This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
-0.5.11 (1461 tests).
+0.5.11 (1554 pass, 13 skip, re-measured on this branch's merged catalogue).
