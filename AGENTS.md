@@ -57,6 +57,28 @@
   with `bun run test` and the shared test harness. Use fake external operations
   and isolated test state.
 
+## Test failure triage
+
+When `bun run test` goes red, gather the evidence with these rules and record
+it in the report, beside the existing honesty rule: a skipped required check
+is not a pass, and a recorded load flake is evidence, not a dodge.
+
+- A file that fails in the full suite but passes alone is a load flake, not a
+  regression. The report names the file and records it as such, so a reviewer
+  can weigh the evidence without re-running anything.
+- To prove a failure pre-exists, check out the base commit inside the same
+  worktree, run only the failing files, and restore your work. No new
+  worktree, no repository copy, no clone: the modules, state, and git refs
+  you already have do the work.
+- `/tmp` is for scratch scripts only. Probe files land there; a repository
+  copy, worktree, or clone never does.
+- Iterate with targeted file runs (`bun test <file>`). Exactly one full
+  `bun run test` gates the push; do not pay the full-suite price on every
+  intermediate state.
+- Before the full run, check once whether another `bun test` process is
+  running on this machine, and record the machine state in the report. No
+  sleep or `pgrep` poll loops.
+
 ## Agent skills
 
 ### Issue tracker
