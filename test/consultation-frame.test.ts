@@ -3190,12 +3190,6 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					expect(queued).toBeDefined();
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					const id8 = queued.id.slice(0, 8);
-					// The launched Agent's pane joins the poll's list, so the
-					// start the force-dispatch runs verifies on the next cycle.
-					runner.agentListJson = agentListJson([
-						{ pane: seatPane, status: "working" },
-						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
-					]);
 					// The cap is full from the boot: the seed's seat stands on the
 					// line, and the cursor crosses into the Work queue's row.
 					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
@@ -3203,11 +3197,8 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 						/\bWork\b/.test(row),
 					);
 					expect(headerRow).toBeGreaterThanOrEqual(0);
-					console.log("DEBUG headerRow " + String(headerRow));
-					console.log("DEBUG frame before click:\n" + setup.captureCharFrame());
 					await mouseClick(setup, 2, headerRow);
 					await settle(setup, 300);
-					console.log("DEBUG frame after click:\n" + setup.captureCharFrame());
 					await awaitFrame(
 						setup,
 						(f) => f.includes("❯ Work queue"),
@@ -3248,7 +3239,14 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					runner,
 					config: { ...configFor(), maxParallelAgents: 1 },
 					home,
-					pollIntervalMs: 100,
+					// The test projection holds the seat: no poll can free it or
+					// pick the item up out from under the test. The projection also
+					// keeps the observation loop off the start's Message line: a tick
+					// that lands while the record stands in `opening` cannot verify
+					// its Agent yet and would clear the start's notice with its
+					// recovery warning, so the line the test asserts on stays where
+					// the start left it.
+					initialTickets: [],
 				},
 			);
 		} finally {
@@ -3428,12 +3426,6 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 			await withApp(
 				async (setup) => {
 					const id = await unscheduleThroughTheQueue(setup, state);
-					// The launched Agent's pane joins the poll's list, so the
-					// start the key runs verifies on the next cycle.
-					runner.agentListJson = agentListJson([
-						{ pane: seatPane, status: "working" },
-						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
-					]);
 					// The cap stands full from the boot: the seed's seat is the
 					// line, and Enter starts the record over it.
 					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
@@ -3465,7 +3457,14 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					runner,
 					config: { ...configFor(), maxParallelAgents: 1 },
 					home,
-					pollIntervalMs: 100,
+					// The test projection holds the seat: no poll can free it or
+					// pick the item up out from under the test. The projection also
+					// keeps the observation loop off the start's Message line: a tick
+					// that lands while the record stands in `opening` cannot verify
+					// its Agent yet and would clear the start's notice with its
+					// recovery warning, so the line the test asserts on stays where
+					// the start left it.
+					initialTickets: [],
 				},
 			);
 		} finally {
@@ -3489,17 +3488,19 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 			await withApp(
 				async (setup) => {
 					const id = await unscheduleThroughTheQueue(setup, state);
-					// The launched Agent's pane joins the poll's list, so the
-					// start the key runs verifies on the next cycle.
-					runner.agentListJson = agentListJson([
-						{ pane: seatPane, status: "working" },
-						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
-					]);
 					// Free the seat the queue walk held: the line then names no
 					// cap, because the seat count stood under the limit at the
 					// key, the way the queue's force-dispatch line does.
 					state.setConsultationState(seatId, "awaiting-response");
-					await awaitFrame(setup, (f) => f.includes("auto: off 0/1"), "the freed seat");
+					// The write lands in the state the app reads live but re-renders
+					// nothing: step the cursor up to the seed's row and back, so the
+					// mode line re-reads the freed seat count before the key runs.
+					await press(setup, "k", "the mode line on the freed seat", (f) =>
+						f.includes("auto: off 0/1"),
+					);
+					await press(setup, "j", "the cursor back on the record", (f) =>
+						detailPaneText(f).includes("State: unscheduled"),
+					);
 					const started = await press(setup, "return", "the start-now notice", (f) =>
 						f.includes("starting Consultation"),
 					);
@@ -3527,7 +3528,14 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					runner,
 					config: { ...configFor(), maxParallelAgents: 1 },
 					home,
-					pollIntervalMs: 100,
+					// The test projection holds the seat: no poll can free it or
+					// pick the item up out from under the test. The projection also
+					// keeps the observation loop off the start's Message line: a tick
+					// that lands while the record stands in `opening` cannot verify
+					// its Agent yet and would clear the start's notice with its
+					// recovery warning, so the line the test asserts on stays where
+					// the start left it.
+					initialTickets: [],
 				},
 			);
 		} finally {
