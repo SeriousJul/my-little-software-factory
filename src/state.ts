@@ -162,6 +162,7 @@ interface HandoffDetails {
 
 export const CONSULTATION_STATES = [
 	"queued",
+	"unscheduled",
 	"opening",
 	"working",
 	"awaiting-response",
@@ -1876,8 +1877,12 @@ export class FactoryState {
 
 	/**
 	 * Remove the Consultation's item from the shared order (ADR 0034, issue
-	 * #90). The record keeps its `queued` state: the removal is the item's,
-	 * not the record's, and the ask stands behind the pointer it loses.
+	 * #90, unscheduled by issue #91). The removal is the item's, not the
+	 * record's: the ask stands behind the pointer it loses, and a record that
+	 * was still `queued` moves to `unscheduled` in the same write, so the
+	 * operator finds it in the Consultation section with its type, repository,
+	 * and initial input. A record that left `queued` behind the removal - a
+	 * close or a delete that won the race - keeps the state it holds.
 	 */
 	removeConsultationWorkItem(consultationId: string): boolean {
 		return this.transaction(() => {
@@ -1886,7 +1891,45 @@ export class FactoryState {
 				.run(consultationId);
 			if (result.changes === 0) return false;
 			this.repackWorkQueuePositions();
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'unscheduled', updated_at = ? WHERE id = ? AND state = 'queued'",
+				)
+				.run(new Date(this.now()).toISOString(), consultationId);
 			return true;
+		});
+	}
+
+	/**
+	 * Schedule an `unscheduled` Consultation back into the Work queue (issue
+	 * #91): the record moves to `queued` and its item returns at the queue's
+	 * tail in one write, the way the launcher's creation wrote them together.
+	 * The write reaches an `unscheduled` record only, and refuses one that
+	 * already waits: the queue holds at most one item per record.
+	 */
+	scheduleConsultation(consultationId: string): { ok: true } | { ok: false; reason: string } {
+		return this.transaction(() => {
+			const waiting = this.db
+				.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?")
+				.get(consultationId);
+			if (waiting !== null && waiting !== undefined)
+				return {
+					ok: false,
+					reason: `consultation ${consultationId} already has a waiting queue item`,
+				};
+			const result = this.db
+				.prepare(
+					"UPDATE consultations SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'unscheduled'",
+				)
+				.run(new Date(this.now()).toISOString(), consultationId);
+			if (Number(result.changes) === 0)
+				return { ok: false, reason: "the Consultation is not unscheduled" };
+			this.db
+				.prepare(
+					"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
+				)
+				.run(consultationId, new Date(this.now()).toISOString());
+			return { ok: true };
 		});
 	}
 
@@ -2666,21 +2709,23 @@ export class FactoryState {
 	}
 
 	/**
-	 * Take a `queued` Consultation out of its wait and into the opening
-	 * (ADR 0034, issue #90).
+	 * Take a Consultation out of its wait and into the opening (ADR 0034,
+	 * issue #90, the `unscheduled` start by issue #91).
 	 *
 	 * The move is the seat: from this write on the record holds a Parallel
-	 * limit seat the Work queue's pickup paid for. The atomic step keeps a
-	 * close or a delete that raced the pickup from being yanked back to
-	 * opening; the loser of the race answers `false` and starts nothing. The
-	 * winner drops the record's pointer in the same write: the claim ends the
-	 * wait, and the queue holds the item only while the record waits.
+	 * limit seat the Work queue's pickup paid for, or a seat the operator's
+	 * start-now took over the cap. The write reaches a `queued` or an
+	 * `unscheduled` record only. The atomic step keeps a close or a delete
+	 * that raced the start from being yanked back to opening; the loser of
+	 * the race answers `false` and starts nothing. The winner drops the
+	 * record's pointer in the same write: the claim ends the wait, and the
+	 * queue holds the item only while the record waits.
 	 */
 	beginConsultationStart(id: string): boolean {
 		return this.transaction(() => {
 			const result = this.db
 				.prepare(
-					"UPDATE consultations SET state = 'opening', updated_at = ? WHERE id = ? AND state = 'queued'",
+					"UPDATE consultations SET state = 'opening', updated_at = ? WHERE id = ? AND state IN ('queued', 'unscheduled')",
 				)
 				.run(new Date(this.now()).toISOString(), id);
 			if (Number(result.changes) === 0) return false;
@@ -2693,15 +2738,15 @@ export class FactoryState {
 	 * Re-read the Consultation type's settings into the record (ADR 0034,
 	 * issue #90).
 	 *
-	 * The `queued` record waited for a seat, so its pickup starts it on the
-	 * type as the config holds it now, not on the settings the record captured
-	 * when the launcher created it. The operator's own input never changes; the
-	 * opening prompt is re-rendered from the type's template and the stored
-	 * input.
+	 * A record that waited - in the queue or `unscheduled` - starts on the
+	 * type as the config holds it now, not on the settings the record
+	 * captured when the launcher created it. The operator's own input never
+	 * changes; the opening prompt is re-rendered from the type's template and
+	 * the stored input.
 	 *
-	 * The write reaches a `queued` record only: the pickup's claim below it is
-	 * atomic the same way, and a record that left `queued` behind the pickup is
-	 * never touched by it.
+	 * The write reaches a `queued` or an `unscheduled` record only: the
+	 * start's claim below it is atomic the same way, and a record that left
+	 * the wait behind the start is never touched by it.
 	 */
 	updateConsultationTypeSettings(
 		id: string,
@@ -2718,7 +2763,7 @@ export class FactoryState {
 		const result = this.db
 			.prepare(
 				`UPDATE consultations SET agent_type = ?, environment = ?, model = ?, thinking = ?,
-					context_window = ?, template = ?, rendered_opening_prompt = ?, updated_at = ? WHERE id = ? AND state = 'queued'`,
+					context_window = ?, template = ?, rendered_opening_prompt = ?, updated_at = ? WHERE id = ? AND state IN ('queued', 'unscheduled')`,
 			)
 			.run(
 				settings.agentType,
@@ -3214,12 +3259,20 @@ export class FactoryState {
 		return boundedInput(parts, limit);
 	}
 
-	/** Delete only closed local history, then reduce WAL remnants. */
+	/**
+	 * Delete closed or unscheduled local history, then reduce WAL remnants.
+	 *
+	 * An `unscheduled` record (issue #91) has never had an Agent, an
+	 * environment, or a worktree: its history is the ask and its turns, and
+	 * its delete keeps its captured history out of the backups the operator
+	 * asked to lose. Every other state refuses: the record still stands behind
+	 * work the delete may not take out from under it.
+	 */
 	deleteConsultation(id: string): boolean {
 		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 			| { state: ConsultationState }
 			| undefined;
-		if (row?.state !== "closed") return false;
+		if (row?.state !== "closed" && row?.state !== "unscheduled") return false;
 		this.transaction(() => {
 			// The delete takes any pointer the record still leaves behind, so the
 			// queue never lists an item that names no record (ADR 0034, issue #90).
@@ -3547,10 +3600,15 @@ function compareConsultations(left: Consultation, right: Consultation): number {
 			// records that are closing (ADR 0034, issue #90).
 			case "queued":
 				return 5;
-			case "closing":
+			// An `unscheduled` record needs the operator's decision - schedule,
+			// start, or delete (issue #91) - so it stands beside the queue's
+			// waiters and ahead of the closing records.
+			case "unscheduled":
 				return 6;
-			case "closed":
+			case "closing":
 				return 7;
+			case "closed":
+				return 8;
 		}
 	};
 	const leftGroup = group(left.state);

@@ -943,6 +943,8 @@ describe("the merged Main view", () => {
 						"f History",
 						"w Close",
 						"d Delete",
+						"s Schedule",
+						"Enter Start now",
 						"Enter Recovery",
 						"Enter Respond",
 						"x Section",
@@ -950,18 +952,22 @@ describe("the merged Main view", () => {
 						expect(rows.filter((row) => row.includes(hint))).toHaveLength(1);
 					// The guide states no second Message or Help control: the
 					// frame holds one of each, whatever section is expanded. The
-					// Consultation section now runs past the first window (Goto,
-					// ADR 0025), so one scroll step brings its tail into view.
-					setup.mockInput.pressKey("j");
-					const scrolled = overlayRows(await settle(setup));
-					// The recovery row's reason takes a line of its own, so the
-					// section's tail sits two steps down from where it did before
-					// Enter learned its third meaning.
-					expect(scrolled.filter((row) => row.includes("r Refresh"))).toHaveLength(1);
-					setup.mockInput.pressKey("j");
-					const tail = overlayRows(await settle(setup));
-					expect(tail.filter((row) => row.includes("m/F2 Message"))).toHaveLength(1);
-					expect(scrolled.filter((row) => row.includes("? Help"))).toHaveLength(1);
+					// Consultation section runs past the first window (Goto, ADR
+					// 0025, and the unscheduled actions, issue #91), so scroll
+					// steps bring its tail into view.
+					let window = rows;
+					const seen = new Set<string>();
+					for (let step = 0; step < 10; step += 1) {
+						for (const row of window) seen.add(row);
+						if (window.some((row) => row.includes("m/F2 Message"))) break;
+						setup.mockInput.pressKey("j");
+						window = overlayRows(await settle(setup));
+					}
+					// The refresh keeps the last row of the group, and the guide
+					// names it once across every window the scroll passed.
+					expect([...seen].filter((row) => row.includes("r Refresh"))).toHaveLength(1);
+					expect(window.filter((row) => row.includes("m/F2 Message"))).toHaveLength(1);
+					expect(window.filter((row) => row.includes("? Help"))).toHaveLength(1);
 				},
 				state,
 				undefined,

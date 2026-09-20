@@ -69,6 +69,13 @@ export function consultationDetailLines(
 	};
 	push(`${consultation.typeName} - ${consultation.repository.displayName}`, paint("text"), true);
 	push(`State: ${consultation.state}`);
+	// The `unscheduled` record (issue #91) owns three answers in the section:
+	// the hint names them, the way the queue's detail names its list keys.
+	if (consultation.state === "unscheduled")
+		push(
+			"s schedules it into the Work queue, Enter starts it now over the cap, d deletes the record",
+			paint("subtext0"),
+		);
 	push(`Started: ${consultation.createdAt.slice(0, 16).replace("T", " ")}`);
 	push(`Agent: ${consultation.agentType} (${consultation.agentName})`);
 	if (agentStatus !== null)

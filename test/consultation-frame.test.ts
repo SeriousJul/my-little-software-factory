@@ -27,7 +27,7 @@ import type {
 	CommandRunner,
 	ModelListResult,
 } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import { type FactoryState, openFactoryState, workQueueIdentityOf } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -3252,7 +3252,62 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		}
 	});
 
-	test("removing the queue item leaves the record queued", async () => {
+	/**
+	 * The shared walk of the unscheduling tests (issue #91): the cap is held
+	 * by the seed's seat, the launcher queues the Consultation, the Work
+	 * section's cursor lands on the item, and Delete removes it. The item
+	 * goes, the record is `unscheduled`, and the cursor crosses to the
+	 * Consultation section, where the record keeps standing.
+	 */
+	async function unscheduleThroughTheQueue(setup: Setup, state: FactoryState): Promise<string> {
+		await openLauncher(setup);
+		await awaitFrame(setup, (f) => f.includes("acme/factory"), "the verified Repository option");
+		await launchConsultationDraft(setup, "review auth");
+		await awaitFrame(
+			setup,
+			(f) => messageRowOf(f).includes("consultation queued"),
+			"the queued notice",
+		);
+		const queued = state.consultations("all").find((c) => c.state === "queued");
+		if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+		const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) => /\bWork\b/.test(row));
+		expect(headerRow).toBeGreaterThanOrEqual(0);
+		await mouseClick(setup, 2, headerRow);
+		await awaitFrame(setup, (f) => f.includes("❯ Work queue"), "the cursor in the Work queue");
+		// The item's row stands under the kind word, with the record's identity.
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("consultation");
+		expect(frame).toContain(queued.id.slice(0, 8));
+		// Delete removes the item, not the ask: the record moves to
+		// `unscheduled`, and the Message line says both.
+		const removed = await press(setup, "delete", "the removal notice", (f) =>
+			f.includes("removed from the queue"),
+		);
+		expect(messageRowOf(removed)).toContain(
+			`consultation ${queued.id.slice(0, 8)}: removed from the queue; the record is unscheduled`,
+		);
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.consultation(queued.id)?.state).toBe("unscheduled");
+		// The record keeps standing in the Consultation section: the row
+		// carries its state, its type, and its repository.
+		await crossToConsultations(setup);
+		const section = setup.captureCharFrame();
+		expect(section).toContain("unscheduled");
+		expect(section).toContain("grill");
+		expect(section).toContain("acme/factory");
+		// The seed's working record is listed in the section too, and it sorts
+		// ahead of the unscheduled ask: the walk steps the cursor down to the
+		// unscheduled row, the one every test works on.
+		for (let step = 0; step < 10; step += 1) {
+			if (detailPaneText(setup.captureCharFrame()).includes("State: unscheduled")) break;
+			setup.mockInput.pressKey("j");
+			await settle(setup, 200);
+		}
+		expect(detailPaneText(setup.captureCharFrame())).toContain("State: unscheduled");
+		return queued.id;
+	}
+
+	test("removing the queue item unschedules the record, and the record keeps standing", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
 		const inner = new FakeRunner();
@@ -3261,55 +3316,160 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		try {
 			await withApp(
 				async (setup) => {
-					await openLauncher(setup);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("acme/factory"),
-						"the verified Repository option",
-					);
-					await launchConsultationDraft(setup, "review auth");
-					await awaitFrame(
-						setup,
-						(f) => messageRowOf(f).includes("consultation queued"),
-						"the queued notice",
-					);
-					const queued = state.consultations("all").find((c) => c.state === "queued");
-					expect(queued).toBeDefined();
-					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
-					// Open the Work section: the click lands the cursor on the item.
-					const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
-						/\bWork\b/.test(row),
-					);
-					expect(headerRow).toBeGreaterThanOrEqual(0);
-					await mouseClick(setup, 2, headerRow);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("❯ Work queue"),
-						"the cursor in the Work queue",
-					);
-					// The item's row stands under the kind word, with the
-					// record's identity.
-					const frame = setup.captureCharFrame();
-					expect(frame).toContain("consultation");
-					expect(frame).toContain(queued?.id.slice(0, 8));
-					// Remove it: the item goes, the record keeps its ask and
-					// its state, and the Message line says both.
-					setup.mockInput.pressKey("DELETE");
-					const removed = await awaitFrame(
-						setup,
-						(f) => f.includes("the queue item was removed"),
-						"the removal notice",
-					);
-					expect(messageRowOf(removed)).toContain(
-						`consultation ${queued?.id.slice(0, 8)}: the queue item was removed; the record keeps its queued state`,
-					);
-					expect(state.workQueue()).toHaveLength(0);
-					expect(state.consultation(queued?.id ?? "")?.state).toBe("queued");
+					await unscheduleThroughTheQueue(setup, state);
+					// The detail reads the ask: the state word, the type beside the
+					// repository, and the initial input the launcher gave it.
+					const detail = detailPaneText(setup.captureCharFrame());
+					expect(detail).toContain("State: unscheduled");
+					expect(detail).toContain(`grill - acme/factory`);
+					expect(detail).toContain("review auth");
 				},
 				WIDTH,
 				32,
 				// The test projection holds the seat: no poll can free it or
 				// pick the item up out from under the test.
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section schedules the unscheduled record back into the queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// `s` schedules the record back: it returns to `queued` with
+					// its item at the queue's tail, and the line names the place.
+					const scheduled = await press(setup, "s", "the schedule notice", (f) =>
+						f.includes(`Consultation ${id.slice(0, 8)} scheduled`),
+					);
+					expect(messageRowOf(scheduled)).toContain(
+						`Consultation ${id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
+					);
+					expect(state.consultation(id)?.state).toBe("queued");
+					expect(state.workQueue().map(workQueueIdentityOf)).toEqual([id]);
+					// A second `s` says the record already waits: the schedule
+					// refuses in the section's words, and the record stands where
+					// it stands.
+					await press(setup, "s", "the already-waiting refusal", (f) =>
+						f.includes("already waits in the Work queue"),
+					);
+					expect(state.consultation(id)?.state).toBe("queued");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section starts the unscheduled record now, over the cap", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// The launched Agent's pane joins the poll's list, so the
+					// start the key runs verifies on the next cycle.
+					runner.agentListJson = agentListJson([
+						{ pane: seatPane, status: "working" },
+						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
+					]);
+					// The cap stands full from the boot: the seed's seat is the
+					// line, and Enter starts the record over it.
+					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+					const started = await press(setup, "return", "the start-now notice", (f) =>
+						f.includes("starting Consultation"),
+					);
+					expect(messageRowOf(started)).toContain(
+						`starting Consultation ${id.slice(0, 8)} over the Parallel limit`,
+					);
+					// The seat count stands over the limit: the seed's seat plus
+					// the seat the start took over the cap.
+					await awaitFrame(setup, (f) => f.includes("auto: off 2/1"), "the seat over the cap");
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the start-now launch sequence",
+					);
+					expect(state.consultation(id)?.state).not.toBe("unscheduled");
+					expect(state.consultation(seatId)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					pollIntervalMs: 100,
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section deletes the unscheduled record", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// `d` asks first: the delete removes the record and its
+					// history, and nothing else can run behind it.
+					await openConsultationPanel(setup, "d", "the delete confirmation", (f) =>
+						f.includes(`Delete Consultation ${id.slice(0, 8)}`),
+					);
+					const frame = await confirmPanel(setup, "the delete", (f) =>
+						f.includes("deleted; backups may retain data"),
+					);
+					expect(messageRowOf(frame)).toContain(
+						`Consultation ${id.slice(0, 8)} deleted; backups may retain data`,
+					);
+					expect(state.consultation(id)).toBeUndefined();
+				},
+				WIDTH,
+				32,
 				{
 					state,
 					runner,

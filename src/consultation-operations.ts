@@ -361,9 +361,16 @@ export class ConsultationOperations {
 	 * `failed` with its reason and its Message line, exactly as a failed launch
 	 * does, and the queue's item went with the claim.
 	 */
+	/**
+	 * Start one Consultation that is not started yet: the Work queue's pickup
+	 * of a `queued` record (ADR 0034, issue #90), and the operator's start
+	 * now of an `unscheduled` record over the Parallel limit (issue #91). Both
+	 * run through this one seam: the cap is the scheduler's check, not the
+	 * start's, and the seat move below is the claim in either case.
+	 */
 	pickup(consultationId: string): Promise<ConsultationPickupOutcome> {
 		const current = this.state.consultation(consultationId);
-		if (current === undefined || current.state !== "queued")
+		if (current === undefined || (current.state !== "queued" && current.state !== "unscheduled"))
 			return Promise.resolve({ kind: "moved" });
 		const type = this.config().consultationTypes[current.typeName];
 		if (type === undefined) {
@@ -392,8 +399,8 @@ export class ConsultationOperations {
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
 		});
 		// The atomic step is the seat: the record moves to `opening` only if it
-		// is still `queued`, so a close or a delete that raced the pickup wins
-		// the record and the pickup starts nothing.
+		// is still `queued` or `unscheduled`, so a close or a delete that
+		// raced the start wins the record and the start runs nothing.
 		if (!this.state.beginConsultationStart(current.id)) {
 			this.callbacks.onConsultationsChanged();
 			return Promise.resolve({ kind: "moved" });
@@ -735,6 +742,26 @@ export class ConsultationOperations {
 		this.status(
 			"info",
 			`Consultation ${consultation.id.slice(0, 8)} deleted; backups may retain data`,
+		);
+		return true;
+	}
+
+	/**
+	 * Schedule an `unscheduled` Consultation back into the Work queue (issue
+	 * #91): the record returns to `queued` and waits at the queue's tail, with
+	 * its pickup the only starter. The answer of the state's one write, so a
+	 * record that left `unscheduled` behind the key says its own fact.
+	 */
+	schedule(consultation: Consultation): boolean {
+		const result = this.state.scheduleConsultation(consultation.id);
+		if (!result.ok) {
+			this.status("error", result.reason);
+			return false;
+		}
+		this.callbacks.onConsultationsChanged();
+		this.status(
+			"info",
+			`Consultation ${consultation.id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
 		);
 		return true;
 	}
