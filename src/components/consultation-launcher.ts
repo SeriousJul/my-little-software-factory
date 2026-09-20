@@ -45,7 +45,6 @@ import { DraftField, type FieldHandle } from "./shared/fields.ts";
 import { copySelectionWith, type FormFocus, moveFieldWith, useFormSlots } from "./shared/form.ts";
 import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
 import { truncateToWidth } from "./text.ts";
-import { paint } from "./theme.ts";
 
 /** The whole unfinished form, kept by the screen that owns the launcher. */
 export interface LauncherDraft {
@@ -298,17 +297,19 @@ export function ConsultationLauncher({
 		frame,
 		width: terminalWidth,
 		title,
-		borderColor: ink.indicator.fg ?? paint("accent"),
-		minContentRows: FIXED_ROWS + MINIMUM_DRAFT_ROWS,
+		body: {
+			above: [],
+			below: [
+				...rows,
+				createElement(
+					"text",
+					{ key: "note", fg: ink.detail.fg ?? undefined },
+					truncateToWidth(RETENTION_NOTE, frame.contentWidth),
+				),
+			],
+			minRows: FIXED_ROWS + MINIMUM_DRAFT_ROWS,
+		},
 		message,
 		bar: { mode: formContext.mode, context: contextFor(formContext.mode, formContext) },
-		children: [
-			...rows,
-			createElement(
-				"text",
-				{ key: "note", fg: ink.detail.fg ?? undefined },
-				truncateToWidth(RETENTION_NOTE, frame.contentWidth),
-			),
-		],
 	});
 }

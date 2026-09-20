@@ -708,36 +708,72 @@ This is recorded as an open upstream defect, not as a pass. The
 
 ## The Body pane, the Decision region, and the Live view's chrome (issues #121-#125, ADR 0039 and ADR 0040)
 
-This branch carries the written rules the pane's work stands on, not a
-measurement of the pane: the shared control standard states the Body pane,
-the Decision region, their payment order, and the one border-ink rule, and
-names the region module in the library's module list; the architecture check
-refuses a surface that paints decision rows without the library's region
-state, naming the offender by file, with the shared chrome as the one stated
-exemption (`test/shared-control-architecture.test.ts`); and the agent
-instructions name the Live view's mode in the catalogue surface list. The
-pane's implementation (issues #121-#125) is where the targets below get
-measured; this branch records them as unverified, not as a pass.
+The written rules landed with the earlier links of the chain: the shared
+control standard states the Body pane, the Decision region, their payment
+order, and the one border-ink rule, and names the region module in the
+library's module list; the architecture check refuses a surface that paints
+decision rows without the library's region state, naming the offender by
+file, with the shared chrome as the one stated exemption
+(`test/shared-control-architecture.test.ts`); and the agent instructions
+name the Live view's mode in the catalogue surface list. This link, issue
+#125, carries the implementation the targets below measure.
 
-The record carries the pane's new unverified targets, stated rather than
-measured:
+What the implementation is: the region's selection, wrap, auto-scroll,
+visible window, and range text are the library's region module
+(`src/components/shared/region.ts`); the pane stands in the shared chrome's
+`ModalSurface`, which takes a body of an optional above row, a bordered and
+titled pane, and a below region; the decision surface computes the pane's
+rows, its padding, and the region's visible rows in the stated payment
+order (`decisionBodyLayout` in `decision-modal.ts`), and only then does the
+surface stand down to the size message; the Live view renders on the same
+surface, its stream sub-mode answering to the `live-view` catalogue mode
+and its settled sub-mode to the `decision-modal` mode, with the border
+re-titling `Live:` to `Decision:` on settle in place and no second pop-in.
 
-- The nested border at the declared minimum: the pane's border inside the
-  modal's box at the plane's declared minimum, with the pane's chrome
-  yielded - padding first, border second - before the surface stands down to
-  the size message. **Not verified:** it is a terminal and visual walk, and
-  no walk has run for it.
-- The Live view's bar and Message line: the shared-chrome rows the Live view
-  gains (ADR 0040), with the bar's hints following the mode and the border
-  re-titling `Live:` to `Decision:` on settle. **Not verified:** the terminal
-  walks have not been run for them.
+What is measured automatically, on this branch:
+
+- The nested border at the plane's declared minimum (40 by 19): the box's
+  border one cell in on every side, the pane's border and its padding inside
+  the box's padding, the log's floor of three rows held inside the pane,
+  the region's rows standing below the pane's bottom border with the
+  selection on Close, and the keys dispatching in both regions - the region
+  selection moving to Goto and the body scrolling one row (`test/decision-modal.test.ts`).
+- The nested border with the pane's chrome yielded: at a low box the pane
+  yields its padding before the log yields rows, keeps its border, and the
+  scrollbar stays pinned to the body's last column inside the pane on full,
+  short, and blank rows (`test/decision-modal.test.ts`).
+- The Live view's shared chrome: the bar and Message line under the box, the
+  hints following the mode, the re-title from `Live:` to `Decision:` on
+  settle with the pane's title moving from `Agent view` to `Turn log` in
+  the same frame, the stream's bottom pin and scroll keys, the stale note as
+  the body's last line, and the auto-close turn that keeps streaming under
+  the `Live:` border with no region rows (`test/live-view.test.ts`,
+  `test/auto-mode.test.ts`).
+- The catalogue: the `live-view` mode's keys beside its hints, the
+  `live-goto` entry in the catalogue, and the decision mode's `Scroll body`
+  hint (`test/key-guide.test.ts`).
+- The guide's pictures: the decision modal, the Live view's stream, and the
+  settled Live view recaptured at the shared fixture, and verified by eye
+  for the pane's border, title, and the region's rows (`test/screenshot-drift.test.ts`).
+
+The stand-down step of the payment order is measured as the step the
+declared minimum cannot reach: at 40 by 19 the box holds twelve body rows,
+and the context row, the pane's chrome, the log's floor, and the region's
+minimum of one row fit within them, so the size message is the fallback the
+shorter surfaces use, not one the decision surface paints at a legal
+terminal size.
+
+What remains unverified:
+
+- The terminal walks: the nested border and the re-title are measured in the
+  harness's frames, not in a walked terminal, and the walks recorded earlier
+  in this file have not been re-run on the pane. Not a pass.
 - The screen-reader path: **remains unverified**, as recorded above. No
   screen-reader claim is made for the pane or the Live view's chrome.
 
-The record's existing open items stand: the terminal walks have not been
-re-run on the theme-inherited paint, the light-herdr-theme visual walk is
-unrun, and the inherited herdr theme pairs are not contrast-checked. Nothing
-in this section claims a pass for what was not measured.
+The record's existing open items stand: the light-herdr-theme visual walk is
+unrun, and the inherited herdr theme pairs are not contrast-checked.
+Nothing in this section claims a pass for what was not measured.
 
 ## The queued badge of the Queue wait
 

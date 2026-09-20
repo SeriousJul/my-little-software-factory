@@ -281,7 +281,7 @@ describe("the contextual Action bar", () => {
 				const panelBar = actionBarRowOf(panelFrame);
 				for (const hint of [
 					"↑↓ Select action",
-					"j/k Scroll log",
+					"j/k Scroll body",
 					"Enter Confirm action",
 					"Esc Cancel",
 					"F1/? Help",

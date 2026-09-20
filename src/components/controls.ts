@@ -36,6 +36,8 @@ export type InteractionMode =
 	| "action-panel"
 	| "decision-modal"
 	| "missing-modal"
+	/** The Live view's streaming sub-mode (ADR 0040). */
+	| "live-view"
 	| "key-guide"
 	| "message-view"
 	| "consultation-interaction";
@@ -169,6 +171,23 @@ export interface ControlContext {
 	 * `e` key by control id.
 	 */
 	editableActionSelected?: boolean;
+	/**
+	 * Whether the surface's Body pane scrolls: the body holds more rows than
+	 * its window. The surface states it from its own rows, and the catalogue
+	 * gates the body's scroll on it, so the bar never hints a scroll that
+	 * cannot run (ADR 0039).
+	 */
+	bodyScrollable?: boolean;
+	/** Whether the surface's Body pane carries nothing at all. */
+	bodyEmpty?: boolean;
+	/**
+	 * The rows the surface's Decision region holds.
+	 *
+	 * The surface states it from its own rows, and the catalogue refuses the
+	 * region's selection when the region holds one row, on the same rule the
+	 * form's selector already uses for a cycle that goes nowhere.
+	 */
+	actionRowCount?: number;
 	/**
 	 * The slot of the active form that holds the focus.
 	 *
@@ -596,6 +615,18 @@ const message = (context: ControlContext): ControlAvailability =>
 	context.messageTruncated
 		? available()
 		: unavailable("the current Message fits on the Message line");
+/**
+ * Why the body's scroll answers nothing (ADR 0039).
+ *
+ * The control is gated on the facts: unavailable, with a stated reason, when
+ * the body already fills the pane's window or carries nothing, so the Action
+ * bar never hints a scroll that cannot run and a pressed key says why.
+ */
+const bodyScroll = (context: ControlContext): ControlAvailability => {
+	if (context.bodyEmpty === true) return unavailable("the body carries no rows");
+	if (context.bodyScrollable === false) return unavailable("the body fills its pane");
+	return available();
+};
 
 /**
  * Why the Priority bump and clear answer nothing (ADR 0022).
@@ -632,6 +663,7 @@ const planeModes: readonly InteractionMode[] = [
 	...formModes,
 	"action-panel",
 	...modalModes,
+	"live-view",
 	"key-guide",
 	"message-view",
 ];
@@ -1394,22 +1426,31 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "↑↓",
 		scope: "modal",
 		actionBar: true,
+		// The region's range rides the bar behind this hint, the way the Key
+		// guide and the Message view already use the range anchor.
+		rangeAnchor: true,
 		priority: 80,
 		modes: [...modalModes, "action-panel"],
-		availability: available,
+		// A selection in a region that holds one row goes nowhere: the same
+		// rule the form's selector already uses for a cycle with no other
+		// value, and the reason lands on the Message line.
+		availability: (context) =>
+			context.actionRowCount === 1 ? unavailable("the region holds one row") : available(),
 	},
 	{
-		id: "scroll-turn-log",
-		label: "Scroll log",
+		id: "scroll-body",
+		label: "Scroll body",
 		// The page and jump keys are aliases of the same scroll: they are
-		// accepted, and the j/k hint is the one the bar and guide show.
+		// accepted, and the j/k hint is the one the bar and guide show. The
+		// body it scrolls may be the Agent view and not the Turn log
+		// (ADR 0039), so it carries the shared name.
 		keys: () => ["j", "k", "pageup", "pagedown", "home", "end"],
 		keyLabel: "j/k",
 		scope: "modal",
 		actionBar: true,
 		priority: 75,
-		modes: ["decision-modal"],
-		availability: available,
+		modes: ["decision-modal", "live-view"],
+		availability: bodyScroll,
 	},
 	{
 		id: "scroll-message",
@@ -1457,8 +1498,25 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 90,
-		modes: [...modalModes, "action-panel"],
+		modes: [...modalModes, "action-panel", "live-view"],
 		availability: available,
+	},
+	{
+		// Enter in the Live view's streaming sub-mode is the Goto: pure focus,
+		// the same navigation the Ticket section runs on `g` (ADR 0033), and
+		// the row it confirms on the decision sub-mode is the decision's own
+		// Goto row. A turn settling under the open view stays a live view
+		// until the factory leaves the decision to the operator, so the pane
+		// fact the Ticket Goto gates on is the gate here too.
+		id: "live-goto",
+		label: "Goto",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "modal",
+		actionBar: true,
+		priority: 70,
+		modes: ["live-view"],
+		availability: (context) => ticketGoto(context),
 	},
 	{
 		id: "guide-scroll",
@@ -1820,6 +1878,8 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Decision modal";
 		case "missing-modal":
 			return "Missing modal";
+		case "live-view":
+			return "Live view";
 		case "form-field":
 			return "Form field";
 		case "form-selector":

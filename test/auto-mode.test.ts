@@ -2002,7 +2002,7 @@ describe("the decision modal", () => {
 				expect(modal).not.toContain("**");
 				expect(modal).not.toContain("##");
 				// The shared Action bar offers the log's scroll key.
-				expect(modal).toContain("j/k Scroll log");
+				expect(modal).toContain("j/k Scroll body");
 
 				// The failed tool call wears the warning color, the passing one
 				// the dim one. Both are painted, so the notes are on screen. The
