@@ -216,6 +216,29 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("settles a claim a dead run left unsettled and frees the ticket to hand off again", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		// The run dies here: the claim stays unsettled.
+		state.close();
+
+		const reopened = openFactoryState(path);
+		// The remnant blocks a new handoff until the recovery runs.
+		expect(reopened.claimHandoff(ticket.identity, choice, "open")).toEqual(
+			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
+		);
+		expect(reopened.recoverUnsettledHandoffs()).toBe(1);
+		expect(reopened.claimHandoff(ticket.identity, choice, "open")).toEqual(
+			expect.objectContaining({ ok: true }),
+		);
+		reopened.close();
+	});
+
 	test("keeps identity and state when a configured source is renamed", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);

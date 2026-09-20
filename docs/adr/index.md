@@ -49,3 +49,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0038: Enter answers a Consultation with the surface its state needs](./0038-enter-answers-a-consultation-with-the-surface-its-state-needs.md)
 - [ADR 0039: The modal's body is a pane and its decisions a bounded region](./0039-the-modal-body-is-a-pane-and-its-decisions-a-bounded-region.md)
 - [ADR 0040: Every near-fullscreen surface is shared chrome](./0040-every-near-fullscreen-surface-is-shared-chrome.md)
+- [ADR 0041: The boot settles the handoff claims the previous run left unsettled](./0041-the-boot-settles-the-handoff-claims-the-previous-run-left-unssettled.md)

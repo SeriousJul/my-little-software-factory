@@ -9,6 +9,7 @@
  * bin end to end; these tests pin the words and the order.
  */
 
+import { Database } from "bun:sqlite";
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -175,6 +176,51 @@ describe("the startup state open", () => {
 		expect(opened.ok).toBe(false);
 		if (opened.ok) return;
 		expect(opened.reason).toContain(`cannot open factory state at ${at}`);
+	});
+
+	/**
+	 * The remnant a dead run leaves in the state file: the ticket and its
+	 * handoff claim, the claim unsettled the way a crash or a watch reset
+	 * leaves it.
+	 */
+	function plantRemnant(path: string): void {
+		const db = new Database(path);
+		db.prepare(
+			"INSERT INTO tickets(identity, state, work_cycle) VALUES ('github:github.com:I_5', 'open', 1)",
+		).run();
+		db.prepare(
+			"INSERT INTO handoff_attempts(attempt_id, ticket_identity, work_cycle, choice_json, stage, created_at) VALUES ('remnant', 'github:github.com:I_5', 1, '{}', 'starting-agent', '2026-09-20T18:55:34.000Z')",
+		).run();
+		db.close();
+	}
+
+	test("opening settles a remnant claim and reports the recovery as a note", () => {
+		const path = inTempDir("state-recovery")("state.sqlite");
+		const opened = openStartupState(path);
+		if (!opened.ok) throw new Error(opened.reason);
+		expect(opened.notes).toEqual([]);
+		opened.state.close();
+		plantRemnant(path);
+
+		const next = openStartupState(path);
+		expect(next.ok).toBe(true);
+		if (!next.ok) return;
+		expect(next.notes).toEqual(["recovered 1 handoff claim left unsettled by the previous run"]);
+		// The remnant settled as a failed start, so the ticket's recovery
+		// block is gone with it.
+		const db = new Database(path);
+		const remnant = db
+			.prepare(
+				"SELECT stage, resolved_at, failure_reason FROM handoff_attempts WHERE attempt_id = 'remnant'",
+			)
+			.get() as { stage: string; resolved_at: string | null; failure_reason: string | null };
+		expect(remnant.stage).toBe("failed");
+		expect(remnant.resolved_at).not.toBeNull();
+		expect(remnant.failure_reason).toBe(
+			"the run that claimed this handoff ended before it settled it",
+		);
+		db.close();
+		next.state.close();
 	});
 });
 

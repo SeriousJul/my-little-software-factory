@@ -286,7 +286,7 @@ _Avoid_: progress bar, loader animation, hourglass
 
 **Starting**:
 The window during which a ticket's Handoff is claimed and not yet settled, or the ticket is `handed-off`: the agent is being started, or it has started and its work is not yet observed.
-The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the ticket shows its recovery fact instead.
+The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the next boot settles it as a failed start, so the ticket wears no starting face over it (ADR 0041).
 _Avoid_: boot, launch, pending, startup
 
 **Startup grace**:

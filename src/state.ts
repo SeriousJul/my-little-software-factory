@@ -2483,6 +2483,33 @@ export class FactoryState {
 		});
 	}
 
+	/**
+	 * The boot recovery for a run that died with a handoff in flight.
+	 *
+	 * The lease keeps the plane to one process, so an attempt left unsettled
+	 * when a new run opens the state is a remnant: the dispatch that claimed
+	 * it died with its run and will never settle it. The boot settles each
+	 * remnant as a failed start with that reason and frees its ticket from
+	 * the recovery block (ADR 0041).
+	 *
+	 * The ticket's state never moves: a claim that never settled never moved
+	 * its ticket. An agent a dead run may have started is a leftover the
+	 * operator sees in herdr, not a row this recovery writes.
+	 *
+	 * Returns how many attempts the recovery settled.
+	 */
+	recoverUnsettledHandoffs(): number {
+		return this.transaction(() => {
+			const now = new Date(this.now()).toISOString();
+			const settled = this.db
+				.prepare(
+					"UPDATE handoff_attempts SET stage = 'failed', resolved_at = ?, failure_reason = ? WHERE resolved_at IS NULL",
+				)
+				.run(now, "the run that claimed this handoff ended before it settled it");
+			return Number(settled.changes);
+		});
+	}
+
 	/** Create the Consultation record before any Herdr or git command runs. */
 	createConsultation(input: CreateConsultationInput): Consultation {
 		const id = input.id ?? randomUUID();

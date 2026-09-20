@@ -42,7 +42,9 @@ export type StartupConfigResult =
 	| { ok: false; reason: string };
 
 /** An opened state, or the one failure line the operator reads instead. */
-export type StartupStateResult = { ok: true; state: FactoryState } | { ok: false; reason: string };
+export type StartupStateResult =
+	| { ok: true; state: FactoryState; notes: string[] }
+	| { ok: false; reason: string };
 
 /**
  * The whole startup, as a value.
@@ -108,9 +110,12 @@ export async function loadStartupConfig(configPath: string): Promise<StartupConf
 }
 
 /**
- * Open the state database at the given path and take the one-process lease.
+ * Open the state database at the given path, take the one-process lease, and
+ * settle the handoff claims the previous run left unsettled (ADR 0041).
  * A path that cannot be opened is one readable failure line; the state is
- * left open only when it is usable.
+ * left open only when it is usable. A recovered claim is a note, not a
+ * warning: the recovery is the normal end of the crashed run's start, and
+ * the ticket it frees is ready to hand off again.
  */
 export function openStartupState(statePath: string): StartupStateResult {
 	let state: FactoryState | undefined;
@@ -122,7 +127,17 @@ export function openStartupState(statePath: string): StartupStateResult {
 		const message = error instanceof StateError ? error.message : String(error);
 		return { ok: false, reason: message };
 	}
-	return { ok: true, state };
+	const recovered = state.recoverUnsettledHandoffs();
+	return {
+		ok: true,
+		state,
+		notes:
+			recovered === 0
+				? []
+				: [
+						`recovered ${recovered} handoff claim${recovered === 1 ? "" : "s"} left unsettled by the previous run`,
+					],
+	};
 }
 
 /**
@@ -210,6 +225,9 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 		// The warnings precede the failure they lead to.
 		return { ok: false, lines: [...notes, opened.reason], exitCode: 1 };
 	}
+	// The recovery note lands after the warnings: it is the last of the boot's
+	// findings, and the state it opens already carries the repair.
+	for (const note of opened.notes) notes.push(note);
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
 	return {
