@@ -230,7 +230,9 @@ export function LiveView({
 				const next = Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll);
 				return next >= maxBodyScroll ? null : next;
 			});
-		else setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
+		// The catalogue feeds this handler only the named keys, so an unknown
+		// name is a no-op, not a guess for `k`.
+		else if (name === "k") setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
 	};
 
 	useControlDispatch({
