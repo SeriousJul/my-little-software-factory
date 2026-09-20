@@ -92,6 +92,7 @@ describe("the shared control gallery", () => {
 			"captured-history-fallback",
 			"work-queue-item",
 			"work-queue-item-defaults",
+			"work-queue-item-damaged",
 			"work-queue-empty",
 			"close-dialog-opening",
 			"close-dialog-working",

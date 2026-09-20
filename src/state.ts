@@ -90,12 +90,39 @@ export interface WorkQueueItem {
 	id: string;
 	kind: "handoff";
 	ticketIdentity: string;
-	/** The origin the pickup's claim re-checks against the ticket state. */
-	origin: HandoffOrigin;
-	/** The operator's choice, captured at the enqueue. */
-	choice: HandoffChoice;
+	/** The origin the pickup's claim re-checks; null when the stored cell cannot be read. */
+	origin: HandoffOrigin | null;
+	/** The operator's choice, captured at the enqueue; null when the stored cell cannot be read. */
+	choice: HandoffChoice | null;
 	/** When the item entered the queue, in ISO time. */
 	createdAt: string;
+}
+
+/** What one stored Work queue item asks the factory to start, once read. */
+export type WorkQueueStart =
+	| { ok: true; ticketIdentity: string; origin: HandoffOrigin; choice: HandoffChoice }
+	| { ok: false; reason: string };
+
+/**
+ * Read a stored Work queue item as the start it asks for.
+ *
+ * A cell neither the column rules nor the choice decoder can read makes the
+ * item unstartable, and the answer names that damage: the queue keeps the row
+ * in view, and the pickup refuses it rather than inventing the origin, the
+ * ticket, or the settings the operator never chose.
+ */
+export function workQueueStartOf(item: WorkQueueItem): WorkQueueStart {
+	if (item.ticketIdentity === "") return { ok: false, reason: "the stored item names no ticket" };
+	if (item.origin === null)
+		return { ok: false, reason: "the stored item's origin is not one the plane knows" };
+	if (item.choice === null)
+		return { ok: false, reason: "the stored item's captured choice is not readable" };
+	return {
+		ok: true,
+		ticketIdentity: item.ticketIdentity,
+		origin: item.origin,
+		choice: item.choice,
+	};
 }
 
 interface SettleTurnInput {
@@ -615,7 +642,8 @@ const MIGRATION_V13_TO_V14 = `
 		queue_order INTEGER NOT NULL,
 		created_at TEXT NOT NULL
 	);
-	CREATE INDEX work_queue_kind_order ON work_queue(kind, queue_order);
+	-- Every read takes the whole queue in its shared order across kinds, and
+	-- the queue is short by design, so the order carries no index of its own.
 `;
 
 /** Open state synchronously after creating its parent directory. */
@@ -1341,6 +1369,9 @@ export class FactoryState {
 	}): WorkQueueItem {
 		return this.transaction(() => {
 			const id = randomUUID();
+			// One clock read serves the stored row and the returned item, so the
+			// `Enqueued:` time the queue shows is the time its row carries.
+			const createdAt = new Date(this.now()).toISOString();
 			const position =
 				(
 					this.db
@@ -1357,7 +1388,7 @@ export class FactoryState {
 					input.origin,
 					JSON.stringify(input.choice),
 					position,
-					new Date(this.now()).toISOString(),
+					createdAt,
 				);
 			return {
 				id,
@@ -1365,7 +1396,7 @@ export class FactoryState {
 				ticketIdentity: input.ticketIdentity,
 				origin: input.origin,
 				choice: input.choice,
-				createdAt: new Date(this.now()).toISOString(),
+				createdAt,
 			};
 		});
 	}
@@ -1376,14 +1407,6 @@ export class FactoryState {
 			.prepare("SELECT * FROM work_queue ORDER BY queue_order, rowid")
 			.all() as WorkQueueRow[];
 		return rows.map(workQueueItemOf);
-	}
-
-	/** One Work queue item by its id, or undefined when it is gone. */
-	workQueueItem(id: string): WorkQueueItem | undefined {
-		const row = this.db
-			.prepare("SELECT * FROM work_queue WHERE id = ?")
-			.get(id) as WorkQueueRow | null;
-		return row == null ? undefined : workQueueItemOf(row);
 	}
 
 	/**
@@ -3269,7 +3292,6 @@ function jsonStringRecord(value: string): Record<string, string> {
 	}
 }
 
-/** A stored handoff row, with the herdr handles it started. */
 /** The stored row of a Work queue item (ADR 0034, issue #88). */
 interface WorkQueueRow {
 	id: string;
@@ -3282,54 +3304,29 @@ interface WorkQueueRow {
 }
 
 /**
- * Read one stored Work queue item back. The cells the Handoff kind fills are
- * non-null by construction; a row that lost one reads the empty value, so a
- * damaged row degrades to an item the pickup refuses with a readable reason
- * instead of blanking the queue.
+ * Read one stored Work queue item back.
+ *
+ * The choice decodes through `jsonChoice`, the one reader of the stored
+ * `choice_json` shape, so the queue and the handoff record cannot drift apart.
+ * A cell neither rule can read stays null: the row keeps its place in the
+ * queue, and `workQueueStartOf` names the damage it cannot start.
  */
-/** A stored cell the choice fills with a string, read back as the stored text. */
-function choiceString(record: Record<string, unknown>, key: string): string {
-	const value = record[key];
-	return typeof value === "string" ? value : "";
-}
-
 function workQueueItemOf(row: WorkQueueRow): WorkQueueItem {
-	const parsed = row.choice_json === null ? null : safeJsonParse(row.choice_json);
-	const record: Record<string, unknown> = isRecord(parsed) ? parsed : {};
-	const environment = record.environment;
-	const choice: HandoffChoice = {
-		agentType: choiceString(record, "agentType"),
-		environment:
-			environment === "live-worktree" || environment === "worktree" || environment === "container"
-				? environment
-				: "worktree",
-		taskType: choiceString(record, "taskType"),
-		model: choiceString(record, "model"),
-		thinking: choiceString(record, "thinking"),
-		contextWindow: choiceString(record, "contextWindow"),
-	};
-	const origin: HandoffOrigin =
+	const origin: HandoffOrigin | null =
 		row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
 			? row.origin
-			: "open";
+			: null;
 	return {
 		id: row.id,
 		kind: "handoff",
 		ticketIdentity: row.ticket_identity ?? "",
 		origin,
-		choice,
+		choice: row.choice_json === null ? null : (jsonChoice(row.choice_json) ?? null),
 		createdAt: row.created_at,
 	};
 }
 
-function safeJsonParse(text: string): unknown {
-	try {
-		return JSON.parse(text);
-	} catch {
-		return null;
-	}
-}
-
+/** A stored handoff row, with the herdr handles it started. */
 interface HandoffRow {
 	attempt_id: string;
 	choice_json: string;

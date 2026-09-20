@@ -112,7 +112,16 @@ import {
 	type InteractionMode,
 } from "./controls.ts";
 import { DecisionModal } from "./decision-modal.ts";
-import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
+import {
+	type MainSectionId,
+	maxScrollOf,
+	planSectionBoxes,
+	type SectionBox,
+	type SectionFlowEntry,
+	type SectionFlowStep,
+	stepSectionFlow,
+	usePaneGeometry,
+} from "./geometry.ts";
 import { LiveView } from "./live-view.ts";
 import { consultationProgressOwner, useMessageFacts } from "./message-facts.ts";
 import {
@@ -134,7 +143,7 @@ import { ticketCloseDialog } from "./ticket-close.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
-import { WorkQueueDetail, WorkQueueList } from "./work-queue.ts";
+import { WorkQueueDetail, WorkQueueList, workQueueDetailLines } from "./work-queue.ts";
 
 type Pane = "list" | "detail";
 interface StatusMessage {
@@ -256,6 +265,24 @@ export interface AppTeardown {
 }
 
 const EMPTY_SOURCES: readonly TicketSource[] = [];
+/**
+ * The rows a Main view Section's box spends on chrome: two borders and two
+ * padding rows.
+ */
+const SECTION_BOX_CHROME = 4;
+/** A Section's reservation: three content rows, so seven rows for its box. */
+const MIN_SECTION_BOX_ROWS = 3 + SECTION_BOX_CHROME;
+/**
+ * The rows a Section keeps before it gives way: one content row and its
+ * chrome. A Section the body cannot even pay for collapses to its header.
+ */
+const FLOOR_SECTION_BOX_ROWS = 1 + SECTION_BOX_CHROME;
+/**
+ * The rows the body keeps for the section headers: the Ticket header across
+ * the full width, and the Consultation and Work queue headers between their
+ * boxes. Every header holds its row, collapsed or not.
+ */
+const SECTION_HEADER_ROWS = 3;
 let lazyRealRunner: CommandRunner | undefined;
 function realRunner(): CommandRunner {
 	lazyRealRunner ??= createChildProcessRunner();
@@ -305,8 +332,17 @@ export function App({
 	const workIndexRef = useRef(0);
 	const [workExpanded, setWorkExpanded] = useState(true);
 	const workExpandedRef = useRef(true);
-	const [selection, setSelection] = useState<"ticket" | "consultation" | "work">("ticket");
-	const selectionRef = useRef<"ticket" | "consultation" | "work">("ticket");
+	// The queue item's detail scrolls like every other base detail.
+	const [workScroll, setWorkScroll] = useState(0);
+	// The layout's own answer, held for the key handlers and the control
+	// context, so a cursor step and a Section box read the same table.
+	const sectionBoxesRef = useRef<Record<MainSectionId, SectionBox>>({
+		ticket: { open: true, rows: MIN_SECTION_BOX_ROWS },
+		consultation: { open: true, rows: MIN_SECTION_BOX_ROWS },
+		work: { open: true, rows: MIN_SECTION_BOX_ROWS },
+	});
+	const [selection, setSelection] = useState<MainSectionId>("ticket");
+	const selectionRef = useRef<MainSectionId>("ticket");
 	const [consultations, setConsultations] = useState<Consultation[]>(
 		() => state?.consultations("open") ?? [],
 	);
@@ -575,48 +611,38 @@ export function App({
 	// row with the mode line and the two permanent bottom rows.
 	const detailReservedRows = 3 + (showModeLine ? 1 : 0);
 	const detailGeometry = usePaneGeometry("detail", detailReservedRows);
-	// The rows a section's box spends on chrome: two borders and two padding
-	// rows. Each section's minimum is three content rows, so its minimum box
-	// is seven rows. The body rows the boxes share are the body minus the
-	// Ticket header row and the one header row each of the two lower
-	// sections keeps, collapsed or not (a collapsed section keeps its header
-	// as the row it expands from).
-	const SECTION_BOX_CHROME = 4;
-	const MIN_SECTION_BOX_ROWS = 3 + SECTION_BOX_CHROME;
-	const totalBoxRows = Math.max(0, bodyRows - 3);
-	const expandedSections: Array<{ section: "ticket" | "consultation" | "work"; open: boolean }> = [
-		{ section: "ticket", open: ticketsExpanded },
-		{ section: "consultation", open: consultationsExpanded },
-		{ section: "work", open: workExpanded },
-	];
-	const expandedCount = expandedSections.filter((entry) => entry.open).length;
-	// The expanded section under the cursor takes the remaining rows after
-	// the other expanded sections claim their share; the cursor's section is
-	// the first expanded one when the cursor rests on a collapsed section.
-	const greedySection =
-		expandedSections.find((entry) => entry.open && entry.section === selection)?.section ??
-		expandedSections.find((entry) => entry.open)?.section ??
-		"ticket";
-	// The rows the other expanded sections claim: each takes its share of the
-	// body, capped at the minimum box, and the cursor's section takes what
-	// remains.
-	const otherShare = Math.min(MIN_SECTION_BOX_ROWS, Math.floor(totalBoxRows / expandedCount));
-	const greedyRows =
-		expandedCount <= 1 ? totalBoxRows : totalBoxRows - otherShare * (expandedCount - 1);
-	const rowsFor = (open: boolean, section: "ticket" | "consultation" | "work"): number => {
-		if (!open) return 0;
-		if (expandedCount <= 1) return totalBoxRows;
-		if (section === greedySection) return Math.max(0, greedyRows);
-		return otherShare;
-	};
-	const ticketsBoxRows = rowsFor(ticketsExpanded, "ticket");
-	const consultationsBoxRows = rowsFor(consultationsExpanded, "consultation");
-	const workBoxRows = rowsFor(workExpanded, "work");
-	const ticketsContentRows = ticketsExpanded ? Math.max(1, ticketsBoxRows - SECTION_BOX_CHROME) : 0;
-	const consultationsContentRows = consultationsExpanded
-		? Math.max(1, consultationsBoxRows - SECTION_BOX_CHROME)
+	// The body rows the boxes share are the body minus the Ticket header row
+	// and the one header row each of the three sections keeps, collapsed or
+	// not (a collapsed section keeps its header as the row it expands from).
+	const totalBoxRows = Math.max(0, bodyRows - SECTION_HEADER_ROWS);
+	// The rows each section's box holds, and which boxes the terminal can
+	// actually show. One table answers both, so the layout, the cursor's
+	// crossings, and the bar's Move hint can never disagree about what is on
+	// screen (issue #88 review).
+	const sectionBoxes = planSectionBoxes({
+		totalRows: totalBoxRows,
+		minimumRows: MIN_SECTION_BOX_ROWS,
+		floorRows: FLOOR_SECTION_BOX_ROWS,
+		cursor: selection,
+		sections: [
+			{ section: "ticket", open: ticketsExpanded, depth: tickets.length },
+			{ section: "consultation", open: consultationsExpanded, depth: consultations.length },
+			{ section: "work", open: workExpanded, depth: workItems.length },
+		],
+	});
+	// The layout the key handlers and the control context read, so a crossing
+	// never steps onto a row the terminal does not show.
+	sectionBoxesRef.current = sectionBoxes;
+	const ticketsBoxRows = sectionBoxes.ticket.rows;
+	const consultationsBoxRows = sectionBoxes.consultation.rows;
+	const workBoxRows = sectionBoxes.work.rows;
+	const contentRowsOf = (section: MainSectionId): number =>
+		Math.max(1, sectionBoxes[section].rows - SECTION_BOX_CHROME);
+	const ticketsContentRows = sectionBoxes.ticket.open ? contentRowsOf("ticket") : 0;
+	const consultationsContentRows = sectionBoxes.consultation.open
+		? contentRowsOf("consultation")
 		: 0;
-	const workContentRows = workExpanded ? Math.max(1, workBoxRows - SECTION_BOX_CHROME) : 0;
+	const workContentRows = sectionBoxes.work.open ? contentRowsOf("work") : 0;
 	// The Scroll control's availability must agree with the native detail's
 	// own overflow, so it asks the pane for the measurement rather than
 	// repeating the pane's gutter rule here.
@@ -639,6 +665,11 @@ export function App({
 	// issue #88): its captured facts render while the cursor is on the
 	// Work queue, whatever pane the focus holds.
 	const selectedWorkItem = selection === "work" ? workItems[workIndex] : undefined;
+	// The queue item's facts, read once for the pane and for the scroll's own
+	// limit: the Scroll control must answer the same overflow the pane shows.
+	const workDetailLines = workQueueDetailLines(selectedWorkItem, detailGeometry.usableCols);
+	const workMaxScroll = maxScrollOf(workDetailLines.length, detailGeometry.visibleRows);
+	const workDetailScroll = Math.min(workScroll, workMaxScroll);
 	// The status the observation last reported for the selected Consultation's
 	// Agent pane: it gates the response editor and the interaction mode.
 	const selectedConsultationAgentStatus =
@@ -768,6 +799,9 @@ export function App({
 		workIndexRef.current = nextIndex;
 		setWorkItems(next);
 		setWorkIndex(nextIndex);
+		// The scroll belongs to the item the detail showed. A re-read that lost
+		// that item starts the next one's facts at their first line.
+		if (selectedId === undefined || !next.some((item) => item.id === selectedId)) setWorkScroll(0);
 	}, [state]);
 	// The Task profile of every task type (ADR 0009): what the panel prefills,
 	// and what it re-derives when the operator switches the task type row.
@@ -1620,11 +1654,27 @@ export function App({
 	 * the section's list and focuses it. Collapsing keeps the selection and
 	 * its detail with the section, so the operator's place is never lost to
 	 * a stray click (user stories 19 and 20).
+	 *
+	 * A section the terminal cannot hold is off screen while its operator's
+	 * toggle still says open. A click on that header lands the cursor on the
+	 * section, whose claim then brings its box back: the click the operator
+	 * aims at the section they want never answers by closing something else.
 	 */
 	const clickSection = (next: MainSection) => {
+		const wanted =
+			next === "tickets" ? "ticket" : next === "consultations" ? "consultation" : "work";
+		const heldOpen =
+			next === "tickets"
+				? ticketsExpandedRef.current
+				: next === "consultations"
+					? consultationsExpandedRef.current
+					: workExpandedRef.current;
+		if (!sectionBoxesRef.current[wanted].open && heldOpen) {
+			focusListSection(wanted);
+			return;
+		}
 		if (flipSectionExpanded(next)) {
-			selectionRef.current =
-				next === "tickets" ? "ticket" : next === "consultations" ? "consultation" : "work";
+			selectionRef.current = wanted;
 			setSelection(selectionRef.current);
 			focusPane("list");
 		}
@@ -1741,46 +1791,17 @@ export function App({
 				selectionRef.current === "consultation"
 					? consultationsRef.current[consultationIndexRef.current]
 					: undefined,
-			// The cursor walks one sequence: the rows of each expanded section, in
-			// order. A step is possible past the last row of a section, into the
-			// next expanded one, so the list can move as long as the cursor is not
-			// the sequence's only row.
-			listCanMove: (() => {
-				const sections = [
-					{
-						open: ticketsExpandedRef.current,
-						depth: ticketsRef.current.length,
-						selected: selectionRef.current === "ticket",
-						index: selectedIndexRef.current,
-					},
-					{
-						open: consultationsExpandedRef.current,
-						depth: consultationsRef.current.length,
-						selected: selectionRef.current === "consultation",
-						index: consultationIndexRef.current,
-					},
-					{
-						open: workExpandedRef.current,
-						depth: workItemsRef.current.length,
-						selected: selectionRef.current === "work",
-						index: workIndexRef.current,
-					},
-				];
-				const position = sections.findIndex((entry) => entry.selected);
-				// A cross reaches an empty section too, so the step into it is
-				// always possible while the neighbour is expanded.
-				const prior = sections.slice(0, position).some((entry) => entry.open);
-				const later = sections.slice(position + 1).some((entry) => entry.open);
-				const here = sections[position];
-				if (here === undefined) return false;
-				if (!here.open) return prior || later;
-				return here.index > 0 || here.index < here.depth - 1 || prior || later;
-			})(),
+			// The cursor walks one flow: the rows of the sections the terminal
+			// shows, in display order. One table answers the step and the hint,
+			// so the bar cannot call Move live for a key that lands nowhere.
+			listCanMove:
+				stepSectionFlow(sectionFlow(), selectionRef.current, -1) !== null ||
+				stepSectionFlow(sectionFlow(), selectionRef.current, 1) !== null,
 			detailCanScroll:
 				mode === "consultation-detail"
 					? consultationMaxScroll > 0
 					: mode === "work-detail"
-						? false
+						? workMaxScroll > 0
 						: detailMaxScroll > 0,
 			selectedWorkQueueItem: selectedWorkItem,
 			workQueueIndex: selectionRef.current === "work" ? workIndexRef.current : undefined,
@@ -2433,7 +2454,7 @@ export function App({
 	 * wheels pass through it, so a click in one section never leaves the
 	 * cursor on a row the operator is not looking at.
 	 */
-	function focusListSection(next: "ticket" | "consultation" | "work") {
+	function focusListSection(next: MainSectionId) {
 		if (selectionRef.current !== next) {
 			selectionRef.current = next;
 			setSelection(next);
@@ -2454,6 +2475,9 @@ export function App({
 		if (next === workIndexRef.current) return;
 		workIndexRef.current = next;
 		setWorkIndex(next);
+		// The detail follows the item the cursor holds, so its scroll belongs to
+		// that item: a new row starts at its first line.
+		setWorkScroll(0);
 	}
 	/**
 	 * Reorder the Work queue item under the cursor (ADR 0034, issue #88).
@@ -2473,13 +2497,18 @@ export function App({
 	 * Remove the Work queue item under the cursor (ADR 0034, issue #88). For
 	 * a Handoff item the removal cancels the intent: the ticket keeps its
 	 * state, and the next cycle never starts it. The Message line says the
-	 * item is gone.
+	 * item is gone, and takes the store's own answer: a row another path
+	 * already removed says so too, instead of a second cancellation.
 	 */
 	function removeWorkQueueItem() {
 		if (state === undefined) return;
 		const item = workItemsRef.current[workIndexRef.current];
 		if (item === undefined) return;
-		state.removeWorkQueueItem(item.id);
+		if (!state.removeWorkQueueItem(item.id)) {
+			replaceWorkQueue();
+			setWarningMessage(`ticket ${item.ticketIdentity}: that item was already gone`);
+			return;
+		}
 		replaceWorkQueue();
 		setNoticeMessage(`ticket ${item.ticketIdentity}: the queued handoff was cancelled`);
 	}
@@ -2535,165 +2564,122 @@ export function App({
 		);
 	}
 	/**
-	 * Move the unified cursor by one row. The cursor walks the visible flow,
-	 * which is the concatenation of the expanded sections' rows in section
-	 * order: down from the last visible Ticket crosses to the first visible
-	 * Consultation, and up from the first visible Consultation crosses back to
-	 * the last visible Ticket. A collapsed section contributes no rows; when
-	 * it holds the cursor the flow starts or ends at its boundary, so a step
-	 * that would leave the visible rows does nothing (user story 21).
+	 * The cursor's flow: every Main view Section in display order, with the
+	 * cursor's place in it, whether its box stands on screen, and whether the
+	 * operator holds it open. The layout's answer, not the operator's toggle,
+	 * decides what is on screen, so the crossings, the Move hint, and the
+	 * boxes all read one table (issue #88 review). A section the body could
+	 * not pay for still takes a crossing: the cursor's own claim brings its
+	 * box back, so no frame hides a section the operator opened behind a key
+	 * that says nothing.
+	 */
+	function sectionFlow(): SectionFlowEntry[] {
+		const boxes = sectionBoxesRef.current;
+		return [
+			{
+				section: "ticket",
+				open: boxes.ticket.open,
+				held: ticketsExpandedRef.current,
+				depth: ticketsRef.current.length,
+				index: selectedIndexRef.current,
+			},
+			{
+				section: "consultation",
+				open: boxes.consultation.open,
+				held: consultationsExpandedRef.current,
+				depth: consultationsRef.current.length,
+				index: consultationIndexRef.current,
+			},
+			{
+				section: "work",
+				open: boxes.work.open,
+				held: workExpandedRef.current,
+				depth: workItemsRef.current.length,
+				index: workIndexRef.current,
+			},
+		];
+	}
+	/**
+	 * Rest the unified cursor on one Section's row: the cursor's section, its
+	 * retained place in it, and the detail that follows it. Every cursor move
+	 * lands here, so no crossing carries its own copy of the three writes.
+	 */
+	function placeCursor(step: SectionFlowStep) {
+		if (selectionRef.current !== step.section) {
+			selectionRef.current = step.section;
+			setSelection(step.section);
+		}
+		if (step.section === "ticket") selectTicket(step.index);
+		else if (step.section === "consultation") selectConsultation(step.index);
+		else selectWork(step.index);
+	}
+	/**
+	 * Move the unified cursor by one row through the visible flow (user story
+	 * 21): the concatenation of the sections' rows the terminal shows, in
+	 * section order. Inside the cursor's own section the step moves the row;
+	 * at the edge, or from the boundary a collapsed section leaves, it crosses
+	 * to the nearest section on screen in that direction and takes its first
+	 * row going down or its last going up. A step that would leave the flow
+	 * does nothing: the catalogue holds the key's refusal for that case.
 	 */
 	function moveVertical(delta: number) {
-		if (selectionRef.current === "consultation") {
-			if (focusedPaneRef.current === "detail") {
+		if (focusedPaneRef.current === "detail") {
+			if (selectionRef.current === "consultation") {
 				consultationFollowRef.current = false;
 				setConsultationScroll((current) => clamp(current + delta, 0, consultationMaxScroll));
 				return;
 			}
-			if (consultationsExpandedRef.current) {
-				if (delta < 0 && consultationIndexRef.current === 0) {
-					// The cross reaches even an empty Ticket list: its empty
-					// message is the row the cursor takes.
-					if (ticketsExpandedRef.current) {
-						selectionRef.current = "ticket";
-						setSelection("ticket");
-						selectTicket(Math.max(0, ticketsRef.current.length - 1));
-					}
-					return;
-				}
-				if (delta > 0 && consultationIndexRef.current >= consultationsRef.current.length - 1) {
-					// The cross reaches even an empty Work queue: its empty
-					// message is the row the cursor takes.
-					if (workExpandedRef.current) {
-						selectionRef.current = "work";
-						setSelection("work");
-						selectWork(0);
-					}
-					return;
-				}
-				selectConsultation(consultationIndexRef.current + delta);
+			if (selectionRef.current === "work") {
+				setWorkScroll((current) => clamp(current + delta, 0, workMaxScroll));
 				return;
 			}
-			// The Consultation section is collapsed: the cursor rests on its
-			// boundary, and the visible step crosses to the nearest expanded
-			// section on either side.
-			if (delta < 0) {
-				if (ticketsExpandedRef.current) {
-					selectionRef.current = "ticket";
-					setSelection("ticket");
-					selectTicket(Math.max(0, ticketsRef.current.length - 1));
-				}
-				return;
-			}
-			if (workExpandedRef.current) {
-				selectionRef.current = "work";
-				setSelection("work");
-				selectWork(0);
-			}
-			return;
-		}
-		if (selectionRef.current === "work") {
-			// The Work queue detail has no scroll: the row keys of the item's
-			// list answer instead, whatever pane the focus holds.
-			if (focusedPaneRef.current === "detail") return;
-			if (workExpandedRef.current) {
-				if (delta < 0 && workIndexRef.current === 0) {
-					// The cross reaches even an empty Consultation list: its
-					// empty message is the row the cursor takes.
-					if (consultationsExpandedRef.current) {
-						selectionRef.current = "consultation";
-						setSelection("consultation");
-						selectConsultation(Math.max(0, consultationsRef.current.length - 1));
-					}
-					return;
-				}
-				selectWork(workIndexRef.current + delta);
-				return;
-			}
-			// The Work queue section is collapsed: the cursor rests on its
-			// boundary, and the visible step crosses up to the nearest expanded
-			// section.
-			if (delta < 0) {
-				if (consultationsExpandedRef.current) {
-					selectionRef.current = "consultation";
-					setSelection("consultation");
-					selectConsultation(Math.max(0, consultationsRef.current.length - 1));
-				} else if (ticketsExpandedRef.current) {
-					selectionRef.current = "ticket";
-					setSelection("ticket");
-					selectTicket(Math.max(0, ticketsRef.current.length - 1));
-				}
-			}
-			return;
-		}
-		if (focusedPaneRef.current === "detail") {
 			detailRef.current?.moveBy(delta * configRef.current.scroll.speed);
 			return;
 		}
-		if (ticketsExpandedRef.current) {
-			if (delta > 0 && selectedIndexRef.current >= ticketsRef.current.length - 1) {
-				// The cross reaches even an empty Consultation list: its empty
-				// message is the row the cursor takes, and the history filter
-				// still operates from there.
-				if (consultationsExpandedRef.current) {
-					selectionRef.current = "consultation";
-					setSelection("consultation");
-					selectConsultation(0);
-				}
-				return;
-			}
-			moveList(delta);
-			return;
-		}
-		// The Ticket section is collapsed: the cursor rests on its boundary, and
-		// the visible step crosses down to the nearest expanded section.
-		if (delta > 0) {
-			if (consultationsExpandedRef.current) {
-				selectionRef.current = "consultation";
-				setSelection("consultation");
-				selectConsultation(0);
-			} else if (workExpandedRef.current) {
-				selectionRef.current = "work";
-				setSelection("work");
-				selectWork(0);
-			}
-		}
+		const step = stepSectionFlow(sectionFlow(), selectionRef.current, delta);
+		if (step !== null) placeCursor(step);
+	}
+	/** Move the queue item's detail by whole pages. */
+	function moveWorkDetailPage(direction: 1 | -1) {
+		const page = Math.max(1, detailGeometry.visibleRows - 2);
+		setWorkScroll((current) => clamp(current + direction * page, 0, workMaxScroll));
 	}
 	function movePage(direction: 1 | -1) {
-		if (selectionRef.current === "consultation") {
-			if (focusedPaneRef.current === "detail") moveConsultationDetailPage(direction);
-			else selectConsultation(consultationIndexRef.current + direction * consultationsContentRows);
+		if (focusedPaneRef.current === "detail") {
+			if (selectionRef.current === "consultation") moveConsultationDetailPage(direction);
+			else if (selectionRef.current === "work") moveWorkDetailPage(direction);
+			else detailRef.current?.movePage(direction === 1 ? "down" : "up");
 			return;
 		}
-		if (selectionRef.current === "work") {
-			if (focusedPaneRef.current !== "detail")
-				selectWork(workIndexRef.current + direction * workContentRows);
-			return;
-		}
-		if (focusedPaneRef.current === "detail")
-			detailRef.current?.movePage(direction === 1 ? "down" : "up");
-		else moveList(direction * ticketsContentRows);
+		const here = sectionFlow().find((entry) => entry.section === selectionRef.current);
+		if (here === undefined || !here.open) return;
+		const page =
+			here.section === "ticket"
+				? ticketsContentRows
+				: here.section === "consultation"
+					? consultationsContentRows
+					: workContentRows;
+		placeCursor({ section: here.section, index: here.index + direction * page });
 	}
 	function moveEdge(edge: "start" | "end") {
-		if (selectionRef.current === "consultation") {
-			if (focusedPaneRef.current === "detail") {
+		const selection = selectionRef.current;
+		if (focusedPaneRef.current === "detail") {
+			if (selection === "consultation") {
 				consultationFollowRef.current = edge === "end";
 				setConsultationScroll(edge === "start" ? 0 : 999999);
 				if (edge === "end") setNewOutput(false);
-			} else if (consultationsExpandedRef.current)
-				selectConsultation(edge === "start" ? 0 : consultationsRef.current.length - 1);
-			return;
-		}
-		if (selectionRef.current === "work") {
-			if (focusedPaneRef.current !== "detail" && workExpandedRef.current)
-				selectWork(edge === "start" ? 0 : workItemsRef.current.length - 1);
-			return;
-		}
-		if (focusedPaneRef.current === "detail") {
-			if (edge === "start") detailRef.current?.toStart();
+			} else if (selection === "work") {
+				setWorkScroll(edge === "start" ? 0 : workMaxScroll);
+			} else if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
-		} else if (ticketsExpandedRef.current)
-			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
+			return;
+		}
+		const here = sectionFlow().find((entry) => entry.section === selection);
+		if (here === undefined || !here.open) return;
+		placeCursor({
+			section: selection,
+			index: edge === "start" ? 0 : Math.max(0, here.depth - 1),
+		});
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
 	// live view over an in-flight agent, the missing-agent choice, and the Close
@@ -2966,7 +2952,7 @@ export function App({
 					// columns below split (ADR 0019).
 					createElement(SectionHeader, {
 						section: "tickets",
-						expanded: ticketsExpanded,
+						expanded: sectionBoxes.ticket.open,
 						terminalWidth,
 						width: terminalWidth,
 						open: openCount,
@@ -3005,7 +2991,7 @@ export function App({
 									overflow: "hidden",
 								},
 							},
-							ticketsExpanded &&
+							sectionBoxes.ticket.open &&
 								createElement(TicketList, {
 									tickets,
 									selectedIndex,
@@ -3030,7 +3016,7 @@ export function App({
 								}),
 							createElement(SectionHeader, {
 								section: "consultations",
-								expanded: consultationsExpanded,
+								expanded: sectionBoxes.consultation.open,
 								terminalWidth,
 								width: leftCols,
 								awaitingResponse: consultationCounts.awaitingResponse,
@@ -3040,7 +3026,7 @@ export function App({
 								active: mainSurfaceActive,
 								onToggle: () => clickSection("consultations"),
 							}),
-							consultationsExpanded &&
+							sectionBoxes.consultation.open &&
 								createElement(ConsultationList, {
 									consultations,
 									selectedIndex: consultationIndex,
@@ -3072,14 +3058,14 @@ export function App({
 							// the Consultation section.
 							createElement(SectionHeader, {
 								section: "work",
-								expanded: workExpanded,
+								expanded: sectionBoxes.work.open,
 								terminalWidth,
 								width: leftCols,
 								depth: workItems.length,
 								active: mainSurfaceActive,
 								onToggle: () => clickSection("work"),
 							}),
-							workExpanded &&
+							sectionBoxes.work.open &&
 								createElement(WorkQueueList, {
 									items: workItems,
 									selectedIndex: workIndex,
@@ -3105,11 +3091,13 @@ export function App({
 						),
 						selection === "work"
 							? createElement(WorkQueueDetail, {
-									item: selectedWorkItem,
-									width: consultationWidth,
+									lines: workDetailLines,
+									visibleRows: detailGeometry.visibleRows,
+									scroll: workDetailScroll,
 									focused: focusedPane === "detail",
 									active: mainSurfaceActive,
 									onFocus: () => focusPane("detail"),
+									onWheel: (delta) => moveVertical(delta),
 								})
 							: selection === "ticket"
 								? createElement(TicketDetail, {

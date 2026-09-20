@@ -2039,6 +2039,172 @@ describe("the Work queue pickup (ADR 0034, issue #88)", () => {
 		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_7"]);
 		state.close();
 	});
+
+	test("an unlimited cap drains the queue instead of stranding it", async () => {
+		// The cap the operator lifted to 0 after the items queued: 0 holds no
+		// seat at all, so every waiting start has a free seat, and the queue
+		// empties in its order rather than freezing at its old depth.
+		const { state, intents, coordinator } = rig({
+			autoOn: false,
+			agents: [],
+			config: { maxParallelAgents: 0 },
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_7",
+			origin: "open",
+			choice,
+		});
+		state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_6",
+			origin: "open",
+			choice: { ...choice, taskType: "review" },
+		});
+		await coordinator.tick();
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual([
+			"github:github.com:I_7",
+			"github:github.com:I_6",
+		]);
+		state.close();
+	});
+
+	test("the Dispatch pause does not hold the queue", async () => {
+		// A held failed trace pauses the automatic starts (ADR 0016). The
+		// queue carries the operator's own ask, so the pause never sees it.
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		settleForCause(state, "github:github.com:I_6", "route", "failed");
+		expect(state.dispatchPauseActive()).toBe(true);
+		state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_7",
+			origin: "open",
+			choice,
+		});
+		await coordinator.tick();
+		// The pause still holds: the only start this cycle is the queue's own.
+		expect(state.dispatchPauseActive()).toBe(true);
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_7"]);
+		state.close();
+	});
+
+	test("the Same-type hold does not hold the queue", async () => {
+		// The ticket's newest closed cycle finished a turn of the type it now
+		// suggests, and the sources re-read it since: the automatic open
+		// dispatch holds that ticket (ADR 0026), and the queue does not.
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched()]));
+		const attempt = settleForCause(state, "github:github.com:I_5", "implement", "completed");
+		state.applyCompletionDecision({
+			ticketIdentity: "github:github.com:I_5",
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
+		expect(state.sourceReverifiedSinceCycleEnd("github:github.com:I_5")).toBe(true);
+		expect(state.sameTypeHoldActive("github:github.com:I_5", "implement")).toBe(true);
+		// The gate stands: with an empty queue the automatic dispatch starts
+		// nothing at all.
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_5",
+			origin: "open",
+			choice,
+		});
+		await coordinator.tick();
+		// The queued ask starts on the gate the automatic origin must wait for.
+		expect(intents.map((intent) => intent.ticketIdentity)).toEqual(["github:github.com:I_5"]);
+		state.close();
+	});
+
+	test("a standing refusal states itself once", async () => {
+		// A ticket that left every source can never start: the item stays, and
+		// the warning is a standing fact the loop says once, the way the
+		// unreachable-herdr and Consultation-recovery notices do.
+		let refusals = 0;
+		const { state, intents, statuses, coordinator } = rig({
+			autoOn: false,
+			agents: [],
+			dispatchOutcome: () => {
+				refusals += 1;
+				return {
+					ok: false,
+					reason:
+						refusals <= 3 ? "the Ticket is not actionable" : "the Ticket's source is unhealthy",
+				};
+			},
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		const item = state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_7",
+			origin: "open",
+			choice,
+		});
+		await coordinator.tick();
+		await coordinator.tick();
+		await coordinator.tick();
+		// Three cycles tried the item, and one line stands for the refusal.
+		expect(intents).toHaveLength(3);
+		expect(state.workQueue().map((entry) => entry.id)).toEqual([item.id]);
+		expect(statuses).toEqual([
+			{
+				kind: "warning",
+				text: "Work queue pickup of ticket github:github.com:I_7 failed: the Ticket is not actionable",
+			},
+		]);
+		// A changed reason is a new fact, and states itself again.
+		await coordinator.tick();
+		expect(statuses.map((status) => status.text)).toEqual([
+			"Work queue pickup of ticket github:github.com:I_7 failed: the Ticket is not actionable",
+			"Work queue pickup of ticket github:github.com:I_7 failed: the Ticket's source is unhealthy",
+		]);
+		state.close();
+	});
+
+	test("a removed item clears its refusal", async () => {
+		const { state, intents, statuses, coordinator } = rig({
+			autoOn: false,
+			agents: [],
+			dispatchOutcome: () => ({ ok: false, reason: "the Ticket is not actionable" }),
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		const item = state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_7",
+			origin: "open",
+			choice,
+		});
+		await coordinator.tick();
+		expect(statuses).toHaveLength(1);
+		// The operator cancels the item, then asks for the same start again.
+		// The new item is a new ask, and its refusal states itself again.
+		state.removeWorkQueueItem(item.id);
+		state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_7",
+			origin: "open",
+			choice,
+		});
+		await coordinator.tick();
+		expect(intents).toHaveLength(2);
+		expect(statuses).toHaveLength(2);
+		state.close();
+	});
 });
 
 describe("the priority order (ADR 0022)", () => {

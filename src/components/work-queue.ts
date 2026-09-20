@@ -11,8 +11,8 @@
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { useRef } from "react";
-import type { HandoffOrigin, WorkQueueItem } from "../state.ts";
-import { usePaneGeometry } from "./geometry.ts";
+import { type HandoffOrigin, type WorkQueueItem, workQueueStartOf } from "../state.ts";
+import { usePaneGeometry, windowOf } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
@@ -26,14 +26,25 @@ export interface WorkQueueDetailLine {
 }
 
 /** The origin word a row and a detail line show for the item's origin. */
-export const workQueueOriginWord = (origin: HandoffOrigin): string =>
-	origin === "open" ? "ticket detail" : origin === "workflow" ? "workflow route" : "restart";
+export const workQueueOriginWord = (origin: HandoffOrigin | null): string =>
+	origin === null
+		? "unreadable"
+		: origin === "open"
+			? "ticket detail"
+			: origin === "workflow"
+				? "workflow route"
+				: "restart";
+
+/** A setting the operator left empty leaves the room to the agent. */
+const settingOf = (value: string): string => (value === "" ? "(the agent's default)" : value);
 
 /**
  * The captured facts of one Work queue item, as the detail pane shows them:
  * the ticket, the origin, and the operator's choice. A setting the operator
  * left empty says the agent's own default stands, the way the override
- * panel's empty rows do.
+ * panel's empty rows do. A row the store damaged says its damage in place of
+ * the choice it cannot read, so the pane never shows a start the operator did
+ * not ask for.
  */
 export function workQueueDetailLines(
 	item: WorkQueueItem | undefined,
@@ -45,21 +56,27 @@ export function workQueueDetailLines(
 		for (const line of wrapToWidth(text, width))
 			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
+	const finish = (lines: WorkQueueDetailLine[]): WorkQueueDetailLine[] =>
+		lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
 	push("Work queue item", paint("text"), true);
-	push(`Ticket: ${item.ticketIdentity}`);
+	push(`Ticket: ${item.ticketIdentity === "" ? "(unreadable)" : item.ticketIdentity}`);
 	push(`Origin: ${workQueueOriginWord(item.origin)}`);
-	push(`Enqueued: ${item.createdAt.slice(0, 16).replace("T", " ")}`, paint("subtext0"));
-	push(`Agent: ${item.choice.agentType === "" ? "(the agent's default)" : item.choice.agentType}`);
-	push(`Environment: ${item.choice.environment}`);
-	push(
-		`Task type: ${item.choice.taskType === "" ? "(the agent's default)" : item.choice.taskType}`,
-	);
-	push(`Model: ${item.choice.model === "" ? "(the agent's default)" : item.choice.model}`);
-	push(`Thinking: ${item.choice.thinking === "" ? "(the agent's default)" : item.choice.thinking}`);
-	push(
-		`Context window: ${item.choice.contextWindow === "" ? "(the agent's default)" : item.choice.contextWindow}`,
-	);
-	return lines.map((line) => ({ ...line, text: truncateToWidth(line.text, width) }));
+	// The stored time is UTC, and the line says so: a bare clock reading could
+	// stand for the operator's own zone.
+	push(`Enqueued: ${item.createdAt.slice(0, 16).replace("T", " ")} UTC`, paint("subtext0"));
+	const start = workQueueStartOf(item);
+	if (!start.ok) {
+		push(`Damaged: ${start.reason}`, paint("yellow"));
+		return finish(lines);
+	}
+	const choice = start.choice;
+	push(`Agent: ${settingOf(choice.agentType)}`);
+	push(`Environment: ${choice.environment}`);
+	push(`Task type: ${settingOf(choice.taskType)}`);
+	push(`Model: ${settingOf(choice.model)}`);
+	push(`Thinking: ${settingOf(choice.thinking)}`);
+	push(`Context window: ${settingOf(choice.contextWindow)}`);
+	return finish(lines);
 }
 
 interface WorkQueueListProps {
@@ -164,31 +181,35 @@ function row(item: WorkQueueItem, selected: boolean, width: number) {
 }
 
 interface WorkQueueDetailProps {
-	/** The item the shared detail pane points at, if the queue holds one. */
-	item: WorkQueueItem | undefined;
-	/** The detail's text width in cells. */
-	width: number;
+	/** The captured facts, as `workQueueDetailLines` read the item. */
+	lines: readonly WorkQueueDetailLine[];
+	/** The rows the box can paint at once, from the shared detail geometry. */
+	visibleRows: number;
+	/** The pane's own scroll, clamped to the lines it holds. */
+	scroll: number;
 	focused: boolean;
 	/** False while a surface above the panes owns the input. */
 	active?: boolean;
 	onFocus: () => void;
+	onWheel: (delta: number) => void;
 }
 
 /**
  * The Work queue item's detail pane: the captured facts in a bordered box,
- * the same chrome the Consultation detail wears. The facts are static - the
- * item does not change while it waits - so the pane holds its lines without
- * a scroll.
+ * the same chrome the Consultation detail wears. The facts are static, but a
+ * long ticket identity wraps the rows past the pane at the smallest frames, so
+ * the pane slides a window over its lines like every other base detail.
  */
 export function WorkQueueDetail({
-	item,
-	width,
+	lines,
+	visibleRows,
+	scroll,
 	focused,
 	active = true,
 	onFocus,
+	onWheel,
 }: WorkQueueDetailProps) {
 	const rootRef = useRef<BoxRenderable | null>(null);
-	const lines = workQueueDetailLines(item, width);
 	return createElement(
 		"box",
 		{
@@ -198,9 +219,13 @@ export function WorkQueueDetail({
 			borderColor: focused ? paint("accent") : paint("surface_dim"),
 			padding: 1,
 			style: { flexGrow: 1, flexShrink: 1, flexDirection: "column", overflow: "hidden" },
-			onMouse: paneMouse({ active: () => active, onFocus, onWheel: () => undefined }),
+			onMouse: paneMouse({
+				active: () => active,
+				onFocus,
+				onWheel: (direction) => onWheel(direction === "up" ? -1 : 1),
+			}),
 		},
-		...lines.map((line, index) =>
+		...windowOf(lines, scroll, visibleRows).map((line, index) =>
 			createElement(
 				"text",
 				{ key: index, fg: line.fg },

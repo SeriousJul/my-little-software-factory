@@ -626,8 +626,12 @@ describe("the merged Main view", () => {
 				// A click on the expanded Consultation header collapses the
 				// section, and the cursor stays on the row it held. The header
 				// sits one row below the Ticket box, which holds the frame's
-				// remaining rows at this size.
-				await mouseClick(setup, 10, 14);
+				// remaining rows at this size, so the click finds the header
+				// by its own words.
+				const consultationHeaderRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
+					row.includes("▾ Consultations"),
+				);
+				await mouseClick(setup, 10, consultationHeaderRow);
 				const collapsed = await awaitFrame(
 					setup,
 					(candidate) => headerOf(candidate, "Consultations").startsWith("▸"),
@@ -760,29 +764,64 @@ describe("the merged Main view", () => {
 			await booted(
 				async (setup) => {
 					// At the minimum size the mode line, all three headers, the
-					// Message line and the Action bar stay permanent, and every
-					// section still holds a real list box.
+					// Message line and the Action bar stay permanent. The body
+					// cannot pay three minimum boxes at once, so the sections
+					// the cursor does not hold give up their rows in turn: the
+					// Consultation section keeps its floor box, and the empty
+					// Work queue collapses to its header, where its depth stays
+					// readable (docs/operation/main-view.md).
 					const frame = await settle(setup);
-					expect(rowsOf(frame)).toHaveLength(19);
-					expect(rowsOf(frame)[0]).toContain("auto: off");
-					expect(rowsOf(frame)[1]).toContain("Tickets");
-					expect(rowsOf(frame)[7]).toContain("Consultations");
-					expect(rowsOf(frame)[12]).toContain("Work queue");
-					expect(paneTopRows(frame)).toBe(3);
+					const rows = rowsOf(frame);
+					expect(rows).toHaveLength(19);
+					expect(rows[0]).toContain("auto: off");
+					expect(rows[1]).toContain("Tickets");
+					expect(rows[10]).toContain("Consultations");
+					expect(rows[16]).toContain("▸");
+					expect(rows[16]).toContain("Work queue");
+					expect(rows[16]).toContain("depth");
+					expect(paneTopRows(frame)).toBe(2);
 					expect(actionBarRowOf(frame)).toContain("? Help");
 					expect(messageRowOf(frame)).not.toBe(actionBarRowOf(frame));
-					// The toggle answers at the minimum size, and the room the
-					// collapsed section frees goes to the sections that stay.
-					const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
-						headerOf(f, "Tickets").startsWith("▸"),
+					// A click on the header the layout collapsed brings that
+					// section's box back: the cursor's section claims its
+					// minimum first, and the weakest other claim gives way -
+					// here the Ticket list, which holds no row yet, and not
+					// the Consultation section that holds one.
+					await mouseClick(setup, 10, 16);
+					const shown = await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Work queue"),
+						"the Work queue box to answer the header click",
+					);
+					expect(rowsOf(shown)).toHaveLength(19);
+					expect(shown).toContain("▸ Tickets");
+					expect(shown).toContain("┌─  Consultations");
+					expect(paneTopRows(shown)).toBe(2);
+					// `x` gives the rows back: the Work queue collapses to its
+					// header, and the Ticket list takes its box again.
+					const collapsed = await press(setup, "x", "the Work queue section to collapse", (f) =>
+						rowsOf(f).some((row) => row.startsWith("▸ Work queue") && !row.includes("┌─")),
 					);
 					expect(rowsOf(collapsed)).toHaveLength(19);
+					// The cursor stays with the section it collapsed, so no
+					// box on screen holds the focus mark.
+					expect(collapsed).toContain("┌─  Tickets");
+					expect(collapsed).toContain("┌─  Consultations");
 					expect(paneTopRows(collapsed)).toBe(2);
-					// The collapsed Ticket section keeps its header row, so the
-					// Consultation header and box rise one row.
-					expect(rowsOf(collapsed)[2]).toContain("Consultations");
-					expect(rowsOf(collapsed)[3]).toContain("┌─");
-					expect(rowsOf(collapsed).at(-3)).toContain("└─");
+					// The cursor on a boundary no frame can show still walks:
+					// up crosses to the Consultation row above it, and one
+					// step more reaches the Ticket list.
+					const ontoConsultations = await press(
+						setup,
+						"k",
+						"the cursor on the Consultation list",
+						(f) => f.includes("┌─❯ Consultations"),
+					);
+					expect(ontoConsultations).toContain("▸ Work queue");
+					const back = await press(setup, "k", "the cursor on the Ticket list", (f) =>
+						f.includes("┌─❯ Tickets"),
+					);
+					expect(back).toContain("┌─  Consultations");
 				},
 				state,
 				undefined,
@@ -802,18 +841,23 @@ describe("the merged Main view", () => {
 			await booted(async (setup) => {
 				await awaitFrame(setup, (f) => f.includes("grill"), "the Consultation list");
 				// The Consultation header and box sit below the Ticket
-				// section's: at this size the Ticket section holds the cursor,
-				// so the Consultation box keeps its minimum of three content
-				// rows, and the second seeded row sits on frame row 18.
-				// The click moves the cursor, and the Consultation box grows
-				// to the remaining rows, so the selected row rests on 13.
-				await mouseClick(setup, 10, 18);
+				// section's, whose cursor holds the minimum-plus-rest claim on
+				// the rows. Read the box's own rows rather than a fixed frame
+				// row: the second item is two content rows below the box's top
+				// border. The click moves the cursor, and the Consultation box
+				// grows to the remaining rows.
+				const before = rowsOf(await settle(setup));
+				const boxTop = before.findIndex((row) => row.includes("┌─  Consultations"));
+				expect(boxTop).toBeGreaterThan(0);
+				await mouseClick(setup, 10, boxTop + 3);
 				const selected = await awaitFrame(
 					setup,
-					(f) => rowsOf(f)[13]?.includes("❯ ") === true,
+					(f) => f.includes("┌─❯ Consultations"),
 					"the clicked Consultation to become selected",
 				);
-				expect(selected).toContain("┌─❯ Consultations");
+				const after = rowsOf(selected);
+				const focusedTop = after.findIndex((row) => row.includes("┌─❯ Consultations"));
+				expect(after[focusedTop + 3]).toContain("❯ ");
 				// A click inside the Agent view moves the pane focus, and the
 				// Action bar follows with the detail's own hints.
 				await mouseClick(setup, 70, 5);
@@ -913,10 +957,17 @@ describe("the merged Main view", () => {
 				// in both sections.
 				expect(rows[0]).toContain("auto: off");
 				expect(rows[1]).toContain("Tickets");
-				expect(rows[14]).toContain("Consultations");
-				expect(rows[22]).toContain("Work queue");
 				expect(rows[2]).toContain("┌─");
 				expect(rows.at(-3)).toContain("└─");
+				// The section under the cursor holds the minimum-plus-rest
+				// claim, so its box runs twelve content rows and the two lower
+				// sections follow it with their own header and box.
+				const consultationHeaderRow = rows.findIndex((row) => row.includes("▾ Consultations"));
+				const workHeaderRow = rows.findIndex((row) => row.includes("▾ Work queue"));
+				expect(consultationHeaderRow).toBe(16);
+				expect(workHeaderRow).toBe(24);
+				expect(rows[consultationHeaderRow + 1]).toContain("┌─  Consultations");
+				expect(rows[workHeaderRow + 1]).toContain("┌─  Work queue");
 				expect(actionBarRowOf(frame)).toContain("x Section");
 				// The bar follows the section under the cursor, and the
 				// Consultation section's History keeps its bar hint there.

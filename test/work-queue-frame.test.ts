@@ -20,11 +20,14 @@ import { openFactoryState } from "../src/state.ts";
 import type { TicketSource } from "../src/ticket-source.ts";
 import {
 	awaitFrame,
+	detailPaneText,
 	HEIGHT,
 	messageRowOf,
 	press,
 	rowsOf,
 	type Setup,
+	scrollDetailUntil,
+	settle,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -186,6 +189,13 @@ async function toWorkSection(setup: Setup): Promise<void> {
 	await press(setup, "j", "the cursor in the Work queue", (f) => f.includes("❯ Work queue"));
 }
 
+/** The detail pane's text at the width the frame carries. */
+const detailText = (frame: string, width = 120): string => detailPaneText(frame, width);
+
+/** Press `l` and wait for the queue item's detail pane to take the focus. */
+const focusQueueDetail = (setup: Setup): Promise<string> =>
+	press(setup, "l", "the Work queue detail to take focus", (f) => f.includes("❯ Work queue item"));
+
 describe("the Work queue through the UI (issue #88)", () => {
 	test("a manual handoff at a full cap enters the queue instead of starting", async () => {
 		const { state, source } = seedQueueState();
@@ -291,6 +301,169 @@ describe("the Work queue through the UI (issue #88)", () => {
 				},
 				WIDTH,
 				HEIGHT,
+				{
+					config: oneSeatConfig(),
+					runner: makeRunner(),
+					home,
+					configPath,
+					state,
+					sources: [source],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the detail pane reads the captured facts of the queued start", async () => {
+		// The proof the criterion asks for runs through the app's own keys:
+		// the cursor walks to a queue row, `l` focuses the detail, and the
+		// pane's own lines carry the ticket, the origin, and the choice the
+		// operator made at the handoff.
+		const { state, source } = seedQueueState();
+		state.enqueueWorkQueueItem({
+			ticketIdentity: FIRST,
+			origin: "open",
+			choice: {
+				agentType: "codex",
+				environment: "container",
+				taskType: "review",
+				model: "gpt-5.2",
+				thinking: "high",
+				contextWindow: "272000",
+			},
+		});
+		try {
+			await withApp(
+				async (setup) => {
+					await toWorkSection(setup);
+					const frame = await focusQueueDetail(setup);
+					const detail = detailText(frame);
+					expect(detail).toContain("Work queue item");
+					expect(detail).toContain(`Ticket: ${FIRST}`);
+					expect(detail).toContain("Origin: ticket detail");
+					expect(detail).toContain("Enqueued:");
+					expect(detail).toContain("Agent: codex");
+					expect(detail).toContain("Environment: container");
+					expect(detail).toContain("Task type: review");
+					expect(detail).toContain("Model: gpt-5.2");
+					expect(detail).toContain("Thinking: high");
+					expect(detail).toContain("Context window: 272000");
+				},
+				WIDTH,
+				HEIGHT,
+				{
+					config: oneSeatConfig(),
+					runner: makeRunner(),
+					home,
+					configPath,
+					state,
+					sources: [source],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the cursor crosses to and from the queue past a collapsed Consultation section", async () => {
+		// The queue is the third section, and the Consultation section between
+		// it and the Ticket list can be collapsed. A step then must reach the
+		// nearest section the operator holds open, not stop at the closed one:
+		// the dead end the first cut left is the bug this walks, in both
+		// directions, and the bar's Move hint agrees with the key all the way.
+		const { state, source } = seedQueueState();
+		state.enqueueWorkQueueItem({ ticketIdentity: FIRST, origin: "open", choice: choice() });
+		try {
+			await withApp(
+				async (setup) => {
+					// Down to the Consultation list, and collapse it there.
+					await press(setup, "j", "the selection on the first open ticket", (f) =>
+						rowSelected(f, FIRST),
+					);
+					await press(setup, "j", "the selection on the last ticket", (f) =>
+						rowSelected(f, SECOND_TITLE),
+					);
+					await press(setup, "j", "the cursor on the Consultation list", (f) =>
+						f.includes("❯ Consultations"),
+					);
+					await press(setup, "x", "the Consultation section to collapse", (f) =>
+						f.includes("▸ Consultations"),
+					);
+					// Down from the closed section's boundary lands in the Work
+					// queue, over it.
+					const toQueue = await press(setup, "j", "the cursor in the Work queue", (f) =>
+						f.includes("┌─❯ Work queue"),
+					);
+					expect(toQueue).toContain("▸ Consultations");
+					expect(toQueue).toContain("ticket detail");
+					// And back up from the queue's first item lands on the last
+					// Ticket, again over the closed section.
+					const toTickets = await press(setup, "k", "the cursor on the Ticket list", (f) =>
+						f.includes("┌─❯ Tickets"),
+					);
+					expect(toTickets).toContain("▸ Consultations");
+					expect(rowSelected(toTickets, SECOND_TITLE)).toBe(true);
+				},
+				WIDTH,
+				HEIGHT,
+				{
+					config: oneSeatConfig(),
+					runner: makeRunner(),
+					home,
+					configPath,
+					state,
+					sources: [source],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the queue detail slides to its last fact on a short frame", async () => {
+		// A long ticket identity wraps the fact rows past the pane at the
+		// small frames, and the pane owns a scroll like every other base
+		// detail: the walk reaches the last row instead of cutting it off.
+		const { state, source } = seedQueueState();
+		const long = "github:github.com:acme/a-repository-with-a-long-name-that-wraps-the-row#1234567";
+		state.enqueueWorkQueueItem({
+			ticketIdentity: long,
+			origin: "open",
+			choice: {
+				agentType: "codex",
+				environment: "container",
+				taskType: "review",
+				model: "gpt-5.2",
+				thinking: "high",
+				contextWindow: "272000",
+			},
+		});
+		try {
+			await withApp(
+				async (setup) => {
+					// The short frame cannot pay three boxes at once, so the
+					// queue's box answers the crossing rather than a fixed
+					// number of steps: walk down until the cursor is on it.
+					for (let step = 0; step < 12; step += 1) {
+						if (setup.captureCharFrame().includes("┌─❯ Work queue")) break;
+						setup.mockInput.pressKey("j");
+						await settle(setup, 120);
+					}
+					expect(setup.captureCharFrame()).toContain("┌─❯ Work queue");
+					const focused = await focusQueueDetail(setup);
+					expect(detailText(focused, 60)).not.toContain("Context window: 272000");
+					const scrolled = await scrollDetailUntil(setup, "the queue detail's last fact", (f) =>
+						detailText(f, 60).includes("Context window: 272000"),
+					);
+					expect(detailText(scrolled, 60)).toContain("Context window: 272000");
+					// End answers the same way the wheel and the row keys do.
+					await press(setup, "home", "the detail to return to its first line", (f) =>
+						detailText(f, 60).includes("Work queue item"),
+					);
+				},
+				60,
+				19,
 				{
 					config: oneSeatConfig(),
 					runner: makeRunner(),

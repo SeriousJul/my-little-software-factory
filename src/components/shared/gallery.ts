@@ -30,7 +30,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { KeyGuide } from "../utility.ts";
-import { WorkQueueDetail } from "../work-queue.ts";
+import { WorkQueueDetail, workQueueDetailLines } from "../work-queue.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
@@ -202,12 +202,15 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  * review reads: normal, focused, invalid, unavailable, loading, and narrow.
  */
 /** A Work queue item the detail examples render, the operator's choice in. */
-function sampleWorkQueueItem(choice: WorkQueueItem["choice"]): WorkQueueItem {
+function sampleWorkQueueItem(
+	choice: WorkQueueItem["choice"],
+	origin: WorkQueueItem["origin"] = "open",
+): WorkQueueItem {
 	return {
 		id: "work-queue-example",
 		kind: "handoff",
 		ticketIdentity: "github:github.com:acme/factory#88",
-		origin: "open",
+		origin,
 		choice,
 		createdAt: "2026-09-19T22:57:00.000Z",
 	};
@@ -759,17 +762,22 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(WorkQueueDetail, {
 				key: "work-queue-item",
-				item: sampleWorkQueueItem({
-					agentType: "pi",
-					environment: "live-worktree",
-					taskType: "implement",
-					model: "claude-sonnet-4-5",
-					thinking: "medium",
-					contextWindow: "200000",
-				}),
-				width: columns.contentWidth - 4,
+				lines: workQueueDetailLines(
+					sampleWorkQueueItem({
+						agentType: "pi",
+						environment: "live-worktree",
+						taskType: "implement",
+						model: "claude-sonnet-4-5",
+						thinking: "medium",
+						contextWindow: "200000",
+					}),
+					columns.contentWidth - 4,
+				),
+				visibleRows: 7,
+				scroll: 0,
 				focused: false,
 				onFocus: () => undefined,
+				onWheel: () => undefined,
 			}),
 		],
 	},
@@ -779,17 +787,40 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(WorkQueueDetail, {
 				key: "work-queue-item-defaults",
-				item: sampleWorkQueueItem({
-					agentType: "",
-					environment: "worktree",
-					taskType: "",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				}),
-				width: columns.contentWidth - 4,
+				lines: workQueueDetailLines(
+					sampleWorkQueueItem({
+						agentType: "",
+						environment: "worktree",
+						taskType: "",
+						model: "",
+						thinking: "",
+						contextWindow: "",
+					}),
+					columns.contentWidth - 4,
+				),
+				visibleRows: 7,
+				scroll: 3,
 				focused: false,
 				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		// A row the store damaged (issue #88 review): the queue keeps it in
+		// view and says what it cannot read, instead of showing a start with
+		// an invented origin or settings nobody chose. The pickup refuses it.
+		id: "work-queue-item-damaged",
+		state: "Work queue item: a stored row the reader cannot start",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(WorkQueueDetail, {
+				key: "work-queue-item-damaged",
+				lines: workQueueDetailLines(sampleWorkQueueItem(null, null), columns.contentWidth - 4),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
 			}),
 		],
 	},
@@ -799,10 +830,12 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		render: (columns, _holds, _inputActive, _wiring) => [
 			createElement(WorkQueueDetail, {
 				key: "work-queue-empty",
-				item: undefined,
-				width: columns.contentWidth - 4,
+				lines: workQueueDetailLines(undefined, columns.contentWidth - 4),
+				visibleRows: 7,
+				scroll: 0,
 				focused: false,
 				onFocus: () => undefined,
+				onWheel: () => undefined,
 			}),
 		],
 	},

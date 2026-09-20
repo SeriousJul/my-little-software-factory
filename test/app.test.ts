@@ -370,14 +370,14 @@ describe("the control plane", () => {
 	test("the list pane window slides when the tickets overflow the pane", async () => {
 		await withApp(
 			async (setup) => {
-				// The pane shows four rows at this height: the first four
-				// tickets only. The rows carry their state and task type
+				// The pane shows five rows at this height: the Work queue is
+				// empty, so it collapses to its header and the five rows it
+				// held fall to the Ticket list. The rows carry their state and
+				// task type
 				// badges as their identity, so a slide is visible in the
 				// badges even where a title wraps or truncates. The
 				// handed-off ticket wears its Starting window's spinner face
-				// in place of the badge it replaced (ADR 0030). The frame is
-				// tall enough that the two lower sections keep their minimum
-				// boxes and the Ticket list still holds four rows.
+				// in place of the badge it replaced (ADR 0030).
 				let frame = frameText(setup.captureCharFrame());
 				expect(startingFaceOf(frame)).not.toBeNull();
 				expect(frame).toContain("[awaiting]");
@@ -397,10 +397,11 @@ describe("the control plane", () => {
 					(rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "").includes("Ticket id"),
 				);
 				expect(frame).toContain("Observe the agent");
-				expect(frame).not.toContain("Drop the legacy");
+				expect(frame).toContain("Drop the legacy");
+				expect(frame).not.toContain("Migrate scheduler");
 			},
 			WIDTH,
-			27,
+			19,
 		);
 	});
 
@@ -421,15 +422,14 @@ describe("the control plane", () => {
 			// grid first, the panes' row geometry second. Wait on the row
 			// geometry itself: in the 60-wide layout the [implement] badge
 			// and the repository have dropped from the list rows, and the
-			// short [fix] badge still rides. The height keeps the Ticket list
-			// three rows tall beside the two minimum boxes.
-			setup.resize(60, 26);
+			// short [fix] badge still rides.
+			setup.resize(60, 19);
 			const small = await awaitFrame(
 				setup,
 				(f) => {
 					const rows = rowsOf(f);
 					return (
-						rows.length === 26 &&
+						rows.length === 19 &&
 						rows.every((row) => row.length === 60) &&
 						f.includes("Tickets") &&
 						f.includes("Detail") &&
@@ -490,7 +490,7 @@ describe("the control plane", () => {
 
 	test("the layout adapts to the terminal size", async () => {
 		for (const [width, height] of [
-			[80, 27],
+			[80, 24],
 			[160, 40],
 		]) {
 			await withApp(
@@ -516,17 +516,17 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const rows = rowsOf(setup.captureCharFrame());
-				expect(rows).toHaveLength(33);
+				expect(rows).toHaveLength(25);
 				for (const row of rows) {
 					expect(row.length).toBe(75);
 				} // Row 0 carries the section header and the detail's top border, and
-				// the Ticket box runs from row 1 to row 14. The split puts the
+				// the Ticket box runs from row 2 to row 11, and the
+				// Consultation and Work queue headers and floor boxes take
+				// the rows below it. The split puts the
 				// list box on columns 0-36 and the detail box on 37-74. At an
 				// odd width a "50%" list would take 38 columns, and the shared
 				// geometry would then lay text one cell off the rendered box.
-				// The height keeps the Ticket box at fourteen rows beside the
-				// Consultation and Work queue minimum boxes.
-				for (const row of rows.slice(2, 14)) {
+				for (const row of rows.slice(2, 10)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -544,7 +544,7 @@ describe("the control plane", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
 			},
 			75,
-			33,
+			25,
 		);
 	});
 
@@ -930,10 +930,11 @@ describe("the control plane", () => {
 			async (setup) => {
 				const selectedState = (frame: string) =>
 					rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "";
-				// One page is two visible rows at this height: the page lands
-				// on the third ticket.
+				// One page is five visible rows at this height: the empty
+				// Consultation and Work queue sections hold their floor boxes,
+				// and the page lands on the sixth ticket.
 				await press(setup, "pagedown", "the list to move one visible page", (frame) =>
-					selectedState(frame).includes("Migrat"),
+					selectedState(frame).includes("Keep ti"),
 				);
 				await press(setup, "end", "the list to select its last ticket", (frame) =>
 					selectedState(frame).includes("Ticket id i"),
@@ -978,8 +979,7 @@ describe("the control plane", () => {
 					(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 					"the detail wheel event to move its surface",
 				);
-				// The two-row window keeps the selected ticket on its second row.
-				expect(markerRowOf(scrolled)).toBe(4);
+				expect(markerRowOf(scrolled)).toBe(5);
 
 				// Horizontal and Shift-wheel gestures are inert for wrapped detail text.
 				const stable = setup.captureCharFrame();

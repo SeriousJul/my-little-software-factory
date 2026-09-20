@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { openFactoryState } from "../src/state.ts";
+import { openFactoryState, type WorkQueueItem, workQueueStartOf } from "../src/state.ts";
 
 const paths: string[] = [];
 afterEach(() => {
@@ -129,9 +129,10 @@ describe("the Work queue's durable order (issue #88)", () => {
 		});
 		expect(state.removeWorkQueueItem(a.id)).toBe(true);
 		expect(state.workQueue().map((item) => item.id)).toEqual([b.id]);
-		expect(state.workQueueItem(a.id)).toBeUndefined();
+		// Removing an item that is not there says so: the store's answer is
+		// the fact the Main view reports, not a second cancellation.
 		expect(state.removeWorkQueueItem(a.id)).toBe(false);
-		expect(state.workQueueItem(b.id)?.choice).toEqual(choiceB);
+		expect(state.workQueue().find((item) => item.id === b.id)?.choice).toEqual(choiceB);
 		state.close();
 	});
 
@@ -174,11 +175,11 @@ describe("the Work queue's durable order (issue #88)", () => {
 			}),
 		);
 		// The removed item stays gone across the restart.
-		expect(again.workQueueItem(b.id)).toBeUndefined();
+		expect(queue.some((item) => item.id === b.id)).toBe(false);
 		again.close();
 	});
 
-	test("a corrupt stored choice reads back as the empty choice, not a crash", () => {
+	test("a damaged stored row stays damaged, visible, and unstartable", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
 		const item = state.enqueueWorkQueueItem({
@@ -188,7 +189,7 @@ describe("the Work queue's durable order (issue #88)", () => {
 		});
 		state.close();
 
-		// Corrupt the stored choice outside the store, the way a damaged cell
+		// Damage the stored cells outside the store, the way a corrupt row
 		// would sit there.
 		const db = new Database(path);
 		db.exec(`UPDATE work_queue SET choice_json = 'not json' WHERE id = '${item.id}'`);
@@ -196,18 +197,43 @@ describe("the Work queue's durable order (issue #88)", () => {
 		db.close();
 
 		const again = openFactoryState(path);
-		const read = again.workQueueItem(item.id);
-		// The damaged choice degrades to the empty choice on the default
-		// environment, and the damaged origin to the origin the item asks for.
-		expect(read?.choice).toEqual({
-			agentType: "",
-			environment: "worktree",
-			taskType: "",
-			model: "",
-			thinking: "",
-			contextWindow: "",
+		const read = again.workQueue().find((entry) => entry.id === item.id);
+		// The row keeps its place in the queue with the cells the reader could
+		// not name, and the reader invents none of them: no origin, so no
+		// wrong hard check, and no environment the operator never chose.
+		expect(read?.origin).toBeNull();
+		expect(read?.choice).toBeNull();
+		expect(read?.ticketIdentity).toBe("github:github.com:I_6");
+		// The start it asks for is refused with the reason that names the
+		// damage, and the refusal is the first fact the reader lost.
+		expect(workQueueStartOf(read ?? ({} as WorkQueueItem))).toEqual({
+			ok: false,
+			reason: "the stored item's origin is not one the plane knows",
 		});
-		expect(read?.origin).toBe("open");
+		again.close();
+	});
+
+	test("a row that lost its ticket names that damage", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		const item = state.enqueueWorkQueueItem({
+			ticketIdentity: "github:github.com:I_6",
+			origin: "restart",
+			choice: choiceA,
+		});
+		state.close();
+		const db = new Database(path);
+		db.exec(`UPDATE work_queue SET ticket_identity = NULL WHERE id = '${item.id}'`);
+		db.close();
+
+		const again = openFactoryState(path);
+		const read = again.workQueue().find((entry) => entry.id === item.id);
+		expect(read?.ticketIdentity).toBe("");
+		expect(read?.origin).toBe("restart");
+		expect(workQueueStartOf(read ?? ({} as WorkQueueItem))).toEqual({
+			ok: false,
+			reason: "the stored item names no ticket",
+		});
 		again.close();
 	});
 });
