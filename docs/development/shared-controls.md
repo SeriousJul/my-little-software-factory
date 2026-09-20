@@ -337,7 +337,7 @@ and lint, type checks, behavior tests, terminal tests, visual review, and
 screen-reader checks pass. Documentation and a new component directory alone do
 not meet this condition.
 
-The verification commands are `bun run lint`, `bun run typecheck`, `bun test`,
+The verification commands are `bun run lint`, `bun run typecheck`, `bun run test`,
 and `bun run gallery`. The architecture rule is checked by
 `test/shared-control-architecture.test.ts`, which rejects a separate field
 implementation, a hand-edited draft string, and a screen that names a renderer

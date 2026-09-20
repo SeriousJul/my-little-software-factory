@@ -8,7 +8,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | Command               | What it does                                          |
 | --------------------- | ----------------------------------------------------- |
 | `bun run dev`         | Start the control plane in watch mode                  |
-| `bun test`            | Run the full test suite                                |
+| `bun run test`        | Run the full test suite                                |
 | `bun run test:changed`| Run only the test files the current changes affect     |
 | `bun run gallery`     | Run the shared control gallery, using the real modules |
 | `bun run lint`        | Lint and check formatting with Biome                   |
@@ -46,7 +46,7 @@ plane owns, drawn by the production modules and answering the production keys.
 focused, invalid, unavailable, loading, Type-ahead search, and narrow. Pass an
 example name to land on it: `bun run gallery -- fields`. The gallery reads no
 config file, opens no state, and starts no Agent, and the same examples are
-exercised by `bun test`, so a gallery row cannot become an imitation of the
+exercised by `bun run test`, so a gallery row cannot become an imitation of the
 control. See [the shared control standard](./shared-controls.md).
 
 ## Regenerating the screenshots
@@ -54,6 +54,6 @@ control. See [the shared control standard](./shared-controls.md).
 `bun run screenshots` rebuilds the images the
 [operation guide](../operation/main-view.md) shows: the fixture world, the
 production binary on a pseudo-terminal, the production keys, and the
-cell-grid render. The drift test in `bun test` reruns the same path and fails
+cell-grid render. The drift test in `bun run test` reruns the same path and fails
 when a committed image no longer matches the screen, so a screen change
 always lands with its image.

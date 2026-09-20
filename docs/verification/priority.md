@@ -17,7 +17,7 @@ for the pull request inheritance through the issues it closes.
 
 ## What is verified automatically
 
-Every check below runs in `bun test`.
+Every check below runs in `bun run test`.
 
 | Requirement | Checked by | Result |
 | --- | --- | --- |
