@@ -76,9 +76,9 @@ and `bun run test`.
 | Part | Version |
 | --- | --- |
 | OS | Arch Linux, kernel 7.2.5-3-omarchy |
-| Runtime | Bun 1.4.0 (the pinned minimum is 1.3.0, ADR 0035) |
+| Runtime | Bun 1.4.2 (the pinned minimum is 1.3.0, ADR 0035) |
 | Renderer | OpenTUI `@opentui/core` 0.5.11, `@opentui/react` 0.5.11 |
-| Test runner | `bun:test` (Bun 1.4.0), run through `bun test --isolate` |
+| Test runner | `bun:test` (Bun 1.4.2), run through `bun run test` (`bun test --parallel --isolate`) |
 | Multiplexer (tmux path) | tmux 3.7c |
 
 ## Required acceptance targets and their state
@@ -705,3 +705,58 @@ recorded workaround for the drift class of OpenTUI issue 1187.
 This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
 0.5.11 (1554 pass, 13 skip, re-measured on this branch's merged catalogue).
+
+## The queued badge of the Queue wait
+
+A ticket whose manual start waits in the Work queue wears the `queued`
+badge in the state badge's slot of its list row and of its detail's state
+line, painted in the open role (CONTEXT.md, Queue wait). The badge is a
+presentation fact, not a ticket state: the ticket keeps its `open` state, so
+the section counts, the pickup gate, and the state file all keep it `open`,
+and a removal, a failed pickup, or a pickup that starts the work gives the
+row its open badge back by itself. The Work queue row keeps its origin cell
+unchanged, and the Consultation's `queued` state is the separate fact it was
+before this badge took the word in the Ticket section.
+
+The automatic suite covers the badge in both surfaces, its open-role paint,
+the unchanged open count, the open badge the ticket without a waiting start
+keeps, the origin the queue row keeps, and the open badge the cancel gives
+back (`test/work-queue-frame.test.ts`).
+
+The badge's first cut of that test asserted its expected color through the
+paint layer, which reads the test process's environment at the instant of the
+assertion. The test files share one worker's environment and run beside
+one another, and the no-color tests of the other files hold `NO_COLOR` while
+they run, so a frame the app repaints inside that window wears no paint at
+all: the expected color resolved `undefined`, and the frame the assertion
+read could paint white. The environment the plane resolves from is now as
+isolated as the standard states it is:
+
+- `roleColor` in the shared harness resolves the standalone theme through
+  the pure resolver instead of the paint layer, so an expected color never
+  reads the environment (`unfitTones` resolves through it and kept its
+  meaning).
+- The full-suite script spreads the files across worker processes
+  (`bun test --parallel --isolate`), so a `NO_COLOR` one file's test holds
+  never reaches a frame another file's app paints.
+- The theme isolation preloads into every test file
+  (`bunfig.toml`, `[test]`), so the environment clears before every test of
+  every file, the files that do not import it through the shared harness
+  included.
+- The no-color tests that left `NO_COLOR` set for the worker's remaining
+  files delete it when they end: the two frame tests, the shared
+  presentation's two no-color tests, and the override panel's.
+
+The checks pass in full on this branch after the isolation, re-measured
+on the tree merged with origin/main, which rebuilt the Work queue item
+as a union the badge's predicate narrows to its handoff kind: `bun run
+lint` and `bun run typecheck` pass, and `bun run test` passes in full
+(1607 pass, 13 skip, 0 fail, twice in a row, about 38 s per run, on Bun
+1.4.2). The 13 skips are the ones this record already holds as skipped,
+issues #103 and #104. The direct run of the five files that share the
+no-color tests and the badge's frame test passed four times in a row
+(57 pass, 7 skip, 0 fail).
+
+The terminal walks were not re-run on the queued badge: they are recorded as
+not re-verified for this change, not as a pass. The screen-reader target
+remains unverified.

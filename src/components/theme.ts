@@ -88,6 +88,15 @@ export function stateBadge(state: TicketState): string {
 	return `[${state}]`.padEnd(BADGE_WIDTH);
 }
 
+/**
+ * The badge the Queue wait (CONTEXT.md) wears in the state badge's slot:
+ * the ticket's manual start waits in the Work queue, and the ticket keeps
+ * its open state, so the badge paints the open role.
+ */
+export function queuedBadge(): string {
+	return `[queued]`.padEnd(BADGE_WIDTH);
+}
+
 /** The theme role each failure badge paints in. */
 const MARKER_ROLES: Record<TicketMarker, ThemeRole> = {
 	blocked: "yellow",

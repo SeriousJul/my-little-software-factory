@@ -653,23 +653,32 @@ describe("the Starting window's timeline", () => {
 describe("the no-color presentation", () => {
 	test("NO_COLOR keeps the face's written word in the row and the detail, and drops its color", async () => {
 		process.env.NO_COLOR = "1";
-		await withApp(async (setup) => {
-			// The sample data carries a handed-off ticket, so its face stands
-			// on the boot frame; selecting it puts the same face in the detail.
-			await settle(setup);
-			const booted = await settle(setup);
-			const faceRow = rowsOf(booted).findIndex((row) => startingFaceOf(row) !== null);
-			expect(faceRow).toBeGreaterThanOrEqual(0);
-			await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
-			const frame = await settle(setup);
-			const faceRows = rowsOf(frame).filter((row) => startingFaceOf(row) !== null);
-			// The row and the detail header both wear the word...
-			expect(faceRows.length).toBe(2);
-			for (const row of faceRows) {
-				// ...and neither wears a color: the presentation is the
-				// terminal's own default.
-				expect(spanColorAt(setup, rowsOf(frame).indexOf(row), "starting")).toEqual([255, 255, 255]);
-			}
-		});
+		try {
+			await withApp(async (setup) => {
+				// The sample data carries a handed-off ticket, so its face stands
+				// on the boot frame; selecting it puts the same face in the detail.
+				await settle(setup);
+				const booted = await settle(setup);
+				const faceRow = rowsOf(booted).findIndex((row) => startingFaceOf(row) !== null);
+				expect(faceRow).toBeGreaterThanOrEqual(0);
+				await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
+				const frame = await settle(setup);
+				const faceRows = rowsOf(frame).filter((row) => startingFaceOf(row) !== null);
+				// The row and the detail header both wear the word...
+				expect(faceRows.length).toBe(2);
+				for (const row of faceRows) {
+					// ...and neither wears a color: the presentation is the
+					// terminal's own default.
+					expect(spanColorAt(setup, rowsOf(frame).indexOf(row), "starting")).toEqual([
+						255, 255, 255,
+					]);
+				}
+			});
+		} finally {
+			// The worker's environment is shared with the files that run
+			// beside this one: a NO_COLOR left behind paints their frames
+			// white for the rest of the run.
+			delete process.env.NO_COLOR;
+		}
 	});
 });

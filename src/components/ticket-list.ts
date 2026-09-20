@@ -30,6 +30,7 @@ import {
 	heldBadge,
 	markerColor,
 	paint,
+	queuedBadge,
 	STARTING_WORD,
 	stateBadge,
 	stateColor,
@@ -66,6 +67,13 @@ interface TicketListProps {
 	 * badge while it holds. A failure marker outranks it in the row.
 	 */
 	starting: (ticket: Ticket) => boolean;
+	/**
+	 * Whether the ticket's Queue wait (CONTEXT.md) holds against the app's
+	 * facts: the row wears the `queued` badge in place of its state badge
+	 * while it holds. A failure marker and the Starting window outrank it in
+	 * the row the way they outrank the state badge.
+	 */
+	queueWait: (ticket: Ticket) => boolean;
 	/** False while an overlay owns input above the panes. */
 	active: boolean;
 	onFocus: () => void;
@@ -82,6 +90,7 @@ export function TicketList({
 	markerOf,
 	limitReached,
 	starting,
+	queueWait,
 	active,
 	onFocus,
 	onSelect,
@@ -155,6 +164,7 @@ export function TicketList({
 							markerOf(ticket),
 							limitReached(ticket),
 							starting(ticket),
+							queueWait(ticket),
 							faceFrame,
 						),
 					),
@@ -181,6 +191,7 @@ function rowSpans(
 	marker: "blocked" | "missing" | null,
 	atLimit: boolean,
 	starting: boolean,
+	queueWait: boolean,
 	faceFrame: number,
 ): ReactElement[] {
 	const spans: ReactElement[] = [];
@@ -223,6 +234,10 @@ function rowSpans(
 			);
 		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
 			spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
+		else if (queueWait)
+			// The Queue wait badge wears the open role: the ticket keeps its
+			// open state while its start waits for a seat.
+			spans.push(createElement("span", { fg: stateColor("open") }, queuedBadge()));
 		else
 			spans.push(createElement("span", { fg: stateColor(ticket.state) }, stateBadge(ticket.state)));
 		budget -= BADGE_WIDTH;

@@ -15,8 +15,7 @@ import { testRender } from "@opentui/react/test-utils";
 
 import { App, type AppProps } from "../src/components/app.ts";
 import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
-import type { ThemeRole } from "../src/components/shared/theme.ts";
-import { paint } from "../src/components/theme.ts";
+import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
@@ -256,18 +255,19 @@ export const rgb = (hex: string): [number, number, number] => [
 /**
  * One theme role's painted color, the hex a test asserts its frame against.
  *
- * The theme isolation (test/theme-isolation.ts) clears the theme environment
- * before every test, so this resolves the standalone theme in color: the
- * `text` role for the old `COLORS.text`, `subtext0` for `dim`, `accent` for
- * `borderFocused`, `blue` for `statusWorking`, `yellow` for `statusWarning`, `red`
- * for `statusError`, `panel_bg` for `overlay`, and so on. The emphasis the
- * old palette carried in a brighter text color (`textBright`) now rides on
- * bold, so a test asserts the `text` role for it. The standalone palette
- * paints every role, so the paint is never `undefined` under the test
- * isolation.
+ * This resolves the standalone theme in color through the pure resolver, so
+ * the expected value never reads the test process's environment: the test
+ * files share one process and run concurrently, and another file's test body
+ * can hold `NO_COLOR` at the instant an assertion resolves, a window in which
+ * `paint` answers `undefined`. The role-to-old-palette mapping stands as
+ * before: the `text` role for the old `COLORS.text`, `subtext0` for `dim`,
+ * `accent` for `borderFocused`, `blue` for `statusWorking`, `yellow` for
+ * `statusWarning`, `red` for `statusError`, `panel_bg` for `overlay`, and so
+ * on. The emphasis the old palette carried in a brighter text color
+ * (`textBright`) now rides on bold, so a test asserts the `text` role for it.
+ * The standalone palette paints every role, so the value is always a color.
  */
-// biome-ignore lint/style/noNonNullAssertion: the isolation pins the standalone palette, which paints every role
-export const roleColor = (role: ThemeRole): string => paint(role)!;
+export const roleColor = (role: ThemeRole): string => resolveTheme(null, false).theme.roles[role];
 
 /** The rendered foreground and background colors at one terminal cell. */
 export function cellColors(

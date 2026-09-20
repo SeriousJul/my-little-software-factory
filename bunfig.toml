@@ -1,0 +1,13 @@
+# The test runner's options that hold for every `bun test` invocation in this
+# repository, the `bun run test` script included.
+#
+# The theme isolation preloads into every test file: the test files share one
+# worker's environment, and a file that leaves a theme variable behind (a
+# `NO_COLOR` a no-color test set and did not delete) would otherwise stand
+# for the worker's remaining files. The preload's `beforeEach` clears the
+# theme environment and forgets the cached resolution before every test of
+# every file, the way the isolation's own header states the contract. Files
+# that boot the app import the same module through the shared harness, and
+# the doubled hook clears twice, which changes nothing.
+[test]
+preload = ["./test/theme-isolation.ts"]

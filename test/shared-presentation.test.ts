@@ -124,6 +124,7 @@ describe("the shared control ink", () => {
 		expect(controlInk().text.fg).toBe(STANDALONE_THEME.roles.text);
 		process.env.NO_COLOR = "1";
 		expect(controlInk()).toBe(NO_COLOR_INK);
+		delete process.env.NO_COLOR;
 	});
 
 	// Skipped: passes in isolation, fails in the full suite. Investigate and
@@ -218,6 +219,10 @@ describe("the shared control ink", () => {
 			// The renderer's own default: no role asked for a color.
 			expect([...new Set(painted)]).toEqual(["#ffffff"]);
 		} finally {
+			// The worker's environment is shared with the files that run
+			// beside this one: a NO_COLOR left behind paints their frames
+			// white for the rest of the run.
+			delete process.env.NO_COLOR;
 			await setup.renderer.destroy();
 		}
 	});

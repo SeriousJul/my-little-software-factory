@@ -289,6 +289,10 @@ The window during which a ticket's Handoff is claimed and not yet settled, or th
 The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the next boot settles it as a failed start, so the ticket wears no starting face over it (ADR 0041).
 _Avoid_: boot, launch, pending, startup
 
+**Queue wait**:
+The window in which a ticket's manual start waits in the Work queue for a free Parallel limit seat. The ticket keeps its `open` state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket `open`.
+_Avoid_: queued state, pending, on hold
+
 **Startup grace**:
 The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.

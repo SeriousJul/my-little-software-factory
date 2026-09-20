@@ -27,8 +27,11 @@ import {
 	mouseClick,
 	press,
 	pressArrow,
+	rgb,
+	roleColor,
 	rowsOf,
 	settle,
+	spanColors,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -176,14 +179,17 @@ function queuedFixture(state: FactoryState) {
 }
 
 // These frames show the waiting, never a running start, so nothing may pick
-// the items up while they walk. A zero Parallel limit keeps the cap gate off
-// (an unlimited cap never enqueues), and the long poll interval holds the
-// observation cycle back: at an unlimited cap `pickupWorkQueue` runs the whole
-// queue, so a cycle that fired mid-frame would empty the section the test is
-// still reading.
+// the items up while they walk. A one-seat cap with a held claim keeps the
+// free-seat figure at zero, so the observation's pickup never runs: the first
+// cycle fires the moment the app boots, before the source settles, and a
+// slower runner lets the cycle meet the settled tickets and claim the queue.
+// The held claim is a durable handoff attempt the fixture stores for the HELD
+// ticket; it holds the seat the same way a live agent would, and the ticket
+// keeps its open state, so the counts and the badge the test reads are the
+// resting ones.
 const zeroSeatConfig: FactoryConfig = {
 	...issuesConfig,
-	maxParallelAgents: 0,
+	maxParallelAgents: 1,
 	agentPollIntervalSeconds: 60,
 };
 
@@ -297,6 +303,75 @@ describe("the Work queue section", () => {
 					// The detail answers for the item under the cursor.
 					expect(detailPaneText(expanded)).toContain("Origin: open");
 					expect(detailPaneText(expanded)).toContain("place 1 of 2");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The Queue wait (CONTEXT.md): a ticket whose manual start waits in the
+	 * queue keeps its open state, and its row and its detail wear the
+	 * `queued` badge in the state badge's place, in the open badge's color.
+	 * A ticket without a waiting start keeps its open badge, the queue row
+	 * keeps its origin, and the cancel gives the open badge back.
+	 */
+	test("the waiting ticket wears the queued badge in row and detail, and the cancel gives the open badge back", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		// Seed the tickets into the state before the app boots, then hold the
+		// one seat with a durable claim for the second ticket. The claim keeps
+		// the free-seat figure at zero, so the observation's pickup never runs
+		// and the Waiting badge the test reads is the resting one.
+		const outcome = success(twoTickets());
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		const held = state.claimHandoff(SECOND, baseChoice("pi", "live-worktree", "implement"), "open");
+		if (!held.ok) throw new Error(held.reason);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(outcome);
+					// The frame the counts hold: the source has settled, so the
+					// badges the assertion reads are the resting ones, not the
+					// loading frame the boot pickup warns over.
+					const frame = await awaitFrame(
+						setup,
+						(f) =>
+							f.includes("Work") &&
+							f.includes("waiting: 1") &&
+							frameText(f).includes("open: 2 running: 0 awaiting: 0"),
+						"the waiting ticket's count",
+					);
+					// The ticket keeps its open state: the count says open...
+					expect(frameText(frame)).toContain("open: 2 running: 0 awaiting: 0");
+					const rows = rowsOf(stripAnsi(frame));
+					// ...and the selected row wears the queued badge in its
+					// place, in the row and in the detail state line alike.
+					const selected = rows.find((row) => row.startsWith("│ ❯"));
+					expect(selected).toContain("[queued]");
+					expect(detailPaneText(frame)).toContain("[queued]");
+					// The ticket without a waiting start keeps its open badge.
+					const resting = rows.find((row) => row.includes("Close the stale"));
+					expect(resting).toContain("[open]");
+					// The badge paints the open role: the ticket is still open.
+					expect(spanColors(setup, "[queued]")).toEqual([rgb(roleColor("blue"))]);
+					// The queue row keeps its origin, and the cancel gives the
+					// open badge back to the row and the detail.
+					await clickWorkHeader(setup);
+					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
+					expect(queueRowIndex(setup.captureCharFrame(), openRowLead)).toBeGreaterThanOrEqual(0);
+					await press(setup, "delete", "the item to cancel", (f) =>
+						f.includes(`waiting start for "Add a webhook retry policy"`),
+					);
+					const returned = await settle(setup);
+					expect(stripAnsi(returned)).not.toContain("[queued]");
+					expect(frameText(returned)).toContain("open: 2 running: 0 awaiting: 0");
 				},
 				state,
 				source,

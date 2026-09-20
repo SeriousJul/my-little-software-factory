@@ -31,6 +31,7 @@ import {
 	failureBadge,
 	markerColor,
 	paint,
+	queuedBadge,
 	STARTING_WORD,
 	stateBadge,
 	stateColor,
@@ -118,6 +119,7 @@ export function detailContent(
 	priorityOverride: string | null = null,
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
+	queueWait: boolean = false,
 ): DetailContent {
 	if (ticket === undefined)
 		return {
@@ -140,10 +142,16 @@ export function detailContent(
 	// the badge, the same face the list row wears, so the list and the detail
 	// never disagree. The `[handed-off]` badge is never drawn: where the
 	// failure marker rules the face out, the marker's own word holds the
-	// slot, the word the row wears beside it.
+	// slot, the word the row wears beside it. The Queue wait badge (CONTEXT.md)
+	// takes the slot the same way the list row wears it, so the two surfaces
+	// never disagree there either.
 	if (starting) lines.push({ text: " ", fg: undefined, spinner: true });
 	else if (marker !== null && ticket.state === "handed-off")
 		lines.push({ text: failureBadge(marker), fg: markerColor(marker) });
+	else if (queueWait)
+		// The Queue wait badge wears the open role: the ticket keeps its
+		// open state while its start waits for a seat.
+		lines.push({ text: queuedBadge(), fg: stateColor("open") });
 	else lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
 	const choice = detailChoice(ticket, suggestedChoice);
 	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
@@ -266,6 +274,7 @@ export function detailLines(
 	priorityOverride: string | null = null,
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
+	queueWait: boolean = false,
 ): DetailLine[] {
 	return detailContent(
 		ticket,
@@ -275,6 +284,7 @@ export function detailLines(
 		priorityOverride,
 		starting,
 		marker,
+		queueWait,
 	).lines;
 }
 
@@ -433,6 +443,12 @@ interface TicketDetailProps {
 	 * surface, so the marker that rules the face out takes the slot.
 	 */
 	marker: TicketMarker | null;
+	/**
+	 * Whether the ticket's Queue wait (CONTEXT.md) holds against the app's
+	 * facts: the state line wears the `queued` badge the list row wears in
+	 * place of the badge, while the ticket keeps its open state.
+	 */
+	queueWait: boolean;
 	scroll: ScrollConfig;
 	onFocus: () => void;
 	/**
@@ -459,6 +475,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		suggestedChoice,
 		starting,
 		marker,
+		queueWait,
 		scroll,
 		onFocus,
 		scrollSlot,
@@ -480,6 +497,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		priorityOverride,
 		starting,
 		marker,
+		queueWait,
 	);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;

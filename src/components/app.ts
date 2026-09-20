@@ -928,6 +928,22 @@ export function App({
 	 */
 	const startingWindow = (ticket: Ticket): boolean =>
 		inStartingWindow(ticket, startingTickets.has(ticket.identity));
+	/**
+	 * The Queue wait (CONTEXT.md) one ticket reads from the app's facts: its
+	 * open-origin item in the Work queue while the ticket rests open. The row
+	 * and the detail state line wear the `queued` badge in place of their
+	 * state badge, and the Starting window rules it out before it is read.
+	 * The ticket keeps its open state, so the counts and the state file
+	 * never learn the badge.
+	 */
+	const queueWait = (ticket: Ticket): boolean =>
+		ticket.state === "open" &&
+		workQueue.some(
+			(item) =>
+				item.kind === "handoff" &&
+				item.origin === "open" &&
+				item.ticketIdentity === ticket.identity,
+		);
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
@@ -3274,6 +3290,7 @@ export function App({
 									markerOf,
 									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
 									starting: startingWindow,
+									queueWait,
 									active: mainSurfaceActive,
 									onFocus: () => focusListSection("ticket"),
 									onSelect: (index: number) => {
@@ -3389,6 +3406,7 @@ export function App({
 											markerOf(selectedTicket) === null &&
 											startingWindow(selectedTicket),
 										marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
+										queueWait: selectedTicket !== undefined && queueWait(selectedTicket),
 										scroll: config.scroll,
 										onFocus: () => focusPane("detail"),
 										scrollSlot: detailScrollSlot,

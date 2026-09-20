@@ -163,22 +163,29 @@ describe.skip("theme inheritance", () => {
 describe("the no-color presentation", () => {
 	test("NO_COLOR paints the frame with no color at all", async () => {
 		process.env.NO_COLOR = "1";
-		await withApp(async (setup) => {
-			const frame = await settle(setup);
-			const rows = rowsOf(frame);
-			// The border, the marker, and the badge all paint the terminal's
-			// own default: nothing in the frame carries a meaning in color.
-			const borderRow = rows.findIndex((row) => row.includes("┌"));
-			expect(spanColorAt(setup, borderRow, "─")).toEqual([255, 255, 255]);
-			const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
-			expect(spanColorAt(setup, markerRow, "❯")).toEqual([255, 255, 255]);
-			// The Starting window's face paints no color either (ADR 0030):
-			// the written word stays, the color drops.
-			const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
-			expect(spanColorAt(setup, faceRow, "starting")).toEqual([255, 255, 255]);
-			// The words the colors would have carried stay on the screen.
-			expect(frame).toContain("Tickets");
-			expect(startingFaceOf(frame)).not.toBeNull();
-		});
+		try {
+			await withApp(async (setup) => {
+				const frame = await settle(setup);
+				const rows = rowsOf(frame);
+				// The border, the marker, and the badge all paint the terminal's
+				// own default: nothing in the frame carries a meaning in color.
+				const borderRow = rows.findIndex((row) => row.includes("┌"));
+				expect(spanColorAt(setup, borderRow, "─")).toEqual([255, 255, 255]);
+				const markerRow = rows.findIndex((row) => row.includes("❯ [open]"));
+				expect(spanColorAt(setup, markerRow, "❯")).toEqual([255, 255, 255]);
+				// The Starting window's face paints no color either (ADR 0030):
+				// the written word stays, the color drops.
+				const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
+				expect(spanColorAt(setup, faceRow, "starting")).toEqual([255, 255, 255]);
+				// The words the colors would have carried stay on the screen.
+				expect(frame).toContain("Tickets");
+				expect(startingFaceOf(frame)).not.toBeNull();
+			});
+		} finally {
+			// The worker's environment is shared with the files that run
+			// beside this one: a NO_COLOR left behind paints their frames
+			// white for the rest of the run.
+			delete process.env.NO_COLOR;
+		}
 	});
 });
