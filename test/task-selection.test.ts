@@ -53,9 +53,9 @@ describe("state selection", () => {
 	});
 
 	test("ready-for-review alone selects review", () => {
-		expect(selectTaskType([membership({ labels: ["ready-for-review"] })], STATES, "implement")).toBe(
-			"review",
-		);
+		expect(
+			selectTaskType([membership({ labels: ["ready-for-review"] })], STATES, "implement"),
+		).toBe("review");
 	});
 
 	test("label comparison does not depend on case", () => {
@@ -139,9 +139,9 @@ describe("state selection", () => {
 		expect(selectTaskType([membership({ labels: ["blocked"] })], none, "implement")).toBe(
 			"implement",
 		);
-		expect(
-			selectTaskType([membership({ labels: ["ready-for-agent"] })], none, "implement"),
-		).toBe("review");
+		expect(selectTaskType([membership({ labels: ["ready-for-agent"] })], none, "implement")).toBe(
+			"review",
+		);
 	});
 
 	test("a state with no conditions matches every membership", () => {
@@ -155,13 +155,13 @@ describe("state selection", () => {
 		);
 	});
 
-	test("a parking state offers no task: the fallback stands", () => {
-		const states: WorkflowState[] = [
-			{ name: "parked", match: { labelsAny: ["needs-work"] } },
-		];
-		expect(selectTaskType([membership({ labels: ["needs-work"] })], states, "implement")).toBe(
-			"implement",
-		);
+	test("a parking state offers no task: the plane suggests nothing", () => {
+		const states: WorkflowState[] = [{ name: "parked", match: { labelsAny: ["needs-work"] } }];
+		// Null, not the fallback: the parking state matched, and the default
+		// task type stands only when no state matches at all (ADR 0027).
+		expect(
+			selectTaskType([membership({ labels: ["needs-work"] })], states, "implement"),
+		).toBeNull();
 	});
 
 	test("a matching membership from any source selects the state", () => {

@@ -8,13 +8,7 @@
  * the pulled-source pull request, the branch that holds fires, and its facts
  * and pins take effect.
  */
-import type { CommandResult, CommandRunner } from "./runner.ts";
-import {
-	issueReferencesOf,
-	type EnvironmentKind,
-	type SourceMembership,
-	type Ticket,
-} from "./domain/ticket.ts";
+
 import type {
 	FactoryConfig,
 	TransitionBranch,
@@ -22,8 +16,15 @@ import type {
 	TransitionOutcome,
 	WorkflowTransition,
 } from "./config.ts";
-import type { FactoryState } from "./state.ts";
+import {
+	type EnvironmentKind,
+	issueReferencesOf,
+	type SourceMembership,
+	type Ticket,
+} from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
+import type { CommandResult, CommandRunner } from "./runner.ts";
+import type { FactoryState } from "./state.ts";
 import { membershipMatchesState } from "./task-selection.ts";
 
 /** The inputs the transition's judgments read. */
@@ -82,7 +83,10 @@ export function evaluateTransition(
 	}
 	if (fallback !== undefined) return fallback;
 	const tested = new Set(branches.map((branch) => branch.when));
-	if (input.score === null && (tested.has("score-above-threshold") || tested.has("score-below-threshold"))) {
+	if (
+		input.score === null &&
+		(tested.has("score-above-threshold") || tested.has("score-below-threshold"))
+	) {
 		return { ...base, reason: "the completion message carries no score" };
 	}
 	if (
@@ -160,10 +164,7 @@ export function scoreFromMessage(message: string): number | null {
 export function workflowLabelSet(config: FactoryConfig): ReadonlySet<string> {
 	const labels = new Set<string>();
 	for (const state of config.workflowStates) {
-		for (const label of [
-			...(state.match.labelsAll ?? []),
-			...(state.match.labelsAny ?? []),
-		])
+		for (const label of [...(state.match.labelsAll ?? []), ...(state.match.labelsAny ?? [])])
 			labels.add(label.toLocaleLowerCase());
 	}
 	for (const task of Object.values(config.taskTypes)) {
@@ -217,7 +218,7 @@ export function findLinkedPullRequest(tickets: readonly Ticket[], issue: Ticket)
 
 /** Whether the ticket's newest membership reads draft. */
 export function isDraft(ticket: Ticket): boolean {
-	return newestMembershipOf(ticket).attributes["draft"] === "true";
+	return newestMembershipOf(ticket).attributes.draft === "true";
 }
 
 /** The ticket's newest membership by external update time. */
@@ -254,7 +255,9 @@ export interface FireTransitionRequest {
  * type has no transition or the ticket has left the list; the fire is
  * idempotent, so a second fire on the same labels writes nothing.
  */
-export async function fireTransition(request: FireTransitionRequest): Promise<TransitionOutcome | null> {
+export async function fireTransition(
+	request: FireTransitionRequest,
+): Promise<TransitionOutcome | null> {
 	const transition = request.config.taskTypes[request.taskType]?.transition;
 	if (transition === undefined) return null;
 	await request.refresh?.();
@@ -296,26 +299,41 @@ export async function fireTransition(request: FireTransitionRequest): Promise<Tr
 	};
 	if (!evaluation.fired) return outcome;
 	const machine = workflowLabelSet(request.config);
-	const ticketWrite = await writeSurfaceLabels(
-		request,
-		"issue",
-		ticket,
-		evaluation.ticketFacts,
-		machine,
-	);
-	outcome.ticketWrite = applyWrite(outcome, ticketWrite);
-	if (pullRequest !== null && pullRequest.identity !== ticket.identity) {
-		const pullWrite = await writeSurfaceLabels(
-			request,
-			"pr",
-			pullRequest,
-			evaluation.pullRequestFacts,
-			machine,
-		);
-		outcome.pullRequestWrite = applyWrite(outcome, pullWrite);
-	} else if (pullRequest !== null) {
-		// The ticket is the pull request: one surface, one write.
-		outcome.pullRequestWrite = outcome.ticketWrite;
+	// The two surfaces the facts name. A pull request ticket is its own linked
+	// pull request, so one surface carries both fact lists and the plane
+	// converges it once: a second write would strip what the first wrote.
+	const surfaces: PullRequestSurface[] =
+		ticket.sourceKind === "github-pull-request"
+			? [
+					{
+						kind: "pull-request",
+						command: "pr",
+						ticket,
+						facts: [...new Set([...evaluation.ticketFacts, ...evaluation.pullRequestFacts])],
+					},
+				]
+			: [
+					{ kind: "ticket", command: "issue", ticket, facts: evaluation.ticketFacts },
+					...(pullRequest === null
+						? []
+						: [
+								{
+									kind: "pull-request" as const,
+									command: "pr" as const,
+									ticket: pullRequest,
+									facts: evaluation.pullRequestFacts,
+								},
+							]),
+				];
+	// No linked pull request, and the transition named facts for one: the skip
+	// is the fire's visible fact, not a silent gap in the written labels.
+	if (pullRequest === null && evaluation.pullRequestFacts.length > 0)
+		outcome.reason = "no linked pull request was found for the ticket";
+	for (const target of surfaces) {
+		const write = await writeSurfaceLabels(request, target, machine);
+		const applied = applyWrite(outcome, write);
+		if (target.kind === "ticket") outcome.ticketWrite = applied;
+		else outcome.pullRequestWrite = applied;
 	}
 	// A failed write stands as the failure fact; the plane does not re-derive
 	// a position from labels it did not manage to write.
@@ -371,6 +389,18 @@ function postWriteLabels(
 }
 
 /**
+ * One surface a fire writes on: the ticket, the linked pull request, or - on
+ * a pull request ticket - the one surface that holds both roles.
+ */
+interface PullRequestSurface {
+	kind: "ticket" | "pull-request";
+	/** The `gh` subcommand that edits this surface's item. */
+	command: "issue" | "pr";
+	ticket: Ticket;
+	facts: readonly string[];
+}
+
+/**
  * Write one surface's label facts through the command runner (ADR 0027):
  * add the facts the surface does not wear, remove the machine's labels the
  * facts do not name. Returns the write that ran, null when nothing had to
@@ -378,36 +408,46 @@ function postWriteLabels(
  */
 async function writeSurfaceLabels(
 	request: FireTransitionRequest,
-	kind: "issue" | "pr",
-	surface: Ticket,
-	facts: readonly string[],
+	surface: PullRequestSurface,
 	machine: ReadonlySet<string>,
 ): Promise<{ added: string[]; removed: string[]; failure?: string } | null> {
-	const have = new Set(surface.labels.map((label) => label.toLocaleLowerCase()));
+	const { command: kind, ticket: item, facts } = surface;
+	const have = new Set(item.labels.map((label) => label.toLocaleLowerCase()));
 	const factSet = new Set(facts.map((label) => label.toLocaleLowerCase()));
 	const added = facts.filter((label) => !have.has(label.toLocaleLowerCase()));
-	const removed = surface.labels.filter(
+	const removed = item.labels.filter(
 		(label) => machine.has(label.toLocaleLowerCase()) && !factSet.has(label.toLocaleLowerCase()),
 	);
 	if (added.length === 0 && removed.length === 0) return null;
-	const membership = newestMembershipOf(surface);
-	const host =
-		request.config.sources.find((source) => source.name === membership.sourceName)?.host ??
-		"github.com";
-	const args: string[] = [kind, "edit", membership.externalKey];
-	if (host !== "github.com") args.push("--hostname", host);
-	args.push("--repo", membership.repository.displayName);
+	const membership = newestMembershipOf(item);
+	// The repository identity carries the host (`<host>/<owner>/<name>`), which
+	// is the form `gh --repo` takes: `gh <kind> edit` maps no `--hostname`.
+	const args: string[] = [
+		kind,
+		"edit",
+		membership.externalKey,
+		"--repo",
+		membership.repository.identity,
+	];
 	if (added.length > 0) args.push("--add-label", added.join(","));
 	if (removed.length > 0) args.push("--remove-label", removed.join(","));
 	let result: CommandResult;
 	try {
 		result = await request.runner.run("gh", args);
 	} catch (error) {
-		return { added, removed, failure: `gh ${kind} edit ${membership.externalKey} failed: ${String(error)}` };
+		return {
+			added,
+			removed,
+			failure: `gh ${kind} edit ${membership.externalKey} failed: ${String(error)}`,
+		};
 	}
 	if (result.code !== 0) {
 		const detail = firstNonEmptyLine(result.stderr) ?? `exit ${result.code}`;
-		return { added, removed, failure: `gh ${kind} edit ${membership.externalKey} failed: ${detail}` };
+		return {
+			added,
+			removed,
+			failure: `gh ${kind} edit ${membership.externalKey} failed: ${detail}`,
+		};
 	}
 	return { added, removed };
 }

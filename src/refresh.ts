@@ -90,21 +90,23 @@ export class RefreshCoordinator {
 		if (this.stopped) return Promise.resolve();
 		if (this.sources.find((source) => source.name === sourceName) === undefined)
 			return Promise.resolve();
-		if (this.inFlight.has(sourceName)) {
+		if (!this.inFlight.has(sourceName)) this.refreshNow(sourceName);
+		return new Promise<void>((resolve) => {
+			// The in-flight fetch owns the waiter set. No set means nothing is
+			// fetching - a stop between the two checks - and a waiter must not
+			// hang on a fetch that will never settle.
 			const resolvers = this.settling.get(sourceName);
-			if (resolvers === undefined) return Promise.resolve();
-			return new Promise<void>((resolve) => resolvers.add(resolve));
-		}
-		const pending = new Promise<void>((resolve) => {
-			this.settling.set(sourceName, new Set([resolve]));
+			if (resolvers === undefined) resolve();
+			else resolvers.add(resolve);
 		});
-		this.refreshNow(sourceName);
-		return pending;
 	}
 
 	refresh(source: TicketSource): void {
 		if (this.stopped || this.inFlight.has(source.name)) return;
 		this.inFlight.add(source.name);
+		// Every fetch owns a waiter set, so a `refreshAndWait` that joins an
+		// in-flight fetch always has somewhere to register.
+		this.settling.set(source.name, new Set());
 		// The pull request source covers its Issue references against the
 		// live tickets and reads the uncovered ones directly (ADR 0023).
 		const known = this.state.liveTicketLabels();

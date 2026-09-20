@@ -767,6 +767,9 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("Goto");
 				expect(panel).toContain("Close");
+				// The transition's fact lines stand above the rows that decide
+				// on them (ADR 0027): what the plane wrote, on which surface.
+				expect(panel).toContain("ticket · added ready-for-review · removed ready-for-agent");
 
 				// Close is the default; the workflow handoff is the last row: down twice.
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -788,6 +791,59 @@ describe("the decision modal", () => {
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 			},
 			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the modal states a fire that found no linked pull request", async () => {
+		// No pending record and no retry: the skip is a fact the operator reads
+		// beside the write the ticket did get (ADR 0027).
+		const app = seededApp("awaiting", {}, success, "live-worktree", {
+			transition: reviewRoute({
+				pullRequestWrite: null,
+				pullRequestIdentity: null,
+				pullRequestKey: null,
+				positionTaskType: null,
+				positionTicketIdentity: null,
+				reason: "no linked pull request was found for the ticket",
+			}),
+		});
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("no linked pull request was found for the ticket");
+				// No position: no handoff row stands.
+				expect(panel).not.toContain("Handoff: review");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("the modal states a label write that failed", async () => {
+		const app = seededApp("awaiting", {}, success, "live-worktree", {
+			transition: reviewRoute({
+				writeFailure: "gh pr edit #12 failed: HTTP 403: Must have admin rights to Repository.",
+				positionTaskType: null,
+				positionTicketIdentity: null,
+			}),
+		});
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain("label write failed: gh pr edit #12 failed");
+			},
+			WIDE_STATUS,
 			HEIGHT,
 			propsOf(app),
 		);
@@ -852,7 +908,12 @@ describe("the decision modal", () => {
 			},
 			success,
 			"live-worktree",
-			{ message: "The turn is done.", model: "opus-4", thinking: "high", transition: reviewRoute() },
+			{
+				message: "The turn is done.",
+				model: "opus-4",
+				thinking: "high",
+				transition: reviewRoute(),
+			},
 		);
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -905,7 +966,12 @@ describe("the decision modal", () => {
 			},
 			success,
 			"live-worktree",
-			{ message: "The turn is done.", model: "opus-4", thinking: "high", transition: reviewRoute() },
+			{
+				message: "The turn is done.",
+				model: "opus-4",
+				thinking: "high",
+				transition: reviewRoute(),
+			},
 		);
 		stubCheckout(app);
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -1228,7 +1294,12 @@ describe("the decision modal", () => {
 			},
 			success,
 			"live-worktree",
-			{ message: "The turn is done.", model: "opus-4", thinking: "high", transition: reviewRoute() },
+			{
+				message: "The turn is done.",
+				model: "opus-4",
+				thinking: "high",
+				transition: reviewRoute(),
+			},
 		);
 		stubCheckout(app);
 		app.runner.setModelList("pi", ["anthropic/claude-review-4"]);
@@ -1397,7 +1468,10 @@ describe("the decision modal", () => {
 				// open: the ticket is running, and the row wears the missing
 				// badge only because the faked agent list is empty.
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
-				const visible = app.state.visibleTickets(app.config.workflowStates, app.config.defaultTaskType);
+				const visible = app.state.visibleTickets(
+					app.config.workflowStates,
+					app.config.defaultTaskType,
+				);
 				expect(visible[0]?.state).toBe("running");
 				expect(ticketRow(await settle(setup))).toContain("missing");
 			},
@@ -3110,7 +3184,10 @@ describe("the auto dispatch", () => {
 				]);
 				// No ticket is left with an unresolved handoff: every claim
 				// the queue held settled, so nothing needs recovery.
-				const visible = app.state.visibleTickets(app.config.workflowStates, app.config.defaultTaskType);
+				const visible = app.state.visibleTickets(
+					app.config.workflowStates,
+					app.config.defaultTaskType,
+				);
 				expect(visible).toHaveLength(2);
 				for (const ticket of visible) {
 					expect(ticket.handoffRecoveryRequired).toBe(false);
@@ -3133,13 +3210,9 @@ describe("the auto dispatch", () => {
 		// hold the ticket instead of re-running the completed type. A pair
 		// ticket with no closed cycle dispatches in the same cycle: the loop
 		// runs, and the finished work does not repeat.
-		const app = seededApp(
-			"awaiting",
-			{ autoHandoff: true },
-			pairSuccess,
-			"live-worktree",
-			{ cause: "completed" },
-		);
+		const app = seededApp("awaiting", { autoHandoff: true }, pairSuccess, "live-worktree", {
+			cause: "completed",
+		});
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
@@ -3599,7 +3672,11 @@ describe("the handoff queue", () => {
 			...BASE_CONFIG,
 			repos: { [repoIdentity]: path },
 			workflowStates: [
-				{ name: "ready-for-review", taskType: "review", match: { labelsAny: ["ready-for-review"] } },
+				{
+					name: "ready-for-review",
+					taskType: "review",
+					match: { labelsAny: ["ready-for-review"] },
+				},
 			],
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,

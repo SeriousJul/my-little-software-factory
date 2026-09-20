@@ -52,7 +52,7 @@ environment = "live-worktree"
 template = "{input}"
 
 # --- The workflow machine (ADR 0027) --------------------------------------
-# The four states of the label workflow. A state's match names the labels
+# The states of the label workflow. A state's match names the labels
 # that put a ticket on it; its task is what the plane suggests for a ticket
 # that sits there. Order decides: the first matching state wins.
 
@@ -83,6 +83,18 @@ task-type = "merge"
 [states.match]
 source-kind = "github-pull-request"
 labels-any = ["ready-to-ship"]
+
+# A pull request the plane has not put in the machine parks: the plane offers
+# no task for it, so it hands off nothing, and a label write is the only
+# engine that moves it. That holds a stranger's pull request, and one an agent
+# opened but has not finished with, out of the queue; the implement transition
+# still reaches such a pull request as its ticket's linked pull request and
+# labels it from there. It sits last because the states match in order.
+[[states]]
+name = "pull-request-unlabeled"
+[states.match]
+source-kind = "github-pull-request"
+labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 
 # --- The task types --------------------------------------------------------
 # Each task type is work only: a prompt template and a task profile. The

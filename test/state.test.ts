@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
+import type { TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
@@ -338,6 +339,62 @@ describe("factory SQLite state", () => {
 				decision: null,
 			}),
 		);
+		state.close();
+	});
+
+	test("the transition outcome the fire wrote is stored on the trace and reads back", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		const written: TransitionOutcome = {
+			fired: true,
+			when: "score-above-threshold",
+			reason: "",
+			ticketFacts: [],
+			pullRequestFacts: ["ready-to-ship"],
+			autoAdvance: true,
+			agent: "codex",
+			environment: "worktree",
+			ticketWrite: null,
+			pullRequestWrite: { added: ["ready-to-ship"], removed: ["ready-for-review"] },
+			pullRequestIdentity: ticket.identity,
+			pullRequestKey: "#5",
+			writeFailure: "",
+			positionTaskType: "merge",
+			positionTicketIdentity: ticket.identity,
+		};
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "- **Score:** 95 / 100",
+			turnLog: textLog("- **Score:** 95 / 100"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: written,
+		});
+
+		// The decision modal and the automatic decision read the facts the
+		// plane wrote, not a re-read of the source (ADR 0027).
+		expect(state.lastCompletion(ticket.identity)?.transition).toEqual(written);
+
+		// A turn that settled with no fire stores null, and a stored record
+		// that no longer parses fails open the same way a broken cause does.
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "second",
+			turnLog: textLog("second"),
+			completedAt: "2026-08-31T12:00:00Z",
+		});
+		expect(state.lastCompletion(ticket.identity)?.transition).toBeNull();
 		state.close();
 	});
 

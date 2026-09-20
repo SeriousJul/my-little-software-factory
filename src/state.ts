@@ -1228,7 +1228,7 @@ export class FactoryState {
 	 * cycle whose turn never settled holds nothing: its row carries no
 	 * cause. It gates the open auto-handoff only; a manual handoff passes.
 	 */
-	sameTypeHoldActive(identity: string, suggestedTaskType: string): boolean {
+	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
 		const ended = this.db
 			.prepare(
 				"SELECT task_type, cause FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL ORDER BY decided_at DESC, rowid DESC LIMIT 1",
@@ -3062,4 +3062,3 @@ function isRecordOutcome(value: unknown): value is TransitionOutcome {
 	const outcome = value as Record<string, unknown>;
 	return typeof outcome.fired === "boolean" && typeof outcome.writeFailure === "string";
 }
-

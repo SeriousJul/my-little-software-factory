@@ -375,11 +375,16 @@ class GitHubTicketSource implements TicketSource {
 				// the unlabeled issues.
 				queries.push(scope);
 			} else {
-				// `needs-work` intentionally does not test draft. The review and
-				// merge halves do: a draft cannot be reviewed to a verdict or merged.
+				// The same rule on the pull request side, and it is load-bearing:
+				// the implement transition labels the pull request the agent just
+				// opened, and it can only do that when the pull request is already
+				// in the list. So the default policy lists open pull requests,
+				// unlabeled ones included. The draft policy carries over: only
+				// `needs-work` may rest on a draft, because a draft cannot be
+				// reviewed to a verdict or merged, and GitHub search cannot express
+				// that union in one query.
 				queries.push(`${scope} label:needs-work`);
-				queries.push(`${scope} label:ready-for-review no:draft`);
-				queries.push(`${scope} label:ready-to-ship no:draft`);
+				queries.push(`${scope} no:draft`);
 			}
 		}
 		return queries;

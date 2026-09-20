@@ -135,6 +135,13 @@ describe("the Default configuration", () => {
 				taskType: "merge",
 				match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
 			},
+			{
+				name: "pull-request-unlabeled",
+				match: {
+					sourceKind: "github-pull-request",
+					labelsNone: ["needs-work", "ready-for-review", "ready-to-ship"],
+				},
+			},
 		]);
 		// Every task type carries its transition: the plane fires it on a
 		// completed turn and writes the label facts the machine reads.
@@ -497,6 +504,16 @@ describe("validateConfig", () => {
 					name: "ready-to-ship",
 					taskType: "merge",
 					match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+				},
+				{
+					// The park: an open pull request the plane has not labeled
+					// yet, which the implement transition still reaches through
+					// its Issue reference (ADR 0027).
+					name: "pull-request-unlabeled",
+					match: {
+						sourceKind: "github-pull-request",
+						labelsNone: ["needs-work", "ready-for-review", "ready-to-ship"],
+					},
 				},
 			]);
 		});
@@ -1213,7 +1230,10 @@ describe("auto-handoff config keys", () => {
 					template: "x",
 					transition: {
 						"pull-request-facts": ["a"],
-						branches: [{ when: "pull-request-open", "pull-request-facts": ["b"] }, { "pull-request-facts": ["c"] }],
+						branches: [
+							{ when: "pull-request-open", "pull-request-facts": ["b"] },
+							{ "pull-request-facts": ["c"] },
+						],
 					},
 				},
 			},
@@ -1249,11 +1269,17 @@ describe("auto-handoff config keys", () => {
 			"transition: must be a table",
 		);
 		expectConfigError(
-			{ ...withTransition(), "task-types": { implement: { template: "x", transition: { "ticket-facts": 3 } } } },
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { "ticket-facts": 3 } } },
+			},
 			"ticket-facts: must be a list of label names",
 		);
 		expectConfigError(
-			{ ...withTransition(), "task-types": { implement: { template: "x", transition: { "score-threshold": 150 } } } },
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { "score-threshold": 150 } } },
+			},
 			"score-threshold: must be a number between 0 and 100",
 		);
 		expectConfigError(
@@ -1266,11 +1292,17 @@ describe("auto-handoff config keys", () => {
 			"auto-advance: must be a boolean",
 		);
 		expectConfigError(
-			{ ...withTransition(), "task-types": { implement: { template: "x", transition: { agent: "cursor" } } } },
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { agent: "cursor" } } },
+			},
 			'unknown agent "cursor"',
 		);
 		expectConfigError(
-			{ ...withTransition(), "task-types": { implement: { template: "x", transition: { environment: "container" } } } },
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { environment: "container" } } },
+			},
 			"environment: must be one of",
 		);
 		expectConfigError(
@@ -1283,7 +1315,10 @@ describe("auto-handoff config keys", () => {
 			"when: must be one of",
 		);
 		expectConfigError(
-			{ ...withTransition(), "task-types": { implement: { template: "x", transition: { pin: "x" } } } },
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { pin: "x" } } },
+			},
 			'unknown key "pin"',
 		);
 	});

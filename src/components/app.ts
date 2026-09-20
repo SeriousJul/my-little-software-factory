@@ -30,7 +30,6 @@ import {
 	persistConfig,
 	type TransitionOutcome,
 } from "../config.ts";
-import { fireTransition } from "../workflow.ts";
 import {
 	type ConsultationRepositoryOption,
 	consultationRepositoryCatalog,
@@ -89,6 +88,7 @@ import {
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
+import { fireTransition } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel, panelBodyCols } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -759,8 +759,13 @@ export function App({
 		// The resolved Task profile of the ticket's suggested task type: the
 		// panel prefills it, and Enter applies it (ADR 0009). The operator
 		// changes a row in the panel, or clears one to leave the setting to the
-		// agent.
-		return resolveHandoffChoice(configRef.current, ticket.suggestedTaskType);
+		// agent. A ticket on a parking state suggests nothing, and the plane
+		// starts nothing on its own: this manual path is the operator's choice,
+		// so it prefills the default task type (ADR 0027).
+		return resolveHandoffChoice(
+			configRef.current,
+			ticket.suggestedTaskType ?? configRef.current.defaultTaskType,
+		);
 	};
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
@@ -1144,7 +1149,10 @@ export function App({
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
 	const taskTypeOf = (ticket: Ticket): string =>
-		ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		ticket.lastCompletion?.taskType ??
+		ticket.handoff?.taskType ??
+		ticket.suggestedTaskType ??
+		configRef.current.defaultTaskType;
 
 	/** The Live view's context line: repository, task type, agent. No time: the turn has not settled. */
 	const liveContextLine = (ticket: Ticket): string =>
@@ -1187,12 +1195,20 @@ export function App({
 		const factLines: string[] = [];
 		const outcome = completion?.transition ?? null;
 		if (outcome !== null) {
-			if (outcome.fired === false && outcome.reason !== "")
-				factLines.push(`no transition branch held: ${outcome.reason}`);
+			// The reason is a visible fact either way: the branch that did not
+			// hold, or the pull-request fact the fire skipped because no linked
+			// pull request was found (ADR 0027).
+			if (outcome.reason !== "")
+				factLines.push(
+					outcome.fired ? outcome.reason : `no transition branch held: ${outcome.reason}`,
+				);
 			if (outcome.ticketWrite !== null)
 				factLines.push(transitionFactLine("ticket", outcome.ticketWrite));
 			if (outcome.pullRequestWrite !== null && outcome.pullRequestIdentity !== null) {
-				const surface = outcome.pullRequestKey !== null ? `pull request ${outcome.pullRequestKey}` : "pull request";
+				const surface =
+					outcome.pullRequestKey !== null
+						? `pull request ${outcome.pullRequestKey}`
+						: "pull request";
 				factLines.push(transitionFactLine(surface, outcome.pullRequestWrite));
 			}
 			if (outcome.writeFailure !== "")
@@ -1217,7 +1233,10 @@ export function App({
 	};
 
 	/** One surface's label write as the decision's fact line. */
-	const transitionFactLine = (surface: string, write: { added: string[]; removed: string[] }): string => {
+	const transitionFactLine = (
+		surface: string,
+		write: { added: string[]; removed: string[] },
+	): string => {
 		const parts = [surface];
 		if (write.added.length > 0) parts.push(`added ${write.added.join(", ")}`);
 		if (write.removed.length > 0) parts.push(`removed ${write.removed.join(", ")}`);
@@ -1330,7 +1349,11 @@ export function App({
 	 * now sit, while the decision records on the ticket whose turn settled
 	 * (ADR 0027).
 	 */
-	const runRouteHandoff = (ticket: Ticket, outcome: TransitionOutcome | null, choice: HandoffChoice) => {
+	const runRouteHandoff = (
+		ticket: Ticket,
+		outcome: TransitionOutcome | null,
+		choice: HandoffChoice,
+	) => {
 		if (handoffDispatch === undefined) return;
 		// Claim first: a refused claim leaves the ticket where it was. The
 		// turn's decision is not recorded here: it lands when the routed
@@ -1934,8 +1957,7 @@ export function App({
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
-		const taskType =
-			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const taskType = taskTypeOf(ticket);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
 			// notice on the Message line, and the observation makes the
@@ -1948,7 +1970,7 @@ export function App({
 		// auto-handoff - run on the observation's tick; the decision modal
 		// shows what the transition wrote (ADR 0027).
 		const outcome = ticket.lastCompletion?.transition ?? null;
-		if (outcome !== null && outcome.autoAdvance) {
+		if (outcome?.autoAdvance) {
 			setNoticeMessage(`task type ${taskType} auto-advances: the factory decides this ticket`);
 			observationRef.current?.tick();
 			return;
@@ -2458,8 +2480,7 @@ export function App({
 			? panelTicket.state === "open"
 				? "closed"
 				: panelTicket.state === "awaiting"
-					? autoMode ||
-							panelTicket.lastCompletion?.transition?.autoAdvance === true
+					? autoMode || panelTicket.lastCompletion?.transition?.autoAdvance === true
 						? "stream"
 						: "decision"
 					: markerOf(panelTicket) === "missing"

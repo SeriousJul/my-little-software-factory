@@ -209,37 +209,27 @@ describe("GitHub ticket source contract", () => {
 		expect(prRequest).not.toContain("draft:false");
 	});
 
-	test("the default pull request policy splits draft rules into separate queries", async () => {
-		const runner = new SourceRunner([
-			page([pullRequest()]),
-			page([pullRequest()]),
-			page([pullRequest()]),
-		]);
+	test("the default pull request policy lists every open pull request a draft rule allows", async () => {
+		const runner = new SourceRunner([page([pullRequest()]), page([pullRequest()])]);
 		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
-		expect(runner.calls).toHaveLength(3);
+		// The plane owns the workflow labels (ADR 0027), so an open pull
+		// request enters the list before it carries one: that is how the
+		// implement transition finds the pull request the agent just opened.
+		expect(runner.calls).toHaveLength(2);
 		const needsWork = runner.calls[0].args.join(" ");
-		const review = runner.calls[1].args.join(" ");
-		const merge = runner.calls[2].args.join(" ");
+		const openPulls = runner.calls[1].args.join(" ");
 		expect(needsWork).toContain("is:open is:pr repo:acme/factory -label:blocked label:needs-work");
 		expect(needsWork).not.toContain("no:draft");
-		expect(review).toContain(
-			"is:open is:pr repo:acme/factory -label:blocked label:ready-for-review no:draft",
-		);
-		// The merge half keeps the draft rule with the review half.
-		expect(merge).toContain(
-			"is:open is:pr repo:acme/factory -label:blocked label:ready-to-ship no:draft",
-		);
-		for (const query of [
-			searchQueryOf(runner.calls[0]),
-			searchQueryOf(runner.calls[1]),
-			searchQueryOf(runner.calls[2]),
-		]) {
+		expect(openPulls).toContain("is:open is:pr repo:acme/factory -label:blocked no:draft");
+		expect(openPulls).not.toContain("label:ready-for-review");
+		expect(openPulls).not.toContain("label:ready-to-ship");
+		for (const query of [searchQueryOf(runner.calls[0]), searchQueryOf(runner.calls[1])]) {
 			expect(query).not.toMatch(/\bOR\b/);
 			expect(query).not.toContain("(");
 			expect(query).not.toContain("draft:false");
 		}
-		// All queries matched the same pull request. The snapshot keeps one copy.
+		// Both queries matched the same pull request. The snapshot keeps one copy.
 		if (outcome.status === "success") expect(outcome.tickets).toHaveLength(1);
 	});
 
@@ -537,7 +527,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 			prPages(
 				[pullRequestClosing({ closingIssuesReferences: { nodes: [referenceIssue(5)] } })],
 				[],
-				[],
 			),
 		);
 		const outcome = await createTicketSource(prSource, runner).fetch([
@@ -571,7 +560,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 					}),
 				],
 				[],
-				[],
 			),
 		);
 		const outcome = await createTicketSource(prSource, runner).fetch([
@@ -580,8 +568,8 @@ describe("pull request reference reads (ADR 0023)", () => {
 		]);
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		// The three search queries, nothing else: the snapshot covers both.
-		expect(runner.calls).toHaveLength(3);
+		// The two search queries, nothing else: the snapshot covers both.
+		expect(runner.calls).toHaveLength(2);
 		expect(outcome.referencedIssueFacts).toEqual([
 			{
 				identity: "github:github.com:I_5",
@@ -605,7 +593,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 					}),
 				],
 				[],
-				[],
 			),
 			referenceRead({
 				id: "I_6",
@@ -619,8 +606,8 @@ describe("pull request reference reads (ADR 0023)", () => {
 		]);
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		expect(runner.calls).toHaveLength(4);
-		const read = runner.calls[3].args.join(" ");
+		expect(runner.calls).toHaveLength(3);
+		const read = runner.calls[2].args.join(" ");
 		expect(read).toContain("api graphql");
 		// The covered reference is not in the read; the uncovered one is
 		// addressed by its identity.
@@ -650,7 +637,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 					}),
 				],
 				[],
-				[],
 			),
 			referenceRead({
 				issue: {
@@ -664,7 +650,7 @@ describe("pull request reference reads (ADR 0023)", () => {
 		const outcome = await createTicketSource(prSource, runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		const read = runner.calls[3].args.join(" ");
+		const read = runner.calls[2].args.join(" ");
 		expect(read).toContain("repository(owner: $ref0Owner, name: $ref0Name)");
 		expect(read).toContain("issue(number: $ref0Number)");
 		expect(read).toContain("ref0Owner=acme");
@@ -692,7 +678,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 			...prPages(
 				[pullRequestClosing({ closingIssuesReferences: { nodes: [referenceIssue(5)] } })],
 				[],
-				[],
 			),
 			{ code: 1, stdout: "", stderr: "HTTP 500: internal error\n" },
 		]);
@@ -716,7 +701,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 						closingIssuesReferences: { nodes: [referenceIssue(5), referenceIssue(6)] },
 					}),
 				],
-				[],
 				[],
 			),
 			referenceRead({
@@ -757,7 +741,6 @@ describe("pull request reference reads (ADR 0023)", () => {
 			prPages(
 				[pullRequestClosing({ closingIssuesReferences: { nodes: [referenceIssue(5)] } })],
 				[],
-				[],
 			),
 		);
 		await createTicketSource(prSource, runner).fetch();
@@ -780,17 +763,17 @@ describe("pull request reference reads (ADR 0023)", () => {
 		});
 		const references = Array.from({ length: 300 }, (_, index) => referenceIssue(101 + index));
 		const runner = new SourceRunner([
-			...prPages([pullRequestClosing({ closingIssuesReferences: { nodes: references } })], [], []),
+			...prPages([pullRequestClosing({ closingIssuesReferences: { nodes: references } })], []),
 			referenceRead(...Array.from({ length: 250 }, (_, index) => answer(101 + index))),
 			referenceRead(...Array.from({ length: 50 }, (_, index) => answer(351 + index))),
 		]);
 		const outcome = await createTicketSource(prSource, runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		// Three search pages, then two read chunks: 250, then 50.
-		expect(runner.calls).toHaveLength(5);
-		const firstRead = runner.calls[3].args.join(" ");
-		const secondRead = runner.calls[4].args.join(" ");
+		// Two search pages, then two read chunks: 250, then 50.
+		expect(runner.calls).toHaveLength(4);
+		const firstRead = runner.calls[2].args.join(" ");
+		const secondRead = runner.calls[3].args.join(" ");
 		expect(firstRead).toContain("ref249Id");
 		expect(firstRead).not.toContain("ref250Id");
 		expect(secondRead).toContain("ref49Id");
@@ -809,7 +792,7 @@ describe("pull request reference reads (ADR 0023)", () => {
 	test("a failed later chunk fails the whole read with one warning (issue #65)", async () => {
 		const references = Array.from({ length: 251 }, (_, index) => referenceIssue(101 + index));
 		const runner = new SourceRunner([
-			...prPages([pullRequestClosing({ closingIssuesReferences: { nodes: references } })], [], []),
+			...prPages([pullRequestClosing({ closingIssuesReferences: { nodes: references } })], []),
 			referenceRead(
 				...Array.from({ length: 250 }, (_, index) => ({
 					id: `I_${101 + index}`,

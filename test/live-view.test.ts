@@ -672,6 +672,21 @@ describe("the Live view against a running factory", () => {
 				expect(frame).toContain("The fix is in the layout math.");
 				expect(frame).toContain("Close");
 				expect(frame).toContain("Goto");
+				// The plane wrote the labels itself (ADR 0027): the completed
+				// settle fired the implement transition through the command
+				// runner, converged the ticket to its facts, and the review
+				// row stands on the position those labels derived.
+				expect(app.runner.commands()).toContain(
+					"gh issue edit #5 --repo github.com/acme/factory --add-label ready-for-review",
+				);
+				const stored = app.state.lastCompletion(identity)?.transition;
+				expect(stored).toEqual(
+					expect.objectContaining({
+						fired: true,
+						ticketWrite: { added: ["ready-for-review"], removed: [] },
+						positionTaskType: "review",
+					}),
+				);
 				// Close is selected by default; confirming it ends the cycle.
 				await pressReturn(setup, "the close", (f) => f.includes("[open]"));
 				expect(ticketRow(await settle(setup))).toContain("[open]");

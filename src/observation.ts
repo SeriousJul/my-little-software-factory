@@ -1092,13 +1092,7 @@ export class ObservationCoordinator {
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
 		const completion = this.state.lastCompletion(ticket.ticketIdentity);
 		const outcome = completion?.transition ?? null;
-		const decision = this.decideAwaiting(
-			ticket.taskType,
-			slots.count,
-			handoffCount,
-			autoOn,
-			outcome,
-		);
+		const decision = this.decideAwaiting(slots.count, handoffCount, autoOn, outcome);
 		if (decision === "wait") return false;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
 		// truncated is held. No automatic decision runs on it, in auto or
@@ -1231,13 +1225,12 @@ export class ObservationCoordinator {
 	 * completion that is neither waits for the operator.
 	 */
 	decideAwaiting(
-		taskType: string,
 		liveCount: number,
 		handoffCount: number,
 		autoOn: boolean,
 		outcome: TransitionOutcome | null,
 	): AwaitingDecision {
-		const autoAdvance = outcome !== null && outcome.fired && outcome.autoAdvance;
+		const autoAdvance = outcome === null ? false : outcome.fired && outcome.autoAdvance;
 		if (!autoOn && !autoAdvance) return "wait";
 		const routable =
 			autoAdvance &&
@@ -1307,6 +1300,10 @@ export class ObservationCoordinator {
 			// finished; the item still lists it because no new signal landed.
 			// The dispatch waits for the suggestion to change, and holds the
 			// ticket, not a parallel slot.
+			// A parking state offers no task: the plane does nothing on the
+			// ticket, and an external label write is the only engine that moves
+			// it (ADR 0027).
+			if (ticket.suggestedTaskType === null) continue;
 			if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;

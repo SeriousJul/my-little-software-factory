@@ -1,6 +1,6 @@
 /** The strict, startup-only factory configuration. */
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -224,7 +224,6 @@ export interface TicketSourceConfig {
 	auth?: GitHubAuthentication;
 }
 
-
 export interface ScrollConfig {
 	/** Rows moved by one detail key step or one slow wheel event. */
 	speed: number;
@@ -379,6 +378,10 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 	}
 	if (hasOldWorkflowMachineKeys(data)) {
 		try {
+			// The mode the operator's file carries is the mode the migration
+			// leaves behind, on the backup and the report as much as on the
+			// config: a 0600 file stays 0600 through the rewrite.
+			const mode = (await stat(path)).mode;
 			const shippedText = await readFile(shippedDefaultConfigPath(), "utf8");
 			const migration = migrateWorkflowMachineConfig(
 				path,
@@ -389,7 +392,7 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 			// anything: a broken migration stops the plane with the file
 			// unchanged and the reason named.
 			validateConfigWithWarnings(parse(migration.configText));
-			await writeMigrationFiles(path, text, migration);
+			await writeMigrationFiles(path, text, migration, mode);
 			note = `the config at ${path} was migrated to the workflow machine; the pre-migration file is at ${migration.backupFileName} and the report at ${migration.reportFileName}`;
 			text = migration.configText;
 		} catch (error) {
@@ -421,18 +424,27 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 /**
  * The migration's writes: the backup first, the report second, and the new
  * config last, each atomic. The backup lands before the config is touched,
- * so no failure path loses the original.
+ * so no failure path loses the original. Every write keeps the mode the
+ * config file already carried: a file the operator locked to 0600 because it
+ * holds a literal token must not come back world-readable as a backup.
  */
 async function writeMigrationFiles(
 	path: string,
 	originalText: string,
-	migration: { configText: string; reportText: string; backupFileName: string; reportFileName: string },
+	migration: {
+		configText: string;
+		reportText: string;
+		backupFileName: string;
+		reportFileName: string;
+	},
+	mode: number,
 ): Promise<void> {
 	const dir = dirname(path);
 	await mkdir(dir, { recursive: true });
 	const write = async (name: string, content: string): Promise<void> => {
 		const temp = join(dir, `.${name}.${randomUUID()}.tmp`);
-		await writeFile(temp, content, { encoding: "utf8", mode: 0o666 });
+		await writeFile(temp, content, { encoding: "utf8", mode });
+		if ((mode & 0o777) !== 0o666) await chmod(temp, mode & 0o777);
 		try {
 			await rename(temp, join(dir, name));
 		} catch (error) {
@@ -440,7 +452,7 @@ async function writeMigrationFiles(
 				await unlink(temp);
 			} catch {}
 			throw error;
-		};
+		}
 	};
 	await write(migration.backupFileName, originalText);
 	await write(migration.reportFileName, migration.reportText);
@@ -538,7 +550,7 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 			// error that points at the backup the migration left.
 			throw new ConfigError(
 				`config: "${key}" is a pre-workflow-machine key; the config migrates to "states" and task-type transitions at load (see the .bak backup and the migration report)`,
-				);
+			);
 		}
 		if (!knownTop.has(key)) {
 			throw new ConfigError(`config: unknown top-level key "${key}"`);
@@ -988,7 +1000,10 @@ export function validateInteractionExitKey(value: string): InteractionExitKey {
  * The ordered States of the workflow machine (ADR 0027). Names are unique,
  * and every task type a State offers must exist.
  */
-function validateWorkflowStates(value: unknown, taskTypes: Record<string, TaskTypeConfig>): WorkflowState[] {
+function validateWorkflowStates(
+	value: unknown,
+	taskTypes: Record<string, TaskTypeConfig>,
+): WorkflowState[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value))
 		throw new ConfigError("config: states: must be a list of [[states]] tables");
@@ -1018,9 +1033,14 @@ function validateWorkflowStates(value: unknown, taskTypes: Record<string, TaskTy
 function validateStateMatch(raw: Record<string, unknown>, where: string): StateMatch {
 	for (const key of Object.keys(raw))
 		if (
-			!["source-name", "source-kind", "repository", "labels-all", "labels-any", "labels-none"].includes(
-				key,
-			)
+			![
+				"source-name",
+				"source-kind",
+				"repository",
+				"labels-all",
+				"labels-any",
+				"labels-none",
+			].includes(key)
 		)
 			throw new ConfigError(`config: ${where}.match: unknown key "${key}"`);
 	const stringCondition = (key: "source-name" | "source-kind" | "repository") =>
@@ -1037,9 +1057,15 @@ function validateStateMatch(raw: Record<string, unknown>, where: string): StateM
 		return [...rawLabels] as string[];
 	};
 	return {
-		...(stringCondition("source-name") === undefined ? {} : { sourceName: stringCondition("source-name") }),
-		...(stringCondition("source-kind") === undefined ? {} : { sourceKind: stringCondition("source-kind") }),
-		...(stringCondition("repository") === undefined ? {} : { repository: stringCondition("repository") }),
+		...(stringCondition("source-name") === undefined
+			? {}
+			: { sourceName: stringCondition("source-name") }),
+		...(stringCondition("source-kind") === undefined
+			? {}
+			: { sourceKind: stringCondition("source-kind") }),
+		...(stringCondition("repository") === undefined
+			? {}
+			: { repository: stringCondition("repository") }),
 		...(labels("labels-all") === undefined ? {} : { labelsAll: labels("labels-all") }),
 		...(labels("labels-any") === undefined ? {} : { labelsAny: labels("labels-any") }),
 		...(labels("labels-none") === undefined ? {} : { labelsNone: labels("labels-none") }),
@@ -1085,20 +1111,25 @@ function validateTransition(
 	let scoreThreshold: number | undefined;
 	if (value["score-threshold"] !== undefined) {
 		const rawThreshold = value["score-threshold"];
-		if (typeof rawThreshold !== "number" || !Number.isFinite(rawThreshold) || rawThreshold < 0 || rawThreshold > 100)
+		if (
+			typeof rawThreshold !== "number" ||
+			!Number.isFinite(rawThreshold) ||
+			rawThreshold < 0 ||
+			rawThreshold > 100
+		)
 			throw new ConfigError(
 				`config: ${where}.transition.score-threshold: must be a number between 0 and 100`,
 			);
-			scoreThreshold = rawThreshold;
+		scoreThreshold = rawThreshold;
 	}
 	const autoAdvance =
 		value["auto-advance"] === undefined
 			? undefined
 			: (() => {
-				if (typeof value["auto-advance"] !== "boolean")
-					throw new ConfigError(`config: ${where}.transition.auto-advance: must be a boolean`);
-				return value["auto-advance"] as boolean;
-			})();
+					if (typeof value["auto-advance"] !== "boolean")
+						throw new ConfigError(`config: ${where}.transition.auto-advance: must be a boolean`);
+					return value["auto-advance"] as boolean;
+				})();
 	let agent: string | undefined;
 	if (value.agent !== undefined) {
 		agent = stringField(value, "agent", `${where}.transition`);
@@ -1119,87 +1150,92 @@ function validateTransition(
 		value.branches === undefined
 			? undefined
 			: (() => {
-				if (!Array.isArray(value.branches))
-					throw new ConfigError(`config: ${where}.transition.branches: must be a list of tables`);
-				return value.branches.map((rawBranch, index) => {
-					const branchWhere = `${where}.transition.branches[${index}]`;
-					if (!isRecord(rawBranch))
-						throw new ConfigError(`config: ${branchWhere}: must be a table`);
-					for (const key of Object.keys(rawBranch))
-						if (
-							![
-								"when",
-								"ticket-facts",
-								"pull-request-facts",
-								"auto-advance",
-								"agent",
-								"environment",
-							].includes(key)
-						)
-							throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
-					let when: TransitionJudgment | undefined;
-					if (rawBranch.when !== undefined) {
-						const judgment = stringField(rawBranch, "when", branchWhere);
-						if (!(TRANSITION_JUDGMENTS as readonly string[]).includes(judgment))
-							throw new ConfigError(
-								`config: ${branchWhere}.when: must be one of: ${TRANSITION_JUDGMENTS.join(", ")}`,
-							);
-						when = judgment as TransitionJudgment;
-					}
-					const branchFacts = (key: "ticket-facts" | "pull-request-facts") => {
-						const rawFacts = rawBranch[key];
-						if (rawFacts === undefined) return undefined;
-						if (
-							!Array.isArray(rawFacts) ||
-							rawFacts.some((label) => typeof label !== "string" || label === "")
-						)
-							throw new ConfigError(
-								`config: ${branchWhere}.${key}: must be a list of label names`,
-							);
-						return [...rawFacts] as string[];
-					};
-					const branchAutoAdvance =
-						rawBranch["auto-advance"] === undefined
-							? undefined
-							: (() => {
-								if (typeof rawBranch["auto-advance"] !== "boolean")
-									throw new ConfigError(`config: ${branchWhere}.auto-advance: must be a boolean`);
-								return rawBranch["auto-advance"] as boolean;
-							})();
-					let branchAgent: string | undefined;
-					if (rawBranch.agent !== undefined) {
-						branchAgent = stringField(rawBranch, "agent", branchWhere);
-						if (!(branchAgent in agents))
-							throw new ConfigError(`config: ${branchWhere}.agent: unknown agent "${branchAgent}"`);
-					}
-					let branchEnvironment: EnvironmentKind | undefined;
-					if (rawBranch.environment !== undefined) {
-						const kind = stringField(rawBranch, "environment", branchWhere);
-						if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
-							throw new ConfigError(
-								`config: ${branchWhere}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
-							);
+					if (!Array.isArray(value.branches))
+						throw new ConfigError(`config: ${where}.transition.branches: must be a list of tables`);
+					return value.branches.map((rawBranch, index) => {
+						const branchWhere = `${where}.transition.branches[${index}]`;
+						if (!isRecord(rawBranch))
+							throw new ConfigError(`config: ${branchWhere}: must be a table`);
+						for (const key of Object.keys(rawBranch))
+							if (
+								![
+									"when",
+									"ticket-facts",
+									"pull-request-facts",
+									"auto-advance",
+									"agent",
+									"environment",
+								].includes(key)
+							)
+								throw new ConfigError(`config: ${branchWhere}: unknown key "${key}"`);
+						let when: TransitionJudgment | undefined;
+						if (rawBranch.when !== undefined) {
+							const judgment = stringField(rawBranch, "when", branchWhere);
+							if (!(TRANSITION_JUDGMENTS as readonly string[]).includes(judgment))
+								throw new ConfigError(
+									`config: ${branchWhere}.when: must be one of: ${TRANSITION_JUDGMENTS.join(", ")}`,
+								);
+							when = judgment as TransitionJudgment;
 						}
-						branchEnvironment = kind as EnvironmentKind;
-					}
-					return {
-						...(when === undefined ? {} : { when }),
-						...(branchFacts("ticket-facts") === undefined ? {} : { ticketFacts: branchFacts("ticket-facts") }),
-						...(branchFacts("pull-request-facts") === undefined
-							? {}
-							: { pullRequestFacts: branchFacts("pull-request-facts") }),
-						...(branchAutoAdvance === undefined ? {} : { autoAdvance: branchAutoAdvance }),
-						...(branchAgent === undefined ? {} : { agent: branchAgent }),
-						...(branchEnvironment === undefined ? {} : { environment: branchEnvironment }),
-					};
-				});
-			})();
+						const branchFacts = (key: "ticket-facts" | "pull-request-facts") => {
+							const rawFacts = rawBranch[key];
+							if (rawFacts === undefined) return undefined;
+							if (
+								!Array.isArray(rawFacts) ||
+								rawFacts.some((label) => typeof label !== "string" || label === "")
+							)
+								throw new ConfigError(
+									`config: ${branchWhere}.${key}: must be a list of label names`,
+								);
+							return [...rawFacts] as string[];
+						};
+						const branchAutoAdvance =
+							rawBranch["auto-advance"] === undefined
+								? undefined
+								: (() => {
+										if (typeof rawBranch["auto-advance"] !== "boolean")
+											throw new ConfigError(
+												`config: ${branchWhere}.auto-advance: must be a boolean`,
+											);
+										return rawBranch["auto-advance"] as boolean;
+									})();
+						let branchAgent: string | undefined;
+						if (rawBranch.agent !== undefined) {
+							branchAgent = stringField(rawBranch, "agent", branchWhere);
+							if (!(branchAgent in agents))
+								throw new ConfigError(
+									`config: ${branchWhere}.agent: unknown agent "${branchAgent}"`,
+								);
+						}
+						let branchEnvironment: EnvironmentKind | undefined;
+						if (rawBranch.environment !== undefined) {
+							const kind = stringField(rawBranch, "environment", branchWhere);
+							if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(kind)) {
+								throw new ConfigError(
+									`config: ${branchWhere}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
+								);
+							}
+							branchEnvironment = kind as EnvironmentKind;
+						}
+						return {
+							...(when === undefined ? {} : { when }),
+							...(branchFacts("ticket-facts") === undefined
+								? {}
+								: { ticketFacts: branchFacts("ticket-facts") }),
+							...(branchFacts("pull-request-facts") === undefined
+								? {}
+								: { pullRequestFacts: branchFacts("pull-request-facts") }),
+							...(branchAutoAdvance === undefined ? {} : { autoAdvance: branchAutoAdvance }),
+							...(branchAgent === undefined ? {} : { agent: branchAgent }),
+							...(branchEnvironment === undefined ? {} : { environment: branchEnvironment }),
+						};
+					});
+				})();
 	if (branches !== undefined) {
-		const scoreJudgments: TransitionJudgment[] = [
-			"score-above-threshold",
-			"score-below-threshold",
-		];
-		if (branches.some((branch) => branch.when !== undefined && scoreJudgments.includes(branch.when))) {
+		const scoreJudgments: TransitionJudgment[] = ["score-above-threshold", "score-below-threshold"];
+		if (
+			branches.some((branch) => branch.when !== undefined && scoreJudgments.includes(branch.when))
+		) {
 			if (scoreThreshold === undefined) {
 				throw new ConfigError(
 					`config: ${where}.transition: a score judgment needs score-threshold`,

@@ -6,9 +6,12 @@
  * task-type transitions, the four seed templates are replaced on exact
  * match (a customized template is left untouched and named in the report),
  * inexpressible edges are dropped and each named in the operator-readable
- * report, and the old file is backed up. The migration is pure here: it
- * returns the new text and the report, and the caller validates the new
- * text before it writes anything.
+ * report, and the old file is backed up. A task type whose seed template was
+ * replaced and whose own config expressed no edge takes the shipped seed's
+ * transition: dropping the template's label prose and writing no label would
+ * otherwise stop the workflow. The migration is pure here: it returns the new
+ * text and the report, and the caller validates the new text before it writes
+ * anything.
  */
 import { parse, stringify } from "smol-toml";
 
@@ -55,7 +58,7 @@ export function migrateWorkflowMachineConfig(
 	const reportFileName = `${baseName}.migration-report.md`;
 
 	const rules = tableList(originalData["task-rules"], "task-rules");
-	const edges = tableList(originalData["workflows"], "workflows");
+	const edges = tableList(originalData.workflows, "workflows");
 	const shipped = parse(shippedDefaultText) as Record<string, unknown>;
 	const shippedTaskTypes = isRecord(shipped["task-types"]) ? shipped["task-types"] : {};
 	const taskTypes = isRecord(originalData["task-types"]) ? originalData["task-types"] : {};
@@ -66,6 +69,8 @@ export function migrateWorkflowMachineConfig(
 	const stateNames = new Set<string>();
 	const stateForTask = new Map<string, { name: string; match: Record<string, unknown> }>();
 	const stateLines: string[] = [];
+	const shippedStates = (Array.isArray(shipped.states) ? shipped.states : []).filter(isRecord);
+	const installedParks: string[] = [];
 	for (const rule of rules) {
 		const taskType = rule["task-type"];
 		if (typeof taskType !== "string" || taskType === "") {
@@ -80,6 +85,22 @@ export function migrateWorkflowMachineConfig(
 		stateLines.push(`- \`${name}\`: task \`${taskType}\`, matches ${matchDescription(match)}.`);
 	}
 
+	// The shipped machine's parking states come over with the migration. The
+	// default source list carries an open pull request before it holds a label,
+	// so a config whose rules name only the labeled states would otherwise hand
+	// the default task type to a stranger's pull request.
+	for (const shippedState of shippedStates) {
+		if (shippedState["task-type"] !== undefined) continue;
+		const name = shippedState.name;
+		if (typeof name !== "string" || stateNames.has(name)) continue;
+		if (!isRecord(shippedState.match)) continue;
+		stateNames.add(name);
+		states.push({ ...shippedState });
+		installedParks.push(
+			`\`${name}\`: the shipped seed's parking state, appended so a pull request the machine has not placed suggests nothing.`,
+		);
+	}
+
 	// One transition per expressible edge: the single edge out of a task
 	// type whose target one state suggests. The transition writes that
 	// state's label facts, on the surface the state names, and it carries
@@ -88,7 +109,7 @@ export function migrateWorkflowMachineConfig(
 	const droppedEdges: string[] = [];
 	for (const [taskType, rawTask] of Object.entries(taskTypes)) {
 		if (!isRecord(rawTask)) continue;
-		const fromEdges = edges.filter((edge) => edge["from"] === taskType);
+		const fromEdges = edges.filter((edge) => edge.from === taskType);
 		if (fromEdges.length === 0) continue;
 		if (fromEdges.length > 1) {
 			droppedEdges.push(
@@ -97,7 +118,7 @@ export function migrateWorkflowMachineConfig(
 			continue;
 		}
 		const edge = fromEdges[0];
-		const targets = Array.isArray(edge["to"]) ? (edge["to"] as unknown[]) : [];
+		const targets = Array.isArray(edge.to) ? (edge.to as unknown[]) : [];
 		if (targets.length !== 1 || typeof targets[0] !== "string" || targets[0] === "") {
 			droppedEdges.push(
 				`the edge from \`${taskType}\` to ${targetList(targets)}: a transition's single edge must name exactly one task type.`,
@@ -112,7 +133,10 @@ export function migrateWorkflowMachineConfig(
 			);
 			continue;
 		}
-		const facts = [...stringList(state.match["labels-all"]), ...stringList(state.match["labels-any"])];
+		const facts = [
+			...stringList(state.match["labels-all"]),
+			...stringList(state.match["labels-any"]),
+		];
 		if (facts.length === 0) {
 			droppedEdges.push(
 				`the edge from \`${taskType}\` to \`${target}\`: the state \`${state.name}\` matches without naming any labels, so it has no facts to write.`,
@@ -123,8 +147,8 @@ export function migrateWorkflowMachineConfig(
 		const transition: Record<string, unknown> = { "ticket-facts": [], "pull-request-facts": [] };
 		if (onPullRequest) transition["pull-request-facts"] = facts;
 		else transition["ticket-facts"] = facts;
-		if (typeof edge["agent"] === "string") transition["agent"] = edge["agent"];
-		if (typeof edge["environment"] === "string") transition["environment"] = edge["environment"];
+		if (typeof edge.agent === "string") transition.agent = edge.agent;
+		if (typeof edge.environment === "string") transition.environment = edge.environment;
 		transitions.set(taskType, {
 			transition,
 			line: `\`${taskType}\`: writes the ${onPullRequest ? "pull request" : "ticket"} facts ${labelList(facts)} (from the edge to \`${target}\` and the state \`${state.name}\`).`,
@@ -132,9 +156,15 @@ export function migrateWorkflowMachineConfig(
 	}
 
 	// Task types: auto-close is dropped (named), and a seed template that
-	// matches the pre-machine seed exactly is replaced by the clean one.
+	// matches the pre-machine seed exactly is replaced by the clean one. The
+	// clean template drops the label prose that made the agents write the
+	// labels, so the same exact match installs the shipped seed's transition on
+	// that type when no edge expressed one: the plane takes over the labels the
+	// template let go. A customized template keeps its prose and gets no
+	// transition, and the report names it.
 	const newTaskTypes: Record<string, unknown> = {};
 	const templateLines: string[] = [];
+	const installedTransitions: string[] = [];
 	const autoCloseLines: string[] = [];
 	for (const [name, rawTask] of Object.entries(taskTypes)) {
 		if (!isRecord(rawTask)) {
@@ -142,6 +172,7 @@ export function migrateWorkflowMachineConfig(
 			continue;
 		}
 		const task: Record<string, unknown> = {};
+		let seedTemplateMatched = false;
 		for (const [key, value] of Object.entries(rawTask)) {
 			if (key === "auto-close") {
 				if (value === true) {
@@ -154,11 +185,12 @@ export function migrateWorkflowMachineConfig(
 			if (key === "template" && typeof value === "string") {
 				const replacement = seedTemplateReplacement(name, value, shippedTaskTypes);
 				task.template = replacement.template;
+				seedTemplateMatched = replacement.replaced;
 				if (OLD_SEED_TEMPLATES[name] !== undefined) {
 					templateLines.push(
 						replacement.replaced
 							? `\`${name}\`: replaced with the clean seed template (the pre-migration template matched the seed exactly).`
-						: `\`${name}\`: left untouched (the template does not match the pre-migration seed).`,
+							: `\`${name}\`: left untouched (the template does not match the pre-migration seed). Its own label prose is the only writer of the labels this type's turns leave behind.`,
 					);
 				}
 				continue;
@@ -166,7 +198,17 @@ export function migrateWorkflowMachineConfig(
 			task[key] = value;
 		}
 		const transition = transitions.get(name);
-		if (transition !== undefined) task.transition = transition.transition;
+		if (transition !== undefined) {
+			task.transition = transition.transition;
+		} else if (seedTemplateMatched) {
+			const shippedTransition = shippedSeedTransition(name, shippedTaskTypes);
+			if (shippedTransition !== undefined) {
+				task.transition = shippedTransition;
+				installedTransitions.push(
+					`\`${name}\`: the shipped seed's transition, installed with the clean template (no pre-migration edge expressed it).`,
+				);
+			}
+		}
 		newTaskTypes[name] = task;
 	}
 
@@ -203,7 +245,7 @@ export function migrateWorkflowMachineConfig(
 		"",
 		`The config at \`${configPath}\` carried the pre-workflow-machine keys. The`,
 		`control plane rewrote it at load on ${date} (ADR 0027). The pre-migration`,
-		`file is at \`${backupFileName}\`, next to the config.`,
+		`file is at \`${backupFileName}\`, next to the config, and this report at \`${reportFileName}\`.`,
 		"",
 		"## States",
 		"",
@@ -211,6 +253,9 @@ export function migrateWorkflowMachineConfig(
 		"with the rule's match carried over.",
 		"",
 		...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
+		...(installedParks.length > 0
+			? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
+			: []),
 		"",
 		"## Transitions",
 		"",
@@ -221,6 +266,14 @@ export function migrateWorkflowMachineConfig(
 		...(transitions.size > 0
 			? [...transitions.values()].map((entry) => `- ${entry.line}`)
 			: ["No edges were expressible as transitions."]),
+		...(installedTransitions.length > 0
+			? [
+					"",
+					"Transitions installed from the shipped seed with the clean template:",
+					"",
+					...installedTransitions.map((line) => `- ${line}`),
+				]
+			: []),
 		...(droppedEdges.length > 0
 			? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
 			: []),
@@ -357,6 +410,20 @@ Description:
 };
 
 /**
+ * The transition the shipped Default configuration carries for one task type,
+ * as a raw table. The migration installs it on a task type whose seed template
+ * matched exactly and whose pre-machine config expressed no edge.
+ */
+function shippedSeedTransition(
+	name: string,
+	shippedTaskTypes: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+	const shippedTask = shippedTaskTypes[name];
+	if (!isRecord(shippedTask) || !isRecord(shippedTask.transition)) return undefined;
+	return shippedTask.transition;
+}
+
+/**
  * Replace a seed template on exact match. The replacement comes from the
  * shipped Default configuration, so the migration always lands the clean
  * templates the machine ships.
@@ -411,7 +478,8 @@ function matchDescription(match: Record<string, unknown>): string {
 	] as const) {
 		const value = match[key];
 		if (typeof value === "string") parts.push(`${key} \`${value}\``);
-		else if (Array.isArray(value)) parts.push(`${key} ${value.map((item) => `\`${String(item)}\``).join(", ")}`);
+		else if (Array.isArray(value))
+			parts.push(`${key} ${value.map((item) => `\`${String(item)}\``).join(", ")}`);
 	}
 	return parts.length > 0 ? parts.join(", ") : "everything (a catch-all)";
 }

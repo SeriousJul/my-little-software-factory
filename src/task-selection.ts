@@ -3,19 +3,22 @@ import type { WorkflowState } from "./config.ts";
 import type { SourceMembership } from "./domain/ticket.ts";
 
 /**
- * The suggested task type of a ticket. The first state whose match holds on
- * any current membership wins; the ticket takes the task that state offers,
- * and a state that offers no task is a parking state, so the ticket takes
- * the fallback task type.
+ * The suggested task type of a ticket, or null when the machine offers none.
+ *
+ * The first state whose match holds on any current membership wins, and the
+ * ticket takes the task that state offers. A state that offers no task is a
+ * parking state: the plane suggests nothing and does nothing on the ticket,
+ * so the result is null and only an external label write moves it. The
+ * fallback task type stands when no state matches at all (ADR 0027).
  */
 export function selectTaskType(
 	memberships: readonly SourceMembership[],
 	states: readonly WorkflowState[],
 	fallback: string,
-): string {
+): string | null {
 	for (const state of states) {
 		if (memberships.some((membership) => membershipMatchesState(membership, state))) {
-			return state.taskType ?? fallback;
+			return state.taskType ?? null;
 		}
 	}
 	return fallback;
@@ -26,7 +29,10 @@ export function selectTaskType(
  * must hold; an omitted condition holds for anything, so a state whose match
  * names nothing matches every membership: a catch-all.
  */
-export function membershipMatchesState(membership: SourceMembership, state: WorkflowState): boolean {
+export function membershipMatchesState(
+	membership: SourceMembership,
+	state: WorkflowState,
+): boolean {
 	const { match } = state;
 	if (match.sourceName !== undefined && match.sourceName !== membership.sourceName) return false;
 	if (match.sourceKind !== undefined && match.sourceKind !== membership.sourceKind) return false;

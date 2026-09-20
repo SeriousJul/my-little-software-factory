@@ -247,7 +247,13 @@ export interface Ticket {
 	labels: string[];
 	externalUpdatedAt: string;
 	memberships: SourceMembership[];
-	suggestedTaskType: string;
+	/**
+	 * The task the machine's first matching Workflow state offers, or null
+	 * when the ticket sits on a parking state: the control plane does nothing
+	 * on it, and only an external label write moves it (ADR 0027). An
+	 * operator's handoff of a parked ticket starts the default task type.
+	 */
+	suggestedTaskType: string | null;
 	actionable: boolean;
 	handoffRecoveryRequired: boolean;
 	/**

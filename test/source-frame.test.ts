@@ -349,7 +349,13 @@ describe("source-driven frames", () => {
 				},
 				review: { ...BASE_CONFIG.taskTypes.review, agent: "claude" },
 			},
-			workflowStates: [ { name: "ready-for-review", taskType: "review", match: { labelsAny: ["ready-for-review"] } } ],
+			workflowStates: [
+				{
+					name: "ready-for-review",
+					taskType: "review",
+					match: { labelsAny: ["ready-for-review"] },
+				},
+			],
 		};
 		try {
 			await withApp(

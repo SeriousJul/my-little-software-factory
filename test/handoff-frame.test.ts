@@ -3431,7 +3431,7 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
-						},
+					},
 				},
 			};
 			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
@@ -3571,7 +3571,7 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
-						},
+					},
 				},
 			};
 			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
@@ -3623,7 +3623,7 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
-						},
+					},
 				},
 			};
 			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };
@@ -3678,7 +3678,7 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						agent: "claude",
-						},
+					},
 				},
 			};
 			const mergeTicket: Ticket = { ...first, suggestedTaskType: "merge" };

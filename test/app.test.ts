@@ -118,6 +118,25 @@ describe("the control plane", () => {
 		});
 	});
 
+	test("a ticket on a parking state wears the park, not a task type", async () => {
+		// The machine's parking state offers no task (ADR 0027): the row and
+		// the detail both state the park, so the operator reads why the plane
+		// starts nothing.
+		const parked: Ticket = { ...SAMPLE_TICKETS[0], suggestedTaskType: null };
+		await withApp(
+			async (setup) => {
+				const frame = setup.captureCharFrame();
+				expect(frame).toContain("[parked]");
+				// The park is a machine fact, not a missing one: it wears no
+				// warning color, unlike `unknown`.
+				expect(detailPaneText(frame)).toContain("Suggested task type: parked");
+			},
+			undefined,
+			undefined,
+			{ initialTickets: [parked], config: BASE_CONFIG },
+		);
+	});
+
 	test("the sample-data contract is observable in the rendered frame", async () => {
 		await withApp(async (setup) => {
 			// Every ticket state is on screen at once.
