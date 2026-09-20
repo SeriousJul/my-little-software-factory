@@ -31,6 +31,7 @@ import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
 import { KeyGuide } from "../utility.ts";
+import { workQueueDetailLines } from "../work-queue-detail.ts";
 import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
@@ -204,9 +205,21 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
  */
 /** The Consultation the detail and close-dialog examples render under. */
 function sampleConsultation(
-	state: "opening" | "working" | "awaiting-response" | "missing" | "failed" | "closing" | "closed",
+	state:
+		| "queued"
+		| "opening"
+		| "working"
+		| "awaiting-response"
+		| "missing"
+		| "failed"
+		| "closing"
+		| "closed",
 ): Consultation {
 	const now = "2026-02-17T10:00:00.000Z";
+	// A `queued` record holds no environment and no Agent until the pickup
+	// starts it (ADR 0034, issue #90), so the sample carries no handles: the
+	// state word and the handles cannot contradict each other in the gallery.
+	const waiting = state === "queued";
 	return {
 		id: "c1c1c1c1-1111-4111-8111-111111111111",
 		typeName: "Review",
@@ -228,11 +241,11 @@ function sampleConsultation(
 		createdAt: now,
 		updatedAt: now,
 		agentName: "consultation-00000000",
-		paneId: "pane-c1",
-		tabId: "tab-ws-new",
-		workspaceId: "ws-new",
-		sessionId: "sess-c1",
-		latestSequence: 1,
+		paneId: waiting ? null : "pane-c1",
+		tabId: waiting ? null : "tab-ws-new",
+		workspaceId: waiting ? null : "ws-new",
+		sessionId: waiting ? null : "sess-c1",
+		latestSequence: waiting ? null : 1,
 		draft: "",
 		draftUpdatedAt: null,
 		draftOld: false,
@@ -896,14 +909,41 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
-		// The Work queue's list (ADR 0034): the rows in queue order with the
-		// origin and the place, the empty state, and the bar the cursor's
-		// own keys come from.
+		// The record the queue waits on (ADR 0034, issue #90): a `queued`
+		// Consultation's own detail, with no Agent output to read and no
+		// environment behind it - the state word is the whole fact.
+		id: "consultation-detail-queued",
+		state: "Consultation detail: the queued record that waits for a seat",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "queued",
+				lines: consultationDetailLines(
+					sampleConsultation("queued"),
+					[],
+					[],
+					columns.contentWidth - 4,
+					null,
+					null,
+				),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		// The Work queue's list (ADR 0034): the rows in the shared order with
+		// the origin word and the place - the handoff's origin and the
+		// Consultation item's kind (issue #90) - the empty state, and the bar
+		// the cursor's own keys come from.
 		id: "work-queue",
 		state: "the Work queue: the waiting starts in queue order, and the empty state",
 		render: (columns, _holds, _inputActive, _wiring) => {
 			const items: WorkQueueItem[] = [
 				{
+					kind: "handoff",
 					position: 0,
 					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
 					origin: "open",
@@ -919,6 +959,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					enqueuedAt: "2026-02-17T10:00:00.000Z",
 				},
 				{
+					kind: "handoff",
 					position: 1,
 					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
 					origin: "workflow",
@@ -933,10 +974,24 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					previousMessage: "the workflow named the next task",
 					enqueuedAt: "2026-02-17T10:01:00.000Z",
 				},
+				// The `queued` Consultation's item (issue #90): the pointer stands
+				// in the same order, under its kind word and the record's
+				// identity prefix.
+				{
+					kind: "consultation",
+					position: 2,
+					consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+					enqueuedAt: "2026-02-17T10:02:00.000Z",
+				},
 			];
 			const rows: WorkQueueRow[] = items.map((item, index) => ({
 				item,
-				title: index === 0 ? "Add a webhook retry policy" : "Close the stale deploy branch",
+				title:
+					index === 0
+						? "Add a webhook retry policy"
+						: index === 1
+							? "Close the stale deploy branch"
+							: "c1c1c1c1",
 			}));
 			return [
 				createElement(WorkQueueList, {
@@ -987,9 +1042,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		// ticket keeps its state and its own failure surface.
 		id: "work-force-dispatch",
 		state:
-			"Force-dispatch: available on an item, refused while a Handoff runs or the queue is empty",
+			"Force-dispatch: a Handoff item refuses while a Handoff runs; a Consultation item stands over the cap",
 		render: (columns, _holds, _inputActive, _wiring) => {
 			const item: WorkQueueItem = {
+				kind: "handoff",
 				position: 0,
 				ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
 				origin: "open",
@@ -1003,6 +1059,15 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				},
 				previousMessage: "",
 				enqueuedAt: "2026-02-17T10:00:00.000Z",
+			};
+			// The Consultation item's row (issue #90): its force-dispatch runs its
+			// own pickup seam and never parks on the herdr seat, so the bar stands
+			// on it while a Handoff runs.
+			const consultation: WorkQueueItem = {
+				kind: "consultation",
+				position: 1,
+				consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+				enqueuedAt: "2026-02-17T10:01:00.000Z",
 			};
 			const bar = (key: string, handoffActive: boolean, selected: WorkQueueItem | null) =>
 				createElement(ActionBar, {
@@ -1022,10 +1087,13 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					width: columns.contentWidth,
 				});
 			return [
-				// The hint in its three states: available on an item, dimmed while a
-				// Handoff holds the environment seat, and dimmed on an empty queue.
+				// The hint in its states: available on an item, dimmed while a
+				// Handoff holds the environment seat for a Handoff item, standing on
+				// a Consultation item in the same moment, and dimmed on an empty
+				// queue.
 				bar("force-dispatch-available", false, item),
 				bar("force-dispatch-busy", true, item),
+				bar("force-dispatch-consultation-busy", true, consultation),
 				bar("force-dispatch-empty", false, null),
 				// The words the refusals carry on the Message line: a refused key
 				// says its catalogue reason on the line the operator already
@@ -1048,8 +1116,75 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					},
 					columns.contentWidth,
 				),
+				// The Consultation item's force-dispatch over the cap (issue #90):
+				// the item leaves the queue, and the line names the cap it stood
+				// over. The record's own progress line takes over from there.
+				messageRowElement(
+					{
+						severity: "info",
+						text: `force-dispatched Consultation c1c1c1c1 over the Parallel limit`,
+					},
+					columns.contentWidth,
+				),
 			];
 		},
+	},
+	{
+		// The Consultation item's detail (ADR 0034, issue #90): the record is
+		// the ask, and the detail reads the record the item names, so the
+		// reviewer sees the pointer's own facts, the record's facts beside
+		// them, and the record gone in its place.
+		id: "work-queue-item-consultation",
+		state: "Work queue item: the Consultation it names",
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "work-queue-item-consultation",
+				lines: workQueueDetailLines(
+					{
+						item: {
+							kind: "consultation",
+							position: 2,
+							consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+							enqueuedAt: "2026-02-17T10:02:00.000Z",
+						},
+						title: "c1c1c1c1",
+					},
+					3,
+					sampleConsultation("queued"),
+				),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		id: "work-queue-item-consultation-gone",
+		state: "Work queue item: the record it names is gone",
+		render: (_columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "work-queue-item-consultation-gone",
+				lines: workQueueDetailLines(
+					{
+						item: {
+							kind: "consultation",
+							position: 2,
+							consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
+							enqueuedAt: "2026-02-17T10:02:00.000Z",
+						},
+						title: "c1c1c1c1",
+					},
+					3,
+				),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
 	},
 	{
 		id: "theme",

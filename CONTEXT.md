@@ -226,6 +226,10 @@ The Consultation state where the Agent waits for operator input and the operator
 The Agent waits when it has settled its turn, or when it shows an approval or question UI (Blocked).
 _Avoid_: blocked, idle, done
 
+**Queued**:
+The Consultation state where the Consultation waits in the Work queue for a free Parallel limit seat. It holds no environment and no Agent until the queue's pickup starts it.
+_Avoid_: pending, waiting to start
+
 **Unscheduled**:
 The Consultation state where the Consultation exists but is not started and is not in the Work queue. It waits for the operator to schedule it, start it, or delete it.
 _Avoid_: parked, on hold
@@ -364,7 +368,7 @@ _Avoid_: dispatch queue, pending list, execution queue
 **Force-dispatch**:
 The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
 It re-runs every start check the normal pickup runs and skips only the cap.
-A force-dispatch that fails leaves the item out of the queue, where a pickup failure keeps it.
+A force-dispatch that fails leaves the item out of the queue, where a Handoff pickup failure keeps it: a Consultation's start that fails is a terminal record, and its item leaves with it.
 _Avoid_: manual override, bypass
 
 **Handoff limit**:

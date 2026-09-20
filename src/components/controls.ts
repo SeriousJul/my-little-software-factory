@@ -450,17 +450,23 @@ const queueRemove = (context: ControlContext): ControlAvailability =>
  *
  * The force-dispatch is the queue's only meaning of Enter, and it starts the
  * item now, over a full Parallel limit: every hard start check the pickup
- * runs still runs, only the cap is skipped. A Handoff already in flight holds
- * the shared environment seat, and the key refuses rather than queue the item
- * behind it, the way the Ticket section's Hand off refuses the same fact. A
- * cleanup that holds the seat while a Handoff does not still lets the key
- * through: the module parks the claim, and the item leaves the queue when
- * that parked start settles. An empty queue refuses with the one reason the
- * operator can act on, like the queue's other row keys.
+ * runs still runs, only the cap is skipped. For a Handoff item, a Handoff
+ * already in flight holds the shared environment seat, and the key refuses
+ * rather than queue the item behind it, the way the Ticket section's Hand off
+ * refuses the same fact. A cleanup that holds the seat while a Handoff does
+ * not still lets the key through: the module parks the claim, and the item
+ * leaves the queue when that parked start settles. A Consultation item runs
+ * its own pickup seam and never parks on the herdr seat, so the refusal does
+ * not reach it: a Consultation start stands while a Handoff is active, the
+ * way a launcher submit does (ADR 0034, issue #90). An empty queue refuses
+ * with the one reason the operator can act on, like the queue's other row
+ * keys.
  */
 const queueForceDispatch = (context: ControlContext): ControlAvailability => {
-	if (context.handoffActive) return unavailable("a Handoff is active");
-	return queueRemove(context);
+	const item = context.selectedWorkQueueItem;
+	if (item === null || item === undefined) return unavailable("no queue item is under the cursor");
+	if (item.kind === "handoff" && context.handoffActive) return unavailable("a Handoff is active");
+	return available();
 };
 const refresh = (context: ControlContext): ControlAvailability => {
 	if (consultationMode(context.mode))
@@ -504,6 +510,10 @@ const consultationRecovery = (context: ControlContext): ControlAvailability => {
 	)
 		return available();
 	if (consultation.state === "closed") return unavailable(CONSULTATION_CLOSED_REASON);
+	// A `queued` record (ADR 0034, issue #90) has no Agent to reach: it waits
+	// in the Work queue for a free seat, and the pickup is the only starter.
+	if (consultation.state === "queued")
+		return unavailable("the selected Consultation waits in the Work queue for a free seat");
 	return unavailable("the selected Consultation reaches its Agent or its response with Enter");
 };
 const consultationResponse = (context: ControlContext): ControlAvailability =>

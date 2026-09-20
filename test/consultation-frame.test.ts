@@ -2932,3 +2932,394 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		}
 	});
 });
+
+describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)", () => {
+	/**
+	 * The seat the cap tests hold: a working Consultation whose Agent the
+	 * poll lists. The Consultation seat is the record's state alone, so it
+	 * holds from the boot, and it frees the moment the test moves the
+	 * record.
+	 */
+	const seatId = uid("1");
+
+	test("a launch at the full cap queues the Consultation in the Work queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const paneId = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					const frame = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					// The record is durable in `queued` state: the launcher
+					// closed it, the Consultation list shows it, and the
+					// detail states the wait.
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					expect(queued.paneId).toBeNull();
+					expect(queued.workspaceId).toBeNull();
+					// The Consultation section lists the record under its
+					// state word, the same row the cursor selected.
+					expect(
+						rowsOf(frame).some(
+							(row) => row.startsWith("│") && row.includes("queued") && row.includes("grill"),
+						),
+					).toBe(true);
+					expect(detailPaneText(frame)).toContain("State: queued");
+					// The Work queue section shows the item under its kind
+					// word, and the header carries the depth.
+					expect(frame).toContain("waiting: 1");
+					expect(
+						rowsOf(frame).some(
+							(row) => row.includes("consultation") && row.includes(queued.id.slice(0, 8)),
+						),
+					).toBe(true);
+					// The notice names the record and the queue it waits in.
+					expect(messageRowOf(frame)).toContain(
+						`consultation queued: ${queued.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+					);
+					// The queue holds the item, and the seat count stayed at
+					// the cap: the record holds no seat until the pickup.
+					const queue = state.workQueue();
+					expect(queue).toHaveLength(1);
+					expect(queue[0]).toEqual(
+						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
+					);
+					// The enqueue ran no external step: it is not a start.
+					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+				},
+				WIDTH,
+				32,
+				// The test projection holds the seat: no poll can free it or
+				// pick the item up out from under the test.
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("key w abandons a queued Consultation and takes its item out of the queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const paneId = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					const gone8 = queued.id.slice(0, 8);
+					// The cursor stands on the new record: the submit selected it.
+					expect(detailPaneText(setup.captureCharFrame())).toContain("State: queued");
+					// A queued record holds no Agent to stop, so `w` closes it on the
+					// keypress: no confirmation panel, no cleanup command, and its
+					// Work queue item goes with the record out of `queued`.
+					await press(setup, "w", "the queued Consultation closed", (f) =>
+						messageRowOf(f).includes(`${gone8} closed`),
+					);
+					expect(state.consultation(queued.id)?.state).toBe("closed");
+					expect(state.workQueue()).toHaveLength(0);
+					expect(runner.commands()).not.toContain(expect.stringContaining("pane close"));
+					expect(runner.commands()).not.toContain(expect.stringContaining("workspace close"));
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the pickup at a freed seat starts the queued Consultation", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					// The launched Agent's pane joins the poll's list, so the
+					// pickup's start verifies on the next cycle.
+					runner.agentListJson = agentListJson([
+						{ pane: seatPane, status: "working" },
+						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
+					]);
+					// Free the seat: the record leaves the states that hold one.
+					state.setConsultationState(seatId, "awaiting-response");
+					// The pickup crosses to the Consultation operations, the
+					// start runs the opening pipeline, and the detail settles
+					// on the record's new state.
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("State: working"),
+						"the picked-up Consultation working",
+					);
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the pickup's launch sequence",
+					);
+					// The item left the queue with the record out of `queued`.
+					expect(state.workQueue()).toHaveLength(0);
+					expect(queued === undefined ? undefined : state.consultation(queued.id)?.state).toBe(
+						"working",
+					);
+					// The seat freed once: the seed's record rests in
+					// awaiting-response and holds none.
+					expect(state.consultation(seatId)?.state).toBe("awaiting-response");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					pollIntervalMs: 100,
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on the queue item force-dispatches the Consultation over the cap", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					const id8 = queued.id.slice(0, 8);
+					// The launched Agent's pane joins the poll's list, so the
+					// start the force-dispatch runs verifies on the next cycle.
+					runner.agentListJson = agentListJson([
+						{ pane: seatPane, status: "working" },
+						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
+					]);
+					// The cap is full from the boot: the seed's seat stands on the
+					// line, and the cursor crosses into the Work queue's row.
+					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+					const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
+						/\bWork\b/.test(row),
+					);
+					expect(headerRow).toBeGreaterThanOrEqual(0);
+					await mouseClick(setup, 2, headerRow);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("❯ Work queue"),
+						"the cursor in the Work queue",
+					);
+					// Enter force-dispatches the item over the full cap: the line
+					// names the cap, the seat count stands over the limit, the item
+					// leaves the queue, and the start runs the real external steps.
+					await press(setup, "return", "the force-dispatch message", (f) =>
+						f.includes("force-dispatched"),
+					);
+					// The line names the cap, and the seat count stands over the
+					// limit: the seed's seat plus the start the force-dispatch took.
+					await awaitFrame(setup, (f) => f.includes("auto: off 2/1"), "the seat over the cap");
+					expect(messageRowOf(setup.captureCharFrame())).toContain(
+						`force-dispatched Consultation ${id8} over the Parallel limit`,
+					);
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the force-dispatch's launch sequence",
+					);
+					// The item left the queue with the claim, and the start ran
+					// over the cap, not behind the seed's release: the seed's
+					// seat stood through the whole of it.
+					expect(state.workQueue()).toHaveLength(0);
+					expect(state.consultation(queued.id)?.state).not.toBe("queued");
+					expect(state.consultation(seatId)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					pollIntervalMs: 100,
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("removing the queue item leaves the record queued", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					// Open the Work section: the click lands the cursor on the item.
+					const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
+						/\bWork\b/.test(row),
+					);
+					expect(headerRow).toBeGreaterThanOrEqual(0);
+					await mouseClick(setup, 2, headerRow);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("❯ Work queue"),
+						"the cursor in the Work queue",
+					);
+					// The item's row stands under the kind word, with the
+					// record's identity.
+					const frame = setup.captureCharFrame();
+					expect(frame).toContain("consultation");
+					expect(frame).toContain(queued?.id.slice(0, 8));
+					// Remove it: the item goes, the record keeps its ask and
+					// its state, and the Message line says both.
+					setup.mockInput.pressKey("DELETE");
+					const removed = await awaitFrame(
+						setup,
+						(f) => f.includes("the queue item was removed"),
+						"the removal notice",
+					);
+					expect(messageRowOf(removed)).toContain(
+						`consultation ${queued?.id.slice(0, 8)}: the queue item was removed; the record keeps its queued state`,
+					);
+					expect(state.workQueue()).toHaveLength(0);
+					expect(state.consultation(queued?.id ?? "")?.state).toBe("queued");
+				},
+				WIDTH,
+				32,
+				// The test projection holds the seat: no poll can free it or
+				// pick the item up out from under the test.
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+});

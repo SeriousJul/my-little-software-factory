@@ -50,7 +50,7 @@ and `bun run test`.
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
 | The Work queue section dispatches its list, detail, reorder, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the Consultation section's `d` and `f` refused there in that section's words and named in neither the queue's guide nor its bar; the Section stays hidden while it is empty and collapsed, and the cursor crosses into it only while it stands | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a manual start asked at a full Parallel limit waits with its origin and captured choice (walked through the real decision modal), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat, the cancel line states only the removal the module measured (nothing claimed for a row its pickup had already taken), the module says nothing on the line for a row the operator removed after its run reached herdr, a picked-up route records its decision on the turn it came from through the one helper the direct route shares, the observation's automatic restart and automatic route skip a ticket the queue already waits for, a pickup of a restarted or routed item whose ticket took its seat in the race that skip misses cancels the item and names the start on the line, and the observation cycle runs the pickup before the open dispatch against the one seat count, in auto mode and in manual mode alike | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
-| Force-dispatch (issue #89, ADR 0034): Enter on a queue row starts the item over a full Parallel limit through the dispatch module's one seam - the claim re-runs every hard start check the pickup runs and skips only the cap, the seat count stands over the limit until the work settles, a failed claim or a failed start leaves the queue with the failure's warning and the ticket keeps its state, and the catalogue refuses the key while a Handoff runs or the queue is empty | `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the key, and the terminal walks above have not been re-run for it. |
+| Force-dispatch (issue #89, ADR 0034): Enter on a queue row starts the item over a full Parallel limit through the dispatch module's one seam - the claim re-runs every hard start check the pickup runs and skips only the cap, the seat count stands over the limit until the work settles, a failed claim or a failed start leaves the queue with the failure's warning and the ticket keeps its state, and the catalogue refuses the key while a Handoff runs or the queue is empty. A Consultation item runs the same key through its own pickup seam (issue #90): the item leaves the queue on every answer, the started line names the cap when the seat count stood over it, and the catalogue refuses the key for a Handoff item only while a Handoff runs - a Consultation start never parks on the herdr seat | `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/consultation-frame.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the key, and the terminal walks above have not been re-run for it. |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
@@ -543,6 +543,54 @@ the state refuses (`test/work-queue-frame.test.ts`).
 The terminal walks were not re-run for this key's Action bar and Key guide
 row: they are recorded as not re-verified for it, not as a pass. The
 screen-reader target remains unverified.
+
+## The launcher queues a Consultation at a full Parallel limit (issue #90, ADR 0034)
+
+The acceptance pass over the Consultation's entry into the Work queue, per
+the shared control standard. The one shared order holds both kinds (ADR
+0034): the queue's table keeps one row per start with the position as its
+key, the Handoff's ticket identity and the Consultation's id in two unique
+disjoint columns, and the order the operator sees is the order the pickup
+walks. The launcher submit into a full cap creates the durable Consultation
+record in `queued` state and its queue item in one write, holds no environment
+and no agent until the pickup, and names the record and the queue it waits
+in on the Message line. The pickup answers at the seat, not at the Agent:
+the module's seam re-reads the Consultation type's settings from the config,
+the record takes its seat in the atomic move from `queued` to `opening`, and
+the opening pipeline runs on behind the answer. The item leaves the queue on
+every answer: a started record holds its seat, a start that fails leaves a
+terminal `failed` record with its reason on the Message line, and a record a
+close or a delete out-waited the pickup leaves its row with the warning.
+
+The surface reads the record the item names: the row carries the kind word
+and the record's identity prefix, and the detail pane shows the ask, the
+type, and the state - or the record gone in its place. The Consultation
+section's own keys meet the `queued` record: `w` closes it without a dialog
+and takes its item out of the queue, and Enter refuses it in the section's
+words - its start is the Work queue's Enter. The Work queue's `Delete` takes
+the item out and leaves the record in `queued` state with its ask: the
+removal is the item's, not the record's (issue #91 lands the `unscheduled`
+state and the Consultation section's schedule-back, start-over-the-cap, and
+delete-record answers for it). The force-dispatch (issue #89) starts a
+Consultation item over the cap through the same seam: the line names the
+cap when the seat count stood over it at the key, and the catalogue refuses
+the key for a Handoff item only while a Handoff runs.
+
+The checks: `bun run lint` and `bun run typecheck` pass; the behavior suite
+passes in full at a six-way parallel run (1606 pass, 13 skip, 0 fail on this
+worktree; the 32-way parallel default flakes on timing on this machine, on
+this branch and on a clean checkout of the base alike, so the scoped run is
+the measured one). `bun run screenshots` redrew nothing. The gallery holds
+the queue's row and detail states for the Consultation kind and the
+force-dispatch's Consultation bar and line (`test/shared-gallery.test.ts`).
+The frame tests walk the real app flow: the submit at the full cap, the
+queued close, the pickup at the freed seat, the item removal, and the
+force-dispatch over the cap with the seat count standing over it at `2/1`
+(`test/consultation-frame.test.ts`, `test/work-queue-frame.test.ts`).
+
+The screen-reader path is not verified. The terminal walks recorded for the
+Work queue above have not been re-run for the Consultation item's row and
+detail states: they are recorded as not re-verified for them, not as a pass.
 
 ## The aligned control surface (issues #80–#85)
 

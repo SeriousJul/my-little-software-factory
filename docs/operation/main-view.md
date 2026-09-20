@@ -18,16 +18,25 @@ section under the cursor to its header row, and the same toggle restores
 it. The Work section holds the manual starts that wait for a Parallel
 limit seat (ADR 0034): its header carries the depth, and it stays hidden
 while it is empty and collapsed, so an idle factory keeps its two-Section
-frame. A queued start carries the ticket's title, the start's origin,
-and its place in the queue; the detail pane shows the choice the start
-carried. `u` and `d` move the item under the cursor one place toward the
-front or the back, `Delete` removes it - the ticket keeps the state it
-wore while it waited - and Enter force-dispatches the item under the cursor
+frame. A queued Handoff start carries the ticket's title, the start's
+origin, and its place in the queue; the detail pane shows the choice the
+start carried. A queued Consultation start (issue #90) carries the kind
+word and the record's identity prefix, and the detail pane reads the record
+the item names - the ask, the type, the state - with the record gone saying
+so in its place. `u` and `d` move the item under the cursor one place toward
+the front or the back, `Delete` removes it - the ticket keeps the state it
+wore while it waited, and a Consultation item's record keeps its `queued`
+state and its ask - and Enter force-dispatches the item under the cursor
 (issue #89, ADR 0034): it starts now, even when the Parallel limit is full,
 and re-runs every start check the queue's pickup runs except the cap, so the
 seat count can stand over the limit until the work settles. A force-dispatch
 that fails leaves the item out of the queue with the failure on the Message
-line, and the ticket keeps its state. The removal cancels the start
+line, and the ticket keeps its state. A Consultation item runs the same
+force-dispatch over the cap (ADR 0034, issue #90): its record takes its seat
+in the atomic move to `opening`, the line names the cap when the seat count
+stood over it, and the item leaves the queue on the answer. A Handoff in
+flight refuses the key on a Handoff item only: a Consultation start never
+parks on the herdr seat a Handoff holds, the way a launcher submit does not. The removal cancels the start
 everywhere the factory
 holds it: a claim its pickup already made and the herdr seat parked ends with
 the row, and it never starts an Agent the operator removed. The one exception
