@@ -350,6 +350,13 @@ describe("the in-app Key guide", () => {
 					expect(listCurrent).toContain("Delete Remove");
 					expect(listCurrent.some((row) => row.includes("Hand off"))).toBe(false);
 					expect(listCurrent.some((row) => row.includes("Decide"))).toBe(false);
+					// The Consultation section's `d Delete` and `f History` run on
+					// the shared base modes, so they reach a queue mode as a key the
+					// queue can never dispatch. Each section's guide names only the
+					// keys it owns (issue #85, ADR 0034): the queue's `d Queue down`
+					// stands, and the other section's two rows stay out.
+					expect(listCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
+					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
 
 					// The detail-mode guide: the queue's scroll carries its own
@@ -368,6 +375,13 @@ describe("the in-app Key guide", () => {
 					expect(detailCurrent).toContain("←/h List");
 					expect(detailCurrent.some((row) => row.includes("Queue up"))).toBe(false);
 					expect(detailCurrent.some((row) => row.includes("Remove"))).toBe(false);
+					// The detail pane holds no queue key of its own for `d` or `f`,
+					// so the Consultation section's two refuse there and appear in
+					// this guide nowhere: the row that would name the key the mode
+					// cannot dispatch is the leak issue #85 closed for the Ticket
+					// section, closed here for the queue.
+					expect(detailCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
+					expect(detailCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
 				},
 				WIDTH,

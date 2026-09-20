@@ -65,13 +65,22 @@ rule, not drift:
   and History (`f`) (issue #85): the Ticket section does not ask the
   operator to learn those keys, and the Ticket bar follows its guide, so it
   hints neither.
+- The Work queue section omits the same two controls (ADR 0034). Its two
+  modes join the shared base modes, so the Consultation section's keys
+  reach them as a key the queue can never dispatch: `d` is the queue's own
+  Queue down in its list and answers nothing in its detail, and `f` belongs
+  to no queue control at all. Each section's guide names the keys that
+  section dispatches, so a queue cursor shows neither row, and its bar
+  hints neither.
 
 The catalogue states the section ownership once per control
 (`consultationSectionOnly`), and the refusal, the guide, and the bar read
-it; neither the bar nor the guide special-cases a control by id. The
+it; neither the bar nor the guide special-cases a control by id. The rule
+names the owning section, so it reaches every section that does not own
+the control, and adding a section to the plane cannot reopen the gap. The
 [verification record](../verification/shared-controls.md) carries the
 catalogue-wide guard test that fails if a refused key is hinted by a bar
-whose guide does not name it.
+whose guide does not name it, walked in every base mode of every section.
 
 ## Editing and keyboard ownership
 

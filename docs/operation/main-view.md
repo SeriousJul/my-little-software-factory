@@ -26,9 +26,13 @@ wore while it waited. The removal cancels the start everywhere the factory
 holds it: a claim its pickup already made and the herdr seat parked ends with
 the row, and it never starts an Agent the operator removed. The one exception
 is a start whose work had already reached herdr: that Agent runs, and the
-removed row adds no second line about it. Up and down move
+removed row adds no second line about it. The line the cancel writes states
+only what the module measured: a removal when a row stood under the cursor,
+and the queue holding no such row when its pickup had already taken it. Up and down move
 the cursor through the visible rows and cross the section boundary when the
-sections are adjacent. The mode the bar and the
+sections are adjacent. `d` and `f` belong to the Consultation section: in the
+Work queue they state that section's refusal, and the queue's guide and Action
+bar name neither key (issue #85, ADR 0034). The mode the bar and the
 guide state derives from the section that holds the cursor and its focused
 pane.
 

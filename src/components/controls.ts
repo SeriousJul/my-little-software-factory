@@ -252,13 +252,14 @@ export interface ControlDefinition {
 	/**
 	 * The control belongs to the Consultation section alone (issue #85).
 	 *
-	 * Stated once here, and read by every place the section shows: the Ticket
-	 * base modes state the section refusal for the key (availabilityFor), the
-	 * Ticket guide omits the control (omitFromTicketSection), and the Ticket
-	 * bar omits its hint (actionBarControls). A future Consultation-only key
-	 * cannot refuse in the Ticket section and still show up in its guide or
-	 * bar: the three rules read this one marker, and the catalogue guard
-	 * test fails if a refused key is hinted where the guide does not name it.
+	 * Stated once here, and read by every place the section shows: every other
+	 * section's modes state the section refusal for the key (availabilityFor),
+	 * those sections' guides omit the control (omitFromOtherSection), and their
+	 * bars omit its hint (actionBarControls). A future Consultation-only key
+	 * cannot refuse in another section and still show up in that section's
+	 * guide or bar: the three rules read this one marker, and the catalogue
+	 * guard test fails if a refused key is hinted where the guide does not name
+	 * it.
 	 */
 	consultationSectionOnly?: true;
 	/** Larger values survive narrow Action bar packing first. */
@@ -374,14 +375,25 @@ const workQueueMode = (mode: InteractionMode): boolean =>
 	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
+/**
+ * The base modes of a section other than the Consultation section.
+ *
+ * The plane has three sections that share one list surface, and a control one
+ * section owns answers nothing in the others: the key still resolves there and
+ * states the owning section's refusal, but the guide and the Action bar of a
+ * section that does not own it name it nowhere (issue #85, ADR 0034).
+ */
+const otherSectionMode = (mode: InteractionMode): boolean =>
+	ticketBaseMode(mode) || workQueueMode(mode);
 /** The Ticket section's refusal words, mirrored by ticketOnly. */
 const TICKET_ONLY = "this control is available only in the Ticket section";
 /**
  * The Consultation section's refusal words, the mirror of TICKET_ONLY.
  *
  * availabilityFor states them for every Consultation-section control in the
- * Ticket base modes, so the key the operator already knows from the other
- * section refuses readably instead of doing nothing at all.
+ * Ticket base modes and in the Work queue's two, so the key the operator
+ * already knows from the owning section refuses readably instead of doing
+ * nothing at all.
  */
 const CONSULTATION_ONLY = "this control is available only in the Consultation section";
 /**
@@ -1417,7 +1429,7 @@ export function actionBarControls(
 	return controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
-			!omitFromTicketSection(mode, control) &&
+			!omitFromOtherSection(mode, control) &&
 			isReachableInMode(mode, control, context) &&
 			(control.showInBar?.(context) ?? true),
 	);
@@ -1564,10 +1576,12 @@ export function availabilityFor(
 	control: ControlDefinition,
 	context: ControlContext,
 ): ControlAvailability {
-	// A Consultation-section control states the section refusal in the Ticket
-	// base modes. The marker is the single place the ownership is written, so
-	// the dispatch, the guide, and the bar all read the same words.
-	if (control.consultationSectionOnly === true && ticketBaseMode(context.mode))
+	// A Consultation-section control states the section refusal in every other
+	// section's modes: the Ticket section and the Work queue both answer the key
+	// with the owning section's words. The marker is the single place the
+	// ownership is written, so the dispatch, the guide, and the bar all read the
+	// same words.
+	if (control.consultationSectionOnly === true && otherSectionMode(context.mode))
 		return unavailable(CONSULTATION_ONLY);
 	return control.availability(context);
 }
@@ -1593,18 +1607,19 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
 }
 
 /**
- * Whether the Ticket section omits a Consultation-section control from its
- * guide and its bar.
+ * Whether a section other than the Consultation's omits a Consultation-section
+ * control from its guide and its bar.
  *
  * Delete and History keep their catalog place in the Consultation section
- * alone (issue #85): the key still resolves in the Ticket section and
- * refuses there, in the catalogue's words, but the section that does not
- * own the control names it nowhere, and the bar hints no key its guide
- * omits. The rule reads the control's own section marker, so a future
- * Consultation-only key is omitted from the same two places at once.
+ * alone (issue #85): the key still resolves in the Ticket section and in the
+ * Work queue and refuses there, in the catalogue's words, but the section that
+ * does not own the control names it nowhere, and the bar hints no key its
+ * guide omits. The rule reads the control's own section marker, so a future
+ * Consultation-only key is omitted from the same two places at once, in every
+ * other section (ADR 0034 widened the base modes with the Work queue's two).
  */
-function omitFromTicketSection(mode: InteractionMode, control: ControlDefinition): boolean {
-	return ticketBaseMode(mode) && control.consultationSectionOnly === true;
+function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
+	return otherSectionMode(mode) && control.consultationSectionOnly === true;
 }
 
 /**
@@ -1617,8 +1632,9 @@ function omitFromTicketSection(mode: InteractionMode, control: ControlDefinition
  * another control outright, as both utility overlays take F1 and ?, is not a
  * control of this mode, so neither the bar nor the guide may name it. The one
  * exception is a key that carries only the other section's refusal: a
- * Consultation-section control refuses in the Ticket base modes, and the
- * Ticket section names it in neither its guide nor its bar (issue #85).
+ * Consultation-section control refuses in the Ticket base modes and in the
+ * Work queue's two, and those sections name it in neither their guide nor
+ * their bar (issue #85, ADR 0034).
  */
 function isCataloguedInMode(
 	mode: InteractionMode,
@@ -1649,7 +1665,7 @@ export function guideControls(context: ControlContext): Array<{
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
-			!omitFromTicketSection(mode, control) &&
+			!omitFromOtherSection(mode, control) &&
 			isCataloguedInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
@@ -1659,7 +1675,7 @@ export function guideControls(context: ControlContext): Array<{
 				!seen.has(control.id) &&
 				control.guideOnly !== true &&
 				!omitFromGuide(mode, control) &&
-				!omitFromTicketSection(mode, control) &&
+				!omitFromOtherSection(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
 		).map((control) => {

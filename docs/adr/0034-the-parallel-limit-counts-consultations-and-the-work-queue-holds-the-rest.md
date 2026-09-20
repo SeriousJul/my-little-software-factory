@@ -74,7 +74,10 @@ removed would run the moment the seat freed. One window stays open by physics,
 not by choice: a pickup whose run already reached herdr cannot be recalled, so
 that Agent starts, its ticket moves on, and the removed row says nothing on the
 Message line - the module reports a queue start only for a row that still
-waited when the start answered. One item per ticket: a
+waited when the start answered. The Main view states the same measured fact: its
+cancel line reports a removal only for a row that stood when the keypress ran,
+and reports that the queue held no such row when its pickup had already taken
+it. One item per ticket: a
 second add of the same ticket is refused while the first waits.
 
 The considered alternatives:
@@ -120,7 +123,10 @@ The considered alternatives:
   gains the queue as a third Section: its header carries the depth, its
   rows are selectable into the detail pane, and the Section stays hidden
   while it is empty and collapsed, so the two-Section frame survives the
-  smallest terminal.
+  smallest terminal. The queue's two modes join the shared base modes, so
+  the Consultation section's `d` and `f` refuse there in that section's
+  words and appear in neither the queue's guide nor its bar: the section
+  that does not own a control names it nowhere (issue #85 generalized).
 - The schema grows the durable queue - the Handoff intents and the shared
   order - and the Consultation states gain `queued` and `unscheduled`.
 - With the cap at 0 (unlimited) the queue never engages: a manual start

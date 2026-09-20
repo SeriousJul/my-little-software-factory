@@ -364,12 +364,16 @@ export function App({
 	workQueueIndexRef.current = workQueueIndex;
 	workQueueDetailScrollRef.current = workQueueDetailScroll;
 	historyFilterRef.current = historyFilter;
-	// The Work queue read from state in queue order (ADR 0034): the manual
-	// starts waiting for a Parallel limit seat. It re-reads on every refresh,
-	// because an enqueue, a pickup, a reorder, and a cancel each end in the
-	// dispatch module's own refresh report or the app's own replaceTickets.
-	const workQueue: readonly WorkQueueItem[] = state === undefined ? [] : state.workQueue();
-	const workQueueRef = useRef<readonly WorkQueueItem[]>([]);
+	// The Work queue read in queue order (ADR 0034): the manual starts waiting
+	// for a Parallel limit seat. It follows the other two projections: one read
+	// into UI state, re-read on the refresh every change ends in - the dispatch
+	// module's own report for an enqueue, a pickup, and a cancel it made, and the
+	// App's own re-read for the reorder and the cancel the operator asked for.
+	// The render never queries the state.
+	const [workQueue, setWorkQueue] = useState<readonly WorkQueueItem[]>(
+		() => state?.workQueue() ?? [],
+	);
+	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
 	workQueueRef.current = workQueue;
 	// The row the list draws: the item's ticket by its title while the ticket
 	// is still in the projection, by its identity once it is gone.
@@ -854,6 +858,10 @@ export function App({
 		setTickets(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
+		// The Work queue rides on the same re-read: an enqueue, a pickup, and a
+		// removal all report their refresh through here, so the section never
+		// shows a row the durable queue no longer holds.
+		setWorkQueue(state.workQueue());
 	}, [state]);
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
@@ -1827,6 +1835,12 @@ export function App({
 	 * Remove the queue's item under the cursor (ADR 0034): the waiting start
 	 * is cancelled, the ticket keeps the state it has while it waits, and the
 	 * row the list kept clamps to the rows that remain.
+	 *
+	 * The line states only what the module measured. Its answer says whether a
+	 * row stood when the cancel ran, and a row that left between the render and
+	 * the keypress had already left through its own pickup: the Agent is on its
+	 * way, and the plane says that instead of a removal the operator did not
+	 * cause.
 	 */
 	const removeQueueItem = () => {
 		if (handoffDispatch === undefined) return;
@@ -1835,15 +1849,20 @@ export function App({
 		// Route the removal through the module so the waiting start and its
 		// once-per-reason pickup warning leave together (ADR 0034): a bare
 		// state delete would strand the warning and mute a later re-enqueue.
-		handoffDispatch.removeQueueItem(item.ticketIdentity);
+		const removed = handoffDispatch.removeQueueItem(item.ticketIdentity);
 		// The name the operator reads on the line: the title while the ticket
 		// is still in the projection, its identity once it is gone.
 		const title = ticketsRef.current.find(
 			(candidate) => candidate.identity === item.ticketIdentity,
 		)?.title;
-		setNoticeMessage(
-			`the waiting start for ${title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`} was removed`,
-		);
+		const name = title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`;
+		if (removed) {
+			setNoticeMessage(`the waiting start for ${name} was removed`);
+		} else {
+			// Nothing to cancel: the keypress met a queue that no longer held the
+			// row, so the line refuses the removal it could not make.
+			setWarningMessage(`the Work queue no longer held a waiting start for ${name}`);
+		}
 		replaceTickets();
 	};
 	const currentBaseMode = (): InteractionMode =>

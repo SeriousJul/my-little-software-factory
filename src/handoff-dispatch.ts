@@ -273,10 +273,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 	/**
-	 * The last pickup warning per queue item, so a pickup that keeps failing
-	 * the same check says it once on the Message line, not once per cycle.
+	 * The pickup warnings already said for one queue item, so a pickup that
+	 * keeps failing says each reason once on the Message line, not once per
+	 * cycle. The set holds the reasons, not just the last one: a check that
+	 * comes back after another reason is still the reason the operator has
+	 * read, and a repeat of it would only push a newer line off the bar.
 	 */
-	private readonly lastPickupWarning = new Map<string, string>();
+	private readonly warnedPickups = new Map<string, Set<string>>();
 
 	/** True while external handoff work holds the seat. */
 	private inFlight = false;
@@ -414,6 +417,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 		if (items.length === 0) return 0;
 		const freeSeats = limit === 0 ? items.length : limit - this.seatCount();
 		if (freeSeats <= 0) return 0;
+		// One count for the whole call, on purpose: the loop takes at most
+		// `freeSeats` items, so it cannot start more than the cap allows even when
+		// a claim dedups to a seat the ticket already holds. That dedup is real and
+		// deliberate: `parallelSeatCount` counts one seat per ticket, so a picked
+		// ticket that already holds its own seat (a restart whose agent the latest
+		// poll still lists) claims no new seat, and the free-seat figure counts it
+		// against the same ceiling the mode line shows.
 		let claimed = 0;
 		for (const item of items.slice(0, freeSeats)) {
 			if (this.stopped) break;
@@ -433,12 +443,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 *
 	 * The false answer is a fact too: the row had already left, which is how the
 	 * answer of a pickup whose work was already inside herdr knows the operator
-	 * cancelled the start it can no longer recall.
+	 * cancelled the start it can no longer recall. The App reads the same answer
+	 * to choose its own line, so a cancel states a removal only for a row that
+	 * stood when the keypress ran.
 	 */
 	removeQueueItem(ticketIdentity: string): boolean {
 		const removed = this.state.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
-		this.lastPickupWarning.delete(ticketIdentity);
+		this.warnedPickups.delete(ticketIdentity);
 		return removed;
 	}
 
@@ -543,7 +555,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.reportPickupFailure(item, "the ticket is no longer visible");
 			return false;
 		}
-		this.lastPickupWarning.delete(item.ticketIdentity);
+		this.warnedPickups.delete(item.ticketIdentity);
 		const previousHandoffId = ticket.handoff?.attemptId ?? "";
 		this.runClaimedHandoff(
 			{
@@ -599,12 +611,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/** The pickup warning, once per reason per item. */
 	private reportPickupFailure(item: WorkQueueItem, reason: string): void {
-		const previous = this.lastPickupWarning.get(item.ticketIdentity);
-		if (previous === reason) return;
-		this.lastPickupWarning.set(item.ticketIdentity, reason);
+		const warned = this.warnedReasons(item.ticketIdentity);
+		if (warned.has(reason)) return;
+		warned.add(reason);
 		this.reports.warning(
 			`queued handoff for ${this.ticketName(item.ticketIdentity)} was not run: ${reason}`,
 		);
+	}
+
+	/** The reasons this item's pickup has already said, empty until the first. */
+	private warnedReasons(ticketIdentity: string): Set<string> {
+		const existing = this.warnedPickups.get(ticketIdentity);
+		if (existing !== undefined) return existing;
+		const created = new Set<string>();
+		this.warnedPickups.set(ticketIdentity, created);
+		return created;
 	}
 
 	closeCleanup(

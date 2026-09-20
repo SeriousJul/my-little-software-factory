@@ -1705,6 +1705,83 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(rigRef.state.ticketState(SECOND.identity)).toBe("handed-off");
 	});
 
+	/**
+	 * ADR 0034 states a pickup skips the automatic gates: "the Dispatch pause and
+	 * the Same-type hold gate the automatic origins, and the item is the
+	 * operator's own ask". Both gates live in the observation cycle, and the
+	 * pickup runs through the dispatch module, so the sentence holds by
+	 * structure - this measures it: the pause stands armed and the hold stands
+	 * on the item's own ticket, and the pickup still claims the seat and starts.
+	 */
+	test("a pickup runs with the Dispatch pause armed and the Same-type hold on", async () => {
+		const rigRef = rig([FIRST, SECOND]);
+		// The Same-type hold on FIRST: its newest cycle ended on a completed
+		// turn of the task type the ticket still suggests (ADR 0026).
+		const closed = await handOff(rigRef, FIRST);
+		rigRef.state.settleTurn({
+			ticketIdentity: FIRST.identity,
+			handoffId: closed.handoffId,
+			taskType: liveChoice.taskType,
+			agentType: liveChoice.agentType,
+			message: "the turn is done",
+			turnLog: [{ kind: "text", text: "the turn is done" }],
+			completedAt: "2026-09-01T01:00:00Z",
+			cause: "completed",
+		});
+		rigRef.state.applyCompletionDecision({
+			ticketIdentity: FIRST.identity,
+			handoffId: closed.handoffId,
+			decision: "closed",
+			decidedAt: "2026-09-01T01:00:00Z",
+		});
+		rigRef.state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-09-01T01:01:00Z",
+			tickets: rigRef.seeds.map(issueTicket),
+		});
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		expect(rigRef.state.sameTypeHoldActive(FIRST.identity, liveChoice.taskType)).toBe(true);
+		// The Dispatch pause: SECOND rests on a held failed turn no decision has
+		// landed on, which pauses every automatic dispatch (ADR 0016).
+		const held = await handOff(rigRef, SECOND);
+		rigRef.state.settleTurn({
+			ticketIdentity: SECOND.identity,
+			handoffId: held.handoffId,
+			taskType: liveChoice.taskType,
+			agentType: liveChoice.agentType,
+			message: "the provider refused",
+			turnLog: [{ kind: "text", text: "the provider refused" }],
+			completedAt: "2026-09-01T02:00:00Z",
+			cause: "failed",
+			detail: "the provider refused the request",
+		});
+		expect(rigRef.state.dispatchPauseActive()).toBe(true);
+		// Both gates stand, and neither is asked: the pickup takes the free seat,
+		// claims FIRST, and starts its Agent.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(
+			rigRef.state.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "open",
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).toMatchObject({ ok: true });
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		// Both gates still stand after the start: the pickup answered neither.
+		expect(rigRef.state.dispatchPauseActive()).toBe(true);
+		expect(rigRef.state.sameTypeHoldActive(FIRST.identity, liveChoice.taskType)).toBe(true);
+		expect(
+			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
+		).toHaveLength(0);
+	});
+
 	test("a free seat picks up the queue's head, and the start names the queue", async () => {
 		const rigRef = rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {
@@ -1758,6 +1835,52 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(
 			rigRef.events.filter((event) => event.startsWith("warning:queued handoff")),
 		).toHaveLength(1);
+	});
+
+	/**
+	 * ADR 0034 promises a failed pickup warns "once per reason", and the note
+	 * holds every reason an item has said, not just the last one. A ticket that
+	 * moves between two states fails the same two checks twice over, and the
+	 * second round says nothing new: a repeat of a reason the operator already
+	 * read would only push a newer line off the Message bar.
+	 */
+	test("a pickup that alternates its reasons says each one once", async () => {
+		const rigRef = rig([FIRST]);
+		expect(
+			rigRef.state.enqueueWork({
+				ticketIdentity: FIRST.identity,
+				origin: "restart",
+				choice: liveChoice,
+				previousMessage: "again",
+			}),
+		).toMatchObject({ ok: true });
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		const warned = () =>
+			rigRef.events.filter((event) => event.startsWith("warning:queued handoff"));
+		// Reason one: a restart waits for a ticket that is still open.
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(warned()).toContain(
+			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now open`,
+		);
+		// Reason two: the ticket runs a cycle and rests on its settled turn.
+		const stored = await handOff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(warned()).toContain(
+			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now awaiting`,
+		);
+		expect(warned()).toHaveLength(2);
+		// Back to the first reason: the cycle closes and the ticket is open
+		// again. The pickup meets the reason it already said, so it adds no line.
+		closeCycle(rigRef, FIRST, stored.handoffId);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("open");
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(warned()).toHaveLength(2);
+		// The item kept its place through the whole walk.
+		expect(rigRef.state.workQueue()).toHaveLength(1);
 	});
 
 	test("removing a waiting start clears its warning, so a re-enqueued failure warns again", async () => {

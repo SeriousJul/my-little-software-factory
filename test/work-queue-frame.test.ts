@@ -22,6 +22,8 @@ import {
 	awaitFrame,
 	detailPaneText,
 	frameText,
+	markerRowOf,
+	messageRowOf,
 	mouseClick,
 	press,
 	pressArrow,
@@ -285,6 +287,126 @@ describe("the Work queue section", () => {
 					// The cancel drops the queue to its last item, and the
 					// cursor follows the row that took the place.
 					expect(detailPaneText(frame)).toContain("Origin: workflow");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The Consultation section's keys refuse the Work queue too (issue #85,
+	 * ADR 0034). The Work queue shares the list surface and the base modes with
+	 * the other two sections, so `f` History and the detail pane's `d` reach a
+	 * queue mode by way of those shared modes. Both state the owning section's
+	 * refusal on the Message line and change nothing: the queue keeps its rows,
+	 * its order, and its cursor, and the Consultation section is untouched.
+	 */
+	test("the Consultation's keys refuse in both Work queue modes, and nothing moves", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && f.includes("waiting: 2"),
+						"the Work header",
+					);
+					await clickWorkHeader(setup);
+					const list = await awaitFrame(
+						setup,
+						(f) => f.includes("▾ Work"),
+						"the expanded Work section",
+					);
+					const queueRows = (frame: string) =>
+						rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]/.test(row));
+					const before = await settle(setup);
+					// In the list `f` is the Consultation's History key, and the
+					// queue refuses it. `d` is the queue's own Queue down, so it
+					// must NOT carry the refusal: this press moves the item, and the
+					// line stays clear of the other section's words.
+					let refusal = await press(setup, "f", "the history refusal in the queue list", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
+					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					expect(queueRows(refusal)).toEqual(queueRows(before));
+					expect(markerRowOf(refusal)).toBe(markerRowOf(list));
+					expect(detailPaneText(refusal)).toContain("place 1 of 2");
+					// The detail pane: `d` belongs to no queue control here, so the
+					// Consultation's Delete resolves and refuses, and the detail
+					// keeps the item under its cursor.
+					setup.mockInput.pressKey("l");
+					const detail = await awaitFrame(
+						setup,
+						(f) => f.includes("❯ Work queue") === false && f.includes("Origin: open"),
+						"the Work queue detail pane",
+					);
+					const detailBefore = await settle(setup);
+					refusal = await press(setup, "d", "the delete refusal in the queue detail", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
+					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					expect(queueRows(refusal)).toEqual(queueRows(detailBefore));
+					expect(detailPaneText(refusal)).toBe(detailPaneText(detail));
+					// The queue still holds both starts at the same depth.
+					expect(frameText(refusal)).toContain("waiting: 2");
+				},
+				state,
+				source,
+				runner,
+			);
+			expect(state.workQueue().length).toBe(2);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The cancel line states only the removal the module measured (ADR 0034).
+	 *
+	 * A pickup takes a row between the render that drew it and the keypress the
+	 * operator aims at it. The frame reaches that window by removing the row
+	 * from the state behind the plane's back, which is exactly what a successful
+	 * pickup leaves: the list still holds the row the cursor points at, and the
+	 * module answers that no row stood. The line then refuses the removal it
+	 * never made instead of claiming one.
+	 */
+	test("a cancel that meets a row its pickup already took claims no removal", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && f.includes("waiting: 2"),
+						"the Work header",
+					);
+					await clickWorkHeader(setup);
+					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
+					// The row the cursor holds, taken out from under it.
+					expect(state.removeWorkItem(FIRST)).toBe(true);
+					const line = await press(setup, "delete", "the cancel of a row already gone", (f) =>
+						messageRowOf(f).includes("no longer held a waiting start"),
+					);
+					expect(messageRowOf(line)).toContain(`"Add a webhook retry policy"`);
+					expect(messageRowOf(line)).not.toContain("was removed");
+					// The row that stood keeps its place: the queue is at the depth
+					// the state holds, and the refusal moved nothing else.
+					const frame = await settle(setup);
+					expect(frame).toContain("waiting: 1");
+					expect(frameText(frame)).toContain(`[workflow] Close the stale deploy branch`);
+					expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual([SECOND]);
 				},
 				state,
 				source,
