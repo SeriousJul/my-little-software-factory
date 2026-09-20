@@ -1013,8 +1013,9 @@ export function App({
 				// module owns the seat and the queue's shared order. The `moved`
 				// fallback stands only where the operations are absent - the
 				// no-state test projection, where the module removes the item and
-				// the still-`queued` record loses its pointer; the `unscheduled`
-				// state that keeps the ask is issue #91's.
+				// the still-`queued` record loses its pointer, and a removal of the
+				// item through the module's seam moves the record to `unscheduled`
+				// the way the Main view's Delete does (issue #91).
 				pickupConsultation: (consultationId) =>
 					consultationOperationsRef.current?.pickup(consultationId) ??
 					Promise.resolve({ kind: "moved" } as const),
@@ -1671,13 +1672,16 @@ export function App({
 	/**
 	 * Whether this record's close has nothing to stop and nothing to keep.
 	 *
-	 * The two states Recovery names, plus a `queued` record (issue #90): it has
-	 * never had an Agent, an environment, or a worktree, so its close confirms
-	 * nothing and cleans nothing. It is not one the launcher replaces: its ask
-	 * still stands, and the record closes to the delete that follows it.
+	 * The two states Recovery names, plus a `queued` or an `unscheduled`
+	 * record (issue #90, issue #91): it has never had an Agent, an
+	 * environment, or a worktree, so its close confirms nothing and cleans
+	 * nothing. It is not one the launcher replaces: its ask still stands, and
+	 * the record closes to the delete that follows it.
 	 */
 	const consultationCloseNeedsNoAgent = (consultation: Consultation) =>
-		consultation.state === "queued" || consultationHasNoAgent(consultation);
+		consultation.state === "queued" ||
+		consultation.state === "unscheduled" ||
+		consultationHasNoAgent(consultation);
 	/**
 	 * Whether this record is one a Replacement continues.
 	 *
@@ -1916,8 +1920,9 @@ export function App({
 	 * Remove the queue's item under the cursor (ADR 0034). A handoff item's
 	 * removal cancels the intent: the ticket keeps the state it has while it
 	 * waits, and the row the list kept clamps to the rows that remain. A
-	 * Consultation item's removal leaves the record in `queued` state (issue
-	 * #90): the ask is kept, and the pickup never runs for it.
+	 * Consultation item's removal unschedules the record (issue #91): the ask
+	 * is kept in `unscheduled` state, listed in the Consultation section, and
+	 * the pickup never runs for it.
 	 *
 	 * The line states only what the module measured. Its answer says whether a
 	 * row stood when the cancel ran, and a row that left between the render and
@@ -1930,14 +1935,15 @@ export function App({
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
 		if (item.kind === "consultation") {
-			// A Consultation item's removal leaves the record in `queued` state
-			// (ADR 0034, issue #90): the ask is kept, and the pickup never runs
-			// for it. The module holds no claim for the record, so only the row
-			// and its pickup note leave through the module's seam.
+			// A Consultation item's removal unschedules the record (ADR 0034,
+			// issue #91): the ask is kept in `unscheduled` state behind the
+			// pointer it loses, and the pickup never runs for it. The module
+			// holds no claim for the record, so only the row and its pickup note
+			// leave through the module's seam.
 			const removed = handoffDispatch.removeConsultationQueueItem(item.consultationId);
 			if (removed) {
 				setNoticeMessage(
-					`consultation ${item.consultationId.slice(0, 8)}: the queue item was removed; the record keeps its queued state`,
+					`consultation ${item.consultationId.slice(0, 8)}: removed from the queue; the record is unscheduled`,
 				);
 			} else {
 				setWarningMessage(
@@ -1945,6 +1951,10 @@ export function App({
 				);
 			}
 			replaceTickets();
+			// The record's state moved in the same write the item left, so the
+			// Consultation section re-reads its rows: the row the operator just
+			// removed reappears as the `unscheduled` ask.
+			replaceConsultations();
 			return;
 		}
 		// Route the removal through the module so the waiting start and its
@@ -2295,6 +2305,57 @@ export function App({
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected !== undefined)
 						setPanel({ kind: "consultation-delete", identity: selected.id });
+				},
+				// `s` schedules the unscheduled record back into the Work queue
+				// (issue #91): the state's one write moves it to `queued` at the
+				// queue's tail, and the pickup is its only starter from there.
+				"consultation-schedule": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					if (consultationOperations === undefined) {
+						setWarningMessage("Consultations require SQLite state");
+						return;
+					}
+					// The operations own the Message line and the Consultation rows,
+					// but the queue rows re-read only here: the item lands at the
+					// queue's tail in the same write the section's Delete path
+					// refreshes, so the schedule path does the same.
+					const scheduled = consultationOperations.schedule(selected);
+					if (scheduled) {
+						replaceTickets();
+					}
+				},
+				// Enter starts the unscheduled record now (issue #91): the pickup
+				// seam with the cap skipped. The operations own every line the
+				// start or its failure leaves; the key names the cap when the seat
+				// count stood over it at the key, the way the queue's force-
+				// dispatch line does, and says when a race out-waited it.
+				"consultation-start-now": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					if (consultationOperations === undefined) {
+						setWarningMessage("Consultations require SQLite state");
+						return;
+					}
+					// The line states only what the key measured, the way the
+					// queue's force-dispatch line does: the cap stands when the
+					// seat count stood over the limit at the key.
+					const cap = configRef.current.maxParallelAgents;
+					const overCap = cap > 0 && currentSeatCount() >= cap;
+					void consultationOperations.pickup(selected.id).then((outcome) => {
+						if (outcome.kind === "moved") {
+							setWarningMessage(
+								`consultation ${selected.id.slice(0, 8)}: the record is no longer unscheduled`,
+							);
+							return;
+						}
+						if (outcome.kind === "started")
+							setNoticeMessage(
+								overCap
+									? `starting Consultation ${selected.id.slice(0, 8)} over the Parallel limit`
+									: `starting Consultation ${selected.id.slice(0, 8)}`,
+							);
+					});
 				},
 				"consultation-respond": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];

@@ -342,28 +342,31 @@ export class ConsultationOperations {
 	}
 
 	/**
-	 * Start the Work queue's Consultation when a seat frees (ADR 0034,
-	 * issue #90).
+	 * Start one Consultation that is not started yet: the Work queue's pickup
+	 * of a `queued` record when a seat frees (ADR 0034, issue #90), and the
+	 * operator's start now of an `unscheduled` record, over the Parallel limit
+	 * or under it (issue #91). Both run through this one seam: the cap is the
+	 * scheduler's check, not the start's, and the seat move below is the claim
+	 * in either case.
 	 *
-	 * The pickup is the start a launcher submit queued at a full cap. The
-	 * record already holds the operator's ask, and the pickup re-reads the
+	 * The record already holds the operator's ask, and the start re-reads the
 	 * Consultation type's settings from the config - the record waited for a
-	 * seat, so the start runs on the type the config holds now, not on the
-	 * settings the record captured at the enqueue - before it moves the record
-	 * to `opening` and hands the record to the same opening pipeline a direct
-	 * launch runs: the Setting fit check, the repository resolution, the
-	 * environment, and the Agent.
+	 * seat or the operator's call, so the start runs on the type the config
+	 * holds now, not on the settings the record captured at the enqueue -
+	 * before it moves the record to `opening` and hands the record to the same
+	 * opening pipeline a direct launch runs: the Setting fit check, the
+	 * repository resolution, the environment, and the Agent.
 	 *
 	 * The claim is all the observation cycle waits for. The opening runs on
 	 * behind the answer, the way a claimed handoff's start does: an external
 	 * pipeline that can take as long as a cold clone must not hold every ticket
 	 * poll with it. A start that fails after the claim leaves the record
 	 * `failed` with its reason and its Message line, exactly as a failed launch
-	 * does, and the queue's item went with the claim.
+	 * does, and the queue's item went with the claim while one stood.
 	 */
 	pickup(consultationId: string): Promise<ConsultationPickupOutcome> {
 		const current = this.state.consultation(consultationId);
-		if (current === undefined || current.state !== "queued")
+		if (current === undefined || (current.state !== "queued" && current.state !== "unscheduled"))
 			return Promise.resolve({ kind: "moved" });
 		const type = this.config().consultationTypes[current.typeName];
 		if (type === undefined) {
@@ -392,8 +395,8 @@ export class ConsultationOperations {
 			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
 		});
 		// The atomic step is the seat: the record moves to `opening` only if it
-		// is still `queued`, so a close or a delete that raced the pickup wins
-		// the record and the pickup starts nothing.
+		// is still `queued` or `unscheduled`, so a close or a delete that
+		// raced the start wins the record and the start runs nothing.
 		if (!this.state.beginConsultationStart(current.id)) {
 			this.callbacks.onConsultationsChanged();
 			return Promise.resolve({ kind: "moved" });
@@ -735,6 +738,26 @@ export class ConsultationOperations {
 		this.status(
 			"info",
 			`Consultation ${consultation.id.slice(0, 8)} deleted; backups may retain data`,
+		);
+		return true;
+	}
+
+	/**
+	 * Schedule an `unscheduled` Consultation back into the Work queue (issue
+	 * #91): the record returns to `queued` and waits at the queue's tail, with
+	 * its pickup the only starter. The answer of the state's one write, so a
+	 * record that left `unscheduled` behind the key says its own fact.
+	 */
+	schedule(consultation: Consultation): boolean {
+		const result = this.state.scheduleConsultation(consultation.id);
+		if (!result.ok) {
+			this.status("error", result.reason);
+			return false;
+		}
+		this.callbacks.onConsultationsChanged();
+		this.status(
+			"info",
+			`Consultation ${consultation.id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
 		);
 		return true;
 	}

@@ -25,8 +25,9 @@ word and the record's identity prefix, and the detail pane reads the record
 the item names - the ask, the type, the state - with the record gone saying
 so in its place. `u` and `d` move the item under the cursor one place toward
 the front or the back, `Delete` removes it - the ticket keeps the state it
-wore while it waited, and a Consultation item's record keeps its `queued`
-state and its ask - and Enter force-dispatches the item under the cursor
+wore while it waited, and a Consultation item unschedules the record (issue
+#91): the record keeps its ask in `unscheduled` state, listed in the
+Consultation section - and Enter force-dispatches the item under the cursor
 (issue #89, ADR 0034): it starts now, even when the Parallel limit is full,
 and re-runs every start check the queue's pickup runs except the cap, so the
 seat count can stand over the limit until the work settles. A force-dispatch

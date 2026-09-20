@@ -22,15 +22,18 @@ its availability and reason.
 - `j` and `k` cross into the Consultation section from the last row of the
 	Ticket list, and back again from its first. Once the cursor holds a
 	Consultation, `c` launches a Consultation, `f` cycles the history filter
-	through open, closed, and all, `w` closes the selected Consultation, and
-	`d` deletes a closed one. A close that stops a live Agent - an opening,
+	through open, closed, and all, `w` closes the selected Consultation, `d`
+	deletes a closed or an unscheduled one, and `s` schedules an `unscheduled`
+	one back into the Work queue (issue #91): the record returns to `queued`
+	with its item at the queue's tail, and the pickup is its only starter. A close that stops a live Agent - an opening,
 	a working, or an awaiting-response Consultation - confirms first: the
 	dialog names the Agent and states what the close keeps, the worktree and
 	branch on a worktree Consultation and the checkout on a live-worktree
-	one. A `missing`, a `failed`, or a `queued` Consultation closes without a
-dialog: the first two hold nothing live to stop, and the `queued` one holds
-nothing at all - its Work queue item leaves with the record. A `closing` one
-opens the Retry and Force-close recovery panel instead, and
+	one. A `missing`, a `failed`, a `queued`, or an `unscheduled`
+	Consultation closes without a dialog: these hold nothing live to stop,
+	and the `queued` one's Work queue item leaves with the record. A
+	`closing` one opens the Retry and Force-close recovery panel instead,
+	and
 	a `closed` one refuses. `h` or `Left` moves between the section's own
 	list and the detail pane, and `x` collapses or restores the section under
 	the cursor. The Consultation that needs the operator keeps its attention
@@ -67,11 +70,15 @@ opens the Retry and Force-close recovery panel instead, and
 	opens the close panel that already carries its `Retry` and `Force-close`,
 	and a `closed` one answers nothing: the line states that the selected
 	Consultation is already closed. The editor stores its draft in SQLite,
-	`Tab` reaches `Send response` and `Enter` runs it, `Enter` inside the field
-	adds a line, `Esc` closes it with the draft saved, and `Discard draft`
-	deletes the saved draft. A `queued` Consultation answers nothing in this
-	section: it waits for a seat in the Work queue, and its start is the queue's
-	Enter (ADR 0034).
+	`Tab` reaches `Send response` and `Enter` runs it, `Enter` inside the
+	field adds a line, `Esc` closes it with the draft saved, and `Discard
+	draft` deletes the saved draft. A `queued` Consultation answers nothing
+	in this section: it waits for a seat in the Work queue, and its start is
+	the queue's Enter (ADR 0034). An `unscheduled` Consultation answers
+	Enter with its start over the Parallel limit (issue #91): the start runs
+	the queue's pickup with the cap skipped, the line names the cap when the
+	seat count stood over it, and the record's own progress line takes over
+	from the start.
 - `r` recovers a Consultation whose opening was interrupted, and refreshes the
 	Consultation projection and the Ticket sources otherwise. It remains
 	Refresh even when an awaiting Consultation can also be answered with

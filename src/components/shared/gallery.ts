@@ -207,6 +207,7 @@ export function galleryColumns(contentWidth: number): GalleryColumns {
 function sampleConsultation(
 	state:
 		| "queued"
+		| "unscheduled"
 		| "opening"
 		| "working"
 		| "awaiting-response"
@@ -216,10 +217,11 @@ function sampleConsultation(
 		| "closed",
 ): Consultation {
 	const now = "2026-02-17T10:00:00.000Z";
-	// A `queued` record holds no environment and no Agent until the pickup
-	// starts it (ADR 0034, issue #90), so the sample carries no handles: the
-	// state word and the handles cannot contradict each other in the gallery.
-	const waiting = state === "queued";
+	// A `queued` or an `unscheduled` record holds no environment and no Agent
+	// until a start runs (ADR 0034, issue #90, issue #91), so the sample
+	// carries no handles: the state word and the handles cannot contradict
+	// each other in the gallery.
+	const waiting = state === "queued" || state === "unscheduled";
 	return {
 		id: "c1c1c1c1-1111-4111-8111-111111111111",
 		typeName: "Review",
@@ -907,6 +909,103 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				width: columns.contentWidth,
 			}),
 		],
+	},
+	{
+		// The record the queue's removal leaves behind (issue #91): an
+		// `unscheduled` Consultation's own detail. The ask stands on its type,
+		// repository, and initial input, and the hint names the three answers the
+		// section gives it: schedule it back, start it now over the cap, or delete
+		// the record.
+		id: "consultation-detail-unscheduled",
+		state: "Consultation detail: the unscheduled record and its three answers",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ConsultationDetail, {
+				key: "unscheduled",
+				lines: consultationDetailLines(
+					sampleConsultation("unscheduled"),
+					[
+						{
+							id: "turn-0",
+							consultationId: sampleConsultation("unscheduled").id,
+							input: "review the auth design",
+							acceptedAt: "2026-02-17T10:00:00.000Z",
+							sequenceBaseline: null,
+							settledAt: null,
+							settledStatus: null,
+							cause: "completed",
+							detail: "",
+							snapshotId: null,
+						},
+					],
+					[],
+					columns.contentWidth - 4,
+					null,
+					null,
+				),
+				visibleRows: 7,
+				scroll: 0,
+				focused: false,
+				onFocus: () => undefined,
+				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		// The unscheduled record's three answers in the Consultation section
+		// (issue #91): `s` schedules it back into the Work queue, Enter starts
+		// it now over the cap, and `d` deletes the record. The bar holds the
+		// hints available on the unscheduled record, and the bar of a working
+		// record shows none of them: the start and the schedule refuse it in
+		// the catalogue's words, and the delete waits for the close.
+		id: "consultation-unscheduled-actions",
+		state: "Unscheduling: schedule, start now over the cap, or delete the record",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			const bar = (key: string, state: "unscheduled" | "working") =>
+				createElement(ActionBar, {
+					key,
+					mode: "consultation-list",
+					context: contextFor("consultation-list", {
+						selectedConsultation: sampleConsultation(state),
+						listCanMove: true,
+						detailCanScroll: false,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+						consultationRefreshAvailable: true,
+					}),
+					width: columns.contentWidth,
+				});
+			return [
+				bar("unscheduled-actions-available", "unscheduled"),
+				bar("unscheduled-actions-refused", "working"),
+				// The words the three answers leave on the Message line: the
+				// schedule's notice, the start's notice over the cap, and the
+				// queue removal that created the record's state.
+				messageRowElement(
+					{
+						severity: "info",
+						text: "Consultation c1c1c1c1 scheduled: it waits at the end of the Work queue",
+					},
+					columns.contentWidth,
+				),
+				messageRowElement(
+					{
+						severity: "info",
+						text: "starting Consultation c1c1c1c1 over the Parallel limit",
+					},
+					columns.contentWidth,
+				),
+				messageRowElement(
+					{
+						severity: "info",
+						text: "consultation c1c1c1c1: removed from the queue; the record is unscheduled",
+					},
+					columns.contentWidth,
+				),
+			];
+		},
 	},
 	{
 		// The record the queue waits on (ADR 0034, issue #90): a `queued`

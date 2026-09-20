@@ -83,6 +83,7 @@ type ControlKey =
 	| "c"
 	| "f"
 	| "g"
+	| "s"
 	| "x"
 	| "u"
 	| "d"
@@ -533,6 +534,13 @@ const consultationRecovery = (context: ControlContext): ControlAvailability => {
 	// in the Work queue for a free seat, and the pickup is the only starter.
 	if (consultation.state === "queued")
 		return unavailable("the selected Consultation waits in the Work queue for a free seat");
+	// An `unscheduled` record (issue #91) starts with Enter over the cap: the
+	// start control owns that meaning, and its refusal stands here for the
+	// guide's rows.
+	if (consultation.state === "unscheduled")
+		return unavailable(
+			"the selected Consultation is unscheduled; Enter starts it now over the cap",
+		);
 	return unavailable("the selected Consultation reaches its Agent or its response with Enter");
 };
 const consultationResponse = (context: ControlContext): ControlAvailability =>
@@ -605,10 +613,53 @@ const consultationClose = (context: ControlContext): ControlAvailability => {
 	if (consultation === undefined) return unavailable("no Consultation is selected");
 	return consultation.state === "closed" ? unavailable(CONSULTATION_CLOSED_REASON) : available();
 };
-const consultationDelete = (context: ControlContext): ControlAvailability =>
-	context.selectedConsultation?.state === "closed"
-		? available()
-		: unavailable("only a closed Consultation can be deleted");
+/**
+ * Why Delete answers nothing (issue #91).
+ *
+ * A `closed` record's history is removable, and an `unscheduled` record is
+ * the ask itself: it holds no environment and no Agent, so deleting it
+ * removes the record and nothing else. Every other state still runs - the
+ * close or the recovery answers the key - and the delete refuses it.
+ */
+const consultationDelete = (context: ControlContext): ControlAvailability => {
+	const state = context.selectedConsultation?.state;
+	if (state === "closed" || state === "unscheduled") return available();
+	return unavailable("only a closed or unscheduled Consultation can be deleted");
+};
+/**
+ * Why Schedule answers nothing (issue #91).
+ *
+ * `s` puts an `unscheduled` Consultation back into the Work queue, at its
+ * tail: the record the queue's pickup takes when a seat frees. Every other
+ * state refuses the key with the state's own fact, so a record that is
+ * started, waiting, or broken never silently re-enters the queue.
+ */
+const consultationSchedule = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (consultation.state === "unscheduled") return available();
+	if (consultation.state === "queued")
+		return unavailable("the selected Consultation already waits in the Work queue");
+	if (consultation.state === "closed") return unavailable(CONSULTATION_CLOSED_REASON);
+	return unavailable("only an unscheduled Consultation can be scheduled");
+};
+/**
+ * Why Start now answers nothing (issue #91).
+ *
+ * Enter starts an `unscheduled` Consultation now, over the Parallel limit,
+ * the Consultation's face of the queue's force-dispatch: every start check
+ * the pickup runs still runs, only the cap is skipped. A `queued` record's
+ * start is the Work queue's pickup, and a started or broken record reaches
+ * its Agent or its recovery with Enter instead.
+ */
+const consultationStartNow = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (consultation.state === "unscheduled") return available();
+	if (consultation.state === "queued")
+		return unavailable("the selected Consultation waits in the Work queue for a free seat");
+	return unavailable("only an unscheduled Consultation can be started now");
+};
 const activeQuit = (context: ControlContext): ControlAvailability =>
 	context.handoffActive ? unavailable("normal Quit is unavailable during a Handoff") : available();
 const message = (context: ControlContext): ControlAvailability =>
@@ -1079,6 +1130,25 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// A Consultation-section control: in the Ticket section the key states
 		// the section refusal, and the Ticket guide and bar omit the control.
 		consultationSectionOnly: true,
+		guideNote: "removes a closed or unscheduled record and its history",
+	},
+	{
+		// `s` schedules an `unscheduled` Consultation back into the Work queue
+		// (issue #91): the record returns to `queued` at the queue's tail, and
+		// the pickup is the only starter, the way the launcher's submit is.
+		id: "consultation-schedule",
+		label: "Schedule",
+		keys: () => ["s"],
+		keyLabel: "s",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 52,
+		modes: [...consultationBaseModes],
+		availability: consultationSchedule,
+		// A Consultation-section control: the section that does not own it
+		// states the section refusal and names it nowhere.
+		consultationSectionOnly: true,
+		guideNote: "puts the unscheduled Consultation back into the Work queue",
 	},
 	{
 		id: "consultation-recovery",
@@ -1123,6 +1193,27 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 69,
 		modes: [...consultationBaseModes],
 		availability: consultationInteraction,
+	},
+	{
+		// Enter starts an `unscheduled` Consultation now (issue #91): the
+		// pickup seam with the cap skipped, the Consultation section's face of
+		// the queue's force-dispatch. The record's own progress line takes
+		// over from the start. It is cataloged after the other Enter meanings,
+		// so a record with no Enter meaning at all still reads Recovery's
+		// reason, and the start is found wherever its record stands.
+		id: "consultation-start-now",
+		label: "Start now",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		// The primary-action rung the other sections give their Enter meaning:
+		// it is available only where their Enter meanings are not.
+		priority: 70,
+		modes: [...consultationBaseModes],
+		availability: consultationStartNow,
+		consultationSectionOnly: true,
+		guideNote: "starts the unscheduled Consultation over the Parallel limit",
 	},
 	{
 		id: "consultation-goto",
@@ -1657,6 +1748,7 @@ const KEY_NAMES: Record<string, string> = {
 	a: "a",
 	m: "m",
 	c: "c",
+	s: "s",
 	f1: "F1",
 	f2: "F2",
 	f3: "F3",

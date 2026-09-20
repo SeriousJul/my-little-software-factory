@@ -101,6 +101,8 @@ describe("the shared control gallery", () => {
 			"recovery-panel-failed",
 			"goto",
 			"ticket-goto",
+			"consultation-detail-unscheduled",
+			"consultation-unscheduled-actions",
 			"consultation-detail-queued",
 			"work-queue",
 			"work-force-dispatch",
