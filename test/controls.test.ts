@@ -2,12 +2,14 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+	actionBarControls,
 	availabilityFor,
 	type ControlContext,
 	type ControlDefinition,
 	contextFor,
 	controlById,
 	controlForKey,
+	controlsForMode,
 	guideControls,
 } from "../src/components/controls.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
@@ -80,6 +82,81 @@ describe("the shared control catalogue", () => {
 	test("z answers nothing in the Consultation section", () => {
 		for (const mode of ["consultation-list", "consultation-detail"] as const)
 			expect(controlForKey({ name: "z" }, contextFor(mode, values))).toBeUndefined();
+	});
+
+	test("d and f refuse in both Ticket modes, in the Consultation section's words", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const context = contextFor(mode, values);
+			const deleteControl = controlForKey({ name: "d" }, context);
+			const historyControl = controlForKey({ name: "f" }, context);
+			expect(deleteControl?.id).toBe("consultation-delete");
+			expect(historyControl?.id).toBe("history");
+			if (deleteControl === undefined || historyControl === undefined)
+				throw new Error("Delete and History are missing from the catalogue");
+			expect(availabilityFor(deleteControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+			expect(availabilityFor(historyControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+		}
+		// In the Consultation section the keys keep their own meanings.
+		const consultation = contextFor("consultation-list", values);
+		expect(controlForKey({ name: "d" }, consultation)?.id).toBe("consultation-delete");
+		expect(controlForKey({ name: "f" }, consultation)?.id).toBe("history");
+		const closed = contextFor("consultation-list", {
+			...values,
+			selectedConsultation: { state: "closed" } as unknown as Consultation,
+		});
+		const closedDelete = controlForKey({ name: "d" }, closed);
+		const closedHistory = controlForKey({ name: "f" }, closed);
+		if (closedDelete === undefined || closedHistory === undefined)
+			throw new Error("Delete and History are missing from the catalogue");
+		expect(availabilityFor(closedDelete, closed).available).toBe(true);
+		expect(availabilityFor(closedHistory, closed).available).toBe(true);
+	});
+
+	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {
+		// The guard that keeps the catalogue's display rules in step: a control
+		// the mode dispatches a key for is either available, named in the guide
+		// with its reason, or omitted from the guide and the bar together. A
+		// future Consultation-only key that refuses in the Ticket section and
+		// still shows up in its bar fails here.
+		for (const mode of [
+			"ticket-list",
+			"ticket-detail",
+			"consultation-list",
+			"consultation-detail",
+		] as const) {
+			const context = contextFor(mode, values);
+			const named = new Set(guideControls(context).map(({ control }) => control.id));
+			const hinted = new Set(actionBarControls(mode, context).map((control) => control.id));
+			for (const control of controlsForMode(mode)) {
+				const availability = availabilityFor(control, context);
+				expect(
+					availability.available || named.has(control.id) || !hinted.has(control.id),
+					`${control.id} in ${mode}: the bar hints a key the guide does not name`,
+				).toBe(true);
+			}
+		}
+	});
+
+	test("the Ticket guide omits Delete and History, and the Consultation guide keeps them", () => {
+		for (const mode of ["ticket-list", "ticket-detail"] as const) {
+			const ids = guideControls(contextFor(mode, values)).map(({ control }) => control.id);
+			expect(ids).not.toContain("history");
+			expect(ids).not.toContain("consultation-delete");
+		}
+		for (const mode of ["consultation-list", "consultation-detail"] as const) {
+			const entries = guideControls(contextFor(mode, values));
+			for (const id of ["history", "consultation-delete"]) {
+				expect(entries.find(({ control }) => control.id === id)?.group).toBe(
+					"Current interaction mode",
+				);
+			}
+		}
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {

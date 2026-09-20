@@ -43,6 +43,8 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | The Action bar and Key guide agree with dispatch, and field editing is named in the guide | `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue | `test/consultation-frame.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
+| The Consultation-only keys `d` and `f` refuse in both Ticket base modes with the section's own words, claim the key so nothing else answers it, and the Ticket guide and bar omit both controls | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts` | Passed |
+| No refused key is hinted by the Action bar unless the Key guide names it, in every base mode (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
@@ -243,6 +245,60 @@ the pane. It passed in full on this branch.
 The terminal walks above were not re-run on the Session view's paint: they are
 recorded as not re-verified for that body, not as a pass. The screen-reader
 target remains unverified.
+
+## The Consultation-only keys in the Ticket section (issue #85)
+
+Keys `d` (Delete) and `f` (History) belong to the Consultation section. In
+both Ticket base modes the keys still resolve, and the shared dispatch states
+the refusal on the Message line in the catalogue's own words - "this control
+is available only in the Consultation section", the mirror of the Ticket
+section's refusal - and claims the key, so nothing else may answer it. The
+Ticket guide omits both controls from every one of its sections, and the
+Ticket bar hints neither key: the bar hints no key its guide omits. The
+Consultation section's guide and bar keep both hints unchanged, and the keys
+keep their Consultation meanings, including the closed-Consultation delete.
+
+The section ownership is stated once per control in the catalogue
+(`consultationSectionOnly`), and the refusal (availabilityFor), the guide
+omission, and the bar omission all read it; no id list, and no inverted copy
+of the same predicate. A catalogue-wide guard test walks every base mode and
+fails if a refused key is hinted by the bar while the guide does not name it,
+so the next Consultation-only key cannot refuse in the Ticket section and
+still show up in its guide or bar.
+
+The automatic suite covers the refusal and the key claim in both Ticket
+modes, the untouched Consultation meanings, and the guard test itself
+(`test/controls.test.ts`), the bar's omission (`test/action-bar.test.ts`),
+the guide's rows and ranges (`test/key-guide.test.ts`), and the frame test
+that presses `d` and `f` in the Ticket list and again in the Ticket detail,
+checks the refusal on the Message line, and compares both sections' rows and
+both list selections before and after every press, so the refusal is shown
+to change nothing (`test/main-view-frame.test.ts`).
+
+On the rebased catalogue (after ADR 0031 put a `w Close` row in the Ticket
+guide) the counts were re-measured, not computed: the Ticket guide holds 54
+rows at the full width where it held 56 with Delete and History present, the
+scroll ladder walks 35 steps to the bottom row `36-54/54`, and the narrow
+60x12 case holds 75 rows where it held 77. The guide screenshots need no
+regeneration: neither section's Action bar changed, and the Key guide is not
+screenshotted, so `test/screenshot-drift.test.ts` passes against the
+committed images.
+On this branch `bun run lint` and `bun run typecheck` pass, and
+`test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`,
+`test/main-view-frame.test.ts`, and `test/screenshot-drift.test.ts` each pass
+in isolation. The full `bun run test` passes on the rebased branch (1506 pass,
+13 skip, 0 fail): the frame flakes issues #103 and #104 record did not show on
+this run, and the 13 skips are the ones that record already holds.
+
+The display rule the section asymmetry rests on - the Consultation guide
+names a refused `e Override` dim, while the Ticket guide and bar omit the
+refused `d` and `f` - is written down in the
+[shared control standard](../development/shared-controls.md), so the next
+contributor does not "fix" one direction to match the other.
+
+The terminal walks were not re-run on the changed bar and guide rows: they
+are recorded as not re-verified for this change, not as a pass. The
+screen-reader target remains unverified.
 
 ## The Ticket section's Goto key (issue #82, ADR 0033)
 
