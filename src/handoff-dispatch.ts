@@ -8,6 +8,7 @@
  * work.
  */
 import type { FactoryConfig } from "./config.ts";
+import type { ConsultationPickupOutcome } from "./consultation-operations.ts";
 import type { EnvironmentKind, Ticket, TicketState } from "./domain/ticket.ts";
 import {
 	type CloseCleanupOptions,
@@ -22,7 +23,14 @@ import {
 } from "./handoff.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
-import type { FactoryState, HandoffClaim, HandoffOrigin, WorkQueueItem } from "./state.ts";
+import type {
+	FactoryState,
+	HandoffClaim,
+	HandoffOrigin,
+	WorkQueueConsultationItem,
+	WorkQueueHandoffItem,
+} from "./state.ts";
+import { workQueueIdentityOf } from "./state.ts";
 
 /** A renderer callback must not strand a durable claim or the dispatch seat. */
 function safeReport(report: () => void): void {
@@ -170,6 +178,15 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 * A manual start at a full cap enters the Work queue instead of starting.
 	 */
 	seatCount: () => number;
+	/**
+	 * The Work queue's Consultation side (ADR 0034, issue #90): start the
+	 * `queued` Consultation an item names. The module crosses this to the
+	 * Consultation operations, which own the settings re-read, the seat move,
+	 * and the opening the record runs behind the answer. Absent where the app
+	 * has no Consultation side, and a loop without the side leaves the item
+	 * standing for a later cycle.
+	 */
+	pickupConsultation?: (consultationId: string) => Promise<ConsultationPickupOutcome>;
 	home: string;
 	/**
 	 * The herdr workspace the control plane itself runs in, or null outside
@@ -209,8 +226,20 @@ export interface HandoffDispatch {
 	 * Message line warns, and the ticket keeps its state and its own failure
 	 * surface. A seat a Close cleanup holds while it queues parks the claim, and
 	 * the item leaves only when that parked start settles.
+	 *
+	 * The Consultation item runs the Consultation's own pickup seam (ADR 0034,
+	 * issue #90): the seat move is the claim, the opening runs on behind the
+	 * answer, and the item leaves the queue on every answer, the way its pickup
+	 * does - the cap was the pickup scheduler's check, not the pickup's, so the
+	 * seam skips it without skipping any start check. The started line names the
+	 * cap when the seat count stood over the limit at the key, and says the
+	 * pickup's own words when it did not.
+	 *
+	 * `itemIdentity` is the row's identity: the ticket identity of a Handoff
+	 * item, the Consultation id of a Consultation item. The two columns are
+	 * unique and disjoint, so the string names the row (ADR 0034, issue #90).
 	 */
-	forceDispatchWorkQueueItem(ticketIdentity: string): void;
+	forceDispatchWorkQueueItem(itemIdentity: string): void;
 	/**
 	 * Drop one ticket's waiting start from the Work queue, and forget every fact
 	 * the module holds for it: the pickup warning it reports once per reason, and
@@ -225,6 +254,19 @@ export interface HandoffDispatch {
 	 * gone, which is how a start that answers late reads the operator's cancel.
 	 */
 	removeQueueItem(ticketIdentity: string): boolean;
+	/**
+	 * Drop one Consultation's waiting item from the Work queue (ADR 0034,
+	 * issue #90), and forget every pickup warning the module already said for
+	 * it. The record keeps its `queued` state: the removal is the item's, not
+	 * the record's, and the ask stands behind the pointer it loses. The module
+	 * holds no claim for a Consultation, so only the row and its note leave:
+	 * a later re-enqueue of the same record warns again with the same reason.
+	 *
+	 * The answer says whether a row left, the way `removeQueueItem` does:
+	 * false reports that the row had already gone, which is how a keypress that
+	 * met a queue that no longer held the row reads it back.
+	 */
+	removeConsultationQueueItem(consultationId: string): boolean;
 	/**
 	 * Record the operator's `handed-off` decision on the turn a routed start came
 	 * from (ADR 0034). One implementation holds both paths of the same fact:
@@ -281,6 +323,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly runner: CommandRunner;
 	private readonly config: () => FactoryConfig;
 	private readonly seatCount: () => number;
+	private readonly pickupConsultation?: (
+		consultationId: string,
+	) => Promise<ConsultationPickupOutcome>;
 	private readonly home: string;
 	private readonly controlPlaneWorkspaceId: string | null | undefined;
 	private readonly reports: HandoffDispatchReports;
@@ -314,6 +359,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.runner = options.runner;
 		this.config = options.config;
 		this.seatCount = options.seatCount;
+		this.pickupConsultation = options.pickupConsultation;
 		this.home = options.home;
 		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId;
 		this.persistMapping = options.persistMapping;
@@ -440,6 +486,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 		let claimed = 0;
 		for (const item of items.slice(0, freeSeats)) {
 			if (this.stopped) break;
+			if (item.kind === "consultation") {
+				// The shared order is one across kinds (ADR 0034, issue #90): a
+				// Consultation item takes its place in the same walk, and a pickup
+				// that starts holds its seat for the rest of the cycle, the way a
+				// handoff pickup does.
+				if (await this.pickupConsultationItem(item, false)) claimed += 1;
+				continue;
+			}
 			if (this.pickupItem(item)) claimed += 1;
 		}
 		if (claimed > 0) this.reports.refresh();
@@ -464,6 +518,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const removed = this.state.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
 		this.warnedPickups.delete(ticketIdentity);
+		return removed;
+	}
+
+	removeConsultationQueueItem(consultationId: string): boolean {
+		const removed = this.state.removeConsultationWorkItem(consultationId);
+		this.warnedPickups.delete(consultationId);
 		return removed;
 	}
 
@@ -514,6 +574,61 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
+	 * The Consultation item's pickup (ADR 0034, issue #90): the module's own
+	 * seam, so the Consultation operations stay out of the dispatch module.
+	 * The pickup answers at the seat, not at the Agent: a `started` answer
+	 * means the claim took the seat in its atomic move to `opening`, and the
+	 * opening pipeline runs on behind it.
+	 *
+	 * `overCap` says the force-dispatch measured the seat count over the
+	 * Parallel limit at the key, so the started line names the cap: a force-
+	 * dispatch under a full cap says the pickup's own words, the way the
+	 * handoff's force-dispatch does.
+	 */
+	private async pickupConsultationItem(
+		item: WorkQueueConsultationItem,
+		overCap: boolean,
+	): Promise<boolean> {
+		const pickup = this.pickupConsultation;
+		if (pickup === undefined) return false;
+		const outcome = await pickup(item.consultationId);
+		if (this.stopped) return false;
+		// The claim took the pointer with it for a `started` answer; this
+		// removal clears it for the answers that claimed nothing, so no item is
+		// left standing for a record that no longer waits. The item leaves the
+		// queue on every answer (ADR 0034, issue #90): the record keeps the ask,
+		// and the queue holds the pointer only while the record waits.
+		this.state.removeConsultationWorkItem(item.consultationId);
+		this.warnedPickups.delete(item.consultationId);
+		this.reports.refresh();
+		if (outcome.kind === "started") {
+			// The record holds its seat in `opening` now, and the opening runs on
+			// behind this answer: the line names the pickup - or the cap, for a
+			// force-dispatch that stood over it - and the record's own progress
+			// line takes over from there.
+			this.reports.notice(
+				overCap
+					? `force-dispatched Consultation ${item.consultationId.slice(0, 8)} over the Parallel limit`
+					: `Work queue: opening Consultation ${item.consultationId.slice(0, 8)}`,
+			);
+			return true;
+		}
+		if (outcome.kind === "moved") {
+			// The record left the queue's wait before the pickup ran - a close or a
+			// delete that won the race. The pickup names the record it found, once:
+			// the row is gone after this answer, so a repeat is impossible.
+			this.reports.warning(
+				`Work queue pickup of Consultation ${item.consultationId.slice(0, 8)} was not run: the record is no longer queued`,
+			);
+			return false;
+		}
+		// A failed pickup says nothing on its own: the Consultation operations
+		// already put the failure and its reason on the Message line with the
+		// `failed` record they left behind.
+		return false;
+	}
+
+	/**
 	 * The claim one queue item crosses before its start (ADR 0034): the race
 	 * check, the state gate, the claim's hard checks, and the Starting window,
 	 * in the order the pickup runs them. It reports no refusal: the answer
@@ -522,7 +637,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * `cancelled` says the item already left through the restart-or-route race
 	 * check, with that check's own line.
 	 */
-	private claimQueueItem(item: WorkQueueItem): QueueItemClaimResult {
+	private claimQueueItem(item: WorkQueueHandoffItem): QueueItemClaimResult {
 		// A restart or a route whose ticket already wears a handoff newer than
 		// the item's enqueue: the seat the operator asked for was taken by a
 		// start the operator did not ask for - the automatic restart, or the
@@ -590,7 +705,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * this call: a refused claim keeps the item in the queue and says why on
 	 * the Message line, once per reason.
 	 */
-	private pickupItem(item: WorkQueueItem): boolean {
+	private pickupItem(item: WorkQueueHandoffItem): boolean {
 		const claimed = this.claimQueueItem(item);
 		if (claimed.ok === "cancelled") return false;
 		if (claimed.ok === false) {
@@ -651,12 +766,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * the key runs no dispatch and says nothing: the catalogue gated the
 	 * availability, so a key this race meets has no answer to give.
 	 */
-	forceDispatchWorkQueueItem(ticketIdentity: string): void {
+	forceDispatchWorkQueueItem(itemIdentity: string): void {
 		if (this.stopped) return;
 		const item = this.state
 			.workQueue()
-			.find((candidate) => candidate.ticketIdentity === ticketIdentity);
+			.find((candidate) => workQueueIdentityOf(candidate) === itemIdentity);
 		if (item === undefined) return;
+		if (item.kind === "consultation") {
+			// The Consultation's claim is its seat move, and the cap is the pickup
+			// scheduler's check, not the pickup's: the seam re-runs every start
+			// check the pickup runs and skips only the cap, and the item leaves
+			// the queue on every answer, the way its pickup does.
+			const limit = this.config().maxParallelAgents;
+			const overCap = limit > 0 && this.seatCount() >= limit;
+			void this.pickupConsultationItem(item, overCap);
+			return;
+		}
 		// Measured before the claim, on the shared count: the line states the
 		// start over the cap only when the cap was full at the dispatch.
 		const limit = this.config().maxParallelAgents;
@@ -723,7 +848,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/** The pickup warning, once per reason per item. */
-	private reportPickupFailure(item: WorkQueueItem, reason: string): void {
+	private reportPickupFailure(item: WorkQueueHandoffItem, reason: string): void {
 		const warned = this.warnedReasons(item.ticketIdentity);
 		if (warned.has(reason)) return;
 		warned.add(reason);

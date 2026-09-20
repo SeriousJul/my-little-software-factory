@@ -85,6 +85,22 @@ and reports that the queue held no such row when its pickup had already taken
 it. One item per ticket: a
 second add of the same ticket is refused while the first waits.
 
+**The Consultation pickup answers at the seat, not at the Agent.** The
+dispatch module runs the pickup through its own seam, so the Consultation
+operations stay out of the module. The answer the seam gives is the claim:
+`started` means the record took its seat in the atomic move from `queued` to
+`opening`, and the opening pipeline - the Setting fit check, the repository
+resolution, the environment, and the Agent - runs on behind the answer, the
+way a claimed handoff's start does. The item leaves the queue on every
+answer: a started record holds its seat and no longer waits, a start that
+fails leaves a terminal `failed` record with its reason on the Message line,
+and a record a close or a delete out-waited the pickup no longer waits at all.
+A force-dispatch of a Consultation item is the same seam with the cap
+skipped, because the cap was the pickup scheduler's check, not the pickup's:
+the line names the cap when the seat count stood over the limit at the key,
+and the key never parks on the herdr seat a Handoff in flight holds, the way
+a launcher submit does not.
+
 The considered alternatives:
 
 - Two caps, the ticket cap and a combined cap. Rejected: two knobs with

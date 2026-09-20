@@ -82,7 +82,12 @@ import {
 	supportsModelList,
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
-import type { Consultation, FactoryState, WorkQueueItem } from "../state.ts";
+import {
+	type Consultation,
+	type FactoryState,
+	type WorkQueueItem,
+	workQueueIdentityOf,
+} from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import {
@@ -135,16 +140,10 @@ import { ticketCloseDialog } from "./ticket-close.ts";
 import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
+import { workQueueDetailLines } from "./work-queue-detail.ts";
 import { WorkQueueList, type WorkQueueRow } from "./work-queue-list.ts";
 
 type Pane = "list" | "detail";
-/** One Work queue detail line: the text, the color it paints, the emphasis. */
-interface WorkQueueDetailLine {
-	text: string;
-	fg: string | undefined;
-	/** The emphasis the old palette carried in a brighter text color. */
-	bold?: boolean;
-}
 interface StatusMessage {
 	kind: "info" | "warning" | "error";
 	text: string;
@@ -378,12 +377,15 @@ export function App({
 	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
 	workQueueRef.current = workQueue;
 	// The row the list draws: the item's ticket by its title while the ticket
-	// is still in the projection, by its identity once it is gone.
+	// is still in the projection, by its identity once it is gone, and the
+	// Consultation's item by the record's identity prefix (ADR 0034, issue #90).
 	const workQueueRows: readonly WorkQueueRow[] = workQueue.map((item) => ({
 		item,
 		title:
-			tickets.find((ticket) => ticket.identity === item.ticketIdentity)?.title ??
-			item.ticketIdentity,
+			item.kind === "consultation"
+				? item.consultationId.slice(0, 8)
+				: (tickets.find((ticket) => ticket.identity === item.ticketIdentity)?.title ??
+					item.ticketIdentity),
 	}));
 	// The cursor never rests on a queue that no longer holds its row: a pickup
 	// or a cancel that empties the section sends the selection home, and the
@@ -791,53 +793,24 @@ export function App({
 	// captured, and the message the start would carry in. The shared line
 	// pane scrolls it, like the Consultation detail.
 	const selectedWorkQueueRow = workQueueRows[workQueueIndex];
-	const workQueueDetailLines: WorkQueueDetailLine[] =
-		selectedWorkQueueRow === undefined
-			? [{ text: "no queue item is selected", fg: paint("subtext0") }]
-			: (() => {
-					const { item, title } = selectedWorkQueueRow;
-					const lines: WorkQueueDetailLine[] = [
-						{ text: title, fg: paint("text"), bold: true },
-						{ text: item.ticketIdentity, fg: paint("subtext0") },
-						{
-							text: `Origin: ${item.origin}   place ${item.position + 1} of ${workQueueRows.length}`,
-							fg: paint("text"),
-						},
-						{ text: `Enqueued: ${item.enqueuedAt.slice(11, 19)}`, fg: paint("subtext0") },
-						{ text: `Agent: ${item.choice.agentType}`, fg: paint("text") },
-						{ text: `Environment: ${item.choice.environment}`, fg: paint("text") },
-						{ text: `Task type: ${item.choice.taskType}`, fg: paint("text") },
-						{
-							text: `Model: ${item.choice.model === "" ? "left to agent" : item.choice.model}`,
-							fg: paint("text"),
-						},
-						{
-							text: `Thinking: ${item.choice.thinking === "" ? "left to agent" : item.choice.thinking}`,
-							fg: paint("text"),
-						},
-						{
-							text: `Context: ${item.choice.contextWindow === "" ? "left to agent" : item.choice.contextWindow}`,
-							fg: paint("text"),
-						},
-					];
-					if (item.previousMessage !== "") {
-						lines.push({ text: "Message carried in:", fg: paint("subtext0") });
-						for (const line of item.previousMessage.split("\n"))
-							lines.push({ text: line, fg: paint("text") });
-					}
-					lines.push({
-						// The three keys run in the queue's list, not in this pane:
-						// the detail says where they answer instead of hinting keys the
-						// mode it stands in never dispatches.
-						text: "In the list: u/d reorder, Delete removes the start",
-						fg: paint("subtext0"),
-					});
-					return lines;
-				})();
-	const workQueueDetailMaxScroll = maxScrollOf(
-		workQueueDetailLines.length,
-		detailGeometry.visibleRows,
+	// A Consultation item's facts stand on the record it names (ADR 0034,
+	// issue #90), so the pane reads the record from the Consultation
+	// projection the app holds, the way the Consultation detail reads its
+	// own.
+	const selectedWorkQueueConsultationId =
+		selectedWorkQueueRow !== undefined && selectedWorkQueueRow.item.kind === "consultation"
+			? selectedWorkQueueRow.item.consultationId
+			: undefined;
+	const selectedWorkQueueRecord =
+		selectedWorkQueueConsultationId === undefined
+			? undefined
+			: consultations.find((record) => record.id === selectedWorkQueueConsultationId);
+	const queueDetailLines = workQueueDetailLines(
+		selectedWorkQueueRow,
+		workQueueRows.length,
+		selectedWorkQueueRecord,
 	);
+	const workQueueDetailMaxScroll = maxScrollOf(queueDetailLines.length, detailGeometry.visibleRows);
 	const workQueueDetailClampedScroll = Math.min(workQueueDetailScroll, workQueueDetailMaxScroll);
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
@@ -1018,6 +991,17 @@ export function App({
 				runner: commandRunner,
 				config: () => configRef.current,
 				seatCount: currentSeatCount,
+				// The Work queue's Consultation side (ADR 0034, issue #90): the
+				// pickup crosses to the Consultation operations, which own the
+				// record's settings re-read, its seat move, and its opening. The
+				// module owns the seat and the queue's shared order. The `moved`
+				// fallback stands only where the operations are absent - the
+				// no-state test projection, where the module removes the item and
+				// the still-`queued` record loses its pointer; the `unscheduled`
+				// state that keeps the ask is issue #91's.
+				pickupConsultation: (consultationId) =>
+					consultationOperationsRef.current?.pickup(consultationId) ??
+					Promise.resolve({ kind: "moved" } as const),
 				home: homeDir,
 				controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 				working: (text) => setWorkingMessage(text, "handoff"),
@@ -1605,6 +1589,15 @@ export function App({
 			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
 			return;
 		}
+		// The Parallel limit is full: the submit creates the durable record in
+		// `queued` state instead of starting (ADR 0034, issue #90). No
+		// environment and no agent until the Work queue's pickup starts the
+		// record when a seat frees, before the automatic starts do. The seat
+		// count is the same shared source the mode line and the handoff's
+		// queue gate read, so the launcher's submit and the mode line cannot
+		// disagree about the cap.
+		const cap = configRef.current.maxParallelAgents;
+		const queued = cap > 0 && currentSeatCount() >= cap;
 		const replaced =
 			replacementConsultationId === null
 				? undefined
@@ -1616,8 +1609,14 @@ export function App({
 						repository,
 						initialInput: input,
 						replacementOf: replacementConsultationId,
+						queued,
 					})
-				: consultationOperations.replace(replaced, { typeName, repository, initialInput: input });
+				: consultationOperations.replace(replaced, {
+						typeName,
+						repository,
+						initialInput: input,
+						queued,
+					});
 		if (consultation === undefined) return;
 		setLauncher(false);
 		setReplacementConsultationId(null);
@@ -1626,6 +1625,16 @@ export function App({
 		// Stay on the record the replacement points back at, or on the
 		// launched Consultation when it replaces nothing.
 		selectConsultationById(consultation.replacementOf ?? consultation.id);
+		if (queued) {
+			// The record and its item committed in one write: the queue re-reads
+			// it through the same refresh a handoff enqueue runs, and the Message
+			// line says the wait stands.
+			replaceTickets();
+			setNoticeMessage(
+				`consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+			);
+			return;
+		}
 		// A Replacement opens like a new Consultation: the module builds the
 		// linked record with its bounded recovery context, then the same launch
 		// route starts it.
@@ -1643,6 +1652,16 @@ export function App({
 	 */
 	const consultationHasNoAgent = (consultation: Consultation) =>
 		consultation.state === "missing" || consultation.state === "failed";
+	/**
+	 * Whether this record's close has nothing to stop and nothing to keep.
+	 *
+	 * The two states Recovery names, plus a `queued` record (issue #90): it has
+	 * never had an Agent, an environment, or a worktree, so its close confirms
+	 * nothing and cleans nothing. It is not one the launcher replaces: its ask
+	 * still stands, and the record closes to the delete that follows it.
+	 */
+	const consultationCloseNeedsNoAgent = (consultation: Consultation) =>
+		consultation.state === "queued" || consultationHasNoAgent(consultation);
 	/**
 	 * Whether this record is one a Replacement continues.
 	 *
@@ -1671,7 +1690,7 @@ export function App({
 	 * its Retry and Force-close recovery rows.
 	 */
 	const runConsultationClose = (consultation: Consultation) => {
-		if (consultationHasNoAgent(consultation)) closeConsultation(consultation);
+		if (consultationCloseNeedsNoAgent(consultation)) closeConsultation(consultation);
 		else setPanel({ kind: "consultation-close", identity: consultation.id });
 	};
 	const beginResponse = (consultation: Consultation) => {
@@ -1860,7 +1879,12 @@ export function App({
 		if (state === undefined) return;
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
-		if (!state.moveWorkItem(item.ticketIdentity, direction)) {
+		if (
+			!state.moveWorkItem(
+				item.kind === "handoff" ? item.ticketIdentity : item.consultationId,
+				direction,
+			)
+		) {
 			setWarningMessage(
 				direction === "up" ? "the item is first in the queue" : "the item is last in the queue",
 			);
@@ -1873,9 +1897,11 @@ export function App({
 		replaceTickets();
 	};
 	/**
-	 * Remove the queue's item under the cursor (ADR 0034): the waiting start
-	 * is cancelled, the ticket keeps the state it has while it waits, and the
-	 * row the list kept clamps to the rows that remain.
+	 * Remove the queue's item under the cursor (ADR 0034). A handoff item's
+	 * removal cancels the intent: the ticket keeps the state it has while it
+	 * waits, and the row the list kept clamps to the rows that remain. A
+	 * Consultation item's removal leaves the record in `queued` state (issue
+	 * #90): the ask is kept, and the pickup never runs for it.
 	 *
 	 * The line states only what the module measured. Its answer says whether a
 	 * row stood when the cancel ran, and a row that left between the render and
@@ -1887,6 +1913,24 @@ export function App({
 		if (handoffDispatch === undefined) return;
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
+		if (item.kind === "consultation") {
+			// A Consultation item's removal leaves the record in `queued` state
+			// (ADR 0034, issue #90): the ask is kept, and the pickup never runs
+			// for it. The module holds no claim for the record, so only the row
+			// and its pickup note leave through the module's seam.
+			const removed = handoffDispatch.removeConsultationQueueItem(item.consultationId);
+			if (removed) {
+				setNoticeMessage(
+					`consultation ${item.consultationId.slice(0, 8)}: the queue item was removed; the record keeps its queued state`,
+				);
+			} else {
+				setWarningMessage(
+					`consultation ${item.consultationId.slice(0, 8)}: the queue item was already gone`,
+				);
+			}
+			replaceTickets();
+			return;
+		}
 		// Route the removal through the module so the waiting start and its
 		// once-per-reason pickup warning leave together (ADR 0034): a bare
 		// state delete would strand the warning and mute a later re-enqueue.
@@ -1914,15 +1958,19 @@ export function App({
 	 * cap, so the seat count may stand over the limit until the work settles.
 	 * The module owns the seam end to end - the claim, the row, and every
 	 * Message line the start or its failure leaves - and the catalogue gated
-	 * the availability: a Handoff already in flight and an empty queue never
-	 * reach here. A seat a Close cleanup holds while it queues parks the claim
-	 * in the module, and the row leaves only when that parked start settles.
+	 * the availability: an empty queue never reaches here, and for a Handoff
+	 * item a Handoff already in flight never does. A Consultation item runs its
+	 * own pickup seam, the way the queue's pickup does (ADR 0034, issue #90):
+	 * the seat move is the claim, and a Consultation start never parks behind
+	 * the herdr seat a Handoff in flight holds. A seat a Close cleanup holds
+	 * while it queues parks a Handoff claim in the module, and the row leaves
+	 * only when that parked start settles.
 	 */
 	const forceDispatchQueueItem = () => {
 		if (handoffDispatch === undefined) return;
 		const item = workQueueRef.current[workQueueIndexRef.current];
 		if (item === undefined) return;
-		handoffDispatch.forceDispatchWorkQueueItem(item.ticketIdentity);
+		handoffDispatch.forceDispatchWorkQueueItem(workQueueIdentityOf(item));
 	};
 	const currentBaseMode = (): InteractionMode =>
 		interaction
@@ -3313,7 +3361,7 @@ export function App({
 									"box",
 									{ style: { flexGrow: 1, flexDirection: "column" } },
 									createElement(ConsultationDetail, {
-										lines: workQueueDetailLines,
+										lines: queueDetailLines,
 										visibleRows: Math.max(1, detailGeometry.visibleRows),
 										scroll: workQueueDetailClampedScroll,
 										focused: focusedPane === "detail" && selection === "queue",

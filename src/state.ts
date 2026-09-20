@@ -47,7 +47,7 @@ import {
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -72,13 +72,43 @@ export interface HandoffClaim {
  * start was asked, and the origin says what the pickup re-checks when a seat
  * frees.
  */
-export interface WorkQueueItem {
+export interface WorkQueueHandoffItem {
+	kind: "handoff";
 	position: number;
 	ticketIdentity: string;
 	origin: HandoffOrigin;
 	choice: HandoffChoice;
 	previousMessage: string;
 	enqueuedAt: string;
+}
+
+/**
+ * A `queued` Consultation's item in the Work queue (ADR 0034, issue #90).
+ *
+ * The item is the pointer; the record is the ask. The record holds the type,
+ * the repository, and the operator's input, and the pickup re-reads the type's
+ * settings from the config when it starts. The record waits in `queued` state
+ * as long as the item holds its place in the shared order, so the two never
+ * exist apart from each other.
+ */
+export interface WorkQueueConsultationItem {
+	kind: "consultation";
+	position: number;
+	consultationId: string;
+	enqueuedAt: string;
+}
+
+/** The two kinds of starts the Work queue holds, in one shared order. */
+export type WorkQueueItem = WorkQueueHandoffItem | WorkQueueConsultationItem;
+
+/** The identity a Work queue row names: the ticket or the Consultation. */
+export function workQueueIdentityOf(item: WorkQueueItem): string {
+	return item.kind === "handoff" ? item.ticketIdentity : item.consultationId;
+}
+
+/** The identity's column in the table, by the row's kind. */
+function identityColumn(item: WorkQueueItem): string {
+	return item.kind === "handoff" ? "ticket_identity" : "consultation_id";
 }
 
 export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reason: string };
@@ -131,6 +161,7 @@ interface HandoffDetails {
 }
 
 export const CONSULTATION_STATES = [
+	"queued",
 	"opening",
 	"working",
 	"awaiting-response",
@@ -241,6 +272,13 @@ export interface CreateConsultationInput {
 	agentName: string;
 	replacementOf?: string | null;
 	createdAt?: string;
+	/**
+	 * The state the record holds from its first write (ADR 0034, issue #90).
+	 * `opening` is the default for a start that runs at once; `queued` is the
+	 * submit the full Parallel limit kept from starting, and it takes the
+	 * record's Work queue item in the same write.
+	 */
+	initialState?: "opening" | "queued";
 }
 
 export interface ConsultationAgentDetails {
@@ -615,6 +653,48 @@ const WORK_QUEUE_TABLE = `
 const MIGRATION_V13_TO_V14 = WORK_QUEUE_TABLE;
 
 /**
+ * The v16 columns: the Work queue grows the `queued` Consultation's item
+ * (ADR 0034, issue #90) beside the handoff item, in the one shared order.
+ *
+ * The second kind is a pointer, not a copy: the row names the Consultation
+ * record the operator asked for, and the record holds the type, the
+ * repository, and the operator's input in its own table. Each kind's identity
+ * is unique, so the queue holds at most one item per ticket and per
+ * Consultation alike, and the CHECK holds the row to exactly one: a row with
+ * both identities, or neither, is not a row the plane can read, and the
+ * constraint keeps it from ever committing. A Consultation row leaves the
+ * Handoff's cells null, the way the Handoff row leaves the Consultation's.
+ */
+const WORK_QUEUE_COLUMNS_V16 = `
+	position INTEGER PRIMARY KEY,
+	ticket_identity TEXT UNIQUE,
+	consultation_id TEXT UNIQUE,
+	origin TEXT,
+	choice_json TEXT,
+	previous_message TEXT NOT NULL,
+	enqueued_at TEXT NOT NULL,
+	CHECK ((ticket_identity IS NOT NULL) <> (consultation_id IS NOT NULL))
+`;
+
+/**
+ * The v16 step: rebuild the Work queue around its second kind (ADR 0034,
+ * issue #90).
+ *
+ * The rows the v15 shape holds are all handoff items, and they keep their
+ * place in the shared order: the rebuild copies every row into the new table
+ * beside its own identity, and drops none. The rebuild runs the rename dance
+ * instead of a plain drop, because a plain drop would lose the starts already
+ * waiting in the queue.
+ */
+const MIGRATION_V15_TO_V16 = `
+	CREATE TABLE work_queue_v16 (${WORK_QUEUE_COLUMNS_V16});
+	INSERT INTO work_queue_v16(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at)
+		SELECT position, ticket_identity, NULL, origin, choice_json, previous_message, enqueued_at FROM work_queue;
+	DROP TABLE work_queue;
+	ALTER TABLE work_queue_v16 RENAME TO work_queue;
+`;
+
+/**
  * The v15 step: rebuild the Work queue a reused version number left unreadable.
  *
  * The queue landed twice under the same number. The first step (issue #88, PR
@@ -771,6 +851,7 @@ export class FactoryState {
 			// the starts already waiting in it.
 			if (version < 15 && !this.hasColumn("work_queue", "position"))
 				this.db.exec(MIGRATION_V14_TO_V15);
+			if (version < 16) this.db.exec(MIGRATION_V15_TO_V16);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1630,39 +1711,61 @@ export class FactoryState {
 	}
 
 	/**
-	 * The Work queue (ADR 0034), in queue order: the manual starts waiting
-	 * for a Parallel limit seat. Rows that cannot be read back are dropped
-	 * from the projection, exactly as a broken choice_json is elsewhere.
+	 * The Work queue (ADR 0034), in the one shared order across kinds: the
+	 * manual starts waiting for a Parallel limit seat. A handoff row that
+	 * cannot be read back is dropped from the projection, exactly as a broken
+	 * choice_json is elsewhere. A Consultation row is the pointer alone, so
+	 * there is no cell for it to lose: the CHECK constraint holds every row to
+	 * exactly one identity, so a row the reader does not know is one the schema
+	 * never committed.
 	 */
 	workQueue(): WorkQueueItem[] {
 		const rows = this.db
 			.prepare(
-				"SELECT position, ticket_identity, origin, choice_json, previous_message, enqueued_at FROM work_queue ORDER BY position ASC",
+				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at FROM work_queue ORDER BY position ASC",
 			)
 			.all() as Array<{
 			position: number;
-			ticket_identity: string;
-			origin: string;
-			choice_json: string;
+			ticket_identity: string | null;
+			consultation_id: string | null;
+			origin: string | null;
+			choice_json: string | null;
 			previous_message: string;
 			enqueued_at: string;
 		}>;
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
-			const origin =
-				row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
-					? (row.origin as HandoffOrigin)
-					: undefined;
-			const choice = jsonChoice(row.choice_json);
-			if (origin === undefined || choice === undefined) continue;
-			items.push({
-				position: row.position,
-				ticketIdentity: row.ticket_identity,
-				origin,
-				choice,
-				previousMessage: row.previous_message,
-				enqueuedAt: row.enqueued_at,
-			});
+			if (row.ticket_identity !== null) {
+				const origin =
+					row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
+						? (row.origin as HandoffOrigin)
+						: undefined;
+				const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
+				if (origin === undefined || choice === undefined) continue;
+				items.push({
+					kind: "handoff",
+					position: row.position,
+					ticketIdentity: row.ticket_identity,
+					origin,
+					choice,
+					previousMessage: row.previous_message,
+					enqueuedAt: row.enqueued_at,
+				});
+				continue;
+			}
+			if (row.consultation_id !== null) {
+				items.push({
+					kind: "consultation",
+					position: row.position,
+					consultationId: row.consultation_id,
+					enqueuedAt: row.enqueued_at,
+				});
+				continue;
+			}
+			// The CHECK holds every row to one identity, so this arm stands for a
+			// row the constraint cannot name: refuse to read it rather than guess
+			// what it asks for.
+			throw new StateError("the Work queue holds a row with no identity");
 		}
 		return items;
 	}
@@ -1717,6 +1820,48 @@ export class FactoryState {
 		}
 	}
 
+	/** Whether the queue already waits for the Consultation: one item per record. */
+	hasConsultationWorkItem(consultationId: string): boolean {
+		return (
+			this.db.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?").get(consultationId) !=
+			null
+		);
+	}
+
+	/**
+	 * Add the `queued` Consultation's item to the end of the queue (ADR 0034,
+	 * issue #90). The item is the pointer to the record: the record holds the
+	 * operator's ask, and the pickup re-reads the type's settings when it
+	 * starts. The queue holds at most one item per record: a second add for a
+	 * Consultation that already waits is refused, and the first item keeps its
+	 * place.
+	 */
+	enqueueConsultationWork(consultationId: string): { ok: true } | { ok: false; reason: string } {
+		try {
+			return this.transaction(() => {
+				const existing = this.db
+					.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?")
+					.get(consultationId);
+				if (existing !== null && existing !== undefined)
+					return {
+						ok: false,
+						reason: `consultation ${consultationId} already has a waiting queue item`,
+					};
+				this.db
+					.prepare(
+						"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
+					)
+					.run(consultationId, new Date(this.now()).toISOString());
+				return { ok: true };
+			});
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the Consultation: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+	}
+
 	/** Cancel the ticket's waiting item. The ticket keeps its state. */
 	removeWorkItem(ticketIdentity: string): boolean {
 		return this.transaction(() => {
@@ -1724,37 +1869,79 @@ export class FactoryState {
 				.prepare("DELETE FROM work_queue WHERE ticket_identity = ?")
 				.run(ticketIdentity);
 			if (result.changes === 0) return false;
-			// Repack the places so the queue stays dense: the item's place in
-			// the queue is its position, and a gap would leave a number the
-			// queue never shows.
-			const remaining = this.db
-				.prepare("SELECT position FROM work_queue ORDER BY position ASC")
-				.all() as Array<{ position: number }>;
-			const set = this.db.prepare("UPDATE work_queue SET position = ? WHERE position = ?");
-			remaining.forEach((row, index) => {
-				if (row.position !== index) set.run(index, row.position);
-			});
+			this.repackWorkQueuePositions();
 			return true;
 		});
 	}
 
 	/**
-	 * Move the ticket's item one place within the shared queue order, toward
-	 * the front (`up`) or the back (`down`). An item at an edge moves nowhere.
+	 * Remove the Consultation's item from the shared order (ADR 0034, issue
+	 * #90). The record keeps its `queued` state: the removal is the item's,
+	 * not the record's, and the ask stands behind the pointer it loses.
 	 */
-	moveWorkItem(ticketIdentity: string, direction: "up" | "down"): boolean {
+	removeConsultationWorkItem(consultationId: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare("DELETE FROM work_queue WHERE consultation_id = ?")
+				.run(consultationId);
+			if (result.changes === 0) return false;
+			this.repackWorkQueuePositions();
+			return true;
+		});
+	}
+
+	/**
+	 * Take one Consultation's pointer out of the shared order (ADR 0034,
+	 * issue #90).
+	 *
+	 * The record and its item are created in one write, and every write that
+	 * ends the record's wait breaks them together here: the queue never keeps
+	 * an item for a record that no longer waits, and never lists an item that
+	 * names no record.
+	 */
+	private dropConsultationWorkItem(consultationId: string): void {
+		this.db.prepare("DELETE FROM work_queue WHERE consultation_id = ?").run(consultationId);
+	}
+
+	/**
+	 * Repack the places so the queue stays dense: an item's place in the queue
+	 * is its position, and a gap would leave a number the queue never shows.
+	 */
+	private repackWorkQueuePositions(): void {
+		const remaining = this.db
+			.prepare("SELECT position FROM work_queue ORDER BY position ASC")
+			.all() as Array<{ position: number }>;
+		const set = this.db.prepare("UPDATE work_queue SET position = ? WHERE position = ?");
+		remaining.forEach((row, index) => {
+			if (row.position !== index) set.run(index, row.position);
+		});
+	}
+
+	/**
+	 * Move one item one place within the shared queue order, toward the front
+	 * (`up`) or the back (`down`). The order is shared across kinds, so the
+	 * move crosses kinds, and an item at an edge moves nowhere. The identity
+	 * names the row in whichever kind holds it: the two identity columns are
+	 * both unique, so an identity is one row.
+	 */
+	moveWorkItem(identity: string, direction: "up" | "down"): boolean {
 		return this.transaction(() => {
 			const items = this.workQueue();
-			const index = items.findIndex((item) => item.ticketIdentity === ticketIdentity);
+			const index = items.findIndex((item) => workQueueIdentityOf(item) === identity);
 			const target = index + (direction === "up" ? -1 : 1);
 			if (index < 0 || target < 0 || target >= items.length) return false;
 			// The swap goes through a spare position: the column is the
 			// queue's primary key, and the two rows may not share either
 			// place for a step of the swap.
-			const swap = this.db.prepare("UPDATE work_queue SET position = ? WHERE ticket_identity = ?");
-			swap.run(-1, ticketIdentity);
-			swap.run(items[index].position, items[target].ticketIdentity);
-			swap.run(items[target].position, ticketIdentity);
+			const swap = this.db.prepare(
+				`UPDATE work_queue SET position = ? WHERE ${identityColumn(items[index])} = ?`,
+			);
+			const swapTarget = this.db.prepare(
+				`UPDATE work_queue SET position = ? WHERE ${identityColumn(items[target])} = ?`,
+			);
+			swap.run(-1, identity);
+			swapTarget.run(items[index].position, workQueueIdentityOf(items[target]));
+			swap.run(items[target].position, identity);
 			return true;
 		});
 	}
@@ -2300,6 +2487,11 @@ export class FactoryState {
 	createConsultation(input: CreateConsultationInput): Consultation {
 		const id = input.id ?? randomUUID();
 		const createdAt = input.createdAt ?? new Date().toISOString();
+		// The state the record holds from its first write (ADR 0034, issue
+		// #90). A record that cannot take a Parallel limit seat is born `queued`
+		// with its Work queue item in the same write, so the record and the
+		// pointer to it commit together and never exist apart from each other.
+		const initialState = input.initialState ?? "opening";
 		this.transaction(() => {
 			this.db
 				.prepare(
@@ -2309,7 +2501,7 @@ export class FactoryState {
 						repository_display_name, repository_clone_url, repository_path,
 						state, created_at, updated_at, agent_name, draft, replacement_of,
 						attention_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, NULL)`,
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, NULL)`,
 				)
 				.run(
 					id,
@@ -2326,6 +2518,7 @@ export class FactoryState {
 					input.repository.displayName,
 					input.repository.cloneUrl,
 					input.repository.path,
+					initialState,
 					createdAt,
 					createdAt,
 					input.agentName,
@@ -2336,6 +2529,7 @@ export class FactoryState {
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, NULL)",
 				)
 				.run(randomUUID(), id, input.initialInput, createdAt);
+			if (initialState === "queued") this.insertWorkQueueConsultationItem(id, createdAt);
 		});
 		const consultation = this.consultation(id);
 		if (consultation == null) throw new StateError(`consultation ${id} was not created`);
@@ -2455,6 +2649,89 @@ export class FactoryState {
 			| { state: ConsultationState }
 			| undefined;
 		return row?.state === "opening";
+	}
+
+	/**
+	 * The one Work queue item write every caller shares (ADR 0034, issue #90):
+	 * the row lands at the end of the shared order beside the handoff items.
+	 * The Consultation creation's `queued` write runs it inside the creation's
+	 * own transaction, so the record and its pointer commit together.
+	 */
+	private insertWorkQueueConsultationItem(consultationId: string, createdAt: string): void {
+		this.db
+			.prepare(
+				"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
+			)
+			.run(consultationId, createdAt);
+	}
+
+	/**
+	 * Take a `queued` Consultation out of its wait and into the opening
+	 * (ADR 0034, issue #90).
+	 *
+	 * The move is the seat: from this write on the record holds a Parallel
+	 * limit seat the Work queue's pickup paid for. The atomic step keeps a
+	 * close or a delete that raced the pickup from being yanked back to
+	 * opening; the loser of the race answers `false` and starts nothing. The
+	 * winner drops the record's pointer in the same write: the claim ends the
+	 * wait, and the queue holds the item only while the record waits.
+	 */
+	beginConsultationStart(id: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"UPDATE consultations SET state = 'opening', updated_at = ? WHERE id = ? AND state = 'queued'",
+				)
+				.run(new Date(this.now()).toISOString(), id);
+			if (Number(result.changes) === 0) return false;
+			this.dropConsultationWorkItem(id);
+			return true;
+		});
+	}
+
+	/**
+	 * Re-read the Consultation type's settings into the record (ADR 0034,
+	 * issue #90).
+	 *
+	 * The `queued` record waited for a seat, so its pickup starts it on the
+	 * type as the config holds it now, not on the settings the record captured
+	 * when the launcher created it. The operator's own input never changes; the
+	 * opening prompt is re-rendered from the type's template and the stored
+	 * input.
+	 *
+	 * The write reaches a `queued` record only: the pickup's claim below it is
+	 * atomic the same way, and a record that left `queued` behind the pickup is
+	 * never touched by it.
+	 */
+	updateConsultationTypeSettings(
+		id: string,
+		settings: {
+			agentType: string;
+			environment: EnvironmentKind;
+			model: string;
+			thinking: string;
+			contextWindow: string;
+			template: string;
+			renderedOpeningPrompt: string;
+		},
+	): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE consultations SET agent_type = ?, environment = ?, model = ?, thinking = ?,
+					context_window = ?, template = ?, rendered_opening_prompt = ?, updated_at = ? WHERE id = ? AND state = 'queued'`,
+			)
+			.run(
+				settings.agentType,
+				settings.environment,
+				settings.model,
+				settings.thinking,
+				settings.contextWindow,
+				settings.template,
+				settings.renderedOpeningPrompt,
+				new Date(this.now()).toISOString(),
+				id,
+			);
+		return Number(result.changes) > 0;
 	}
 
 	/** Record an opening outcome. A pre-Agent failure is immutable. */
@@ -2854,7 +3131,16 @@ export class FactoryState {
 
 	/** Mark cleanup as started before issuing the first external close command. */
 	beginConsultationClose(id: string): boolean {
-		return this.setConsultationState(id, "closing");
+		// A close is the other way a `queued` record leaves its wait besides the
+		// pickup (ADR 0034, issue #90): the operator abandoned the ask. Its
+		// pointer leaves the shared order in the same write, so the queue never
+		// holds an item whose record is closing behind a cap the pickup cannot
+		// reach.
+		return this.transaction(() => {
+			if (!this.setConsultationState(id, "closing")) return false;
+			this.dropConsultationWorkItem(id);
+			return true;
+		});
 	}
 
 	/** Persist a cleanup failure while leaving the aggregate recoverable. */
@@ -2935,6 +3221,9 @@ export class FactoryState {
 			| undefined;
 		if (row?.state !== "closed") return false;
 		this.transaction(() => {
+			// The delete takes any pointer the record still leaves behind, so the
+			// queue never lists an item that names no record (ADR 0034, issue #90).
+			this.dropConsultationWorkItem(id);
 			this.db.prepare("DELETE FROM consultations WHERE id = ?").run(id);
 		});
 		try {
@@ -3253,10 +3542,15 @@ function compareConsultations(left: Consultation, right: Consultation): number {
 				return 3;
 			case "opening":
 				return 4;
-			case "closing":
+			// A `queued` record needs no operator: it waits for a seat, and it
+			// sorts after the live records that hold their seats and before the
+			// records that are closing (ADR 0034, issue #90).
+			case "queued":
 				return 5;
-			case "closed":
+			case "closing":
 				return 6;
+			case "closed":
+				return 7;
 		}
 	};
 	const leftGroup = group(left.state);

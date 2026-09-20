@@ -1,7 +1,9 @@
 /**
  * The Work queue's list (ADR 0034): the manual starts waiting for a Parallel
- * limit seat, in queue order. A row carries the ticket's title, the start's
- * origin, and the item's place in the queue.
+ * limit seat, in the one shared order across kinds. A row carries the
+ * identity of the start it waits for - the ticket's title for a handoff, the
+ * record's identity prefix for the Consultation's item (issue #90) - the
+ * start's origin word, and the item's place in the queue.
  */
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
@@ -91,10 +93,11 @@ export function WorkQueueList({
 			: visible.map((row) =>
 					createElement(
 						"text",
-						{ key: row.item.ticketIdentity },
+						{ key: rowKey(row.item) },
 						...itemRow(
 							row,
-							row.item.ticketIdentity === rows[selectedIndex]?.item.ticketIdentity,
+							rowKey(row.item) === rowKey(rows[selectedIndex]?.item ?? row.item) &&
+								rows[selectedIndex]?.item.kind === row.item.kind,
 							geometry.usableCols,
 						),
 					),
@@ -102,9 +105,21 @@ export function WorkQueueList({
 	);
 }
 
+/** The one identity that stands in the row's key and its selection check. */
+function rowKey(item: WorkQueueItem): string {
+	return item.kind === "handoff" ? item.ticketIdentity : item.consultationId;
+}
+
+/** The word a row stands under, in the cell before its identity (ADR 0034):
+ * the handoff's origin the pickup re-checks, and the Consultation item's
+ * kind, the record the pointer names (issue #90). */
+function originWord(item: WorkQueueItem): string {
+	return item.kind === "handoff" ? `[${item.origin}]` : "consultation";
+}
+
 function itemRow(row: WorkQueueRow, selected: boolean, width: number) {
 	const marker = selected ? "❯ " : "  ";
-	const origin = `[${row.item.origin}]`;
+	const origin = originWord(row.item);
 	const place = ` ${row.item.position + 1}`;
 	const prefix = `${marker}${padToWidth(origin, ORIGIN_WIDTH)} `;
 	const suffix = place;

@@ -34,8 +34,20 @@ const consultationWithPane = { paneId: "pane-1" } as unknown as Consultation;
 const queueValues: Omit<ControlContext, "mode"> = {
 	...values,
 	selectedWorkQueueItem: {
+		kind: "handoff",
 		ticketIdentity: "github:github.com:I_5",
 		origin: "open",
+		position: 0,
+	} as unknown as ControlContext["selectedWorkQueueItem"],
+	workQueueDepth: 2,
+};
+
+/** The cursor on a Consultation's queue item (issue #90), for the queue's keys. */
+const queueConsultationValues: Omit<ControlContext, "mode"> = {
+	...values,
+	selectedWorkQueueItem: {
+		kind: "consultation",
+		consultationId: "c1c1c1c1-1111-4111-8111-111111111111",
 		position: 0,
 	} as unknown as ControlContext["selectedWorkQueueItem"],
 	workQueueDepth: 2,
@@ -162,9 +174,11 @@ describe("the shared control catalogue", () => {
 
 	test("Enter is the force-dispatch on a queue row, and it keeps its refusals", () => {
 		// The force-dispatch (issue #89) is the queue's only meaning of Enter, in
-		// the pane that holds the rows. It refuses while a Handoff holds the
-		// environment seat, the way the Ticket section's Hand off does, and on an
-		// empty queue it carries the queue's row keys' one reason.
+		// the pane that holds the rows. For a Handoff item it refuses while a
+		// Handoff holds the environment seat, the way the Ticket section's Hand
+		// off does; a Consultation item never parks on that seat, so the refusal
+		// does not reach it (issue #90). On an empty queue it carries the
+		// queue's row keys' one reason.
 		const control = controlForKey({ name: "return" }, contextFor("work-queue-list", queueValues));
 		expect(control?.id).toBe("queue-force-dispatch");
 		if (control === undefined) throw new Error("the queue lost its force-dispatch");
@@ -176,6 +190,17 @@ describe("the shared control catalogue", () => {
 			available: false,
 			reason: "a Handoff is active",
 		});
+		// The Consultation item stands in the same moment: its start runs its
+		// own pickup seam, the way a launcher submit does, and a Handoff in
+		// flight holds no seat it waits on.
+		const busyConsultation = contextFor("work-queue-list", {
+			...queueConsultationValues,
+			handoffActive: true,
+		});
+		expect(availabilityFor(control, busyConsultation)).toEqual({ available: true });
+		expect(
+			availabilityFor(control, contextFor("work-queue-list", queueConsultationValues)),
+		).toEqual({ available: true });
 		const empty = contextFor("work-queue-list", values);
 		expect(availabilityFor(control, empty)).toEqual({
 			available: false,

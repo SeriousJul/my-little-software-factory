@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { FactoryConfig } from "../src/config.ts";
 import { baseChoice } from "../src/handoff.ts";
 import type { CommandRunner } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import { type FactoryState, openFactoryState, workQueueIdentityOf } from "../src/state.ts";
 import {
 	awaitFrame,
 	detailPaneText,
@@ -502,7 +502,7 @@ describe("the Work queue section", () => {
 					const frame = await settle(setup);
 					expect(frame).toContain("waiting: 1");
 					expect(frameText(frame)).toContain(`[workflow] Close the stale deploy branch`);
-					expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual([SECOND]);
+					expect(state.workQueue().map(workQueueIdentityOf)).toEqual([SECOND]);
 				},
 				state,
 				source,
@@ -581,9 +581,10 @@ describe("the Work queue section", () => {
 					// The item carries the route's origin and the edge's resolved choice,
 					// and the ticket keeps the state it wears while it waits.
 					const items = state.workQueue();
-					expect(items.map((item) => item.ticketIdentity)).toEqual([FIRST]);
-					expect(items[0]?.origin).toBe("workflow");
-					expect(items[0]?.choice.taskType).toBe("review");
+					expect(items.map(workQueueIdentityOf)).toEqual([FIRST]);
+					if (items[0]?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
+					expect(items[0].origin).toBe("workflow");
+					expect(items[0].choice.taskType).toBe("review");
 					expect(state.ticketState(FIRST)).toBe("awaiting");
 					// The trace the route came from is still undecided: the routed
 					// handoff never started.
