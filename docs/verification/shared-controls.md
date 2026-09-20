@@ -609,3 +609,26 @@ recorded workaround for the drift class of OpenTUI issue 1187.
 This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
 0.5.11 (1554 pass, 13 skip, re-measured on this branch's merged catalogue).
+
+## The queued badge of the Queue wait
+
+A ticket whose manual start waits in the Work queue wears the `queued`
+badge in the state badge's slot of its list row and of its detail's state
+line, painted in the open role (CONTEXT.md, Queue wait). The badge is a
+presentation fact, not a ticket state: the ticket keeps its `open` state, so
+the section counts, the pickup gate, and the state file all keep it `open`,
+and a removal, a failed pickup, or a pickup that starts the work gives the
+row its open badge back by itself. The Work queue row keeps its origin cell
+unchanged, and the Consultation's `queued` state is the separate fact it was
+before this badge took the word in the Ticket section.
+
+The automatic suite covers the badge in both surfaces, its open-role paint,
+the unchanged open count, the open badge the ticket without a waiting start
+keeps, the origin the queue row keeps, and the open badge the cancel gives
+back (`test/work-queue-frame.test.ts`). The suite passed in full on this
+branch (1558 pass, 13 skip, 0 fail), and the 13 skips are the ones this
+record already holds as skipped.
+
+The terminal walks were not re-run on the queued badge: they are recorded as
+not re-verified for this change, not as a pass. The screen-reader target
+remains unverified.

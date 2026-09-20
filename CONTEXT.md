@@ -357,6 +357,10 @@ The ordered, durable list of starts that wait for a free Parallel limit seat: a 
 When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record. A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
 
+**Queue wait**:
+The window in which a ticket's manual start waits in the Work queue for a free Parallel limit seat. The ticket keeps its `open` state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket `open`.
+_Avoid_: queued state, pending, on hold
+
 **Force-dispatch**:
 The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
 It re-runs every start check the normal pickup runs and skips only the cap.
