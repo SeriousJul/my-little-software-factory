@@ -26,6 +26,8 @@ interface SectionHeaderProps {
 	/** The Consultation counts for the Consultations section's header. */
 	awaitingResponse?: number;
 	recovery?: number;
+	/** The Work queue's depth for the Work section's header (ADR 0034). */
+	waiting?: number;
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
@@ -45,8 +47,6 @@ interface SectionHeaderProps {
 	 * header, not just the bell, carries the fact.
 	 */
 	newOutput?: boolean;
-	/** The Work queue's depth: the items waiting for a Parallel limit seat. */
-	depth?: number;
 	/**
 	 * A click on the header toggles the section (user story 9). Expanding
 	 * lands the cursor on the section's list; collapsing keeps its selection
@@ -80,8 +80,8 @@ export function SectionHeader({
 	awaiting = 0,
 	awaitingResponse = 0,
 	recovery = 0,
+	waiting = 0,
 	held = 0,
-	depth = 0,
 	bell = false,
 	heldBell = false,
 	newOutput = false,
@@ -95,13 +95,13 @@ export function SectionHeader({
 			? wide
 				? `open: ${open}  running: ${running}  awaiting: ${awaiting}`
 				: `open ${open}  running ${running}  awaiting ${awaiting}`
-			: section === "consultations"
+			: section === "work"
 				? wide
-					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
-					: `awaiting ${awaitingResponse}  recovery ${recovery}`
+					? `waiting: ${waiting}`
+					: `waiting ${waiting}`
 				: wide
-					? `depth: ${depth}`
-					: `depth ${depth}`;
+					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
+					: `awaiting ${awaitingResponse}  recovery ${recovery}`;
 	// The section name leads so a truncation never hides it, the held count
 	// shows only when it is above zero (a steady zero holds no row), and the
 	// bells sit by the facts they ring on.
@@ -110,12 +110,11 @@ export function SectionHeader({
 			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
 					heldBell ? "  !!!" : ""
 				}`
-			: section === "consultations"
-				? `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`
-				: `  ${counts}`;
-	const text = `${expanded ? "▾" : "▸"} ${
-		section === "tickets" ? "Tickets" : section === "consultations" ? "Consultations" : "Work queue"
-	}${facts}`;
+			: section === "work"
+				? `  ${counts}`
+				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;
+	const name = section === "tickets" ? "Tickets" : section === "work" ? "Work" : "Consultations";
+	const text = `${expanded ? "▾" : "▸"} ${name}${facts}`;
 	const handleMouse = (event: MouseEvent) => {
 		if (!active) return;
 		if (event.type === "down" && event.button === 0) onToggle(section);

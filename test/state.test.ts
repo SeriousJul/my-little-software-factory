@@ -6,7 +6,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
+import { openFactoryState, SCHEMA_V1, SCHEMA_VERSION, StateError } from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
@@ -1100,12 +1100,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
-		// The v13 mode belongs to the run after this record: a v5 file stored
-		// no Auto-handoff mode.
-		db.exec("DROP TABLE auto_handoff_mode;");
-		// The v14 queue belongs to the run after this record: a v5 file stored
-		// no Work queue.
-		db.exec("DROP TABLE work_queue;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v5 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1178,12 +1175,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
-		// The v13 mode belongs to the run after this record: a v7 file stored
-		// no Auto-handoff mode.
-		db.exec("DROP TABLE auto_handoff_mode;");
-		// The v14 queue belongs to the run after this record: a v7 file stored
-		// no Work queue.
-		db.exec("DROP TABLE work_queue;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v7 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
@@ -1254,14 +1248,11 @@ describe("factory SQLite state", () => {
 		state.applyFetch(sourceA, success([fetched()]));
 		state.close();
 
-		// Downgrade the record to the v12 shape: the mode table does not exist
-		// yet and the schema cell says twelve, which is exactly what an
-		// upgrade from v12 finds.
+		// Downgrade the record to the v12 shape: the mode table and the Work
+		// queue do not exist yet and the schema cell says twelve, which is
+		// exactly what an upgrade from v12 finds.
 		const db = new Database(path);
-		db.exec("DROP TABLE auto_handoff_mode;");
-		// The v14 queue belongs to the run after this record: a v12 file stored
-		// no Work queue.
-		db.exec("DROP TABLE work_queue;");
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		db.prepare("UPDATE schema_version SET version = 12").run();
 		db.close();
 
@@ -1278,6 +1269,118 @@ describe("factory SQLite state", () => {
 		const reread = openFactoryState(path);
 		expect(reread.autoHandoffMode()).toBe(true);
 		reread.close();
+	});
+
+	/** Rewrite the queue's shape to the one the first Work queue migration wrote. */
+	function downgradeQueueToTheAbandonedShape(path: string): void {
+		const db = new Database(path);
+		// The step that landed the queue (issue #88, commit 604d803) keyed the row
+		// by a random id and ordered it by `queue_order`, and it stamped the file
+		// version 14. The step that ships now writes a `position` keyed table under
+		// the same number, so a file this record made claims 14 with that shape.
+		db.exec(`
+			DROP TABLE work_queue;
+			CREATE TABLE work_queue (
+				id TEXT PRIMARY KEY,
+				kind TEXT NOT NULL,
+				ticket_identity TEXT,
+				origin TEXT,
+				choice_json TEXT,
+				queue_order INTEGER NOT NULL,
+				created_at TEXT NOT NULL
+			);
+			UPDATE schema_version SET version = 14;
+		`);
+		db.close();
+	}
+
+	test("a v14 file with the abandoned Work queue shape migrates to v15: the queue reads again", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		state.close();
+
+		downgradeQueueToTheAbandonedShape(path);
+
+		// Before the repair this open throws SQLiteError: no such column: position
+		// from the Work queue projection, and the app dies while it mounts.
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue()).toEqual([]);
+		expect(
+			reopened.enqueueWork({
+				ticketIdentity: ticket.identity,
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ position: 0, ticketIdentity: ticket.identity }),
+		]);
+		reopened.close();
+
+		const db = new Database(path, { readonly: true });
+		expect(
+			(db.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		db.close();
+	});
+
+	test("a v14 file with a stale queue row opens to an empty queue", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		state.close();
+
+		downgradeQueueToTheAbandonedShape(path);
+		const db = new Database(path);
+		db.prepare(
+			"INSERT INTO work_queue(id, kind, ticket_identity, origin, choice_json, queue_order, created_at) " +
+				"VALUES ('abandoned-1', 'handoff', ?, 'open', '{}', 0, '2026-09-20T10:00:00Z')",
+		).run(ticket.identity);
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The abandoned row is not readable by the shipped queue: it is dropped,
+		// and the operator re-queues the start with the same key.
+		expect(reopened.workQueue()).toEqual([]);
+		expect(reopened.hasWorkItem(ticket.identity)).toBe(false);
+		reopened.close();
+	});
+
+	test("a v14 file with a sound queue keeps its waiting item", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		expect(
+			state.enqueueWork({
+				ticketIdentity: ticket.identity,
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		state.close();
+
+		// A file the shipping migration wrote claims 14 with the sound shape.
+		const db = new Database(path);
+		db.prepare("UPDATE schema_version SET version = 14").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ position: 0, ticketIdentity: ticket.identity }),
+		]);
+		reopened.close();
 	});
 
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {
@@ -2025,5 +2128,116 @@ describe("stored completion trace degradation", () => {
 		expect(readStoredLog(trace.path, trace.identity)).toEqual([
 			{ kind: "text", text: "stored wins" },
 		]);
+	});
+});
+
+describe("the work queue (ADR 0034)", () => {
+	const enqueue = (state: ReturnType<typeof openFactoryState>, identity: string) => {
+		const result = state.enqueueWork({
+			ticketIdentity: identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+
+	test("items enter in enqueue order, and the queue reports its depth and identities", () => {
+		const state = openFactoryState(":memory:");
+		// The depth is the projection's row count, the same number the Work
+		// section's header carries: a second count read off the table could
+		// disagree with the rows an operator sees when a damaged row drops out.
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.hasWorkItem("t1")).toBe(false);
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.workQueue()).toHaveLength(2);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
+		expect(state.hasWorkItem("t2")).toBe(true);
+	});
+
+	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		const refused = state.enqueueWork({
+			ticketIdentity: "t1",
+			origin: "restart",
+			choice,
+			previousMessage: "again",
+		});
+		expect(refused).toEqual({
+			ok: false,
+			reason: "ticket t1 already has a waiting queue item",
+		});
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1"]);
+	});
+
+	test("u and d move one place, and an item at an edge moves nowhere", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		enqueue(state, "t3");
+		// The front item cannot move up, the back item cannot move down.
+		expect(state.moveWorkItem("t1", "up")).toBe(false);
+		expect(state.moveWorkItem("t3", "down")).toBe(false);
+		// d takes the front item behind the middle one; the swap is atomic
+		// on the queue's primary key, so no step of it shares a position.
+		expect(state.moveWorkItem("t1", "down")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1", "t3"]);
+		expect(state.moveWorkItem("t1", "up")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t2", "t3"]);
+		// An unknown identity moves nowhere.
+		expect(state.moveWorkItem("t9", "up")).toBe(false);
+	});
+
+	test("the queue and its order survive the state file being closed and reopened", () => {
+		// The durability claim of #88 is a file-backed fact: an in-memory
+		// database cannot show it, so this walk closes the state and opens the
+		// same file again the way the next control-plane run does.
+		const path = statePath();
+		const state = openFactoryState(path);
+		for (const identity of ["t1", "t2", "t3"]) enqueue(state, identity);
+		// The operator puts the last ask at the front before the plane closes.
+		expect(state.moveWorkItem("t3", "up")).toBe(true);
+		expect(state.moveWorkItem("t3", "up")).toBe(true);
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t3", "t1", "t2"]);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		const items = reopened.workQueue();
+		expect(items.map((item) => item.ticketIdentity)).toEqual(["t3", "t1", "t2"]);
+		expect(items.map((item) => item.position)).toEqual([0, 1, 2]);
+		// Every fact the waiting start carried comes back: the origin the pickup
+		// re-checks, the choice the operator captured, and the message it routes.
+		expect(items[0]).toEqual(
+			expect.objectContaining({
+				ticketIdentity: "t3",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		);
+		expect(reopened.workQueue()).toHaveLength(3);
+		expect(reopened.hasWorkItem("t1")).toBe(true);
+		// The reopened queue still moves and still answers a cancel.
+		expect(reopened.moveWorkItem("t3", "down")).toBe(true);
+		expect(reopened.workQueue().map((item) => item.ticketIdentity)).toEqual(["t1", "t3", "t2"]);
+		reopened.close();
+	});
+
+	test("removing an item keeps the rest in order, and the ticket is free to wait again", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.removeWorkItem("t1")).toBe(true);
+		expect(state.removeWorkItem("t1")).toBe(false);
+		// The places repack: the surviving item holds the front of the
+		// queue, so the queue never shows a place it does not use.
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0]);
+		// The cancelled start may enqueue again for its ticket.
+		enqueue(state, "t1");
+		expect(state.workQueue().map((item) => item.ticketIdentity)).toEqual(["t2", "t1"]);
 	});
 });

@@ -44,17 +44,14 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | Consultation list and Agent view navigation, response gating, recovery, history, close, delete, and refresh use the shared catalogue, and Enter opens the recovery surface each broken or stuck state needs (ADR 0038) | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | Consultation close is key `w` in both Consultation modes (#80): a closed record refuses readably, a `missing` or a `failed` one closes directly, a live Agent stops behind the shared panel, a `closing` one opens the panel with its retry and force-close, and the Ticket section's `w` stays its own Close in each section's guide and bar | `test/controls.test.ts`, `test/consultation-frame.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Consultation detail reads the Agent's session record as its body (operator input, agent text, tool notes), capped, and keeps the Agent view and captured history as its fallbacks | `test/turn-log.test.ts`, `test/consultation-detail.test.ts`, `test/consultation-frame.test.ts` | Passed |
-| The Consultation-only keys `d` and `f` refuse in both Ticket base modes with the section's own words, claim the key so nothing else answers it, and the Ticket guide and bar omit both controls; the Consultation Delete stands in neither of the Work queue's modes, where `d` is the queue's own reorder and answers with its own refusal | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts` | Passed |
-| No refused key is hinted by the Action bar unless the Key guide names it, in every base mode (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
+| The Consultation-only keys `d` and `f` refuse in both Ticket base modes and in both Work queue modes with the section's own words, claim the key so nothing else answers it, and the guide and bar of each section that does not own them omit both controls | `test/controls.test.ts`, `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/main-view-frame.test.ts`, `test/work-queue-frame.test.ts` | Passed |
+| No refused key is hinted by the Action bar unless the Key guide names it, in every base mode of all three sections (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
+| The Work queue section dispatches its list, detail, reorder, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the Consultation section's `d` and `f` refused there in that section's words and named in neither the queue's guide nor its bar; the Section stays hidden while it is empty and collapsed, and the cursor crosses into it only while it stands | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a manual start asked at a full Parallel limit waits with its origin and captured choice (walked through the real decision modal), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat, the cancel line states only the removal the module measured (nothing claimed for a row its pickup had already taken), the module says nothing on the line for a row the operator removed after its run reached herdr, a picked-up route records its decision on the turn it came from through the one helper the direct route shares, the observation's automatic restart and automatic route skip a ticket the queue already waits for, a pickup of a restarted or routed item whose ticket took its seat in the race that skip misses cancels the item and names the start on the line, and the observation cycle runs the pickup before the open dispatch against the one seat count, in auto mode and in manual mode alike | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| The Work queue's list and its item detail dispatch from the catalogue: the row keys, `u` and `d` reorder and `Del` removal of the item under the cursor in both of the queue's modes, each with its stated refusal (no item selected, the item already first or last), and the detail's scroll answers where the facts overflow the pane | `test/work-queue-frame.test.ts`, `test/shared-control-architecture.test.ts`, `test/key-guide.test.ts`, `test/action-bar.test.ts` | Passed |
-| The queue's detail states the captured facts - the ticket, the origin, and the choice with its settings left to the agent - and a stored row the reader cannot name stays in view with its damage in place of a repaired start; the gallery holds both states and the empty queue | `test/work-queue-frame.test.ts`, `test/work-queue.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| One queue item per ticket (ADR 0034): the store refuses a second add of a ticket that already waits, and the handoff that reached it reports the refusal on the Message line with the queue's depth unchanged | `test/work-queue.test.ts`, `test/work-queue-frame.test.ts` | Passed |
-| Force-dispatch (issue #89, ADR 0034): Enter on a queue row starts the item over a full Parallel limit, re-runs every hard start check the pickup runs except the cap, and leaves the seat count over the limit until the work settles; a start that fails leaves the item and the queue with the start's own failure, and a claim the dispatch refuses leaves it with the pickup-style warning, the ticket keeping its state in both cases | `test/work-queue-frame.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the key, and the terminal walks above have not been re-run for it. |
-| The cursor crosses to and from the Work queue over a section the operator collapsed or the terminal cannot pay for, in both directions, and the Action bar's Move hint agrees with the key | `test/work-queue-frame.test.ts`, `test/main-view-frame.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the queue, and the terminal walks above have not been re-run for it. |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
@@ -78,9 +75,9 @@ Every check below runs in `bun test`, which is `bun run lint`,
 | Part | Version |
 | --- | --- |
 | OS | Arch Linux, kernel 7.2.5-3-omarchy |
-| Node | v26.8.1 (the pinned minimum is 26.4.0) |
+| Runtime | Bun 1.4.0 (the pinned minimum is 1.3.0, ADR 0035) |
 | Renderer | OpenTUI `@opentui/core` 0.5.11, `@opentui/react` 0.5.11 |
-| Test runner | `bun test`, Bun 1.4.0 |
+| Test runner | `bun:test` (Bun 1.4.0), run through `bun test --isolate` |
 | Multiplexer (tmux path) | tmux 3.7c |
 
 ## Required acceptance targets and their state
@@ -306,6 +303,62 @@ The terminal walks were not re-run on the changed bar and guide rows: they
 are recorded as not re-verified for this change, not as a pass. The
 screen-reader target remains unverified.
 
+## The Consultation-only keys in the Work queue (issue #85, ADR 0034)
+
+The Work queue's two modes joined the catalogue's shared base modes, and with
+them the Consultation section's `d` (Delete) and `f` (History) reached a queue
+cursor: in the Work queue detail `d` resolved to the Consultation's Delete and
+stated "only a closed Consultation can be deleted", a fact about a row the
+queue's cursor can never hold, and both queue modes listed `d Delete` in the
+Key guide's current-mode section beside the queue's own `d Queue down`.
+
+The ownership rule that issue #85 built for the Ticket section now covers every
+section that does not own a Consultation control: the marker reads the mode's
+section, not one section's name. In both Work queue modes `d` and `f` state
+"this control is available only in the Consultation section" and claim the key,
+and the queue's guide and Action bar name neither control. The queue's own `d`
+keeps its meaning: in its list the key stays Queue down, the refusal the mode
+states is the queue's own ("the item is last in the queue"), and a closed
+Consultation elsewhere steals nothing, because the ownership decides the
+refusal before the selected row does.
+
+The automatic suite covers the refusal, the guide omission, and the bar
+omission in both queue modes, and extends the catalogue-wide guard walk to all
+six base modes (`test/controls.test.ts`); the guide's current-mode rows, which
+name the queue's own `d Queue down` and neither Consultation row
+(`test/key-guide.test.ts`); and the frame walk that boots the real app with two
+waiting starts, presses `f` in the Work queue list and `d` in the Work queue
+detail, reads the refusal on the Message line, and compares the queue's rows,
+its order, its depth, its cursor, and its detail before and after each press,
+so the refusal is shown to change nothing (`test/work-queue-frame.test.ts`).
+
+The change touches no Action bar the operation images draw: the Work section's
+bar loses the two hints it never had the right to show, the Ticket and
+Consultation bars come out of it unchanged, and the Key guide is not
+screenshotted, so `test/screenshot-drift.test.ts` re-runs clean on the
+committed images. The terminal walks are not re-run for this change, and the
+screen-reader target remains unverified.
+
+## The Work queue's seat count on the skipped held-turn frame (issue #87, ADR 0034)
+
+The Parallel limit's combined count reaches every surface that shows it, and
+the held-turn frame's mode line is one of them: it reads `auto: on 2/3 paused`
+where it read `1/3` before a Consultation held a seat. That frame is one of the
+checks issue #103 skips (it fails in the full suite and passes in isolation), so
+the automated run does not exercise the edited number.
+
+The case was therefore run by hand once on this head, with the skip lifted and
+the file run alone: `bun test test/turn-end-cause-frame.test.ts --isolate`, one
+pass, 25 assertions, 0 fail, so the mode line showed the combined count with
+the held turn and the seeded Consultation both in it. That is a single manual
+measurement, not a suite result: the case stays skipped for issue #103, the
+full-suite run still does not exercise it, and the number carries no
+continuous guard until that skip goes away. The assertion change and this
+measurement are recorded here so the next contributor knows which part of the
+count the suite actually re-checks on every run (the active frames in
+`test/auto-mode.test.ts` and `test/parallel.test.ts`) and which part rests on
+one hand run.
+
 ## The Ticket section's Goto key (issue #82, ADR 0033)
 
 ADR 0033 makes key `g` a base-mode control of the Ticket section, in both
@@ -434,14 +487,14 @@ screen-reader target remains unverified.
 
 ## The Work queue's rows join the recovery rows (issue #88, ADR 0034)
 
-This PR's queue rows (`u Move up`, `d Move down`, `Del Remove`, and the
-queue's detail rows) and ADR 0038's `Enter Recovery` row now ride the same
-catalogue. The counts are re-measured on the merged catalogue from real
-frames, not computed: the guide holds 59 rows at the full width where the
-recovery row alone measured 55, its scroll ladder walks 40 steps to the
-bottom row `41-59/59`, and the narrow 60x12 case holds 83 rows where it
-held 79 (`test/key-guide.test.ts`). The queue's own guide entries, mode
-names, and refusals stand as recorded above.
+The queue's controls (the reorder pair, the removal, and the shared move and
+scroll rows its detail reuses) and ADR 0038's `Enter Recovery` row now ride
+the same catalogue. The counts are re-measured on this branch's merged
+catalogue from real frames, not computed: the guide holds 55 rows at the full
+width where PR #114 measured 54, its scroll ladder walks 36 steps to the
+bottom row `37-55/55`, and the narrow 60x12 case holds 79 rows where it held
+75 (`test/key-guide.test.ts`). The queue's own guide entries, mode names, and
+refusals stand as recorded above.
 
 ## The aligned control surface (issues #80–#85)
 
@@ -456,11 +509,10 @@ Consultation section (#84, ADR 0038), and the Consultation-only keys in the
 Ticket section learned to refuse in the section's own words (#85).
 
 The full automated suite passed in full on this branch: lint, typecheck, and
-the behavior suite, run through the package scripts, with 1555 pass, 13
-skip, 0 fail - re-measured on the merged catalogue after this branch rebased
-onto the Work queue's rows (issue #88), 38 more tests than this pass first
-measured (1517), and the 13 skips are the ones this record already holds as
-skipped. On the versions in the table below.
+the behavior suite, run through the package scripts, with 1554 pass, 13
+skip, 0 fail - re-measured on this branch's merged catalogue, 37 more tests
+than this pass first measured (1517), and the 13 skips are the ones this
+record already holds as skipped. On the versions in the table below.
 
 The gallery holds every state the alignment added or changed, drawn from the
 production modules, and `test/shared-gallery.test.ts` walks each one:
@@ -504,48 +556,8 @@ as a pass:
   mechanism, and the screen-reader path remains unverified, as recorded
   above. No screen-reader claim is made for the alignment.
 
-Measured on Arch Linux (kernel 7.2.5-3-omarchy), Bun 1.4.0, Node v26.8.1,
-OpenTUI `@opentui/core` 0.5.11 and `@opentui/react` 0.5.11, and tmux 3.7c.
-
-## Enter force-dispatches a Work queue item over the cap (issue #89, ADR 0034)
-
-Enter on a Work queue row is the force-dispatch: it starts the item now,
-even when the Parallel limit is full. The dispatch runs through the shared
-dispatch module the pickup runs, so every hard start check - the ticket
-still holds the state the item's origin requires, the source is healthy,
-the settings fit - re-runs, and only the cap is skipped. The seat count
-stands over the limit until the work settles, the way the mode line's
-`N/M` already counts the force-dispatched start against the held seat.
-
-A failure ends as a pickup failure with one difference the issue carries:
-the item leaves the queue. A start that fails a check leaves the queue
-with the start's own failure on the Message line, and a claim the dispatch
-refuses leaves it with the pickup-style warning that names what stood in
-the way. The ticket keeps its state and its own failure surface in both
-cases. The catalogue gates the key: a Handoff in flight refuses with the
-Ticket section's own words, an empty queue refuses with the queue's row
-keys' one reason, and a damaged stored row refuses before the dispatch is
-asked.
-
-The counts are re-measured on the merged catalogue from real frames, not
-computed: the guide holds 61 rows at the full width where the issue #88
-record measured 59, its scroll ladder walks 42 steps to the bottom row
-`43-61/61`, and the narrow 60x12 case holds 87 rows where it held 83
-(`test/key-guide.test.ts`). The force-dispatch's note flows onto its
-continuation rows at the widths the catalog wraps, the way every long note
-in the guide does.
-
-The gallery's force-dispatch example holds the bar's states - the hint
-available on an item, dimmed while a Handoff runs and on an empty queue -
-and the Message lines the refusals and the failure carry
-(`test/shared-gallery.test.ts`). The frame tests run the real app flow on
-faked external operations: the start over a full cap with the seat count
-standing over it, the start that fails its first external step, and the
-claim the dispatch refuses (`test/work-queue-frame.test.ts`).
-
-The terminal walks were not re-run for this key's Action bar and Key guide
-row: they are recorded as not re-verified for it, not as a pass. The
-screen-reader target remains unverified.
+Measured on Arch Linux (kernel 7.2.5-3-omarchy), Bun 1.4.0, OpenTUI
+`@opentui/core` 0.5.11 and `@opentui/react` 0.5.11, and tmux 3.7c.
 
 ## The native row-update corruption (OpenTUI, open as of 0.5.11)
 
@@ -596,4 +608,4 @@ recorded workaround for the drift class of OpenTUI issue 1187.
 
 This is recorded as an open upstream defect, not as a pass. The
 `bun run lint`, `bun run typecheck`, and `bun test` checks pass in full on
-0.5.11 (1555 tests, re-measured on the merged catalogue as of issue #88).
+0.5.11 (1554 pass, 13 skip, re-measured on this branch's merged catalogue).

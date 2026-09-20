@@ -16,6 +16,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
+import type { FactoryConfig } from "../src/config.ts";
+import { baseChoice } from "../src/handoff.ts";
 import type { Setup } from "./app-harness.ts";
 import {
 	actionBarRowOf,
@@ -27,6 +29,7 @@ import {
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
+	mouseClick,
 	openGuide,
 	openMessageView,
 	openPanel,
@@ -279,6 +282,117 @@ describe("the in-app Key guide", () => {
 		}
 	});
 
+	// The Work queue's list and detail modes are cataloged like every other
+	// base mode. This walks the guide from both queue modes: each names its own
+	// controls (the reorder pair, the cancel, the list return, the queue's own
+	// scroll reason), and no other section's controls reach its current-mode
+	// section. That is the Key-guide half of the Work queue row in the
+	// verification record: the catalogue dispatch and the guide's per-section
+	// key names, measured (ADR 0034).
+	test("names the Work queue modes, and keeps each section's keys in its own guide", async () => {
+		const state = freshState();
+		try {
+			// One waiting start: the guide reads the queue cursor through it.
+			const enqueued = state.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "open",
+				choice: baseChoice("pi", "live-worktree", "implement"),
+				previousMessage: "",
+			});
+			if (!enqueued.ok) throw new Error(enqueued.reason);
+			const runner = new FakeRunner();
+			const tickets = [issueTicket()];
+			const source = new FakeSource("issues", "github-issues", success(tickets));
+			// These frames read the waiting item, never a running start. A zero
+			// Parallel limit keeps the cap gate off, and the long poll interval holds
+			// the observation cycle back: at an unlimited cap `pickupWorkQueue` runs
+			// the whole queue, so a cycle that fired mid-test would empty the queue
+			// under the guide.
+			const zeroSeatConfig: FactoryConfig = {
+				...issuesConfig,
+				maxParallelAgents: 0,
+				agentPollIntervalSeconds: 60,
+			};
+			await withApp(
+				async (setup) => {
+					source.settle(success(tickets));
+					// The Work header stands with its count; it starts collapsed.
+					const header = await awaitFrame(
+						setup,
+						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						"the Work header",
+					);
+					expect(header).toContain("▸ Work");
+					// Expand the section: the click lands the cursor on the first row.
+					const workRow = rowsOf(header).findIndex((row) => /\bWork\b/.test(row));
+					await mouseClick(setup, 2, workRow);
+					const list = await awaitFrame(
+						setup,
+						(f) => f.includes("▾ Work") && f.includes("❯ Work queue"),
+						"the expanded Work section",
+					);
+					expect(list).toMatch(/\[open\]\s+Add a webhook retry policy/);
+
+					// The list-mode guide holds the queue's keys and none of the
+					// Ticket section's: the reorder pair and the cancel stand in the
+					// current mode, and no Hand off or Decide row reaches it.
+					const listGuide = rowsOf(await openGuide(setup, "?", "Key guide - Work queue list"));
+					const listIndexOf = (needle: string) =>
+						listGuide.findIndex((row) => norm(row).includes(needle));
+					const listBetween = (top: number, bottom: number) =>
+						listGuide.slice(top + 1, bottom).map(contentOf);
+					const listCurrent = listBetween(
+						listIndexOf("Current interaction mode"),
+						listIndexOf("Global controls"),
+					);
+					expect(listCurrent).toContain("u Queue up - the item is first in the queue");
+					expect(listCurrent).toContain("d Queue down - the item is last in the queue");
+					expect(listCurrent).toContain("Delete Remove");
+					expect(listCurrent.some((row) => row.includes("Hand off"))).toBe(false);
+					expect(listCurrent.some((row) => row.includes("Decide"))).toBe(false);
+					// The Consultation section's `d Delete` and `f History` run on
+					// the shared base modes, so they reach a queue mode as a key the
+					// queue can never dispatch. Each section's guide names only the
+					// keys it owns (issue #85, ADR 0034): the queue's `d Queue down`
+					// stands, and the other section's two rows stay out.
+					expect(listCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
+					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
+					await closeOverlay(setup, "Key guide", "the guide to close");
+
+					// The detail-mode guide: the queue's scroll carries its own
+					// reason, the pane return is named for the queue, and the
+					// list-mode keys (reorder, cancel) leave this mode's section.
+					setup.mockInput.pressKey("l");
+					const detailGuide = rowsOf(await openGuide(setup, "?", "Key guide - Work queue detail"));
+					const detailIndexOf = (needle: string) =>
+						detailGuide.findIndex((row) => norm(row).includes(needle));
+					const detailCurrent = detailGuide
+						.slice(detailIndexOf("Current interaction mode") + 1, detailIndexOf("Global controls"))
+						.map(contentOf);
+					expect(detailCurrent).toContain(
+						"↑↓/jk Scroll - the Work queue detail has nowhere to scroll",
+					);
+					expect(detailCurrent).toContain("←/h List");
+					expect(detailCurrent.some((row) => row.includes("Queue up"))).toBe(false);
+					expect(detailCurrent.some((row) => row.includes("Remove"))).toBe(false);
+					// The detail pane holds no queue key of its own for `d` or `f`,
+					// so the Consultation section's two refuse there and appear in
+					// this guide nowhere: the row that would name the key the mode
+					// cannot dispatch is the leak issue #85 closed for the Ticket
+					// section, closed here for the queue.
+					expect(detailCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
+					expect(detailCurrent.some((row) => row.startsWith("f History"))).toBe(false);
+					await closeOverlay(setup, "Key guide", "the guide to close");
+				},
+				WIDTH,
+				34,
+				{ config: zeroSeatConfig, state, sources: [source], runner },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("lists the sections in order, with every control once and all valid aliases", async () => {
 		const runner = new FakeRunner();
 		await withApp(
@@ -351,8 +465,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 42 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/61`,
+				const ladder = Array.from({ length: 36 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/55`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -390,19 +504,8 @@ describe("the in-app Key guide", () => {
 				]);
 				expect(shown.slice(otherStart + 1)).toEqual([
 					"↑↓/jk Scroll",
-					// The Work queue's row keys, catalogued before the section
-					// returns: the queue's reorder and removal, and the return to
-					// its list. The Consultation list's return row renders the same
-					// cells as the queue's, and the walk keeps the first of the two.
-					"←/h List",
-					"u Move up",
-					"d Move down",
-					"Del Remove",
-					// The note flows onto its continuation row at this width, the
-					// way every long note in the catalog does.
-					"Enter Force-dispatch - starts the item over a full Parallel limit; a failure leaves",
-					"the queue",
 					"←/h Tickets",
+					"←/h List",
 					"←→/hl Change",
 					"Type Edit",
 					"Backspace Delete",
@@ -764,81 +867,28 @@ describe("the in-app Key guide", () => {
 		}
 	});
 
-	test("names the force-dispatch in the Work queue's guide, with its note", async () => {
-		const state = freshState();
-		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
-		try {
-			// One waiting item: the force-dispatch is available on it, and the
-			// guide names it in the queue's own mode with what Enter does there.
-			const item = state.enqueueWorkQueueItem({
-				ticketIdentity: "github:github.com:I_5",
-				origin: "open",
-				choice: {
-					agentType: "pi",
-					environment: "live-worktree",
-					taskType: "implement",
-					model: "",
-					thinking: "",
-					contextWindow: "",
-				},
-			});
-			if (item === null) throw new Error("the first enqueue of a fresh ticket cannot be refused");
-			await withApp(
-				async (setup) => {
-					// The queue is the third section: the open ticket crosses the
-					// empty Consultation section into the queue's item.
-					await press(setup, "j", "the cursor over the Consultation section", (f) =>
-						f.includes("❯ Consultations"),
-					);
-					await press(setup, "j", "the cursor in the Work queue", (f) =>
-						f.includes("❯ Work queue"),
-					);
-					await openGuide(setup, "?", "Key guide - Work queue list");
-					const rows = await allGuideRows(setup);
-					const rowOf = (needle: string) => rows.find((row) => norm(row).includes(needle)) ?? "";
-					// The row sits in the queue's own section, and its note says
-					// what Enter does: the start over the cap, and the failure's
-					// end. The note may wrap across rows, so the check reads the
-					// joined catalogue, not one row.
-					expect(rowOf("Enter Force-dispatch")).not.toBe("");
-					expect(
-						rows
-							.map(norm)
-							.join(" ")
-							.includes("starts the item over a full Parallel limit; a failure leaves the queue"),
-					).toBe(true);
-				},
-				WIDTH,
-				HEIGHT,
-				{ config: issuesConfig, state, sources: [source] },
-			);
-		} finally {
-			state.close();
-		}
-	});
-
 	test("scrolls with a range and no-ops at the boundaries", async () => {
 		const runner = new FakeRunner();
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/61");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/55");
 
-				await scrollGuide(setup, "j", "2-20/61");
-				await scrollGuide(setup, "j", "3-21/61");
-				await scrollGuide(setup, "k", "2-20/61");
-				await scrollGuide(setup, "k", "1-19/61");
+				await scrollGuide(setup, "j", "2-20/55");
+				await scrollGuide(setup, "j", "3-21/55");
+				await scrollGuide(setup, "k", "2-20/55");
+				await scrollGuide(setup, "k", "1-19/55");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/61");
+				expect(await settle(setup, 500)).toContain("1-19/55");
 				// Walk to the bottom, one step per frame.
-				const ladder = Array.from({ length: 42 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/61`,
+				const ladder = Array.from({ length: 36 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/55`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("43-61/61");
+				expect(await settle(setup, 500)).toContain("37-55/55");
 			},
 			WIDTH,
 			HEIGHT,
@@ -941,7 +991,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/61"),
+					(f) => actionBarRowOf(f).includes("2-20/55"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -1044,7 +1094,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/61");
+				expect(bar).toContain("1-19/55");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -1060,7 +1110,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/61");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/55");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -1069,16 +1119,16 @@ describe("the in-app Key guide", () => {
 				setup.resize(60, 12);
 				let frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				// The selector's note, the Close reason, the Recovery note, and
-				// the queue's rows wrap on this narrow terminal, so the guide
-				// runs longer than at the full width.
-				expect(actionBarRowOf(frame)).toContain("1-4/87");
+				// The selector's note, the Close reason, and the Recovery note wrap
+				// on this narrow terminal, so the guide runs longer than at the full
+				// width.
+				expect(actionBarRowOf(frame)).toContain("1-4/79");
 
-				await scrollGuide(setup, "j", "2-5/87");
+				await scrollGuide(setup, "j", "2-5/79");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/61");
+				expect(actionBarRowOf(frame)).toContain("2-20/55");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -1096,7 +1146,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/61");
+				expect(actionBarRowOf(frame)).toContain("2-20/55");
 			},
 			WIDTH,
 			HEIGHT,

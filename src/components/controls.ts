@@ -23,8 +23,9 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
-	| "work-list"
-	| "work-detail"
+	/** The Work queue's list and detail panes (ADR 0034). */
+	| "work-queue-list"
+	| "work-queue-detail"
 	| "override-list"
 	| "override-model"
 	| "override-text"
@@ -52,8 +53,8 @@ type ControlScope =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
-	| "work-list"
-	| "work-detail"
+	| "work-queue-list"
+	| "work-queue-detail"
 	| "override"
 	| "modal"
 	| "utility"
@@ -81,8 +82,8 @@ type ControlKey =
 	| "f"
 	| "g"
 	| "x"
-	| "d"
 	| "u"
+	| "d"
 	| "w"
 	| "delete"
 	| "f1"
@@ -130,11 +131,11 @@ export interface ControlContext {
 	selectedTicket?: Ticket;
 	/** The Consultation the base panes point at, if the list holds one. */
 	selectedConsultation?: Consultation;
-	/** The Work queue item the base panes point at, if the queue holds one. */
-	selectedWorkQueueItem?: WorkQueueItem;
-	/** The selected Work queue item's position in the shared order, 0-based. */
-	workQueueIndex?: number;
-	/** The Work queue's depth: how many items wait for a seat. */
+	/**
+	 * The Work queue's item under the cursor, with the queue's depth beside it
+	 * (ADR 0034). The item's own position is the queue order's.
+	 */
+	selectedWorkQueueItem?: WorkQueueItem | null;
 	workQueueDepth?: number;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
@@ -251,13 +252,14 @@ export interface ControlDefinition {
 	/**
 	 * The control belongs to the Consultation section alone (issue #85).
 	 *
-	 * Stated once here, and read by every place the section shows: the Ticket
-	 * base modes state the section refusal for the key (availabilityFor), the
-	 * Ticket guide omits the control (omitFromTicketSection), and the Ticket
-	 * bar omits its hint (actionBarControls). A future Consultation-only key
-	 * cannot refuse in the Ticket section and still show up in its guide or
-	 * bar: the three rules read this one marker, and the catalogue guard
-	 * test fails if a refused key is hinted where the guide does not name it.
+	 * Stated once here, and read by every place the section shows: every other
+	 * section's modes state the section refusal for the key (availabilityFor),
+	 * those sections' guides omit the control (omitFromOtherSection), and their
+	 * bars omit its hint (actionBarControls). A future Consultation-only key
+	 * cannot refuse in another section and still show up in that section's
+	 * guide or bar: the three rules read this one marker, and the catalogue
+	 * guard test fails if a refused key is hinted where the guide does not name
+	 * it.
 	 */
 	consultationSectionOnly?: true;
 	/** Larger values survive narrow Action bar packing first. */
@@ -369,16 +371,29 @@ function interactionExitLabel(exitKey: string | undefined): string {
 const LIVE_VIEW_NOTE = "opens the Live view on an in-flight Ticket";
 const consultationMode = (mode: InteractionMode): boolean =>
 	mode === "consultation-list" || mode === "consultation-detail";
+const workQueueMode = (mode: InteractionMode): boolean =>
+	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
+/**
+ * The base modes of a section other than the Consultation section.
+ *
+ * The plane has three sections that share one list surface, and a control one
+ * section owns answers nothing in the others: the key still resolves there and
+ * states the owning section's refusal, but the guide and the Action bar of a
+ * section that does not own it name it nowhere (issue #85, ADR 0034).
+ */
+const otherSectionMode = (mode: InteractionMode): boolean =>
+	ticketBaseMode(mode) || workQueueMode(mode);
 /** The Ticket section's refusal words, mirrored by ticketOnly. */
 const TICKET_ONLY = "this control is available only in the Ticket section";
 /**
  * The Consultation section's refusal words, the mirror of TICKET_ONLY.
  *
  * availabilityFor states them for every Consultation-section control in the
- * Ticket base modes, so the key the operator already knows from the other
- * section refuses readably instead of doing nothing at all.
+ * Ticket base modes and in the Work queue's two, so the key the operator
+ * already knows from the owning section refuses readably instead of doing
+ * nothing at all.
  */
 const CONSULTATION_ONLY = "this control is available only in the Consultation section";
 /**
@@ -389,51 +404,6 @@ const CONSULTATION_ONLY = "this control is available only in the Consultation se
  */
 const ticketOnly = (context: ControlContext): ControlAvailability =>
 	ticketBaseMode(context.mode) ? available() : unavailable(TICKET_ONLY);
-const workQueueMode = (mode: InteractionMode): boolean =>
-	mode === "work-list" || mode === "work-detail";
-/**
- * Why a Work queue row control answers nothing (ADR 0034, issue #88).
- *
- * The queue's reorder and removal run on the item under the cursor, whatever
- * pane the focus holds, so both of the queue's modes dispatch them. An empty
- * queue refuses the key with the one reason the operator can act on.
- */
-const workQueueItem = (context: ControlContext): ControlAvailability =>
-	context.selectedWorkQueueItem !== undefined
-		? available()
-		: unavailable("no Work queue item is selected");
-/**
- * Why Enter answers a Work queue item with the force-dispatch (issue #89).
- *
- * The force-dispatch is the queue's only meaning of Enter, and it starts the
- * item now, over a full Parallel limit: every hard start check the pickup
- * runs still runs, only the cap is skipped. A Handoff already in flight holds
- * the shared environment seat, and the key refuses rather than queue the item
- * behind it, the way the Ticket section's Hand off refuses the same fact. An
- * empty queue refuses with the one reason the operator can act on, like the
- * queue's other row keys.
- */
-const workForceDispatch = (context: ControlContext): ControlAvailability => {
-	if (context.handoffActive) return unavailable("a Handoff is active");
-	return workQueueItem(context);
-};
-/** What the force-dispatch does, for the guide's current section. */
-const FORCE_DISPATCH_NOTE =
-	"starts the item over a full Parallel limit; a failure leaves the queue";
-/** Why a queue reorder refuses: no item, or the item is at the edge asked for. */
-const workQueueMove =
-	(direction: -1 | 1) =>
-	(context: ControlContext): ControlAvailability => {
-		if (context.selectedWorkQueueItem === undefined)
-			return unavailable("no Work queue item is selected");
-		const index = context.workQueueIndex ?? 0;
-		const depth = context.workQueueDepth ?? 1;
-		if (direction === -1 && index === 0)
-			return unavailable("the item is already first in the Work queue");
-		if (direction === 1 && index >= depth - 1)
-			return unavailable("the item is already last in the Work queue");
-		return available();
-	};
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -444,7 +414,7 @@ const listMove = (context: ControlContext): ControlAvailability =>
 				consultationMode(context.mode)
 					? "the Consultation list has nowhere to move"
 					: workQueueMode(context.mode)
-						? "the Work queue list has nowhere to move"
+						? "the Work queue has nowhere to move"
 						: "the Ticket list has nowhere to move",
 			);
 const detailScroll = (context: ControlContext): ControlAvailability =>
@@ -453,10 +423,27 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				context.mode === "consultation-detail"
 					? "the Consultation detail has nowhere to scroll"
-					: context.mode === "work-detail"
+					: workQueueMode(context.mode)
 						? "the Work queue detail has nowhere to scroll"
 						: "the Ticket detail has nowhere to scroll",
 			);
+const queueMove =
+	(direction: "up" | "down") =>
+	(context: ControlContext): ControlAvailability => {
+		const item = context.selectedWorkQueueItem;
+		if (item === null || item === undefined)
+			return unavailable("no queue item is under the cursor");
+		const depth = context.workQueueDepth ?? 0;
+		if (direction === "up" && item.position > 0) return available();
+		if (direction === "down" && item.position < depth - 1) return available();
+		return unavailable(
+			direction === "up" ? "the item is first in the queue" : "the item is last in the queue",
+		);
+	};
+const queueRemove = (context: ControlContext): ControlAvailability =>
+	context.selectedWorkQueueItem !== null && context.selectedWorkQueueItem !== undefined
+		? available()
+		: unavailable("no queue item is under the cursor");
 const refresh = (context: ControlContext): ControlAvailability => {
 	if (consultationMode(context.mode))
 		return context.consultationRefreshAvailable === true
@@ -597,18 +584,8 @@ const priorityEligibility = (context: ControlContext): ControlAvailability => {
 
 const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
-/** The Work queue's own modes (ADR 0034, issue #88): its list and its item detail. */
-const workQueueModes = ["work-list", "work-detail"] as const;
-/**
- * The modes one control of the Consultation section answers: the two base
- * sections' panes, never the Work queue's. On the queue's rows `d` is the
- * item's own Move down, and a Consultation control declared in the queue's
- * modes could run against a Consultation the cursor cannot even see (issue
- * #88 review); in the Ticket section the key still resolves and refuses, in
- * the section's own words.
- */
-const consultationSectionModes = [...ticketBaseModes, ...consultationBaseModes] as const;
-const baseModes = [...consultationSectionModes, ...workQueueModes] as const;
+const workQueueBaseModes = ["work-queue-list", "work-queue-detail"] as const;
+const baseModes = [...ticketBaseModes, ...consultationBaseModes, ...workQueueBaseModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
 /**
  * The modes one shared form surface runs, one per slot kind.
@@ -707,7 +684,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 					? ["up", "down", "j", "k", "tab"]
 					: mode === "consultation-list"
 						? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
-						: mode === "work-list"
+						: mode === "work-queue-list"
 							? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
 							: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
@@ -717,7 +694,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [
 			"ticket-list",
 			"consultation-list",
-			"work-list",
+			"work-queue-list",
 			"override-list",
 			"override-model",
 			"override-text",
@@ -732,7 +709,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-list",
 		actionBar: true,
 		priority: 75,
-		modes: ["ticket-list", "consultation-list", "work-list"],
+		modes: ["ticket-list", "consultation-list", "work-queue-list"],
 		availability: available,
 	},
 	{
@@ -743,71 +720,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-detail",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-detail", "consultation-detail", "work-detail"],
+		modes: ["ticket-detail", "consultation-detail", "work-queue-detail"],
 		availability: detailScroll,
-	},
-	// The Work queue's row keys (ADR 0034, issue #88): the reorder and the
-	// removal of the item under the cursor, whatever pane the focus holds.
-	{
-		id: "work-list",
-		label: "List",
-		keys: () => ["left", "h"],
-		keyLabel: "←/h",
-		scope: "work-detail",
-		actionBar: true,
-		priority: 76,
-		modes: ["work-detail"],
-		availability: available,
-	},
-	{
-		id: "work-move-up",
-		label: "Move up",
-		keys: () => ["u"],
-		keyLabel: "u",
-		scope: "work-list",
-		actionBar: true,
-		priority: 74,
-		modes: [...workQueueModes],
-		availability: workQueueMove(-1),
-	},
-	{
-		id: "work-move-down",
-		label: "Move down",
-		keys: () => ["d"],
-		keyLabel: "d",
-		scope: "work-list",
-		actionBar: true,
-		priority: 73,
-		modes: [...workQueueModes],
-		availability: workQueueMove(1),
-	},
-	{
-		id: "work-remove",
-		label: "Remove",
-		keys: () => ["delete"],
-		keyLabel: "Del",
-		scope: "work-list",
-		actionBar: true,
-		priority: 72,
-		modes: [...workQueueModes],
-		availability: workQueueItem,
-	},
-	{
-		id: "work-force-dispatch",
-		label: "Force-dispatch",
-		// Enter on a queue row force-dispatches the item under the cursor,
-		// whatever pane the focus holds: it starts now, over a full Parallel
-		// limit, the way the queue's other row keys run from either pane.
-		keys: () => ["return"],
-		keyLabel: "Enter",
-		scope: "work-list",
-		actionBar: true,
-		// Below the queue's row keys, at the primary-action rung the other
-		// sections give their Enter meaning: the bar's packing order stays total.
-		priority: 70,
-		modes: [...workQueueModes],
-		availability: workForceDispatch,
-		guideNote: FORCE_DISPATCH_NOTE,
 	},
 	{
 		id: "tickets",
@@ -831,6 +745,19 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 75,
 		modes: ["consultation-detail"],
+		availability: available,
+	},
+	{
+		// The same pane navigation, named for the section that owns it. Left
+		// returns to the Work queue's list (ADR 0034).
+		id: "queue-list",
+		label: "List",
+		keys: () => ["left", "h"],
+		keyLabel: "←/h",
+		scope: "work-queue-detail",
+		actionBar: true,
+		priority: 75,
+		modes: ["work-queue-detail"],
 		availability: available,
 	},
 	{
@@ -969,7 +896,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "section-toggle",
 		label: "Section",
-		// `x` collapses the section the cursor is in, or expands it back. Both
+		// `x` collapses the section the cursor is in, or expands it back. The
 		// sections stay visible as long as the frame can hold them, so the
 		// toggle is a matter of room, not of access.
 		keys: () => ["x"],
@@ -980,6 +907,43 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...baseModes],
 		availability: available,
 		guideNote: SECTION_TOGGLE_NOTE,
+	},
+	{
+		// The queue's own keys (ADR 0034): `u` and `d` move the item under the
+		// cursor in the queue, and Delete cancels the item's waiting start.
+		// Reordering never changes an item's captured choice, and cancelling
+		// leaves the ticket in the state it keeps while it waits.
+		id: "queue-up",
+		label: "Queue up",
+		keys: () => ["u"],
+		keyLabel: "u",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 60,
+		modes: ["work-queue-list"],
+		availability: queueMove("up"),
+	},
+	{
+		id: "queue-down",
+		label: "Queue down",
+		keys: () => ["d"],
+		keyLabel: "d",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 60,
+		modes: ["work-queue-list"],
+		availability: queueMove("down"),
+	},
+	{
+		id: "queue-remove",
+		label: "Remove",
+		keys: () => ["delete"],
+		keyLabel: "Delete",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 55,
+		modes: ["work-queue-list"],
+		availability: queueRemove,
 	},
 	{
 		id: "launch",
@@ -1031,7 +995,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
-		modes: [...consultationSectionModes],
+		modes: [...baseModes],
 		availability: consultationDelete,
 		// A Consultation-section control: in the Ticket section the key states
 		// the section refusal, and the Ticket guide and bar omit the control.
@@ -1330,7 +1294,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Message",
 		// `m` opens the Message view only from the base panes. F2 is the
 		// alias in every interaction mode, so text input keeps its `m`.
-		keys: (mode) => (ticketBaseMode(mode) || consultationMode(mode) ? ["m", "f2"] : ["f2"]),
+		keys: (mode) =>
+			ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode) ? ["m", "f2"] : ["f2"],
 		keyLabel: "m/F2",
 		scope: "global",
 		actionBar: true,
@@ -1516,7 +1481,7 @@ export function actionBarControls(
 	return controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
-			!omitFromTicketSection(mode, control) &&
+			!omitFromOtherSection(mode, control) &&
 			isReachableInMode(mode, control, context) &&
 			(control.showInBar?.(context) ?? true),
 	);
@@ -1583,7 +1548,6 @@ const KEY_NAMES: Record<string, string> = {
 	f: "f",
 	x: "x",
 	d: "d",
-	u: "u",
 	r: "r",
 	a: "a",
 	m: "m",
@@ -1664,41 +1628,50 @@ export function availabilityFor(
 	control: ControlDefinition,
 	context: ControlContext,
 ): ControlAvailability {
-	// A Consultation-section control states the section refusal in the Ticket
-	// base modes. The marker is the single place the ownership is written, so
-	// the dispatch, the guide, and the bar all read the same words.
-	if (control.consultationSectionOnly === true && ticketBaseMode(context.mode))
+	// A Consultation-section control states the section refusal in every other
+	// section's modes: the Ticket section and the Work queue both answer the key
+	// with the owning section's words. The marker is the single place the
+	// ownership is written, so the dispatch, the guide, and the bar all read the
+	// same words.
+	if (control.consultationSectionOnly === true && otherSectionMode(context.mode))
 		return unavailable(CONSULTATION_ONLY);
 	return control.availability(context);
 }
 
 /** Ticket-section controls have no useful meaning in a Consultation guide. */
-function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefinition): boolean {
-	return (
+function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boolean {
+	if (
 		consultationMode(mode) &&
 		control.scope !== "global" &&
 		(control.scope === "control-plane" ||
 			control.scope === "ticket-list" ||
-			control.scope === "ticket-detail" ||
-			control.scope === "work-list" ||
-			control.scope === "work-detail") &&
+			control.scope === "ticket-detail") &&
 		!control.modes.some(consultationMode)
+	)
+		return true;
+	// The Work queue's own keys stay out of the other sections' guides
+	// (ADR 0034): each section's guide names the keys it dispatches, and the
+	// queue's reorder, cancel, and list-focus keys belong to the queue alone.
+	return (
+		!workQueueMode(mode) &&
+		(control.scope === "work-queue-list" || control.scope === "work-queue-detail")
 	);
 }
 
 /**
- * Whether the Ticket section omits a Consultation-section control from its
- * guide and its bar.
+ * Whether a section other than the Consultation's omits a Consultation-section
+ * control from its guide and its bar.
  *
  * Delete and History keep their catalog place in the Consultation section
- * alone (issue #85): the key still resolves in the Ticket section and
- * refuses there, in the catalogue's words, but the section that does not
- * own the control names it nowhere, and the bar hints no key its guide
- * omits. The rule reads the control's own section marker, so a future
- * Consultation-only key is omitted from the same two places at once.
+ * alone (issue #85): the key still resolves in the Ticket section and in the
+ * Work queue and refuses there, in the catalogue's words, but the section that
+ * does not own the control names it nowhere, and the bar hints no key its
+ * guide omits. The rule reads the control's own section marker, so a future
+ * Consultation-only key is omitted from the same two places at once, in every
+ * other section (ADR 0034 widened the base modes with the Work queue's two).
  */
-function omitFromTicketSection(mode: InteractionMode, control: ControlDefinition): boolean {
-	return ticketBaseMode(mode) && control.consultationSectionOnly === true;
+function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
+	return otherSectionMode(mode) && control.consultationSectionOnly === true;
 }
 
 /**
@@ -1711,8 +1684,9 @@ function omitFromTicketSection(mode: InteractionMode, control: ControlDefinition
  * another control outright, as both utility overlays take F1 and ?, is not a
  * control of this mode, so neither the bar nor the guide may name it. The one
  * exception is a key that carries only the other section's refusal: a
- * Consultation-section control refuses in the Ticket base modes, and the
- * Ticket section names it in neither its guide nor its bar (issue #85).
+ * Consultation-section control refuses in the Ticket base modes and in the
+ * Work queue's two, and those sections name it in neither their guide nor
+ * their bar (issue #85, ADR 0034).
  */
 function isCataloguedInMode(
 	mode: InteractionMode,
@@ -1743,7 +1717,7 @@ export function guideControls(context: ControlContext): Array<{
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
-			!omitFromTicketSection(mode, control) &&
+			!omitFromOtherSection(mode, control) &&
 			isCataloguedInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
@@ -1752,8 +1726,8 @@ export function guideControls(context: ControlContext): Array<{
 			(control) =>
 				!seen.has(control.id) &&
 				control.guideOnly !== true &&
-				!omitFromConsultationGuide(mode, control) &&
-				!omitFromTicketSection(mode, control) &&
+				!omitFromGuide(mode, control) &&
+				!omitFromOtherSection(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
 		).map((control) => {
@@ -1785,9 +1759,9 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Consultation list";
 		case "consultation-detail":
 			return "Consultation detail";
-		case "work-list":
+		case "work-queue-list":
 			return "Work queue list";
-		case "work-detail":
+		case "work-queue-detail":
 			return "Work queue detail";
 		case "override-list":
 			return "Override list row";
@@ -1831,10 +1805,12 @@ function displayKeyLabel(
 		// modes only F1 opens the guide.
 		if (fieldModes.includes(mode)) return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
-		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "F1/?" : "?";
+		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+			return includeAllAliases ? "F1/?" : "?";
 	}
 	if (control.id === "message") {
-		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "m/F2" : "m";
+		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+			return includeAllAliases ? "m/F2" : "m";
 		return "F2";
 	}
 	return control.keyLabel;

@@ -13,7 +13,7 @@ import {
 	guideControls,
 } from "../src/components/controls.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
-import type { Consultation, WorkQueueItem } from "../src/state.ts";
+import type { Consultation } from "../src/state.ts";
 
 const values: Omit<ControlContext, "mode"> = {
 	listCanMove: true,
@@ -26,6 +26,20 @@ const values: Omit<ControlContext, "mode"> = {
 };
 
 const consultationWithPane = { paneId: "pane-1" } as unknown as Consultation;
+
+/**
+ * The same context with one item under the Work queue's cursor, so the two
+ * queue modes hold a real row to move, remove, and read the refusal against.
+ */
+const queueValues: Omit<ControlContext, "mode"> = {
+	...values,
+	selectedWorkQueueItem: {
+		ticketIdentity: "github:github.com:I_5",
+		origin: "open",
+		position: 0,
+	} as unknown as ControlContext["selectedWorkQueueItem"],
+	workQueueDepth: 2,
+};
 
 const runningTicketWithPane = {
 	state: "running",
@@ -118,85 +132,22 @@ describe("the shared control catalogue", () => {
 		expect(availabilityFor(closedHistory, closed).available).toBe(true);
 	});
 
-	test("the Consultation Delete never reaches the Work queue's modes", () => {
-		// The queue's `d` is its own Move down, whatever the Consultation
-		// section's selection stands at. A Consultation control declared in
-		// the queue's modes could delete a Consultation the cursor cannot see
-		// (issue #88 review), so the catalogue keeps the two apart.
-		for (const mode of ["work-list", "work-detail"] as const) {
-			expect(controlsForMode(mode).map((control) => control.id)).not.toContain(
-				"consultation-delete",
-			);
-			const queueValues = {
-				...values,
-				selectedConsultation: { state: "closed" } as unknown as Consultation,
-				selectedWorkQueueItem: { id: "item-1" } as unknown as WorkQueueItem,
-				workQueueDepth: 2,
-			};
-			const queueContext = contextFor(mode, { ...queueValues, workQueueIndex: 0 });
-			expect(controlForKey({ name: "d" }, queueContext)?.id).toBe("work-move-down");
-			expect(availabilityFor(controlById("work-move-down"), queueContext).available).toBe(true);
-			// At the last row the key answers with the queue's own refusal, not
-			// with the Consultation's words.
-			const lastContext = contextFor(mode, { ...queueValues, workQueueIndex: 1 });
-			const refused = controlForKey({ name: "d" }, lastContext);
-			expect(refused?.id).toBe("work-move-down");
-			if (refused === undefined) throw new Error("the queue lost its Move down");
-			expect(availabilityFor(refused, lastContext)).toEqual({
-				available: false,
-				reason: "the item is already last in the Work queue",
-			});
-		}
-	});
-
-	test("Enter is the force-dispatch in both Work queue panes, and it keeps its refusals", () => {
-		// The force-dispatch (issue #89) is the queue's only meaning of Enter,
-		// from either pane. It refuses while a Handoff holds the environment
-		// seat, the way the Ticket section's Hand off does, and on an empty
-		// queue it carries the queue's row keys' one reason.
-		for (const mode of ["work-list", "work-detail"] as const) {
-			const withItem = contextFor(mode, {
-				...values,
-				selectedWorkQueueItem: { id: "item-1" } as unknown as WorkQueueItem,
-				workQueueIndex: 0,
-				workQueueDepth: 1,
-			});
-			const control = controlForKey({ name: "return" }, withItem);
-			expect(control?.id).toBe("work-force-dispatch");
-			if (control === undefined) throw new Error("the queue lost its force-dispatch");
-			expect(availabilityFor(control, withItem)).toEqual({ available: true });
-			const busy = contextFor(mode, { ...withItem, handoffActive: true });
-			expect(availabilityFor(control, busy)).toEqual({
-				available: false,
-				reason: "a Handoff is active",
-			});
-			const empty = contextFor(mode, values);
-			expect(availabilityFor(control, empty)).toEqual({
-				available: false,
-				reason: "no Work queue item is selected",
-			});
-			// The guide names the key in the queue's own section with its note,
-			// whatever the item's facts run.
-			const entry = guideControls(withItem).find(
-				({ control }) => control.id === "work-force-dispatch",
-			);
-			expect(entry?.group).toBe("Current interaction mode");
-		}
-	});
-
 	test("a refused key is never hinted by the bar unless the guide names it, in every base mode", () => {
 		// The guard that keeps the catalogue's display rules in step: a control
 		// the mode dispatches a key for is either available, named in the guide
 		// with its reason, or omitted from the guide and the bar together. A
-		// future Consultation-only key that refuses in the Ticket section and
-		// still shows up in its bar fails here.
+		// future Consultation-only key that refuses in another section and
+		// still shows up in that section's bar fails here. The walk covers all
+		// six base modes, so the Work queue's two answer to it too (ADR 0034).
 		for (const mode of [
 			"ticket-list",
 			"ticket-detail",
 			"consultation-list",
 			"consultation-detail",
+			"work-queue-list",
+			"work-queue-detail",
 		] as const) {
-			const context = contextFor(mode, values);
+			const context = contextFor(mode, queueValues);
 			const named = new Set(guideControls(context).map(({ control }) => control.id));
 			const hinted = new Set(actionBarControls(mode, context).map((control) => control.id));
 			for (const control of controlsForMode(mode)) {
@@ -223,6 +174,58 @@ describe("the shared control catalogue", () => {
 				);
 			}
 		}
+	});
+
+	// The Work queue shares the list surface with the other two sections, so the
+	// Consultation section's Delete and History reach its modes by way of the
+	// common base modes. They refuse there in the owning section's words, and
+	// the queue's guide and bar name them nowhere: each section's guide names
+	// the keys it dispatches (issue #85, ADR 0034).
+	test("d and f refuse in both Work queue modes, and its guide and bar omit them", () => {
+		for (const mode of ["work-queue-list", "work-queue-detail"] as const) {
+			const context = contextFor(mode, queueValues);
+			const historyControl = controlForKey({ name: "f" }, context);
+			expect(historyControl?.id).toBe("history");
+			if (historyControl === undefined)
+				throw new Error("History is missing from the Work queue modes");
+			expect(availabilityFor(historyControl, context)).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
+			// In the queue list `d` is the queue's own Queue down, and a closed
+			// Consultation elsewhere cannot steal it: the queue's refusal stands.
+			// In the queue detail no queue key answers `d`, so the Consultation's
+			// Delete resolves there and states the section refusal, not its own
+			// closed-Consultation reason.
+			const deleteControl = controlForKey({ name: "d" }, context);
+			if (deleteControl === undefined) throw new Error("d answers nothing in the queue modes");
+			const deleteAvailability = availabilityFor(deleteControl, context);
+			if (mode === "work-queue-detail") {
+				expect(deleteControl.id).toBe("consultation-delete");
+				expect(deleteAvailability).toEqual({
+					available: false,
+					reason: "this control is available only in the Consultation section",
+				});
+			} else {
+				expect(deleteControl.id).toBe("queue-down");
+			}
+			const ids = guideControls(context).map(({ control }) => control.id);
+			expect(ids).not.toContain("history");
+			expect(ids).not.toContain("consultation-delete");
+			const hinted = actionBarControls(mode, context).map((control) => control.id);
+			expect(hinted).not.toContain("history");
+			expect(hinted).not.toContain("consultation-delete");
+		}
+		// A closed Consultation under the cursor changes nothing in the queue:
+		// the queue's modes still refuse the key in the Consultation's words,
+		// because the ownership, not the row, decides.
+		const withClosedConsultation: Omit<ControlContext, "mode"> = {
+			...queueValues,
+			selectedConsultation: { state: "closed" } as unknown as Consultation,
+		};
+		const detail = contextFor("work-queue-detail", withClosedConsultation);
+		const deleteControl = controlById("consultation-delete");
+		expect(availabilityFor(deleteControl, detail).available).toBe(false);
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {
