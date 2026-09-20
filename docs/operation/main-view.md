@@ -14,10 +14,11 @@ that, and one context-dependent detail pane on the right that shows the
 detail of the item the cursor holds. One control catalogue, one Action bar,
 and one Message line answer for all three. All three sections start
 expanded; `x` or a click on a section header collapses the section under the
-cursor to its header row, and the same toggle restores it. Up and down move the cursor through the visible rows and cross the
-section boundary when the sections are adjacent. The mode the bar and the
-guide state derives from the section that holds the cursor and its focused
-pane.
+cursor to its header row, and the same toggle restores it. Up and down move
+the cursor through the visible rows and cross to the next section the terminal
+shows, so a collapsed section in between does not stop the walk. The mode the
+bar and the guide state derives from the section that holds the cursor and its
+focused pane.
 
 The Ticket header always shows the pipeline counts - open, running, and
 awaiting - with the held count appended only when it is non-zero. The
@@ -34,12 +35,12 @@ line when the operator presses it anyway.
 The in-app Key guide lists the controls of the modes the app dispatches from
 its catalogue. Press `?` or `F1` to open it from anywhere, including the
 panes and the modals. It carries the Ticket list, the Ticket detail, the
-Consultation list, the Consultation detail, the Agent terminal, the response
-editor, the override panel in both of its row kinds, the decision modal, the
-missing modal, the guide and the Message view, the controls that are only
-reachable from another mode, Quit, and the `Ctrl+C` emergency exit, each with
-what it does and, where the app will not run it, why. Press `Esc`, `F1`, or
-`?` to close it.
+Consultation list, the Consultation detail, the Work queue list, the Work
+queue item detail, the Agent terminal, the response editor, the override panel
+in both of its row kinds, the decision modal, the missing modal, the guide and
+the Message view, the controls that are only reachable from another mode,
+Quit, and the `Ctrl+C` emergency exit, each with what it does and, where the
+app will not run it, why. Press `Esc`, `F1`, or `?` to close it.
 
 This guide does not repeat that list. A table of keys here went stale twice:
 the guide and the Action bar are generated from one control catalogue
@@ -49,22 +50,32 @@ The Ticket list and detail move with the row, page and jump keys, focus the
 detail with `l` or `Right` and the list with `h` or `Left`, hand an open
 ticket off with `Enter`, open the decision modal on an awaiting one, the
 missing modal on a ticket whose agent is gone, and the override panel with
-`e`. `=`, `+`, and `-` bump a ticket's priority up and down through the
-configured rank, and Backspace clears it to the label rank or unranked. `a` toggles
-auto-handoff, `r` refreshes, `g` goes to the agent's pane, `w` closes the work
-cycle of the selected ticket behind a confirmation (ADR 0031), and `q` quits.
+`e`. The Work queue's list and its item detail answer the same row, page,
+jump, and focus keys. On a queue row, `u` and `d` move that item up or down
+the shared order, and `Del` takes it out of the queue: a removed Handoff item
+is cancelled, and the ticket it asked for keeps its state. `=`, `+`, and `-`
+bump a ticket's priority up and down through the configured rank, and
+Backspace clears it to the label rank or unranked. `a` toggles auto-handoff,
+`r` refreshes, `g` goes to the agent's pane, `w` closes the work cycle of the
+selected ticket behind a confirmation (ADR 0031), and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
-the Action bar reserve the two bottom rows at every terminal size, and each
-list section reserves its header row plus a minimum of three content rows:
-below the smallest useful frame (40 columns by 19 rows) the panes give way
-to a size message and a compact Help control, a section that cannot hold its
-minimum collapses rather than vanishing so both headers keep their counts, and
-a surface that cannot draw its own rows says so instead of painting them over
-its border. One hint holds the row's end cells: Help on a
-bar that can open the Key guide, and the overlay's own Close on a utility
-overlay. A frame too narrow for that hint states one of its whole keys, so the
+the Action bar reserve the two bottom rows at every terminal size. Each list
+section reserves its header row at every size, and its box reserves three
+content rows while the terminal can pay for them; a section that holds no rows
+reserves one content row instead. When the body cannot pay the claims, the
+sections below the cursor give up their rows in turn, from the bottom of the
+column up, and a section that cannot hold even its one content row collapses
+to its header rather than vanishing, so all three headers keep their counts.
+The section under the cursor never gives way: it holds its three content rows,
+and a click on a collapsed header moves the cursor there, which brings its box
+back and hands the rows another section gives up. Below the smallest useful
+frame (40 columns by 19 rows) the panes give way to a size message and a
+compact Help control, and a surface that cannot draw its own rows says so
+instead of painting them over its border. One hint holds the row's end cells:
+Help on a bar that can open the Key guide, and the overlay's own Close on a
+utility overlay. A frame too narrow for that hint states one of its whole keys, so the
 way out of a screen is named at any width and never cut in half.
 
 The keys the override panel answers with live on the
@@ -87,9 +98,10 @@ run: the mode line (while the control plane has state to observe), the
 Ticket header across the full terminal width, the three sections' list panes
 stacked on the left with the Consultation and Work headers between them, the
 detail pane on the right, the Message line, and the Action bar. The focused
-section takes the remaining rows after the other sections claim their
-minimum of three content rows, so the list the operator works in gets the
-room. The
+section takes the remaining rows after the other sections claim their minimum
+of three content rows - one content row while their list is empty - so the
+list the operator works in gets the room, and a section the body cannot pay
+for at all shows its header alone. The
 Ticket header always shows the pipeline counts - open, running, and awaiting,
 in the labelled form on a terminal of at least 60 columns and the short form
 below - and appends the held count with its bell marker only when it is
@@ -97,10 +109,10 @@ non-zero. The Consultation header carries that section's attention facts, its
 awaiting-response and recovery counts, the bell marker while the bell rings,
 and "new output" while that fact holds, so a Consultation that needs
 the operator is visible whether the section is expanded or collapsed and no
-free-standing attention line exists. A section that cannot hold its minimum collapses rather than
-vanishing, so all three headers keep their counts; below the smallest useful
-frame
-the compact frame drops the panes with a size message.
+free-standing attention line exists. A section that cannot hold its minimum
+collapses rather than vanishing, so all three headers keep their counts; below
+the smallest useful frame the compact frame drops the panes with a size
+message.
 
 Two panes side by side, flex-sized to the terminal.
 The list pane on the left shows the tickets of the Ticket section with their
@@ -127,18 +139,30 @@ the ticket's handoff count against its per-ticket limit, counting the
 handoffs of every work cycle the ticket ran, and, when one exists, the last
 completion: its date, the task type, the agent, and the recorded decision.
 Factory ticket state and external source state stay separate.
+The Work queue's rows carry the origin the pickup re-checks and the ticket the
+item asks for; its detail carries the ticket, that origin, the time the item
+entered the queue in UTC, and the choice the operator made at the handoff -
+the agent, environment, task type, model, thinking level, and context window -
+with a setting left to the agent saying so in the same words the override
+panel uses. A row the store damaged keeps its place and states its damage in
+place of the choice it cannot read, and the observation cycle refuses to start
+it with that reason. An empty queue states that fact on its one line.
 The panes share one focus.
 Switching focus never moves the selection.
 
 The vertical keys act on the focused pane.
 With the list focused, they move the selection and cross the section boundary
-when the sections are adjacent: from the last row of the Ticket list the next
-down lands on the Consultation list, from its last row the next down lands on
-the Work queue list, and a step back up from either first row lands on the
-section above. Page keys move by one visible
+to the next section the terminal shows: from the last row of the Ticket list
+the next down lands on the Consultation list, from its last row the next down
+lands on the Work queue list, and a step back up from either first row lands
+on the section above. A section the operator collapsed, or that the body could
+not pay for, is stepped over rather than stopped at, so the cursor reaches
+every section the frame holds. Page keys move by one visible
 list page, and Home and End select the list edges. With the detail focused,
 the row keys move at the configured speed, PageUp and PageDown retain one row
-of context, and Home and End move to the detail edges. A new selection starts
+of context, and Home and End move to the detail edges. Every base detail, the
+Work queue item's facts included, owns that scroll, so a long ticket identity
+that wraps past the pane stays readable. A new selection starts
 the detail at the top.
 
 The detail is a native OpenTUI viewport. Its complete content stays mounted,

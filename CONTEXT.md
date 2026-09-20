@@ -19,7 +19,7 @@ The always-present base surface of the control plane. It holds three list sectio
 _Avoid_: dashboard, home, screen, primary view
 
 **Section**:
-An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row and its rows are skipped by navigation.
+An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows.
 _Avoid_: tab, pane, view, accordion
 
 **Section header**:
