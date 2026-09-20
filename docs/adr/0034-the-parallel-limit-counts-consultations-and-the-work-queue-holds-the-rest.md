@@ -53,12 +53,12 @@ that fails a check leaves the queue with a Message line warning: the ticket
 keeps its state, and a Consultation whose start fails becomes a `failed`
 record, as it does today.
 
-A pickup of a `restart` item whose ticket already wears a handoff newer than
-the item's enqueue cancels the item: the ticket's turn is back, and the
-pickup would only start a second handoff on it. The observation's automatic
-restart skips a ticket the queue already waits for, so the operator's
-captured choice takes the freed seat, and the cancellation meets the race
-that slips past that skip.
+A pickup of a `restart` or a `route` item whose ticket already wears a
+handoff newer than the item's enqueue cancels the item: the ticket's turn is
+back, and the pickup would only start a second handoff on it. The
+observation's automatic restart and automatic route skip a ticket the queue
+already waits for, so the operator's captured choice takes the freed seat,
+and the cancellation meets the race that slips past that skip.
 
 **A queued Consultation is a record, not a bare intent.** A launcher submit
 into a full cap creates the durable Consultation record in `queued` state;

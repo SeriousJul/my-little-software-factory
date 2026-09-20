@@ -2196,4 +2196,50 @@ describe("the Parallel limit and the Work queue", () => {
 		);
 		expect(rigRef.events).not.toContain(`notice:"${FIRST.title}" started from the Work queue`);
 	});
+
+	test("a queued route whose ticket routed while it waits is cancelled, not double-started", async () => {
+		let clockMs = Date.parse("2026-09-01T00:00:00Z");
+		const rigRef = rig([FIRST], () => clockMs);
+		// The ticket rests on its settled turn, awaiting a route.
+		const seeded = seedHandoff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, seeded.handoffId);
+		clockMs += 60_000;
+		// The cap is full: the operator's route waits in the queue.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "the last message",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// A seat frees and the automatic route takes it in the race the skip
+		// misses: the ticket's handoff is now newer than the item's enqueue.
+		clockMs += 60_000;
+		const raceClaim = rigRef.state.claimHandoff(FIRST.identity, liveChoice, "workflow");
+		if (!raceClaim.ok) throw new Error(`the race claim failed: ${raceClaim.reason}`);
+		rigRef.state.settleHandoff(raceClaim.claim.attemptId, true, undefined, {
+			paneId: FIRST.paneId,
+			tabId: FIRST.tabId,
+			workspaceId: FIRST.workspaceId,
+		});
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		// The item is gone, and no handoff started behind the ticket the
+		// route already gave it.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.handoffCount(FIRST.identity)).toBe(2);
+		expect(rigRef.events).toContain(
+			`notice:"${FIRST.title}" routed while its route waited in the Work queue; the queue item is removed`,
+		);
+		expect(rigRef.events).not.toContain(`notice:"${FIRST.title}" started from the Work queue`);
+		expect(rigRef.events).not.toContain(
+			`warning:queued handoff for "${FIRST.title}" was not run: the ticket is now handed-off`,
+		);
+	});
 });

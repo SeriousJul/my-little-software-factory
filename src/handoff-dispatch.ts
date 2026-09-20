@@ -505,6 +505,31 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * the Message line, once per reason.
 	 */
 	private pickupItem(item: WorkQueueItem): boolean {
+		// A restart or a route whose ticket already wears a handoff newer than
+		// the item's enqueue: the seat the operator asked for was taken by a
+		// start the operator did not ask for - the automatic restart, or the
+		// automatic route - so the pickup cancels the item instead of starting
+		// a second handoff on a ticket that has a live turn (ADR 0034). The
+		// observation's automatic restart and automatic route skip a ticket the
+		// queue waits for, so this meets the race that slipped past that skip.
+		// It runs before the state gate below: a ticket the race already routed
+		// is in the very state that gate refuses, and the answer there is the
+		// cancellation, not a "the ticket is now ..." failure.
+		if (item.origin === "restart" || item.origin === "workflow") {
+			const inFlight = this.state
+				.ticketsByState(["handed-off", "running"])
+				.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
+			if (inFlight !== undefined && Date.parse(inFlight.startedAt) > Date.parse(item.enqueuedAt)) {
+				this.removeQueueItem(item.ticketIdentity);
+				this.reports.refresh();
+				this.reports.notice(
+					item.origin === "restart"
+						? `${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`
+						: `${this.ticketName(item.ticketIdentity)} routed while its route waited in the Work queue; the queue item is removed`,
+				);
+				return false;
+			}
+		}
 		const currentState = this.state.ticketState(item.ticketIdentity);
 		if (currentState === undefined || !handoffAllowsState(item.origin, currentState)) {
 			this.reportPickupFailure(
@@ -514,25 +539,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 					: `the ticket is now ${currentState}`,
 			);
 			return false;
-		}
-		// A restart whose ticket already wears a handoff newer than the item's
-		// enqueue: the seat the operator asked for was taken by a restart the
-		// operator did not ask for, so the pickup cancels the item instead of
-		// starting a second handoff on a ticket that has a live turn (ADR
-		// 0034). The observation's automatic restart skips a ticket the queue
-		// waits for, so this meets the race that slipped past that skip.
-		if (item.origin === "restart") {
-			const inFlight = this.state
-				.ticketsByState(["handed-off", "running"])
-				.find((candidate) => candidate.ticketIdentity === item.ticketIdentity);
-			if (inFlight !== undefined && Date.parse(inFlight.startedAt) > Date.parse(item.enqueuedAt)) {
-				this.removeQueueItem(item.ticketIdentity);
-				this.reports.refresh();
-				this.reports.notice(
-					`${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`,
-				);
-				return false;
-			}
 		}
 		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {

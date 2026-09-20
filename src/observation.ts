@@ -1115,6 +1115,12 @@ export class ObservationCoordinator {
 		// `route` is only returned with exactly one edge and one target.
 		const edge = this.singleEdge(ticket.taskType);
 		if (edge === undefined || edge.to.length !== 1) return false;
+		// A waiting Work queue item routes the ticket with the operator's
+		// captured choice (ADR 0034): the automatic route must not take the
+		// seat the operator asked for, or the item's pickup would start a
+		// second handoff on the ticket it routed. It mirrors the skip the
+		// automatic restart keeps.
+		if (this.state.hasWorkItem(ticket.ticketIdentity)) return false;
 		// A Dispatch pause holds the automatic route, not the close: it stops
 		// new work from starting, not a cycle from ending (ADR 0016). It holds
 		// the route in auto and manual mode alike, exactly like the Parallel

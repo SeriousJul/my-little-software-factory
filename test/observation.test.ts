@@ -1305,6 +1305,26 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
+	test("an automatic route skips a ticket the Work queue already waits for", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "route");
+		// The operator's route waits in the Work queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "workflow",
+				choice,
+				previousMessage: "settled the turn",
+			}),
+		).toEqual({ ok: true });
+		await coordinator.tick();
+		// The automatic route holds: the seat is the operator's, and the
+		// pickup starts the ticket with the operator's captured choice, not
+		// the automatic one. It mirrors the skip the automatic restart keeps.
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
 	test("a route starts fresh from its target task profile", async () => {
 		const targetProfileConfig: FactoryConfig = {
 			...config,
