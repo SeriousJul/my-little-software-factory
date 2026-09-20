@@ -6,7 +6,7 @@ import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
+import { openFactoryState, SCHEMA_V1, SCHEMA_VERSION, StateError } from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
@@ -1269,6 +1269,118 @@ describe("factory SQLite state", () => {
 		const reread = openFactoryState(path);
 		expect(reread.autoHandoffMode()).toBe(true);
 		reread.close();
+	});
+
+	/** Rewrite the queue's shape to the one the first Work queue migration wrote. */
+	function downgradeQueueToTheAbandonedShape(path: string): void {
+		const db = new Database(path);
+		// The step that landed the queue (issue #88, commit 604d803) keyed the row
+		// by a random id and ordered it by `queue_order`, and it stamped the file
+		// version 14. The step that ships now writes a `position` keyed table under
+		// the same number, so a file this record made claims 14 with that shape.
+		db.exec(`
+			DROP TABLE work_queue;
+			CREATE TABLE work_queue (
+				id TEXT PRIMARY KEY,
+				kind TEXT NOT NULL,
+				ticket_identity TEXT,
+				origin TEXT,
+				choice_json TEXT,
+				queue_order INTEGER NOT NULL,
+				created_at TEXT NOT NULL
+			);
+			UPDATE schema_version SET version = 14;
+		`);
+		db.close();
+	}
+
+	test("a v14 file with the abandoned Work queue shape migrates to v15: the queue reads again", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		state.close();
+
+		downgradeQueueToTheAbandonedShape(path);
+
+		// Before the repair this open throws SQLiteError: no such column: position
+		// from the Work queue projection, and the app dies while it mounts.
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue()).toEqual([]);
+		expect(
+			reopened.enqueueWork({
+				ticketIdentity: ticket.identity,
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ position: 0, ticketIdentity: ticket.identity }),
+		]);
+		reopened.close();
+
+		const db = new Database(path, { readonly: true });
+		expect(
+			(db.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		db.close();
+	});
+
+	test("a v14 file with a stale queue row opens to an empty queue", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		state.close();
+
+		downgradeQueueToTheAbandonedShape(path);
+		const db = new Database(path);
+		db.prepare(
+			"INSERT INTO work_queue(id, kind, ticket_identity, origin, choice_json, queue_order, created_at) " +
+				"VALUES ('abandoned-1', 'handoff', ?, 'open', '{}', 0, '2026-09-20T10:00:00Z')",
+		).run(ticket.identity);
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The abandoned row is not readable by the shipped queue: it is dropped,
+		// and the operator re-queues the start with the same key.
+		expect(reopened.workQueue()).toEqual([]);
+		expect(reopened.hasWorkItem(ticket.identity)).toBe(false);
+		reopened.close();
+	});
+
+	test("a v14 file with a sound queue keeps its waiting item", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		expect(
+			state.enqueueWork({
+				ticketIdentity: ticket.identity,
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		state.close();
+
+		// A file the shipping migration wrote claims 14 with the sound shape.
+		const db = new Database(path);
+		db.prepare("UPDATE schema_version SET version = 14").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ position: 0, ticketIdentity: ticket.identity }),
+		]);
+		reopened.close();
 	});
 
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {

@@ -45,7 +45,9 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 14;
+/** The schema every state file the plane opens is brought to. Exported so a
+ * test can assert the stamp a migration left instead of copying the number. */
+export const SCHEMA_VERSION = 15;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -589,14 +591,16 @@ const MIGRATION_V12_TO_V13 = `
 `;
 
 /**
- * The v14 step: the Work queue (ADR 0034).
+ * The Work queue table: the durable, ordered list of manual starts waiting for
+ * a Parallel limit seat (ADR 0034). The position is the queue order and the
+ * ticket identity is unique in the table: the queue holds at most one item per
+ * ticket, and a second enqueue for a ticket with a waiting item is refused by
+ * the state.
  *
- * The durable, ordered list of manual starts waiting for a Parallel limit
- * seat. The position is the queue order and the ticket identity is unique in
- * the table: the queue holds at most one item per ticket, and a second
- * enqueue for a ticket with a waiting item is refused by the state.
+ * One definition serves both the step that lands it at v14 and the step that
+ * repairs it at v15, so the two cannot disagree about the shape the code reads.
  */
-const MIGRATION_V13_TO_V14 = `
+const WORK_QUEUE_TABLE = `
 	CREATE TABLE work_queue (
 		position INTEGER PRIMARY KEY,
 		ticket_identity TEXT NOT NULL UNIQUE,
@@ -605,6 +609,33 @@ const MIGRATION_V13_TO_V14 = `
 		previous_message TEXT NOT NULL,
 		enqueued_at TEXT NOT NULL
 	);
+`;
+
+/** The v14 step: the Work queue (ADR 0034). */
+const MIGRATION_V13_TO_V14 = WORK_QUEUE_TABLE;
+
+/**
+ * The v15 step: rebuild the Work queue a reused version number left unreadable.
+ *
+ * The queue landed twice under the same number. The first step (issue #88, PR
+ * #116, commit 604d803) keyed the row by a random id and ordered it by
+ * `queue_order`. The step that ships (PR #102, commit 30f251b) rewrote that same
+ * v14 string to a table keyed by `position`. A file the first step wrote
+ * therefore claims version 14 while it holds a shape the code cannot read, and
+ * `migrate` skips every step the stamp already covers, so no later open can fix
+ * it. The Work queue read then threw `no such column: position` while the app
+ * mounted, and the plane died at startup with no written refusal.
+ *
+ * The abandoned rows are dropped, not converted: a row that old holds no
+ * previous message, its `choice_json` predates the shipped choice shape, and it
+ * can name a Consultation the queue no longer carries. A waiting manual start
+ * is cheap to put back: the operator presses the same key again. A file that
+ * already holds the sound table is left alone (see `migrate`), so its waiting
+ * items keep their place.
+ */
+const MIGRATION_V14_TO_V15 = `
+	DROP TABLE IF EXISTS work_queue;
+	${WORK_QUEUE_TABLE}
 `;
 
 /** Open state synchronously after creating its parent directory. */
@@ -691,6 +722,13 @@ export class FactoryState {
 		);
 	}
 
+	/** Whether the table holds the named column. A missing table answers false. */
+	private hasColumn(table: string, name: string): boolean {
+		return (
+			this.db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, name) != null
+		);
+	}
+
 	private migrate(): void {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
@@ -727,6 +765,12 @@ export class FactoryState {
 			if (version < 12) this.db.exec(MIGRATION_V11_TO_V12);
 			if (version < 13) this.db.exec(MIGRATION_V12_TO_V13);
 			if (version < 14) this.db.exec(MIGRATION_V13_TO_V14);
+			// The v14 number was reused while the queue was new, so the stamp alone
+			// cannot tell the two shapes apart. Ask the file: only the table that
+			// lacks its `position` column is unreadable, and a sound queue keeps
+			// the starts already waiting in it.
+			if (version < 15 && !this.hasColumn("work_queue", "position"))
+				this.db.exec(MIGRATION_V14_TO_V15);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
