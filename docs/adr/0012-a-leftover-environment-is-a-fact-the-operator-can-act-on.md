@@ -170,3 +170,26 @@ the holder's pane and workspace and says it is no agent of this ticket.
   that recorded no handle can end nothing in herdr, so its close clears only
   its own row. Facts of other rows stand until a cleanup reaches them, and a
   clear reports what herdr refused when it will not.
+
+## Amendment: a route's handoff owns the settled ticket's name too
+
+Date: 2026-09-21
+
+A Transition route that lands on another ticket - the pull request behind the
+issue's `ready-for-review` - starts its handoff on the position's own ticket,
+but the decision is the settled ticket's. The plane's issue and pull request
+share one title, so herdr cuts both to one stable name, and the issue's agent
+still holds it when the route asks. The handoff computed "own" from the
+position ticket alone, saw no recorded handle for the pane that holds the
+name, and failed the route as a stranger to the name.
+
+The decision above is amended for the route's handoff: **the recorded handles
+of both tickets of the route - the position ticket and the settled ticket it
+continues - answer "own".** A name the settled ticket's own agent still holds
+falls to the cycle name, and the route's handoff starts beside it, the way a
+direct handoff starts beside its ticket's leftover. A name a stranger holds
+still fails, with the holder's pane and workspace in the reason. The route's
+settled ticket is a fact of the handoff's queue item, so a route that waits in
+the Work queue keeps it across a restart, and a route the settled ticket
+outlived - its turn closed while the item waited - stands on the settled
+ticket's awaiting, and the refusal names the ticket that left.

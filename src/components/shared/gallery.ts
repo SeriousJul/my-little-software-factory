@@ -1231,6 +1231,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					kind: "handoff",
 					position: 0,
 					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
+					routeFromIdentity: null,
 					origin: "open",
 					choice: {
 						agentType: "pi",
@@ -1247,6 +1248,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					kind: "handoff",
 					position: 1,
 					ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
+					routeFromIdentity: "github:github.com:SeriousJul/my-little-software-factory#41",
 					origin: "workflow",
 					choice: {
 						agentType: "pi",
@@ -1333,6 +1335,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				kind: "handoff",
 				position: 0,
 				ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#42",
+				routeFromIdentity: null,
 				origin: "open",
 				choice: {
 					agentType: "pi",

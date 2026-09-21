@@ -564,6 +564,105 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("a close on a turn the route decided ends the cycle, and the decision stands", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (ticket === undefined) throw new Error("the fixture holds no ticket");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		// The route decides the turn when the routed handoff starts...
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "handed-off",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
+		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
+		// ...and the operator's close ends the cycle the turn routed from: the
+		// recorded decision is not rewritten, and the cycle still ends.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:30:00Z",
+			}),
+		).toBe(true);
+		const [returned] = state.visibleTickets([], "implement");
+		expect(returned.state).toBe("open");
+		expect(returned.workCycle).toBe(2);
+		expect(returned.lastCompletion?.decision).toBe("handed-off");
+		// A repeated close changes nothing: the ticket left awaiting, so the
+		// cycle number moves exactly once for the one end.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:31:00Z",
+			}),
+		).toBe(false);
+		expect(state.visibleTickets([], "implement")[0].workCycle).toBe(2);
+		state.close();
+	});
+
+	test("the automatic close on a decided turn ends the cycle too", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (ticket === undefined) throw new Error("the fixture holds no ticket");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+		// The automatic route at the handoff limit degrades to the close after
+		// the auto route has recorded its decision: the end still runs.
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "auto-handed-off",
+				decidedAt: "2026-08-31T11:10:00Z",
+			}),
+		).toBe(true);
+		expect(
+			state.applyCompletionDecision({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "auto-closed",
+				decidedAt: "2026-08-31T11:30:00Z",
+			}),
+		).toBe(true);
+		const [returned] = state.visibleTickets([], "implement");
+		expect(returned.state).toBe("open");
+		expect(returned.workCycle).toBe(2);
+		expect(returned.lastCompletion?.decision).toBe("auto-handed-off");
+		state.close();
+	});
+
 	test("an in-flight close ends the cycle and writes no completion trace (ADR 0031)", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
@@ -631,12 +730,15 @@ describe("factory SQLite state", () => {
 			.split("\n")
 			.map((line) => line.trim())
 			.filter((line) => /"UPDATE tickets SET[^"]*work_cycle[^"]*"/u.test(line));
-		// The two ends: the decided close of a settled turn, and the in-flight
-		// Close that writes no trace. Both return the ticket to open.
-		expect([...new Set(statements)]).toEqual([
+		// The ends: the decided close of a settled turn, the in-flight Close
+		// that writes no trace, and the close of a turn the route decided -
+		// the last runs only from awaiting, so it too moves the number on an
+		// end, exactly once.
+		expect([...new Set(statements)].sort()).toEqual([
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'\",",
 			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\",",
 		]);
-		expect(statements.length).toBe(2);
+		expect(statements.length).toBe(3);
 		// A cycle's moves that end nothing hold the number: the handoff that starts
 		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
 		const state = openFactoryState(":memory:");
@@ -1481,6 +1583,106 @@ describe("factory SQLite state", () => {
 		reopened.close();
 	});
 
+	test("a v17 file migrates to v18: the queue row gains the route's settled ticket", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		expect(
+			state.enqueueWork({
+				ticketIdentity: ticket.identity,
+				routeFromIdentity: "issue-1",
+				origin: "workflow",
+				choice,
+				previousMessage: "the route",
+			}),
+		).toEqual({ ok: true });
+		state.close();
+
+		// A file the previous step wrote claims 17 without the column.
+		const db = new Database(path);
+		db.exec("ALTER TABLE work_queue DROP COLUMN route_from_identity");
+		db.prepare("UPDATE schema_version SET version = 17").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The row the v17 file waited with reads back with no settled ticket.
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({
+				position: 0,
+				ticketIdentity: ticket.identity,
+				routeFromIdentity: null,
+			}),
+		]);
+		expect(
+			reopened.enqueueWork({
+				ticketIdentity: "pr-2",
+				routeFromIdentity: "issue-1",
+				origin: "workflow",
+				choice,
+				previousMessage: "the route",
+			}),
+		).toEqual({ ok: true });
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({
+				position: 0,
+				ticketIdentity: ticket.identity,
+				routeFromIdentity: null,
+			}),
+			expect.objectContaining({
+				position: 1,
+				ticketIdentity: "pr-2",
+				routeFromIdentity: "issue-1",
+			}),
+		]);
+		reopened.close();
+
+		const check = new Database(path, { readonly: true });
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+	});
+
+	test("a file stamped at the target without the column heals on open", () => {
+		// The live incident: a build that stamped the file before its migration
+		// step ran left a queue the new code cannot read. The stamp alone does
+		// not describe the file, so the open asks the file and adds the column
+		// instead of trusting the stamp.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.close();
+
+		const db = new Database(path);
+		db.exec("ALTER TABLE work_queue DROP COLUMN route_from_identity");
+		db.close();
+
+		const reopened = openFactoryState(path);
+		expect(
+			reopened.enqueueWork({
+				ticketIdentity: "pr-2",
+				routeFromIdentity: "issue-1",
+				origin: "workflow",
+				choice,
+				previousMessage: "the route",
+			}),
+		).toEqual({ ok: true });
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ ticketIdentity: "pr-2", routeFromIdentity: "issue-1" }),
+		]);
+		reopened.close();
+
+		const check = new Database(path, { readonly: true });
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+	});
+
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
@@ -2310,6 +2512,38 @@ describe("the work queue (ADR 0034)", () => {
 			reason: "ticket t1 already has a waiting queue item",
 		});
 		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1"]);
+	});
+
+	test("a route row names the settled ticket it continues, and a same-ticket route names none", () => {
+		const state = openFactoryState(":memory:");
+		// The route crosses to the position's own ticket: the row holds both
+		// identities, where the handoff starts and whose turn it decides.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "pr-2",
+				routeFromIdentity: "issue-1",
+				origin: "workflow",
+				choice,
+				previousMessage: "the route",
+			}),
+		).toEqual({ ok: true });
+		// A route that stays on its own ticket names no second ticket.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "issue-3",
+				routeFromIdentity: "issue-3",
+				origin: "workflow",
+				choice,
+				previousMessage: "the same-ticket route",
+			}),
+		).toEqual({ ok: true });
+		// A start that is no route names none.
+		enqueue(state, "issue-4");
+		expect(state.workQueue()).toEqual([
+			expect.objectContaining({ ticketIdentity: "pr-2", routeFromIdentity: "issue-1" }),
+			expect.objectContaining({ ticketIdentity: "issue-3", routeFromIdentity: null }),
+			expect.objectContaining({ ticketIdentity: "issue-4", routeFromIdentity: null }),
+		]);
 	});
 
 	test("u and d move one place, and an item at an edge moves nowhere", () => {

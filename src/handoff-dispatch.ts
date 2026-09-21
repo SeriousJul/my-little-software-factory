@@ -84,6 +84,16 @@ export interface HandoffIntent {
 	 * this. An intent that records nothing on a start omits it.
 	 */
 	onStarted?: (started: DispatchResult) => void;
+	/**
+	 * The ticket this route's handoff continues (ADR 0027): the settled ticket
+	 * whose turn the route is the decision of. The handoff starts on the
+	 * position's own ticket (`ticketIdentity`) but the settled ticket's
+	 * leftover environment is the handoff's own: a name the settled ticket's
+	 * leftover agent still holds falls to the cycle name instead of failing as
+	 * a stranger. Omitted for a start that is no route, and for a route that
+	 * stays on its own ticket.
+	 */
+	routeFromIdentity?: string;
 }
 
 /**
@@ -431,6 +441,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				claim: claim.claim,
 				claimedState: ticket.state,
 				previousMessage: intent.previousMessage,
+				routeFromIdentity: intent.routeFromIdentity ?? null,
 			},
 			intent.onStarted,
 		);
@@ -459,6 +470,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			};
 		const enqueued = this.state.enqueueWork({
 			ticketIdentity: intent.ticketIdentity,
+			routeFromIdentity: intent.routeFromIdentity ?? null,
 			origin: intent.origin,
 			choice: intent.choice,
 			previousMessage: intent.previousMessage,
@@ -684,13 +696,19 @@ class HandoffDispatchModule implements HandoffDispatch {
 			}
 		}
 		const currentState = this.state.ticketState(item.ticketIdentity);
-		// A queued route is the operator's decision on the turn the item's
-		// ticket awaited when the route was asked for: it stands while the
-		// ticket keeps awaiting that decision, and a ticket that closed the
-		// turn - back to open - or moved on leaves the route stale, so the
-		// item keeps its place with the state it moved to.
+		// A queued route is the operator's decision on the turn the route's
+		// settled ticket awaited when the route was asked for: it stands while
+		// that ticket keeps awaiting the decision, and a ticket that closed the
+		// turn - back to open - or moved on leaves the route stale, so the item
+		// keeps its place with the state it moved to. A route that lands on the
+		// position's own ticket names its settled ticket in `routeFromIdentity`;
+		// the position's own state is where the facts sit, not where the
+		// decision stands or falls.
 		const routeStillStands =
-			item.origin !== "workflow" || (currentState !== undefined && currentState === "awaiting");
+			item.origin !== "workflow" ||
+			(item.routeFromIdentity !== null
+				? this.state.ticketState(item.routeFromIdentity) === "awaiting"
+				: currentState !== undefined && currentState === "awaiting");
 		if (
 			currentState === undefined ||
 			!handoffAllowsState(item.origin, currentState) ||
@@ -701,7 +719,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 				reason:
 					currentState === undefined
 						? "the ticket no longer exists"
-						: `the ticket is now ${currentState}`,
+						: !routeStillStands && item.routeFromIdentity !== null
+							? `the settled ticket ${this.ticketName(
+									item.routeFromIdentity,
+								)} is now ${this.state.ticketState(item.routeFromIdentity) ?? "gone"}`
+							: `the ticket is now ${currentState}`,
 			};
 		}
 		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
@@ -729,11 +751,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 			return { ok: false, reason: "the ticket is no longer visible" };
 		}
 		this.warnedPickups.delete(item.ticketIdentity);
+		// The decision lands on the settled turn: for a route that crosses to
+		// the position's own ticket, that is the settled ticket's latest
+		// handoff, not the position's. A crossed route whose settled ticket
+		// holds no handoff names an empty id, and the record waits for a fact
+		// that never stands.
+		const routeFrom = item.routeFromIdentity;
 		return {
 			ok: true,
 			ticket,
 			claim: claim.claim,
-			previousHandoffId: ticket.handoff?.attemptId ?? "",
+			routeFromIdentity: routeFrom,
+			previousHandoffId:
+				routeFrom !== null
+					? (this.state.latestHandoff(routeFrom)?.handoffId ?? "")
+					: (ticket.handoff?.attemptId ?? ""),
 		};
 	}
 
@@ -757,6 +789,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				claim: claimed.claim,
 				claimedState: claimed.ticket.state,
 				previousMessage: item.previousMessage,
+				routeFromIdentity: item.routeFromIdentity,
 				workQueuePickup: true,
 			},
 			(started) => {
@@ -773,7 +806,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// call `recordRoutedDecision`, so one copy of the fact and one clock
 					// serve a route that starts in its seat and a route that waited.
 					if (item.origin === "workflow") {
-						this.recordRoutedDecision(item.ticketIdentity, claimed.previousHandoffId);
+						this.recordRoutedDecision(
+							claimed.routeFromIdentity ?? item.ticketIdentity,
+							claimed.previousHandoffId,
+						);
 					}
 					this.reports.refresh();
 					if (rowStands) {
@@ -846,6 +882,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				claim: claimed.claim,
 				claimedState: claimed.ticket.state,
 				previousMessage: item.previousMessage,
+				routeFromIdentity: item.routeFromIdentity,
 				workQueuePickup: true,
 			},
 			(started) => {
@@ -856,7 +893,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueItem(item.ticketIdentity);
 					if (item.origin === "workflow")
-						this.recordRoutedDecision(item.ticketIdentity, claimed.previousHandoffId);
+						this.recordRoutedDecision(
+							claimed.routeFromIdentity ?? item.ticketIdentity,
+							claimed.previousHandoffId,
+						);
 					this.reports.refresh();
 					if (rowStands)
 						this.reports.notice(
@@ -944,13 +984,28 @@ class HandoffDispatchModule implements HandoffDispatch {
 		return this.inFlight || this.cleanupQueued;
 	}
 
-	private nameKnowledgeFor(identity: string): OwnNameKnowledge {
-		const handles = this.state.handoffHandles(identity);
-		return {
-			ownPaneIds: handles.paneIds,
-			ownWorkspaceIds: handles.workspaceIds,
-			leftoverKnown: this.state.leftoverEnvironment(identity) !== null,
-		};
+	/**
+	 * The knowledge a handoff's name plan carries of its own environments: the
+	 * panes and workspaces the ticket's handoffs recorded, and whether the
+	 * ticket already knows a leftover. A route handoff spans two tickets - the
+	 * position's own, where it starts, and the settled one it continues - so
+	 * the knowledge unions both, and a name the settled ticket's leftover agent
+	 * still holds is the handoff's own, not a stranger's.
+	 */
+	private nameKnowledgeFor(identity: string, routeFromIdentity?: string | null): OwnNameKnowledge {
+		const identities = new Set<string>([identity]);
+		if (routeFromIdentity !== null && routeFromIdentity !== undefined)
+			identities.add(routeFromIdentity);
+		const paneIds: string[] = [];
+		const workspaceIds: string[] = [];
+		let leftoverKnown = false;
+		for (const known of identities) {
+			const handles = this.state.handoffHandles(known);
+			for (const paneId of handles.paneIds) paneIds.push(paneId);
+			for (const workspaceId of handles.workspaceIds) workspaceIds.push(workspaceId);
+			if (this.state.leftoverEnvironment(known) !== null) leftoverKnown = true;
+		}
+		return { ownPaneIds: paneIds, ownWorkspaceIds: workspaceIds, leftoverKnown };
 	}
 
 	private recordNameCollision(identity: string, collision: NameCollision): void {
@@ -982,7 +1037,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.inFlight = true;
 		this.reports.working(`handing off "${ticket.title}"...`);
 		const onStage = (stage: string) => this.state.advanceHandoffAttempt(claim.attemptId, stage);
-		const names = this.nameKnowledgeFor(ticket.identity);
+		const names = this.nameKnowledgeFor(ticket.identity, claimed.routeFromIdentity);
 		const run =
 			origin === "open"
 				? handOffTicket(ticket, choice, {
@@ -1234,6 +1289,11 @@ interface ClaimedHandoff {
 	claimedState: TicketState;
 	previousMessage: string;
 	/**
+	 * The ticket the route's handoff continues (ADR 0027): null for a start
+	 * that is no route, or a route that stays on its own ticket.
+	 */
+	routeFromIdentity: string | null;
+	/**
 	 * True for the claim a Work queue pickup or force-dispatch made (ADR 0034):
 	 * the durable row and this claim are one waiting start, so removing the row
 	 * settles this claim and drops this intent. A direct start claims for
@@ -1252,7 +1312,15 @@ interface QueuedHandoff extends ClaimedHandoff {
  * the race check's cancellation, which already left its item and its line.
  */
 type QueueItemClaimResult =
-	| { ok: true; ticket: Ticket; claim: HandoffClaim; previousHandoffId: string }
+	| {
+			ok: true;
+			ticket: Ticket;
+			claim: HandoffClaim;
+			/** The route's settled ticket, as the queue row names it; null for a no-route start. */
+			routeFromIdentity: string | null;
+			/** The handoff id the route's decision lands on, empty when it lands on none. */
+			previousHandoffId: string;
+	  }
 	| { ok: false; reason: string }
 	| { ok: "cancelled" };
 

@@ -68,6 +68,14 @@ rejection stands.
 	work cycle, as `persist-source-facts-c2`, and says so on the Message line
 	(ADR 0012). A name held by any other agent fails the handoff, with the
 	pane and workspace that hold it in the reason.
+
+	A route's handoff - the one a Transition decision starts on another
+	ticket, the pull request behind the issue - owns the settled ticket's
+	name too (ADR 0012, amendment): an issue and its fixing pull request
+	share a title, so herdr cuts both to one stable name, and the issue's
+	agent holds it while the route asks. The handoff asks the same cycle
+	name and starts beside the settled ticket's agent instead of failing
+	the route on a name its own predecessor still holds.
 - The ticket moves to `handed-off` when the agent starts, even if the prompt
 	later fails. The agent is running and can be prompted by hand. A failure
 	before the start (a missing herdr, a missing checkout, a clone target the

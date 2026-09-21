@@ -1140,7 +1140,10 @@ export class ObservationCoordinator {
 	 * lands as the cycle ends. A route's decision waits for the routed
 	 * Handoff to start: the claim only says the app took the work, so a
 	 * route that cannot start leaves the pending trace for the next cycle
-	 * instead of holding a decision the handoff never made.
+	 * instead of holding a decision the handoff never made. A turn whose
+	 * decision already stands decides nothing more: the routed turn rests in
+	 * awaiting, and the operator's close ends its cycle with the recorded
+	 * decision standing.
 	 */
 	private async handleAwaiting(
 		ticket: HandoffTicket,
@@ -1151,6 +1154,10 @@ export class ObservationCoordinator {
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
 		const completion = this.state.lastCompletion(ticket.ticketIdentity);
 		const outcome = completion?.transition ?? null;
+		// A decided turn decides nothing more: the route recorded its decision
+		// when it started, the automatic rule cannot route the same turn twice,
+		// and the routed turn rests in awaiting for the operator's close.
+		if (completion !== null && completion.decision !== null) return false;
 		const decision = this.decideAwaiting(slots.count, handoffCount, autoOn, outcome);
 		if (decision === "wait") return false;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
@@ -1210,6 +1217,11 @@ export class ObservationCoordinator {
 			origin: "workflow",
 			automatic: true,
 			ticketIdentity: outcome.positionTicketIdentity,
+			// The route continues this ticket's settled turn: its leftover
+			// environment is the handoff's own, so a name that leftover agent
+			// still holds falls to the cycle name instead of failing as a
+			// stranger (ADR 0027).
+			routeFromIdentity: ticket.ticketIdentity,
 			choice: resolveHandoffChoice(config, target, {
 				...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
 				...(outcome.environment === undefined ? {} : { environment: outcome.environment }),

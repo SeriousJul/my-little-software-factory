@@ -28,6 +28,7 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../src/handoff-dispatch.ts";
+import { cycleAgentName } from "../src/naming.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { FactoryState, type HandoffOrigin, workQueueIdentityOf } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
@@ -79,6 +80,72 @@ const THIRD: Seed = {
 	tabId: "tab-3",
 	workspaceId: "ws-3",
 };
+
+/**
+ * The route pair with one herdr name: the settled ticket's long title and the
+ * position ticket's short title cut to the same 32-character name, the way an
+ * issue and its fixing pull request do.
+ */
+const ROUTE_SETTLED: Seed = {
+	identity: "github:github.com:I_8",
+	title: "The fixing pull request: the link, the list, and the rank",
+	name: "the-fixing-pull-request-the-link",
+	paneId: "pane-1",
+	tabId: "tab-1",
+	workspaceId: "ws-1",
+};
+const ROUTE_TARGET: Seed = {
+	identity: "github:github.com:I_9",
+	title: "The fixing pull request: the link",
+	name: "the-fixing-pull-request-the-link",
+	paneId: "pane-2",
+	tabId: "tab-2",
+	workspaceId: "ws-2",
+};
+
+/**
+ * The settled turn and the held name one route test starts from: the settled
+ * ticket's cycle is live in herdr, its turn rests awaiting the decision the
+ * route is, and its agent still holds the name in the environment its own
+ * handoff recorded.
+ */
+function settleRoutePair(
+	rigRef: Rig,
+	holders: { paneId: string; workspaceId: string }[] = [
+		{ paneId: ROUTE_SETTLED.paneId, workspaceId: ROUTE_SETTLED.workspaceId },
+	],
+): StoredHandoffFacts {
+	const settled = seedHandoff(rigRef, ROUTE_SETTLED);
+	settleTurn(rigRef, ROUTE_SETTLED, settled.handoffId);
+	rigRef.runner.set(
+		"herdr",
+		["agent", "start", ROUTE_TARGET.name, "--kind", "pi", "--pane", "pane-agent"],
+		{ code: 1, stderr: nameTaken(ROUTE_TARGET.name, holders) },
+	);
+	return settled;
+}
+
+/** The route's dispatch, with its start's answer awaited. */
+function routeDispatch(
+	dispatch: HandoffDispatch,
+	onStarted?: (started: DispatchResult) => void,
+): Promise<DispatchResult> {
+	return new Promise<DispatchResult>((resolve) => {
+		void dispatch
+			.dispatch({
+				origin: "workflow",
+				ticketIdentity: ROUTE_TARGET.identity,
+				routeFromIdentity: ROUTE_SETTLED.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+				onStarted: (result) => {
+					resolve(result);
+					onStarted?.(result);
+				},
+			})
+			.then((result) => expect(result).toEqual({ ok: true, queued: false }));
+	});
+}
 
 /** The Agent, environment, and Task profile every handoff in this file starts. */
 const liveChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement");
@@ -1609,6 +1676,50 @@ describe("the name fact", () => {
 		);
 		expect(rigRef.state.leftoverEnvironment(FIRST.identity)).toBeNull();
 	});
+
+	test("a route treats the settled ticket's held name as its own, and starts beside it", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		settleRoutePair(rigRef);
+		const started = await routeDispatch(rigRef.dispatch);
+		expect(started).toEqual({ ok: true, queued: false });
+		// The route's first candidate is the name the settled ticket's agent
+		// still holds, in the environment that ticket's own handoff recorded:
+		// the handoff asks the cycle name for the seat instead of failing as a
+		// stranger.
+		expect(rigRef.commands()).toContain(
+			`herdr agent start ${cycleAgentName(ROUTE_TARGET.title, 1)} --kind pi --pane pane-agent`,
+		);
+		expect(rigRef.state.ticketState(ROUTE_TARGET.identity)).toBe("handed-off");
+		// No leftover fact lands: the holder's environment is the settled
+		// ticket's, and a fact names the ticket whose handoff recorded it.
+		expect(rigRef.state.leftoverEnvironment(ROUTE_TARGET.identity)).toBeNull();
+		expect(rigRef.state.leftoverEnvironment(ROUTE_SETTLED.identity)).toBeNull();
+		// And the line says which name the agent actually runs under.
+		expect(rigRef.events).toContain(
+			`warning:a leftover agent still holds the herdr name ${ROUTE_TARGET.name}; this agent started as ${cycleAgentName(ROUTE_TARGET.title, 1)}`,
+		);
+	});
+
+	test("a route still fails on a name a stranger holds, and records nothing", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		// The holder the refusal names is no agent of either ticket of the route.
+		settleRoutePair(rigRef, [{ paneId: "pane-stranger", workspaceId: "ws-stranger" }]);
+		const started = await routeDispatch(rigRef.dispatch);
+		expect(started.ok).toBe(false);
+		// The position ticket keeps the state its claim left it, and the stranger
+		// is no ticket's to move aside: the stable name was asked for once.
+		expect(rigRef.state.ticketState(ROUTE_TARGET.identity)).toBe("open");
+		expect(rigRef.state.leftoverEnvironment(ROUTE_TARGET.identity)).toBeNull();
+		expect(rigRef.state.leftoverEnvironment(ROUTE_SETTLED.identity)).toBeNull();
+		// The line names the stranger's handles, so the operator can find the
+		// pane, and carries herdr's refusal behind the fact.
+		expect(rigRef.events).toContain(
+			`error:the herdr name ${ROUTE_TARGET.name} is held by pane pane-stranger in workspace ws-stranger, which is no agent of this ticket: agent name ${ROUTE_TARGET.name} is already used; candidates: terminal_id=term-pane-stranger pane_id=pane-stranger workspace_id=ws-stranger tab_id=tab-pane-stranger cwd=unknown status=Idle (agent_name_taken)`,
+		);
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(1);
+	});
 });
 
 describe("the Parallel limit and the Work queue", () => {
@@ -1649,6 +1760,84 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(rigRef.events).toContain("refresh");
 		expect(rigRef.events).toContain(
 			`notice:handoff of "${FIRST.title}" is in the Work queue; it starts when a seat frees`,
+		);
+	});
+
+	test("a queued route keeps the settled ticket it continues, and the pickup starts it beside its leftover", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		settleRoutePair(rigRef);
+		// Every seat is held: the route waits in the Work queue.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: ROUTE_TARGET.identity,
+				routeFromIdentity: ROUTE_SETTLED.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// The queue row names both tickets of the route: where the handoff
+		// starts, and whose settled turn it is the decision of.
+		const items = rigRef.state.workQueue();
+		expect(items).toHaveLength(1);
+		if (items[0]?.kind !== "handoff") throw new Error("the waiting item is not a handoff");
+		expect(items[0].ticketIdentity).toBe(ROUTE_TARGET.identity);
+		expect(items[0].routeFromIdentity).toBe(ROUTE_SETTLED.identity);
+		expect(rigRef.state.ticketState(ROUTE_TARGET.identity)).toBe("open");
+		// One seat frees: the pickup claims the item. The route stands on the
+		// settled ticket's awaiting, while the position ticket keeps the open
+		// state its facts sit in, and the handoff starts beside the name the
+		// settled ticket's agent still holds.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(1);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.commands()).toContain(
+			`herdr agent start ${cycleAgentName(ROUTE_TARGET.title, 1)} --kind pi --pane pane-agent`,
+		);
+		expect(rigRef.state.ticketState(ROUTE_TARGET.identity)).toBe("handed-off");
+		// The decision lands on the settled turn, like the direct route's start:
+		// one copy of the fact serves the seat that started and the seat that
+		// waited.
+		const settledTicket = rigRef.state
+			.visibleTickets(rigRef.config.workflowStates, rigRef.config.defaultTaskType)
+			.find((candidate) => candidate.identity === ROUTE_SETTLED.identity);
+		expect(settledTicket?.lastCompletion?.decision).toBe("handed-off");
+	});
+
+	test("a queued route whose settled ticket closed stays waiting, and the warning names that ticket", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const settled = settleRoutePair(rigRef);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: ROUTE_TARGET.identity,
+				routeFromIdentity: ROUTE_SETTLED.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// The operator closed the settled turn while the route waited: the
+		// route is stale, and the item keeps its place.
+		closeCycle(rigRef, ROUTE_SETTLED, settled.handoffId);
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		// The warning names the ticket that left the decision, not the position
+		// ticket that kept its state.
+		expect(rigRef.events).toContain(
+			`warning:queued handoff for "${ROUTE_TARGET.title}" was not run: the settled ticket "${ROUTE_SETTLED.title}" is now open`,
 		);
 	});
 

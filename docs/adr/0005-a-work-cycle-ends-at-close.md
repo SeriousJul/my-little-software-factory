@@ -40,3 +40,27 @@ The considered alternatives:
   so the per-ticket handoff limit bounds auto-handoff.
 - Source facts still never reset factory state. Close is a factory action
   and never touches the external source item.
+
+## Amendment: a close of a decided turn ends the cycle with the decision standing
+
+Date: 2026-09-21
+
+A transition route records its decision on the settled turn when the routed
+handoff starts. The operator's instance routed an issue to its fixing pull
+request, and the issue then rested in `awaiting` wearing its `handed-off`
+decision. The close refused the turn: the decision write runs only on a
+pending trace, and a decided trace is not pending. The routed ticket's work
+cycle could never end, and its environment - the worktree, the workspace,
+the idle agent that still held the ticket's herdr name - could never be
+cleaned up.
+
+The decision above is amended for that case: **a close on a turn that already
+decided ends the cycle without rewriting the decision.** The recorded
+decision stands - a fact is not rewritten - and the ticket returns to `open`
+with the cycle incremented, exactly as the closed decision leaves it. The
+move runs only from `awaiting`, so a repeated close changes nothing, and the
+cycle number still moves exactly once per end. The automatic close degrades
+the same way: a route that meets the handoff limit after its decision stands
+still ends the cycle. The automatic rule likewise decides a decided turn
+nothing more: the routed turn rests for the operator's close, and the poll
+routes no second time on the turn the route already decided.

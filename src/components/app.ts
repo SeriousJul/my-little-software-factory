@@ -1662,6 +1662,11 @@ export function App({
 			.dispatch({
 				origin: "workflow",
 				ticketIdentity: targetIdentity,
+				// The route continues this ticket's settled turn: its leftover
+				// environment is the handoff's own, so a name that leftover agent
+				// still holds falls to the cycle name instead of failing as a
+				// stranger (ADR 0027).
+				routeFromIdentity: ticket.identity,
 				choice,
 				previousMessage: ticket.lastCompletion?.message ?? "",
 				// The routed handoff started: the operator's decision on the turn

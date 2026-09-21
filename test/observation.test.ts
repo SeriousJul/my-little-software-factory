@@ -1515,6 +1515,30 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
+	test("a decided turn routes no second time: the routed turn rests for the close", async () => {
+		const { state, intents, reportStart, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+		});
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome());
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		// The route's start records the decision on the settled turn...
+		reportStart();
+		const [decided] = state.visibleTickets([], "implement");
+		expect(decided.lastCompletion?.decision).toBe("auto-handed-off");
+		expect(decided.state).toBe("awaiting");
+		// ...and the next polls decide the turn nothing more: no second route,
+		// and the turn rests in awaiting for the operator's close.
+		await coordinator.tick();
+		await coordinator.tick();
+		expect(intents).toHaveLength(1);
+		const [resting] = state.visibleTickets([], "implement");
+		expect(resting.state).toBe("awaiting");
+		expect(resting.lastCompletion?.decision).toBe("auto-handed-off");
+		state.close();
+	});
+
 	test("an automatic route skips a ticket the Work queue already waits for", async () => {
 		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		settleFor(state, "github:github.com:I_5", "route");

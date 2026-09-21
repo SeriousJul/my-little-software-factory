@@ -47,7 +47,7 @@ import {
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -76,6 +76,13 @@ export interface WorkQueueHandoffItem {
 	kind: "handoff";
 	position: number;
 	ticketIdentity: string;
+	/**
+	 * The ticket the route's handoff continues (ADR 0027): its settled turn
+	 * awaits the decision this item is the handoff of. Null for a start that is
+	 * no route - an open start, a restart - and for the rows a pre-v18 file
+	 * waits with.
+	 */
+	routeFromIdentity: string | null;
 	origin: HandoffOrigin;
 	choice: HandoffChoice;
 	previousMessage: string;
@@ -109,6 +116,21 @@ export function workQueueIdentityOf(item: WorkQueueItem): string {
 /** The identity's column in the table, by the row's kind. */
 function identityColumn(item: WorkQueueItem): string {
 	return item.kind === "handoff" ? "ticket_identity" : "consultation_id";
+}
+
+/**
+ * The `route_from_identity` a queue row stores: null for a start that is no
+ * route, and null for a route that stays on its own ticket, where the cell
+ * would only repeat `ticket_identity`. It names a second ticket only when
+ * the route crosses to one.
+ */
+function normalizeRouteFromIdentity(
+	ticketIdentity: string,
+	routeFromIdentity: string | null | undefined,
+): string | null {
+	if (routeFromIdentity === undefined || routeFromIdentity === null || routeFromIdentity === "")
+		return null;
+	return routeFromIdentity === ticketIdentity ? null : routeFromIdentity;
 }
 
 export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reason: string };
@@ -665,6 +687,19 @@ const MIGRATION_V13_TO_V14 = WORK_QUEUE_TABLE;
 const MIGRATION_V16_TO_V17 = "ALTER TABLE completion_traces ADD COLUMN transition_json TEXT;";
 
 /**
+ * The v18 step: the route's settled ticket in the Work queue's handoff row
+ * (ADR 0027).
+ *
+ * A transition route lands on the position's own ticket and continues the
+ * settled ticket's turn, so the row names both: `ticket_identity` is where
+ * the handoff starts, `route_from_identity` is where its decision lands and
+ * whose leftover environment the handoff's name plan treats as its own. A row
+ * that is no route - an open start, a restart - keeps the cell null, the way
+ * the Consultation's row leaves the Handoff's cells.
+ */
+const MIGRATION_V17_TO_V18 = "ALTER TABLE work_queue ADD COLUMN route_from_identity TEXT;";
+
+/**
  * The v16 columns: the Work queue grows the `queued` Consultation's item
  * (ADR 0034, issue #90) beside the handoff item, in the one shared order.
  *
@@ -869,6 +904,11 @@ export class FactoryState {
 			// and the file both get asked before the step runs.
 			if (version < 17 && !this.hasColumn("completion_traces", "transition_json"))
 				this.db.exec(MIGRATION_V16_TO_V17);
+			// Ask the file, not the stamp: a build that stamped 18 before its
+			// step ran left a file the stamp alone does not describe, and the
+			// column missing is the file's own confession. A sound file keeps
+			// the column, so the step stays a no-op for it.
+			if (!this.hasColumn("work_queue", "route_from_identity")) this.db.exec(MIGRATION_V17_TO_V18);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1749,7 +1789,7 @@ export class FactoryState {
 	workQueue(): WorkQueueItem[] {
 		const rows = this.db
 			.prepare(
-				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at FROM work_queue ORDER BY position ASC",
+				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity FROM work_queue ORDER BY position ASC",
 			)
 			.all() as Array<{
 			position: number;
@@ -1759,6 +1799,7 @@ export class FactoryState {
 			choice_json: string | null;
 			previous_message: string;
 			enqueued_at: string;
+			route_from_identity: string | null;
 		}>;
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
@@ -1773,6 +1814,7 @@ export class FactoryState {
 					kind: "handoff",
 					position: row.position,
 					ticketIdentity: row.ticket_identity,
+					routeFromIdentity: row.route_from_identity,
 					origin,
 					choice,
 					previousMessage: row.previous_message,
@@ -1812,6 +1854,8 @@ export class FactoryState {
 	 */
 	enqueueWork(entry: {
 		ticketIdentity: string;
+		/** The ticket the route's handoff continues; null for a start that is no route. */
+		routeFromIdentity?: string | null;
 		origin: HandoffOrigin;
 		choice: HandoffChoice;
 		previousMessage: string;
@@ -1828,10 +1872,11 @@ export class FactoryState {
 					};
 				this.db
 					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?)",
+						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						entry.ticketIdentity,
+						normalizeRouteFromIdentity(entry.ticketIdentity, entry.routeFromIdentity),
 						entry.origin,
 						JSON.stringify(entry.choice),
 						entry.previousMessage,
@@ -2295,7 +2340,10 @@ export class FactoryState {
 	 * writes one - once per handoff - so an un-settled cycle leaves a
 	 * complete trace. The ticket state moves only when this call wrote or
 	 * updated the trace, so a double decision can never bump the cycle
-	 * number twice. Returns whether the decision was applied.
+	 * number twice. A close on a turn that already decided - the routed turn
+	 * the operator closes after the route started - rewrites nothing: the
+	 * recorded decision stands, and the cycle still ends, once. Returns
+	 * whether the decision was applied.
 	 */
 	applyCompletionDecision(input: CompletionDecisionInput): boolean {
 		return this.transaction(() => {
@@ -2307,6 +2355,19 @@ export class FactoryState {
 			if (Number(decided.changes) > 0) {
 				this.applyDecisionStateChange(input);
 				return true;
+			}
+			// A cycle-end decision on a turn that already decided: the route
+			// recorded its decision when it started, and this close ends the
+			// cycle the turn routed from. The recorded decision stands - a fact
+			// is not rewritten - but the cycle still ends. The move runs only
+			// from awaiting, so a repeated close changes nothing.
+			if (input.decision === "closed" || input.decision === "auto-closed") {
+				const ended = this.db
+					.prepare(
+						"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'",
+					)
+					.run(input.ticketIdentity);
+				if (Number(ended.changes) > 0) return true;
 			}
 			// No pending row: the turn never settled. Abandon records its
 			// decision anyway, once per handoff, so the trace stays complete

@@ -88,9 +88,12 @@ back to the decision: nothing is claimed and nothing runs. Enter on an
 awaiting ticket keeps the direct route, so a route the operator wants
 unchanged stays one press. The row's "handed-off" decision lands on the turn's
 trace only when the routed handoff settles with the agent started; a
-failed route leaves the trace pending, so Close and Goto keep working
-on the awaiting ticket. The automatic route decides the same way: its
-`auto-handed-off` record waits for the same start.
+failed route leaves the trace pending. Close and Goto keep working on
+the awaiting ticket either way: a close of a turn the route decided
+ends the cycle and leaves the recorded decision standing (ADR 0005,
+amendment), so the routed issue's work cycle ends with key `w` and its
+environment with the Close cleanup. The automatic route decides the
+same way: its `auto-handed-off` record waits for the same start.
 
 ## Missing modal
 
