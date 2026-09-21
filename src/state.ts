@@ -44,6 +44,11 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
+import {
+	externalKeyNumber,
+	isCoveredByFixingPullRequest,
+	pullRequestFixesTicket,
+} from "./workflow.ts";
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
@@ -1153,19 +1158,21 @@ export class FactoryState {
 	}
 
 	/**
-	 * Current visible ticket projection, ordered for operator attention.
+	 * The ticket projection before the list rule (ADR 0042): every ticket a
+	 * current snapshot still lists, ranked, with a covered open ticket among
+	 * them.
+	 *
+	 * The machine's transition fire reads the fixing-pull-request association
+	 * from this projection, and the rank inheritance reads a covered ticket's
+	 * labels from it: the rule that withholds a covered ticket's row applies
+	 * to the operator's list alone.
 	 *
 	 * Tickets that hold in-flight work or a pending decision (handed-off,
 	 * running, awaiting) keep their memberships even when every source has
 	 * gone inactive: an agent can close or change its source item while it
 	 * works, and the ticket must stay visible for the decision.
-	 *
-	 * Within its attention group, a ticket's rank orders it: ranked before
-	 * unranked, better rank first, then the newest external update (ADR
-	 * 0022). The group stays ahead, so an awaiting decision never waits
-	 * behind ranked work.
 	 */
-	visibleTickets(
+	projectedTickets(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
 		priorityLabels: readonly string[] = [],
@@ -1179,6 +1186,10 @@ export class FactoryState {
 			priority_override: string | null;
 		}>;
 		const tickets: Ticket[] = [];
+		// The tickets a current snapshot still lists, and each row's stored
+		// Priority override: the rank inheritance below reads them.
+		const live = new Set<string>();
+		const overrides = new Map<string, string | null>();
 		for (const row of rows) {
 			const storedMemberships = this.membershipsFor(row.identity, row.state);
 			const active = storedMemberships.filter(
@@ -1203,6 +1214,8 @@ export class FactoryState {
 			)[0];
 			if (facts == null) continue;
 			const handoff = this.handoffFor(row.identity);
+			if (active.length > 0) live.add(row.identity);
+			overrides.set(row.identity, row.priority_override);
 			// The pull request's own facts beat the rank its Issue references
 			// carry; an issue ticket, which closes nothing, reads its own chain
 			// (ADR 0023).
@@ -1241,10 +1254,61 @@ export class FactoryState {
 				priority,
 			});
 		}
-		return tickets.sort(
-			(left, right) =>
-				attentionGroup(left) - attentionGroup(right) || compareTicketPriority(left, right),
-		);
+		// The tickets a pull request fixes feed its inheritance rule beside
+		// its closing references (ADR 0042): one rule over both links. The
+		// rank source is a live ticket - one a current snapshot still lists -
+		// so a ticket covered by the pull request, hidden from the list, still
+		// supplies its rank, and a ticket that left the source supplies
+		// nothing.
+		for (const ticket of tickets) {
+			if (ticket.sourceKind !== "github-pull-request") continue;
+			const fixing = tickets.filter(
+				(candidate) =>
+					candidate.identity !== ticket.identity &&
+					live.has(candidate.identity) &&
+					pullRequestFixesTicket(ticket, candidate),
+			);
+			if (fixing.length === 0) continue;
+			ticket.priority = effectivePullRequestPriority(
+				priorityLabels,
+				overrides.get(ticket.identity) ?? null,
+				ticket.labels,
+				[
+					...this.issueReferenceRanks(ticket.memberships),
+					...fixing.map((candidate) => ({
+						number: externalKeyNumber(candidate.externalKey) ?? Number.MAX_SAFE_INTEGER,
+						labels: candidate.labels,
+						override: overrides.get(candidate.identity) ?? null,
+					})),
+				],
+			);
+		}
+		return tickets;
+	}
+
+	/**
+	 * Current visible ticket projection, ordered for operator attention.
+	 *
+	 * A covered open ticket - one an open fixing pull request fixes (ADR
+	 * 0042) - leaves the list; the in-flight states are never covered, so
+	 * live work stays listed whatever pull requests exist. Within its
+	 * attention group, a ticket's rank orders it: ranked before unranked,
+	 * better rank first, then the newest external update (ADR 0022). The
+	 * group stays ahead, so an awaiting decision never waits behind ranked
+	 * work.
+	 */
+	visibleTickets(
+		states: readonly WorkflowState[],
+		fallbackTaskType: string,
+		priorityLabels: readonly string[] = [],
+	): Ticket[] {
+		const tickets = this.projectedTickets(states, fallbackTaskType, priorityLabels);
+		return tickets
+			.filter((ticket) => !isCoveredByFixingPullRequest(tickets, ticket))
+			.sort(
+				(left, right) =>
+					attentionGroup(left) - attentionGroup(right) || compareTicketPriority(left, right),
+			);
 	}
 
 	private membershipsFor(identity: string, state: TicketState): StoredMembership[] {

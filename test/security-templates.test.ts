@@ -137,7 +137,7 @@ describe("the security transitions hand the opened pull request to review", () =
 		"resolve-dependabot-alert",
 		"resolve-secret-scanning-alert",
 	]) {
-		test(`${name} writes ready-for-review on the linked pull request`, () => {
+		test(`${name} writes ready-for-review on the fixing pull request`, () => {
 			const transition = config.taskTypes[name].transition;
 			expect(transition).not.toBeUndefined();
 			expect(transition?.pullRequestFacts).toContain("ready-for-review");

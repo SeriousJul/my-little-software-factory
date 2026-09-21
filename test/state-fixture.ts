@@ -50,10 +50,13 @@ export function issueTicket(
 	identity = "github:github.com:I_5",
 	over: Partial<FetchedTicket> = {},
 ): FetchedTicket {
+	// The issue's number is the one its identity carries: a ticket I_6 is
+	// issue #6, so the key and the number a rule reads off the key agree.
+	const number = /I_(\d+)$/.exec(identity)?.[1] ?? "5";
 	return {
 		identity,
 		sourceKind: "github-issue",
-		externalKey: "#5",
+		externalKey: `#${number}`,
 		sourceState: "open",
 		url: "https://github.com/acme/factory/issues/5",
 		title: "Add a webhook retry policy",

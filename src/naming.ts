@@ -28,15 +28,35 @@ export function titleSlug(title: string): string {
 }
 
 /**
+ * The ticket id a factory branch carries: the source-visible external key,
+ * shaped to a git-ref-safe word.
+ *
+ * The normalization is the branch's contract, so the branch a worktree
+ * creates and the link that reads the branch back agree on it (ADR 0042).
+ */
+export function ticketBranchKey(externalKey: string): string {
+	// A stable provider identity can contain ':' or other ref-invalid bytes.
+	// The source-visible external key is safe after this narrow normalization.
+	return externalKey.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
+}
+
+/**
  * The branch a worktree handoff creates: `factory/<ticket id>-<title slug>`.
  * One ticket owns one branch; a second ticket never shares the first's.
  */
 export function branchNameFor(ticket: Ticket): string {
-	// A stable provider identity can contain ':' or other ref-invalid bytes.
-	// The source-visible external key is safe after this narrow normalization.
-	const key =
-		ticket.externalKey.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
-	return `factory/${key}-${titleSlug(ticket.title)}`;
+	return `factory/${ticketBranchKey(ticket.externalKey)}-${titleSlug(ticket.title)}`;
+}
+
+/**
+ * The prefix every factory branch of one ticket carries: `factory/<ticket
+ * id>-`.
+ *
+ * A branch match on the prefix, not the full branch name, so a title the
+ * upstream source changes cannot sever the link (ADR 0042).
+ */
+export function ticketBranchPrefix(externalKey: string): string {
+	return `factory/${ticketBranchKey(externalKey)}-`;
 }
 
 /**

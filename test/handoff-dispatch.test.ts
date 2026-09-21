@@ -1997,6 +1997,109 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(rigRef.events).toContain(`notice:"${FIRST.title}" started from the Work queue`);
 	});
 
+	test("a pickup whose ticket gained an open fixing pull request removes the item, and the ticket keeps its state", async () => {
+		const rigRef = rig([SECOND]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: SECOND.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// While the start waits, the ticket gains an open fixing pull request:
+		// the pull request is in the ticket's repository, and its head branch
+		// carries the ticket's factory-branch prefix (ADR 0042).
+		const pulls = { name: "pulls", kind: "github-pull-requests" };
+		rigRef.state.applyFetch(pulls, {
+			status: "success",
+			fetchedAt: "2026-09-01T04:00:00Z",
+			tickets: [
+				{
+					identity: "github:github.com:P_99",
+					sourceKind: "github-pull-request",
+					externalKey: "#99",
+					sourceState: "open",
+					url: "https://github.com/acme/factory/pulls/99",
+					title: "Close the stale deploy branch",
+					description: "",
+					labels: [],
+					externalUpdatedAt: "2026-09-01T03:59:00Z",
+					repository: {
+						identity: "github.com/acme/factory",
+						displayName: "acme/factory",
+						cloneUrl: "https://github.com/acme/factory.git",
+					},
+					attributes: { headBranch: `factory/6-${SECOND.name}` },
+				},
+			],
+		});
+		// One seat frees: the pickup meets the covered ticket, removes its
+		// item, and the ticket keeps the state it wore while it waited.
+		const picking = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		expect(await picking.pickupWorkQueue()).toBe(0);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(SECOND.identity)).toBe("open");
+		expect(rigRef.events).toContain(
+			`notice:the queued start of "${SECOND.title}" is removed: an open fixing pull request covers the ticket`,
+		);
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(0);
+	});
+
+	test("a covered open ticket is gone from the auto-handoff candidate set", async () => {
+		// The auto-handoff's open dispatch reads the list (ADR 0042): a covered
+		// ticket is not in it, so the start it would run is refused, and the
+		// ticket keeps its state and its pull request's rank.
+		const rigRef = rig([SECOND]);
+		const pulls = { name: "pulls", kind: "github-pull-requests" };
+		rigRef.state.applyFetch(pulls, {
+			status: "success",
+			fetchedAt: "2026-09-01T04:00:00Z",
+			tickets: [
+				{
+					identity: "github:github.com:P_99",
+					sourceKind: "github-pull-request",
+					externalKey: "#99",
+					sourceState: "open",
+					url: "https://github.com/acme/factory/pulls/99",
+					title: "Close the stale deploy branch",
+					description: "",
+					labels: [],
+					externalUpdatedAt: "2026-09-01T03:59:00Z",
+					repository: {
+						identity: "github.com/acme/factory",
+						displayName: "acme/factory",
+						cloneUrl: "https://github.com/acme/factory.git",
+					},
+					attributes: { headBranch: `factory/6-${SECOND.name}` },
+				},
+			],
+		});
+		const dispatching = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents - 1,
+		});
+		await expect(
+			dispatching.dispatch({
+				origin: "open",
+				ticketIdentity: SECOND.identity,
+				choice: liveChoice,
+				previousMessage: "",
+				automatic: true,
+			}),
+		).resolves.toEqual({ ok: false, reason: "the ticket no longer exists" });
+		expect(rigRef.state.ticketState(SECOND.identity)).toBe("open");
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(0);
+	});
+
 	test("a pickup the state refuses keeps the item, and the warning says why once", async () => {
 		const rigRef = rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {

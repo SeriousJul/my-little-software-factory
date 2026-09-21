@@ -184,6 +184,35 @@ export function withIssueReferences(
 	};
 }
 
+/**
+ * The attribute key a pull request membership stores its head branch in
+ * (ADR 0042): the branch the pull request pushes from, read from the source.
+ */
+export const HEAD_BRANCH_ATTRIBUTE = "headBranch";
+
+/**
+ * The head branch a pull request membership carries, or null when the
+ * membership has no such fact: a refresh can change it, and an issue
+ * membership never carries one.
+ */
+export function headBranchOf(attributes: Record<string, string>): string | null {
+	const stored = attributes[HEAD_BRANCH_ATTRIBUTE];
+	return stored === undefined || stored === "" ? null : stored;
+}
+
+/**
+ * A membership's attributes with the pull request's head branch stored
+ * (ADR 0042). The branch is a source fact like `draft`: a refresh can
+ * change it.
+ */
+export function withHeadBranch(
+	attributes: Record<string, string>,
+	headBranch: string,
+): Record<string, string> {
+	if (headBranch === "") return attributes;
+	return { ...attributes, [HEAD_BRANCH_ATTRIBUTE]: headBranch };
+}
+
 /** A normalized source fact, independent of factory state. */
 export interface FetchedTicket {
 	identity: string;

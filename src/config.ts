@@ -140,7 +140,7 @@ export interface TransitionBranch {
 	when?: TransitionJudgment;
 	/** The label facts the ticket wears after this branch fires. */
 	ticketFacts?: string[];
-	/** The label facts the linked pull request wears after this branch fires. */
+	/** The label facts the fixing pull request wears after this branch fires. */
 	pullRequestFacts?: string[];
 	/** Hand off the new position's task without the operator, in any mode. */
 	autoAdvance?: boolean;
@@ -151,13 +151,13 @@ export interface TransitionBranch {
 /**
  * The Transition that hangs off one task type (ADR 0027). A completed turn of
  * the type fires it once, before the completion decision: it writes the
- * label facts on the ticket and its linked pull request, and the machine
+ * label facts on the ticket and its fixing pull request, and the machine
  * re-derives every position from the written labels. It names no destination.
  */
 export interface WorkflowTransition {
 	/** The label facts the ticket wears after a completed turn. */
 	ticketFacts: string[];
-	/** The label facts the linked pull request wears after a completed turn. */
+	/** The label facts the fixing pull request wears after a completed turn. */
 	pullRequestFacts: string[];
 	/** The review-score threshold the score judgments test against. */
 	scoreThreshold?: number;
@@ -192,7 +192,7 @@ export interface TransitionOutcome {
 	ticketWrite: { added: string[]; removed: string[] } | null;
 	/** What the write did on the pull request; null when nothing was written. */
 	pullRequestWrite: { added: string[]; removed: string[] } | null;
-	/** The linked pull request's identity; null when none was found. */
+	/** The fixing pull request's identity; null when none was found. */
 	pullRequestIdentity: string | null;
 	/** The pull request's external key, as the source lists it; null when none. */
 	pullRequestKey: string | null;

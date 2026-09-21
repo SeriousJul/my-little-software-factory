@@ -2,9 +2,9 @@
  * The workflow machine's transition (ADR 0027).
  *
  * A completed turn fires the task type's transition once: the plane writes
- * the label facts on the ticket and its linked pull request, and the machine
+ * the label facts on the ticket and its fixing pull request, and the machine
  * re-derives every position from the written labels. The transition names no
- * destination. The judgments read from the settled turn's last message and
+ * destination. The judgments read from the pull request's review comment and
  * the pulled-source pull request, the branch that holds fires, and its facts
  * and pins take effect.
  */
@@ -18,11 +18,13 @@ import type {
 } from "./config.ts";
 import {
 	type EnvironmentKind,
+	headBranchOf,
 	issueReferencesOf,
 	type SourceMembership,
 	type Ticket,
 } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
+import { ticketBranchPrefix } from "./naming.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "./runner.ts";
 import type { FactoryState } from "./state.ts";
 import { membershipMatchesState } from "./task-selection.ts";
@@ -32,7 +34,7 @@ import { GhAuthenticator } from "./ticket-source.ts";
 export interface TransitionJudgmentInput {
 	/** The review score the completed turn reported; null when there is none. */
 	score: number | null;
-	/** Whether the linked pull request is still open; null when there is none. */
+	/** Whether the fixing pull request is still open; null when there is none. */
 	pullRequestOpen: boolean | null;
 }
 
@@ -252,36 +254,12 @@ export function transitionLabelSet(config: FactoryConfig): ReadonlySet<string> {
 }
 
 /**
- * The pull request a ticket links, from the plane's own ticket list (ADR
- * 0023): the newest non-draft pull request whose issue references name the
- * ticket, by identity or by repository and number. Null when none is found.
+ * The number a source-visible external key carries (`#5` is 5), or null
+ * when the key names none.
  */
-export function findLinkedPullRequest(tickets: readonly Ticket[], issue: Ticket): Ticket | null {
-	const issueIdentities = new Set(issue.memberships.map((membership) => membership.identity));
-	const issueNumbers = new Map<string, number>();
-	for (const membership of issue.memberships) {
-		const number = numberFromExternalKey(membership.externalKey);
-		if (number !== null) issueNumbers.set(membership.repository.identity, number);
-	}
-	const candidates = tickets.filter(
-		(ticket) =>
-			ticket.sourceKind === "github-pull-request" &&
-			!isDraft(ticket) &&
-			ticket.memberships.some((membership) =>
-				issueReferencesOf(membership.attributes).some(
-					(reference) =>
-						(reference.identity !== null && issueIdentities.has(reference.identity)) ||
-						(reference.identity === null &&
-							issueNumbers.get(membership.repository.identity) === reference.number),
-				),
-			),
-	);
-	if (candidates.length === 0) return null;
-	return candidates.sort(
-		(a, b) =>
-			b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
-			a.identity.localeCompare(b.identity),
-	)[0];
+export function externalKeyNumber(key: string): number | null {
+	const match = /^#(\d+)$/.exec(key);
+	return match === null ? null : Number(match[1]);
 }
 
 /** Whether the ticket's newest membership reads draft. */
@@ -298,9 +276,95 @@ export function newestMembershipOf(ticket: Ticket): SourceMembership {
 	)[0];
 }
 
-function numberFromExternalKey(key: string): number | null {
-	const match = /^#(\d+)$/.exec(key);
-	return match === null ? null : Number(match[1]);
+/**
+ * Whether a pull request fixes a ticket (ADR 0042), from the source facts
+ * alone: the pull request closes the ticket - by the ticket's identity, or
+ * by repository and number when the source never learned the identity - or
+ * it is in the ticket's own repository and its head branch carries the
+ * ticket's `factory/<ticket id>-` prefix. The prefix match is on the ticket
+ * id alone, so a title the upstream source changes cannot sever the link.
+ *
+ * The fact is structural: a closed pull request still fixes the ticket, and
+ * the callers decide what an open one stands for.
+ */
+export function pullRequestFixesTicket(pullRequest: Ticket, ticket: Ticket): boolean {
+	if (pullRequest.sourceKind !== "github-pull-request") return false;
+	const ticketNumbers = new Map<string, number>();
+	for (const membership of ticket.memberships) {
+		const number = externalKeyNumber(membership.externalKey);
+		if (number !== null) ticketNumbers.set(membership.repository.identity, number);
+	}
+	for (const membership of pullRequest.memberships) {
+		for (const reference of issueReferencesOf(membership.attributes)) {
+			if (reference.identity !== null && reference.identity === ticket.identity) return true;
+			if (
+				reference.identity === null &&
+				ticketNumbers.get(membership.repository.identity) === reference.number
+			)
+				return true;
+		}
+	}
+	const headBranch = headBranchOf(newestMembershipOf(pullRequest).attributes);
+	if (headBranch === null) return false;
+	return (
+		newestMembershipOf(pullRequest).repository.identity ===
+			newestMembershipOf(ticket).repository.identity &&
+		headBranch.startsWith(ticketBranchPrefix(ticket.externalKey))
+	);
+}
+
+/**
+ * The ticket's fixing pull requests (ADR 0042): the open pull requests that
+ * fix it. Derived from the source facts of the projection it reads; never
+ * stored. A draft fixing pull request counts: the work is in flight, and the
+ * rule's job is to withhold the ticket's task.
+ */
+export function fixingPullRequests(tickets: readonly Ticket[], ticket: Ticket): Ticket[] {
+	return tickets.filter(
+		(candidate) =>
+			candidate.sourceKind === "github-pull-request" &&
+			candidate.identity !== ticket.identity &&
+			candidate.sourceState === "open" &&
+			pullRequestFixesTicket(candidate, ticket),
+	);
+}
+
+/**
+ * The fixing pull request the machine acts on (ADR 0042): the newest
+ * non-draft among the ticket's open fixing pull requests. Null when the
+ * ticket has none, or only draft ones.
+ */
+export function findFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket): Ticket | null {
+	const candidates = fixingPullRequests(tickets, ticket).filter((candidate) => !isDraft(candidate));
+	if (candidates.length === 0) return null;
+	return candidates.sort(
+		(a, b) =>
+			b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
+			a.identity.localeCompare(b.identity),
+	)[0];
+}
+
+/**
+ * The tickets a pull request fixes (ADR 0042), read from the pull request's
+ * side: the tickets it closes, or the tickets its head branch carries. The
+ * rank inheritance reads this side.
+ */
+export function fixedTickets(tickets: readonly Ticket[], pullRequest: Ticket): Ticket[] {
+	return tickets.filter(
+		(candidate) =>
+			candidate.identity !== pullRequest.identity && pullRequestFixesTicket(pullRequest, candidate),
+	);
+}
+
+/**
+ * Whether a ticket is covered by an open fixing pull request (ADR 0042):
+ * the ticket is open, and at least one open pull request fixes it. The list
+ * rule withholds a covered ticket's row, and a draft fixing pull request
+ * counts. The in-flight states are never covered: live work stays reachable
+ * for its Live view, its Close, and its decision.
+ */
+export function isCoveredByFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket): boolean {
+	return ticket.state === "open" && fixingPullRequests(tickets, ticket).length > 0;
 }
 
 /** The request one transition fire needs. */
@@ -316,7 +380,7 @@ export interface FireTransitionRequest {
 
 /**
  * Fire the task type's transition on a completed turn: pull the sources,
- * find the linked pull request, read the judgments, fire the branch, write
+ * find the fixing pull request, read the judgments, fire the branch, write
  * the label facts, and compute the new position. Returns null when the task
  * type has no transition or the ticket has left the list; the fire is
  * idempotent, so a second fire on the same labels writes nothing.
@@ -327,7 +391,10 @@ export async function fireTransition(
 	const transition = request.config.taskTypes[request.taskType]?.transition;
 	if (transition === undefined) return null;
 	await request.refresh?.();
-	const tickets = request.state.visibleTickets(
+	// The fire reads the projection before the list rule (ADR 0042): the rule
+	// withholds a covered ticket's row from the operator's list, and the
+	// machine's fire must still reach the ticket it acts on.
+	const tickets = request.state.projectedTickets(
 		request.config.workflowStates,
 		request.config.defaultTaskType,
 		[],
@@ -335,7 +402,7 @@ export async function fireTransition(
 	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
 	if (ticket === undefined) return null;
 	const pullRequest =
-		ticket.sourceKind === "github-pull-request" ? ticket : findLinkedPullRequest(tickets, ticket);
+		ticket.sourceKind === "github-pull-request" ? ticket : findFixingPullRequest(tickets, ticket);
 	// The review verdict is the pull request's own comment, the place the
 	// review template names for the score. It is read only when this
 	// transition tests a score judgment and only for a pull request that is
@@ -398,7 +465,7 @@ export async function fireTransition(
 								},
 							]),
 				];
-	// No linked pull request, and the transition named facts for one: the skip
+	// No fixing pull request, and the transition named facts for one: the skip
 	// is the fire's visible fact, not a silent gap in the written labels. The
 	// fire derives no position from it either: the position the facts were
 	// meant to stand on is the pull request's, and deriving one on the ticket
@@ -425,7 +492,7 @@ export async function fireTransition(
 	};
 	// The new position: the first state whose match holds on the surface's
 	// post-write labels. A parking state offers no task: the plane does
-	// nothing on it, so the position offers no handoff. A missing linked
+	// nothing on it, so the position offers no handoff. A missing fixing
 	// pull request derives no position: see the skip above.
 	if (!missingPullRequest) {
 		for (const state of request.config.workflowStates) {
@@ -470,7 +537,7 @@ function postWriteLabels(
 }
 
 /**
- * One surface a fire writes on: the ticket, the linked pull request, or - on
+ * One surface a fire writes on: the ticket, the fixing pull request, or - on
  * a pull request ticket - the one surface that holds both roles.
  */
 interface PullRequestSurface {

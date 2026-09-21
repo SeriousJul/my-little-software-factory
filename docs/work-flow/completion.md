@@ -41,13 +41,17 @@ agent reads what the previous one left behind.
 
 A turn that settles `completed` fires the task type's Transition first
 (ADR 0027), before any decision and in either mode: the plane writes the
-transition's label facts on the ticket and on its linked pull request through
-the command runner, and the [workflow machine](../configuration/index.md)
+transition's label facts on the ticket and on its fixing pull request
+through the command runner, and the [workflow machine](../configuration/index.md)
 re-derives every position from the labels it wrote. The fire is idempotent,
 so a second fire on the same labels writes nothing, and its outcome is stored
 on the completion trace: the written facts, the failure when a write failed,
-and the new position. No linked pull request is a visible fact on that trace,
-and it is not retried.
+and the new position. No fixing pull request is a visible fact on that trace,
+and it is not retried. The fixing pull request is derived from the source
+facts on the fire's own projection (ADR 0042): the open pull request that
+closes the ticket, or, for a security item, the open pull request in the
+same repository whose head branch carries the ticket's factory branch
+prefix. No pull request body is read for it, and no body is parsed.
 
 In manual mode, `awaiting` waits for the operator. Enter opens the decision
 modal, which states what the transition wrote and offers the handoff of the
@@ -71,7 +75,7 @@ limits:
 - A fired transition that carries `auto-advance` routes the task of the
 	position it derived, while the parallel limit has room, in manual mode
 	too. The handoff starts on the ticket that position sits on, which is the
-	linked pull request when the written labels put the pull request in the
+	fixing pull request when the written labels put the pull request in the
 	machine. At the per-ticket handoff limit the route degrades to close, and
 	a full parallel limit leaves the ticket awaiting until a slot frees. The
 	route's `auto-handed-off` decision lands the same way the operator's does:

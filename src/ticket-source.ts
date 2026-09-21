@@ -6,7 +6,12 @@
  */
 import type { GitHubAuthentication, TicketSourceConfig } from "./config.ts";
 import { isSecuritySourceKind } from "./config.ts";
-import { type FetchedTicket, type IssueReference, withIssueReferences } from "./domain/ticket.ts";
+import {
+	type FetchedTicket,
+	type IssueReference,
+	withHeadBranch,
+	withIssueReferences,
+} from "./domain/ticket.ts";
 import { type CommandOptions, type CommandRunner, commandFailureText } from "./runner.ts";
 import { GitHubSecurityTicketSource } from "./security-source.ts";
 
@@ -171,7 +176,7 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
         repository { name nameWithOwner url }
       }
       ... on PullRequest {
-        id number title body url state updatedAt isDraft
+        id number title body url state updatedAt isDraft headRefName
         labels(first: 100) { nodes { name } }
         repository { name nameWithOwner url }
         closingIssuesReferences(first: 100) {
@@ -695,7 +700,11 @@ function normalizeGitHubNode(
 	const labelNames = labelNamesOf(item.labels);
 	if (labelNames === undefined) return { ok: false, reason: "GitHub returned an unreadable label" };
 	const isDraft = item.isDraft;
-	if (config.kind === "github-pull-requests" && typeof isDraft !== "boolean")
+	const headRefName = stringOf(item.headRefName);
+	if (
+		config.kind === "github-pull-requests" &&
+		(typeof isDraft !== "boolean" || headRefName === undefined)
+	)
 		return { ok: false, reason: "GitHub returned an unreadable pull request" };
 	// The pull request's closing-issue references, stored as source facts on
 	// its membership (ADR 0023). A refresh can change them.
@@ -727,8 +736,8 @@ function normalizeGitHubNode(
 				cloneUrl: `https://${config.host}/${nameWithOwner}.git`,
 			},
 			attributes:
-				config.kind === "github-pull-requests"
-					? withIssueReferences({ draft: String(isDraft) }, references)
+				config.kind === "github-pull-requests" && headRefName !== undefined
+					? withHeadBranch(withIssueReferences({ draft: String(isDraft) }, references), headRefName)
 					: {},
 		},
 		references,
