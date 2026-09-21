@@ -9,10 +9,11 @@
 - Use and extend the shared control library in
   [src/components/shared](src/components/shared): `fields.ts` for a Text field
   and a Draft field, `choices.ts` for a selector row and a visible action,
-  `form.ts` for a form's slots, focus, and control facts, `type-ahead.ts` for a
-  searchable list row, `presentation.ts` for labels, focus markers, state
-  words, and the tested color pairs, and `theme.ts` for the pure Theme
-  resolution. Colors leave the plane through the shared paint layer
+  `form.ts` for a form's slots, focus, and control facts, `region.ts` for the
+  Decision region's selection, wrap, auto-scroll, visible window, and range
+  text, `type-ahead.ts` for a searchable list row, `spinner.ts` for the
+  animated spinner face beside its written word, `presentation.ts` for labels, focus markers, state words, and
+  the tested color pairs, and `theme.ts` for the pure Theme resolution. Colors leave the plane through the shared paint layer
   ([src/components/theme.ts](src/components/theme.ts)): a surface asks it for a
   role's color, it answers from the Theme the environment resolved (ADR 0024),
   and no surface holds its own palette. Do not add a separate screen-specific
@@ -21,13 +22,14 @@
   (`InputRenderable`, `TextareaRenderable`) outside the library: an automated
   check rejects each of them. Keep domain validation, draft storage, setting
   resolution, and Agent operations in the screen that owns them.
-- Run `npm run gallery` to see a control, and add the state a reviewer must see
+- Run `bun run gallery` to see a control, and add the state a reviewer must see
   to the gallery's examples rather than to a private sketch; the gallery's
   examples are exercised by the suite, so a preview cannot drift from a control.
 - Every control the control plane owns dispatches from the shared Control
   catalogue: the fields, selectors, searches, form actions, and form focus
-  routes, and the Consultation view's list and detail, the Agent interaction
-  mode, and the Consultation confirmation panel. Build missing behavior at the
+  routes, the Consultation view's list and detail, the Work queue's list and
+  item detail, the Agent interaction mode, the Consultation confirmation
+  panel, and the Live view's mode. Build missing behavior at the
   shared module interface, never as another local implementation, and read the
   open items and the unverified acceptance targets in
   [the verification record](docs/verification/shared-controls.md): the
@@ -39,7 +41,7 @@
   plane's own themes keep the tested pairs.
 - Start bug fixes with a reproduction through the real application flow. Use
   isolated test state and fake external operations, not live Agent work.
-- Check `npm run lint`, `npm run typecheck`, and `npm test` for implementation
+- Check `bun run lint`, `bun run typecheck`, and `bun run test` for implementation
   changes, plus the applicable acceptance checks in the standard. Record what
   could not run as incomplete; do not extend a claim past what was measured.
 - Frame snapshots and keyboard tests do not establish screen-reader support.
@@ -53,8 +55,30 @@
   `hyprctl` (or any other window manager or desktop tool) from a test,
   a script, or by hand while verifying a change.
 - Test the app at the unit test layer, and only at that layer. Run tests
-  with `npm test` and the shared test harness. Use fake external operations
+  with `bun run test` and the shared test harness. Use fake external operations
   and isolated test state.
+
+## Test failure triage
+
+When `bun run test` goes red, gather the evidence with these rules and record
+it in the report, beside the existing honesty rule: a skipped required check
+is not a pass, and a recorded load flake is evidence, not a dodge.
+
+- A file that fails in the full suite but passes alone is a load flake, not a
+  regression. The report names the file and records it as such, so a reviewer
+  can weigh the evidence without re-running anything.
+- To prove a failure pre-exists, check out the base commit inside the same
+  worktree, run only the failing files, and restore your work. No new
+  worktree, no repository copy, no clone: the modules, state, and git refs
+  you already have do the work.
+- `/tmp` is for scratch scripts only. Probe files land there; a repository
+  copy, worktree, or clone never does.
+- Iterate with targeted file runs (`bun test <file>`). Exactly one full
+  `bun run test` gates the push; do not pay the full-suite price on every
+  intermediate state.
+- Before the full run, check once whether another `bun test` process is
+  running on this machine, and record the machine state in the report. No
+  sleep or `pgrep` poll loops.
 
 ## Agent skills
 

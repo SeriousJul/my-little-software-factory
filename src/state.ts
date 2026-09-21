@@ -5,11 +5,12 @@
  * memberships, source health, handoff claims, completion traces, and the
  * one-process lease.
  */
+
+import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { TransitionOutcome, WorkflowState } from "./config.ts";
 import {
 	isStaleAgentOutputWarning,
@@ -44,7 +45,9 @@ import {
 	turnLogFromCapture,
 } from "./turn-log.ts";
 
-const SCHEMA_VERSION = 13;
+/** The schema every state file the plane opens is brought to. Exported so a
+ * test can assert the stamp a migration left instead of copying the number. */
+export const SCHEMA_VERSION = 17;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -61,6 +64,51 @@ export interface SourceDefinition {
 
 export interface HandoffClaim {
 	attemptId: string;
+}
+
+/**
+ * One item of the Work queue (ADR 0034): a manual start that waited for a
+ * Parallel limit seat. The choice is the one the operator captured when the
+ * start was asked, and the origin says what the pickup re-checks when a seat
+ * frees.
+ */
+export interface WorkQueueHandoffItem {
+	kind: "handoff";
+	position: number;
+	ticketIdentity: string;
+	origin: HandoffOrigin;
+	choice: HandoffChoice;
+	previousMessage: string;
+	enqueuedAt: string;
+}
+
+/**
+ * A `queued` Consultation's item in the Work queue (ADR 0034, issue #90).
+ *
+ * The item is the pointer; the record is the ask. The record holds the type,
+ * the repository, and the operator's input, and the pickup re-reads the type's
+ * settings from the config when it starts. The record waits in `queued` state
+ * as long as the item holds its place in the shared order, so the two never
+ * exist apart from each other.
+ */
+export interface WorkQueueConsultationItem {
+	kind: "consultation";
+	position: number;
+	consultationId: string;
+	enqueuedAt: string;
+}
+
+/** The two kinds of starts the Work queue holds, in one shared order. */
+export type WorkQueueItem = WorkQueueHandoffItem | WorkQueueConsultationItem;
+
+/** The identity a Work queue row names: the ticket or the Consultation. */
+export function workQueueIdentityOf(item: WorkQueueItem): string {
+	return item.kind === "handoff" ? item.ticketIdentity : item.consultationId;
+}
+
+/** The identity's column in the table, by the row's kind. */
+function identityColumn(item: WorkQueueItem): string {
+	return item.kind === "handoff" ? "ticket_identity" : "consultation_id";
 }
 
 export type ClaimOutcome = { ok: true; claim: HandoffClaim } | { ok: false; reason: string };
@@ -121,6 +169,8 @@ interface HandoffDetails {
 }
 
 export const CONSULTATION_STATES = [
+	"queued",
+	"unscheduled",
 	"opening",
 	"working",
 	"awaiting-response",
@@ -231,6 +281,13 @@ export interface CreateConsultationInput {
 	agentName: string;
 	replacementOf?: string | null;
 	createdAt?: string;
+	/**
+	 * The state the record holds from its first write (ADR 0034, issue #90).
+	 * `opening` is the default for a start that runs at once; `queued` is the
+	 * submit the full Parallel limit kept from starting, and it takes the
+	 * record's Work queue item in the same write.
+	 */
+	initialState?: "opening" | "queued";
 }
 
 export interface ConsultationAgentDetails {
@@ -562,7 +619,116 @@ const MIGRATION_V11_TO_V12 = `
 	);
 `;
 
-const MIGRATION_V12_TO_V13 = `ALTER TABLE completion_traces ADD COLUMN transition_json TEXT;`;
+/**
+ * The v13 step: the Auto-handoff mode (ADR 0036).
+ *
+ * The mode says how the factory runs, so it is factory state, not a config
+ * setting: it survives a restart and a dev reload, and the plane reads the
+ * operator's last choice back from this one row. A fresh state file starts
+ * with the mode off. The row is seeded here rather than read with a default,
+ * so every version of the file holds exactly one explicit answer, and an
+ * upgrade from v12 lands the mode off beside the work it already carries.
+ */
+const MIGRATION_V12_TO_V13 = `
+	CREATE TABLE auto_handoff_mode (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		enabled INTEGER NOT NULL
+	);
+	INSERT INTO auto_handoff_mode(id, enabled) VALUES (1, 0);
+`;
+
+/**
+ * The Work queue table: the durable, ordered list of manual starts waiting for
+ * a Parallel limit seat (ADR 0034). The position is the queue order and the
+ * ticket identity is unique in the table: the queue holds at most one item per
+ * ticket, and a second enqueue for a ticket with a waiting item is refused by
+ * the state.
+ *
+ * One definition serves both the step that lands it at v14 and the step that
+ * repairs it at v15, so the two cannot disagree about the shape the code reads.
+ */
+const WORK_QUEUE_TABLE = `
+	CREATE TABLE work_queue (
+		position INTEGER PRIMARY KEY,
+		ticket_identity TEXT NOT NULL UNIQUE,
+		origin TEXT NOT NULL,
+		choice_json TEXT NOT NULL,
+		previous_message TEXT NOT NULL,
+		enqueued_at TEXT NOT NULL
+	);
+`;
+
+/** The v14 step: the Work queue (ADR 0034). */
+const MIGRATION_V13_TO_V14 = WORK_QUEUE_TABLE;
+
+/** The v17 step: the transition outcome the plane fired on a settled turn (ADR 0027). */
+const MIGRATION_V16_TO_V17 = "ALTER TABLE completion_traces ADD COLUMN transition_json TEXT;";
+
+/**
+ * The v16 columns: the Work queue grows the `queued` Consultation's item
+ * (ADR 0034, issue #90) beside the handoff item, in the one shared order.
+ *
+ * The second kind is a pointer, not a copy: the row names the Consultation
+ * record the operator asked for, and the record holds the type, the
+ * repository, and the operator's input in its own table. Each kind's identity
+ * is unique, so the queue holds at most one item per ticket and per
+ * Consultation alike, and the CHECK holds the row to exactly one: a row with
+ * both identities, or neither, is not a row the plane can read, and the
+ * constraint keeps it from ever committing. A Consultation row leaves the
+ * Handoff's cells null, the way the Handoff row leaves the Consultation's.
+ */
+const WORK_QUEUE_COLUMNS_V16 = `
+	position INTEGER PRIMARY KEY,
+	ticket_identity TEXT UNIQUE,
+	consultation_id TEXT UNIQUE,
+	origin TEXT,
+	choice_json TEXT,
+	previous_message TEXT NOT NULL,
+	enqueued_at TEXT NOT NULL,
+	CHECK ((ticket_identity IS NOT NULL) <> (consultation_id IS NOT NULL))
+`;
+
+/**
+ * The v16 step: rebuild the Work queue around its second kind (ADR 0034,
+ * issue #90).
+ *
+ * The rows the v15 shape holds are all handoff items, and they keep their
+ * place in the shared order: the rebuild copies every row into the new table
+ * beside its own identity, and drops none. The rebuild runs the rename dance
+ * instead of a plain drop, because a plain drop would lose the starts already
+ * waiting in the queue.
+ */
+const MIGRATION_V15_TO_V16 = `
+	CREATE TABLE work_queue_v16 (${WORK_QUEUE_COLUMNS_V16});
+	INSERT INTO work_queue_v16(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at)
+		SELECT position, ticket_identity, NULL, origin, choice_json, previous_message, enqueued_at FROM work_queue;
+	DROP TABLE work_queue;
+	ALTER TABLE work_queue_v16 RENAME TO work_queue;
+`;
+
+/**
+ * The v15 step: rebuild the Work queue a reused version number left unreadable.
+ *
+ * The queue landed twice under the same number. The first step (issue #88, PR
+ * #116, commit 604d803) keyed the row by a random id and ordered it by
+ * `queue_order`. The step that ships (PR #102, commit 30f251b) rewrote that same
+ * v14 string to a table keyed by `position`. A file the first step wrote
+ * therefore claims version 14 while it holds a shape the code cannot read, and
+ * `migrate` skips every step the stamp already covers, so no later open can fix
+ * it. The Work queue read then threw `no such column: position` while the app
+ * mounted, and the plane died at startup with no written refusal.
+ *
+ * The abandoned rows are dropped, not converted: a row that old holds no
+ * previous message, its `choice_json` predates the shipped choice shape, and it
+ * can name a Consultation the queue no longer carries. A waiting manual start
+ * is cheap to put back: the operator presses the same key again. A file that
+ * already holds the sound table is left alone (see `migrate`), so its waiting
+ * items keep their place.
+ */
+const MIGRATION_V14_TO_V15 = `
+	DROP TABLE IF EXISTS work_queue;
+	${WORK_QUEUE_TABLE}
+`;
 
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
@@ -577,16 +743,17 @@ export function openFactoryState(path: string, now?: () => number): FactoryState
 }
 
 export class FactoryState {
-	private readonly db: DatabaseSync;
+	private readonly db: Database;
 	private leaseToken: string | undefined;
+	private hasClosed = false;
 	readonly path: string;
-	/** The clock for internal timestamps. Tests pin it. */
-	private readonly now: () => number;
+	/** The clock for internal timestamps. Tests pin it through the constructor. */
+	private readonly clock: () => number;
 
 	constructor(path: string, now: () => number = () => Date.now()) {
 		this.path = path;
-		this.now = now;
-		this.db = new DatabaseSync(path);
+		this.clock = now;
+		this.db = new Database(path);
 		try {
 			this.db.exec("PRAGMA foreign_keys = ON");
 			this.db.exec("PRAGMA secure_delete = ON");
@@ -610,6 +777,11 @@ export class FactoryState {
 				`cannot prepare database ${path}: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
+	}
+
+	/** The clock's reading, in milliseconds: the unit the state's timestamps take. */
+	now(): number {
+		return this.clock();
 	}
 
 	/**
@@ -638,7 +810,14 @@ export class FactoryState {
 		return (
 			this.db
 				.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-				.get(name) !== undefined
+				.get(name) != null
+		);
+	}
+
+	/** Whether the table holds the named column. A missing table answers false. */
+	private hasColumn(table: string, name: string): boolean {
+		return (
+			this.db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = ?").get(table, name) != null
 		);
 	}
 
@@ -646,9 +825,9 @@ export class FactoryState {
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			this.db.exec("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)");
-			const row = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as
-				| { version: number }
-				| undefined;
+			const row = this.db.prepare("SELECT version FROM schema_version LIMIT 1").get() as {
+				version: number;
+			} | null;
 			const version = row?.version ?? 0;
 			if (version > SCHEMA_VERSION)
 				throw new StateError(`database ${this.path} uses newer schema version ${version}`);
@@ -677,6 +856,19 @@ export class FactoryState {
 			if (version < 11) this.db.exec(MIGRATION_V10_TO_V11);
 			if (version < 12) this.db.exec(MIGRATION_V11_TO_V12);
 			if (version < 13) this.db.exec(MIGRATION_V12_TO_V13);
+			if (version < 14) this.db.exec(MIGRATION_V13_TO_V14);
+			// The v14 number was reused while the queue was new, so the stamp alone
+			// cannot tell the two shapes apart. Ask the file: only the table that
+			// lacks its `position` column is unreadable, and a sound queue keeps
+			// the starts already waiting in it.
+			if (version < 15 && !this.hasColumn("work_queue", "position"))
+				this.db.exec(MIGRATION_V14_TO_V15);
+			if (version < 16) this.db.exec(MIGRATION_V15_TO_V16);
+			// The column may already stand on a file the version stamp alone does
+			// not describe (a downgrade left the column in place), so the stamp
+			// and the file both get asked before the step runs.
+			if (version < 17 && !this.hasColumn("completion_traces", "transition_json"))
+				this.db.exec(MIGRATION_V16_TO_V17);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -710,7 +902,7 @@ export class FactoryState {
 				const exists = this.db
 					.prepare("SELECT source_name FROM source_health WHERE source_name = ?")
 					.get(source.name);
-				if (exists === undefined) {
+				if (exists == null) {
 					this.db
 						.prepare(
 							"INSERT INTO source_health(source_name, kind, health, error, last_success) VALUES (?, ?, 'loading', NULL, NULL)",
@@ -789,7 +981,7 @@ export class FactoryState {
 			// The Referenced issue facts covered by the refresh (ADR 0023): each
 			// overwrites the fact it keys, and an orphaned fact - a reference
 			// the refresh no longer carries - is kept and never cleaned up.
-			if (outcome.referencedIssueFacts !== undefined) {
+			if (outcome.referencedIssueFacts != null) {
 				for (const fact of outcome.referencedIssueFacts) {
 					this.db
 						.prepare(`
@@ -871,7 +1063,7 @@ export class FactoryState {
 			const ticket = this.db
 				.prepare("SELECT priority_override FROM tickets WHERE identity = ?")
 				.get(reference.identity) as { priority_override: string | null } | undefined;
-			if (ticket !== undefined) {
+			if (ticket != null) {
 				const fact = this.db
 					.prepare(
 						"SELECT labels_json FROM memberships WHERE ticket_identity = ? ORDER BY external_updated_at DESC, source_name LIMIT 1",
@@ -900,7 +1092,7 @@ export class FactoryState {
 		const row = this.db
 			.prepare("SELECT source_name FROM source_health WHERE source_name = ?")
 			.get(source.name);
-		if (row === undefined)
+		if (row == null)
 			this.db
 				.prepare("INSERT INTO source_health(source_name, kind, health) VALUES (?, ?, 'loading')")
 				.run(source.name, source.kind);
@@ -969,7 +1161,7 @@ export class FactoryState {
 					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
 					a.sourceName.localeCompare(b.sourceName),
 			)[0];
-			if (facts === undefined) continue;
+			if (facts == null) continue;
 			const handoff = this.handoffFor(row.identity);
 			// The pull request's own facts beat the rank its Issue references
 			// carry; an issue ticket, which closes nothing, reads its own chain
@@ -1054,7 +1246,7 @@ export class FactoryState {
 				.prepare(
 					"SELECT attempt_id FROM handoff_attempts WHERE ticket_identity = ? AND resolved_at IS NULL LIMIT 1",
 				)
-				.get(identity) !== undefined
+				.get(identity) != null
 		);
 	}
 
@@ -1072,9 +1264,9 @@ export class FactoryState {
 					workspace_id: string | null;
 			  }
 			| undefined;
-		if (row === undefined) return null;
+		if (row == null) return null;
 		const choice = jsonChoice(row.choice_json);
-		if (choice === undefined) return null;
+		if (choice == null) return null;
 		return {
 			agentType: choice.agentType,
 			environment: choice.environment,
@@ -1143,7 +1335,7 @@ export class FactoryState {
 					transition_json: string | null;
 			  }
 			| undefined;
-		if (row === undefined) return null;
+		if (row == null) return null;
 		return {
 			taskType: row.task_type,
 			agentType: row.agent_type,
@@ -1159,6 +1351,39 @@ export class FactoryState {
 			decision: row.decision as CompletionDecision | null,
 			transition: transitionOf(row.transition_json),
 		};
+	}
+
+	/**
+	 * The Auto-handoff mode of the factory (ADR 0036).
+	 *
+	 * The mode is a durable fact of this state file, never of the config: two
+	 * state files keep separate modes, and two configs that share one state
+	 * file share the mode. A file the migration seeded reads its stored
+	 * answer, and the seed makes a fresh file read off.
+	 */
+	autoHandoffMode(): boolean {
+		const row = this.db.prepare("SELECT enabled FROM auto_handoff_mode WHERE id = 1").get() as
+			| { enabled: number }
+			| undefined;
+		return row?.enabled === 1;
+	}
+
+	/**
+	 * Store the Auto-handoff mode. The write is the fact the next startup and
+	 * the next dev reload read back, so it is durable the moment it returns.
+	 * A write that fails throws a StateError naming the state file.
+	 */
+	setAutoHandoffMode(enabled: boolean): void {
+		try {
+			this.db
+				.prepare(
+					"INSERT INTO auto_handoff_mode(id, enabled) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled",
+				)
+				.run(enabled ? 1 : 0);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the Auto-handoff mode at ${this.path}: ${message}`);
+		}
 	}
 
 	/**
@@ -1178,14 +1403,14 @@ export class FactoryState {
 			.prepare(
 				"SELECT completed_at, rowid FROM completion_traces WHERE cause = 'failed' AND decision IS NULL ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
-			.get() as { completed_at: string; rowid: number } | undefined;
-		if (held === undefined) return false;
+			.get() as { completed_at: string; rowid: number } | null;
+		if (held == null) return false;
 		const after = this.db
 			.prepare(
 				"SELECT 1 FROM completion_traces WHERE cause = 'completed' AND (completed_at > ? OR (completed_at = ? AND rowid > ?)) LIMIT 1",
 			)
-			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | undefined;
-		return after === undefined;
+			.get(held.completed_at, held.completed_at, held.rowid) as { 1: number } | null;
+		return after == null;
 	}
 
 	/**
@@ -1199,21 +1424,22 @@ export class FactoryState {
 	 * re-read since the latest end decision. A ticket whose cycle has never
 	 * ended is verified, and a failed re-read needs no help here: it leaves
 	 * the membership stale, which already makes the ticket unactionable.
+	 *
+	 * A cycle that ended with no trace row is verified too (ADR 0031): the
+	 * in-flight Close records no end decision, because its turn never settled,
+	 * so there is no finished turn whose source item could have moved. The gate
+	 * reads the absent row as a cycle end that asks for no re-read.
 	 */
 	sourceReverifiedSinceCycleEnd(identity: string): boolean {
-		const ended = this.db
-			.prepare(
-				"SELECT MAX(decided_at) AS ended_at FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL",
-			)
-			.get(identity) as { ended_at: string | null } | undefined;
-		if (ended?.ended_at === undefined || ended.ended_at === null) return true;
+		const ended = this.lastCycleEnd(identity);
+		if (ended === null) return true;
 		const unrefreshed = this.db
 			.prepare(
 				`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name
 				WHERE m.ticket_identity = ? AND m.active = 1 AND (h.last_success IS NULL OR h.last_success < ?) LIMIT 1`,
 			)
-			.get(identity, ended.ended_at) as { 1: number } | undefined;
-		return unrefreshed === undefined;
+			.get(identity, ended.decidedAt) as { 1: number } | undefined;
+		return unrefreshed == null;
 	}
 
 	/**
@@ -1226,16 +1452,16 @@ export class FactoryState {
 	 * row, the same row the re-verify gate reads. A cycle closed after an `aborted` or `failed` turn holds
 	 * nothing: that work did not finish, and a retry is the next move. A
 	 * cycle whose turn never settled holds nothing: its row carries no
-	 * cause. It gates the open auto-handoff only; a manual handoff passes.
+	 * cause. A cycle that ended with no row at all - the in-flight Close, which
+	 * writes no trace (ADR 0031) - holds nothing the same way: the row that
+	 * would say the work finished is not there, and an older cycle's finished
+	 * turn is not this cycle's fact. It gates the open auto-handoff only; a
+	 * manual handoff passes.
 	 */
 	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
-		const ended = this.db
-			.prepare(
-				"SELECT task_type, cause FROM completion_traces WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned') AND decided_at IS NOT NULL ORDER BY decided_at DESC, rowid DESC LIMIT 1",
-			)
-			.get(identity) as { task_type: string; cause: string | null } | undefined;
-		if (ended === undefined) return false;
-		return ended.cause === "completed" && ended.task_type === suggestedTaskType;
+		const ended = this.lastCycleEnd(identity);
+		if (ended === null) return false;
+		return ended.cause === "completed" && ended.taskType === suggestedTaskType;
 	}
 
 	/**
@@ -1281,7 +1507,7 @@ export class FactoryState {
 				"SELECT herdr_name FROM handoffs WHERE ticket_identity = ? AND herdr_name IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as { herdr_name: string | null } | undefined;
-		if (started?.herdr_name !== undefined && started?.herdr_name !== null) {
+		if (started?.herdr_name != null) {
 			return started.herdr_name;
 		}
 		const row = this.db
@@ -1289,7 +1515,7 @@ export class FactoryState {
 				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? ORDER BY m.active DESC, m.source_name LIMIT 1",
 			)
 			.get(identity) as { title: string } | undefined;
-		return row === undefined ? "" : agentNameFor(row.title);
+		return row == null ? "" : agentNameFor(row.title);
 	}
 
 	/**
@@ -1316,7 +1542,7 @@ export class FactoryState {
 					workspace_id: string | null;
 			  }
 			| undefined;
-		if (row === undefined) return null;
+		if (row == null) return null;
 		const choice = jsonChoice(row.choice_json);
 		return {
 			handoffId: row.attempt_id,
@@ -1349,13 +1575,13 @@ export class FactoryState {
 	}): LeftoverEnvironment | null {
 		return this.transaction(() => {
 			const row =
-				input.handoffId !== undefined && input.handoffId !== null
+				input.handoffId != null
 					? (this.db
 							.prepare(
 								"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? AND attempt_id = ?",
 							)
 							.get(input.ticketIdentity, input.handoffId) as HandoffRow | undefined)
-					: input.paneId !== undefined && input.paneId !== null
+					: input.paneId != null
 						? (this.db
 								.prepare(
 									"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? AND pane_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
@@ -1366,7 +1592,7 @@ export class FactoryState {
 									"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 								)
 								.get(input.ticketIdentity) as HandoffRow | undefined);
-			if (row === undefined) return null;
+			if (row == null) return null;
 			const at = input.at ?? new Date(this.now()).toISOString();
 			const choice = jsonChoice(row.choice_json);
 			// A fact that already stood on this handoff is refreshed: the clear
@@ -1504,6 +1730,284 @@ export class FactoryState {
 	}
 
 	/**
+	 * The Work queue (ADR 0034), in the one shared order across kinds: the
+	 * manual starts waiting for a Parallel limit seat. A handoff row that
+	 * cannot be read back is dropped from the projection, exactly as a broken
+	 * choice_json is elsewhere. A Consultation row is the pointer alone, so
+	 * there is no cell for it to lose: the CHECK constraint holds every row to
+	 * exactly one identity, so a row the reader does not know is one the schema
+	 * never committed.
+	 */
+	workQueue(): WorkQueueItem[] {
+		const rows = this.db
+			.prepare(
+				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at FROM work_queue ORDER BY position ASC",
+			)
+			.all() as Array<{
+			position: number;
+			ticket_identity: string | null;
+			consultation_id: string | null;
+			origin: string | null;
+			choice_json: string | null;
+			previous_message: string;
+			enqueued_at: string;
+		}>;
+		const items: WorkQueueItem[] = [];
+		for (const row of rows) {
+			if (row.ticket_identity !== null) {
+				const origin =
+					row.origin === "open" || row.origin === "workflow" || row.origin === "restart"
+						? (row.origin as HandoffOrigin)
+						: undefined;
+				const choice = row.choice_json === null ? undefined : jsonChoice(row.choice_json);
+				if (origin === undefined || choice === undefined) continue;
+				items.push({
+					kind: "handoff",
+					position: row.position,
+					ticketIdentity: row.ticket_identity,
+					origin,
+					choice,
+					previousMessage: row.previous_message,
+					enqueuedAt: row.enqueued_at,
+				});
+				continue;
+			}
+			if (row.consultation_id !== null) {
+				items.push({
+					kind: "consultation",
+					position: row.position,
+					consultationId: row.consultation_id,
+					enqueuedAt: row.enqueued_at,
+				});
+				continue;
+			}
+			// The CHECK holds every row to one identity, so this arm stands for a
+			// row the constraint cannot name: refuse to read it rather than guess
+			// what it asks for.
+			throw new StateError("the Work queue holds a row with no identity");
+		}
+		return items;
+	}
+
+	/** Whether the queue already waits for the ticket: one item per ticket. */
+	hasWorkItem(ticketIdentity: string): boolean {
+		return (
+			this.db.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?").get(ticketIdentity) !=
+			null
+		);
+	}
+
+	/**
+	 * Add the start to the end of the queue. The queue holds at most one item
+	 * per ticket: a second add for a ticket that already waits is refused, and
+	 * the first item keeps its place.
+	 */
+	enqueueWork(entry: {
+		ticketIdentity: string;
+		origin: HandoffOrigin;
+		choice: HandoffChoice;
+		previousMessage: string;
+	}): { ok: true } | { ok: false; reason: string } {
+		try {
+			return this.transaction(() => {
+				const existing = this.db
+					.prepare("SELECT 1 FROM work_queue WHERE ticket_identity = ?")
+					.get(entry.ticketIdentity);
+				if (existing !== null && existing !== undefined)
+					return {
+						ok: false,
+						reason: `ticket ${entry.ticketIdentity} already has a waiting queue item`,
+					};
+				this.db
+					.prepare(
+						"INSERT INTO work_queue(position, ticket_identity, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?)",
+					)
+					.run(
+						entry.ticketIdentity,
+						entry.origin,
+						JSON.stringify(entry.choice),
+						entry.previousMessage,
+						new Date(this.now()).toISOString(),
+					);
+				return { ok: true };
+			});
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the handoff: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+	}
+
+	/** Whether the queue already waits for the Consultation: one item per record. */
+	hasConsultationWorkItem(consultationId: string): boolean {
+		return (
+			this.db.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?").get(consultationId) !=
+			null
+		);
+	}
+
+	/**
+	 * Add the `queued` Consultation's item to the end of the queue (ADR 0034,
+	 * issue #90). The item is the pointer to the record: the record holds the
+	 * operator's ask, and the pickup re-reads the type's settings when it
+	 * starts. The queue holds at most one item per record: a second add for a
+	 * Consultation that already waits is refused, and the first item keeps its
+	 * place.
+	 */
+	enqueueConsultationWork(consultationId: string): { ok: true } | { ok: false; reason: string } {
+		try {
+			return this.transaction(() => {
+				const existing = this.db
+					.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?")
+					.get(consultationId);
+				if (existing !== null && existing !== undefined)
+					return {
+						ok: false,
+						reason: `consultation ${consultationId} already has a waiting queue item`,
+					};
+				this.db
+					.prepare(
+						"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
+					)
+					.run(consultationId, new Date(this.now()).toISOString());
+				return { ok: true };
+			});
+		} catch (error) {
+			return {
+				ok: false,
+				reason: `cannot enqueue the Consultation: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+	}
+
+	/** Cancel the ticket's waiting item. The ticket keeps its state. */
+	removeWorkItem(ticketIdentity: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare("DELETE FROM work_queue WHERE ticket_identity = ?")
+				.run(ticketIdentity);
+			if (result.changes === 0) return false;
+			this.repackWorkQueuePositions();
+			return true;
+		});
+	}
+
+	/**
+	 * Remove the Consultation's item from the shared order (ADR 0034, issue
+	 * #90, unscheduled by issue #91). The removal is the item's, not the
+	 * record's: the ask stands behind the pointer it loses, and a record that
+	 * was still `queued` moves to `unscheduled` in the same write, so the
+	 * operator finds it in the Consultation section with its type, repository,
+	 * and initial input. A record that left `queued` behind the removal - a
+	 * close or a delete that won the race - keeps the state it holds.
+	 */
+	removeConsultationWorkItem(consultationId: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare("DELETE FROM work_queue WHERE consultation_id = ?")
+				.run(consultationId);
+			if (result.changes === 0) return false;
+			this.repackWorkQueuePositions();
+			this.db
+				.prepare(
+					"UPDATE consultations SET state = 'unscheduled', updated_at = ? WHERE id = ? AND state = 'queued'",
+				)
+				.run(new Date(this.now()).toISOString(), consultationId);
+			return true;
+		});
+	}
+
+	/**
+	 * Schedule an `unscheduled` Consultation back into the Work queue (issue
+	 * #91): the record moves to `queued` and its item returns at the queue's
+	 * tail in one write, the way the launcher's creation wrote them together.
+	 * The write reaches an `unscheduled` record only, and refuses one that
+	 * already waits: the queue holds at most one item per record.
+	 */
+	scheduleConsultation(consultationId: string): { ok: true } | { ok: false; reason: string } {
+		return this.transaction(() => {
+			const waiting = this.db
+				.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?")
+				.get(consultationId);
+			if (waiting !== null && waiting !== undefined)
+				return {
+					ok: false,
+					reason: `consultation ${consultationId} already has a waiting queue item`,
+				};
+			const result = this.db
+				.prepare(
+					"UPDATE consultations SET state = 'queued', updated_at = ? WHERE id = ? AND state = 'unscheduled'",
+				)
+				.run(new Date(this.now()).toISOString(), consultationId);
+			if (Number(result.changes) === 0)
+				return { ok: false, reason: "the Consultation is not unscheduled" };
+			this.db
+				.prepare(
+					"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
+				)
+				.run(consultationId, new Date(this.now()).toISOString());
+			return { ok: true };
+		});
+	}
+
+	/**
+	 * Take one Consultation's pointer out of the shared order (ADR 0034,
+	 * issue #90).
+	 *
+	 * The record and its item are created in one write, and every write that
+	 * ends the record's wait breaks them together here: the queue never keeps
+	 * an item for a record that no longer waits, and never lists an item that
+	 * names no record.
+	 */
+	private dropConsultationWorkItem(consultationId: string): void {
+		this.db.prepare("DELETE FROM work_queue WHERE consultation_id = ?").run(consultationId);
+	}
+
+	/**
+	 * Repack the places so the queue stays dense: an item's place in the queue
+	 * is its position, and a gap would leave a number the queue never shows.
+	 */
+	private repackWorkQueuePositions(): void {
+		const remaining = this.db
+			.prepare("SELECT position FROM work_queue ORDER BY position ASC")
+			.all() as Array<{ position: number }>;
+		const set = this.db.prepare("UPDATE work_queue SET position = ? WHERE position = ?");
+		remaining.forEach((row, index) => {
+			if (row.position !== index) set.run(index, row.position);
+		});
+	}
+
+	/**
+	 * Move one item one place within the shared queue order, toward the front
+	 * (`up`) or the back (`down`). The order is shared across kinds, so the
+	 * move crosses kinds, and an item at an edge moves nowhere. The identity
+	 * names the row in whichever kind holds it: the two identity columns are
+	 * both unique, so an identity is one row.
+	 */
+	moveWorkItem(identity: string, direction: "up" | "down"): boolean {
+		return this.transaction(() => {
+			const items = this.workQueue();
+			const index = items.findIndex((item) => workQueueIdentityOf(item) === identity);
+			const target = index + (direction === "up" ? -1 : 1);
+			if (index < 0 || target < 0 || target >= items.length) return false;
+			// The swap goes through a spare position: the column is the
+			// queue's primary key, and the two rows may not share either
+			// place for a step of the swap.
+			const swap = this.db.prepare(
+				`UPDATE work_queue SET position = ? WHERE ${identityColumn(items[index])} = ?`,
+			);
+			const swapTarget = this.db.prepare(
+				`UPDATE work_queue SET position = ? WHERE ${identityColumn(items[target])} = ?`,
+			);
+			swap.run(-1, identity);
+			swapTarget.run(items[index].position, workQueueIdentityOf(items[target]));
+			swap.run(items[target].position, identity);
+			return true;
+		});
+	}
+
+	/**
 	 * The tickets in the given states, with their latest handoff.
 	 *
 	 * When a Priority label list is given, the tickets come back in the
@@ -1547,7 +2051,7 @@ export class FactoryState {
 		}> = [];
 		for (const row of rows) {
 			const choice = jsonChoice(row.choice_json);
-			if (choice === undefined) continue;
+			if (choice == null) continue;
 			out.push({
 				ticketIdentity: row.ticket_identity,
 				state: row.state,
@@ -1624,7 +2128,7 @@ export class FactoryState {
 			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(handoffId) as { id: string } | undefined;
-			if (pending === undefined) return false;
+			if (pending == null) return false;
 			const moved = this.db
 				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
 				.run(identity);
@@ -1657,13 +2161,13 @@ export class FactoryState {
 			const ticket = this.db
 				.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 				.get(identity) as { state: TicketState; work_cycle: number } | undefined;
-			if (ticket === undefined || ticket.state !== "open") return null;
+			if (ticket == null || ticket.state !== "open") return null;
 			const previous = this.db
 				.prepare(
 					"SELECT choice_json FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 				)
 				.get(identity) as { choice_json: string } | undefined;
-			if (previous === undefined || jsonChoice(previous.choice_json) === undefined) return null;
+			if (previous == null || jsonChoice(previous.choice_json) == null) return null;
 			if (this.hasUnresolvedAttempt(identity)) return null;
 			const moved = this.db
 				.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'open'")
@@ -1719,9 +2223,9 @@ export class FactoryState {
 			const pending = this.db
 				.prepare("SELECT id FROM completion_traces WHERE handoff_id = ? AND decision IS NULL")
 				.get(input.handoffId) as { id: string } | undefined;
-			if (handoff === undefined) return;
+			if (handoff == null) return;
 			const choice = jsonChoice(handoff.choice_json);
-			if (pending !== undefined) {
+			if (pending != null) {
 				// A reopened turn settles again: the same trace is refreshed, its
 				// cause and detail overwritten, so a recovered turn reads as the
 				// turn it became.
@@ -1770,29 +2274,17 @@ export class FactoryState {
 	 *
 	 * `closed`, `auto-closed`, and `abandoned` end the work cycle: the
 	 * ticket returns to open with the cycle incremented. A handoff decision
-	 * leaves the state to the handoff that follows it. `goto` is not a
-	 * completion decision: it refocuses the existing agent and moves an
-	 * awaiting ticket back to running, and the trace does not record it. The
-	 * turn's pending trace stays pending, and the next settle refreshes it.
+	 * leaves the state to the handoff that follows it.
 	 *
 	 * A trace decision lands on the handoff's pending row. When the turn
 	 * never settled there is no pending row, and only `abandoned` still
 	 * writes one - once per handoff - so an un-settled cycle leaves a
 	 * complete trace. The ticket state moves only when this call wrote or
-	 * updated the trace (or, for `goto`, moved the state), so a double
-	 * decision can never bump the cycle number twice. Returns whether the
-	 * decision was applied.
+	 * updated the trace, so a double decision can never bump the cycle
+	 * number twice. Returns whether the decision was applied.
 	 */
 	applyCompletionDecision(input: CompletionDecisionInput): boolean {
 		return this.transaction(() => {
-			if (input.decision === "goto") {
-				// A state move only: the trace keeps recording the settled turn,
-				// pending a real decision.
-				const moved = this.db
-					.prepare("UPDATE tickets SET state = 'running' WHERE identity = ? AND state = 'awaiting'")
-					.run(input.ticketIdentity);
-				return Number(moved.changes) > 0;
-			}
 			const decided = this.db
 				.prepare(
 					"UPDATE completion_traces SET decision = ?, decided_at = ? WHERE handoff_id = ? AND decision IS NULL",
@@ -1815,7 +2307,7 @@ export class FactoryState {
 			const handoff = this.db
 				.prepare("SELECT work_cycle, choice_json FROM handoffs WHERE attempt_id = ?")
 				.get(input.handoffId) as { work_cycle: number; choice_json: string } | undefined;
-			if (handoff === undefined) return false;
+			if (handoff == null) return false;
 			const choice = jsonChoice(handoff.choice_json);
 			this.db
 				.prepare(
@@ -1858,6 +2350,72 @@ export class FactoryState {
 		// handed-off and auto-handed-off: the handoff's settle moves the state.
 	}
 
+	/**
+	 * Close the work cycle of a ticket whose turn never settled (ADR 0031).
+	 *
+	 * Key `w` runs this on an in-flight ticket. The turn never settled, so the
+	 * close writes no completion trace: there is no cause, no turn log, and no
+	 * message to record, and the handoff row stays the record of the work. The
+	 * ticket returns to open with its cycle incremented, exactly as a closed
+	 * decision leaves it, so the Handoff limit counts the closed cycle like any
+	 * other cycle end.
+	 *
+	 * The move runs only from an in-flight state: an `open` ticket holds no work
+	 * to close, and an `awaiting` one closes through its settled turn's
+	 * decision. A ticket that settled or closed while the close waited over the
+	 * seat changes nothing, and the caller reads that back as a refusal.
+	 */
+	closeWorkCycle(ticketIdentity: string): boolean {
+		return this.transaction(() => {
+			const ticket = this.db
+				.prepare("SELECT state FROM tickets WHERE identity = ?")
+				.get(ticketIdentity) as { state: TicketState } | undefined;
+			if (ticket == null) return false;
+			if (ticket.state !== "handed-off" && ticket.state !== "running") return false;
+			this.db
+				.prepare(
+					"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?",
+				)
+				.run(ticketIdentity);
+			return true;
+		});
+	}
+
+	/**
+	 * The cycle-end decision of the cycle that ended last: the record the two
+	 * cycle-end gates read.
+	 *
+	 * A cycle end lands on the trace of a handoff that ran in it, and only a
+	 * cycle end moves the ticket's `work_cycle` on, so the newest ended cycle is
+	 * `work_cycle - 1` and its end row carries that number. A ticket whose
+	 * newest cycle ended with no row at all - the in-flight Close, which writes
+	 * no trace (ADR 0031) - reads null here, and so does a ticket whose cycle has
+	 * never ended.
+	 *
+	 * Both gates read this one fact, so the absent row and the cause-less row -
+	 * an abandon of a turn that never settled - reach them the same way: as a
+	 * cycle end that asserts nothing about finished work.
+	 */
+	private lastCycleEnd(identity: string): {
+		decidedAt: string;
+		taskType: string;
+		cause: string | null;
+	} | null {
+		const row = this.db
+			.prepare(
+				`SELECT decided_at, task_type, cause FROM completion_traces
+				 WHERE ticket_identity = ? AND decision IN ('closed', 'auto-closed', 'abandoned')
+				   AND decided_at IS NOT NULL
+				   AND work_cycle = (SELECT work_cycle - 1 FROM tickets WHERE identity = ?)
+				 ORDER BY decided_at DESC, rowid DESC LIMIT 1`,
+			)
+			.get(identity, identity) as
+			| { decided_at: string; task_type: string; cause: string | null }
+			| undefined;
+		if (row == null) return null;
+		return { decidedAt: row.decided_at, taskType: row.task_type, cause: row.cause };
+	}
+
 	/** Claim before the first external command. It rechecks all eligibility atomically. */
 	claimHandoff(ticketIdentity: string, choice: HandoffChoice, origin: HandoffOrigin): ClaimOutcome {
 		try {
@@ -1865,7 +2423,7 @@ export class FactoryState {
 				const ticket = this.db
 					.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 					.get(ticketIdentity) as { state: TicketState; work_cycle: number } | undefined;
-				if (ticket === undefined) return { ok: false, reason: "ticket no longer exists" };
+				if (ticket == null) return { ok: false, reason: "ticket no longer exists" };
 				if (origin === "open") {
 					if (ticket.state !== "open")
 						return {
@@ -1877,7 +2435,7 @@ export class FactoryState {
 							`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = ? AND m.active = 1 AND h.health = 'healthy' LIMIT 1`,
 						)
 						.get(ticketIdentity);
-					if (eligible === undefined)
+					if (eligible == null)
 						return {
 							ok: false,
 							reason:
@@ -1952,7 +2510,7 @@ export class FactoryState {
 				.get(attemptId) as
 				| { ticket_identity: string; work_cycle: number; choice_json: string }
 				| undefined;
-			if (attempt === undefined) return;
+			if (attempt == null) return;
 			if (agentStarted) {
 				this.db
 					.prepare(
@@ -1988,10 +2546,42 @@ export class FactoryState {
 		});
 	}
 
+	/**
+	 * The boot recovery for a run that died with a handoff in flight.
+	 *
+	 * The lease keeps the plane to one process, so an attempt left unsettled
+	 * when a new run opens the state is a remnant: the dispatch that claimed
+	 * it died with its run and will never settle it. The boot settles each
+	 * remnant as a failed start with that reason and frees its ticket from
+	 * the recovery block (ADR 0041).
+	 *
+	 * The ticket's state never moves: a claim that never settled never moved
+	 * its ticket. An agent a dead run may have started is a leftover the
+	 * operator sees in herdr, not a row this recovery writes.
+	 *
+	 * Returns how many attempts the recovery settled.
+	 */
+	recoverUnsettledHandoffs(): number {
+		return this.transaction(() => {
+			const now = new Date(this.now()).toISOString();
+			const settled = this.db
+				.prepare(
+					"UPDATE handoff_attempts SET stage = 'failed', resolved_at = ?, failure_reason = ? WHERE resolved_at IS NULL",
+				)
+				.run(now, "the run that claimed this handoff ended before it settled it");
+			return Number(settled.changes);
+		});
+	}
+
 	/** Create the Consultation record before any Herdr or git command runs. */
 	createConsultation(input: CreateConsultationInput): Consultation {
 		const id = input.id ?? randomUUID();
 		const createdAt = input.createdAt ?? new Date().toISOString();
+		// The state the record holds from its first write (ADR 0034, issue
+		// #90). A record that cannot take a Parallel limit seat is born `queued`
+		// with its Work queue item in the same write, so the record and the
+		// pointer to it commit together and never exist apart from each other.
+		const initialState = input.initialState ?? "opening";
 		this.transaction(() => {
 			this.db
 				.prepare(
@@ -2001,7 +2591,7 @@ export class FactoryState {
 						repository_display_name, repository_clone_url, repository_path,
 						state, created_at, updated_at, agent_name, draft, replacement_of,
 						attention_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'opening', ?, ?, ?, '', ?, NULL)`,
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, NULL)`,
 				)
 				.run(
 					id,
@@ -2018,6 +2608,7 @@ export class FactoryState {
 					input.repository.displayName,
 					input.repository.cloneUrl,
 					input.repository.path,
+					initialState,
 					createdAt,
 					createdAt,
 					input.agentName,
@@ -2028,9 +2619,10 @@ export class FactoryState {
 					"INSERT INTO consultation_turns(id, consultation_id, input, accepted_at, sequence_baseline) VALUES (?, ?, ?, ?, NULL)",
 				)
 				.run(randomUUID(), id, input.initialInput, createdAt);
+			if (initialState === "queued") this.insertWorkQueueConsultationItem(id, createdAt);
 		});
 		const consultation = this.consultation(id);
-		if (consultation === undefined) throw new StateError(`consultation ${id} was not created`);
+		if (consultation == null) throw new StateError(`consultation ${id} was not created`);
 		return consultation;
 	}
 
@@ -2039,7 +2631,7 @@ export class FactoryState {
 		const row = this.db.prepare("SELECT * FROM consultations WHERE id = ?").get(id) as
 			| ConsultationRow
 			| undefined;
-		return row === undefined ? undefined : this.consultationFromRow(row);
+		return row == null ? undefined : this.consultationFromRow(row);
 	}
 
 	/** List Consultations by operator priority. Closed records are opt-in. */
@@ -2094,7 +2686,7 @@ export class FactoryState {
 				"SELECT identities_json FROM checkout_conflict_confirmations WHERE checkout_path = ?",
 			)
 			.get(checkoutPath) as { identities_json: string } | undefined;
-		if (row === undefined) return [];
+		if (row == null) return [];
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(row.identities_json);
@@ -2149,6 +2741,91 @@ export class FactoryState {
 		return row?.state === "opening";
 	}
 
+	/**
+	 * The one Work queue item write every caller shares (ADR 0034, issue #90):
+	 * the row lands at the end of the shared order beside the handoff items.
+	 * The Consultation creation's `queued` write runs it inside the creation's
+	 * own transaction, so the record and its pointer commit together.
+	 */
+	private insertWorkQueueConsultationItem(consultationId: string, createdAt: string): void {
+		this.db
+			.prepare(
+				"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, NULL, ?, NULL, NULL, '', ?)",
+			)
+			.run(consultationId, createdAt);
+	}
+
+	/**
+	 * Take a Consultation out of its wait and into the opening (ADR 0034,
+	 * issue #90, the `unscheduled` start by issue #91).
+	 *
+	 * The move is the seat: from this write on the record holds a Parallel
+	 * limit seat the Work queue's pickup paid for, or a seat the operator's
+	 * start-now took over the cap. The write reaches a `queued` or an
+	 * `unscheduled` record only. The atomic step keeps a close or a delete
+	 * that raced the start from being yanked back to opening; the loser of
+	 * the race answers `false` and starts nothing. The winner drops the
+	 * record's pointer in the same write: the claim ends the wait, and the
+	 * queue holds the item only while the record waits.
+	 */
+	beginConsultationStart(id: string): boolean {
+		return this.transaction(() => {
+			const result = this.db
+				.prepare(
+					"UPDATE consultations SET state = 'opening', updated_at = ? WHERE id = ? AND state IN ('queued', 'unscheduled')",
+				)
+				.run(new Date(this.now()).toISOString(), id);
+			if (Number(result.changes) === 0) return false;
+			this.dropConsultationWorkItem(id);
+			return true;
+		});
+	}
+
+	/**
+	 * Re-read the Consultation type's settings into the record (ADR 0034,
+	 * issue #90).
+	 *
+	 * A record that waited - in the queue or `unscheduled` - starts on the
+	 * type as the config holds it now, not on the settings the record
+	 * captured when the launcher created it. The operator's own input never
+	 * changes; the opening prompt is re-rendered from the type's template and
+	 * the stored input.
+	 *
+	 * The write reaches a `queued` or an `unscheduled` record only: the
+	 * start's claim below it is atomic the same way, and a record that left
+	 * the wait behind the start is never touched by it.
+	 */
+	updateConsultationTypeSettings(
+		id: string,
+		settings: {
+			agentType: string;
+			environment: EnvironmentKind;
+			model: string;
+			thinking: string;
+			contextWindow: string;
+			template: string;
+			renderedOpeningPrompt: string;
+		},
+	): boolean {
+		const result = this.db
+			.prepare(
+				`UPDATE consultations SET agent_type = ?, environment = ?, model = ?, thinking = ?,
+					context_window = ?, template = ?, rendered_opening_prompt = ?, updated_at = ? WHERE id = ? AND state IN ('queued', 'unscheduled')`,
+			)
+			.run(
+				settings.agentType,
+				settings.environment,
+				settings.model,
+				settings.thinking,
+				settings.contextWindow,
+				settings.template,
+				settings.renderedOpeningPrompt,
+				new Date(this.now()).toISOString(),
+				id,
+			);
+		return Number(result.changes) > 0;
+	}
+
 	/** Record an opening outcome. A pre-Agent failure is immutable. */
 	failConsultationOpening(id: string, reason: string, agentStarted = false): void {
 		this.db
@@ -2197,7 +2874,7 @@ export class FactoryState {
 				| undefined;
 			// Check `row` for existence before the state, so a missing
 			// consultation cannot reach the next line's dereference.
-			if (row === undefined || row.state !== "awaiting-response") return false;
+			if (row == null || row.state !== "awaiting-response") return false;
 			if (row.latest_sequence !== null && sequence <= row.latest_sequence) return false;
 			const pending = this.pendingConsultationResponse(id);
 			this.db
@@ -2327,7 +3004,7 @@ export class FactoryState {
 					created_at: string;
 			  }
 			| undefined;
-		return row === undefined
+		return row == null
 			? null
 			: {
 					id: row.id,
@@ -2353,7 +3030,7 @@ export class FactoryState {
 				.prepare("SELECT state, warning FROM consultations WHERE id = ?")
 				.get(id) as { state: ConsultationState; warning: string | null } | undefined;
 			if (
-				consultation === undefined ||
+				consultation == null ||
 				(consultation.state !== "working" && consultation.state !== "opening")
 			)
 				return false;
@@ -2362,7 +3039,7 @@ export class FactoryState {
 					"SELECT * FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NULL ORDER BY accepted_at DESC LIMIT 1",
 				)
 				.get(id) as ConsultationTurnRow | undefined;
-			if (turn === undefined) return false;
+			if (turn == null) return false;
 			// A null sequence is accepted for older Herdr versions. A known
 			// sequence must be newer than the turn baseline.
 			if (
@@ -2435,7 +3112,7 @@ export class FactoryState {
 		const row = this.db.prepare("SELECT * FROM consultation_turns WHERE id = ?").get(id) as
 			| ConsultationTurnRow
 			| undefined;
-		return row === undefined ? undefined : turnFromRow(row);
+		return row == null ? undefined : turnFromRow(row);
 	}
 
 	consultationTurns(id: string): ConsultationTurn[] {
@@ -2465,7 +3142,7 @@ export class FactoryState {
 				.prepare(
 					"SELECT 1 FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL LIMIT 1",
 				)
-				.get(id) !== undefined
+				.get(id) != null
 		);
 	}
 
@@ -2546,7 +3223,16 @@ export class FactoryState {
 
 	/** Mark cleanup as started before issuing the first external close command. */
 	beginConsultationClose(id: string): boolean {
-		return this.setConsultationState(id, "closing");
+		// A close is the other way a `queued` record leaves its wait besides the
+		// pickup (ADR 0034, issue #90): the operator abandoned the ask. Its
+		// pointer leaves the shared order in the same write, so the queue never
+		// holds an item whose record is closing behind a cap the pickup cannot
+		// reach.
+		return this.transaction(() => {
+			if (!this.setConsultationState(id, "closing")) return false;
+			this.dropConsultationWorkItem(id);
+			return true;
+		});
 	}
 
 	/** Persist a cleanup failure while leaving the aggregate recoverable. */
@@ -2605,7 +3291,7 @@ export class FactoryState {
 	/** Recovery input is deterministic and never launched automatically. */
 	replacementInput(id: string, limit = 64 * 1024): string {
 		const consultation = this.consultation(id);
-		if (consultation === undefined) return "";
+		if (consultation == null) return "";
 		const parts = [`Original input:\n${consultation.initialInput}`];
 		const turns = this.consultationTurns(id);
 		const snapshots = this.consultationSnapshots(id);
@@ -2614,19 +3300,30 @@ export class FactoryState {
 			const turn = turns[index];
 			const snapshot = snapshots.find((item) => item.turnId === turn.id);
 			parts.push(
-				`\nOperator response:\n${turn.input}${snapshot === undefined ? "" : `\nAgent output:\n${snapshot.text}`}`,
+				`\nOperator response:\n${turn.input}${snapshot == null ? "" : `\nAgent output:\n${snapshot.text}`}`,
 			);
 		}
 		return boundedInput(parts, limit);
 	}
 
-	/** Delete only closed local history, then reduce WAL remnants. */
+	/**
+	 * Delete closed or unscheduled local history, then reduce WAL remnants.
+	 *
+	 * An `unscheduled` record (issue #91) has never had an Agent, an
+	 * environment, or a worktree: its history is the ask and its turns, and
+	 * its delete keeps its captured history out of the backups the operator
+	 * asked to lose. Every other state refuses: the record still stands behind
+	 * work the delete may not take out from under it.
+	 */
 	deleteConsultation(id: string): boolean {
 		const row = this.db.prepare("SELECT state FROM consultations WHERE id = ?").get(id) as
 			| { state: ConsultationState }
 			| undefined;
-		if (row?.state !== "closed") return false;
+		if (row?.state !== "closed" && row?.state !== "unscheduled") return false;
 		this.transaction(() => {
+			// The delete takes any pointer the record still leaves behind, so the
+			// queue never lists an item that names no record (ADR 0034, issue #90).
+			this.dropConsultationWorkItem(id);
 			this.db.prepare("DELETE FROM consultations WHERE id = ?").run(id);
 		});
 		try {
@@ -2653,7 +3350,7 @@ export class FactoryState {
 	updateConsultationAgentHandles(id: string, details: ConsultationAgentDetails): void {
 		this.transaction(() => {
 			const current = this.consultation(id);
-			if (current === undefined) return;
+			if (current == null) return;
 			const moves: Array<[string, string | null, string | null]> = [
 				["pane", current.paneId, details.paneId],
 				["tab", current.tabId, details.tabId ?? null],
@@ -2699,7 +3396,7 @@ export class FactoryState {
 				"SELECT id FROM consultation_turns WHERE consultation_id = ? AND settled_at IS NOT NULL AND snapshot_id IS NULL ORDER BY settled_at DESC LIMIT 1",
 			)
 			.get(id) as { id: string } | undefined;
-		if (turn === undefined) return false;
+		if (turn == null) return false;
 		const bounded = boundedSnapshot(output);
 		const snapshotId = randomUUID();
 		this.transaction(() => {
@@ -2757,6 +3454,16 @@ export class FactoryState {
 		};
 	}
 
+	/**
+	 * Take the one-process lease on this state file.
+	 *
+	 * A row whose pid is gone is safe to take over, so a run that died without
+	 * closing never locks the state file. The run that holds the lease must
+	 * still close it: `bun run dev` restarts the entry inside one process, so
+	 * the row a restart leaves behind names the next boot's own pid, and only a
+	 * release before that boot reads it clears the way. See
+	 * `installStateShutdown` in src/startup.ts.
+	 */
 	acquireLease(): void {
 		const owner = randomUUID();
 		const host = os.hostname();
@@ -2764,8 +3471,8 @@ export class FactoryState {
 		this.transaction(() => {
 			const current = this.db
 				.prepare("SELECT owner_token, pid, host FROM lease WHERE name = 'control-plane'")
-				.get() as { owner_token: string; pid: number; host: string } | undefined;
-			if (current !== undefined && !this.isDeadLocalOwner(current, host))
+				.get() as { owner_token: string; pid: number; host: string } | null;
+			if (current != null && !this.isDeadLocalOwner(current, host))
 				throw new StateError(
 					`state database is already in use by process ${current.pid} on ${current.host}`,
 				);
@@ -2792,20 +3499,34 @@ export class FactoryState {
 	}
 
 	heartbeatLease(): void {
-		if (this.leaseToken === undefined) return;
+		if (this.leaseToken == null) return;
 		this.db
 			.prepare("UPDATE lease SET heartbeat_at = ? WHERE name = 'control-plane' AND owner_token = ?")
 			.run(Date.now(), this.leaseToken);
 	}
 	releaseLease(): void {
-		if (this.leaseToken === undefined) return;
+		if (this.leaseToken == null) return;
 		this.db
 			.prepare("DELETE FROM lease WHERE name = 'control-plane' AND owner_token = ?")
 			.run(this.leaseToken);
 		this.leaseToken = undefined;
 	}
+	/**
+	 * Close the state: give the lease back, fold the journal into the file, and
+	 * drop the connection. Closing twice is a normal path, not an error: the
+	 * shutdown signals and the process exit hook both close, and the signal
+	 * path then ends the run, which fires the exit hook again.
+	 */
 	close(): void {
+		if (this.hasClosed) return;
+		this.hasClosed = true;
 		this.releaseLease();
+		// Fold the WAL into the main file so a closed state file is complete on
+		// its own: Bun's close does not checkpoint the way a final SQLite close
+		// does, and the data otherwise stays in the -wal sidecar.
+		try {
+			this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+		} catch {}
 		this.db.close();
 	}
 
@@ -2921,10 +3642,20 @@ function compareConsultations(left: Consultation, right: Consultation): number {
 				return 3;
 			case "opening":
 				return 4;
-			case "closing":
+			// A `queued` record needs no operator: it waits for a seat, and it
+			// sorts after the live records that hold their seats and before the
+			// records that are closing (ADR 0034, issue #90).
+			case "queued":
 				return 5;
-			case "closed":
+			// An `unscheduled` record needs the operator's decision - schedule,
+			// start, or delete (issue #91) - so it stands beside the queue's
+			// waiters and ahead of the closing records.
+			case "unscheduled":
 				return 6;
+			case "closing":
+				return 7;
+			case "closed":
+				return 8;
 		}
 	};
 	const leftGroup = group(left.state);
@@ -3019,6 +3750,27 @@ interface HandoffRow {
 	workspace_id: string | null;
 }
 
+/**
+ * The transition outcome stored on a trace; null when the turn settled
+ * without a fire, and null when a stored record does not parse: a broken
+ * record fails open, the same way a broken cause does.
+ */
+function transitionOf(json: string | null): TransitionOutcome | null {
+	if (json === null) return null;
+	try {
+		const parsed: unknown = JSON.parse(json);
+		return isRecordOutcome(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+function isRecordOutcome(value: unknown): value is TransitionOutcome {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const outcome = value as Record<string, unknown>;
+	return typeof outcome.fired === "boolean" && typeof outcome.writeFailure === "string";
+}
+
 function jsonChoice(value: string): HandoffChoice | undefined {
 	try {
 		const parsed = JSON.parse(value) as Partial<HandoffChoice>;
@@ -3040,25 +3792,4 @@ function jsonChoice(value: string): HandoffChoice | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-/**
- * The transition outcome stored on a trace; null when the turn settled
- * without a fire, and null when a stored record does not parse: a broken
- * record fails open, the same way a broken cause does.
- */
-function transitionOf(json: string | null): TransitionOutcome | null {
-	if (json === null) return null;
-	try {
-		const parsed: unknown = JSON.parse(json);
-		return isRecordOutcome(parsed) ? parsed : null;
-	} catch {
-		return null;
-	}
-}
-
-function isRecordOutcome(value: unknown): value is TransitionOutcome {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-	const outcome = value as Record<string, unknown>;
-	return typeof outcome.fired === "boolean" && typeof outcome.writeFailure === "string";
 }

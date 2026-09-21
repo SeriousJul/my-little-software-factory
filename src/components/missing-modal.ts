@@ -25,9 +25,9 @@ import {
 	ModalSurface,
 	modalFrame,
 	scrollbarRows,
-	useActionSelection,
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
+import { useDecisionRegion } from "./shared/region.ts";
 import { wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -101,12 +101,14 @@ export function MissingModal({
 	// newest message row. The current position stays stable while the
 	// operator uses j and k.
 	const [bodyScroll, setBodyScroll] = useState(maxBodyScroll);
-	const selection = useActionSelection(actions);
+	// The panel's rows are the region's: the shared selection, its wrap, and
+	// its window, with every row shown, the way the decision's region does.
+	const selection = useDecisionRegion(actions, actions.length);
 	const scroll = Math.min(bodyScroll, maxBodyScroll);
 
 	useControlDispatch({
 		mode: "missing-modal",
-		context,
+		context: { ...context, actionRowCount: actions.length },
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -128,32 +130,34 @@ export function MissingModal({
 		frame,
 		width: terminalWidth,
 		title,
-		borderColor: paint("accent"),
 		// Every action row: without one of them the modal has no way out, so
 		// it holds itself back at that size.
-		minContentRows: actions.length,
-		message,
-		bar: { mode: "missing-modal", context: contextFor("missing-modal", context) },
-		children: [
-			...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
-				createElement(
-					"text",
-					{ key: `body-${index}` },
-					...bodyRowSpans(
-						[{ text: line, fg: paint("subtext0") }],
-						bodyWidth,
-						thumbRows?.has(index),
+		body: {
+			above: [],
+			below: [
+				...windowOf(wrapped, scroll, bodyRows).map((line, index) =>
+					createElement(
+						"text",
+						{ key: `body-${index}` },
+						...bodyRowSpans(
+							[{ text: line, fg: paint("subtext0") }],
+							bodyWidth,
+							thumbRows?.has(index),
+						),
 					),
 				),
-			),
-			...actions.map((row, index) =>
-				createElement(ActionItem, {
-					key: row.key,
-					row,
-					focused: index === selection.at,
-					width: frame.contentWidth,
-				}),
-			),
-		],
+				...selection.window.map((row) =>
+					createElement(ActionItem, {
+						key: row.key,
+						row,
+						focused: actions[selection.at] === row,
+						width: frame.contentWidth,
+					}),
+				),
+			],
+			minRows: actions.length,
+		},
+		message,
+		bar: { mode: "missing-modal", context: contextFor("missing-modal", context) },
 	});
 }

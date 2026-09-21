@@ -52,6 +52,27 @@ import type {
 	FactoryState,
 } from "./state.ts";
 
+/**
+ * The answer the Work queue's pickup gets from one Consultation pickup
+ * (ADR 0034, issue #90).
+ *
+ * The answer stands at the seat. `started` means the record left `queued` and
+ * holds its seat in `opening`, with its environment and Agent being built
+ * behind the answer; `failed` means the pickup had nothing to start with, and
+ * the record is `failed` with its reason; `moved` means the record had left the
+ * queue's wait before the pickup ran. A start that fails after the seat - a
+ * Setting fit refusal, a failed clone - leaves the same `failed` record and the
+ * same Message line a direct launch leaves, and reports nothing more here:
+ * the queue's item went with the claim.
+ *
+ * The caller removes the item on every answer: the item is the pointer to a
+ * record in `queued` state, and no answer leaves the record waiting.
+ */
+export type ConsultationPickupOutcome =
+	| { kind: "started" }
+	| { kind: "failed" }
+	| { kind: "moved" };
+
 export interface ConsultationStatus {
 	kind: "info" | "warning" | "error";
 	text: string;
@@ -107,6 +128,14 @@ export interface ConsultationCreateInput {
 	repository: ConsultationRepositoryOption;
 	initialInput: string;
 	replacementOf?: string | null;
+	/**
+	 * Whether the submit could not take a Parallel limit seat (ADR 0034,
+	 * issue #90). A `true` submit creates the record in `queued` state with
+	 * its Work queue item, and starts nothing; the pickup starts it when a
+	 * seat frees. A `false` submit creates the record in `opening` state, the
+	 * way a direct launch has always done.
+	 */
+	queued?: boolean;
 }
 
 export type ConsultationReplacementInput = Omit<
@@ -211,6 +240,10 @@ export class ConsultationOperations {
 			repository: input.repository,
 			replacementOf: input.replacementOf,
 			agentName: consultationAgentName(id),
+			// The submit the full cap kept from starting is born `queued` with
+			// its Work queue item in the same write (ADR 0034, issue #90): no
+			// environment and no agent until the pickup starts the record.
+			initialState: input.queued === true ? "queued" : "opening",
 		});
 		this.callbacks.onConsultationsChanged();
 		return consultation;
@@ -306,6 +339,79 @@ export class ConsultationOperations {
 				this.openingOperations.delete(current.id);
 				this.endProgress(current.id);
 			});
+	}
+
+	/**
+	 * Start one Consultation that is not started yet: the Work queue's pickup
+	 * of a `queued` record when a seat frees (ADR 0034, issue #90), and the
+	 * operator's start now of an `unscheduled` record, over the Parallel limit
+	 * or under it (issue #91). Both run through this one seam: the cap is the
+	 * scheduler's check, not the start's, and the seat move below is the claim
+	 * in either case.
+	 *
+	 * The record already holds the operator's ask, and the start re-reads the
+	 * Consultation type's settings from the config - the record waited for a
+	 * seat or the operator's call, so the start runs on the type the config
+	 * holds now, not on the settings the record captured at the enqueue -
+	 * before it moves the record to `opening` and hands the record to the same
+	 * opening pipeline a direct launch runs: the Setting fit check, the
+	 * repository resolution, the environment, and the Agent.
+	 *
+	 * The claim is all the observation cycle waits for. The opening runs on
+	 * behind the answer, the way a claimed handoff's start does: an external
+	 * pipeline that can take as long as a cold clone must not hold every ticket
+	 * poll with it. A start that fails after the claim leaves the record
+	 * `failed` with its reason and its Message line, exactly as a failed launch
+	 * does, and the queue's item went with the claim while one stood.
+	 */
+	pickup(consultationId: string): Promise<ConsultationPickupOutcome> {
+		const current = this.state.consultation(consultationId);
+		if (current === undefined || (current.state !== "queued" && current.state !== "unscheduled"))
+			return Promise.resolve({ kind: "moved" });
+		const type = this.config().consultationTypes[current.typeName];
+		if (type === undefined) {
+			// The type the record asks for is gone from the config: there is
+			// nothing to start it with. The record becomes failed, as a start
+			// that cannot fit does, and the queue's item leaves with it.
+			this.state.setConsultationState(
+				current.id,
+				"failed",
+				`unknown Consultation type ${current.typeName}`,
+			);
+			this.callbacks.onConsultationsChanged();
+			this.status(
+				"error",
+				`Consultation ${current.id.slice(0, 8)} failed: unknown Consultation type ${current.typeName}`,
+			);
+			return Promise.resolve({ kind: "failed" });
+		}
+		this.state.updateConsultationTypeSettings(current.id, {
+			agentType: type.agent,
+			environment: type.environment,
+			model: type.model ?? "",
+			thinking: type.thinking ?? "",
+			contextWindow: type.contextWindow ?? "",
+			template: type.template,
+			renderedOpeningPrompt: renderConsultationPrompt(type.template, current.initialInput),
+		});
+		// The atomic step is the seat: the record moves to `opening` only if it
+		// is still `queued` or `unscheduled`, so a close or a delete that
+		// raced the start wins the record and the start runs nothing.
+		if (!this.state.beginConsultationStart(current.id)) {
+			this.callbacks.onConsultationsChanged();
+			return Promise.resolve({ kind: "moved" });
+		}
+		const refreshed = this.state.consultation(current.id);
+		if (refreshed === undefined) {
+			// The record went away between the move and the re-read.
+			return Promise.resolve({ kind: "moved" });
+		}
+		// No await sits between the seat move and this call, so the record holds
+		// no other opening operation: the launch always takes the job it is
+		// handed, and reports its own outcome on the record and the Message line.
+		void this.launch(refreshed);
+		this.callbacks.onConsultationsChanged();
+		return Promise.resolve({ kind: "started" });
 	}
 
 	/**
@@ -637,6 +743,26 @@ export class ConsultationOperations {
 	}
 
 	/**
+	 * Schedule an `unscheduled` Consultation back into the Work queue (issue
+	 * #91): the record returns to `queued` and waits at the queue's tail, with
+	 * its pickup the only starter. The answer of the state's one write, so a
+	 * record that left `unscheduled` behind the key says its own fact.
+	 */
+	schedule(consultation: Consultation): boolean {
+		const result = this.state.scheduleConsultation(consultation.id);
+		if (!result.ok) {
+			this.status("error", result.reason);
+			return false;
+		}
+		this.callbacks.onConsultationsChanged();
+		this.status(
+			"info",
+			`Consultation ${consultation.id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
+		);
+		return true;
+	}
+
+	/**
 	 * Approve the live checkout conflict set, and continue the launch.
 	 *
 	 * The confirmation belongs to the checkout, not to this opening. It stores
@@ -834,6 +960,9 @@ export class ConsultationOperations {
 				? [outcome.notes.warning]
 				: []),
 			...(mappingWarning === undefined ? [] : [mappingWarning]),
+			...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
+				? [outcome.notes.worktreeBase]
+				: []),
 		];
 		if (outcome.status === "failed") {
 			this.state.failConsultationOpening(consultation.id, lines.join("; ") || outcome.reason);

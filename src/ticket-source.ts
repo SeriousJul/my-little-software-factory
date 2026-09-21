@@ -5,8 +5,10 @@
  * settled snapshot. It never exposes scheduling, storage, or task choice.
  */
 import type { GitHubAuthentication, TicketSourceConfig } from "./config.ts";
+import { isSecuritySourceKind } from "./config.ts";
 import { type FetchedTicket, type IssueReference, withIssueReferences } from "./domain/ticket.ts";
-import { type CommandRunner, commandFailureText } from "./runner.ts";
+import { type CommandOptions, type CommandRunner, commandFailureText } from "./runner.ts";
+import { GitHubSecurityTicketSource } from "./security-source.ts";
 
 /**
  * One Referenced issue fact (ADR 0023): the labels and fetch time the control
@@ -69,7 +71,83 @@ export function createTicketSource(
 	runner: CommandRunner,
 	environment: NodeJS.ProcessEnv = process.env,
 ): TicketSource {
+	// The security feeds read REST endpoints, not GitHub searches (issue #73).
+	if (isSecuritySourceKind(config.kind))
+		return new GitHubSecurityTicketSource(config, runner, environment);
 	return new GitHubTicketSource(config, runner, environment);
+}
+
+/**
+ * The GitHub authentication of one configured source (issue #73 shares it
+ * with the security sources): the existing table of a literal token, a token
+ * environment variable, or an authenticated account. A token travels in the
+ * environment, never in argv.
+ */
+export class GhAuthenticator {
+	private accountToken: string | undefined;
+	private readonly host: string;
+	private readonly auth: GitHubAuthentication | undefined;
+	private readonly runner: CommandRunner;
+	private readonly environment: NodeJS.ProcessEnv;
+
+	constructor(
+		host: string,
+		auth: GitHubAuthentication | undefined,
+		runner: CommandRunner,
+		environment: NodeJS.ProcessEnv,
+	) {
+		this.host = host;
+		this.auth = auth;
+		this.runner = runner;
+		this.environment = environment;
+	}
+
+	async resolve(): Promise<{ ok: true; options: GhOptions } | { ok: false; reason: string }> {
+		if (this.auth === undefined) return { ok: true, options: {} };
+		if (this.auth.token !== undefined) return secretToken(this.auth.token);
+		if (this.auth.tokenEnv !== undefined) {
+			const token = this.environment[this.auth.tokenEnv];
+			if (token === undefined || token === "")
+				return {
+					ok: false,
+					reason: `GitHub token environment variable ${this.auth.tokenEnv} is not set`,
+				};
+			return secretToken(token);
+		}
+		if (this.accountToken !== undefined) return secretToken(this.accountToken);
+		const account = this.auth.account ?? "";
+		const result = await this.runner.run("gh", [
+			"auth",
+			"token",
+			"--hostname",
+			this.host,
+			"--user",
+			account,
+		]);
+		if (result.code !== 0)
+			return {
+				ok: false,
+				reason: `GitHub account ${account} is unavailable: ${commandFailureText(result)}`,
+			};
+		const token =
+			[...result.stdout.split(/\r?\n/)]
+				.reverse()
+				.find((line) => line.trim() !== "")
+				?.trim() ?? "";
+		if (token === "") return { ok: false, reason: `GitHub account ${account} returned no token` };
+		this.accountToken = token;
+		return secretToken(token);
+	}
+}
+
+function secretToken(token: string): {
+	ok: true;
+	options: {
+		env: Record<string, string>;
+		secretEnv: readonly string[];
+	};
+} {
+	return { ok: true, options: { env: { GH_TOKEN: token }, secretEnv: ["GH_TOKEN"] } };
 }
 
 /**
@@ -89,6 +167,7 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
       ... on Issue {
         id number title body url state updatedAt
         labels(first: 100) { nodes { name } }
+        blockedBy(first: 100) { nodes { number state } }
         repository { name nameWithOwner url }
       }
       ... on PullRequest {
@@ -106,21 +185,20 @@ const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String)
   }
 }`;
 
-type GhOptions = { env?: Record<string, string>; secretEnv?: readonly string[] };
+type GhOptions = CommandOptions;
 
 class GitHubTicketSource implements TicketSource {
 	readonly name: string;
 	readonly kind: string;
 	readonly refreshIntervalMs: number;
-	private accountToken: string | undefined;
 	private readonly config: TicketSourceConfig;
 	private readonly runner: CommandRunner;
-	private readonly environment: NodeJS.ProcessEnv;
+	private readonly authenticator: GhAuthenticator;
 
 	constructor(config: TicketSourceConfig, runner: CommandRunner, environment: NodeJS.ProcessEnv) {
 		this.config = config;
 		this.runner = runner;
-		this.environment = environment;
+		this.authenticator = new GhAuthenticator(config.host, config.auth, runner, environment);
 		this.name = config.name;
 		this.kind = config.kind;
 		this.refreshIntervalMs = config.refreshIntervalSeconds * 1000;
@@ -342,6 +420,10 @@ class GitHubTicketSource implements TicketSource {
 			for (const node of page.nodes) {
 				const normalized = normalizeGitHubNode(node, this.config);
 				if (!normalized.ok) return { status: "failed", reason: normalized.reason };
+				// An issue blocked by an unclosed issue is not handoff work. The
+				// source drops it the way the `blocked` label does, so the app
+				// never sees it at all.
+				if (normalized.blocked) continue;
 				tickets.push(normalized.ticket);
 				references.push(...normalized.references);
 			}
@@ -397,55 +479,8 @@ class GitHubTicketSource implements TicketSource {
 	private async authentication(): Promise<
 		{ ok: true; options: GhOptions } | { ok: false; reason: string }
 	> {
-		const auth = this.config.auth;
-		if (auth === undefined) return { ok: true, options: {} };
-		if (auth.token !== undefined) return secretToken(auth.token);
-		if (auth.tokenEnv !== undefined) {
-			const token = this.environment[auth.tokenEnv];
-			if (token === undefined || token === "")
-				return {
-					ok: false,
-					reason: `GitHub token environment variable ${auth.tokenEnv} is not set`,
-				};
-			return secretToken(token);
-		}
-		return this.accountAuthentication(auth);
+		return this.authenticator.resolve();
 	}
-
-	private async accountAuthentication(
-		auth: GitHubAuthentication,
-	): Promise<{ ok: true; options: GhOptions } | { ok: false; reason: string }> {
-		if (this.accountToken !== undefined) return secretToken(this.accountToken);
-		const result = await this.runner.run("gh", [
-			"auth",
-			"token",
-			"--hostname",
-			this.config.host,
-			"--user",
-			auth.account ?? "",
-		]);
-		if (result.code !== 0)
-			return {
-				ok: false,
-				reason: `GitHub account ${auth.account} is unavailable: ${commandFailureText(result)}`,
-			};
-		const token =
-			[...result.stdout.split(/\r?\n/)]
-				.reverse()
-				.find((line) => line.trim() !== "")
-				?.trim() ?? "";
-		if (token === "")
-			return { ok: false, reason: `GitHub account ${auth.account} returned no token` };
-		this.accountToken = token;
-		return secretToken(token);
-	}
-}
-
-function secretToken(token: string): {
-	ok: true;
-	options: { env: Record<string, string>; secretEnv: readonly string[] };
-} {
-	return { ok: true, options: { env: { GH_TOKEN: token }, secretEnv: ["GH_TOKEN"] } };
 }
 
 type Page =
@@ -615,7 +650,7 @@ function normalizeGitHubNode(
 	node: unknown,
 	config: TicketSourceConfig,
 ):
-	| { ok: true; ticket: FetchedTicket; references: SearchReference[] }
+	| { ok: true; ticket: FetchedTicket; references: SearchReference[]; blocked: boolean }
 	| { ok: false; reason: string } {
 	const item = node as Record<string, unknown>;
 	const expectedTypename = config.kind === "github-issues" ? "Issue" : "PullRequest";
@@ -668,6 +703,12 @@ function normalizeGitHubNode(
 		config.kind === "github-pull-requests"
 			? parseClosingReferences(item.closingIssuesReferences, config.host)
 			: [];
+	// The issue's native "blocked by" links. A pull request carries no
+	// links, and a server that answers without the field blocks nothing:
+	// only a present but unreadable field fails the source.
+	const blocked = isBlockedByOpenIssue(item.blockedBy);
+	if (blocked === undefined)
+		return { ok: false, reason: "GitHub returned an unreadable blocked-by link" };
 	return {
 		ok: true,
 		ticket: {
@@ -691,7 +732,28 @@ function normalizeGitHubNode(
 					: {},
 		},
 		references,
+		blocked,
 	};
+}
+
+/**
+ * Whether the issue is blocked by at least one unclosed issue: GitHub's
+ * native "blocked by" links. A closed blocking issue unblocks. Returns
+ * `undefined` when the field is present but unreadable, `false` when it is
+ * absent.
+ */
+function isBlockedByOpenIssue(link: unknown): boolean | undefined {
+	if (link === undefined || link === null) return false;
+	const nodes = (link as { nodes?: unknown }).nodes;
+	if (!Array.isArray(nodes)) return undefined;
+	let blocked = false;
+	for (const node of nodes) {
+		const item = node as Record<string, unknown> | null;
+		const state = item === null ? undefined : stringOf(item.state);
+		if (state === undefined) return undefined;
+		if (state.toUpperCase() === "OPEN") blocked = true;
+	}
+	return blocked;
 }
 
 function stringOf(value: unknown): string | undefined {

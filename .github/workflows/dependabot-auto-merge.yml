@@ -1,0 +1,71 @@
+# Auto-merge the Dependabot updates that are safe to merge, once CI is green.
+#
+# Policy
+#   - Only Dependabot PRs are acted on. The job is skipped for any other PR.
+#   - A PR is auto-merged when it contains no major bump. PRs with a major
+#     bump are reviewed by hand.
+#   - "Once CI is green" is enforced by GitHub native auto-merge plus the
+#     branch protection on main. This workflow only *requests* the
+#     auto-merge. GitHub performs the squash merge only after every required
+#     check passes. A red gate leaves the PR open.
+#   - Runs on pull_request_target so it never executes code from the PR head.
+#     It only reads PR metadata and calls the merge API.
+
+name: Dependabot auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    steps:
+      - name: Fetch Dependabot PR metadata
+        uses: dependabot/fetch-metadata@v3
+        id: metadata
+
+      - name: Decide and request auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          DEPS_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          set -euo pipefail
+
+          # fetch-metadata emits nothing it can parse for non-Dependabot PRs.
+          if [ -z "${DEPS_JSON:-}" ] || [ "${DEPS_JSON:-}" = "null" ]; then
+            echo "No dependency metadata. Holding for manual review."
+            exit 0
+          fi
+
+          if [ "$(printf '%s' "${DEPS_JSON}" | jq 'if type == "array" then length else -1 end')" -lt 1 ]; then
+            echo "No parsable updated dependencies. Holding for manual review."
+            exit 0
+          fi
+
+          # Hold any PR that bumps a major version.
+          if [ "$(printf '%s' "${DEPS_JSON}" | jq '[ .[] | select(.updateType | contains("semver-major")) ] | length')" -gt 0 ]; then
+            echo "Contains a major version bump. Holding for manual review."
+            exit 0
+          fi
+
+          # Already requested? Leave it as is.
+          if [ "$(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json autoMergeRequest --jq '.autoMergeRequest != null')" = "true" ]; then
+            echo "Auto-merge already requested. Nothing to do."
+            exit 0
+          fi
+
+          echo "Allowed. Requesting auto-merge (squash). GitHub merges once all required checks pass."
+          gh pr merge "${PR_NUMBER}" --repo "${REPO}" --auto --squash

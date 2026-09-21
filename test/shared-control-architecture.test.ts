@@ -11,9 +11,10 @@
  * The rule is a declared dependency rule, and it is not a behavior test: what
  * the operator sees is checked by the flow tests that drive the real screens.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+
+import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { describe, expect, test } from "vitest";
 
 /** Every TypeScript source file under `src`, the library's own files aside. */
 function sourceFiles(directory: string, keep: (file: string) => boolean = () => true): string[] {
@@ -164,6 +165,34 @@ describe("the shared control library is the only control implementation", () => 
 				`${file} must take its selector cycling from the shared choice module`,
 			).toMatch(/\b(useChoice|cycleChoice)\b/u);
 		}
+	});
+
+	test("no surface paints decision rows without the library's region state", () => {
+		// ADR 0039 and ADR 0040 put the Decision region's selection, its wrap,
+		// its auto-scroll, its visible window, and its range text in the
+		// shared library's region module, and its rows are painted from that
+		// module too. A surface that paints the region's rows while keeping
+		// its own selection state is the drift the local Live view carried,
+		// and this names it by file, the way the other checks do. The shared
+		// chrome (modal-chrome.ts) consumes the module and is the one stated
+		// exemption. Until the module lands (issue #122) no surface paints
+		// the region's rows through it, so the rule holds and the check
+		// passes: there is no offender to list.
+		const regionModule = "src/components/shared/region.ts";
+		if (!existsSync(regionModule)) return;
+		const moduleSource = readFileSync(regionModule, "utf8");
+		const stateNames = [...moduleSource.matchAll(/export\s+function\s+(use[A-Za-z0-9_$]+)/gu)].map(
+			(match) => match[1],
+		);
+		const offenders: string[] = [];
+		for (const file of screens) {
+			if (file === "src/components/modal-chrome.ts") continue;
+			const source = readFileSync(file, "utf8");
+			if (!/from "\.\/shared\/region\.ts"/u.test(source)) continue;
+			if (stateNames.some((name) => source.includes(name))) continue;
+			offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
 	});
 
 	test("every action surface takes its rows from the library", () => {

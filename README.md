@@ -19,7 +19,7 @@ The guides on the site hold everything this screen used to hold:
 
 ## Requirements
 
-- Node `26.4.0` or newer, and a current `npm`
+- Bun `1.3.0` or newer, and Node for `npx`
 - `herdr` on the `PATH`, with a current [ghostty](https://ghostty.org) on the
   `PATH` (herdr runs each Agent's terminal in ghostty), and `git`
 
@@ -70,7 +70,7 @@ design decisions behind this one.
 ## Contributing
 
 For changes to controls, follow the shared control standard: use and extend
-the shared modules in `src/components/shared`, and run `npm run gallery` to
+the shared modules in `src/components/shared`, and run `bun run gallery` to
 see a control. See [CONTEXT.md](./CONTEXT.md),
 [the shared control standard](./docs/shared-controls.md), and
 [the verification record](./docs/verification/shared-controls.md) for the open

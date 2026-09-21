@@ -9,6 +9,8 @@
  * cross references (default agent, default task type, default environment).
  * The error is always one readable line an operator can act on.
  */
+
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
 	existsSync,
 	mkdirSync,
@@ -23,8 +25,6 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
-
 import {
 	ConfigError,
 	configToToml,
@@ -38,6 +38,7 @@ import {
 } from "../src/config.ts";
 import { THINKING_LEVELS } from "../src/domain/agent.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
 /** The checked-in Default configuration the package ships. */
 const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
@@ -106,14 +107,26 @@ describe("the Default configuration", () => {
 		const { config, fromFile, seeded } = await loadConfigFile(SHIPPED_DEFAULT_CONFIG);
 		expect(fromFile).toBe(true);
 		expect(seeded).toBeUndefined();
-		// The four workflow task types, and the four states of the label
-		// machine (ADR 0027).
+		// The four workflow task types, the three security task types, and
+		// the states of the label workflow machine (ADR 0027).
 		expect(Object.keys(config.taskTypes).sort()).toEqual([
 			"implement",
 			"merge",
+			"resolve-dependabot-alert",
+			"resolve-secret-scanning-alert",
+			"resolve-security-advisory",
 			"review",
 			"rework",
 		]);
+		// The security task types run on a high thinking level: one kind of
+		// finding per template.
+		for (const name of [
+			"resolve-security-advisory",
+			"resolve-dependabot-alert",
+			"resolve-secret-scanning-alert",
+		]) {
+			expect(config.taskTypes[name].thinking).toBe("high");
+		}
 		expect(config.workflowStates).toEqual([
 			{
 				name: "ready-for-agent",
@@ -134,6 +147,21 @@ describe("the Default configuration", () => {
 				name: "ready-to-ship",
 				taskType: "merge",
 				match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+			},
+			{
+				name: "security-advisory",
+				taskType: "resolve-security-advisory",
+				match: { sourceKind: "github-security-advisory" },
+			},
+			{
+				name: "security-dependabot-alert",
+				taskType: "resolve-dependabot-alert",
+				match: { sourceKind: "github-dependabot-alert" },
+			},
+			{
+				name: "security-secret-alert",
+				taskType: "resolve-secret-scanning-alert",
+				match: { sourceKind: "github-secret-scanning-alert" },
 			},
 			{
 				name: "pull-request-unlabeled",
@@ -170,10 +198,23 @@ describe("the Default configuration", () => {
 				{ pullRequestFacts: [] },
 			],
 		});
+		// The security transitions write ready-for-review on the opened pull
+		// request and auto-advance into its review position.
+		for (const name of [
+			"resolve-security-advisory",
+			"resolve-dependabot-alert",
+			"resolve-secret-scanning-alert",
+		]) {
+			expect(config.taskTypes[name].transition).toEqual({
+				ticketFacts: [],
+				pullRequestFacts: ["ready-for-review"],
+				autoAdvance: true,
+			});
+		}
 		// One neutral Consultation type that passes the operator's input
 		// straight through.
 		expect(config.consultationTypes).toEqual({
-			consult: { agent: "pi", environment: "live-worktree", template: "{input}" },
+			consult: { agent: "pi", environment: "worktree", template: "{input}" },
 		});
 		// No ticket sources, no repository mappings, and no state file entry:
 		// the file works on any machine.
@@ -184,7 +225,6 @@ describe("the Default configuration", () => {
 		expect(Object.keys(config.agents).sort()).toEqual(["claude", "codex", "pi"]);
 		expect(config.defaultAgent).toBe("pi");
 		expect(config.defaultTaskType).toBe("implement");
-		expect(config.autoHandoff).toBe(false);
 		expect(config.maxParallelAgents).toBe(2);
 		expect(config.agentPollIntervalSeconds).toBe(5);
 		expect(config.completionMessageLines).toBe(200);
@@ -212,7 +252,7 @@ describe("the standard paths", () => {
 			join("/custom/state", "my-little-software-factory", "state.sqlite"),
 		);
 		// With the state home unset, the file lives under the home.
-		vi.stubEnv("XDG_STATE_HOME", "");
+		stubEnv("XDG_STATE_HOME", "");
 		expect(defaultStatePath("/home/op")).toBe(
 			join("/home/op", ".local", "state", "my-little-software-factory", "state.sqlite"),
 		);
@@ -220,7 +260,7 @@ describe("the standard paths", () => {
 });
 
 afterEach(() => {
-	vi.unstubAllEnvs();
+	unstubAllEnvs();
 });
 
 describe("loadConfigFile", () => {
@@ -939,7 +979,7 @@ describe("validateConfig", () => {
 		// holds standard levels in the runtime's own order, and every one of
 		// them fits inside the standard set.
 		const agents = validateConfig(parseToml(readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8"))).agents;
-		expect(agents.pi.thinkingValues).toEqual(THINKING_LEVELS);
+		expect(agents.pi.thinkingValues).toEqual([...THINKING_LEVELS]);
 		expect(agents.codex.thinkingValues).toEqual(["minimal", "low", "medium", "high"]);
 		expect(agents.claude.thinkingValues).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		for (const agent of Object.values(agents)) {
@@ -1136,9 +1176,74 @@ describe("ticket source configuration", () => {
 			"specify exactly one",
 		);
 	});
+
+	describe("the security feed source kinds (issue #73)", () => {
+		const base = {
+			"default-agent": "pi",
+			"default-environment": "worktree",
+			"default-task-type": "implement",
+			agents: { pi: { kind: "pi" } },
+			"task-types": { implement: { template: "x" } },
+		};
+
+		test("each kind validates and reuses the shared source shape", () => {
+			for (const kind of [
+				"github-security-advisories",
+				"github-dependabot-alerts",
+				"github-secret-scanning-alerts",
+			] as const) {
+				const config = validateConfig({
+					...base,
+					sources: [
+						{
+							name: kind,
+							kind,
+							"refresh-interval-seconds": 300,
+							repositories: ["acme/factory", "acme/portal"],
+							auth: { account: "me" },
+						},
+					],
+				});
+				expect(config.sources).toEqual([
+					{
+						name: kind,
+						kind,
+						refreshIntervalSeconds: 300,
+						repositories: ["acme/factory", "acme/portal"],
+						host: "github.com",
+						auth: { account: "me" },
+					},
+				]);
+			}
+		});
+
+		test("a filter on a security feed is a startup error, not a silent no-op", () => {
+			for (const kind of [
+				"github-security-advisories",
+				"github-dependabot-alerts",
+				"github-secret-scanning-alerts",
+			]) {
+				expectConfigError(
+					{
+						...base,
+						sources: [
+							{
+								name: kind,
+								kind,
+								"refresh-interval-seconds": 300,
+								repositories: ["acme/factory"],
+								filter: "severity:critical",
+							},
+						],
+					},
+					`takes no filter; a filter would be silently ignored`,
+				);
+			}
+		});
+	});
 });
 
-describe("auto-handoff config keys", () => {
+describe("limits config keys", () => {
 	/** The minimal config every test in this block breaks in one place. */
 	const base = () => ({
 		"default-agent": "pi",
@@ -1150,7 +1255,6 @@ describe("auto-handoff config keys", () => {
 
 	test("absent keys take the shipped defaults", () => {
 		const config = validateConfig(base());
-		expect(config.autoHandoff).toBe(false);
 		expect(config.maxParallelAgents).toBe(2);
 		expect(config.agentPollIntervalSeconds).toBe(5);
 		expect(config.completionMessageLines).toBe(200);
@@ -1160,8 +1264,11 @@ describe("auto-handoff config keys", () => {
 		expect(config.taskTypes.implement.transition).toBeUndefined();
 	});
 
+	test("a config that still carries the removed auto-handoff key fails startup", () => {
+		expectConfigError({ ...base(), "auto-handoff": false }, 'unknown top-level key "auto-handoff"');
+	});
+
 	test("the new keys validate their types and ranges", () => {
-		expectConfigError({ ...base(), "auto-handoff": "yes" }, "auto-handoff: must be a boolean");
 		expectConfigError(
 			{ ...base(), "max-parallel-agents": -1 },
 			"max-parallel-agents: must be a whole number of 0 or more",
@@ -1187,9 +1294,8 @@ describe("auto-handoff config keys", () => {
 	test("a zero parallel limit means unlimited and a value parses", () => {
 		const zero = validateConfig({ ...base(), "max-parallel-agents": 0 });
 		expect(zero.maxParallelAgents).toBe(0);
-		const three = validateConfig({ ...base(), "max-parallel-agents": 3, "auto-handoff": true });
+		const three = validateConfig({ ...base(), "max-parallel-agents": 3 });
 		expect(three.maxParallelAgents).toBe(3);
-		expect(three.autoHandoff).toBe(true);
 	});
 
 	test("a task type's transition sets the facts, threshold, and branches it writes", () => {
@@ -1410,6 +1516,20 @@ describe("consultation configuration", () => {
 			template: "/skill:grill-with-docs {input}",
 			model: "--model sonnet",
 			thinking: "high",
+		});
+	});
+
+	test("a type without an environment starts in an isolated worktree", () => {
+		const config = validateConfig({
+			...base(),
+			"consultation-types": {
+				consult: { agent: "pi", template: "{input}" },
+			},
+		});
+		expect(config.consultationTypes.consult).toEqual({
+			agent: "pi",
+			environment: "worktree",
+			template: "{input}",
 		});
 	});
 

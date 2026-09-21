@@ -23,9 +23,10 @@ import {
 	type Ticket,
 } from "./domain/ticket.ts";
 import { firstNonEmptyLine } from "./lines.ts";
-import type { CommandResult, CommandRunner } from "./runner.ts";
+import type { CommandOptions, CommandResult, CommandRunner } from "./runner.ts";
 import type { FactoryState } from "./state.ts";
 import { membershipMatchesState } from "./task-selection.ts";
+import { GhAuthenticator } from "./ticket-source.ts";
 
 /** The inputs the transition's judgments read. */
 export interface TransitionJudgmentInput {
@@ -145,28 +146,31 @@ function effective(
 /**
  * The review score a completion message reports; null when the message
  * carries none. The seed review template ends in `- **Score:** 85 / 100`.
+ * The line is the fixed format the template carries, and a number in loose
+ * prose is not a score. When the line appears more than once, the last
+ * occurrence is the verdict: the agent restates the score after the final
+ * pass, and the earlier lines are scratch.
  */
 export function scoreFromMessage(message: string): number | null {
-	let match = /\*\*score:\*\*\s*(\d{1,3})/i.exec(message);
-	if (match === null) match = /\bscore\b[:\s]+(\d{1,3})/i.exec(message);
-	if (match === null) return null;
-	const value = Number(match[1]);
+	const matches = [...message.matchAll(/\*\*score:\*\*\s*(\d{1,3})/gi)];
+	if (matches.length === 0) return null;
+	const value = Number(matches[matches.length - 1][1]);
 	return Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
 }
 
 /**
- * The machine's workflow label set: every label a state match names in its
- * all or any set, and every label a transition or branch writes. A label
- * outside the set is not a workflow label, and a write never removes it.
- * The none set names what keeps a ticket out of a state, not what the
- * machine owns.
+ * The labels the machine's writes own: every label a transition or branch
+ * writes, across all task types. A write removes only a label in this set
+ * that the write's facts do not name.
+ *
+ * A label a state match names in its all or any set, but that no transition
+ * writes, is the operator's: a scoping label that gates the state (for
+ * example `labels-all = ["factory"]`). The fire never removes it, so a state
+ * that scopes on an operator label keeps the label it matched on. The none
+ * set names what keeps a ticket out of a state, not what the machine owns.
  */
-export function workflowLabelSet(config: FactoryConfig): ReadonlySet<string> {
+export function transitionLabelSet(config: FactoryConfig): ReadonlySet<string> {
 	const labels = new Set<string>();
-	for (const state of config.workflowStates) {
-		for (const label of [...(state.match.labelsAll ?? []), ...(state.match.labelsAny ?? [])])
-			labels.add(label.toLocaleLowerCase());
-	}
 	for (const task of Object.values(config.taskTypes)) {
 		const transition = task.transition;
 		if (transition === undefined) continue;
@@ -298,7 +302,7 @@ export async function fireTransition(
 		positionTicketIdentity: null,
 	};
 	if (!evaluation.fired) return outcome;
-	const machine = workflowLabelSet(request.config);
+	const machine = transitionLabelSet(request.config);
 	// The two surfaces the facts name. A pull request ticket is its own linked
 	// pull request, so one surface carries both fact lists and the plane
 	// converges it once: a second write would strip what the first wrote.
@@ -326,9 +330,14 @@ export async function fireTransition(
 							]),
 				];
 	// No linked pull request, and the transition named facts for one: the skip
-	// is the fire's visible fact, not a silent gap in the written labels.
-	if (pullRequest === null && evaluation.pullRequestFacts.length > 0)
-		outcome.reason = "no linked pull request was found for the ticket";
+	// is the fire's visible fact, not a silent gap in the written labels. The
+	// fire derives no position from it either: the position the facts were
+	// meant to stand on is the pull request's, and deriving one on the ticket
+	// instead would auto-advance into the ticket's own state, re-firing the
+	// same transition on the next turn while the pull request is still
+	// missing.
+	const missingPullRequest = pullRequest === null && evaluation.pullRequestFacts.length > 0;
+	if (missingPullRequest) outcome.reason = "no linked pull request was found for the ticket";
 	for (const target of surfaces) {
 		const write = await writeSurfaceLabels(request, target, machine);
 		const applied = applyWrite(outcome, write);
@@ -347,14 +356,17 @@ export async function fireTransition(
 	};
 	// The new position: the first state whose match holds on the surface's
 	// post-write labels. A parking state offers no task: the plane does
-	// nothing on it, so the position offers no handoff.
-	for (const state of request.config.workflowStates) {
-		if (membershipMatchesState(pseudo, state)) {
-			if (state.taskType !== undefined) {
-				outcome.positionTaskType = state.taskType;
-				outcome.positionTicketIdentity = surface.identity;
+	// nothing on it, so the position offers no handoff. A missing linked
+	// pull request derives no position: see the skip above.
+	if (!missingPullRequest) {
+		for (const state of request.config.workflowStates) {
+			if (membershipMatchesState(pseudo, state)) {
+				if (state.taskType !== undefined) {
+					outcome.positionTaskType = state.taskType;
+					outcome.positionTicketIdentity = surface.identity;
+				}
+				break;
 			}
-			break;
 		}
 	}
 	return outcome;
@@ -420,6 +432,28 @@ async function writeSurfaceLabels(
 	);
 	if (added.length === 0 && removed.length === 0) return null;
 	const membership = newestMembershipOf(item);
+	// The write runs as the source the item lists on: the source's auth
+	// table resolves to a token the command carries in its environment, so
+	// the labels the plane writes and the items it reads come from the same
+	// account. A source with no auth table runs on gh's current
+	// authentication, as the reads do.
+	const source = request.config.sources.find((item2) => item2.name === membership.sourceName);
+	let ghOptions: CommandOptions = {};
+	if (source?.auth !== undefined) {
+		const resolved = await new GhAuthenticator(
+			source.host,
+			source.auth,
+			request.runner,
+			process.env,
+		).resolve();
+		if (!resolved.ok)
+			return {
+				added,
+				removed,
+				failure: `gh ${kind} edit ${membership.externalKey} failed: ${resolved.reason}`,
+			};
+		ghOptions = resolved.options;
+	}
 	// The repository identity carries the host (`<host>/<owner>/<name>`), which
 	// is the form `gh --repo` takes: `gh <kind> edit` maps no `--hostname`.
 	const args: string[] = [
@@ -433,7 +467,7 @@ async function writeSurfaceLabels(
 	if (removed.length > 0) args.push("--remove-label", removed.join(","));
 	let result: CommandResult;
 	try {
-		result = await request.runner.run("gh", args);
+		result = await request.runner.run("gh", args, ghOptions);
 	} catch (error) {
 		return {
 			added,

@@ -2,7 +2,7 @@
 import type { FactoryConfig } from "./config.ts";
 import type { RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
-import type { HerdrAgent } from "./observation.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import { expandHome, matchesRepository, realPathOf } from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
 import type { Consultation, ConsultationResource } from "./state.ts";

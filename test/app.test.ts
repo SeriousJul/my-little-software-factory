@@ -26,10 +26,12 @@
  * the test body, and destroys it in a finally, so no test body owns its
  * own cleanup.
  */
+
+import { describe, expect, spyOn, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
 import { MouseButtons } from "@opentui/core/testing";
 import stringWidth from "string-width";
-import { describe, expect, test, vi } from "vitest";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
@@ -61,11 +63,22 @@ import {
 	showsTicket,
 	sleep,
 	spanColors,
+	startingFaceOf,
+	stillFrame,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+
+/**
+ * The braille glyph the spinner face stands on, as a character class.
+ *
+ * The face steps one glyph every ~100 ms, so an exact row check runs on the
+ * word and the glyph class instead of one frame's glyph (ADR 0030). The
+ * class is built from the shared frames, so it cannot fall behind them.
+ */
+const SPINNER_GLYPH = `[${SPINNER_FRAMES.join("")}]`;
 
 describe("the control plane", () => {
 	test("production starts with no configured ticket sources instead of sample data", async () => {
@@ -285,7 +298,7 @@ describe("the control plane", () => {
 			// right press over the detail changes nothing.
 			const before = setup.captureCharFrame();
 			await mousePress(setup, Math.floor(WIDTH / 2) + 10, paneRow(5), MouseButtons.RIGHT);
-			expect(await settle(setup)).toBe(before);
+			expect(stillFrame(await settle(setup))).toBe(stillFrame(before));
 		});
 	});
 
@@ -332,7 +345,7 @@ describe("the control plane", () => {
 				const before = setup.captureCharFrame();
 				setup.mockInput.pressKey("k");
 				const afterTop = await settle(setup);
-				expect(afterTop).toBe(before);
+				expect(stillFrame(afterTop)).toBe(stillFrame(before));
 
 				// Press j past the bottom edge, one key at a time. The detail
 				// settles on its last page: the final description line is
@@ -351,7 +364,7 @@ describe("the control plane", () => {
 				// One more j at the bottom edge changes nothing.
 				setup.mockInput.pressKey("j");
 				const afterBottom = await settle(setup);
-				expect(afterBottom).toBe(atBottom);
+				expect(stillFrame(afterBottom)).toBe(stillFrame(atBottom));
 
 				// The selection never moved.
 				expect(markerRowOf(atBottom)).toBe(3);
@@ -379,9 +392,11 @@ describe("the control plane", () => {
 				// The pane shows four rows at this height: the first four
 				// tickets only. The rows carry their state and task type
 				// badges as their identity, so a slide is visible in the
-				// badges even where a title wraps or truncates.
+				// badges even where a title wraps or truncates. The
+				// handed-off ticket wears its Starting window's spinner face
+				// in place of the badge it replaced (ADR 0030).
 				let frame = frameText(setup.captureCharFrame());
-				expect(frame).toContain("[handed-off]");
+				expect(startingFaceOf(frame)).not.toBeNull();
 				expect(frame).toContain("[awaiting]");
 				expect(frame).not.toContain("Ticket id");
 
@@ -560,13 +575,14 @@ describe("the control plane", () => {
 				// At this width the row budget after the badge cannot hold
 				// both the repository and a readable title. The title keeps
 				// its space, and the repository drops from the list row instead
-				// of pushing the title out.
-				const row = rows.find((r) => r.includes("[handed-off]"));
+				// of pushing the title out. The Starting window's face holds
+				// the badge's own cells (ADR 0030).
+				const row = rows.find((r) => startingFaceOf(r) !== null);
 				expect(row).toBeDefined();
 				// The list pane's content cells, borders and padding stripped:
-				// badge, gap, and the title cut to the cells the row still has.
+				// face, gap, and the title cut to the cells the row still has.
 				const listHalf = (row ?? "").slice(2, 28);
-				expect(listHalf).toBe("  [handed-off] Fix pan dri");
+				expect(listHalf).toMatch(new RegExp(`^  ${SPINNER_GLYPH} starting   Fix pan dri$`));
 				expect(listHalf).not.toContain("acme/");
 				// The repository stays reachable in the detail pane of the
 				// selected ticket.
@@ -590,12 +606,12 @@ describe("the control plane", () => {
 				// The list row for the handed-off ticket keeps its fields in
 				// order. The repository, which no longer fits, is dropped from
 				// the list rows instead of interleaved into them.
-				const row = rows.find((r) => r.includes("[handed-off]"));
+				const row = rows.find((r) => startingFaceOf(r) !== null);
 				expect(row).toBeDefined();
 				// The list pane's content cells, borders and padding stripped:
-				// marker, badge, gap, and the title cut to the two cells left.
+				// marker, face, gap, and the title cut to the one cell left.
 				const listHalf = (row ?? "").slice(2, 18);
-				expect(listHalf).toBe("  [handed-off] F");
+				expect(listHalf).toMatch(new RegExp(`^  ${SPINNER_GLYPH} starting   F$`));
 				// The repository is dropped from the row, not interleaved into it.
 				expect(listHalf).not.toContain("acme/");
 			},
@@ -788,13 +804,18 @@ describe("the control plane", () => {
 				// [implement] badge and the title minimum do not share the 12
 				// cells the row has left, so the badge drops and the title
 				// keeps the cells.
-				await press(setup, "j", "the selection to move to the second ticket", (f) =>
-					listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string).includes("[handed-off]"),
+				await press(
+					setup,
+					"j",
+					"the selection to move to the second ticket",
+					(f) =>
+						startingFaceOf(listHalfOf(rowsOf(f).find((r) => r.startsWith("│ ❯")) as string)) !==
+						null,
 				);
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
-				const line = listHalfOf(rows.find((r) => listHalfOf(r).includes("[handed-off]")) as string);
-				expect(line).toBe("│ ❯ [handed-off] Fix pan dri │");
+				const line = listHalfOf(rows.find((r) => startingFaceOf(listHalfOf(r)) !== null) as string);
+				expect(line).toMatch(new RegExp(`^│ ❯ ${SPINNER_GLYPH} starting   Fix pan dri │$`));
 				expect(line).not.toContain("[implem");
 				// The detail carries the full value the row dropped. Its profile
 				// rows take the short viewport first, so scroll down to the Task
@@ -910,8 +931,8 @@ describe("the control plane", () => {
 					frame.includes("Retry policy for webhooks"),
 				);
 				setup.mockInput.pressKey("HOME");
-				expect(await settle(setup)).toBe(home);
-				expect(top).not.toBe(page);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(home));
+				expect(stillFrame(top)).not.toBe(stillFrame(page));
 			},
 			60,
 			19,
@@ -949,7 +970,7 @@ describe("the control plane", () => {
 					setup,
 					(frame) =>
 						listFocused(frame) &&
-						(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "").includes("[handed-off]"),
+						startingFaceOf(rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "") !== null,
 					"the clicked Ticket to become selected",
 				);
 				// List wheels select exactly one adjacent Ticket. They have no
@@ -968,7 +989,7 @@ describe("the control plane", () => {
 				await mouseWheel(setup, 45, paneRow(3), "down");
 				const scrolled = await awaitFrame(
 					setup,
-					(frame) => detailFocused(frame) && frame !== before,
+					(frame) => detailFocused(frame) && stillFrame(frame) !== stillFrame(before),
 					"the detail wheel event to move its surface",
 				);
 				expect(markerRowOf(scrolled)).toBe(5);
@@ -977,7 +998,7 @@ describe("the control plane", () => {
 				const stable = setup.captureCharFrame();
 				await mouseWheel(setup, 45, paneRow(3), "left");
 				await mouseWheel(setup, 45, paneRow(3), "down", true);
-				expect(await settle(setup)).toBe(stable);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(stable));
 			},
 			60,
 			19,
@@ -1070,7 +1091,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const wheelAt = async (now: number) => {
-					const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+					const clock = spyOn(Date, "now").mockReturnValue(now);
 					try {
 						await mouseWheel(setup, 45, paneRow(3), "down");
 					} finally {
@@ -1138,7 +1159,7 @@ describe("the control plane", () => {
 				const before = setup.captureCharFrame();
 				await mouseWheel(setup, 45, paneRow(3), "down");
 				await mouseClick(setup, 4, paneRow(3));
-				expect(await settle(setup)).toBe(before);
+				expect(stillFrame(await settle(setup))).toBe(stillFrame(before));
 			},
 			60,
 			19,

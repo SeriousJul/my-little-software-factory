@@ -33,9 +33,22 @@ export interface ConfigMigrationResult {
 	reportFileName: string;
 }
 
-/** Whether the parsed config carries a pre-workflow-machine key (ADR 0027). */
+/**
+ * Whether the parsed config carries a pre-workflow-machine key (ADR 0027).
+ *
+ * `auto-close` counts too: a config that carries only that flag on a task
+ * type is still pre-machine, and the strict loader would otherwise reject it
+ * with an error that names a backup the migration never made.
+ */
 export function hasOldWorkflowMachineKeys(data: unknown): boolean {
-	return isRecord(data) && ("task-rules" in data || "workflows" in data);
+	if (!isRecord(data)) return false;
+	if ("task-rules" in data || "workflows" in data) return true;
+	const taskTypes = data["task-types"];
+	if (!isRecord(taskTypes)) return false;
+	for (const task of Object.values(taskTypes)) {
+		if (isRecord(task) && "auto-close" in task) return true;
+	}
+	return false;
 }
 
 /**
@@ -213,14 +226,24 @@ export function migrateWorkflowMachineConfig(
 	}
 
 	// Reassemble with the old key order: states take the task-rules
-	// position, task-types keeps its own, and the old keys are gone.
+	// position, task-types keeps its own, and the old keys are gone. The
+	// top-level `auto-handoff` key is the pre-ADR-0036 default for the
+	// Auto-handoff mode, which lives in the state file the `a` key toggles:
+	// the rewrite drops it and names the fact in the report.
+	let autoHandoffLine: string | null = null;
+	if ("auto-handoff" in originalData) {
+		autoHandoffLine =
+			`\`auto-handoff = ${String(originalData["auto-handoff"])}\`: dropped. The ` +
+			`Auto-handoff mode is the state file's own fact the \`a\` key toggles ` +
+			`(ADR 0036); the config no longer reads a default for it.`;
+	}
 	const newData: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(originalData)) {
 		if (key === "task-rules") {
 			newData.states = states;
 			continue;
 		}
-		if (key === "workflows") continue;
+		if (key === "workflows" || key === "auto-handoff") continue;
 		if (key === "task-types") {
 			newData["task-types"] = newTaskTypes;
 			continue;
@@ -288,6 +311,21 @@ export function migrateWorkflowMachineConfig(
 		"## Dropped keys",
 		"",
 		...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
+		...(autoHandoffLine === null ? [] : ["", autoHandoffLine]),
+		"",
+		"## Behavior changes to know",
+		"",
+		`The rewrite serializes the config: the data round-trips, but operator`,
+		`comments in the file are dropped. The backup at \`${backupFileName}\` keeps`,
+		"them.",
+		"",
+		"The default source list is wider than the pre-migration default. The",
+		"issue source now lists every open issue that is not `blocked`, and",
+		"the pull request source lists every open pull request that is not a",
+		"draft unless it carries `needs-work`. With auto-handoff on, the",
+		"default task type now hands off every open issue the machine has not",
+		"placed in a state. Tighten a source's `filter` to keep the old",
+		"narrower list.",
 		"",
 	].join("\n");
 

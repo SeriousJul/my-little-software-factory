@@ -7,12 +7,13 @@
  * load that runs it, backs the old file up, writes the report, and refuses
  * to touch the file when the rewrite would not validate.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { afterEach, describe, expect, test } from "vitest";
 
 import { ConfigError, loadConfigFile, validateConfig } from "../src/config.ts";
 import {
@@ -69,6 +70,16 @@ describe("the pre-machine keys", () => {
 		expect(hasOldWorkflowMachineKeys(parseToml(SHIPPED_TEXT))).toBe(false);
 	});
 
+	test("an auto-close flag alone names the config old", () => {
+		// A config that carries only the flag still migrates: the strict
+		// loader would otherwise reject it with an error that names a backup
+		// the migration never made.
+		expect(hasOldWorkflowMachineKeys({ "task-types": { merge: { "auto-close": true } } })).toBe(
+			true,
+		);
+		expect(hasOldWorkflowMachineKeys({ "task-types": { merge: { agent: "pi" } } })).toBe(false);
+	});
+
 	test("the loader rejects an old key after the migration ran", () => {
 		expect(() => validateConfig({ ...parseToml(PRE_MACHINE_SEED) })).toThrow(ConfigError);
 		try {
@@ -117,6 +128,11 @@ describe("the pure rewrite", () => {
 				/ready-for-agent|ready-for-review|ready-to-ship|needs-work/,
 			);
 		expect(result.configText).toContain("# Migrated to the workflow machine on 2026-09-17");
+		// The report names the behavior changes the rewrite carries: the
+		// dropped comments and the wider default source list.
+		expect(result.reportText).toContain("Behavior changes to know");
+		expect(result.reportText).toContain("comments in the file are dropped");
+		expect(result.reportText).toContain("The default source list is wider");
 	});
 
 	test("one rule becomes one state, named for its task type and matching what it matched", () => {
@@ -238,6 +254,18 @@ describe("the pure rewrite", () => {
 		expect(report).toContain("`auto-close = true` on `merge`: dropped");
 		expect(report).toContain("auto-advance");
 		expect(migrate(PRE_MACHINE_SEED).reportText).toContain("No `auto-close` flags were set.");
+	});
+
+	test("the dropped auto-handoff default is named in the report", () => {
+		// Every pre-machine install carries the top-level auto-handoff default.
+		// The rewrite drops the key - the Auto-handoff mode is the state
+		// file's own fact the a key toggles (ADR 0036) - and the report says
+		// so where it says what it dropped.
+		const report = migrate(PRE_MACHINE_SEED).reportText;
+		expect(report).toContain("`auto-handoff = false`: dropped");
+		expect(report).toContain("the state file's own fact the `a` key toggles");
+		// And the rewritten config validates: the key is gone from the file.
+		expect(() => validateConfig(parseToml(migrate(PRE_MACHINE_SEED).configText))).not.toThrow();
 	});
 
 	test("the report names the backup and the states the rules became", () => {

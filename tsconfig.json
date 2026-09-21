@@ -5,7 +5,7 @@
 		"module": "nodenext",
 		"moduleResolution": "nodenext",
 		"lib": ["esnext"],
-		"types": ["node"],
+		"types": ["bun"],
 		"strict": true,
 		"noEmit": true,
 		"allowImportingTsExtensions": true,

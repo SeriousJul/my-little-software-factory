@@ -1,8 +1,8 @@
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, test } from "vitest";
 import { renderAnsiScreen } from "../src/components/ansi-screen.ts";
 import {
 	boundedReplacementInput,
@@ -731,7 +731,7 @@ describe("pending responses across restart and migration", () => {
 		state.settleConsultationTurn(consultation.id, 1, "first answer", "idle");
 		state.close();
 		// Downgrade the record to the v4 shape.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec("DROP TABLE consultation_pending_responses");
 		// The v6 and later columns go too: a v4 record has no leftover fact,
 		// no trace settings, and no context window anywhere.
@@ -761,6 +761,9 @@ describe("pending responses across restart and migration", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v4 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v4 ticket
 		// never stored a Priority override.
 		// The v13 fact belongs to the run after this record: a v4 trace never
@@ -785,7 +788,7 @@ describe("pending responses across restart and migration", () => {
 		state.close();
 		// Downgrade the record to the v9 shape: restore the one-shot override
 		// column the v10 step drops, and drop the checkout's confirmed set.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec(
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0;",
 		);
@@ -793,6 +796,9 @@ describe("pending responses across restart and migration", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v9 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v9 ticket
 		// never stored a Priority override.
 		// The v13 fact belongs to the run after this record: a v9 trace never
@@ -806,9 +812,9 @@ describe("pending responses across restart and migration", () => {
 		// The Consultation record survives the step, and its row reads back
 		// without the dropped column.
 		expect(reopened.consultation(consultation.id)?.state).toBe("working");
-		const columns = new DatabaseSync(path)
-			.prepare("PRAGMA table_info(consultations)")
-			.all() as Array<{ name: string }>;
+		const columns = new Database(path).prepare("PRAGMA table_info(consultations)").all() as Array<{
+			name: string;
+		}>;
 		expect(columns.map((column) => column.name)).not.toContain("live_conflict_override");
 		// The checkout's confirmed set is fresh and usable.
 		expect(reopened.confirmedCheckoutConflicts("/tmp/factory")).toEqual([]);

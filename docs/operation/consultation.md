@@ -22,8 +22,19 @@ its availability and reason.
 - `j` and `k` cross into the Consultation section from the last row of the
 	Ticket list, and back again from its first. Once the cursor holds a
 	Consultation, `c` launches a Consultation, `f` cycles the history filter
-	through open, closed, and all, `z` closes the selected Consultation, and
-	`d` deletes a closed one. `h` or `Left` moves between the section's own
+	through open, closed, and all, `w` closes the selected Consultation, `d`
+	deletes a closed or an unscheduled one, and `s` schedules an `unscheduled`
+	one back into the Work queue (issue #91): the record returns to `queued`
+	with its item at the queue's tail, and the pickup is its only starter. A close that stops a live Agent - an opening,
+	a working, or an awaiting-response Consultation - confirms first: the
+	dialog names the Agent and states what the close keeps, the worktree and
+	branch on a worktree Consultation and the checkout on a live-worktree
+	one. A `missing`, a `failed`, a `queued`, or an `unscheduled`
+	Consultation closes without a dialog: these hold nothing live to stop,
+	and the `queued` one's Work queue item leaves with the record. A
+	`closing` one opens the Retry and Force-close recovery panel instead,
+	and
+	a `closed` one refuses. `h` or `Left` moves between the section's own
 	list and the detail pane, and `x` collapses or restores the section under
 	the cursor. The Consultation that needs the operator keeps its attention
 	on the section header: an awaiting response wins, and among the recovery
@@ -40,14 +51,34 @@ its availability and reason.
 	the agent's own template, so the type must name an agent that maps every
 	setting it sets. The start runs the Setting fit check first and fails with
 	a readable reason when its agent cannot take one of them, before it touches
-	herdr or the repository. Recovery re-checks the stored record, so a config
+	herdr or the repository. A submit into a full Parallel limit creates the
+	record in `queued` state and enqueues it in the Work queue instead of
+	starting it (ADR 0034): the queue's pickup starts it when a seat frees, and
+	the notice names the record and the queue it waits in. Recovery re-checks
+	the stored record, so a config
 	change cannot start an opening Consultation without the settings its record
 	names.
-- `Enter` answers the selected Consultation: it opens the response editor on
-	an awaiting one and Agent interaction on a working or blocked one. The
-	editor stores its draft in SQLite, `Tab` reaches `Send response` and
-	`Enter` runs it, `Enter` inside the field adds a line, `Esc` closes it with
-	the draft saved, and `Discard draft` deletes the saved draft.
+- `Enter` answers the selected Consultation with the surface its state needs
+	(ADR 0038): it opens the response editor on an awaiting one and Agent
+	interaction on a working or blocked one, and it opens the recovery panel on
+	a broken or stuck one. That panel's rows come from the record's state: an
+	`opening` Consultation gets `Recover`, which retries the opening this run
+	left behind, and `Close`, which takes the close path and its dialog; a
+	`missing` or a `failed` one gets `Replace`, which opens the launcher on this
+	record's recovery context and links the new Consultation to it, and `Close`,
+	which retires the record with nothing to stop. A `closing` Consultation
+	opens the close panel that already carries its `Retry` and `Force-close`,
+	and a `closed` one answers nothing: the line states that the selected
+	Consultation is already closed. The editor stores its draft in SQLite,
+	`Tab` reaches `Send response` and `Enter` runs it, `Enter` inside the
+	field adds a line, `Esc` closes it with the draft saved, and `Discard
+	draft` deletes the saved draft. A `queued` Consultation answers nothing
+	in this section: it waits for a seat in the Work queue, and its start is
+	the queue's Enter (ADR 0034). An `unscheduled` Consultation answers
+	Enter with its start over the Parallel limit (issue #91): the start runs
+	the queue's pickup with the cap skipped, the line names the cap when the
+	seat count stood over it, and the record's own progress line takes over
+	from the start.
 - `r` recovers a Consultation whose opening was interrupted, and refreshes the
 	Consultation projection and the Ticket sources otherwise. It remains
 	Refresh even when an awaiting Consultation can also be answered with
@@ -60,8 +91,8 @@ its availability and reason.
 	which the Action bar states while the mode holds the keys; configure
 	`interaction-exit-key` with a function key or `Ctrl` plus one letter.
 
-The override panel and the leftover clear act only in the Ticket section, so
-an unexpected key cannot fire while the operator works Consultations.
+The override panel acts only in the Ticket section, so an unexpected key
+cannot fire while the operator works Consultations.
 
 ## Entry controls
 

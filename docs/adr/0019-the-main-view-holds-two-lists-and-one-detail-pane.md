@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-14
+Superseded in part by ADR 0037: the consequence that the Consultation close takes `z` no longer holds; the close takes `w` and confirms on a live Agent. Its other decisions hold.
 
 ## Context
 

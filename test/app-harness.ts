@@ -7,18 +7,20 @@
  * assertion, because the wait ends only when the effect appears or the
  * deadline dumps the last frame.
  */
+
+import { afterEach, beforeEach, expect, spyOn } from "bun:test";
 import { type MouseButton, MouseButtons } from "@opentui/core/testing";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, beforeEach, expect, vi } from "vitest";
 
 import { App, type AppProps } from "../src/components/app.ts";
-import type { ThemeRole } from "../src/components/shared/theme.ts";
-import { paint } from "../src/components/theme.ts";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
+import { resolveTheme, type ThemeRole } from "../src/components/shared/theme.ts";
 import { TICKET_STATES, type Ticket } from "../src/domain/ticket.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { emptyAgentRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
+import "./theme-isolation.ts";
 
 export type Setup = Awaited<ReturnType<typeof testRender>>;
 
@@ -34,8 +36,8 @@ const FRAME_POLL_MS = 10;
  * through a command runner. A deadline tuned to a quiet machine fails such a
  * wait by a few hundred ms under load, and the run reads as a broken app
  * rather than a busy one. A test whose effect never arrives still fails, only
- * at this deadline; the runner's own budget (vitest.config.ts) stays above
- * the sum of a test's waits.
+ * at this deadline; the runner's own budget (the test script's `--timeout`)
+ * stays above the sum of a test's waits.
  *
  * CI hosts set `CI`, and their shared runners run the suite under a load the
  * deadline was not tuned for. Doubling it there keeps a slow runner slow
@@ -45,8 +47,46 @@ const FRAME_POLL_MS = 10;
 export const FRAME_DEADLINE_MS = process.env.CI ? 20000 : 10000;
 /** The dispatch grace `settle` waits out before trusting stability. */
 const SETTLE_GRACE_MS = 30;
-/** The state badge the list pane renders for each ticket state. */
-const STATE_BADGES = TICKET_STATES.map((state) => `[${state}]`);
+/**
+ * The state badge the list pane renders for each resting ticket state.
+ *
+ * `handed-off` is not among them (ADR 0030): the `[handed-off]` badge is
+ * never drawn, and the ticket's Starting window wears the spinner face in
+ * its place instead. The frames the sample data carries a `handed-off`
+ * ticket, so a frame with every badge also carries one face.
+ */
+const STATE_BADGES = TICKET_STATES.filter((state) => state !== "handed-off").map(
+	(state) => `[${state}]`,
+);
+
+/**
+ * The spinner face a ticket's Starting window wears in place of its state
+ * badge (ADR 0030), read off a frame.
+ *
+ * The face steps its braille frame every ~100 ms, so a frame holds exactly
+ * one glyph beside the written word: the check runs on the word and any of
+ * the shared frames, never on one frame's glyph alone. A frame snapshot pins
+ * the first frame the face stands on; the animation itself is not something
+ * the frame snapshots verify.
+ */
+export const startingFaceOf = (frame: string): string | null =>
+	SPINNER_FRAMES.find((glyph) => frame.includes(`${glyph} starting`)) ?? null;
+
+/**
+ * The frame with the animated face standing on its first frame.
+ *
+ * The face steps a braille glyph every ~100 ms, so an exact frame
+ * comparison over that interval reads the glyph, not the screen it sits
+ * in. A stability check or an equality between two captures normalizes the
+ * glyph to the first frame first, so the face reads as the still it is for
+ * the screen: the word beside it carries the fact, the glyph is the motion
+ * (ADR 0030).
+ */
+export const stillFrame = (frame: string): string =>
+	SPINNER_FRAMES.slice(1).reduce(
+		(out, glyph) => out.replaceAll(`${glyph} starting`, `${SPINNER_FRAMES[0]} starting`),
+		frame,
+	);
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -155,11 +195,16 @@ export const agentRowOf = (frame: string): number => {
 			.startsWith("Agent: "),
 	);
 };
-/** Assert every ticket state badge is on screen, read off the frame. */
+/**
+ * Assert every resting ticket state badge is on screen, read off the frame,
+ * and the Starting window wears its spinner face in place of the badge it
+ * replaced (ADR 0030).
+ */
 export function expectStateBadges(frame: string): void {
 	for (const badge of STATE_BADGES) {
 		expect(frame).toContain(badge);
 	}
+	expect(startingFaceOf(frame)).not.toBeNull();
 }
 
 /**
@@ -210,18 +255,19 @@ export const rgb = (hex: string): [number, number, number] => [
 /**
  * One theme role's painted color, the hex a test asserts its frame against.
  *
- * The theme isolation (test/theme-isolation.ts) clears the theme environment
- * before every test, so this resolves the standalone theme in color: the
- * `text` role for the old `COLORS.text`, `subtext0` for `dim`, `accent` for
- * `borderFocused`, `blue` for `statusWorking`, `yellow` for `statusWarning`, `red`
- * for `statusError`, `panel_bg` for `overlay`, and so on. The emphasis the
- * old palette carried in a brighter text color (`textBright`) now rides on
- * bold, so a test asserts the `text` role for it. The standalone palette
- * paints every role, so the paint is never `undefined` under the test
- * isolation.
+ * This resolves the standalone theme in color through the pure resolver, so
+ * the expected value never reads the test process's environment: the test
+ * files share one process and run concurrently, and another file's test body
+ * can hold `NO_COLOR` at the instant an assertion resolves, a window in which
+ * `paint` answers `undefined`. The role-to-old-palette mapping stands as
+ * before: the `text` role for the old `COLORS.text`, `subtext0` for `dim`,
+ * `accent` for `borderFocused`, `blue` for `statusWorking`, `yellow` for
+ * `statusWarning`, `red` for `statusError`, `panel_bg` for `overlay`, and so
+ * on. The emphasis the old palette carried in a brighter text color
+ * (`textBright`) now rides on bold, so a test asserts the `text` role for it.
+ * The standalone palette paints every role, so the value is always a color.
  */
-// biome-ignore lint/style/noNonNullAssertion: the isolation pins the standalone palette, which paints every role
-export const roleColor = (role: ThemeRole): string => paint(role)!;
+export const roleColor = (role: ThemeRole): string => resolveTheme(null, false).theme.roles[role];
 
 /** The rendered foreground and background colors at one terminal cell. */
 export function cellColors(
@@ -271,11 +317,11 @@ export const listFocused = (frame: string) =>
 	frame.includes("❯ Tickets") && !frame.includes("❯ Detail");
 
 let errorCalls: string[];
-let errorSpy: ReturnType<typeof vi.spyOn>;
+let errorSpy: ReturnType<typeof spyOn>;
 
 beforeEach(() => {
 	errorCalls = [];
-	errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+	errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
 		errorCalls.push(args.map(String).join(" "));
 	});
 });
@@ -426,6 +472,9 @@ function scrollKeyInput(key: string): string {
 	if (key === "pagedown") return "\u001b[6~";
 	if (key === "home") return "HOME";
 	if (key === "end") return "END";
+	// The mock types a word it does not know as literal text, so the Delete
+	// key goes out as its escape sequence like the page keys do.
+	if (key === "delete") return "\u001b[3~";
 	return key;
 }
 
@@ -852,14 +901,14 @@ export async function openSurface(
 }
 
 /**
- * z and d open a confirmation panel over the Consultation detail for the
- * states that need one. The panel's key handler subscribes after the open
+ * w, d, and Enter open a confirmation panel over the Consultation detail for
+ * the states that need one. The panel's key handler subscribes after the open
  * commit, and the next key in the test is the panel's own, so wait for the
  * panel's subscription the same way.
  */
 export async function openConsultationPanel(
 	setup: Setup,
-	key: "z" | "d",
+	key: "w" | "d" | "return",
 	what: string,
 	predicate: (frame: string) => boolean,
 ): Promise<void> {
@@ -926,24 +975,6 @@ export async function crossToTickets(setup: Setup, maxSteps = 30): Promise<strin
 	throw new Error(
 		`the cursor never crossed back to the Ticket list\nlast frame:\n${setup.captureCharFrame()}`,
 	);
-}
-
-/**
- * "w" opens the leftover panel above the selected Ticket, and waits until
- * the panel owns the keys.
- *
- * The panel's key handler subscribes after the open commit, and the next key
- * in the test is the panel's own, so wait for the panel's subscription the
- * same way. Returns the settled frame the panel is drawn in.
- */
-export async function openLeftoverPanel(
-	setup: Setup,
-	what = "the leftover panel",
-): Promise<string> {
-	const before = keyHandlerListeners(setup);
-	await press(setup, "w", what, (f) => f.includes("Leftover environment"));
-	await awaitNewKeyHandler(setup, before, `${what} to take the keys`);
-	return settle(setup);
 }
 
 /**

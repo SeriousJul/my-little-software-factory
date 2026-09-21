@@ -39,7 +39,7 @@ const CONTROLLER_BIN = join(ROOT, "bin", "factory.mjs");
 const OUT = join(ROOT, "docs", "public", "hero.png");
 
 /** The screen the hero shot shows: wide enough for two panes. */
-const SCREEN = { cols: 200, rows: 50 } as const;
+const SCREEN = { cols: 256, rows: 56 } as const;
 
 /** Resolve the real herdr binary from the operator's PATH. */
 function herdrBin(): string {
@@ -133,7 +133,7 @@ async function main(): Promise<void> {
 			"--direction",
 			"right",
 			"--ratio",
-			"0.64",
+			"0.74",
 		]);
 		paneB = split.result.pane.pane_id as string;
 

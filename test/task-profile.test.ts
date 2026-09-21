@@ -1,5 +1,5 @@
+import { describe, expect, test } from "bun:test";
 import { parse as parseToml } from "smol-toml";
-import { describe, expect, test } from "vitest";
 
 import { configToToml, type FactoryConfig, validateConfig } from "../src/config.ts";
 import { resolveHandoffChoice } from "../src/handoff.ts";

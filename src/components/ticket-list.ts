@@ -22,6 +22,7 @@ import { type ReactElement, useRef } from "react";
 import { isHeldCompletion, type Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
+import { spinnerFace, useSpinnerFrame } from "./shared/spinner.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
 	BADGE_WIDTH,
@@ -29,6 +30,8 @@ import {
 	heldBadge,
 	markerColor,
 	paint,
+	queuedBadge,
+	STARTING_WORD,
 	stateBadge,
 	stateColor,
 	taskTypeBadge,
@@ -58,6 +61,19 @@ interface TicketListProps {
 	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
 	/** Whether the ticket has used up its handoffs: the limit marker. */
 	limitReached: (ticket: Ticket) => boolean;
+	/**
+	 * Whether the ticket's Starting window (ADR 0030) is open against the
+	 * app's facts: the row wears the spinner face in place of its state
+	 * badge while it holds. A failure marker outranks it in the row.
+	 */
+	starting: (ticket: Ticket) => boolean;
+	/**
+	 * Whether the ticket's Queue wait (CONTEXT.md) holds against the app's
+	 * facts: the row wears the `queued` badge in place of its state badge
+	 * while it holds. A failure marker and the Starting window outrank it in
+	 * the row the way they outrank the state badge.
+	 */
+	queueWait: (ticket: Ticket) => boolean;
 	/** False while an overlay owns input above the panes. */
 	active: boolean;
 	onFocus: () => void;
@@ -73,6 +89,8 @@ export function TicketList({
 	emptyMessage,
 	markerOf,
 	limitReached,
+	starting,
+	queueWait,
 	active,
 	onFocus,
 	onSelect,
@@ -85,6 +103,15 @@ export function TicketList({
 	const rootRef = useRef<BoxRenderable | null>(null);
 
 	const { start, visible } = listWindow(tickets, selectedIndex, visibleRows);
+	// The row wears the face as written text, not as a mounted control: the row
+	// is one text renderable, and a text renderable takes no nested control, so
+	// the face is the shared face's text at the shared frame, painted as one run
+	// the way the state badge is painted. The frame comes from the shared
+	// `useSpinnerFrame`, gated on whether a visible row wears it: a window that
+	// is not on screen owes no motion, and the face stands on its first frame
+	// the moment the window opens, so a frame snapshot read at the open holds.
+	// The word, not the glyph, is the fact (ADR 0030).
+	const faceFrame = useSpinnerFrame(visible.some((ticket) => starting(ticket)));
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
@@ -136,6 +163,9 @@ export function TicketList({
 							geometry.usableCols,
 							markerOf(ticket),
 							limitReached(ticket),
+							starting(ticket),
+							queueWait(ticket),
+							faceFrame,
 						),
 					),
 				)),
@@ -160,6 +190,9 @@ function rowSpans(
 	usableCols: number,
 	marker: "blocked" | "missing" | null,
 	atLimit: boolean,
+	starting: boolean,
+	queueWait: boolean,
+	faceFrame: number,
 ): ReactElement[] {
 	const spans: ReactElement[] = [];
 	let budget = usableCols;
@@ -184,12 +217,27 @@ function rowSpans(
 	// must act on, and it outranks the resting state it rests in. It only
 	// appears on an awaiting ticket: a held turn whose agent works again has
 	// left awaiting and shows its state badge, never `held` over an agent that
-	// is visibly working.
+	// is visibly working. The spinner face of the Starting window (ADR 0030)
+	// takes the badge's slot while the window holds; a failure marker beats
+	// it the way it beats the state badge, so a dead or blocked agent is
+	// never hidden behind the motion.
 	if (budget >= BADGE_WIDTH) {
 		if (marker !== null)
 			spans.push(createElement("span", { fg: markerColor(marker) }, failureBadge(marker)));
+		else if (starting)
+			spans.push(
+				createElement(
+					"span",
+					{ fg: paint("subtext0") },
+					spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
+				),
+			);
 		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
 			spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
+		else if (queueWait)
+			// The Queue wait badge wears the open role: the ticket keeps its
+			// open state while its start waits for a seat.
+			spans.push(createElement("span", { fg: stateColor("open") }, queuedBadge()));
 		else
 			spans.push(createElement("span", { fg: stateColor(ticket.state) }, stateBadge(ticket.state)));
 		budget -= BADGE_WIDTH;

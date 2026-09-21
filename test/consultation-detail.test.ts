@@ -3,7 +3,7 @@
  * Agent's session record, the Agent view from the terminal, and the
  * Captured history for a closed Consultation whose record does not render.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import {
 	consultationDetailBody,
 	consultationDetailLines,

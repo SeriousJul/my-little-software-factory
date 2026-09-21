@@ -7,13 +7,19 @@
  * a contributor's preview and the operator's screen from becoming two different
  * things, which is the failure the shared control standard names.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, describe, expect, test } from "vitest";
 
 import { GALLERY_EXAMPLES, Gallery, galleryColumns } from "../src/components/shared/gallery.ts";
 import { controlInk } from "../src/components/shared/presentation.ts";
-import { HERDR_THEME_VERSION, STANDALONE_THEME } from "../src/components/shared/theme.ts";
+import { SPINNER_FRAMES } from "../src/components/shared/spinner.ts";
+import {
+	BUILTIN_THEMES,
+	HERDR_THEME_VERSION,
+	STANDALONE_THEME,
+} from "../src/components/shared/theme.ts";
 import {
 	awaitFrame,
 	cellColors,
@@ -79,13 +85,33 @@ describe("the shared control gallery", () => {
 			"states",
 			"search",
 			"notes",
+			"spinner",
 			"priority",
 			"session-view",
 			"agent-view-fallback",
 			"captured-history-fallback",
+			"close-dialog-opening",
+			"close-dialog-working",
+			"close-dialog-awaiting-response",
+			"close-panel-closing",
+			"ticket-close",
+			"ticket-close-live-worktree",
+			"recovery-panel-opening",
+			"recovery-panel-missing",
+			"recovery-panel-failed",
 			"goto",
+			"ticket-goto",
+			"consultation-detail-unscheduled",
+			"consultation-unscheduled-actions",
+			"consultation-detail-queued",
+			"work-queue",
+			"work-force-dispatch",
+			"work-queue-item-consultation",
+			"work-queue-item-consultation-gone",
 			"theme",
 			"theme-fallback",
+			"theme-light",
+			"theme-override",
 			"no-color",
 			"narrow",
 		]);
@@ -259,6 +285,83 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain(`unknown theme name "frobnicate"`);
 	});
 
+	test("the light theme example paints the same controls in a light theme's ink", async () => {
+		const setup = await gallery("theme-light");
+		const raw = setup.captureCharFrame();
+		const frame = frameText(raw);
+		expect(frame).toContain("theme: catppuccin-latte (light)");
+		expect(frame).toContain("Model");
+		expect(frame).toContain("openai/gpt-5.1");
+		// The focused field wears the light theme's own pair: its text on its
+		// active-row surface, so a light name in herdr's config reads light.
+		const value = findCell(setup, "openai/gpt-5.1");
+		const cell = cellColors(setup, value.x, value.y);
+		expect(cell.fg).toEqual([0x4c, 0x4f, 0x69]);
+		expect(cell.bg).toEqual([0xe6, 0xe9, 0xef]);
+		// The accent swatch wears the light theme's accent.
+		const swatchRow = rowsOf(raw).findIndex((row) => row.includes(" subtext0 "));
+		expect(swatchRow).toBeGreaterThanOrEqual(0);
+		const swatch = rowSpans(setup, swatchRow).find((span) => span.text.trim() === "accent");
+		if (swatch === undefined || swatch.bg === null) {
+			throw new Error("the light example lost its accent swatch");
+		}
+		expect(hexOf(swatch.bg)).toBe("#1e66f5");
+		// The heading row wears the example's own pair, not the environment's
+		// ink: the light theme's text on its own panel surface.
+		const heading = findCell(setup, "theme: catppuccin-latte (light)");
+		const headingCell = cellColors(setup, heading.x, heading.y);
+		expect(headingCell.fg).toEqual([0x4c, 0x4f, 0x69]);
+		expect(headingCell.bg).toEqual([0xef, 0xf1, 0xf5]);
+	});
+
+	test("the override example wears the token values the [theme.custom] section holds", async () => {
+		const setup = await gallery("theme-override");
+		const raw = setup.captureCharFrame();
+		const frame = frameText(raw);
+		expect(frame).toContain('names "catppuccin"');
+		// The heading wears the override's own pair: the overridden text role
+		// stands as its ink, and the panel surface resolved to `reset`, so the
+		// base theme's value never shows there either.
+		const headingRow = rowsOf(raw).findIndex((row) => row.includes('names "catppuccin"'));
+		expect(headingRow).toBeGreaterThanOrEqual(0);
+		const heading = rowSpans(setup, headingRow).find((span) => span.text.includes("catppuccin"));
+		if (heading === undefined || heading.fg === null) {
+			throw new Error("the override example lost its heading");
+		}
+		expect(hexOf(heading.fg)).toBe("#ffffff");
+		if (heading.bg !== null)
+			expect(hexOf(heading.bg)).not.toBe(BUILTIN_THEMES.catppuccin.roles.panel_bg);
+		// The swatch row holds every role name at once; the config line above
+		// it names only the overridden tokens.
+		const swatchRow = rowsOf(raw).findIndex((row) => row.includes(" subtext0 "));
+		expect(swatchRow).toBeGreaterThanOrEqual(0);
+		const swatches = rowSpans(setup, swatchRow);
+		// The overridden tokens wear the override's own values...
+		const accent = swatches.find((span) => span.text.trim() === "accent");
+		if (accent === undefined || accent.bg === null) {
+			throw new Error("the override example lost its accent swatch");
+		}
+		expect(hexOf(accent.bg)).toBe("#ffb86c");
+		const text = swatches.find((span) => span.text.trim() === "text");
+		if (text === undefined || text.bg === null) {
+			throw new Error("the override example lost its text swatch");
+		}
+		expect(hexOf(text.bg)).toBe("#ffffff");
+		// ...a token the override drops keeps the base theme, and a token
+		// that resolves to `reset` paints no swatch at all.
+		const subtext = swatches.find((span) => span.text.trim() === "subtext0");
+		if (subtext === undefined || subtext.bg === null) {
+			throw new Error("the override example lost its subtext0 swatch");
+		}
+		expect(hexOf(subtext.bg)).toBe("#a6adc8");
+		// A token that resolves to `reset` paints no swatch of its own: the
+		// surface behind it stands, and the base theme's value never shows.
+		const panel = swatches.find((span) => span.text.trim() === "panel_bg");
+		if (panel === undefined) throw new Error("the override example lost its panel_bg swatch");
+		if (panel.bg !== null)
+			expect(hexOf(panel.bg)).not.toBe(BUILTIN_THEMES.catppuccin.roles.panel_bg);
+	});
+
 	test("the no-color example paints the same controls with no color", async () => {
 		const setup = await gallery("no-color");
 		const frame = frameText(setup.captureCharFrame());
@@ -268,6 +371,10 @@ describe("the shared control gallery", () => {
 		expect(frame).toContain("openai/gpt-5.1");
 		expect(frame).toContain("❯ Repository");
 		expect(frame).toContain("Launch Consultation");
+		// The spinner face wears the no-color ink too: its written word keeps
+		// standing, and no color of its own shows on the row.
+		expect(frame).toContain("starting");
+		expect(spanColors(setup, "starting")).toEqual([[255, 255, 255]]);
 		// And none of them paints a foreground: the writing alone stands. The
 		// renderer's own default is not a paint.
 		expect(spanColors(setup, "openai/gpt-5.1")).toEqual([[255, 255, 255]]);
@@ -299,11 +406,192 @@ describe("the shared control gallery", () => {
 		expect(frameText(captured)).toContain("review the auth design");
 	});
 
+	test("the close dialog examples hold every state a live Agent can be in", async () => {
+		// The dialog examples own a taller frame than the shared one, so the
+		// example opens at the plane's minimum height, where the dialog box
+		// must still hold its title, body, and every action row.
+		const setup = await gallery("close-dialog-opening", 80, 19);
+		let frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("close-dialog-opening"));
+		expect(frame).toContain("Close Consultation c1c1c1c1?");
+		expect(frame).toContain("The Agent is still opening");
+		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
+		expect(frame).toContain("stop the Agent; the work stays");
+		expect(frame).toContain("Cancel");
+
+		setup.mockInput.pressTab();
+		const working = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("close-dialog-working")),
+			"the working state",
+		);
+		frame = frameText(working);
+		expect(frame).toContain("The Agent is working");
+		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
+
+		setup.mockInput.pressTab();
+		const awaiting = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("close-dialog-awaiting-response")),
+			"the awaiting-response state",
+		);
+		frame = frameText(awaiting);
+		expect(frame).toContain("The Agent has answered and is waiting for your reply");
+		expect(frame).toContain("Close stops the Agent. The worktree and branch stay.");
+
+		setup.mockInput.pressTab();
+		const closing = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("close-panel-closing")),
+			"the closing recovery panel",
+		);
+		frame = frameText(closing);
+		expect(frame).toContain("Close Consultation c1c1c1c1");
+		expect(frame).toContain("Cleanup is already in progress");
+		expect(frame).toContain("Retry");
+		expect(frame).toContain("Force-close");
+		expect(frame).not.toContain("The Agent is working");
+	});
+
+	test("the recovery panel examples hold every state that needs recovery", async () => {
+		// The same production panel the Consultation's Enter opens, drawn at
+		// the plane's minimum height where the box must hold its rows.
+		const setup = await gallery("recovery-panel-opening", 80, 19);
+		let frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("recovery-panel-opening"));
+		expect(frame).toContain("Recover Consultation c1c1c1c1");
+		expect(frame).toContain("The Agent never finished opening.");
+		expect(frame).toContain("Recover");
+		expect(frame).toContain("retry the interrupted opening");
+		expect(frame).toContain("Close");
+		// An interrupted opening still holds an Agent, so its close confirms.
+		expect(frame).toContain("stop the Agent; the close confirms");
+		expect(frame).not.toContain("Replace");
+
+		setup.mockInput.pressTab();
+		const missing = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("recovery-panel-missing")),
+			"the missing recovery panel",
+		);
+		frame = frameText(missing);
+		expect(frame).toContain("The Agent is gone from its pane.");
+		expect(frame).toContain("the Agent pane is gone");
+		expect(frame).toContain("Replace");
+		expect(frame).toContain("launch a linked Consultation here");
+		expect(frame).toContain("close the record; nothing to stop");
+
+		setup.mockInput.pressTab();
+		const failed = await awaitFrame(
+			setup,
+			(f) => frameText(f).includes(stateLine("recovery-panel-failed")),
+			"the failed recovery panel",
+		);
+		frame = frameText(failed);
+		expect(frame).toContain("The launch failed before the Agent ran.");
+		expect(frame).toContain("herdr refused the launch");
+		expect(frame).toContain("Replace");
+		expect(frame).toContain("Close");
+	});
+
+	test("the spinner example wears the animated face beside its written word", async () => {
+		const setup = await gallery("spinner");
+		const raw = setup.captureCharFrame();
+		const frame = frameText(raw);
+		expect(frame).toContain(stateLine("spinner"));
+		// The face the ticket's Starting window wears: its written word, beside
+		// a glyph of its own frames. The mount paints the face on one frame of
+		// its own, so the check takes the glyph from the frame, not from a guess
+		// at where the tick has landed.
+		const row = rowsOf(raw).find((line) => line.includes("starting"));
+		if (row === undefined) throw new Error("the spinner face never painted");
+		const glyph = SPINNER_FRAMES.find((candidate) => row.includes(`${candidate} starting`));
+		if (glyph === undefined) throw new Error(`the face wears no frame of its own:\n${row}`);
+		// The face paints from the Theme in force in the tone a state word wears,
+		// and the note beside it names the frames the face steps through.
+		expect(spanColors(setup, "starting")).toEqual([
+			[
+				Number.parseInt(STANDALONE_THEME.roles.subtext0.slice(1, 3), 16),
+				Number.parseInt(STANDALONE_THEME.roles.subtext0.slice(3, 5), 16),
+				Number.parseInt(STANDALONE_THEME.roles.subtext0.slice(5, 7), 16),
+			],
+		]);
+		expect(frame).toContain(SPINNER_FRAMES.join(" "));
+	});
+
 	test("the Goto example shows the hint available and unavailable, with its reason", async () => {
 		const setup = await gallery("goto");
 		const frame = frameText(setup.captureCharFrame());
 		expect(frame).toContain(stateLine("goto"));
 		expect(frame).toContain("g Goto");
+	});
+
+	test("the Force-dispatch example holds the bar's states and the failure line", async () => {
+		// The queue's bar carries more hints than a narrow frame pays for, so
+		// the example opens at a width that keeps the Enter hint on the row.
+		const setup = await gallery("work-force-dispatch", 120, 24);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("work-force-dispatch"));
+		// The available bar states the hint the Work section's bar states: Enter
+		// on a queue row force-dispatches the item under the cursor.
+		expect(frame).toContain("Enter Force-dispatch");
+		// The two refusals the catalogue carries, on the bars that refuse them.
+		expect(frame).toContain("a Handoff is active");
+		expect(frame).toContain("no queue item is under the cursor");
+		// The failure path: the warning a failed force-dispatch leaves on the
+		// Message line, the item leaving the queue behind it.
+		expect(frame).toContain("Warning:");
+		expect(frame).toContain(`force-dispatch of "Add a webhook retry policy" failed`);
+		// The Consultation item's line (issue #90): the item's own force-
+		// dispatch names the cap it ran over, standing while a Handoff runs.
+		expect(frame).toContain("force-dispatched Consultation c1c1c1c1 over the Parallel limit");
+	});
+
+	test("the Ticket Goto example holds the available and refused states", async () => {
+		const setup = await gallery("ticket-goto");
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("ticket-goto"));
+		// The available row states the hint on the in-flight Ticket's bar.
+		expect(frame).toContain("g Goto");
+	});
+	// The Ticket Close confirmation (ADR 0031): the dialog states who is alive
+	// and what the Close cleanup ends, and the two Environments read
+	// differently, so the reviewer sees both from the gallery.
+	test("the Ticket Close example shows the working Agent and the worktree removal", async () => {
+		const setup = await gallery("ticket-close", 100, 30);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("ticket-close"));
+		expect(frame).toContain("Close: Fix the layout math");
+		expect(frame).toContain("The Agent is working.");
+		expect(frame).toContain(
+			"Close removes the worktree checkout; a dirty checkout stays as a leftover.",
+		);
+		expect(frame).toContain(
+			"The git branch stays, and the Ticket returns to open in its next cycle.",
+		);
+		expect(frame).toContain("No completion record is written: the turn never settled.");
+		// The rows the operator answers with, and the panel's own bar. The row's
+		// detail is cut at the panel's own width, the way every action row cuts.
+		expect(frame).toContain("Close end the work cycle; the ticket returns");
+		expect(frame).toContain("Cancel keep the Agent and its work running");
+		expect(frame).toContain("Esc Cancel");
+		// Nothing of the body scrolled away: the whole warning shows at once.
+		expect(frame).not.toContain("more (j/k)");
+	});
+
+	test("the Ticket Close live-worktree example shows the settled turn and the tab", async () => {
+		const setup = await gallery("ticket-close-live-worktree", 100, 30);
+		const frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("ticket-close-live-worktree"));
+		expect(frame).toContain("The turn has settled, and no Agent works.");
+		expect(frame).toContain(
+			"Close closes the Agent's herdr tab, and keeps the checkout and the workspace.",
+		);
+		// The worktree's removal note is not this Environment's fact.
+		expect(frame).not.toContain("removes the worktree checkout");
+		expect(frame).toContain("The closed decision lands on the settled turn.");
+		expect(frame).toContain("Cancel keep the turn undecided");
+		expect(frame).not.toContain("more (j/k)");
 	});
 
 	test("Esc leaves the gallery, the way its bar says", async () => {
@@ -329,11 +617,11 @@ describe("the shared control gallery", () => {
 		const ink = controlInk();
 		// The warning row wears the warning tone on its own value.
 		const value = findCell(setup, "openai/gpt-5.1-codex");
-		expect(hexOf(cellColors(setup, value.x, value.y).fg)).toBe(ink.warning.fg);
+		expect(hexOf(cellColors(setup, value.x, value.y).fg)).toBe(ink.warning.fg ?? "");
 		// The waiting row keeps its value in the tone of a setting it cannot
 		// confirm yet, not in the tone of a value it stands on.
 		const waiting = findCell(setup, "anthropic/claude-sonnet-4-5");
-		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg);
+		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg ?? "");
 	});
 
 	test("the priority example shows the rank badge, each selector state, and the Consultation reason", async () => {

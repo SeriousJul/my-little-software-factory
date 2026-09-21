@@ -6,7 +6,8 @@
  * agent process itself. The live worktree environment reuses the herdr
  * workspace of the checkout and adds a fresh tab; the worktree environment
  * works the ticket on its own branch factory/<ticket id>-<title slug>: a
- * missing branch is created from the current HEAD of the main checkout, an
+ * missing branch is created from the worktree base (the fetched remote
+ * default branch, or the local HEAD with a note on the fallback), an
  * existing branch is reused in the worktree that holds it (or a fresh
  * worktree when no worktree holds it). Every handoff starts a fresh agent
  * in a fresh pane and sends the rendered task type template as its prompt.
@@ -36,7 +37,7 @@
  * pane, and the agent in it alive, and that agent still holds the herdr
  * agent name the ticket's next handoff wants. The handoff does not stop
  * there: it starts under its cycle name, and the leftover environment stays
- * a fact on the ticket for the operator to clear (ADR 0012).
+ * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
 import type { FactoryConfig, TransitionPin } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
@@ -638,12 +639,14 @@ async function startConsultationWorktree(
 			`Consultation branch already exists: ${branch}`,
 			ctx,
 		) as ConsultationHandoffOutcome;
-	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
-	if (head.code !== 0)
-		return failed(
-			`cannot read HEAD in ${checkout}: ${commandFailureText(head)}`,
-			ctx,
-		) as ConsultationHandoffOutcome;
+	// The worktree base rule (the "Worktree base" the glossary records): the
+	// fetched remote default branch, so a Consultation reads the shipped
+	// state of the repository, not the branch the checkout happens to hold.
+	// When the fetch or the ref is unavailable the base falls back to the
+	// checkout's HEAD, with a note on the handoff.
+	const base = await freshWorktreeBase(checkout, ctx.runner);
+	if ("fail" in base) return failed(base.fail, ctx) as ConsultationHandoffOutcome;
+	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
 	const created = await ctx.runner.run("herdr", [
 		"worktree",
 		"create",
@@ -652,7 +655,7 @@ async function startConsultationWorktree(
 		"--branch",
 		branch,
 		"--base",
-		head.stdout.trim(),
+		base.reference,
 		"--no-focus",
 	]);
 	if (created.code !== 0) return failedCommand(created, ctx) as ConsultationHandoffOutcome;
@@ -870,11 +873,106 @@ async function startAgentInNewTab(
 }
 
 /**
+ * The base a fresh worktree starts from (the "Worktree base" the glossary
+ * records): the remote default branch of the repository's origin after a
+ * fresh fetch of that single ref, or the local checkout's HEAD when the
+ * origin, the default branch, or the fetch is unavailable. The same rule
+ * serves a ticket handoff worktree and a Consultation worktree.
+ *
+ * A fallback carries a note for the handoff's note channel that names the
+ * base actually used (ref name plus short sha) and the reason, so weeks
+ * later the operator can answer "was that agent working on stale code?" in
+ * one read. The fetch touches only the remote-tracking ref and pulls only
+ * the default branch ref, so uncommitted work in the checkout is never
+ * disturbed and the handoff stays fast on a large repository.
+ */
+type FreshWorktreeBase = { reference: string; note?: string } | { fail: string };
+
+async function freshWorktreeBase(
+	checkout: string,
+	runner: CommandRunner,
+): Promise<FreshWorktreeBase> {
+	const origin = await runner.run("git", ["-C", checkout, "remote", "get-url", "origin"]);
+	if (origin.code !== 0 || origin.stdout.trim() === "")
+		return localHeadBase(checkout, "no usable origin remote", runner);
+	const branch = await remoteDefaultBranch(checkout, runner);
+	if (branch === null)
+		return localHeadBase(
+			checkout,
+			"no default branch found on origin (tried the origin/HEAD symref, then origin/main, then origin/master)",
+			runner,
+		);
+	const fetched = await runner.run("git", ["-C", checkout, "fetch", "origin", branch]);
+	if (fetched.code !== 0)
+		return localHeadBase(
+			checkout,
+			`fetching origin/${branch} failed: ${commandFailureText(fetched)}`,
+			runner,
+		);
+	return { reference: `origin/${branch}` };
+}
+
+/**
+ * The remote default branch, detected in the order the rule names: the
+ * `origin/HEAD` symref, then `origin/main`, then `origin/master`. No config
+ * names the branch. Null when none of the three points at a branch.
+ */
+async function remoteDefaultBranch(
+	checkout: string,
+	runner: CommandRunner,
+): Promise<string | null> {
+	const symref = await runner.run("git", [
+		"-C",
+		checkout,
+		"symbolic-ref",
+		"refs/remotes/origin/HEAD",
+	]);
+	if (symref.code === 0) {
+		const target = symref.stdout.trim();
+		const branch = target.startsWith("refs/remotes/origin/")
+			? target.slice("refs/remotes/origin/".length)
+			: "";
+		if (branch !== "") return branch;
+	}
+	for (const candidate of ["main", "master"]) {
+		const check = await runner.run("git", [
+			"-C",
+			checkout,
+			"rev-parse",
+			"--verify",
+			"--quiet",
+			`origin/${candidate}^{commit}`,
+		]);
+		if (check.code === 0) return candidate;
+	}
+	return null;
+}
+
+/**
+ * The local checkout's HEAD as the worktree base, with the fallback note:
+ * the base actually used (ref name plus short sha) and the reason.
+ */
+async function localHeadBase(
+	checkout: string,
+	reason: string,
+	runner: CommandRunner,
+): Promise<FreshWorktreeBase> {
+	const head = await runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
+	const sha = head.stdout.trim();
+	if (head.code !== 0 || sha === "")
+		return { fail: `cannot read HEAD in ${checkout}: ${commandFailureText(head)}` };
+	return {
+		reference: sha,
+		note: `the worktree base fell back to HEAD ${sha.slice(0, 7)}: ${reason}`,
+	};
+}
+
+/**
  * The worktree sequence: check the branch in the checkout, then get the
  * ticket a herdr worktree on it. A missing branch is created from the
- * current HEAD of the main checkout; an existing branch is reused (see
- * startReusedBranchHandoff). The agent starts in a fresh pane, receives
- * the prompt.
+ * worktree base (see freshWorktreeBase); an existing branch is reused (see
+ * startReusedBranchHandoff), and the reuse takes no fetch. The agent starts
+ * in a fresh pane, receives the prompt.
  */
 async function startWorktreeHandoff(
 	ticket: Ticket,
@@ -894,11 +992,9 @@ async function startWorktreeHandoff(
 	if (listed.stdout.trim() !== "") {
 		return startReusedBranchHandoff(checkout, branch, agent, args, prompt, ctx, extra);
 	}
-	const head = await ctx.runner.run("git", ["-C", checkout, "rev-parse", "HEAD"]);
-	if (head.code !== 0) {
-		return failed(`cannot read HEAD in ${checkout}: ${commandFailureText(head)}`, ctx);
-	}
-	const base = head.stdout.trim();
+	const base = await freshWorktreeBase(checkout, ctx.runner);
+	if ("fail" in base) return failed(base.fail, ctx);
+	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
 	const created = await ctx.runner.run("herdr", [
 		"worktree",
 		"create",
@@ -907,7 +1003,7 @@ async function startWorktreeHandoff(
 		"--branch",
 		branch,
 		"--base",
-		base,
+		base.reference,
 		"--no-focus",
 	]);
 	if (created.code !== 0) {
@@ -1283,7 +1379,7 @@ async function startAgentUnderAvailableName(
  * did, and otherwise herdr's own answer to the last attempt.
  *
  * A collision with the ticket's own leftover names the ticket's own action:
- * clearing the leftover. A collision with a stranger names the stranger:
+ * ending it in herdr. A collision with a stranger names the stranger:
  * herdr's handles, so the operator can find the pane.
  *
  * When a later candidate failed for another reason (a pane that stayed busy
@@ -1304,7 +1400,7 @@ function failedNameUnusable(attempt: AgentStart, ctx: HandoffContext): HandoffOu
 	}
 	const holder = holderText(collision.holder);
 	const reason = collision.own
-		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); clear its leftover environment, then hand off again: ${collision.reason}`
+		? `this ticket's own leftover agent still holds the herdr name ${collision.stableName} (${holder}); end its leftover environment in herdr, then hand off again: ${collision.reason}`
 		: `the herdr name ${collision.stableName} is held by ${holder}, which is no agent of ${ctx.names.owner}: ${collision.reason}`;
 	return {
 		status: "failed",

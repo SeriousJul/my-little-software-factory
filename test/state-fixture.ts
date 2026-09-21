@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -127,6 +127,7 @@ export function seedAwaitingTurn(
 	state: FactoryState,
 	outcome: FetchOutcome,
 	identity = "github:github.com:I_5",
+	transition?: TransitionOutcome | null,
 ): string {
 	const attemptId = seedInFlightTurn(state, outcome, identity);
 	state.settleTurn({
@@ -137,6 +138,7 @@ export function seedAwaitingTurn(
 		message: "The turn is done.",
 		turnLog: [{ kind: "text", text: "The turn is done." }],
 		completedAt: "2026-08-31T11:00:00Z",
+		...(transition === undefined ? {} : { transition }),
 	});
 	return attemptId;
 }

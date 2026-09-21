@@ -121,8 +121,19 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 		frame,
 		width,
 		title: modalTitle,
-		borderColor: ink.indicator.fg ?? undefined,
-		minContentRows: 1,
+		body: {
+			above: [
+				createElement(
+					"text",
+					{ key: "mode", fg: ink.detail.fg ?? undefined },
+					truncateToWidth(modeTitle(mode), frame.contentWidth),
+				),
+			],
+			below: visible.map((row, index) =>
+				guideRowElement(row, frame.contentWidth, `${scroll}-${index}`),
+			),
+			minRows: 1,
+		},
 		zIndex: 20,
 		message,
 		bar: {
@@ -130,16 +141,6 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 			context: contextFor("key-guide", context),
 			rangeIndicator: range,
 		},
-		children: [
-			createElement(
-				"text",
-				{ key: "mode", fg: ink.detail.fg ?? undefined },
-				truncateToWidth(modeTitle(mode), frame.contentWidth),
-			),
-			...visible.map((row, index) =>
-				guideRowElement(row, frame.contentWidth, `${scroll}-${index}`),
-			),
-		],
 	});
 }
 
@@ -183,14 +184,21 @@ export function MessageView({
 	});
 
 	const range = rangeIndicator(scroll, visible.length, wrapped.length);
-	const ink = controlInk();
 	return createElement(ModalSurface, {
 		frame,
 		width,
 		title: modalTitle,
-		borderColor:
-			fact.severity === "error" ? (ink.error.fg ?? undefined) : (ink.indicator.fg ?? undefined),
-		minContentRows: 1,
+		body: {
+			above: [],
+			below: visible.map((line, index) =>
+				createElement(
+					"text",
+					{ key: `${scroll}-${index}`, fg: messageColor(fact) },
+					padToWidth(truncateToWidth(line, frame.contentWidth), frame.contentWidth),
+				),
+			),
+			minRows: 1,
+		},
 		zIndex: 20,
 		message,
 		bar: {
@@ -198,13 +206,6 @@ export function MessageView({
 			context: contextFor("message-view", context),
 			rangeIndicator: range,
 		},
-		children: visible.map((line, index) =>
-			createElement(
-				"text",
-				{ key: `${scroll}-${index}`, fg: messageColor(fact) },
-				padToWidth(truncateToWidth(line, frame.contentWidth), frame.contentWidth),
-			),
-		),
 	});
 }
 

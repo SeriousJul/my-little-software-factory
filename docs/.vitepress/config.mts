@@ -94,7 +94,7 @@ function markdownFiles(dir: string): string[] {
 }
 
 // The group order the sidebar shows: the guides in the order an operator
-// reads them, the ADRs after, and the top-level Standards pages last. A
+// reads them, the contributor Development pages after, and the ADRs last. A
 // published folder that is not named here still shows: it appends after the
 // named groups, in name order, so a new page or a new guide never requires a
 // config edit.
@@ -103,8 +103,28 @@ const GROUP_ORDER: { folder: string; text: string }[] = [
 	{ folder: "operation", text: "Operation" },
 	{ folder: "work-flow", text: "Work flow" },
 	{ folder: "configuration", text: "Configuration" },
+	{ folder: "development", text: "Development" },
 	{ folder: "adr", text: "ADR" },
 ];
+
+// The page order inside a group, in the order an operator reads them. A group
+// the list does not name keeps the plain alphabetical order, and a page a
+// named list omits still shows: it appends after the named pages, in name
+// order, so a new page never requires a config edit.
+const PAGE_ORDER: Record<string, string[]> = {
+	"getting-started": ["prerequisites.md", "first-launch.md", "minimal-config.md"],
+	operation: ["main-view.md", "consultation.md", "modals.md", "live-view.md"],
+	"work-flow": ["handoffs.md", "completion.md"],
+	development: ["commands.md", "shared-controls.md", "labels.md"],
+};
+
+function orderPages(folder: string, files: string[]): string[] {
+	const wanted = PAGE_ORDER[folder] ?? [];
+	return [
+		...wanted.filter((name) => files.includes(name)),
+		...files.filter((name) => !wanted.includes(name)),
+	];
+}
 
 function sidebar(): DefaultTheme.Sidebar {
 	const groups: DefaultTheme.SidebarGroup[] = [];
@@ -120,10 +140,14 @@ function sidebar(): DefaultTheme.Sidebar {
 		// A folder the order does not name keeps the plain rule: an
 		// all-lowercase name is an acronym, shown uppercased.
 		const text = named?.text ?? (/^[a-z]+$/.test(folder) ? folder.toUpperCase() : folder);
+		// The ADR group shows one landing item, not one entry per ADR: the
+		// index lists every ADR, so the sidebar stays compact.
+		const all = folder === "adr" ? ["index.md"] : markdownFiles(folder);
+		const files = orderPages(folder, all);
 		return {
 			text,
 			collapsible: true,
-			items: markdownFiles(folder).map((name) => ({
+			items: files.map((name) => ({
 				text: pageTitle(join(folder, name)),
 				link: `/${folder}/${name}`,
 			})),
@@ -135,14 +159,6 @@ function sidebar(): DefaultTheme.Sidebar {
 	for (const folder of folders) {
 		if (GROUP_ORDER.some((named) => named.folder === folder)) continue;
 		groups.push(groupOf(folder));
-	}
-	const standards = markdownFiles("").filter((name) => name !== "index.md");
-	if (standards.length > 0) {
-		groups.push({
-			text: "Standards",
-			collapsible: true,
-			items: standards.map((name) => ({ text: pageTitle(name), link: `/${name}` })),
-		});
 	}
 	return groups;
 }

@@ -3,19 +3,19 @@
 Status: accepted, and the baseline is implemented for every editable field,
 selector, search, form action, and form focus route the control plane owns.
 Confirmed on 2026-09-09; implemented in the shared control library under
-[src/components/shared](../src/components/shared).
+[src/components/shared](../../src/components/shared).
 
 The current results for every acceptance target, with their versions, are in
-[the verification record](verification/shared-controls.md): the keyboard and
+[the verification record](../verification/shared-controls.md): the keyboard and
 visual targets ran in Ghostty and foot, and a tmux path runs in the suite; a
 screen reader has never read this application, and no claim of screen-reader
 support is made anywhere in this repository.
 
 This is the required baseline for human and agent contributors.
 
-See [the glossary](../CONTEXT.md) for domain terms,
-[ADR 0014](adr/0014-shared-modules-own-control-behavior.md) for ownership, and
-[the accessibility research](research/terminal-accessibility.md) for evidence.
+See [the glossary](../../CONTEXT.md) for domain terms,
+[ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for ownership, and
+[the accessibility research](../research/terminal-accessibility.md) for evidence.
 
 ## Scope and ownership
 
@@ -44,6 +44,43 @@ Reuse the existing shared control and modal code where it fits this standard.
 OpenTUI's field primitives are candidates for the shared implementation, not
 public escape routes for separate screen-specific editors. Do not create a
 second key definition system that can disagree with dispatch or help.
+
+## The Action bar and the Key guide
+
+The Action bar hints only the keys the Key guide names in the current
+interaction mode, and a key the catalogue names is claimed: the dispatch
+states its refusal on the Message line and nothing else may answer the key.
+A key the current section does not own still refuses there, in the owning
+section's words, so the operator learns the key exists from the other
+section.
+
+The sections differ in what their guides name, and the asymmetry is the
+rule, not drift:
+
+- The Consultation section's guide names every key its modes dispatch,
+  refused keys included: `e` Override appears there dim, because its modes
+  claim the key in the Consultation section and the operator pressing it
+  gets the Ticket section's refusal.
+- The Ticket section's guide omits the Consultation section's Delete (`d`)
+  and History (`f`) (issue #85): the Ticket section does not ask the
+  operator to learn those keys, and the Ticket bar follows its guide, so it
+  hints neither.
+- The Work queue section omits the same two controls (ADR 0034). Its two
+  modes join the shared base modes, so the Consultation section's keys
+  reach them as a key the queue can never dispatch: `d` is the queue's own
+  Queue down in its list and answers nothing in its detail, and `f` belongs
+  to no queue control at all. Each section's guide names the keys that
+  section dispatches, so a queue cursor shows neither row, and its bar
+  hints neither.
+
+The catalogue states the section ownership once per control
+(`consultationSectionOnly`), and the refusal, the guide, and the bar read
+it; neither the bar nor the guide special-cases a control by id. The rule
+names the owning section, so it reaches every section that does not own
+the control, and adding a section to the plane cannot reopen the gap. The
+[verification record](../verification/shared-controls.md) carries the
+catalogue-wide guard test that fails if a refused key is hinted by a bar
+whose guide does not name it, walked in every base mode of every section.
 
 ## Editing and keyboard ownership
 
@@ -117,7 +154,7 @@ rejection. Never turn `1e3` into `13` by removing the letter. Keep the existing
 count validation and leading-zero normalization: `007` and `7` represent the
 same count, while `0` is not a valid count.
 
-This refines the entry behavior in [ADR 0009](adr/0009-handoff-setting-resolution.md).
+This refines the entry behavior in [ADR 0009](../adr/0009-handoff-setting-resolution.md).
 It does not change setting resolution, the meaning of a count, or the rule that
 an invalid setting cannot start Agent work.
 
@@ -135,6 +172,57 @@ an explicit clear action.
 The search is distinct from the selected Model value. This changes the old
 invisible-search definition; it does not change how the Agent supplies its
 Model list or which Models are valid.
+
+## Spinner
+
+The spinner is the shared face a control wears beside its written word while
+a wait runs: an animated braille glyph that steps one frame every about
+100 ms. The face drives its own frames the way the Decision modal's pop-in
+drives its own progress; it never asks the renderer's animation engine, and
+the mount paints the first frame, so a frame snapshot taken there holds.
+The word carries the meaning: the glyph is the motion, the word is the fact,
+so the no-color presentation keeps the word and drops only the color. The
+surface names the word the face wears; the face paints the shared
+presentation's ink and holds no palette of its own.
+
+## The Body pane and the Decision region
+
+The near-fullscreen decision surfaces - the Decision modal and the Live
+view's settled sub-mode - lay their box out in two regions, per
+[ADR 0039](../adr/0039-the-modal-body-is-a-pane-and-its-decisions-a-bounded-region.md):
+
+- The Body pane is bordered and titled, and holds one body by itself: the
+  Turn log, or the Agent view of a live turn. Its border title names the
+  body that shows. An empty body states its reason as one row inside the
+  pane, and the pane keeps its chrome.
+- The Decision region holds the rows the operator confirms: the held cause
+  row and the decision rows. The pane's bottom border is the boundary; the
+  region gets no chrome of its own. It is bounded and scrolls: it shows as
+  many rows as the box has room for once the log has paid its floor, and it
+  states its range on the Action bar behind the selection's hint.
+
+The regions take their rows in a stated payment order: the context row,
+then the held cause row, then the pane's chrome, then the Decision region,
+then the log. The log keeps a floor of three rows, drops it to one after the
+pane has yielded its chrome, and only then does the surface stand down to
+the size message. The pane yields its chrome before the log yields rows:
+padding first, border second.
+
+The pane and the box paint one border ink: the control ink's indicator, the
+checked essential-indicator pair. No surface states its own border color.
+
+The region's selection, its wrap, its auto-scroll, its visible window, and
+its range text are a control behavior, so they live in the shared library's
+region module (`region.ts`, beside the field, the selector row, and the
+form), and the catalogue's `scroll-turn-log` is `scroll-body`: the body it
+scrolls may be the Agent view. The Live view is a shared-chrome surface
+([ADR 0040](../adr/0040-every-near-fullscreen-surface-is-shared-chrome.md)):
+it renders on the modal surface with its Message line and its Action bar, its
+stream sub-mode answers to its own `live-view` catalogue mode, and its
+settled sub-mode dispatches in the `decision-modal` mode, with the border
+re-titling `Live:` to `Decision:` on settle. A surface that paints decision
+rows without the library's region state is refused by the architecture
+check, with the shared chrome as the one stated exemption.
 
 ## Draft retention
 
@@ -184,8 +272,8 @@ applicable. Use those examples in automated tests so examples cannot become a
 separate imitation of the production controls.
 
 Human and agent contributor instructions link to this standard and to the
-gallery. The gallery command is `npm run gallery`, or
-`node bin/factory-gallery.mjs [example]`, and it draws the production modules.
+gallery. The gallery command is `bun run gallery`, or
+`bun bin/factory-gallery.mjs [example]`, and it draws the production modules.
 The same examples are driven by `test/shared-gallery.test.ts`, so an example
 cannot become an imitation of a control.
 
@@ -200,12 +288,12 @@ The initial acceptance targets are:
 
 | Environment | Required checks | Current result |
 | --- | --- | --- |
-| Linux with Ghostty | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
-| Linux with foot | Keyboard and visual checks | [The verification record](verification/shared-controls.md) |
-| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | [The verification record](verification/shared-controls.md) |
+| Linux with Ghostty | Keyboard and visual checks | [The verification record](../verification/shared-controls.md) |
+| Linux with foot | Keyboard and visual checks | [The verification record](../verification/shared-controls.md) |
+| A tmux path on Linux | Keyboard, paste, focus, and rendering checks | [The verification record](../verification/shared-controls.md) |
 | Separate GNOME Terminal and Orca environment | Screen-reader operation | Not verified |
 
-The results live in [the verification record](verification/shared-controls.md),
+The results live in [the verification record](../verification/shared-controls.md),
 which states what was measured, on what, and what was not measured: the
 screen-reader path is the target that has never run. Record the exact OS,
 terminal, multiplexer, renderer, and screen-reader versions used, as
@@ -279,8 +367,8 @@ skipped or cannot run is not a pass.
    replaced implementations rather than retaining permanent alternatives.
 5. Add and enforce the architecture checks. Update current-behavior documentation
    and contributor instructions as each migration lands. Done: the architecture
-   test, this standard, [the README](../README.md), and
-   [the contributor instructions](../AGENTS.md).
+   test, this standard, [the README](../../README.md), and
+   [the contributor instructions](../../AGENTS.md).
 6. Complete all acceptance checks and record their results.
 
 The migration is complete only when every owned control follows this standard
@@ -288,10 +376,12 @@ and lint, type checks, behavior tests, terminal tests, visual review, and
 screen-reader checks pass. Documentation and a new component directory alone do
 not meet this condition.
 
-The verification commands are `npm run lint`, `npm run typecheck`, `npm test`,
-and `npm run gallery`. The architecture rule is checked by
+The verification commands are `bun run lint`, `bun run typecheck`, `bun run test`,
+and `bun run gallery`. The architecture rule is checked by
 `test/shared-control-architecture.test.ts`, which rejects a separate field
-implementation, a hand-edited draft string, and a screen that names a renderer
-field instead of the library. The screen-reader procedure is written down in
-[the verification record](verification/shared-controls.md); it has not been
+implementation, a hand-edited draft string, a screen that names a renderer
+field instead of the library, and a surface that paints decision rows without
+the library's region state, the shared chrome being the one stated
+exemption. The screen-reader procedure is written down in
+[the verification record](../verification/shared-controls.md); it has not been
 run, and no result is claimed for it.

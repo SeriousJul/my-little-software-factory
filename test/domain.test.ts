@@ -6,7 +6,7 @@
  * observed through the rendered terminal frame in the app tests, the same
  * way an operator would see it.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import { canTransition, TICKET_STATES } from "../src/domain/ticket.ts";
 
@@ -29,19 +29,24 @@ describe("the ticket state machine", () => {
 		expect(canTransition("awaiting", "open")).toBe(true);
 	});
 
+	test("key w closes a cycle whose turn never settled (ADR 0031)", () => {
+		expect(canTransition("handed-off", "open")).toBe(true);
+		expect(canTransition("running", "open")).toBe(true);
+	});
+
 	test("a workflow handoff or restart continues the cycle from awaiting", () => {
 		expect(canTransition("awaiting", "handed-off")).toBe(true);
 	});
 
-	test("goto refocuses the existing agent", () => {
+	test("the poll can move an awaiting ticket back to running", () => {
+		// The agent works again on its still-pending turn: the poll reopens it
+		// (ADR 0033 left the move to the poll, since Goto is navigation).
 		expect(canTransition("awaiting", "running")).toBe(true);
 	});
 
 	test("transitions never move backward in the cycle", () => {
 		expect(canTransition("open", "running")).toBe(false);
 		expect(canTransition("open", "awaiting")).toBe(false);
-		expect(canTransition("handed-off", "open")).toBe(false);
-		expect(canTransition("running", "open")).toBe(false);
 		expect(canTransition("running", "handed-off")).toBe(false);
 	});
 

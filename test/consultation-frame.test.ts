@@ -13,10 +13,11 @@
  * real repository. Random launch identities are canonicalized by
  * ConsultationRunner so the command sequence stays pinnable.
  */
+
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
@@ -26,7 +27,7 @@ import type {
 	CommandRunner,
 	ModelListResult,
 } from "../src/runner.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import { type FactoryState, openFactoryState, workQueueIdentityOf } from "../src/state.ts";
 import {
 	actionBarRowOf,
 	awaitFrame,
@@ -59,6 +60,7 @@ import {
 	FakeRunner,
 	tabCreateJson,
 	workspaceCreateJson,
+	workspaceGetJson,
 	workspaceListJson,
 	worktreeCreateJson,
 } from "./fake-runner.ts";
@@ -82,6 +84,11 @@ const FORCE_ID = uid("9");
 const CLOSED_ID = uid("0");
 const MISSING_ID = uid("a");
 const AWAITING_ID = uid("b");
+const MISSING_DIRECT_ID = uid("c");
+const FAILED_DIRECT_ID = uid("d");
+const CLOSED_DIRECT_ID = uid("e");
+const CONFIRM_GONE_ID = uid("f");
+const LIVE_CLOSE_ID = uid("g");
 
 let home = "";
 let checkout = "";
@@ -144,12 +151,13 @@ function seed(
 	agent = true,
 	createdAt = "2026-09-01T10:00:00.000Z",
 	contextWindow = "",
+	environment: "worktree" | "live-worktree" = "worktree",
 ): void {
 	state.createConsultation({
 		id,
 		typeName: "grill",
 		agentType: "pi",
-		environment: "worktree",
+		environment,
 		model: "",
 		thinking: "",
 		contextWindow,
@@ -215,7 +223,12 @@ function stubCheckout(runner: FakeRunner): void {
 /** Stub the full worktree launch sequence at the verified checkout. */
 function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 	runner.set("git", ["-C", checkout, "branch", "--list", branch], { stdout: "" });
-	runner.set("git", ["-C", checkout, "rev-parse", "HEAD"], { stdout: "deadbeef\n" });
+	// The worktree base rule: the origin/HEAD symref names the default
+	// branch and the fetch of its single ref succeeds, so the base is the
+	// fetched remote ref.
+	runner.set("git", ["-C", checkout, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: "refs/remotes/origin/main\n",
+	});
 	runner.set(
 		"herdr",
 		[
@@ -226,7 +239,7 @@ function stubWorktreeLaunch(runner: FakeRunner, branch = BRANCH): void {
 			"--branch",
 			branch,
 			"--base",
-			"deadbeef",
+			"origin/main",
 			"--no-focus",
 		],
 		{ stdout: worktreeCreateJson("ws-new", "pane-c1") },
@@ -434,9 +447,7 @@ function stubLiveLaunchNew(runner: FakeRunner): void {
 /** Count the attention-bell bytes the app writes to the terminal. */
 function countBells(): { count: () => number; restore: () => void } {
 	let bells = 0;
-	const spy = vi.spyOn(process.stdout, "write").mockImplementation(((
-		chunk: Uint8Array | string,
-	) => {
+	const spy = spyOn(process.stdout, "write").mockImplementation(((chunk: Uint8Array | string) => {
 		if (String(chunk).includes("\u0007")) bells += 1;
 		return true;
 	}) as typeof process.stdout.write);
@@ -547,7 +558,7 @@ describe("Consultation launch and monitoring through the UI", () => {
 					await waitForCommands(
 						runner,
 						[
-							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base deadbeef --no-focus`,
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
@@ -623,6 +634,92 @@ describe("Consultation launch and monitoring through the UI", () => {
 	});
 });
 
+test("the mode line counts the ticket seat and the Consultation seat against one cap", async () => {
+	// Issue #87: the Parallel limit counts a Consultation alike with a
+	// ticket. The running ticket and the working Consultation each hold
+	// one seat, and the mode line shows the combined count against the one
+	// cap, from the same shared seat count the gates read. When the
+	// Consultation settles to awaiting-response it drops its seat, and the
+	// line holds the ticket's seat alone.
+	const state = openFactoryState(join(home, "state.sqlite"));
+	const ticketSource = { name: "tickets", kind: "test" };
+	const ticketOutcome = {
+		status: "success" as const,
+		fetchedAt: "2026-09-01T10:00:00.000Z",
+		tickets: [
+			{
+				identity: selectedTicket.identity,
+				sourceKind: selectedTicket.sourceKind,
+				externalKey: selectedTicket.externalKey,
+				sourceState: selectedTicket.sourceState,
+				url: selectedTicket.url,
+				title: selectedTicket.title,
+				description: selectedTicket.description,
+				labels: selectedTicket.labels,
+				externalUpdatedAt: selectedTicket.externalUpdatedAt,
+				repository: selectedTicket.repositoryRef,
+				attributes: {},
+			},
+		],
+	};
+	state.initializeSources([ticketSource]);
+	state.applyFetch(ticketSource, ticketOutcome);
+	const claim = state.claimHandoff(
+		selectedTicket.identity,
+		{
+			agentType: "pi",
+			environment: "live-worktree",
+			taskType: "implement",
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		"open",
+	);
+	if (!claim.ok) throw new Error(claim.reason);
+	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		paneId: "pane-ticket",
+		tabId: "tab-ticket",
+		workspaceId: "ws-ticket",
+	});
+	seed(state, WORKING_ID);
+	const paneId = `pane-${WORKING_ID.slice(0, 8)}`;
+	const inner = new FakeRunner();
+	stubPaneReadText(inner, paneId, "Agent: the review is underway");
+	const runner = new ConsultationRunner(
+		inner,
+		agentListJson([
+			{ pane: "pane-ticket", status: "working" },
+			{ pane: paneId, status: "working" },
+		]),
+	);
+	try {
+		await withApp(
+			async (setup) => {
+				await awaitFrame(setup, (f) => f.includes("auto: off 2/2"), "the combined seat count");
+				// The Consultation settles to awaiting-response on the idle
+				// poll: that state holds no seat, and the line drops to the
+				// ticket's seat alone.
+				runner.agentListJson = agentListJson([
+					{ pane: "pane-ticket", status: "working" },
+					{ pane: paneId, status: "idle" },
+				]);
+				await toConsultations(setup, "the settled Consultation", (f) =>
+					f.includes("State: awaiting-response"),
+				);
+				await awaitFrame(setup, (f) => f.includes("auto: off 1/2"), "the dropped seat");
+			},
+			WIDTH,
+			32,
+			// No initialTickets: the observation loop must poll herdr for the
+			// seat count's agent list, and it stands down on a test
+			// projection.
+			{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+		);
+	} finally {
+		state.close();
+	}
+});
 describe("Consultation recovery and replacement through the UI", () => {
 	test("an interrupted opening recovers with r", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
@@ -646,7 +743,7 @@ describe("Consultation recovery and replacement through the UI", () => {
 					await waitForCommands(
 						runner,
 						[
-							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base deadbeef --no-focus`,
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
 							`herdr agent prompt ${AGENT} /grill review auth`,
 						],
 						"the recovery launch sequence",
@@ -769,6 +866,250 @@ describe("Consultation recovery and replacement through the UI", () => {
 					expect(replacements).toHaveLength(1);
 					expect(replacements[0].replacementOf).toBe(FAILED_ID);
 					expect(replacements[0].state).toBe("working");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+});
+
+/**
+ * Enter answers the Consultation under the cursor with the surface its state
+ * needs: the Agent or the response on a live record, the recovery panel on a
+ * broken or stuck one, the close panel's retry rows on a record stuck in
+ * cleanup, and a readable refusal on a closed one.
+ */
+describe("Consultation Enter reaches the recovery surface its state needs", () => {
+	test("Enter on an opening Consultation opens the recovery panel, and Recover retries it", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, OPENING_ID, false);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the interrupted opening", (f) =>
+						f.includes("State: opening"),
+					);
+					// The bar names the meaning Enter carries on this row.
+					expect(actionBarRowOf(setup.captureCharFrame())).toContain("Enter Recovery");
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					const panel = await settle(setup);
+					expect(frameText(panel)).toContain("The Agent never finished opening.");
+					expect(frameText(panel)).toContain("Recover");
+					expect(frameText(panel)).toContain("Close");
+					// The panel's first row is the retry the interrupted opening needs:
+					// it runs the same recovery the `r` key runs.
+					await confirmPanel(setup, "the recovered opening to reach working", (f) =>
+						f.includes("State: working"),
+					);
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the recovery launch sequence",
+					);
+					expect(state.consultation(OPENING_ID)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the recovery panel's Close takes an opening Consultation through its dialog", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, OPENING_ID, false);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the interrupted opening", (f) =>
+						f.includes("State: opening"),
+					);
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					// The Close row is the close path, dialog and all: an opening
+					// record still holds an Agent the close must stop.
+					await pressArrow(setup, "down", "the Close row to be selected", (f) =>
+						f.includes("❯ Close"),
+					);
+					const dialog = await confirmPanel(setup, "the close dialog", (f) =>
+						f.includes("Close Consultation"),
+					);
+					expect(frameText(dialog)).toContain("The Agent is still opening");
+					expect(state.consultation(OPENING_ID)?.state).toBe("opening");
+					await press(
+						setup,
+						"escape",
+						"the dialog to close",
+						(f) => !f.includes("Close Consultation"),
+					);
+					expect(state.consultation(OPENING_ID)?.state).toBe("opening");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on a missing Consultation opens the recovery panel, and Replace links its replacement", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, MISSING_ID, false);
+		state.setConsultationState(MISSING_ID, "missing", "the Agent pane is gone");
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: reviewing");
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		const expectedInput = state.replacementInput(MISSING_ID);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the missing Consultation", (f) =>
+						f.includes("State: missing"),
+					);
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					const panel = await settle(setup);
+					expect(frameText(panel)).toContain("The Agent is gone from its pane.");
+					expect(frameText(panel)).toContain("the Agent pane is gone");
+					expect(frameText(panel)).toContain("Replace");
+					// Replace opens the launcher on the record's durable recovery
+					// context, not on an empty form.
+					const launcher = await confirmPanel(setup, "the Replacement launcher", (f) =>
+						f.includes("Replacement Consultation"),
+					);
+					expect(frameText(launcher)).toContain("Original input:");
+					await tabUntilSlot(setup, "❯ Launch Consultation");
+					setup.mockInput.pressEnter();
+					await awaitFrame(
+						setup,
+						(f) => f.includes("Replaced by:"),
+						"the missing detail to record the replacement",
+					);
+					await waitForCommands(
+						runner,
+						[`herdr agent prompt ${AGENT} /grill ${expectedInput}`],
+						"the replacement prompt",
+					);
+					const replacement = state.consultations("open").find((item) => item.id !== MISSING_ID);
+					expect(replacement?.replacementOf).toBe(MISSING_ID);
+					// The replaced record keeps its own state beside the new one.
+					expect(state.consultation(MISSING_ID)?.state).toBe("missing");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the recovery panel's Close retires a failed record without a dialog", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, FAILED_ID, false);
+		state.failConsultationOpening(FAILED_ID, "herdr refused the launch");
+		const short = FAILED_ID.slice(0, 8);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the failed Consultation", (f) =>
+						f.includes("State: failed"),
+					);
+					await openConsultationPanel(setup, "return", "the recovery panel", (f) =>
+						f.includes("Recover Consultation"),
+					);
+					await pressArrow(setup, "down", "the Close row to be selected", (f) =>
+						f.includes("❯ Close"),
+					);
+					// A failed record holds no Agent, so the close runs on the row:
+					// no confirmation stands between it and the result.
+					const frame = await confirmPanel(setup, "the direct close", (f) =>
+						messageRowOf(f).includes(`${short} closed`),
+					);
+					expect(frame).not.toContain("Close Consultation");
+					expect(state.consultation(FAILED_ID)?.state).toBe("closed");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on a closing Consultation opens the close panel's Retry and Force-close", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CLOSE_A_ID);
+		state.beginConsultationClose(CLOSE_A_ID);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the closing Consultation", (f) =>
+						f.includes("State: closing"),
+					);
+					// The stuck cleanup is the record's recovery, so Enter opens the
+					// close panel that already carries its retry rows.
+					await openConsultationPanel(setup, "return", "the close recovery panel", (f) =>
+						f.includes("Close Consultation"),
+					);
+					const panel = await settle(setup);
+					expect(frameText(panel)).toContain("Cleanup is already in progress");
+					expect(frameText(panel)).toContain("Retry");
+					expect(frameText(panel)).toContain("Force-close");
+					expect(state.consultation(CLOSE_A_ID)?.state).toBe("closing");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on a closed Consultation says the record is already closed", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CLOSED_DIRECT_ID);
+		state.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.beginConsultationClose(CLOSED_DIRECT_ID);
+		state.finishConsultationClose(CLOSED_DIRECT_ID);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view without open history", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
+					await press(setup, "return", "the Enter refusal", (f) =>
+						f.includes("the selected Consultation is already closed"),
+					);
+					expect(state.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
 				},
 				WIDTH,
 				32,
@@ -1031,9 +1372,37 @@ describe("Consultation close and cleanup through the UI", () => {
 							/Agent: pi \(consultation-([0-9a-f]{8})\)/,
 						)?.[1];
 						if (id8 === undefined) throw new Error("no Consultation agent selected");
-						await openConsultationPanel(setup, "z", "the close panel", (f) =>
-							f.includes("Close Consultation"),
-						);
+						if (i === 0) {
+							const current = state
+								.consultations("open")
+								.find((item) => item.id.slice(0, 8) === id8);
+							if (current === undefined) throw new Error(`no record for ${id8}`);
+							// The confirmation names the live Agent and the work the
+							// close keeps; a cancel leaves the state unchanged.
+							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+								f.includes("Close Consultation"),
+							);
+							const dialog = await settle(setup);
+							expect(dialog).toContain(
+								current.state === "opening" ? "The Agent is still opening" : "The Agent is working",
+							);
+							expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
+							await press(
+								setup,
+								"escape",
+								"the panel to close",
+								(f) => !f.includes("Close Consultation"),
+							);
+							expect(state.consultation(current.id)?.state).toBe(current.state);
+							// Reopen the dialog for the confirm.
+							await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+								f.includes("Close Consultation"),
+							);
+						} else {
+							await openConsultationPanel(setup, "w", "the close panel", (f) =>
+								f.includes("Close Consultation"),
+							);
+						}
 						await confirmPanel(setup, `the close status for ${id8}`, (f) =>
 							f.includes(`${id8} closed`),
 						);
@@ -1090,7 +1459,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					await toConsultations(setup, "the consultations view", (f) =>
 						detailPaneText(f).includes("State: "),
 					);
-					await openConsultationPanel(setup, "z", "the close panel", (f) =>
+					await openConsultationPanel(setup, "w", "the close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await confirmPanel(setup, "the failed cleanup status", (f) =>
@@ -1098,7 +1467,7 @@ describe("Consultation close and cleanup through the UI", () => {
 					);
 					expect(state.consultation(FORCE_ID)?.state).toBe("closing");
 					// Retry offers force-close once the cleanup is stuck.
-					await openConsultationPanel(setup, "z", "the recovery close panel", (f) =>
+					await openConsultationPanel(setup, "w", "the recovery close panel", (f) =>
 						f.includes("Close Consultation"),
 					);
 					await pressArrow(setup, "down", "the force-close action to be selected", (f) =>
@@ -1132,6 +1501,144 @@ describe("Consultation close and cleanup through the UI", () => {
 				WIDTH,
 				32,
 				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a missing or a failed Consultation closes directly, without a dialog", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// Neither record holds an Agent, so the close has nothing to confirm.
+		seed(state, MISSING_DIRECT_ID, false);
+		seed(state, FAILED_DIRECT_ID, false);
+		state.setConsultationState(MISSING_DIRECT_ID, "missing", "the Agent pane is gone");
+		state.setConsultationState(FAILED_DIRECT_ID, "failed", "herdr refused the launch");
+		const missing8 = MISSING_DIRECT_ID.slice(0, 8);
+		const failed8 = FAILED_DIRECT_ID.slice(0, 8);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view", (f) =>
+						detailPaneText(f).includes("State: "),
+					);
+					const closed = (frame: string) =>
+						messageRowOf(frame).includes(`${missing8} closed`) ||
+						messageRowOf(frame).includes(`${failed8} closed`);
+					// The first row closes the moment the key lands: no dialog
+					// stands between the key and the result.
+					await press(setup, "w", "the direct close", closed);
+					// The closed row leaves the open list, so the cursor holds the
+					// other one: it closes directly the same way.
+					const otherMissing = state.consultation(MISSING_DIRECT_ID)?.state === "closed";
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes(`State: ${otherMissing ? "failed" : "missing"}`),
+						"the other Consultation under the cursor",
+					);
+					const frame = await press(setup, "w", "the second direct close", (f) =>
+						messageRowOf(f).includes(`${otherMissing ? failed8 : missing8} closed`),
+					);
+					expect(state.consultation(MISSING_DIRECT_ID)?.state).toBe("closed");
+					expect(state.consultation(FAILED_DIRECT_ID)?.state).toBe("closed");
+					expect(frame).not.toContain("Close Consultation");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("w on a closed Consultation refuses readably", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CLOSED_DIRECT_ID);
+		state.settleConsultationTurn(CLOSED_DIRECT_ID, null, "done", "idle");
+		state.beginConsultationClose(CLOSED_DIRECT_ID);
+		state.finishConsultationClose(CLOSED_DIRECT_ID);
+		const runner = new ConsultationRunner(new FakeRunner(), agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view without open history", (f) =>
+						f.includes("no open Consultations"),
+					);
+					await press(setup, "f", "the closed history filter", (f) => f.includes("State: closed"));
+					await press(setup, "w", "the close refusal", (f) =>
+						f.includes("the selected Consultation is already closed"),
+					);
+					expect(state.consultation(CLOSED_DIRECT_ID)?.state).toBe("closed");
+				},
+				WIDTH,
+				32,
+				bootProps(state, runner),
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the close confirmation lets go of the keys when the Agent dies first", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, CONFIRM_GONE_ID);
+		state.setConsultationState(CONFIRM_GONE_ID, "working");
+		const gone8 = CONFIRM_GONE_ID.slice(0, 8);
+		// The Agent is alive at first: the observation loop matches its pane,
+		// so the Consultation stays working until the list loses it.
+		const inner = new FakeRunner();
+		// The workspace of the dead Agent holds the Consultation's own tab and
+		// pane alone, so the direct close takes the pane down and finishes.
+		inner.set("herdr", ["tab", "list", "--workspace", `ws-${gone8}`], {
+			stdout: JSON.stringify({ result: { tabs: [{ tab_id: `tab-${gone8}` }] } }),
+		});
+		inner.set("herdr", ["pane", "list", "--workspace", `ws-${gone8}`], {
+			stdout: JSON.stringify({
+				result: { panes: [{ pane_id: `pane-${gone8}`, tab_id: `tab-${gone8}` }] },
+			}),
+		});
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: `pane-${gone8}`, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view", (f) =>
+						detailPaneText(f).includes("State: working"),
+					);
+					// The live Agent asks first: the confirmation stands open.
+					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+						f.includes("Close Consultation"),
+					);
+					// A refresh finds the Agent gone while the dialog is open, so
+					// neither close branch draws any more and the panel must let go
+					// of the keys it took.
+					runner.agentListJson = agentListJson([]);
+					// The release names its reason on the Message line: the record
+					// moved out of the states the panel draws, so the panel stood
+					// down instead of holding keys with nothing to show.
+					const released = await awaitFrame(
+						setup,
+						(f) =>
+							messageRowOf(f).includes("the Consultation moved to missing; the close panel closed"),
+						"the release reason on the Message line",
+					);
+					expect(detailPaneText(released)).toContain("State: missing");
+					// A missing Consultation closes directly: the key reaches the
+					// section, so no invisible panel was holding it.
+					await press(setup, "w", "the direct close after the panel let go", (f) =>
+						messageRowOf(f).includes(`${gone8} closed`),
+					);
+					expect(state.consultation(CONFIRM_GONE_ID)?.state).toBe("closed");
+				},
+				WIDTH,
+				32,
+				// The observation loop runs only on the real projection, so this
+				// boot carries no initialTickets, like the settle test above.
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
 			);
 		} finally {
 			state.close();
@@ -1745,6 +2252,52 @@ describe("Consultation live-worktree launch through the UI", () => {
 			state.close();
 		}
 	});
+
+	test("a live-worktree close confirms and names the checkout that stays", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// The live Consultation works in the operator's own checkout, so the
+		// confirmation names the checkout as the resource the close keeps,
+		// not the worktree and branch a worktree Consultation keeps.
+		seed(state, LIVE_CLOSE_ID, true, "2026-09-01T10:00:00.000Z", "", "live-worktree");
+		state.setConsultationState(LIVE_CLOSE_ID, "working");
+		// The Agent is alive at the recorded pane: the observation loop keeps
+		// the record working while the dialog stands.
+		const runner = new ConsultationRunner(
+			new FakeRunner(),
+			agentListJson([{ pane: `pane-${LIVE_CLOSE_ID.slice(0, 8)}`, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the consultations view", (f) =>
+						detailPaneText(f).includes("State: working"),
+					);
+					// The live Agent asks first: the confirmation names the Agent
+					// that is alive and the checkout the close keeps.
+					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+						f.includes("Close Consultation"),
+					);
+					const dialog = await settle(setup);
+					expect(dialog).toContain("The Agent is working");
+					expect(dialog).toContain("Close stops the Agent. The checkout stays.");
+					expect(dialog).toContain("stop the Agent; the checkout stays");
+					// A cancel leaves the state unchanged.
+					await press(
+						setup,
+						"escape",
+						"the panel to close",
+						(f) => !f.includes("Close Consultation"),
+					);
+					expect(state.consultation(LIVE_CLOSE_ID)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{ state, runner, config: liveConfigFor(), home },
+			);
+		} finally {
+			state.close();
+		}
+	});
 });
 
 describe("Consultation response gating by observed Agent status", () => {
@@ -2025,8 +2578,18 @@ describe("The full Consultation operator flow", () => {
 					);
 					expect(state.consultation(id)?.state).toBe("awaiting-response");
 					expect(bells.count()).toBe(3);
-					// Close takes down the owned workspace.
-					await press(setup, "z", "the closing status", (f) =>
+					// Close stops the live Agent, so the confirmation asks first;
+					// the confirm takes down the owned workspace.
+					await openConsultationPanel(setup, "w", "the close confirmation", (f) =>
+						f.includes("Close Consultation"),
+					);
+					// The awaiting-response state names the Agent that answered and
+					// now waits, and the body keeps the worktree and branch.
+					const dialog = await settle(setup);
+					expect(dialog).toContain("The Agent has answered and is waiting for your reply");
+					expect(dialog).toContain("Close stops the Agent. The worktree and branch stay.");
+					expect(dialog).toContain("stop the Agent; the work stays");
+					await confirmPanel(setup, "the closing status", (f) =>
 						f.includes(`${id.slice(0, 8)} closed`),
 					);
 					await waitForCommands(runner, ["herdr workspace close ws-new"], "the workspace cleanup");
@@ -2266,6 +2829,53 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 		}
 	});
 
+	test("g names the workspace in the focus confirmation so the operator can switch herdr's view", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, WORKING_ID);
+		const short = WORKING_ID.slice(0, 8);
+		const paneId = `pane-${short}`;
+		const workspaceId = `ws-${short}`;
+		const label = "factory-consultation-11111111";
+		const { dir, path } = seedRecord(WORKING_ID);
+		const inner = new FakeRunner();
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "idle", record: path }]),
+		);
+		inner.set("herdr", ["workspace", "get", workspaceId], {
+			stdout: workspaceGetJson(workspaceId, label),
+		});
+		try {
+			await withApp(
+				async (setup) => {
+					await toConsultations(setup, "the Consultation detail with the Session view", (f) =>
+						detailPaneText(f).includes("Session view:"),
+					);
+					// g focuses the pane and answers on the Message line as a
+					// result, never as a warning. Herdr 0.9 keeps each client's
+					// own view, so the line names the workspace the operator
+					// switches to.
+					const frame = await press(setup, "g", "the focus confirmation", (f) =>
+						messageRowOf(f).includes("in workspace"),
+					);
+					expect(messageRowOf(frame)).toContain(
+						`Info: focused the Agent pane for Consultation ${short} in workspace ${label}`,
+					);
+					expect(runner.commands()).toContain(`herdr agent focus ${paneId}`);
+					expect(runner.commands()).toContain(`herdr workspace get ${workspaceId}`);
+				},
+				WIDTH,
+				32,
+				// No initialTickets: the observation loop must poll herdr for
+				// the record path, and it stands down on a test projection.
+				{ state, runner, config: configFor(), home, pollIntervalMs: 100 },
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			state.close();
+		}
+	});
+
 	test("a closed Consultation shows its record for the after-the-fact review, and g loses its pane when the poll drops it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const closedId = uid("9");
@@ -2318,6 +2928,655 @@ describe("the Consultation detail reads the Agent's session record (ADR 0025)", 
 			);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
+			state.close();
+		}
+	});
+});
+
+describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)", () => {
+	/**
+	 * The seat the cap tests hold: a working Consultation whose Agent the
+	 * poll lists. The Consultation seat is the record's state alone, so it
+	 * holds from the boot, and it frees the moment the test moves the
+	 * record.
+	 */
+	const seatId = uid("1");
+
+	test("a launch at the full cap queues the Consultation in the Work queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const paneId = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					const frame = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					// The record is durable in `queued` state: the launcher
+					// closed it, the Consultation list shows it, and the
+					// detail states the wait.
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					expect(queued.paneId).toBeNull();
+					expect(queued.workspaceId).toBeNull();
+					// The Consultation section lists the record under its
+					// state word, the same row the cursor selected.
+					expect(
+						rowsOf(frame).some(
+							(row) => row.startsWith("│") && row.includes("queued") && row.includes("grill"),
+						),
+					).toBe(true);
+					expect(detailPaneText(frame)).toContain("State: queued");
+					// The Work queue section shows the item under its kind
+					// word, and the header carries the depth.
+					expect(frame).toContain("waiting: 1");
+					expect(
+						rowsOf(frame).some(
+							(row) => row.includes("consultation") && row.includes(queued.id.slice(0, 8)),
+						),
+					).toBe(true);
+					// The notice names the record and the queue it waits in.
+					expect(messageRowOf(frame)).toContain(
+						`consultation queued: ${queued.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+					);
+					// The queue holds the item, and the seat count stayed at
+					// the cap: the record holds no seat until the pickup.
+					const queue = state.workQueue();
+					expect(queue).toHaveLength(1);
+					expect(queue[0]).toEqual(
+						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
+					);
+					// The enqueue ran no external step: it is not a start.
+					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+				},
+				WIDTH,
+				32,
+				// The test projection holds the seat: no poll can free it or
+				// pick the item up out from under the test.
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("key w abandons a queued Consultation and takes its item out of the queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const paneId = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: paneId, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					const gone8 = queued.id.slice(0, 8);
+					// The cursor stands on the new record: the submit selected it.
+					expect(detailPaneText(setup.captureCharFrame())).toContain("State: queued");
+					// A queued record holds no Agent to stop, so `w` closes it on the
+					// keypress: no confirmation panel, no cleanup command, and its
+					// Work queue item goes with the record out of `queued`.
+					await press(setup, "w", "the queued Consultation closed", (f) =>
+						messageRowOf(f).includes(`${gone8} closed`),
+					);
+					expect(state.consultation(queued.id)?.state).toBe("closed");
+					expect(state.workQueue()).toHaveLength(0);
+					expect(runner.commands()).not.toContain(expect.stringContaining("pane close"));
+					expect(runner.commands()).not.toContain(expect.stringContaining("workspace close"));
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the pickup at a freed seat starts the queued Consultation", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					// The launched Agent's pane joins the poll's list, so the
+					// pickup's start verifies on the next cycle.
+					runner.agentListJson = agentListJson([
+						{ pane: seatPane, status: "working" },
+						{ pane: "pane-c1", status: "working", sess: "sess-c1" },
+					]);
+					// Free the seat: the record leaves the states that hold one.
+					state.setConsultationState(seatId, "awaiting-response");
+					// The pickup crosses to the Consultation operations, the
+					// start runs the opening pipeline, and the detail settles
+					// on the record's new state.
+					await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("State: working"),
+						"the picked-up Consultation working",
+					);
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the pickup's launch sequence",
+					);
+					// The item left the queue with the record out of `queued`.
+					expect(state.workQueue()).toHaveLength(0);
+					expect(queued === undefined ? undefined : state.consultation(queued.id)?.state).toBe(
+						"working",
+					);
+					// The seat freed once: the seed's record rests in
+					// awaiting-response and holds none.
+					expect(state.consultation(seatId)?.state).toBe("awaiting-response");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					pollIntervalMs: 100,
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Enter on the queue item force-dispatches the Consultation over the cap", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					const id8 = queued.id.slice(0, 8);
+					// The cap is full from the boot: the seed's seat stands on the
+					// line, and the cursor crosses into the Work queue's row.
+					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+					const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
+						/\bWork\b/.test(row),
+					);
+					expect(headerRow).toBeGreaterThanOrEqual(0);
+					await mouseClick(setup, 2, headerRow);
+					await settle(setup, 300);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("❯ Work queue"),
+						"the cursor in the Work queue",
+					);
+					// Enter force-dispatches the item over the full cap: the line
+					// names the cap, the seat count stands over the limit, the item
+					// leaves the queue, and the start runs the real external steps.
+					await press(setup, "return", "the force-dispatch message", (f) =>
+						f.includes("force-dispatched"),
+					);
+					// The line names the cap, and the seat count stands over the
+					// limit: the seed's seat plus the start the force-dispatch took.
+					await awaitFrame(setup, (f) => f.includes("auto: off 2/1"), "the seat over the cap");
+					expect(messageRowOf(setup.captureCharFrame())).toContain(
+						`force-dispatched Consultation ${id8} over the Parallel limit`,
+					);
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the force-dispatch's launch sequence",
+					);
+					// The item left the queue with the claim, and the start ran
+					// over the cap, not behind the seed's release: the seed's
+					// seat stood through the whole of it.
+					expect(state.workQueue()).toHaveLength(0);
+					expect(state.consultation(queued.id)?.state).not.toBe("queued");
+					expect(state.consultation(seatId)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					// The test projection holds the seat: no poll can free it or
+					// pick the item up out from under the test. The projection also
+					// keeps the observation loop off the start's Message line: a tick
+					// that lands while the record stands in `opening` cannot verify
+					// its Agent yet and would clear the start's notice with its
+					// recovery warning, so the line the test asserts on stays where
+					// the start left it.
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The shared walk of the unscheduling tests (issue #91): the cap is held
+	 * by the seed's seat, the launcher queues the Consultation, the Work
+	 * section's cursor lands on the item, and Delete removes it. The item
+	 * goes, the record is `unscheduled`, and the cursor crosses to the
+	 * Consultation section, where the record keeps standing.
+	 */
+	async function unscheduleThroughTheQueue(setup: Setup, state: FactoryState): Promise<string> {
+		await openLauncher(setup);
+		await awaitFrame(setup, (f) => f.includes("acme/factory"), "the verified Repository option");
+		await launchConsultationDraft(setup, "review auth");
+		await awaitFrame(
+			setup,
+			(f) => messageRowOf(f).includes("consultation queued"),
+			"the queued notice",
+		);
+		const queued = state.consultations("all").find((c) => c.state === "queued");
+		if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+		const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) => /\bWork\b/.test(row));
+		expect(headerRow).toBeGreaterThanOrEqual(0);
+		await mouseClick(setup, 2, headerRow);
+		await awaitFrame(setup, (f) => f.includes("❯ Work queue"), "the cursor in the Work queue");
+		// The item's row stands under the kind word, with the record's identity.
+		const frame = setup.captureCharFrame();
+		expect(frame).toContain("consultation");
+		expect(frame).toContain(queued.id.slice(0, 8));
+		// Delete removes the item, not the ask: the record moves to
+		// `unscheduled`, and the Message line says both.
+		const removed = await press(setup, "delete", "the removal notice", (f) =>
+			f.includes("removed from the queue"),
+		);
+		expect(messageRowOf(removed)).toContain(
+			`consultation ${queued.id.slice(0, 8)}: removed from the queue; the record is unscheduled`,
+		);
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.consultation(queued.id)?.state).toBe("unscheduled");
+		// The record keeps standing in the Consultation section: the row
+		// carries its state, its type, and its repository.
+		await crossToConsultations(setup);
+		const section = setup.captureCharFrame();
+		expect(section).toContain("unscheduled");
+		expect(section).toContain("grill");
+		expect(section).toContain("acme/factory");
+		// The seed's working record is listed in the section too, and it sorts
+		// ahead of the unscheduled ask: the walk steps the cursor down to the
+		// unscheduled row, the one every test works on.
+		for (let step = 0; step < 10; step += 1) {
+			if (detailPaneText(setup.captureCharFrame()).includes("State: unscheduled")) break;
+			setup.mockInput.pressKey("j");
+			await settle(setup, 200);
+		}
+		expect(detailPaneText(setup.captureCharFrame())).toContain("State: unscheduled");
+		return queued.id;
+	}
+
+	test("removing the queue item unschedules the record, and the record keeps standing", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					await unscheduleThroughTheQueue(setup, state);
+					// The detail reads the ask: the state word, the type beside the
+					// repository, and the initial input the launcher gave it.
+					const detail = detailPaneText(setup.captureCharFrame());
+					expect(detail).toContain("State: unscheduled");
+					expect(detail).toContain(`grill - acme/factory`);
+					expect(detail).toContain("review auth");
+				},
+				WIDTH,
+				32,
+				// The test projection holds the seat: no poll can free it or
+				// pick the item up out from under the test.
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section schedules the unscheduled record back into the queue", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// `s` schedules the record back: it returns to `queued` with
+					// its item at the queue's tail, and the line names the place.
+					const scheduled = await press(setup, "s", "the schedule notice", (f) =>
+						f.includes(`Consultation ${id.slice(0, 8)} scheduled`),
+					);
+					expect(messageRowOf(scheduled)).toContain(
+						`Consultation ${id.slice(0, 8)} scheduled: it waits at the end of the Work queue`,
+					);
+					expect(state.consultation(id)?.state).toBe("queued");
+					expect(state.workQueue().map(workQueueIdentityOf)).toEqual([id]);
+					// The queue rows re-read in the same key: the item stands in
+					// the Work queue section at the place the line names. The
+					// section still stands expanded from the walk, so the
+					// cursor's cross down from the section's last row lands on
+					// its item.
+					const inQueue = await press(setup, "j", "the cursor in the Work queue", (f) =>
+						f.includes("┌─❯ Work queue"),
+					);
+					expect(inQueue).toContain("consultation");
+					expect(inQueue).toContain(id.slice(0, 8));
+					// The walk back crosses up out of the queue, into the
+					// Consultation section's retained row: the record that the
+					// walk left under the cursor, now `queued`. The cursor is on
+					// the Consultation list only while the Work box title carries
+					// no focus marker.
+					for (let step = 0; step < 10; step += 1) {
+						const frame = setup.captureCharFrame();
+						if (frame.includes("┌─❯ Consultations") && !frame.includes("┌─❯ Work queue")) break;
+						setup.mockInput.pressKey("k");
+						await settle(setup, 200);
+					}
+					const backFrame = setup.captureCharFrame();
+					expect(backFrame).toContain("┌─❯ Consultations");
+					expect(backFrame).not.toContain("┌─❯ Work queue");
+					// A second `s` says the record already waits: the schedule
+					// refuses in the section's words, and the record stands where
+					// it stands.
+					await press(setup, "s", "the already-waiting refusal", (f) =>
+						f.includes("already waits in the Work queue"),
+					);
+					expect(state.consultation(id)?.state).toBe("queued");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section starts the unscheduled record now, over the cap", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// The cap stands full from the boot: the seed's seat is the
+					// line, and Enter starts the record over it.
+					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
+					const started = await press(setup, "return", "the start-now notice", (f) =>
+						f.includes("starting Consultation"),
+					);
+					expect(messageRowOf(started)).toContain(
+						`starting Consultation ${id.slice(0, 8)} over the Parallel limit`,
+					);
+					// The seat count stands over the limit: the seed's seat plus
+					// the seat the start took over the cap.
+					await awaitFrame(setup, (f) => f.includes("auto: off 2/1"), "the seat over the cap");
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the start-now launch sequence",
+					);
+					expect(state.consultation(id)?.state).not.toBe("unscheduled");
+					expect(state.consultation(seatId)?.state).toBe("working");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					// The test projection holds the seat: no poll can free it or
+					// pick the item up out from under the test. The projection also
+					// keeps the observation loop off the start's Message line: a tick
+					// that lands while the record stands in `opening` cannot verify
+					// its Agent yet and would clear the start's notice with its
+					// recovery warning, so the line the test asserts on stays where
+					// the start left it.
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section starts the unscheduled record now, under the cap", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const seatPane = `pane-${seatId.slice(0, 8)}`;
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		stubWorktreeLaunch(inner);
+		stubPaneReadText(inner, "pane-c1", "Agent: opened");
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: seatPane, status: "working" }]),
+		);
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// Free the seat the queue walk held: the line then names no
+					// cap, because the seat count stood under the limit at the
+					// key, the way the queue's force-dispatch line does.
+					state.setConsultationState(seatId, "awaiting-response");
+					// The write lands in the state the app reads live but re-renders
+					// nothing: step the cursor up to the seed's row and back, so the
+					// mode line re-reads the freed seat count before the key runs.
+					await press(setup, "k", "the mode line on the freed seat", (f) =>
+						f.includes("auto: off 0/1"),
+					);
+					await press(setup, "j", "the cursor back on the record", (f) =>
+						detailPaneText(f).includes("State: unscheduled"),
+					);
+					const started = await press(setup, "return", "the start-now notice", (f) =>
+						f.includes("starting Consultation"),
+					);
+					const line = messageRowOf(started);
+					expect(line).toContain(`starting Consultation ${id.slice(0, 8)}`);
+					expect(line).not.toContain("over the Parallel limit");
+					// The start took the only free seat.
+					await awaitFrame(setup, (f) => f.includes("auto: off 1/1"), "the start's seat");
+					await waitForCommands(
+						runner,
+						[
+							`herdr worktree create --cwd ${checkout} --branch ${BRANCH} --base origin/main --no-focus`,
+							`herdr agent start ${AGENT} --kind pi --pane pane-c1`,
+							`herdr agent prompt ${AGENT} /grill review auth`,
+						],
+						"the start-now launch sequence",
+					);
+					expect(state.consultation(id)?.state).not.toBe("unscheduled");
+					expect(state.consultation(seatId)?.state).toBe("awaiting-response");
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					// The test projection holds the seat: no poll can free it or
+					// pick the item up out from under the test. The projection also
+					// keeps the observation loop off the start's Message line: a tick
+					// that lands while the record stands in `opening` cannot verify
+					// its Agent yet and would clear the start's notice with its
+					// recovery warning, so the line the test asserts on stays where
+					// the start left it.
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("the Consultation section deletes the unscheduled record", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		seed(state, seatId);
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					const id = await unscheduleThroughTheQueue(setup, state);
+					// `d` asks first: the delete removes the record and its
+					// history, and nothing else can run behind it.
+					await openConsultationPanel(setup, "d", "the delete confirmation", (f) =>
+						f.includes(`Delete Consultation ${id.slice(0, 8)}`),
+					);
+					const frame = await confirmPanel(setup, "the delete", (f) =>
+						f.includes("deleted; backups may retain data"),
+					);
+					expect(messageRowOf(frame)).toContain(
+						`Consultation ${id.slice(0, 8)} deleted; backups may retain data`,
+					);
+					expect(state.consultation(id)).toBeUndefined();
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
 			state.close();
 		}
 	});

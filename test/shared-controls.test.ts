@@ -1,7 +1,8 @@
 /** Shared fields expose one editing baseline to every control-plane caller. */
+
+import { afterEach, describe, expect, mock, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ChoiceRow } from "../src/components/shared/choices.ts";
 import {
@@ -10,9 +11,16 @@ import {
 	type FieldHandle,
 	TextField,
 } from "../src/components/shared/fields.ts";
-import { ownNoteCells } from "../src/components/shared/presentation.ts";
+import { NO_COLOR_INK, ownNoteCells } from "../src/components/shared/presentation.ts";
+import {
+	SPINNER_FRAME_MS,
+	SPINNER_FRAMES,
+	Spinner,
+	spinnerFace,
+	useSpinnerFrame,
+} from "../src/components/shared/spinner.ts";
 import { TypeAheadRow } from "../src/components/shared/type-ahead.ts";
-import { awaitFrame, frameText, rgb, roleColor, rowsOf, spanColors } from "./app-harness.ts";
+import { awaitFrame, frameText, rgb, roleColor, rowsOf, sleep, spanColors } from "./app-harness.ts";
 
 let renderer: { destroy: () => void | Promise<void> } | null = null;
 afterEach(async () => {
@@ -42,7 +50,7 @@ async function withField(
 
 describe("the shared Draft field", () => {
 	test("paints its visible label and keeps Enter as a newline", async () => {
-		const onValueChange = vi.fn();
+		const onValueChange = mock();
 		await withField(
 			createElement(DraftField, {
 				label: "Initial input",
@@ -193,8 +201,8 @@ describe("the shared Draft field", () => {
 
 describe("the shared Text field", () => {
 	test("refuses a non-digit paste as one operation and states why", async () => {
-		const onValueChange = vi.fn();
-		const onRefuse = vi.fn();
+		const onValueChange = mock();
+		const onRefuse = mock();
 		await withField(
 			createElement(TextField, {
 				label: "Context",
@@ -233,7 +241,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("takes a paste of digits in full, in the same rule that refuses the rest", async () => {
-		const onValueChange = vi.fn();
+		const onValueChange = mock();
 		await withField(
 			createElement(TextField, {
 				label: "Context",
@@ -258,7 +266,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("refuses one typed non-digit and keeps the value and the caret", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -285,7 +293,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("refuses non-ASCII printable characters in a digits field", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -313,7 +321,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("refuses a non-digit paste while a selection is held, and keeps the value, the caret, and the selection", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -351,7 +359,7 @@ describe("the shared Text field", () => {
 	});
 
 	test("enforces a stated character limit, and refuses the crossing edit as a whole", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		const field = { current: null as FieldHandle | null };
 		await withField(
 			createElement(TextField, {
@@ -435,7 +443,7 @@ describe("the shared Text field", () => {
 
 describe("both key protocols", () => {
 	test("an enhanced terminal's sequences mean the same operations", async () => {
-		const onValueChange = vi.fn();
+		const onValueChange = mock();
 		await withField(
 			createElement(DraftField, {
 				label: "Initial input",
@@ -468,7 +476,7 @@ describe("both key protocols", () => {
 	});
 
 	test("an enhanced terminal keeps a digits field's refusal", async () => {
-		const onRefuse = vi.fn();
+		const onRefuse = mock();
 		await withField(
 			createElement(TextField, {
 				label: "Context",
@@ -615,5 +623,94 @@ describe("the written reason a control states", () => {
 				expect(spanColors(setup, "openai/gpt-5")).toEqual([rgb(roleColor("text"))]);
 			},
 		);
+	});
+});
+
+describe("the shared spinner", () => {
+	test("paints the frame it is named beside its written word, in the tone a state word wears", async () => {
+		await withField(
+			createElement(Spinner, { word: "starting", width: 12, frame: 0 }),
+			30,
+			3,
+			async (setup) => {
+				const frame = await awaitFrame(
+					setup,
+					(candidate) => candidate.includes(`${SPINNER_FRAMES[0]} starting`),
+					"the first frame beside its word",
+				);
+				// The face holds its slot whole: glyph, a cell of air, the word,
+				// padded to the cells the surface names.
+				const row = rowsOf(frame).find((line) => line.includes("starting"));
+				if (row === undefined) throw new Error("the face never painted its word");
+				expect(row.trim()).toBe(`${SPINNER_FRAMES[0]} starting`);
+				// The face paints the presentation's detail tone: the tone the
+				// shared state words wear, from the Theme in force.
+				expect(spanColors(setup, "starting")).toEqual([rgb(roleColor("subtext0"))]);
+			},
+		);
+	});
+
+	test("under the no-color ink keeps its word and drops its color", async () => {
+		await withField(
+			createElement(Spinner, { word: "starting", width: 12, frame: 2, ink: NO_COLOR_INK }),
+			30,
+			3,
+			async (setup) => {
+				await awaitFrame(
+					setup,
+					(candidate) => candidate.includes(`${SPINNER_FRAMES[2]} starting`),
+					"the face beside its word",
+				);
+				// The word stands as the whole message. The renderer's own default
+				// is the paint, and the default is not a paint: no color of the
+				// face's own shows anywhere on the row.
+				expect(spanColors(setup, "starting")).toEqual([[255, 255, 255]]);
+			},
+		);
+	});
+
+	test("drives its own frames the way the pop-in drives its own", async () => {
+		await withField(
+			createElement(Spinner, { word: "starting", width: 12 }),
+			30,
+			3,
+			async (setup) => {
+				const first = setup.captureCharFrame();
+				const firstGlyph = SPINNER_FRAMES.find((glyph) => first.includes(`${glyph} starting`));
+				// The mount paints the face on one of its frames: the first frame
+				// on a host fast enough, a later one on a host slow enough for a
+				// tick to land before the capture. Never a frame it does not own.
+				expect(firstGlyph).toBeDefined();
+				// The face steps on its own interval without the renderer's
+				// animation engine being asked, so the step shows in the test
+				// renderer too.
+				await awaitFrame(
+					setup,
+					(candidate) =>
+						SPINNER_FRAMES.some(
+							(glyph) => glyph !== firstGlyph && candidate.includes(`${glyph} starting`),
+						),
+					"the face to step to another frame",
+				);
+			},
+		);
+	});
+
+	test("owes no motion to a slot that says no face is on screen", async () => {
+		// A slot that paints the face as written text asks the shared frame for
+		// it, and names the gate: an inactive gate starts no interval at all.
+		const StaticFace = (props: { active: boolean }) => {
+			const at = useSpinnerFrame(props.active);
+			return createElement("text", undefined, spinnerFace(at, "starting", 12));
+		};
+		await withField(createElement(StaticFace, { active: false }), 30, 3, async (setup) => {
+			const first = setup.captureCharFrame();
+			expect(first).toContain(`${SPINNER_FRAMES[0]} starting`);
+			// Three frame ticks of wall time pass, and the face stands: the gate
+			// runs no interval, so nothing can move it.
+			await sleep(SPINNER_FRAME_MS * 3);
+			expect(setup.captureCharFrame()).toContain(`${SPINNER_FRAMES[0]} starting`);
+			expect(setup.captureCharFrame()).toBe(first);
+		});
 	});
 });

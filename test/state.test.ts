@@ -1,13 +1,20 @@
+import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
-import { openFactoryState, SCHEMA_V1, StateError } from "../src/state.ts";
+import {
+	type FactoryState,
+	openFactoryState,
+	SCHEMA_V1,
+	SCHEMA_VERSION,
+	StateError,
+	workQueueIdentityOf,
+} from "../src/state.ts";
 import type { TurnLogEntry } from "../src/turn-log.ts";
 
 const paths: string[] = [];
@@ -64,7 +71,7 @@ function storedTrace(message = "fallback first\nfallback last"): {
 }
 
 function replaceStoredLog(path: string, identity: string, cell: string | null): void {
-	const db = new DatabaseSync(path);
+	const db = new Database(path);
 	db.prepare("UPDATE completion_traces SET turn_log_json = ? WHERE ticket_identity = ?").run(
 		cell,
 		identity,
@@ -210,6 +217,29 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("settles a claim a dead run left unsettled and frees the ticket to hand off again", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		// The run dies here: the claim stays unsettled.
+		state.close();
+
+		const reopened = openFactoryState(path);
+		// The remnant blocks a new handoff until the recovery runs.
+		expect(reopened.claimHandoff(ticket.identity, choice, "open")).toEqual(
+			expect.objectContaining({ ok: false, reason: expect.stringContaining("recovery") }),
+		);
+		expect(reopened.recoverUnsettledHandoffs()).toBe(1);
+		expect(reopened.claimHandoff(ticket.identity, choice, "open")).toEqual(
+			expect.objectContaining({ ok: true }),
+		);
+		reopened.close();
+	});
+
 	test("keeps identity and state when a configured source is renamed", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
@@ -251,7 +281,7 @@ describe("factory SQLite state", () => {
 
 	test("stops with a readable error for a database from a newer schema version", () => {
 		const path = statePath();
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
 		db.prepare("INSERT INTO schema_version(version) VALUES (4)").run();
 		db.close();
@@ -274,10 +304,22 @@ describe("factory SQLite state", () => {
 		state.applyFetch(sourceA, success([fetched()]));
 		state.close();
 
-		// Corrupt the header of the last page: the schema stays readable, but the
-		// integrity check must fail on the damaged data.
+		// Damage a b-tree page's cell count: the file still opens, but the
+		// integrity check must fail on the out-of-range cell pointers. close()
+		// folds the WAL into the main file, so the data pages live there.
 		const buffer = readFileSync(path);
-		buffer[(buffer.byteLength / 4096 - 1) * 4096] = 0;
+		const PAGE = 4096;
+		let damaged = false;
+		for (let page = 1; page * PAGE < buffer.byteLength; page += 1) {
+			const type = buffer[page * PAGE];
+			if (type === 0x02 || type === 0x05 || type === 0x0a || type === 0x0d) {
+				buffer[page * PAGE + 3] = 0x0f;
+				buffer[page * PAGE + 4] = 0xff;
+				damaged = true;
+				break;
+			}
+		}
+		if (!damaged) throw new Error("no b-tree page to damage in the state file");
 		writeFileSync(path, buffer);
 
 		let error: unknown;
@@ -460,7 +502,7 @@ describe("factory SQLite state", () => {
 
 		const [rested] = state.visibleTickets([], "implement");
 		expect(rested.lastCompletion?.message).toBe("Last capture.");
-		const traceCount = new DatabaseSync(path)
+		const traceCount = new Database(path)
 			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
 			.get(ticket.identity) as { n: number };
 		expect(traceCount.n).toBe(1);
@@ -515,10 +557,181 @@ describe("factory SQLite state", () => {
 		expect(second.ok).toBe(true);
 		if (!second.ok) return;
 		state.settleHandoff(second.claim.attemptId, true);
-		const cycles = new DatabaseSync(path)
+		const cycles = new Database(path)
 			.prepare("SELECT work_cycle FROM handoffs WHERE ticket_identity = ? ORDER BY work_cycle")
 			.all(ticket.identity) as Array<{ work_cycle: number }>;
 		expect(cycles).toEqual([{ work_cycle: 1 }, { work_cycle: 2 }]);
+		state.close();
+	});
+
+	test("an in-flight close ends the cycle and writes no completion trace (ADR 0031)", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		expect(state.ticketState(identity)).toBe("handed-off");
+
+		expect(state.closeWorkCycle(identity)).toBe(true);
+		expect(state.ticketState(identity)).toBe("open");
+		const [ticket] = state.visibleTickets([], "implement");
+		// The cycle the close ended counts like any other cycle end.
+		expect(ticket.workCycle).toBe(2);
+		expect(ticket.handoffCount).toBe(1);
+		// And no completion trace exists: the turn never settled, so the handoff
+		// row is the only record the closed cycle leaves.
+		expect(state.lastCompletion(identity)).toBe(null);
+		state.close();
+		const stored = new Database(path)
+			.prepare("SELECT COUNT(*) AS count FROM completion_traces")
+			.get() as { count: number };
+		expect(stored).toEqual({ count: 0 });
+	});
+
+	test("an in-flight close moves nothing on an open or awaiting ticket", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// An open ticket holds no work to close.
+		expect(state.closeWorkCycle(identity)).toBe(false);
+		expect(state.ticketState(identity)).toBe("open");
+
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		// A settled turn closes through its decision, not through this move.
+		expect(state.closeWorkCycle(identity)).toBe(false);
+		expect(state.ticketState(identity)).toBe("awaiting");
+		expect(state.visibleTickets([], "implement")[0].workCycle).toBe(1);
+		state.close();
+	});
+
+	test("only a cycle end moves the work cycle, the fact the gates count on (ADR 0031)", () => {
+		// `lastCycleEnd` reads the end row of `work_cycle - 1`, so the two gates
+		// name the newest ended cycle exactly. That holds only while nothing else
+		// moves the number: a migration or an import path that raised a ticket's
+		// `work_cycle` would silently point both gates at the wrong row, and no
+		// other check reads this file's SQL. The check is on the statements, so a
+		// new move must be a cycle end or must answer here first.
+		const statements = readFileSync("src/state.ts", "utf8")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => /"UPDATE tickets SET[^"]*work_cycle[^"]*"/u.test(line));
+		// The two ends: the decided close of a settled turn, and the in-flight
+		// Close that writes no trace. Both return the ticket to open.
+		expect([...new Set(statements)]).toEqual([
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\",",
+		]);
+		expect(statements.length).toBe(2);
+		// A cycle's moves that end nothing hold the number: the handoff that starts
+		// a cycle, the running mark, a settled turn, and a reclaimed handoff.
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		const cycleOf = () => state.visibleTickets([], "implement")[0].workCycle;
+		expect(cycleOf()).toBe(1);
+		const claim = state.claimHandoff(identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			agentName: "agent-one",
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(state.markTicketRunning(identity)).toBe(true);
+		expect(cycleOf()).toBe(1);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		expect(cycleOf()).toBe(1);
+		// A reclaim of the same agent holds the number too: the cycle it lands in
+		// is the one it works in.
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: claim.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		expect(cycleOf()).toBe(2);
+		const reclaimed = state.reclaimHandoff(identity, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		expect(reclaimed).not.toBeNull();
+		expect(cycleOf()).toBe(2);
+		state.close();
+	});
+
+	test("the cycle-end gates read an in-flight close as holding nothing (ADR 0031)", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		// Cycle 1: a completed turn, closed by decision. That end arms the
+		// re-verify gate and the Same-type hold for the suggestion.
+		const first = state.claimHandoff(identity, choice, "open");
+		if (!first.ok) throw new Error(first.reason);
+		state.settleHandoff(first.claim.attemptId, true);
+		state.settleTurn({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			taskType: "implement",
+			agentType: "pi",
+			message: "Done.",
+			turnLog: textLog("Done."),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: identity,
+			handoffId: first.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:30:00Z",
+		});
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(false);
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(true);
+		state.applyFetch(sourceA, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:31:00Z",
+			tickets: [fetched()],
+		});
+
+		// Cycle 2: the agent never settles, and the operator closes it over key
+		// `w`. That end writes no row, so it holds nothing and re-verifies
+		// nothing: neither gate falls back to cycle 1's finished turn.
+		const second = state.claimHandoff(identity, choice, "open");
+		if (!second.ok) throw new Error(second.reason);
+		state.settleHandoff(second.claim.attemptId, true);
+		expect(state.closeWorkCycle(identity)).toBe(true);
+		expect(state.sourceReverifiedSinceCycleEnd(identity)).toBe(true);
+		expect(state.sameTypeHoldActive(identity, "implement")).toBe(false);
+		// A manual handoff passes both gates either way, and the next cycle
+		// starts on the fact the in-flight close left: none.
+		const third = state.claimHandoff(identity, choice, "open");
+		expect(third.ok).toBe(true);
 		state.close();
 	});
 
@@ -749,83 +962,6 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("a goto moves awaiting back to running and leaves the trace pending", () => {
-		const path = statePath();
-		const state = openFactoryState(path);
-		state.initializeSources([sourceA]);
-		state.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.visibleTickets([], "implement");
-		const claim = state.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true);
-		state.settleTurn({
-			ticketIdentity: ticket.identity,
-			handoffId: claim.claim.attemptId,
-			taskType: "implement",
-			agentType: "pi",
-			message: "Done.",
-			turnLog: textLog("Done."),
-			completedAt: "2026-08-31T11:00:00Z",
-		});
-		expect(state.visibleTickets([], "implement")[0].state).toBe("awaiting");
-
-		// Goto is a state move, not a completion decision: the ticket runs
-		// again, and the settled turn stays pending on its trace.
-		expect(
-			state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId: claim.claim.attemptId,
-				decision: "goto",
-				decidedAt: "2026-08-31T11:30:00Z",
-			}),
-		).toBe(true);
-		const [running] = state.visibleTickets([], "implement");
-		expect(running.state).toBe("running");
-		expect(running.lastCompletion?.decision).toBeNull();
-		expect(running.lastCompletion?.message).toBe("Done.");
-		const db = new DatabaseSync(path, { readOnly: true });
-		const traceCount = db
-			.prepare("SELECT COUNT(*) AS n FROM completion_traces WHERE ticket_identity = ?")
-			.get(ticket.identity) as { n: number };
-		db.close();
-		expect(traceCount.n).toBe(1);
-
-		// A second goto moves nothing: the ticket already runs.
-		expect(
-			state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId: claim.claim.attemptId,
-				decision: "goto",
-				decidedAt: "2026-08-31T11:31:00Z",
-			}),
-		).toBe(false);
-		state.close();
-	});
-
-	test("a goto on a handoff that never settled writes no completion trace", () => {
-		const state = openFactoryState(":memory:");
-		state.initializeSources([sourceA]);
-		state.applyFetch(sourceA, success([fetched()]));
-		const [ticket] = state.visibleTickets([], "implement");
-		const claim = state.claimHandoff(ticket.identity, choice, "open");
-		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true);
-		// The ticket is in flight and its turn unsettled: the blocked agent's
-		// goto focuses the pane without touching the trace or the state.
-		expect(
-			state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId: claim.claim.attemptId,
-				decision: "goto",
-				decidedAt: "2026-08-31T11:30:00Z",
-			}),
-		).toBe(false);
-		const [inFlight] = state.visibleTickets([], "implement");
-		expect(inFlight.state).toBe("handed-off");
-		expect(inFlight.lastCompletion).toBeNull();
-		state.close();
-	});
-
 	test("a settled turn keeps the agent name after the ticket loses its active membership", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);
@@ -893,7 +1029,7 @@ describe("factory SQLite state", () => {
 
 	test("a v1 database migrates to v2: done becomes awaiting and the traces table appears", () => {
 		const path = statePath();
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec("PRAGMA foreign_keys = ON");
 		db.exec(SCHEMA_V1);
 		db.exec("CREATE TABLE schema_version (version INTEGER NOT NULL)");
@@ -917,7 +1053,7 @@ describe("factory SQLite state", () => {
 		const state = openFactoryState(path);
 		const [ticket] = state.visibleTickets([], "implement");
 		expect(ticket).toEqual(expect.objectContaining({ state: "awaiting" }));
-		const tables = new DatabaseSync(path)
+		const tables = new Database(path)
 			.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
 			.all() as Array<{ name: string }>;
 		expect(tables.map((t) => t.name)).toContain("completion_traces");
@@ -944,9 +1080,9 @@ describe("factory SQLite state", () => {
 		});
 		state.close();
 
-		// Downgrade the database to v2: a trace without the turn log column
-		// and no later Consultation tables.
-		const db = new DatabaseSync(path);
+		// Downgrade the database to v2: a trace without the turn log column,
+		// and none of the tables the later versions create.
+		const db = new Database(path);
 		db.exec(`
 			DROP TABLE consultation_pending_responses;
 			DROP TABLE consultation_remaining_resources;
@@ -956,6 +1092,8 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultations;
 			DROP TABLE checkout_conflict_confirmations;
 			DROP TABLE referenced_issues;
+			DROP TABLE auto_handoff_mode;
+			DROP TABLE work_queue;
 		`);
 		// The v9 columns belong to the run after this record: a v2 trace never
 		// stored a cause, so the v9 step re-adds it.
@@ -1025,7 +1163,7 @@ describe("factory SQLite state", () => {
 		// and v8 migrations add, and rewrite the stored choice without the key
 		// the v8 step gives it. A v5 handoff row knows nothing of a leftover or
 		// a herdr name, and a v5 trace carries no settings.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.exec(
 			"ALTER TABLE handoffs DROP COLUMN leftover_reason;" +
 				" ALTER TABLE handoffs DROP COLUMN leftover_at;" +
@@ -1052,6 +1190,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v5 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
 		// The v13 fact belongs to the run after this record: a v5 trace never
@@ -1108,7 +1249,7 @@ describe("factory SQLite state", () => {
 		// Downgrade the record to the v7 shape: drop the column the v8
 		// migration adds, and rewrite a stored choice without the key, which
 		// is exactly what a v7 handoff row holds.
-		const db = new DatabaseSync(path);
+		const db = new Database(path);
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN context_window").run();
 		db.prepare("ALTER TABLE consultations DROP COLUMN context_window").run();
 		// The v9 columns belong to the run after this record: a v7 trace never
@@ -1127,6 +1268,9 @@ describe("factory SQLite state", () => {
 		// The v12 facts belong to the run after this record: the issue the
 		// control plane read directly has no fact yet.
 		db.exec("DROP TABLE referenced_issues;");
+		// The v13 mode and the v14 queue belong to the run after this record: a
+		// v7 file stored no Auto-handoff mode, and no Work queue.
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
 		// The v13 fact belongs to the run after this record: a v7 trace never
@@ -1149,6 +1293,189 @@ describe("factory SQLite state", () => {
 		// a Restart of a v7 handoff never carries a count it never chose.
 		const [restored] = reopened.visibleTickets([], "implement");
 		expect(restored.handoff).toEqual(expect.objectContaining({ contextWindow: "" }));
+		reopened.close();
+	});
+
+	test("a fresh state file reads the Auto-handoff mode off (ADR 0036)", () => {
+		const state = openFactoryState(":memory:");
+		expect(state.autoHandoffMode()).toBe(false);
+		state.close();
+	});
+
+	test("the Auto-handoff mode written to a file reads back on that file's reopen", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		expect(state.autoHandoffMode()).toBe(false);
+		state.setAutoHandoffMode(true);
+		expect(state.autoHandoffMode()).toBe(true);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		expect(reopened.autoHandoffMode()).toBe(true);
+		reopened.setAutoHandoffMode(false);
+		reopened.close();
+
+		const reread = openFactoryState(path);
+		expect(reread.autoHandoffMode()).toBe(false);
+		reread.close();
+	});
+
+	test("two state files keep separate Auto-handoff modes", () => {
+		const first = openFactoryState(statePath());
+		const second = openFactoryState(statePath());
+		first.setAutoHandoffMode(true);
+		expect(first.autoHandoffMode()).toBe(true);
+		expect(second.autoHandoffMode()).toBe(false);
+		first.close();
+		second.close();
+	});
+
+	test("a mode write to a state file that is gone reports the file it could not write", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.close();
+		expect(() => state.setAutoHandoffMode(true)).toThrow(/Auto-handoff mode at .*state\.sqlite/);
+	});
+
+	test("a v12 database migrates to v13: the mode lands off on the existing file", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.close();
+
+		// Downgrade the record to the v12 shape: the mode table and the Work
+		// queue do not exist yet and the schema cell says twelve, which is
+		// exactly what an upgrade from v12 finds.
+		const db = new Database(path);
+		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
+		db.prepare("UPDATE schema_version SET version = 12").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The migration lands the mode off, and the ticket the v12 file held
+		// is untouched.
+		expect(reopened.autoHandoffMode()).toBe(false);
+		expect(reopened.visibleTickets([], "implement")).toEqual([
+			expect.objectContaining({ identity: "github:github.com:I_5" }),
+		]);
+		reopened.setAutoHandoffMode(true);
+		reopened.close();
+
+		const reread = openFactoryState(path);
+		expect(reread.autoHandoffMode()).toBe(true);
+		reread.close();
+	});
+
+	/** Rewrite the queue's shape to the one the first Work queue migration wrote. */
+	function downgradeQueueToTheAbandonedShape(path: string): void {
+		const db = new Database(path);
+		// The step that landed the queue (issue #88, commit 604d803) keyed the row
+		// by a random id and ordered it by `queue_order`, and it stamped the file
+		// version 14. The step that ships now writes a `position` keyed table under
+		// the same number, so a file this record made claims 14 with that shape.
+		db.exec(`
+			DROP TABLE work_queue;
+			CREATE TABLE work_queue (
+				id TEXT PRIMARY KEY,
+				kind TEXT NOT NULL,
+				ticket_identity TEXT,
+				origin TEXT,
+				choice_json TEXT,
+				queue_order INTEGER NOT NULL,
+				created_at TEXT NOT NULL
+			);
+			UPDATE schema_version SET version = 14;
+		`);
+		db.close();
+	}
+
+	test("a v14 file with the abandoned Work queue shape migrates to v15: the queue reads again", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		state.close();
+
+		downgradeQueueToTheAbandonedShape(path);
+
+		// Before the repair this open throws SQLiteError: no such column: position
+		// from the Work queue projection, and the app dies while it mounts.
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue()).toEqual([]);
+		expect(
+			reopened.enqueueWork({
+				ticketIdentity: ticket.identity,
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ position: 0, ticketIdentity: ticket.identity }),
+		]);
+		reopened.close();
+
+		const db = new Database(path, { readonly: true });
+		expect(
+			(db.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		db.close();
+	});
+
+	test("a v14 file with a stale queue row opens to an empty queue", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		state.close();
+
+		downgradeQueueToTheAbandonedShape(path);
+		const db = new Database(path);
+		db.prepare(
+			"INSERT INTO work_queue(id, kind, ticket_identity, origin, choice_json, queue_order, created_at) " +
+				"VALUES ('abandoned-1', 'handoff', ?, 'open', '{}', 0, '2026-09-20T10:00:00Z')",
+		).run(ticket.identity);
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The abandoned row is not readable by the shipped queue: it is dropped,
+		// and the operator re-queues the start with the same key.
+		expect(reopened.workQueue()).toEqual([]);
+		expect(reopened.hasWorkItem(ticket.identity)).toBe(false);
+		reopened.close();
+	});
+
+	test("a v14 file with a sound queue keeps its waiting item", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		if (!ticket) throw new Error("the fixture holds no ticket");
+		expect(
+			state.enqueueWork({
+				ticketIdentity: ticket.identity,
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		state.close();
+
+		// A file the shipping migration wrote claims 14 with the sound shape.
+		const db = new Database(path);
+		db.prepare("UPDATE schema_version SET version = 14").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		expect(reopened.workQueue()).toEqual([
+			expect.objectContaining({ position: 0, ticketIdentity: ticket.identity }),
+		]);
 		reopened.close();
 	});
 
@@ -1232,7 +1559,7 @@ describe("factory SQLite state", () => {
 		const primed = openFactoryState(path);
 		primed.close();
 		const seedLease = (ownerPid: number, ownerHost: string) => {
-			const db = new DatabaseSync(path);
+			const db = new Database(path);
 			db.prepare(
 				"INSERT OR REPLACE INTO lease(name, owner_token, pid, host, heartbeat_at) " +
 					"VALUES ('control-plane', 'stale-owner', ?, ?, ?)",
@@ -1257,14 +1584,14 @@ describe("factory SQLite state", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
 		// Read the two pragmas on the live connection the state uses.
-		const db = (state as unknown as { db: DatabaseSync }).db;
+		const db = (state as unknown as { db: Database }).db;
 		const journal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
 		const foreignKeys = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
 		expect(journal.journal_mode).toBe("wal");
 		expect(foreignKeys.foreign_keys).toBe(1);
 		// WAL is a durable database property: a second connection, as the
 		// agent's tooling would use, reads the same mode while the state is open.
-		const other = new DatabaseSync(path);
+		const other = new Database(path);
 		expect(
 			(other.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode,
 		).toBe("wal");
@@ -1637,6 +1964,21 @@ describe("factory SQLite state", () => {
 		second.close();
 	});
 
+	test("closing twice is not an error", () => {
+		const path = statePath();
+		// The shutdown signals and the process exit hook both close the state, so
+		// a run reaches close() more than once. The second close does nothing
+		// rather than reporting a connection it already dropped.
+		const state = openFactoryState(path);
+		state.acquireLease();
+		state.close();
+		expect(() => state.close()).not.toThrow();
+		// The lease is gone and the file is usable again.
+		const next = openFactoryState(path);
+		next.acquireLease();
+		next.close();
+	});
+
 	describe("the turn end cause and the Dispatch pause", () => {
 		const t5 = "github:github.com:I_5";
 		const t6 = "github:github.com:I_6";
@@ -1743,7 +2085,7 @@ describe("factory SQLite state", () => {
 			});
 			state.close();
 			// A pre-v9 trace: the cell the v9 step added is NULL, not a cause.
-			const db = new DatabaseSync(path);
+			const db = new Database(path);
 			db.prepare("UPDATE completion_traces SET cause = NULL, detail = NULL").run();
 			db.close();
 			const reopened = openFactoryState(path);
@@ -1807,7 +2149,7 @@ describe("factory SQLite state", () => {
 });
 
 describe("stored completion trace degradation", () => {
-	const fallback = [
+	const fallback: TurnLogEntry[] = [
 		{ kind: "text", text: "fallback first" },
 		{ kind: "text", text: "fallback last" },
 	];
@@ -1882,5 +2224,439 @@ describe("stored completion trace degradation", () => {
 		expect(readStoredLog(trace.path, trace.identity)).toEqual([
 			{ kind: "text", text: "stored wins" },
 		]);
+	});
+});
+
+describe("the work queue (ADR 0034)", () => {
+	const enqueue = (state: ReturnType<typeof openFactoryState>, identity: string) => {
+		const result = state.enqueueWork({
+			ticketIdentity: identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+
+	test("items enter in enqueue order, and the queue reports its depth and identities", () => {
+		const state = openFactoryState(":memory:");
+		// The depth is the projection's row count, the same number the Work
+		// section's header carries: a second count read off the table could
+		// disagree with the rows an operator sees when a damaged row drops out.
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.hasWorkItem("t1")).toBe(false);
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.workQueue()).toHaveLength(2);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1", "t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0, 1]);
+		expect(state.hasWorkItem("t2")).toBe(true);
+	});
+
+	test("a second enqueue for a waiting ticket is refused, and the first keeps its place", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		const refused = state.enqueueWork({
+			ticketIdentity: "t1",
+			origin: "restart",
+			choice,
+			previousMessage: "again",
+		});
+		expect(refused).toEqual({
+			ok: false,
+			reason: "ticket t1 already has a waiting queue item",
+		});
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1"]);
+	});
+
+	test("u and d move one place, and an item at an edge moves nowhere", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		enqueue(state, "t3");
+		// The front item cannot move up, the back item cannot move down.
+		expect(state.moveWorkItem("t1", "up")).toBe(false);
+		expect(state.moveWorkItem("t3", "down")).toBe(false);
+		// d takes the front item behind the middle one; the swap is atomic
+		// on the queue's primary key, so no step of it shares a position.
+		expect(state.moveWorkItem("t1", "down")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2", "t1", "t3"]);
+		expect(state.moveWorkItem("t1", "up")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t1", "t2", "t3"]);
+		// An unknown identity moves nowhere.
+		expect(state.moveWorkItem("t9", "up")).toBe(false);
+	});
+
+	test("the queue and its order survive the state file being closed and reopened", () => {
+		// The durability claim of #88 is a file-backed fact: an in-memory
+		// database cannot show it, so this walk closes the state and opens the
+		// same file again the way the next control-plane run does.
+		const path = statePath();
+		const state = openFactoryState(path);
+		for (const identity of ["t1", "t2", "t3"]) enqueue(state, identity);
+		// The operator puts the last ask at the front before the plane closes.
+		expect(state.moveWorkItem("t3", "up")).toBe(true);
+		expect(state.moveWorkItem("t3", "up")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t3", "t1", "t2"]);
+		state.close();
+
+		const reopened = openFactoryState(path);
+		const items = reopened.workQueue();
+		expect(items.map(workQueueIdentityOf)).toEqual(["t3", "t1", "t2"]);
+		expect(items.map((item) => item.position)).toEqual([0, 1, 2]);
+		// Every fact the waiting start carried comes back: the origin the pickup
+		// re-checks, the choice the operator captured, and the message it routes.
+		expect(items[0]).toEqual(
+			expect.objectContaining({
+				ticketIdentity: "t3",
+				origin: "open",
+				choice,
+				previousMessage: "",
+			}),
+		);
+		expect(reopened.workQueue()).toHaveLength(3);
+		expect(reopened.hasWorkItem("t1")).toBe(true);
+		// The reopened queue still moves and still answers a cancel.
+		expect(reopened.moveWorkItem("t3", "down")).toBe(true);
+		expect(reopened.workQueue().map(workQueueIdentityOf)).toEqual(["t1", "t3", "t2"]);
+		reopened.close();
+	});
+
+	test("removing an item keeps the rest in order, and the ticket is free to wait again", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "t1");
+		enqueue(state, "t2");
+		expect(state.removeWorkItem("t1")).toBe(true);
+		expect(state.removeWorkItem("t1")).toBe(false);
+		// The places repack: the surviving item holds the front of the
+		// queue, so the queue never shows a place it does not use.
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2"]);
+		expect(state.workQueue().map((item) => item.position)).toEqual([0]);
+		// The cancelled start may enqueue again for its ticket.
+		enqueue(state, "t1");
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2", "t1"]);
+	});
+});
+
+describe("the Work queue's Consultation items (ADR 0034, issue #90)", () => {
+	const uid = (lead: string) => `${lead.repeat(8)}-1111-4111-8111-111111111111`;
+	const repository = {
+		identity: "github.com/acme/factory",
+		displayName: "acme/factory",
+		cloneUrl: "https://github.com/acme/factory.git",
+		path: "/tmp/factory",
+	};
+
+	/** A `queued` Consultation, born with its Work queue item. */
+	function queuedConsultation(state: FactoryState, id: string, createdAt?: string) {
+		return state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: `consultation-${id.slice(0, 8)}`,
+			createdAt: createdAt ?? "2026-09-19T23:00:00.000Z",
+			initialState: "queued",
+		});
+	}
+
+	/** Enqueue one handoff item the way the operator's start does. */
+	const enqueue = (state: FactoryState, identity: string) => {
+		const result = state.enqueueWork({
+			ticketIdentity: identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!result.ok) throw new Error(result.reason);
+	};
+
+	test("a queued Consultation is born with its queue item, and an opening one without", () => {
+		const state = openFactoryState(":memory:");
+		const queued = queuedConsultation(state, uid("q"));
+		const opening = state.createConsultation({
+			id: uid("o"),
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: "consultation-o",
+			createdAt: "2026-09-19T23:01:00.000Z",
+		});
+		expect(queued.state).toBe("queued");
+		expect(opening.state).toBe("opening");
+		// The record and the pointer commit together: the one item the queue
+		// holds is the one the queued record owns.
+		expect(state.workQueue()).toHaveLength(1);
+		expect(state.workQueue()[0]).toEqual(
+			expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
+		);
+	});
+
+	test("the handoff and Consultation items share one order, and the reorder crosses kinds", () => {
+		const state = openFactoryState(":memory:");
+		enqueue(state, "github:github.com:I_6");
+		const consultation = queuedConsultation(state, uid("q"));
+		// The handoff item was enqueued first, so it leads: the Consultation
+		// item lands behind it in the same order.
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			"github:github.com:I_6",
+			consultation.id,
+		]);
+		// The reorder crosses kinds: the Consultation item moves ahead of the
+		// handoff item, and the swap is the shared order's one rule.
+		expect(state.moveWorkItem(consultation.id, "up")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			consultation.id,
+			"github:github.com:I_6",
+		]);
+		expect(state.moveWorkItem(consultation.id, "down")).toBe(true);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			"github:github.com:I_6",
+			consultation.id,
+		]);
+	});
+
+	test("one Consultation item per waiting record: the second add is refused", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		const first = state.workQueue().map(workQueueIdentityOf);
+		expect(first).toHaveLength(1);
+		expect(state.enqueueConsultationWork(consultation.id)).toEqual({
+			ok: false,
+			reason: `consultation ${consultation.id} already has a waiting queue item`,
+		});
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(first);
+	});
+
+	test("a row with no identity or with both identities cannot commit", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.close();
+		// The CHECK holds every row to exactly one identity: a row with neither
+		// names no start, and one with both is not a row the plane can read, so
+		// the constraint keeps either from ever committing.
+		const db = new Database(path);
+		expect(() =>
+			db
+				.prepare(
+					"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (-1, NULL, NULL, NULL, NULL, '', '2026-09-19T23:03:00.000Z')",
+				)
+				.run(),
+		).toThrow();
+		expect(() =>
+			db
+				.prepare(
+					"INSERT INTO work_queue(position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at) VALUES (-2, 'both', 'also-both', 'open', '{}', '', '2026-09-19T23:03:00.000Z')",
+				)
+				.run(),
+		).toThrow();
+		db.close();
+	});
+
+	test("beginConsultationStart moves a queued record to opening, and nothing else", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(state.beginConsultationStart(consultation.id)).toBe(true);
+		expect(state.consultation(consultation.id)?.state).toBe("opening");
+		// The claim took the pointer in the same write: the queue is empty, and
+		// the move ran once - a second pickup of the same record is refused, so
+		// two loops cannot start one Consultation twice.
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.beginConsultationStart(consultation.id)).toBe(false);
+		expect(state.consultation(consultation.id)?.state).toBe("opening");
+		// A record that left the queue's wait before the pickup ran starts
+		// nothing.
+		const opening = state.createConsultation({
+			id: uid("o"),
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository,
+			agentName: "consultation-o",
+			createdAt: "2026-09-19T23:02:00.000Z",
+		});
+		expect(state.beginConsultationStart(opening.id)).toBe(false);
+	});
+
+	test("updateConsultationTypeSettings re-reads the type, and the input never changes", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(
+			state.updateConsultationTypeSettings(consultation.id, {
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+			}),
+		).toBe(true);
+		const updated = state.consultation(consultation.id);
+		expect(updated).toEqual(
+			expect.objectContaining({
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+				initialInput: "review auth",
+				state: "queued",
+			}),
+		);
+	});
+
+	test("updateConsultationTypeSettings touches a queued record only", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		// The record left the wait before the pickup's write reached it: a
+		// close or a claim that won the race keeps its settings untouched.
+		expect(state.beginConsultationStart(consultation.id)).toBe(true);
+		const opening = state.consultation(consultation.id);
+		expect(
+			state.updateConsultationTypeSettings(consultation.id, {
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+			}),
+		).toBe(false);
+		expect(state.consultation(consultation.id)).toEqual(opening);
+	});
+
+	test("every write that ends a record's wait takes its pointer out of the queue", () => {
+		const state = openFactoryState(":memory:");
+		const claimed = queuedConsultation(state, uid("a"));
+		const closed = queuedConsultation(state, uid("b"));
+		const deleted = queuedConsultation(state, uid("c"));
+		expect(state.workQueue()).toHaveLength(3);
+		// The pickup's seat: the claim and the pointer's removal are one write,
+		// so no cycle that dies between them leaves an item behind.
+		expect(state.beginConsultationStart(claimed.id)).toBe(true);
+		// The close: the operator abandoned the ask, so its item goes with it.
+		expect(state.beginConsultationClose(closed.id)).toBe(true);
+		state.finishConsultationClose(closed.id);
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([deleted.id]);
+		// The delete of a record whose pointer outlived it takes that pointer
+		// too: the queue never lists an item that names no record.
+		expect(state.beginConsultationClose(deleted.id)).toBe(true);
+		state.finishConsultationClose(deleted.id);
+		expect(state.deleteConsultation(deleted.id)).toBe(true);
+		expect(state.workQueue()).toHaveLength(0);
+	});
+
+	test("removing the queue item unschedules the record, and the other record's item stands across a restart", () => {
+		const path = statePath();
+		const state = openFactoryState(path);
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(state.removeConsultationWorkItem(consultation.id)).toBe(true);
+		// The item goes, and the still-`queued` record moves to `unscheduled`
+		// in the same write: the ask stands behind the pointer it loses, listed
+		// in the Consultation section with its type, repository, and input.
+		expect(state.consultation(consultation.id)?.state).toBe("unscheduled");
+		expect(state.removeConsultationWorkItem(consultation.id)).toBe(false);
+		const second = queuedConsultation(state, uid("s"));
+		state.close();
+
+		const again = openFactoryState(path);
+		expect(again.workQueue()).toHaveLength(1);
+		expect(again.workQueue()[0]).toEqual(
+			expect.objectContaining({ kind: "consultation", consultationId: second.id }),
+		);
+		expect(again.consultation(second.id)?.state).toBe("queued");
+		expect(again.consultation(consultation.id)?.state).toBe("unscheduled");
+		again.close();
+	});
+
+	test("a removal through the pickup's seam never unschedules a record that left the wait", () => {
+		const state = openFactoryState(":memory:");
+		const claimed = queuedConsultation(state, uid("a"));
+		// The pickup won the race: the record is opening, so the item removal
+		// that follows the answer takes the pointer only and leaves the
+		// record's state standing.
+		expect(state.beginConsultationStart(claimed.id)).toBe(true);
+		expect(state.removeConsultationWorkItem(claimed.id)).toBe(false);
+		expect(state.consultation(claimed.id)?.state).toBe("opening");
+	});
+
+	test("scheduling an unscheduled Consultation puts it back at the queue's tail", () => {
+		const state = openFactoryState(":memory:");
+		const waiting = queuedConsultation(state, uid("w"));
+		// The record leaves the queue first: the item is gone, the record is
+		// unscheduled, and a handoff item holds the front of the queue.
+		expect(state.removeConsultationWorkItem(waiting.id)).toBe(true);
+		const unscheduled = state.consultation(waiting.id);
+		expect(unscheduled?.state).toBe("unscheduled");
+		expect(unscheduled).toBeDefined();
+		enqueue(state, "github:github.com:I_s");
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["github:github.com:I_s"]);
+		// The schedule returns the record to `queued` with its item at the
+		// tail, behind the handoff item, in one write.
+		expect(state.scheduleConsultation(waiting.id)).toEqual({ ok: true });
+		expect(state.consultation(waiting.id)?.state).toBe("queued");
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([
+			"github:github.com:I_s",
+			waiting.id,
+		]);
+	});
+
+	test("the schedule reaches an unscheduled record only", () => {
+		const state = openFactoryState(":memory:");
+		const queued = queuedConsultation(state, uid("q"));
+		expect(state.scheduleConsultation(queued.id)).toEqual({
+			ok: false,
+			reason: `consultation ${queued.id} already has a waiting queue item`,
+		});
+		expect(state.workQueue().map(workQueueIdentityOf)).toEqual([queued.id]);
+		expect(state.consultation(queued.id)?.state).toBe("queued");
+		// A record that was never unscheduled has nothing to schedule either.
+		expect(state.scheduleConsultation("unknown")).toEqual({
+			ok: false,
+			reason: "the Consultation is not unscheduled",
+		});
+		expect(state.workQueue()).toHaveLength(1);
+	});
+
+	test("an unscheduled Consultation takes its seat in the atomic start, without a queue item", () => {
+		const state = openFactoryState(":memory:");
+		const consultation = queuedConsultation(state, uid("q"));
+		expect(state.removeConsultationWorkItem(consultation.id)).toBe(true);
+		// The start-now over the cap runs the same claim as the pickup: the
+		// move to `opening` reaches the `unscheduled` record, and the second
+		// start of the same record is refused.
+		expect(state.beginConsultationStart(consultation.id)).toBe(true);
+		expect(state.consultation(consultation.id)?.state).toBe("opening");
+		expect(state.workQueue()).toHaveLength(0);
+		expect(state.beginConsultationStart(consultation.id)).toBe(false);
+		// The settings re-read reaches the `unscheduled` record the same way.
+		const again = queuedConsultation(state, uid("u"));
+		expect(state.removeConsultationWorkItem(again.id)).toBe(true);
+		expect(
+			state.updateConsultationTypeSettings(again.id, {
+				agentType: "codex",
+				environment: "live-worktree",
+				model: "review-model",
+				thinking: "low",
+				contextWindow: "200000",
+				template: "/re-grill {input}",
+				renderedOpeningPrompt: "/re-grill review auth",
+			}),
+		).toBe(true);
 	});
 });

@@ -204,7 +204,12 @@ export function bumpPriority(
 	labels: readonly string[],
 	rank: number | null,
 ): PriorityBump {
-	if (labels.length === 0) return { kind: "noop", message: "no Priority labels are configured" };
+	if (labels.length === 0)
+		return {
+			kind: "noop",
+			message:
+				"no Priority labels are configured - add a [priority] labels list to the config file",
+		};
 	if (direction === "up") {
 		if (rank === null)
 			return {

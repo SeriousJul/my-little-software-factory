@@ -57,7 +57,6 @@ export const BASE_CONFIG: FactoryConfig = {
 				"Pull request: {source-url}\n\nLabels: {labels}\n\nDescription:\n{description}",
 		},
 	},
-	autoHandoff: false,
 	maxParallelAgents: 2,
 	agentPollIntervalSeconds: 5,
 	completionMessageLines: 200,

@@ -52,12 +52,10 @@ default-task-type = "implement"
 # ~/.local/state/my-little-software-factory/state.sqlite.
 state-file = "factory.sqlite"
 
-# --- Auto-handoff and limits -----------------------------------------
+# --- Limits ----------------------------------------------------------
 
-# Start in auto-handoff mode. The a key toggles it from the Ticket section.
-auto-handoff = false
-
-# The in-flight agents the control plane keeps. 0 means unlimited.
+# The in-flight works the control plane keeps: a ticket Handoff and a
+# Consultation alike. 0 means unlimited.
 max-parallel-agents = 2
 
 # Seconds between herdr polls.
@@ -298,9 +296,12 @@ labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 # --- Ticket sources ----------------------------------------------------------------
 
 # name must be unique. kind is "github-issues" or
-# "github-pull-requests". filter is a GitHub search applied to the list.
-# auth takes exactly one of token, token-env, or account.
-# Omitted auth uses gh's current authentication.
+# "github-pull-requests", or one of the security feed kinds
+# "github-security-advisories", "github-dependabot-alerts", and
+# "github-secret-scanning-alerts". filter is a GitHub search applied to the
+# list; the security feed kinds take no filter. auth takes exactly one of
+# token, token-env, or account. Omitted auth uses gh's current
+# authentication.
 [[sources]]
 name = "my-app-issues"
 kind = "github-issues"
@@ -323,6 +324,13 @@ filter = "is:open label:factory"
 [sources.auth]
 account = "my-account"
 
+
+[[sources]]
+name = "my-app-dependabot-alerts"
+kind = "github-dependabot-alerts"
+refresh-interval-seconds = 300
+repositories = ["SeriousJul/my-app"]
+host = "github.com"
 ```
 
 ## Key reference
@@ -336,8 +344,7 @@ account = "my-account"
 | `default-environment` | yes | - | The environment a handoff starts with when a transition does not pin one. One of `live-worktree` or `worktree`. |
 | `default-task-type` | yes | - | The task type of a handoff when no state matches. It must name a `[task-types.*]` table. |
 | `state-file` | no | `$XDG_STATE_HOME/my-little-software-factory/state.sqlite`, else `~/.local/state/my-little-software-factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
-| `auto-handoff` | no | `false` | Start in auto-handoff mode. The `a` key toggles it from the Ticket section. |
-| `max-parallel-agents` | no | `2` | The in-flight agents the control plane keeps. `0` means unlimited. |
+| `max-parallel-agents` | no | `2` | The one cap over all running work: the in-flight ticket seats and every Consultation in `opening` or `working`. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
 | `completion-message-lines` | no | `200` | Lines of the agent last message captured when a turn settles. A whole number of 1 or more. |
 | `max-handoffs-per-ticket` | no | `10` | Handoffs per ticket after which auto-handoff stops dispatching it. A manual handoff may pass the limit. |
@@ -392,7 +399,7 @@ account = "my-account"
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `agent` | yes | - | The agent type to start. It must name an `[agents.*]` table. |
-| `environment` | yes | - | The environment the agent runs in. One of `live-worktree` or `worktree`. |
+| `environment` | no | `worktree` | The environment the agent runs in. One of `live-worktree` or `worktree`. A worktree starts from the repository's `main` branch, or its `HEAD` when the repository has no `main`. |
 | `template` | yes | - | The opening prompt. It contains `{input}` exactly once and no other placeholder. |
 | `model` | no | - | The model, passed through the agent's model template. The agent must define one. |
 | `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values`. |
@@ -418,23 +425,31 @@ for the match rules and the sibling clone.
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `name` | yes | - | The source name. It must be unique, and it is what a state match's `source-name` matches. |
-| `kind` | yes | - | `github-issues` or `github-pull-requests`. |
+| `kind` | yes | - | `github-issues`, `github-pull-requests`, or one of the security feed kinds `github-security-advisories`, `github-dependabot-alerts`, `github-secret-scanning-alerts`. See the security source note below. |
 | `refresh-interval-seconds` | yes | - | The refresh interval. A positive number. |
 | `repositories` | yes | - | A non-empty list of `owner/name` strings. |
 | `host` | no | `github.com` | The GitHub host. |
-| `filter` | no | - | A GitHub search applied to the list. Omitted: the default policy lists every open item of the source's kind that is not `blocked`, and a pull request that is not a draft unless it carries `needs-work`. See the filter note below. |
-| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). |
+| `filter` | no | - | A GitHub search applied to the list. Omitted on the issue and pull request sources: the default policy lists every open item of the source's kind that is not `blocked`, and a pull request that is not a draft unless it carries `needs-work`. The security feed kinds reject the key at startup. See the filter note below. |
+| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). The security feeds reuse this table. The plane's transition writes reuse it too: a fire runs `gh issue edit` and `gh pr edit` under the source's configured authentication, so the labels the plane writes and the items it reads come from the same account.
 
 **`[states.match]`** conditions (all optional; omitted conditions are ignored).
 
 | Key | Required | What it does |
 | --- | --- | --- |
 | `source-name` | no | The source `name`. |
-| `source-kind` | no | `github-issue` or `github-pull-request`. |
+| `source-kind` | no | `github-issue`, `github-pull-request`, `github-security-advisory`, `github-dependabot-alert`, or `github-secret-scanning-alert`. |
 | `repository` | no | The repository identity, for example `github.com/seriousjul/my-app`. |
 | `labels-all` | no | Every listed label must be present. Case-insensitive. |
 | `labels-any` | no | At least one listed label must be present. Case-insensitive. |
 | `labels-none` | no | No listed label may be present. Case-insensitive. |
+
+A label named in `labels-all` or `labels-any` but written by no transition
+is a scoping label the operator owns: a fire never removes it, so a state
+can gate on a label the machine never writes, such as `labels-all =
+["factory"]` keeping the machine to one project's items. A label a
+transition writes must already exist in the repository: a write that names a
+missing label fails, and [the ticket labels page](../development/labels.md)
+carries the command that creates them.
 
 **`[task-types.<name>.transition]`** (one table per task type that fires a transition).
 
@@ -484,6 +499,49 @@ GitHub search applies `AND`, `OR`,
 and `NOT` to search text only, and it has no parenthesized grouping.
 Parentheses, and logical operators next to `label:`-style qualifiers, are
 rejected at startup, so a source never degrades to a healthy-but-empty list.
+The security feed kinds are REST endpoints, not GitHub searches, so they
+take no `filter` at all: a filter there would be silently ignored, and the
+key is rejected at startup instead of misread as applied.
+
+### The security feed sources
+
+The three security kinds read the repository security tab, one call set per
+configured repository, and each item appears in the ticket list as one
+ticket. The item's severity becomes its single ticket label, so the Priority
+label list ranks security tickets; an open secret scanning alert always
+carries the label `critical` (ADR 0029).
+
+- `github-security-advisories` lists the repository's security advisories in
+  `triage`, `draft`, and `published` state; `closed` and `withdrawn`
+  advisories stay out. The ticket's external key is the GHSA id, the title
+  the advisory summary, the description the advisory description plus a block
+  listing each named vulnerable component (ecosystem, package, vulnerable
+  range, patched versions) when the advisory carries one, the label the bare
+  severity word, and the URL the advisory page.
+- `github-dependabot-alerts` lists the open Dependabot alerts; `fixed`,
+  `dismissed`, and `auto_dismissed` alerts stay out. The ticket's external
+  key is the alert's per-repository number, the title the CVE id (or the GHSA
+  id when there is no CVE) plus the embedded advisory summary, the
+  description a composed block (package, ecosystem, manifest path, scope,
+  relationship, vulnerable range, first patched version, severity, CVSS
+  score) followed by the embedded advisory's full description, the label the
+  bare severity word from the embedded advisory with the embedded security
+  vulnerability's severity as the fallback, and the URL the alert page.
+- `github-secret-scanning-alerts` lists the open secret scanning alerts;
+  `closed` and `resolved` alerts stay out. The ticket's external key is the
+  alert's per-repository number, the title the word `Exposed` plus the secret
+  type name, the description a composed block (secret type, file path, line
+  range), the label always `critical` while the alert is open, and the URL
+  the alert page.
+
+The sources share the auth table of the other kinds, and a token with the
+`repo` or `security_events` scope reads all three feeds. The endpoints need
+administrator access to the repository (advisories: owner or security
+manager): a token without access makes the source stale with the readable
+reason, like any failed refresh. The control plane is read-only on all three
+feeds: it never writes labels, states, or dismissals to the security items.
+The security task types' transitions write `ready-for-review` on the pull
+request the agent opens for the finding, never on the finding itself.
 
 Repository mappings are the one section the control plane writes back: a
 sibling clone records its path there. The write-back is atomic: the config
@@ -495,12 +553,21 @@ write-back: the data round-trips, the comments do not.
 
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
-`merge`, and the five states of the label workflow - `ready-for-agent`
-issues to `implement`, `needs-work`, `ready-for-review`, and `ready-to-ship`
-pull requests to `rework`, `review`, and `merge`, and one parking state for
-a pull request that carries none of them - with the transitions that move a
-ticket between them, and one `consult` Consultation type that passes your
-input straight through. They have no ticket sources
-and no repository mappings. `config/development.toml` in this repository
-configures the live development path through `--config`; it carries the
-`grill-with-docs` Consultation type.
+`merge`, the three security task types `resolve-security-advisory`,
+`resolve-dependabot-alert`, and `resolve-secret-scanning-alert`, and the
+states of the label workflow - the `ready-for-agent` issue to `implement`,
+the `needs-work`, `ready-for-review`, and `ready-to-ship` pull requests to
+`rework`, `review`, and `merge`, one state per security source kind pointing
+at its task type, and one parking state for a pull request that carries none
+of them - with the transitions that move a ticket between them. They also
+define one `consult` Consultation type that passes your input straight
+through. They carry the three priority labels `critical`, `high`, and `low`.
+They have no ticket sources and no repository mappings: uncommenting one
+security source block is the only setup a fresh install needs. The security
+task types carry `thinking = "high"` and a transition that writes
+`ready-for-review` on the opened pull request with `auto-advance = true`: the
+turn auto-advances into the pull request's review position, and a turn that
+opened no pull request settles closed, the completed task type resting the
+ticket while the item still lists upstream. `config/development.toml` in
+this repository configures the live development path through `--config`; it
+carries the `grill-with-docs` Consultation type.

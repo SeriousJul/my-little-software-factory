@@ -8,10 +8,11 @@
  * unfinished text, discarding must be its own deliberate action, and the Key
  * guide must name the editing keys a field owns.
  */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import type { FactoryState } from "../src/state.ts";
@@ -44,7 +45,6 @@ function launcherConfig(): FactoryConfig {
 		},
 		attentionBell: false,
 		interactionExitKey: "f12",
-		autoHandoff: false,
 		maxParallelAgents: 2,
 		agentPollIntervalSeconds: 60,
 		completionMessageLines: 20,

@@ -46,14 +46,21 @@
  *    start leaves the turn for the next cycle.
  * 5. With auto-handoff on, each eligible open ticket - actionable, under
  *    both limits - is handed off on its task profile's configured settings.
- *    The parallel count is the in-flight tickets whose agent was alive in
- *    the latest poll: a blocked agent holds a slot, a missing one does not.
- *    A handoff still in progress, and a started agent that herdr has not
- *    listed yet (still inside the startup grace), hold a slot too: they run
- *    or are about to run, and the limit bounds running agents. Every agent
- *    this cycle itself dispatches - a restart, a route, an open handoff -
- *    holds a slot before the next dispatch of the cycle is measured, so one
- *    cycle never starts more agents than the limit.
+ *    The parallel count is the shared seat count (issue #87, ADR 0034):
+ *    the in-flight tickets the latest poll listed or still holds in their
+ *    startup grace, every in-progress handoff, and every Consultation in
+ *    opening or working - the one source the mode line reads too. A
+ *    missing agent holds no slot, so the restart can refill it. Every
+ *    agent this cycle itself dispatches - a restart, a route, an open
+ *    handoff - holds a slot before the next dispatch of the cycle is
+ *    measured, so one cycle never starts more agents than the limit.
+ * 6. The Work queue (ADR 0034): when a seat frees, the manual starts that
+ *    could not take a seat enter pickup - in queue order, up to the free
+ *    seats, before auto-dispatch fills the rest. A pickup is a manual start:
+ *    every hard check the claim runs still runs, but the Dispatch pause and
+ *    the Same-type hold do not hold it. A pickup that fails a check leaves
+ *    its item in the queue with a Message line warning, and the ticket keeps
+ *    its state.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -65,6 +72,8 @@ import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
+import type { HerdrAgent } from "./herdr.ts";
+import { parallelSeatCount } from "./parallel.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
 import type { Consultation, FactoryState, HandoffTicket } from "./state.ts";
@@ -78,27 +87,6 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-
-/** One agent herdr reports for a pane. */
-export interface HerdrAgent {
-	paneId: string;
-	tabId: string;
-	workspaceId: string;
-	/** Stable Agent session identity when this Herdr version exposes one. */
-	stableSessionId?: string;
-	/** The checkout or working directory when this Herdr version reports it. */
-	checkoutPath?: string;
-	/** Herdr's monotonic state-change sequence when available. */
-	sequence?: number;
-	/** The agent kind herdr detected in the pane. */
-	agent: string;
-	status: string;
-	/**
-	 * The agent's session record path herdr reports, empty when herdr has
-	 * none. The turn log is read from it on settle (ADR 0008).
-	 */
-	sessionId: string;
-}
 
 /** The normalized states the factory reasons about. */
 export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
@@ -303,11 +291,12 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * The parallel slots held: the agents the poll saw alive, the handoffs still
- * in progress, the started agents herdr has not listed yet, and every agent
- * this cycle dispatched. All dispatches of one cycle read the same poll, so
- * each new start must hold a slot before the next dispatch is measured
- * against the parallel limit.
+ * The parallel slots held this cycle: the shared seat count of the poll -
+ * the in-flight tickets it listed or still holds in their startup grace,
+ * every in-progress handoff, and every Consultation in opening or working -
+ * plus every agent this cycle dispatched. All dispatches of one cycle read
+ * the same poll, so each new start must hold a slot before the next dispatch
+ * is measured against the parallel limit.
  */
 interface ParallelSlots {
 	count: number;
@@ -345,6 +334,12 @@ interface ObservationOptions {
 	 * start the claim only reserves.
 	 */
 	dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
+	/**
+	 * The Work queue's pickup (ADR 0034): the queue items the free seats take
+	 * this cycle, run before auto-dispatch, in queue order. Returns the items
+	 * that claimed a seat. Absent where the app has no Work queue.
+	 */
+	pickupWorkQueue?: () => Promise<number>;
 	/**
 	 * A cycle of this ticket ended: a close or abandon landed, and the ticket
 	 * returned to open. The agent of the ended cycle may have changed the
@@ -407,6 +402,7 @@ export class ObservationCoordinator {
 	private readonly herdr: AgentReader;
 	private readonly config: () => FactoryConfig;
 	private readonly dispatch: (intent: HandoffIntent) => Promise<DispatchResult>;
+	private readonly pickupWorkQueue?: () => Promise<number>;
 	private readonly onCycleEnd?: (ticketIdentity: string) => void;
 	private readonly cleanup: (
 		handoff: HandoffTicket,
@@ -467,6 +463,7 @@ export class ObservationCoordinator {
 		this.herdr = options.herdr;
 		this.config = options.config;
 		this.dispatch = options.dispatch;
+		this.pickupWorkQueue = options.pickupWorkQueue;
 		this.onCycleEnd = options.onCycleEnd;
 		this.cleanup = options.cleanup;
 		this.now = options.now;
@@ -571,26 +568,23 @@ export class ObservationCoordinator {
 		const reclaimed = this.reclaimLiveAgents(byPane);
 		if (this.stopped) return;
 
-		// The parallel slots this poll holds. An in-flight ticket holds one
-		// while its agent is alive in this poll. It also holds one while the
-		// agent has not been listed yet: a handoff still in progress, or a
-		// started agent still inside the startup grace. A missing agent past
-		// the grace holds none, so the restart path can refill the seat.
+		// The parallel slots this poll holds, from the shared seat count
+		// (issue #87, ADR 0034): the in-flight tickets the poll lists or
+		// still holds in their startup grace, every in-progress handoff, and
+		// every Consultation in opening or working. The mode line reads the
+		// same source, so the gates and the line never disagree. A missing
+		// agent past the grace holds no seat, so the restart path can refill
+		// it. Every dispatch of the cycle takes its seat below, so the next
+		// dispatch of the cycle measures against it.
 		const inFlight = this.state.ticketsByState(["handed-off", "running"]);
-		const inProgress = new Set(this.state.openAttemptTickets());
-		const counted = new Set<string>();
-		const slots: ParallelSlots = { count: 0 };
-		for (const ticket of inFlight) {
-			const listed = ticket.paneId !== null && byPane.has(ticket.paneId);
-			const booting = !listed && this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs;
-			if (listed || booting) {
-				slots.count += 1;
-				counted.add(ticket.ticketIdentity);
-			}
-		}
-		for (const identity of inProgress) {
-			if (!counted.has(identity)) slots.count += 1;
-		}
+		const slots: ParallelSlots = {
+			count: parallelSeatCount({
+				state: this.state,
+				agents: probe.agents,
+				now: this.now(),
+				startupGraceMs: this.startupGraceMs,
+			}),
+		};
 
 		// An episode ends when its ticket leaves in-flight: restarts may resume.
 		for (const identity of [...this.restarted]) {
@@ -656,12 +650,29 @@ export class ObservationCoordinator {
 		// next poll no longer sees it in flight and frees the seat. Slots
 		// taken by the dispatches above are counted in too, so the open
 		// dispatch never fills a slot a route or restart just started.
+
+		// The Work queue starts before auto-dispatch (ADR 0034): when a seat
+		// frees, the operator's waiting starts take it in queue order, up to
+		// the free seats, and only then does auto-dispatch fill the rest. A
+		// pickup is a manual start, so it runs in auto or manual mode alike,
+		// and no automatic gate holds it.
+		if (this.pickupWorkQueue !== undefined) {
+			const picked = await this.pickupWorkQueue();
+			if (this.stopped) return;
+			if (picked > 0) {
+				// The picked agents are not in this poll: each claim holds its
+				// seat before the next dispatch of the cycle is measured.
+				slots.count += picked;
+				changed = true;
+			}
+		}
 		if (autoOn) {
 			changed = this.dispatchOpen(slots.count) || changed;
 		}
 
 		// Tickets and Consultations share this one successful Herdr list poll.
-		// A Consultation never enters the Ticket parallel count above.
+		// A Consultation in `opening` or `working` already holds its seat in
+		// the shared count above (ADR 0034).
 		const consultationChanged = await this.observeConsultations(probe.agents);
 		changed = consultationChanged || changed;
 		// The Dispatch pause is derived from the traces each cycle and never
@@ -1033,6 +1044,11 @@ export class ObservationCoordinator {
 		if (config.maxParallelAgents > 0 && slots.count >= config.maxParallelAgents) {
 			return false;
 		}
+		// A waiting Work queue item restarts the ticket with the operator's
+		// captured choice (ADR 0034): the automatic restart must not take the
+		// seat the operator asked for, or the item's pickup would start a
+		// second handoff on the ticket it restarted.
+		if (this.state.hasWorkItem(ticket.ticketIdentity)) return false;
 		if (this.restarted.has(ticket.ticketIdentity)) return false;
 		// A Dispatch pause holds the restart: a held failed turn in the factory
 		// stops automatic work until it is decided or a turn completes (ADR
@@ -1046,6 +1062,7 @@ export class ObservationCoordinator {
 		// auto one matches it.
 		const result = await this.dispatch({
 			origin: "restart",
+			automatic: true,
 			ticketIdentity: ticket.ticketIdentity,
 			choice: baseChoice(
 				ticket.agentType,
@@ -1096,7 +1113,7 @@ export class ObservationCoordinator {
 		if (decision === "wait") return false;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
 		// truncated is held. No automatic decision runs on it, in auto or
-		// manual mode; the operator's explicit close, goto, or route still
+		// manual mode; the operator's explicit close or route still
 		// works. The ticket rests in awaiting until then.
 		if (isHeldCompletion(completion)) return false;
 		const decidedAt = new Date(this.now()).toISOString();
@@ -1130,6 +1147,12 @@ export class ObservationCoordinator {
 			outcome.positionTicketIdentity === null
 		)
 			return false;
+		// A waiting Work queue item routes the ticket with the operator's
+		// captured choice (ADR 0034): the automatic route must not take the
+		// seat the operator asked for, or the item's pickup would start a
+		// second handoff on the ticket it routed. It mirrors the skip the
+		// automatic restart keeps.
+		if (this.state.hasWorkItem(outcome.positionTicketIdentity)) return false;
 		// A Dispatch pause holds the automatic route, not the close: it stops
 		// new work from starting, not a cycle from ending (ADR 0016). It holds
 		// the route in auto and manual mode alike, exactly like the Parallel
@@ -1143,6 +1166,7 @@ export class ObservationCoordinator {
 		// inherits the previous Handoff's model, thinking, or context window.
 		const result = await this.dispatch({
 			origin: "workflow",
+			automatic: true,
 			ticketIdentity: outcome.positionTicketIdentity,
 			choice: resolveHandoffChoice(config, target, {
 				...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
@@ -1323,6 +1347,7 @@ export class ObservationCoordinator {
 			};
 			void this.dispatch({
 				origin: "open",
+				automatic: true,
 				ticketIdentity: ticket.identity,
 				choice,
 				previousMessage: "",

@@ -4,7 +4,7 @@
  * Terminal layout is measured in cells: CJK and emoji take two, combining
  * marks take none. These tests pin the clips that keep a row to its column.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import {
 	padToWidth,

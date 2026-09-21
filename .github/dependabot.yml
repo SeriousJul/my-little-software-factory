@@ -4,18 +4,14 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-      day: "monday"
-    # Keep major version bumps manual. They can change runtime behavior.
-    ignore:
-      - dependency-name: "*"
-        update-type: "version-upgrade: major"
+    # Safe updates are auto-merged by the dependabot-auto-merge workflow once
+    # CI (lint, typecheck, test) is green. Major version bumps arrive as PRs
+    # and are held by the same workflow for manual review.
     # One weekly PR holding all patch and minor bumps.
     groups:
       all:
         patterns:
           - "*"
-    # Merge when CI (lint, typecheck, test) is green.
-    auto-merge: true
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -24,4 +20,3 @@ updates:
       day: "monday"
     # PR-only. A major bump here is a major action version, which is
     # exactly what Dependabot is good at flagging, but a human merges it.
-    auto-merge: false

@@ -11,7 +11,7 @@
  * row, and what the last row states. A modal drawing its border through its
  * own Action bar is the failure this file exists to catch.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 import { contrastRatio, MIN_TEXT_CONTRAST } from "../src/components/shared/presentation.ts";
 import { widthOf } from "../src/components/text.ts";
 import {

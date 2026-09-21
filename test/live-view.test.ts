@@ -14,10 +14,11 @@
  * pinned poll interval, so the settles, the markers, and the transforms
  * happen the way they happen in production.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
@@ -30,6 +31,7 @@ import {
 	awaitFrame,
 	frameText,
 	HEIGHT,
+	openGuide,
 	openPanel,
 	press,
 	pressArrow,
@@ -41,11 +43,18 @@ import {
 	settle,
 	sleep,
 	spanColors,
+	startingFaceOf,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner, tabCreateJson, workspaceListJson } from "./fake-runner.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	tabCreateJson,
+	workspaceGetJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
@@ -251,7 +260,35 @@ function ticketRow(frame: string, title = "Persist source facts"): string {
 	return row;
 }
 
+/**
+ * The in-flight face the row wears (ADR 0030): the Starting window's
+ * spinner face while the window holds, or the `[running]` badge once the
+ * observation has seen the work.
+ */
+const inFlightFace = (row: string): boolean =>
+	startingFaceOf(row) !== null || row.includes("[running]");
+
 describe("the Live view on the ticket list", () => {
+	test("g on an open ticket refuses with the Consultation section's words", async () => {
+		const runner = new FakeRunner();
+
+		await withApp(
+			async (setup) => {
+				// The first sample ticket is open: it holds no agent and no
+				// pane, so `g` states the Consultation section's own refusal
+				// on the Message line and focuses nothing.
+				const frame = await press(setup, "g", "the refusal", (f) =>
+					f.includes("the Agent's pane is not alive in the last poll"),
+				);
+				expect(frame).toContain("Warning:");
+				expect(runner.commands()).not.toContain("herdr agent focus");
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
+	});
+
 	test("enter on an in-flight ticket opens the Live view above the list", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", [...READ("pane-implement")], {
@@ -270,16 +307,18 @@ describe("the Live view on the ticket list", () => {
 				// The pop-in settles before the geometry is measured.
 				await sleep(250);
 				// Near-fullscreen: the box's border sits one cell in from the
-				// terminal's edges, top and bottom.
+				// terminal's edge on top, and the shared chrome keeps the box
+				// above its own Message line, so the bottom border stands two
+				// cells in from the edge.
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				expect(rows[1].slice(0, 2)).toBe(" ┌");
-				expect(rows[HEIGHT - 2].slice(0, 2)).toBe(" └");
+				expect(rows[HEIGHT - 3].slice(0, 2)).toBe(" └");
 				// The context line names the repository, the task, the agent.
 				expect(frame).toContain("acme/portal · implement · codex");
-				// The one row is the Goto, and the hint says so.
-				expect(frame).toContain("Goto");
-				expect(frame).toContain("enter goto");
+				// The pane carries the stream, and the bar names the Goto confirm.
+				expect(frame).toContain("Agent view");
+				expect(frame).toContain("Enter Goto");
 			},
 			WIDTH,
 			HEIGHT,
@@ -415,11 +454,12 @@ describe("the Live view on the ticket list", () => {
 					"the first read at the bottom",
 				);
 				expect(first).not.toContain("tick 01");
-				// Two rows up: the operator is reading, not following. The
-				// window is a row short of the full tail, so the last line
-				// leaves the view only on the second press.
-				await press(setup, "k", "the first scroll row", (f) => f.includes("tick 10"));
-				await press(setup, "k", "the scroll up two rows", (f) => !f.includes("tick 30"));
+				// Three rows up: the operator is reading, not following. The
+				// window is short of the full tail, so the last tick leaves on
+				// the first press, and tick 10 comes in on the third.
+				await press(setup, "k", "the first scroll row", (f) => !f.includes("tick 30"));
+				await press(setup, "k", "the second scroll row", (f) => f.includes("tick 11"));
+				await press(setup, "k", "the third scroll row", (f) => f.includes("tick 10"));
 				// The next read arrives while the operator reads: the window
 				// holds where the operator put it.
 				await sleep(1300);
@@ -459,9 +499,10 @@ describe("the Live view on the ticket list", () => {
 				);
 				expect(first).not.toContain("tick 01");
 				// Two rows up: the pin releases, like a read while the operator
-				// reads.
-				await press(setup, "k", "the first scroll row", (f) => f.includes("tick 10"));
-				await press(setup, "k", "the scroll up two rows", (f) => !f.includes("tick 30"));
+				// reads. The window is short of the full tail, so the last tick
+				// leaves on the first press.
+				await press(setup, "k", "the first scroll row", (f) => !f.includes("tick 30"));
+				await press(setup, "k", "the second scroll row", (f) => f.includes("tick 12"));
 				// End reaches the bottom: the pin comes back, and the newest
 				// line of the next read comes into view without asking.
 				await pressScrollKey(setup, "end", "the stream at its bottom", (f) =>
@@ -526,7 +567,9 @@ describe("the Live view on the ticket list", () => {
 				);
 				const frame = await pressEscape(setup, "the view to close", (f) => !f.includes("Live:"));
 				// The ticket stays where it is, and nothing ran but the reads.
-				expect(frame).toContain("[handed-off]");
+				// Its `handed-off` state wears the Starting window's face
+				// (ADR 0030), the badge itself never drawn.
+				expect(startingFaceOf(frame)).not.toBeNull();
 				expect(runner.commands().join("\n")).not.toContain("agent focus");
 				expect(runner.commands().every((c) => c === READ_COMMAND("pane-implement"))).toBe(true);
 			},
@@ -555,9 +598,9 @@ describe("the Live view on the ticket list", () => {
 				// The context line names the repository, the task type, and the
 				// agent: with no handoff stored, the agent is the question mark.
 				expect(frame).toContain("acme/ingest · implement · ?");
-				// The one row is the Goto, and the hint says so.
+				// The bar names the Goto confirm, once.
 				expect(frame.match(/Goto/g)?.length).toBe(1);
-				expect(frame).toContain("enter goto");
+				expect(frame).toContain("Enter Goto");
 				// No pane to read: the runner was never asked for one.
 				expect(runner.calls).toHaveLength(0);
 			},
@@ -570,7 +613,52 @@ describe("the Live view on the ticket list", () => {
 			},
 		);
 	});
+
+	test("the Key guide names the live-view mode and its controls", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "j", "the selection to move", (f) =>
+					f.includes("Fix pan drift in split panes"),
+				);
+				await pressEnterQuiet(setup, "the Live view", (f) =>
+					f.includes("Live: Fix pan drift in split panes"),
+				);
+				// The guide names the mode of its own: the streaming sub-mode
+				// carries the body's scroll, the Goto confirm, and the leave,
+				// beside the plane's global keys.
+				await openGuide(setup, "?", "Key guide - Live view");
+				const rows = rowsOf(await settle(setup));
+				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
+				expect(between(indexOf("Current interaction mode"), indexOf("Global controls"))).toEqual([
+					"F1/? Help",
+					"F2 Message - the current Message fits on the Message line",
+					"j/k Scroll body",
+					"Esc Cancel",
+					// The fake runner lists no agent, so the Goto's pane is not
+					// alive in the last poll and the row states its reason.
+					"Enter Goto - the Agent's pane is not alive in the last poll",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
+	});
 });
+
+/** Collapse the guide's padded key and label columns into single spaces. */
+const norm = (row: string): string => row.replace(/\s+/g, " ").trim();
+
+/** A row's content with the modal's box borders stripped, or "" for a blank row. */
+const contentOf = (row: string): string =>
+	row
+		.replace(/[│┌┐└┘─]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 
 /** Escape through the real key path, then wait for its effect. */
 async function pressEscape(
@@ -597,23 +685,72 @@ describe("the Live view against a running factory", () => {
 			]),
 		});
 		app.runner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
+		app.runner.set("herdr", ["workspace", "get", "ws-1"], {
+			stdout: workspaceGetJson("ws-1", "live-worktree"),
+		});
 
 		await withApp(
 			async (setup) => {
 				app.src.settle(success);
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
-				// Enter confirms the Goto: the focus runs, the view closes.
+				// Enter confirms the Goto: the focus runs, the view closes. The
+				// confirmation is a result, not a warning, and names the
+				// workspace herdr's view must switch to: since herdr 0.9 a CLI
+				// focus no longer moves an attached client's view.
 				const frame = await pressReturn(setup, "the focus", (f) =>
-					f.includes("focused the agent of ticket"),
+					f.includes("in workspace live-worktree"),
 				);
+				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
 				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
 				// The focus is pure: no completion trace exists, and the
 				// ticket is still in flight under its badge.
 				expect(app.state.lastCompletion(identity)).toBeNull();
 				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
 				expect(frame).not.toContain("Live:");
-				expect(ticketRow(await settle(setup))).toMatch(/\[(handed-off|running)\]/);
+				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
+	test("g in the Ticket base mode focuses the pane and moves no state", async () => {
+		const app = seededApp();
+		app.runner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "pane-1",
+					tabId: "tab-1",
+					workspaceId: "ws-1",
+					agent: "persist-source-facts",
+					status: "working",
+				},
+			]),
+		});
+		app.runner.set("herdr", [...READ("pane-1")], { stdout: "working on the layout\n" });
+		app.runner.set("herdr", ["workspace", "get", "ws-1"], {
+			stdout: workspaceGetJson("ws-1", "live-worktree"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
+				// `g` is the base-mode Goto (ADR 0033): it focuses the agent's
+				// pane without opening a surface, and the ticket stays in flight
+				// under the face the poll wears.
+				const frame = await press(setup, "g", "the focus", (f) =>
+					f.includes("in workspace live-worktree"),
+				);
+				expect(frame).toContain(`Info: focused the agent of ticket ${identity}`);
+				expect(app.runner.commands()).toContain("herdr agent focus pane-1");
+				expect(app.state.lastCompletion(identity)).toBeNull();
+				expect(app.state.ticketsByState(["awaiting"])).toHaveLength(0);
+				expect(frame).not.toContain("Live:");
+				expect(inFlightFace(ticketRow(await settle(setup)))).toBe(true);
 			},
 			WIDTH,
 			HEIGHT,
@@ -660,15 +797,17 @@ describe("the Live view against a running factory", () => {
 						},
 					]),
 				});
-				// The border keeps the Live title in both sub-modes: the
-				// decision's rows are the handover.
+				// The settle re-titles the border in place: the box is the
+				// decision now, and the Live title is gone (ADR 0040).
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("Live: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
 					"the decision",
 				);
-				// The settled turn's log, captured from the pane, and the
-				// decision's rows in their order.
+				expect(frame).not.toContain("Live: Persist source facts");
+				// The settled turn's log stands in the pane under its own title,
+				// and the decision's rows sit below it.
+				expect(frame).toContain("Turn log");
 				expect(frame).toContain("The fix is in the layout math.");
 				expect(frame).toContain("Close");
 				expect(frame).toContain("Goto");
@@ -687,6 +826,11 @@ describe("the Live view against a running factory", () => {
 						positionTaskType: "review",
 					}),
 				);
+				// The bar follows the mode: the decision's hints, the stream's
+				// gone.
+				expect(frame).toContain("j/k Scroll body");
+				expect(frame).toContain("Enter Confirm action");
+				expect(frame).not.toContain("Enter Goto");
 				// Close is selected by default; confirming it ends the cycle.
 				await pressReturn(setup, "the close", (f) => f.includes("[open]"));
 				expect(ticketRow(await settle(setup))).toContain("[open]");
@@ -869,11 +1013,12 @@ describe("the Live view against a running factory", () => {
 				await awaitFrame(setup, (f) => f.includes("Persist source facts"), "the ticket row");
 				await pressReturn(setup, "the Live view", (f) => f.includes("Live: Persist source facts"));
 				await awaitFrame(setup, (f) => f.includes("the implementer is finishing"), "the stream");
-				// The agent reports done: the same box turns into the decision.
+				// The agent reports done: the same box turns into the decision,
+				// the border re-titled in place.
 				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Live: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
 					"the decision",
 				);
 				// Close is the default; the workflow handoff is the last row.
@@ -887,7 +1032,7 @@ describe("the Live view against a running factory", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("Live: Persist source facts");
 				// The new agent is live: the observation loop may already have
 				// marked the in-flight ticket running.
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
 				// The stream follows the handoff: the new pane's read, and no
 				// focus, which is the Goto's alone.
@@ -937,7 +1082,7 @@ describe("the Live view against a running factory", () => {
 				});
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Live: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
 					"the decision",
 				);
 				// The workflow handoff row, then e: the override opens on the
@@ -948,16 +1093,17 @@ describe("the Live view against a running factory", () => {
 				);
 				await openPanel(setup);
 				// Esc drops the edit and returns to the panel it opened from:
-				// the Live view's decision sub-mode, not the decision modal.
+				// the Live view's decision sub-mode, the same box it left, not a
+				// second surface.
 				const frame = await pressEscape(
 					setup,
 					"the Live view to return",
 					(f) =>
-						f.includes("Live: Persist source facts") &&
+						f.includes("Decision: Persist source facts") &&
 						f.includes("Handoff: review") &&
 						!f.includes("Override"),
 				);
-				expect(frame).not.toContain("Decision:");
+				expect(frame).toContain("Turn log");
 				// Only the edit is dropped: the turn is still undecided, and no
 				// handoff was claimed.
 				expect(app.state.ticketState(identity)).toBe("awaiting");
@@ -1012,7 +1158,7 @@ describe("the Live view against a running factory", () => {
 				app.runner.set("herdr", ["agent", "list"], { stdout: list("done", "working") });
 				await awaitFrame(
 					setup,
-					(f) => f.includes("Live: Persist source facts") && f.includes("Handoff: review"),
+					(f) => f.includes("Decision: Persist source facts") && f.includes("Handoff: review"),
 					"the decision",
 				);
 				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
@@ -1031,7 +1177,7 @@ describe("the Live view against a running factory", () => {
 				);
 				expect(frame).not.toContain("Override");
 				expect(app.state.lastCompletion(identity)?.decision).toBe("handed-off");
-				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity));
+				expect(["handed-off", "running"]).toContain(app.state.ticketState(identity) ?? "");
 				expect(app.runner.commands()).toContain(READ_COMMAND("pane-9"));
 			},
 			WIDTH,

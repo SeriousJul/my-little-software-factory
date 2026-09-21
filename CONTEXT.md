@@ -15,15 +15,15 @@ It observes the factory and issues work to agents.
 _Avoid_: dashboard, UI
 
 **Main view**:
-The always-present base surface of the control plane. It holds two list sections (Ticket and Consultation) on the left, and one context-dependent detail pane on the right that shows the detail of the currently selected item.
+The always-present base surface of the control plane. It holds three list sections (Ticket, Consultation, and Work) on the left, and one context-dependent detail pane on the right that shows the detail of the currently selected item.
 _Avoid_: dashboard, home, screen, primary view
 
 **Section**:
-An independently collapsable list in the Main view. The Ticket section holds the ticket list; the Consultation section holds the Consultation list. Both can be expanded at the same time. A collapsed section shrinks to its header row and its rows are skipped by navigation.
+An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows.
 _Avoid_: tab, pane, view, accordion
 
 **Section header**:
-The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). A click on the header toggles that section.
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle
 
 **Response editor**:
@@ -67,9 +67,19 @@ The near-fullscreen Interaction mode above an awaiting ticket: the turn log, the
 `e` on a handoff row edits that route's settings before it starts.
 _Avoid_: action panel, decision popup
 
+**Body pane**:
+The bordered, titled region of a modal's box that holds one body by itself: the Turn log, or the Agent view of a live turn.
+Its border title names the body that shows.
+_Avoid_: section, turn log pane, log block, transcript pane, detail pane
+
+**Decision region**:
+The rows a modal pins to its floor: the held cause row and the Completion decision rows the operator confirms.
+It is bounded, so the Body pane always keeps its rows.
+_Avoid_: action bar, action region, button row, footer
+
 **Live view**:
 The near-fullscreen Interaction mode above a `handed-off` or `running` ticket: the live Agent view of the ticket's agent, streamed, and the one row it proposes: Goto.
-When the turn settles it becomes the Decision modal; when the agent goes missing it becomes the Missing modal.
+When the turn settles for the operator, the same screen carries the decision: the border re-titles from `Live:` to `Decision:` in place, the Body pane holds the Turn log, and the Decision region stands at the box's floor. When the agent goes missing it carries the Missing modal. A settled turn the factory decides for itself keeps the streaming body under the `Live:` border.
 _Avoid_: watch, live log, agent stream
 
 **Missing modal**:
@@ -93,16 +103,16 @@ _Avoid_: input, textarea, free-text row
 
 **Ticket**:
 An actionable unit of work from an external ticket source, carrying the repository it belongs to.
-An issue or pull request is a source fact, not a different factory concept.
+An issue, pull request, security advisory, Dependabot alert, or secret scanning alert is a source fact, not a different factory concept.
 _Avoid_: issue, task
 
 **Ticket source**:
 A configured feed from an external system from which the control plane gets tickets.
-GitHub issues and GitHub pull requests are separate ticket sources.
+GitHub issues, GitHub pull requests, GitHub security advisories, Dependabot alerts, and secret scanning alerts are separate ticket sources.
 _Avoid_: task source, ticket provider
 
 **Source kind**:
-The external form of a ticket, such as a GitHub issue or a GitHub pull request.
+The external form of a ticket: a GitHub issue, a GitHub pull request, a GitHub security advisory, a Dependabot alert, or a secret scanning alert.
 _Avoid_: ticket type
 
 **Source fact**:
@@ -156,7 +166,7 @@ _Avoid_: ghost ticket, stub ticket, shadow issue
 
 **Work cycle**:
 One passage of a ticket from `open` through the factory to cycle close.
-A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number.
+A cycle can hold several handoffs. Close or abandon ends the cycle and returns the ticket to `open` with an incremented cycle number. A cycle closed while its Agent still works leaves no Completion trace, and the cycle-end gates read that absence as a cycle end that holds nothing (ADR 0031).
 _Avoid_: ticket generation, run
 
 **Ticket state**:
@@ -208,13 +218,21 @@ A configured kind of Consultation that selects an Agent type and default Environ
 _Avoid_: quick template, session template
 
 **Consultation state**:
-The position of a Consultation: `opening`, `working`, `awaiting-response`, `missing`, `failed`, `closing`, or `closed`.
+The position of a Consultation: `queued`, `unscheduled`, `opening`, `working`, `awaiting-response`, `missing`, `failed`, `closing`, or `closed`.
 _Avoid_: status, Agent state
 
 **Awaiting response**:
 The Consultation state where the Agent waits for operator input and the operator has not responded or closed the Consultation.
 The Agent waits when it has settled its turn, or when it shows an approval or question UI (Blocked).
 _Avoid_: blocked, idle, done
+
+**Queued**:
+The Consultation state where the Consultation waits in the Work queue for a free Parallel limit seat. It holds no environment and no Agent until the queue's pickup starts it.
+_Avoid_: pending, waiting to start
+
+**Unscheduled**:
+The Consultation state where the Consultation exists but is not started and is not in the Work queue. It waits for the operator to schedule it, start it, or delete it.
+_Avoid_: parked, on hold
 
 **Response draft**:
 Operator input saved for an `awaiting-response` Consultation but not yet accepted by its Agent.
@@ -262,6 +280,19 @@ The condition where the latest Agent poll failed or was unreadable.
 The last known Consultation states stay visible and cannot become `missing` from that poll.
 _Avoid_: missing Agent, Herdr offline
 
+**Spinner**:
+The animated control of the shared control library: a braille glyph that steps one frame every about 100 ms beside the written word the surface names. It drives its own frames the way the Decision modal's pop-in drives its own, so a frame snapshot taken at the mount reads the first frame and holds. The word carries the meaning, so the no-color presentation keeps it and drops only the color. A ticket in the Starting window wears it in place of its state badge (ADR 0030).
+_Avoid_: progress bar, loader animation, hourglass
+
+**Starting**:
+The window during which a ticket's Handoff is claimed and not yet settled, or the ticket is `handed-off`: the agent is being started, or it has started and its work is not yet observed.
+The ticket's row and detail wear the spinner face in place of their state badge during the window (ADR 0030). A claim a crashed run left behind is not this window: the next boot settles it as a failed start, so the ticket wears no starting face over it (ADR 0041).
+_Avoid_: boot, launch, pending, startup
+
+**Queue wait**:
+The window in which a ticket's manual start waits in the Work queue for a free Parallel limit seat. The ticket keeps its `open` state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket `open`.
+_Avoid_: queued state, pending, on hold
+
 **Startup grace**:
 The window from a handoff during which the agent's idle report is its boot, not a turn end, and a pane herdr has not listed yet is its boot, not a Missing agent (ADR 0021).
 The window holds until the agent's session record shows the turn ended: a working report marks the ticket running, but it does not end the window, because herdr's status is not evidence the turn ran (ADR 0017). Past the window, a turn the record does not show settles `no-turn` and holds.
@@ -287,10 +318,27 @@ The condition where a Consultation cannot continue or close without an explicit 
 It stays separate from `awaiting-response`, where the Agent needs ordinary input.
 _Avoid_: awaiting response, blocked
 
+**Recovery panel**:
+The Consultation confirmation Enter opens on a broken or stuck record, with the rows that record can still take: Recover and Close on an interrupted opening, Replace and Close on a missing or failed one.
+A `closing` Consultation keeps its recovery in the close panel's Retry and Force-close rows instead.
+_Avoid_: error dialog, retry box, close panel
+
+**Close**:
+The operator action that ends live work, key `w` in both sections.
+On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031).
+On a Consultation it stops the Agent and cleans up its resources, keeping the worktree and branch.
+It asks for confirmation when it stops a live agent.
+_Avoid_: stop, kill, abort, cancel
+
 **Force-close**:
 Closing a Consultation record after resource cleanup cannot be confirmed.
 It records the resources that might remain and never removes a worktree or branch.
 _Avoid_: abandon, force delete
+
+**Goto**:
+The control that focuses the Agent's pane in herdr from a Ticket or Consultation row, key `g` in both sections.
+It is navigation: it changes no ticket, work cycle, or Consultation record.
+_Avoid_: jump, follow, attach
 
 **Handoff**:
 Assigning a ticket to an agent type and an environment with a task type, and starting the agent's execution.
@@ -303,14 +351,25 @@ An unresolved attempt prevents another handoff of the same ticket after a crash.
 _Avoid_: pending ticket, handoff state
 
 **Auto-handoff mode**:
-The session-level mode in which the control plane hands off eligible open tickets by itself and decides their settled turns without the operator, within the configured limits.
-The config file carries the startup default; the UI toggle is session-only.
+The mode of the factory in which the control plane hands off eligible open tickets by itself and decides their settled turns without the operator, within the configured limits.
+The mode is factory state on the state file: it survives a restart and a dev reload, and a fresh state file starts with the mode off. The operator changes it with the `a` key in the Ticket section.
 _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
-The maximum number of agents in flight. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, and by a started agent still inside its Startup grace: all of them run or are about to run (ADR 0021).
-It gates auto-handoff only; a manual handoff is always allowed.
+The maximum number of works in flight, counting a ticket Handoff and a Consultation alike. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, by a started agent still inside its Startup grace (ADR 0021), and by a Consultation in `opening` or `working`.
+It gates every start: a manual start that cannot take a seat enters the Work queue instead of starting, and an automatic start waits for a seat.
 _Avoid_: concurrency cap, max agents
+
+**Work queue**:
+The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state. The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
+When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record. A removal ends the whole waiting start, including a claim the pickup already made and parked.
+_Avoid_: dispatch queue, pending list, execution queue
+
+**Force-dispatch**:
+The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
+It re-runs every start check the normal pickup runs and skips only the cap.
+A force-dispatch that fails leaves the item out of the queue, where a Handoff pickup failure keeps it: a Consultation's start that fails is a terminal record, and its item leaves with it.
+_Avoid_: manual override, bypass
 
 **Handoff limit**:
 The per-ticket cap on started handoffs that stops the close-and-rehandoff loop.
@@ -421,14 +480,9 @@ _Avoid_: dirty checkout, parallel limit
 
 **Leftover environment**:
 The workspace, tab, or Agent of a ticket's closed Handoff that Herdr still holds after its Close cleanup.
-It is a durable fact on the ticket, visible in its row and in its detail.
+It is a durable fact on the ticket, visible in its row and in its detail, and its cleanup runs in herdr, not in the control plane.
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
-
-**Clear**:
-The one operator action that retries the Close cleanup of a ticket's Leftover environment.
-A forced removal is its own explicit choice within the action, because it discards a dirty checkout and stops the Agents in the workspace.
-_Avoid_: force delete, cleanup retry
 
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
@@ -439,7 +493,7 @@ The settings are: Agent type, Environment kind, Task type, Model, Thinking level
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the auto-handoff default, the limits, the priority label list, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
+The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the limits, the priority label list, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
 A missing file is seeded from the Default configuration on first run. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 
@@ -477,3 +531,10 @@ _Avoid_: executor, spawner
 The static site that GitHub Pages publishes from the `docs/` folder.
 It shows the published subset (the ADRs, the standards, and the guides) and keeps the agent instruction, verification, and research folders out of the build.
 _Avoid_: website, docs site, blog
+
+**Worktree base**:
+The commit a new worktree environment is created from.
+It is the remote default branch of the repository's origin after a fresh fetch, and falls back to the local checkout's HEAD when the fetch or the ref is unavailable, with a note on the handoff.
+The default branch comes from the `origin/HEAD` symref, then `origin/main`, then `origin/master`.
+The same rule serves a ticket handoff worktree and a Consultation worktree.
+_Avoid_: base commit, starting point, worktree origin

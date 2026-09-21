@@ -8,20 +8,23 @@
  * The pseudo-terminal suite (test/executable.test.ts) still pins the shipped
  * bin end to end; these tests pin the words and the order.
  */
+
+import { Database } from "bun:sqlite";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
-import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
-
 import { defaultConfigPath, validateConfig } from "../src/config.ts";
 import {
 	configPathFromArgs,
+	installStateShutdown,
 	loadStartupConfig,
 	openStartupState,
 	runStartup,
 } from "../src/startup.ts";
+import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
 const USAGE = "usage: factory [--config <path>]";
 
@@ -55,7 +58,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
-	vi.unstubAllEnvs();
+	unstubAllEnvs();
 });
 
 /** A valid config body, pointed at the state file the case names. */
@@ -174,6 +177,139 @@ describe("the startup state open", () => {
 		if (opened.ok) return;
 		expect(opened.reason).toContain(`cannot open factory state at ${at}`);
 	});
+
+	/**
+	 * The remnant a dead run leaves in the state file: the ticket and its
+	 * handoff claim, the claim unsettled the way a crash or a watch reset
+	 * leaves it.
+	 */
+	function plantRemnant(path: string): void {
+		const db = new Database(path);
+		db.prepare(
+			"INSERT INTO tickets(identity, state, work_cycle) VALUES ('github:github.com:I_5', 'open', 1)",
+		).run();
+		db.prepare(
+			"INSERT INTO handoff_attempts(attempt_id, ticket_identity, work_cycle, choice_json, stage, created_at) VALUES ('remnant', 'github:github.com:I_5', 1, '{}', 'starting-agent', '2026-09-20T18:55:34.000Z')",
+		).run();
+		db.close();
+	}
+
+	test("opening settles a remnant claim and reports the recovery as a note", () => {
+		const path = inTempDir("state-recovery")("state.sqlite");
+		const opened = openStartupState(path);
+		if (!opened.ok) throw new Error(opened.reason);
+		expect(opened.notes).toEqual([]);
+		opened.state.close();
+		plantRemnant(path);
+
+		const next = openStartupState(path);
+		expect(next.ok).toBe(true);
+		if (!next.ok) return;
+		expect(next.notes).toEqual(["recovered 1 handoff claim left unsettled by the previous run"]);
+		// The remnant settled as a failed start, so the ticket's recovery
+		// block is gone with it.
+		const db = new Database(path);
+		const remnant = db
+			.prepare(
+				"SELECT stage, resolved_at, failure_reason FROM handoff_attempts WHERE attempt_id = 'remnant'",
+			)
+			.get() as { stage: string; resolved_at: string | null; failure_reason: string | null };
+		expect(remnant.stage).toBe("failed");
+		expect(remnant.resolved_at).not.toBeNull();
+		expect(remnant.failure_reason).toBe(
+			"the run that claimed this handoff ended before it settled it",
+		);
+		db.close();
+		next.state.close();
+	});
+});
+
+describe("the state shutdown", () => {
+	/**
+	 * A process that records what the shutdown attaches to.
+	 *
+	 * The recorder stands in for the real process, so the test pulls the hook it
+	 * wrote instead of sending a signal to the test runner, and the exit it asks
+	 * for is a mark on a list instead of the end of the suite.
+	 */
+	function recordingProcess() {
+		const hooks = new Map<string, () => void>();
+		const exits: number[] = [];
+		return {
+			hooks,
+			exits,
+			on(signal: string, listener: () => void) {
+				hooks.set(signal, listener);
+			},
+			exit(code?: number) {
+				exits.push(code ?? 0);
+			},
+			/** Run one recorded hook the way the process would. */
+			fire(signal: string): void {
+				const hook = hooks.get(signal);
+				expect(hook, `no hook recorded for ${signal}`).toBeDefined();
+				hook?.();
+			},
+		};
+	}
+
+	/** An open state and its lease, at a path of its own. */
+	function leasedState(prefix: string) {
+		const path = inTempDir(prefix)("state.sqlite");
+		const opened = openStartupState(path);
+		if (!opened.ok) throw new Error(opened.reason);
+		return { path, state: opened.state };
+	}
+
+	test("the shutdown writes an exit hook and both end signals", () => {
+		const { state } = leasedState("shutdown-hooks");
+		const target = recordingProcess();
+		installStateShutdown(state, target);
+		expect([...target.hooks.keys()].sort()).toEqual(["SIGHUP", "SIGTERM", "exit"]);
+		state.close();
+	});
+
+	test("the exit hook closes the state", () => {
+		const { path, state } = leasedState("shutdown-exit");
+		const target = recordingProcess();
+		installStateShutdown(state, target);
+		target.fire("exit");
+		// The lease is back on the shelf: the next control plane opens.
+		const next = openStartupState(path);
+		expect(next.ok).toBe(true);
+		if (next.ok) next.state.close();
+	});
+
+	test.each(["SIGTERM", "SIGHUP"])(
+		"a run that ends on %s gives the lease back before it ends",
+		(signal: string) => {
+			const { path, state } = leasedState(`shutdown-${signal}`);
+			const target = recordingProcess();
+			installStateShutdown(state, target);
+			target.fire(signal);
+			// The run asks for the exit, so an app that installs this is still
+			// stoppable by kill instead of shrugging the signal off.
+			expect(target.exits).toEqual([0]);
+			// This is the `bun run dev` shape: the watch reset delivers the signal,
+			// then re-runs the boot in the same process, so the next boot is the one
+			// that would otherwise read this process's own pid in the lease row and
+			// stop with "state database is already in use".
+			const next = openStartupState(path);
+			expect(next.ok).toBe(true);
+			if (next.ok) next.state.close();
+		},
+	);
+
+	test("the signal path and the exit hook together still close once", () => {
+		const { state } = leasedState("shutdown-twice");
+		const target = recordingProcess();
+		installStateShutdown(state, target);
+		// The signal closes the state and ends the run; ending the run fires the
+		// exit hook, which finds the state already closed.
+		target.fire("SIGTERM");
+		expect(() => target.fire("exit")).not.toThrow();
+		expect(target.exits).toEqual([0]);
+	});
 });
 
 describe("the whole startup", () => {
@@ -184,7 +320,7 @@ describe("the whole startup", () => {
 
 	test("an invalid config stops before the state opens", async () => {
 		const stateHome = inTempDir("run-config")("state-home");
-		vi.stubEnv("XDG_STATE_HOME", stateHome);
+		stubEnv("XDG_STATE_HOME", stateHome);
 		const at = inTempDir("run-config")("invalid.toml");
 		writeFileSync(at, "default-agent = 42\n", "utf8");
 		const result = await runStartup(["--config", at]);
@@ -224,7 +360,7 @@ describe("the whole startup", () => {
 		// open, which fails last.
 		const emptyBin = inTempDir("run-state-warn")("empty-bin");
 		mkdirSync(emptyBin, { recursive: true });
-		vi.stubEnv("PATH", emptyBin);
+		stubEnv("PATH", emptyBin);
 		const result = await runStartup(["--config", configPath]);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
@@ -256,7 +392,7 @@ describe("the whole startup", () => {
 
 	test("a missing config is seeded from the Default configuration with the note", async () => {
 		const stateHome = inTempDir("run-defaults")("state-home");
-		vi.stubEnv("XDG_STATE_HOME", stateHome);
+		stubEnv("XDG_STATE_HOME", stateHome);
 		const missing = inTempDir("run-defaults")("does-not-exist.toml");
 		const result = await runStartup(["--config", missing]);
 		expect(result.ok).toBe(true);

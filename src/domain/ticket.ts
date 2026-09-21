@@ -26,18 +26,16 @@ export const HANDOFF_ENVIRONMENT_KINDS = ["live-worktree", "worktree"] as const;
  * The trace records the decisions that decide the settled turn:
  * `handed-off` and `auto-handed-off` started a workflow handoff from the
  * awaiting state; `closed` and `auto-closed` ended the work cycle;
- * `abandoned` ended a cycle whose agent went missing. `goto` is a state
- * move, not a completion decision: it refocused the existing agent and
- * moved the ticket back to running, and the trace does not record it. The
- * turn's pending trace stays pending, and the next settle refreshes it.
+ * `abandoned` ended a cycle whose agent went missing. Goto is navigation,
+ * not a decision (ADR 0033): it focuses the agent's pane and records
+ * nothing here.
  */
 export type CompletionDecision =
 	| "closed"
 	| "auto-closed"
 	| "abandoned"
 	| "handed-off"
-	| "auto-handed-off"
-	| "goto";
+	| "auto-handed-off";
 
 /** One settled turn of one handoff, as the control plane stored it. */
 export interface Completion {
@@ -286,20 +284,27 @@ export type TicketMarker = "blocked" | "missing";
  *   first: its agent may still be booting.
  * - awaiting -> open: the operator or an auto-close decision closed the
  *   work cycle.
+ * - handed-off/running -> open: the operator closed a work cycle whose turn
+ *   never settled (ADR 0031). No trace row records that end.
  * - awaiting -> handed-off: a workflow handoff or a restart started a new
  *   turn in the same cycle.
- * - awaiting -> running: goto refocused the existing agent, or the poll
- *   saw the agent working again on its still-pending turn.
+ * - awaiting -> running: the poll saw the agent working again on its
+ *   still-pending turn.
  *
  * A settle may land directly from handed-off: an agent can finish inside
  * one poll interval, before a working observation ever saw it. The settle
  * then waits out the startup grace, the window in which a booted agent
  * reports idle before it picks up the prompt and starts working.
+ *
+ * The two in-flight states reach `open` directly, because key `w` closes a
+ * cycle the agent is still working in (ADR 0031). That close ends the cycle
+ * with no completion trace, so the cycle-end gates read no row for it: the
+ * move stands in the state line, and no trace row carries it.
  */
 const TRANSITIONS: Record<TicketState, readonly TicketState[]> = {
 	open: ["handed-off"],
-	"handed-off": ["running", "awaiting"],
-	running: ["awaiting"],
+	"handed-off": ["running", "awaiting", "open"],
+	running: ["awaiting", "open"],
 	awaiting: ["open", "handed-off", "running"],
 };
 

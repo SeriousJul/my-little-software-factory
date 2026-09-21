@@ -8,10 +8,11 @@
  * and only then earn the m Message hint and the view, which holds the text
  * it opened with.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 import { padToWidth, truncateToWidth, widthOf } from "../src/components/text.ts";
 import {
 	actionBarRowOf,
@@ -511,6 +512,12 @@ describe("the permanent Message line", () => {
 	test("states an operation notice, and lets a refusal take the line back", async () => {
 		await withApp(
 			async (setup) => {
+				// The mode is factory state, not a config default (ADR 0036): the
+				// operator's `a` key is the only way onto it. A plane with no state
+				// draws no mode line, so the flip is not visible here; the notice it
+				// produces is what this test reads.
+				setup.mockInput.pressKey("a");
+				await settle(setup);
 				for (const row of [4, 5, 6]) {
 					await press(setup, "j", "the next ticket", (f) => markerRowOf(f) === row);
 				}
@@ -541,7 +548,7 @@ describe("the permanent Message line", () => {
 			WIDTH,
 			HEIGHT,
 			{
-				config: { ...BASE_CONFIG, autoHandoff: true },
+				config: BASE_CONFIG,
 				runner: new FakeRunner(),
 				initialTickets: SAMPLE_TICKETS,
 			},

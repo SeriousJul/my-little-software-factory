@@ -5,7 +5,7 @@
  * A fake runner holds the lists, so the checks run against a runtime that
  * answers, a runtime that refuses, and a kind that reports no list at all.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import type { FactoryConfig } from "../src/config.ts";
 import { validateConfiguredModels } from "../src/model-settings.ts";

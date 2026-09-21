@@ -8,7 +8,7 @@
  * aliases, the sibling pairs, and the color grammar are vendored from herdr
  * 0.9.0 (ADR 0024).
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import {
 	BUILTIN_THEMES,

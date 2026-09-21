@@ -17,11 +17,12 @@
  * this file is the seam that verifies the executable boundary, and a skipped
  * required check is not a pass.
  */
+
+import { afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
 
 import { openControlPlanePty, type PtySession } from "./executable-pty.ts";
 

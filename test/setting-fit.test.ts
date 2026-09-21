@@ -1,5 +1,5 @@
 /** The public Setting fit seam: one rule and one sentence for each cause. */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "bun:test";
 
 import type { AgentTypeConfig } from "../src/config.ts";
 import {
@@ -13,6 +13,7 @@ import {
 	settingFit,
 	thinkingSettingFit,
 	tokenCountDigits,
+	type UnfitVerdict,
 } from "../src/setting-fit.ts";
 import { FakeRunner } from "./fake-runner.ts";
 
@@ -153,10 +154,12 @@ describe("Setting fit", () => {
 			thinking: "high",
 			contextWindow: "0",
 		});
-		expect(firstFailure(verdicts)).toEqual(verdicts.model);
-		expect(firstFailure({ ...verdicts, model: { ok: true } })).toEqual(verdicts.thinking);
+		expect(firstFailure(verdicts)).toEqual(verdicts.model as UnfitVerdict);
+		expect(firstFailure({ ...verdicts, model: { ok: true } })).toEqual(
+			verdicts.thinking as UnfitVerdict,
+		);
 		expect(firstFailure({ ...verdicts, model: { ok: true }, thinking: { ok: true } })).toEqual(
-			verdicts.contextWindow,
+			verdicts.contextWindow as UnfitVerdict,
 		);
 	});
 

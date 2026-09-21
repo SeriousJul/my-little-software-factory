@@ -24,7 +24,6 @@ default-environment = "worktree"
 default-task-type = "implement"
 attention-bell = true
 interaction-exit-key = "f12"
-auto-handoff = false
 max-parallel-agents = 2
 agent-poll-interval-seconds = 5
 completion-message-lines = 200
@@ -39,11 +38,11 @@ maximum-speed = 6
 # An ordered list of labels that ranks tickets: the first entry is the
 # highest rank. A ticket that carries one of these labels ranks by it. The
 # operator bumps a rank from the ticket detail, and a bump beats the label.
-# An "off" bump sets the ticket unranked. Omitted: tickets are not ranked
-# and the list keeps its previous order.
-#
-# [priority]
-# labels = ["critical", "high", "low"]
+# An "off" bump sets the ticket unranked. Delete the table: tickets are not
+# ranked and the list keeps its previous order.
+
+[priority]
+labels = ["critical", "high", "low"]
 
 [agents.pi]
 kind = "pi"
@@ -67,13 +66,22 @@ context-window = "--autocompact {value}"
 
 [consultation-types.consult]
 agent = "pi"
-environment = "live-worktree"
 template = "{input}"
 
 # --- The workflow machine (ADR 0027) --------------------------------------
 # The states of the label workflow. A state's match names the labels
 # that put a ticket on it; its task is what the plane suggests for a ticket
 # that sits there. Order decides: the first matching state wins.
+#
+# The transitions write `ready-for-review`, `ready-to-ship`, and
+# `needs-work` on pull requests, and a write that names a label the
+# repository does not have fails. Create the labels a transition writes
+# in the repository before a fire can succeed: `gh label create
+# <name> --repo <owner>/<name>`, or the repository's labels page.
+#
+# A label a state match names but no transition writes, such as
+# `ready-for-agent` above, is yours: the plane's fire leaves it alone, so a
+# state may gate on a scoping label the machine never touches.
 
 [[states]]
 name = "ready-for-agent"
@@ -102,6 +110,28 @@ task-type = "merge"
 [states.match]
 source-kind = "github-pull-request"
 labels-any = ["ready-to-ship"]
+
+# The security feeds: one state per source kind, matching without a label
+# condition. The severity label is ranking data, not a gate. A finding that
+# its task completes rests on the same-type hold while the item still lists
+# upstream, the way a closed issue rests off the issue list.
+[[states]]
+name = "security-advisory"
+task-type = "resolve-security-advisory"
+[states.match]
+source-kind = "github-security-advisory"
+
+[[states]]
+name = "security-dependabot-alert"
+task-type = "resolve-dependabot-alert"
+[states.match]
+source-kind = "github-dependabot-alert"
+
+[[states]]
+name = "security-secret-alert"
+task-type = "resolve-secret-scanning-alert"
+[states.match]
+source-kind = "github-secret-scanning-alert"
 
 # A pull request the plane has not put in the machine parks: the plane offers
 # no task for it, so it hands off nothing, and a label write is the only
@@ -254,6 +284,150 @@ pull-request-facts = ["needs-work"]
 [[task-types.merge.transition.branches]]
 pull-request-facts = []
 
+# --- Security task types ----------------------------------------------------
+# One task type per security ticket source, a sibling of implement. Each one
+# carries a template that resolves its kind of finding: verify the finding,
+# make the fix, and open a pull request. From there the review, rework, and
+# merge workflow takes over. The transition writes ready-for-review on the
+# opened pull request and auto-advances into its review position; a turn
+# that opened no pull request settles closed, and the completed task type
+# rests the ticket while the item still lists upstream.
+
+[task-types.resolve-security-advisory]
+thinking = "high"
+template = '''
+Resolve the following security advisory {external-key}: {title}.
+
+### Instructions
+
+1. **Understand the Advisory**
+   - Read the advisory in full: severity, CWEs, affected component, vulnerable range, patched version, CVSS score, and proof of concept.
+
+2. **Verify the Report**
+   - Confirm the vulnerable code exists in this repository and the vulnerable range applies to the code in use.
+   - When the report is invalid or does not apply to this code, stop: open no pull request and explain in your final message exactly why.
+
+3. **Design the Fix**
+   - Make the smallest change that removes the root cause.
+   - Follow the upstream fix where it fits this code.
+   - Fix sibling call sites that carry the same flaw in the same pull request.
+
+4. **Develop**
+   - Implement the fix.
+   - Add a regression test that fails on the vulnerable behavior and passes on the fix.
+
+5. **Commit and Open Pull Request**
+   - Commit all changes to this branch.
+   - Open a pull request linking the source item by its URL.
+   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+[task-types.resolve-security-advisory.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+auto-advance = true
+
+[task-types.resolve-dependabot-alert]
+thinking = "high"
+template = '''
+Resolve the following Dependabot alert {external-key}: {title}.
+
+### Instructions
+
+1. **Read the Alert**
+   - Note the package, the ecosystem, the manifest, the vulnerable range, and the first patched version.
+
+2. **Verify the Alert**
+   - Find the package at a vulnerable version in this repository.
+   - A transitive dependency lands on the direct dependency or the lockfile; fix it there.
+
+3. **Check for an Existing Pull Request**
+   - If a pull request already fixes this alert, do not open a competing one; explain in your final message which pull request covers it.
+
+4. **Upgrade**
+   - Upgrade to the first patched version with the smallest change that leaves the vulnerable range.
+   - On a major bump, apply the minimal breaking migration.
+   - Update the lockfile with the project's package manager.
+   - Run the test suite.
+   - When no patched version exists, remove or replace the dependency and record the choice in the pull request description.
+
+5. **Commit and Open Pull Request**
+   - Commit all changes to this branch.
+   - Open a pull request linking the source item by its URL.
+   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+[task-types.resolve-dependabot-alert.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+auto-advance = true
+
+[task-types.resolve-secret-scanning-alert]
+thinking = "high"
+template = '''
+Resolve the following secret scanning alert {external-key}: {title}.
+
+### Instructions
+
+1. **Read the Alert**
+   - Note the secret type, the file, the lines, and the commit.
+
+2. **Rotate First**
+   - Rotate the exposed credential from your environment when you can, and record in the pull request description exactly what was rotated.
+   - When you cannot rotate it, state in the pull request description exactly which credential to rotate: the alert stays live until rotation, and a human finishes the fix.
+
+3. **Remove the Secret**
+   - Remove the secret from the current state of the code and replace it with the project's environment variable or secret store reference.
+   - When the project has neither, introduce the smallest convention that fits.
+
+4. **Find Every Copy**
+   - Search the repository for every other copy of the secret and report each one in the pull request description.
+
+5. **History**
+   - Do not rewrite git history in the pull request.
+   - Note in the pull request description that history must be purged after rotation, for example with git filter-repo.
+
+6. **Never Print the Secret**
+   - Never print the secret value in the pull request, in a comment, or in a test.
+
+7. **Commit and Open Pull Request**
+   - Commit all changes to this branch.
+   - Open a pull request linking the source item by its URL.
+   - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+[task-types.resolve-secret-scanning-alert.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+auto-advance = true
+
 # --- Ticket sources -------------------------------------------------------
 # No source is active out of the box, so the control plane starts with an
 # empty ticket list on any machine. Add one block per feed: uncomment the
@@ -266,3 +440,26 @@ pull-request-facts = []
 # refresh-interval-seconds = 60
 # repositories = ["owner/name"]
 # host = "github.com"
+
+# The three security feeds read the repository security tab: advisories in
+# triage, draft, and published state; open Dependabot alerts; and open secret
+# scanning alerts. They take no filter, they reuse the auth table, and a
+# token with the repo or security_events scope reads all three.
+
+# [[sources]]
+# name = "my-security-advisories"
+# kind = "github-security-advisories"
+# refresh-interval-seconds = 300
+# repositories = ["owner/name"]
+
+# [[sources]]
+# name = "my-dependabot-alerts"
+# kind = "github-dependabot-alerts"
+# refresh-interval-seconds = 300
+# repositories = ["owner/name"]
+
+# [[sources]]
+# name = "my-secret-alerts"
+# kind = "github-secret-scanning-alerts"
+# refresh-interval-seconds = 300
+# repositories = ["owner/name"]

@@ -25,9 +25,10 @@ closes like any other, and it holds a parallel slot while it works.
 What the poll cannot reclaim stays as a fact on the ticket (ADR 0012): a Close
 cleanup that fails, or a handoff that meets its own leftover name, records the
 herdr environment that is still alive, and the ticket wears the `leftover`
-marker until the operator clears it with `w`. That handoff still starts: it
-takes the ticket's cycle name, and it works beside the leftover agent in the
-reused workspace until someone ends it.
+marker until the operator ends the environment in herdr - the control plane
+keeps no clear of its own (ADR 0032). That handoff still starts: it takes the
+ticket's cycle name, and it works beside the leftover agent in the reused
+workspace until someone ends it.
 
 When the agent settles its turn (herdr reports it as done, or it is idle at
 the end of the turn), the ticket moves to `awaiting`. The
@@ -50,7 +51,19 @@ and it is not retried.
 
 In manual mode, `awaiting` waits for the operator. Enter opens the decision
 modal, which states what the transition wrote and offers the handoff of the
-position those labels derived, or the close of the cycle.
+position those labels derived, or the close of the cycle. Key `w` closes it
+too, from either Ticket pane and behind a confirmation, without the turn log
+beside it (ADR 0031): the two routes run one close, so they cannot drift.
+
+The same key closes a cycle whose turn never settled. An in-flight ticket -
+`handed-off` or `running` - has no settled turn to decide, so its close ends
+the cycle with no completion trace at all: there is no cause, no turn log,
+and no message to record of a turn that did not finish, and the handoff row
+stays the record of the work. The ticket returns to open with its cycle
+incremented, the Agent stops through the Close cleanup, and the closed cycle
+counts toward the Handoff limit like any other. A close that meets a Handoff
+still building its agent waits for it on the shared environment seat, so a
+hung start still ends in the close the operator asked for.
 
 Auto-handoff mode decides without the operator, within the configured
 limits:
@@ -77,7 +90,8 @@ limits:
 	poll. A blocked agent still counts; a missing agent holds no slot.
 - The per-ticket handoff limit stops the close-and-rehandoff loop. When a
 ticket reaches it, auto-handoff leaves it open. A manual handoff may pass
-	the limit.
+	the limit. A cycle closed with no trace counts toward it like a cycle
+	closed by a decision, because the limit counts started handoffs.
 
 Both limits gate auto-handoff only. A manual handoff is always allowed.
 
@@ -115,6 +129,16 @@ turn that started it. It never blocks a manual handoff. The open handoff and
 the restart run only in auto mode; the route block applies in manual mode
 too, where an auto-advance transition still routes without the operator,
 exactly like the Parallel limit. A Consultation never contributes to the pause.
+
+Both cycle-end gates read the cycle that ended last, and a cycle that ended
+with no trace row is one of them (ADR 0031). The re-verify gate waits for the
+sources to re-read the ticket since a finished turn's close, because that
+agent may have merged the pull request or closed the issue; a cycle closed over
+an unsettled turn changed no such fact, so the absent row asks for no re-read
+and holds no ticket. The Same-type hold reads the same row, and reads a
+missing one the way it reads a cause-less one: neither says the work finished,
+so neither holds the next handoff. An older cycle's finished turn is not this
+cycle's fact, and never becomes the reason to withhold it.
 
 A missing agent in auto mode restarts the handoff once, with the last
 message as the previous message. At the per-ticket handoff limit, the

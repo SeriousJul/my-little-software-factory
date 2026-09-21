@@ -6,10 +6,11 @@
  * command, so a drift in the sequence fails the suite. No test touches a
  * real herdr session.
  */
+
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
 import type { FactoryConfig } from "../src/config.ts";
 import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
@@ -126,6 +127,17 @@ function conventionCheckout(runner: FakeRunner): void {
 	runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
 	runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], {
 		stdout: "https://github.com/acme/billing.git\n",
+	});
+}
+
+/**
+ * Stub the worktree base rule: the origin/HEAD symref names the default
+ * branch and the fetch of its single ref succeeds, so the base is the
+ * fetched remote ref `origin/<branch>`.
+ */
+function stubRemoteDefaultBranch(runner: FakeRunner, branch = "main"): void {
+	runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+		stdout: `refs/remotes/origin/${branch}\n`,
 	});
 }
 
@@ -329,6 +341,9 @@ describe("handOffTicket: the live worktree sequence", () => {
 			`herdr agent start ${AGENT} --kind pi --pane pane-1`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
+		// The live worktree environment takes no fetch: the operator's own
+		// checkout stays under their control.
+		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
 	});
 
 	test("retries a busy fresh pane until its shell is available", async () => {
@@ -381,7 +396,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		stubRemoteDefaultBranch(runner);
 		runner.set(
 			"herdr",
 			[
@@ -392,7 +407,7 @@ describe("handOffTicket: the live worktree sequence", () => {
 				"--branch",
 				"factory/7-retry-policy-for-webhooks",
 				"--base",
-				"abc123",
+				"origin/main",
 				"--no-focus",
 			],
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
@@ -551,13 +566,13 @@ describe("handOffTicket: the live worktree sequence", () => {
 });
 
 describe("handOffTicket: the worktree sequence", () => {
-	test("checks the branch, reads HEAD, creates the worktree, starts the agent, sends the prompt", async () => {
+	test("checks the branch, fetches the remote default branch, creates the worktree, starts the agent, sends the prompt", async () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);
 		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		stubRemoteDefaultBranch(runner);
 		runner.set(
 			"herdr",
 			[
@@ -568,7 +583,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--branch",
 				"factory/7-retry-policy-for-webhooks",
 				"--base",
-				"abc123",
+				"origin/main",
 				"--no-focus",
 			],
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
@@ -581,15 +596,221 @@ describe("handOffTicket: the worktree sequence", () => {
 		);
 
 		expect(outcome.status).toBe("ok");
+		// The base is the fetched remote default branch, and a clean fetch
+		// leaves no fallback note.
+		expect(outcome.notes).toBeUndefined();
 		expect(runner.commands()).toEqual([
 			`git -C ${CHECKOUT} rev-parse --git-dir`,
 			`git -C ${CHECKOUT} remote get-url origin`,
 			`git -C ${CHECKOUT} branch --list factory/7-retry-policy-for-webhooks`,
-			`git -C ${CHECKOUT} rev-parse HEAD`,
-			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base abc123 --no-focus`,
+			// The base rule checks for a usable origin on its own...
+			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${CHECKOUT} symbolic-ref refs/remotes/origin/HEAD`,
+			`git -C ${CHECKOUT} fetch origin main`,
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base origin/main --no-focus`,
 			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
+	});
+
+	test("with no origin/HEAD symref, detection falls back to origin/main", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			code: 1,
+			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The symref was tried first, then origin/main; the fetch pulled the
+		// one detected ref.
+		expect(runner.commands()).toContain(`git -C ${CHECKOUT} symbolic-ref refs/remotes/origin/HEAD`);
+		expect(runner.commands()).toContain(
+			`git -C ${CHECKOUT} rev-parse --verify --quiet origin/main^{commit}`,
+		);
+		expect(runner.commands()).toContain(`git -C ${CHECKOUT} fetch origin main`);
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base origin/main --no-focus`,
+		);
+	});
+
+	test("a failed fetch starts on the local HEAD with a note naming the base and the reason", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner);
+		runner.set("git", ["-C", CHECKOUT, "fetch", "origin", "main"], {
+			code: 128,
+			stderr: "fatal: unable to access: Network is down\n",
+		});
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123def456",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		// The handoff still starts, on the local HEAD...
+		expect(outcome.status).toBe("ok");
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base abc123def456 --no-focus`,
+		);
+		// ...and the note names the base actually used (ref name plus short
+		// sha) and the reason for the fallback.
+		expect(outcome.notes?.worktreeBase).toBe(
+			"the worktree base fell back to HEAD abc123d: fetching origin/main failed: fatal: unable to access: Network is down",
+		);
+	});
+
+	test("no default branch ref on the remote falls back to the local HEAD with a note", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
+			code: 1,
+			stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref\n",
+		});
+		runner.set(
+			"git",
+			["-C", CHECKOUT, "rev-parse", "--verify", "--quiet", "origin/main^{commit}"],
+			{
+				code: 1,
+			},
+		);
+		runner.set(
+			"git",
+			["-C", CHECKOUT, "rev-parse", "--verify", "--quiet", "origin/master^{commit}"],
+			{
+				code: 1,
+			},
+		);
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123def456",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// No fetch ran: there was no ref to fetch.
+		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base abc123def456 --no-focus`,
+		);
+		expect(outcome.notes?.worktreeBase).toBe(
+			"the worktree base fell back to HEAD abc123d: no default branch found on origin (tried the origin/HEAD symref, then origin/main, then origin/master)",
+		);
+	});
+
+	test("a repository without a usable origin falls back to the local HEAD with a note", async () => {
+		const sibling = join(HOME, "src", "billing_1");
+		const runner = new FakeRunner();
+		// The convention checkout has no verifiable origin: resolution bends
+		// to a sibling clone and warns about it.
+		runner.set("git", ["-C", CHECKOUT, "rev-parse", "--git-dir"], { stdout: ".git\n" });
+		runner.set("git", ["-C", CHECKOUT, "remote", "get-url", "origin"], { code: 1 });
+		// The sibling is a local-only repository: no origin remote to fetch
+		// from, so the base is the checkout's own HEAD.
+		runner.set("git", ["-C", sibling, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		runner.set("git", ["-C", sibling, "remote", "get-url", "origin"], { code: 1 });
+		runner.set("git", ["-C", sibling, "rev-parse", "HEAD"], { stdout: "abc123def456\n" });
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				sibling,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--base",
+				"abc123def456",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The handoff ran on the sibling the resolution bent to...
+		expect(runner.commands()).toContain(`git clone https://github.com/acme/billing.git ${sibling}`);
+		// ...and no fetch ran: there was no origin to fetch from.
+		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
+		expect(runner.commands()).toContain(
+			`herdr worktree create --cwd ${sibling} --branch factory/7-retry-policy-for-webhooks --base abc123def456 --no-focus`,
+		);
+		// The fallback note and the resolution warning ride the same channel.
+		expect(outcome.notes?.worktreeBase).toBe(
+			"the worktree base fell back to HEAD abc123d: no usable origin remote",
+		);
+		expect(outcome.notes?.warning).toContain("no verifiable origin remote");
 	});
 
 	test("an existing branch reuses the open worktree workspace with a fresh tab", async () => {
@@ -638,9 +859,11 @@ describe("handOffTicket: the worktree sequence", () => {
 			`herdr agent start ${AGENT} --kind pi --pane pane-tab`,
 			`herdr agent prompt ${AGENT} ${PROMPT}`,
 		]);
-		// The pre-existing branch is reused, never recreated or re-based.
+		// The pre-existing branch is reused, never recreated or re-based, and
+		// the reuse takes no fetch.
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
 		expect(runner.commands()).not.toContain(expect.stringContaining("rev-parse HEAD"));
+		expect(runner.commands()).not.toContain(expect.stringContaining("fetch origin"));
 	});
 
 	test("an existing branch without an open workspace attaches one and starts in its first pane", async () => {
@@ -927,7 +1150,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		stubRemoteDefaultBranch(runner);
 		runner.set(
 			"herdr",
 			[
@@ -938,7 +1161,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--branch",
 				"factory/7-retry-policy-for-webhooks",
 				"--base",
-				"abc123",
+				"origin/main",
 				"--no-focus",
 			],
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
@@ -973,7 +1196,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		stubRemoteDefaultBranch(runner);
 		// A worktree create result without the workspace block.
 		runner.set(
 			"herdr",
@@ -985,7 +1208,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--branch",
 				"factory/7-retry-policy-for-webhooks",
 				"--base",
-				"abc123",
+				"origin/main",
 				"--no-focus",
 			],
 			{ stdout: JSON.stringify({ result: { root_pane: { pane_id: "pane-wt" } } }) },
@@ -1011,7 +1234,7 @@ describe("handOffTicket: the worktree sequence", () => {
 		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		stubRemoteDefaultBranch(runner);
 		runner.set(
 			"herdr",
 			[
@@ -1022,7 +1245,7 @@ describe("handOffTicket: the worktree sequence", () => {
 				"--branch",
 				"factory/7-retry-policy-for-webhooks",
 				"--base",
-				"abc123",
+				"origin/main",
 				"--no-focus",
 			],
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
@@ -1763,7 +1986,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
 			stdout: "",
 		});
-		runner.set("git", ["-C", CHECKOUT, "rev-parse", "HEAD"], { stdout: "abc123\n" });
+		stubRemoteDefaultBranch(runner);
 		runner.set(
 			"herdr",
 			[
@@ -1774,7 +1997,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 				"--branch",
 				"factory/7-retry-policy-for-webhooks",
 				"--base",
-				"abc123",
+				"origin/main",
 				"--no-focus",
 			],
 			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
@@ -1796,7 +2019,7 @@ describe("handOffStoredWorkspace: the workflow handoff and the restart", () => {
 		// The choice says worktree, the storage says live: build fresh.
 		const commands = runner.commands();
 		expect(commands).toContain(
-			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base abc123 --no-focus`,
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --base origin/main --no-focus`,
 		);
 		expect(commands).not.toContain(expect.stringContaining("tab create --workspace ws-live"));
 	});
@@ -2223,7 +2446,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("own leftover agent still holds the herdr name");
-		expect(reasonOf(outcome)).toContain("clear its leftover environment");
+		expect(reasonOf(outcome)).toContain("end its leftover environment in herdr");
 		expect(
 			runner.commands().filter((command) => command.startsWith("herdr agent start")),
 		).toHaveLength(3);
@@ -2234,7 +2457,7 @@ describe("a leftover agent that holds the ticket's name", () => {
 		openedWorktree(runner, "pane-stranger", "ws-stranger");
 		// herdr names the stranger first and the ticket's own leftover pane
 		// after it, on every candidate the handoff asks for. The collision the
-		// operator reads must point at the pane that is the ticket's to clear.
+		// operator reads must point at the pane that is the ticket's to end.
 		const bothHeld = (name: string) =>
 			`{"error":{"code":"agent_name_taken","message":"agent name ${name} is already used; ` +
 			`candidates: terminal_id=term_1 pane_id=pane-stranger workspace_id=ws-stranger ` +

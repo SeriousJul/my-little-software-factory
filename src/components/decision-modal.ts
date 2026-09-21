@@ -9,20 +9,29 @@
  * one dim note per tool call. It opens at the bottom, where the agent's
  * conclusion is.
  *
+ * The box is two regions (ADR 0039): a bordered, titled Body pane holds the
+ * Turn log by itself, and the Decision region - the held cause row and the
+ * decision rows - is pinned to the box's floor. The region is bounded and
+ * scrolls: it shows as many rows as the box has room for once the log has
+ * paid its floor, and its range rides the Action bar behind the selection's
+ * hint. An empty turn log states its reason as one row inside the pane, and
+ * the pane keeps its chrome.
+ *
  * The shape: near-fullscreen, one cell of margin on every side, so the log
  * gets the whole terminal. It pops in over the app: a short fade with the
  * box growing to its final size. Its chrome is the shared modal chrome, so
- * the Action bar keeps its own row at every size.
+ * the Action bar keeps its own row at every size, and no in-box hint row
+ * stands between the rows the operator confirms and the bar.
  *
  * The keys dispatch through the shared control catalogue hook in the
- * decision-modal interaction mode: up and down move the action rows, j/k
- * scroll the log one row with the page and jump keys as aliases, e edits
+ * decision-modal interaction mode: up and down move the region's rows, j/k
+ * scroll the body one row with the page and jump keys as aliases, e edits
  * the settings of a selected handoff row before it starts, enter confirms
  * the selected action, and esc cancels. While it is open, the keys of the
  * app below are disabled.
  */
 import { createElement, useTerminalDimensions } from "@opentui/react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 import { useControlDispatch } from "./control-dispatch.ts";
@@ -33,14 +42,18 @@ import type { MessageFact } from "./messages.ts";
 import {
 	type ActionRow,
 	bodyRowSpans,
+	decisionTitle,
+	type ModalBody,
 	ModalSurface,
 	modalFrame,
 	scrollbarRows,
-	useActionSelection,
+	TURN_LOG_PANE,
+	useModalPopScale,
 } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";
-import { truncateToWidth, widthOf } from "./text.ts";
+import { useDecisionRegion } from "./shared/region.ts";
+import { truncateToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
 interface DecisionModalProps {
@@ -79,102 +92,80 @@ interface DecisionModalProps {
 
 /** The modal leaves one cell of margin on every side. */
 const MARGIN = 1;
-/** The pop-in: a short fade with the box growing to its final size. */
-const POP_MS = 120;
-const POP_TICK_MS = 16;
-/** The box's size at the pop-in's start, of its final size. */
-const POP_START = 0.94;
-/** The border, the padding, and nothing else: a box's own cells. */
-const CHROME = 4;
 /** The one row under the border that names the context. */
 const CONTEXT_ROWS = 1;
-
-/** The hint of the decision sub-mode: row selection, scroll, confirm, edit.
- *  The Live view's decision sub-mode reads the same hint from here. */
-export const DECISION_HINT =
-	"up/down select  j/k scroll  pgup/pgdn page  home/end  enter  e edit  esc";
-
-/**
- * The modal's final box size: the terminal minus one cell of margin on
- * every side. The Live view sizes its own box from it.
- */
-export function decisionBoxSize(
-	terminalWidth: number,
-	terminalHeight: number,
-): { width: number; height: number } {
-	return {
-		width: Math.max(1, terminalWidth - MARGIN * 2),
-		height: Math.max(1, terminalHeight - MARGIN * 2),
-	};
-}
+/** The pane's border cells, top and bottom. */
+const PANE_BORDERS = 2;
+/** The pane's vertical padding cells, one per side: its full chrome with the border. */
+const PANE_PADDING = 2;
+/** The rows the Turn log keeps before the pane yields its chrome. */
+export const DECISION_LOG_FLOOR = 3;
+/** The rows the Turn log keeps after the pane has yielded its chrome. */
+export const DECISION_LOG_MIN = 1;
+/** The one row an empty Turn log states inside the pane. */
+export const EMPTY_TURN_LOG_NOTE = "No turn log is recorded for this turn";
 
 /**
- * Fit the log window within a box that holds `contentRows` rows.
+ * Fit the regions of the box the decision and the Live view share: the
+ * pane's chrome, the body's rows, and the region's visible rows.
  *
- * The context row and every action row are always kept: an action row is
- * the only way out of the modal, so the log yields to them. The shared
- * Action bar owns the surface's last row, so it never takes a row here.
+ * The body pays its floor of three rows behind the pane's full chrome, and
+ * the region - bounded, scrolling - takes the rows the floor leaves it,
+ * capped at the rows it holds. A box with no room for the floor yields the
+ * pane's padding to the body before the body yields its floor to the region:
+ * a box without room for the floor holds the region, the border, and a
+ * one-row body. An action row is the only way out, so the region keeps at
+ * least its one row before the surface stands down to the size message. The
+ * caller passes the box's content rows, the region's rows, the held
+ * cause, and the extra region rows above the actions - the transition's
+ * fact lines (ADR 0027); `null` is the stand-down.
  */
-function logRows(contentRows: number, actionRows: number): number {
-	return Math.max(0, contentRows - actionRows - CONTEXT_ROWS);
-}
-
-/**
- * Fit the log window within a modal of a given box size.
- *
- * The context row and the action rows are always kept. The key hint yields
- * before the log, so the operator can still read at least one log row when
- * the terminal is short.
- *
- * The layout derives from the box, not the terminal, so the pop-in stays
- * honest: while the box is still growing, lines wrap at its current width
- * and the body window has its current row count. A line that is wider than
- * the frame being drawn is what a terminal shows as a smudge.
- *
- * The `hint` names the row the layout decides the space for: the Live view
- * passes its own shorter stream hint in its stream sub-mode.
- */
-export function decisionLayout(
-	boxWidth: number,
-	boxHeight: number,
+export function decisionBodyLayout(
+	contentRows: number,
 	actionRows: number,
-	hint = DECISION_HINT,
-): { contentWidth: number; bodyRows: number; showHint: boolean } {
-	const contentWidth = Math.max(1, boxWidth - CHROME);
-	const innerRows = Math.max(0, boxHeight - CHROME);
-	// The hint yields its row before the body drops to zero: a too-small
-	// terminal still shows one log line.
-	const showHint = contentWidth >= widthOf(hint) && innerRows >= actionRows + 3;
-	const bodyRows = Math.max(0, innerRows - actionRows - 1 - (showHint ? 1 : 0));
-	return { contentWidth, bodyRows, showHint };
-}
-
-/**
- * The modal pop-in: a short fade with the box growing to its final size.
- *
- * A self-driven progress keeps it deterministic in the test renderer,
- * where the animation engine never ticks.
- */
-export function useModalPopIn(
-	finalWidth: number,
-	finalHeight: number,
-): { pop: number; boxWidth: number; boxHeight: number } {
-	const [pop, setPop] = useState(0);
-	useEffect(() => {
-		const startedAt = performance.now();
-		const id = setInterval(() => {
-			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
-			setPop(1 - (1 - t) ** 3);
-			if (t >= 1) clearInterval(id);
-		}, POP_TICK_MS);
-		return () => clearInterval(id);
-	}, []);
-	const popFactor = POP_START + (1 - POP_START) * pop;
-	return {
-		pop,
-		boxWidth: Math.max(1, Math.round(finalWidth * popFactor)),
-		boxHeight: Math.max(1, Math.round(finalHeight * popFactor)),
-	};
+	heldCause: boolean,
+	extraRegionRows = 0,
+): { paneRows: number; panePadding: 0 | 1; regionVisible: number } | null {
+	const held = (heldCause ? 1 : 0) + extraRegionRows;
+	// The region's one row is its only way out; a region with no rows asks
+	// for none, the way the streaming sub-mode's body does.
+	const regionMinimum = Math.min(1, actionRows);
+	// 1. The body pays its floor behind the pane's full chrome; the region
+	//    takes the rows the floor leaves it.
+	let regionVisible = Math.min(
+		actionRows,
+		Math.max(
+			0,
+			contentRows - CONTEXT_ROWS - held - PANE_BORDERS - PANE_PADDING - DECISION_LOG_FLOOR,
+		),
+	);
+	if (regionVisible >= regionMinimum)
+		return {
+			paneRows: contentRows - CONTEXT_ROWS - held - PANE_BORDERS - PANE_PADDING - regionVisible,
+			panePadding: 1,
+			regionVisible,
+		};
+	// 2. The pane's chrome yields to the body: the border alone, the floor
+	//    kept, the region the rest.
+	regionVisible = Math.min(
+		actionRows,
+		Math.max(0, contentRows - CONTEXT_ROWS - held - PANE_BORDERS - DECISION_LOG_FLOOR),
+	);
+	if (regionVisible >= regionMinimum)
+		return {
+			paneRows: contentRows - CONTEXT_ROWS - held - PANE_BORDERS - regionVisible,
+			panePadding: 0,
+			regionVisible,
+		};
+	// 3. Only then does the body yield rows: the region, the border, and a
+	//    one-row body.
+	regionVisible = Math.min(
+		actionRows,
+		Math.max(0, contentRows - CONTEXT_ROWS - held - PANE_BORDERS - DECISION_LOG_MIN),
+	);
+	if (regionVisible >= regionMinimum)
+		return { paneRows: DECISION_LOG_MIN, panePadding: 0, regionVisible };
+	return null;
 }
 
 /**
@@ -231,77 +222,89 @@ export function DecisionModal({
 	onEmergencyExit,
 }: DecisionModalProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	// The size the pop-in grows into, decided at the terminal's size. The
-	// scrollbar is decided there too, so neither the scrollbar nor the log
-	// window flickers in and out while the box grows.
-	const finalFrame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN });
-	// The pop-in: a short fade with the box growing to its final size. A
-	// self-driven progress keeps it deterministic in the test renderer,
-	// where the animation engine never ticks.
-	const [pop, setPop] = useState(0);
-	useEffect(() => {
-		const startedAt = performance.now();
-		const id = setInterval(() => {
-			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
-			setPop(1 - (1 - t) ** 3);
-			if (t >= 1) clearInterval(id);
-		}, POP_TICK_MS);
-		return () => clearInterval(id);
-	}, []);
-	const popFactor = POP_START + (1 - POP_START) * pop;
+	// The pop-in: a short fade with the box growing to its final size, the
+	// one the shared chrome owns for every surface it boxes.
+	const { pop, scale } = useModalPopScale();
 	// The modal is a near-fullscreen surface: it takes the room the terminal
-	// offers above its Action bar, and the log scrolls inside it. The shared
+	// offers above its Action bar, and the body scrolls inside it. The shared
 	// chrome keeps the box above the bar's row, so its border can never draw
 	// through the bar at a short size.
-	const frame = modalFrame(terminalWidth, terminalHeight, {
-		margin: MARGIN,
-		scale: popFactor,
-	});
-	// Reserve a column for the scrollbar only when the log needs one. A
-	// scrollbar can add wrap rows, so determine overflow once at the final
-	// width, then make the final window from the narrower text width.
-	// A held turn shows its cause above the action rows (ADR 0016): one row
-	// the log yields to, so the operator reads why the turn is held before
-	// the rows that decide it.
+	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale });
+	// A held turn shows its cause in the region, above the rows it refuses
+	// (ADR 0016): one row the log yields to, so the operator reads why the
+	// turn is held before the rows that decide it.
 	const held = cause !== null && isHeldCause(cause);
-	const heldRows = held ? 1 : 0;
+	// The pane's chrome yields before the log yields rows: padding first,
+	// border second, and only then does the surface stand down to the size
+	// message. The scrollbar is decided at the final size, so the thumb does
+	// not flicker in and out while the pop-in grows the box.
 	// The transition's fact lines stand above the action rows, like the
 	// held-cause row: the rows decide on the facts, so the log yields to
 	// them (ADR 0027).
 	const factRows = factLines.length;
-	const reservedRows = heldRows + factRows;
-	const fullWidthBody = useMemo(
-		() => turnLogBody(entries, finalFrame.contentWidth),
-		[entries, finalFrame.contentWidth],
+	const finalLayout = decisionBodyLayout(
+		modalFrame(terminalWidth, terminalHeight, { margin: MARGIN }).contentRows,
+		actions.length,
+		held,
+		factRows,
 	);
-	const hasScrollbar =
-		fullWidthBody.length > logRows(finalFrame.contentRows, actions.length) - reservedRows;
-	const bodyWidth = Math.max(1, frame.contentWidth - (hasScrollbar ? 1 : 0));
+	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factRows);
+	// An empty turn log states its reason as one row inside the pane, and
+	// the pane keeps its chrome.
+	const emptyLog = entries.length === 0;
+	// The pane's body width at this render: the box's content minus the
+	// pane's border and padding, and one column for the inline thumb when
+	// the body scrolls. A scrollbar can add wrap rows, so determine overflow
+	// once at the full pane width, then wrap at the narrower text width.
+	// The pane's padding is the one its layout decided, on every side.
+	const panePadding = layout?.panePadding ?? 0;
+	const paneInnerWidth = Math.max(1, frame.contentWidth - PANE_BORDERS - 2 * panePadding);
+	const fullWidthBody = useMemo(
+		() =>
+			emptyLog
+				? [[{ text: EMPTY_TURN_LOG_NOTE, fg: paint("subtext0") }]]
+				: turnLogBody(entries, paneInnerWidth),
+		[entries, emptyLog, paneInnerWidth],
+	);
+	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
+	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
-	const body = useMemo(() => turnLogBody(entries, bodyWidth), [entries, bodyWidth]);
-	const bodyRows = Math.min(
-		body.length,
-		Math.max(0, logRows(frame.contentRows, actions.length) - reservedRows),
+	const renderedBody = useMemo(
+		() =>
+			emptyLog
+				? [[{ text: EMPTY_TURN_LOG_NOTE, fg: paint("subtext0") }]]
+				: turnLogBody(entries, bodyWidth),
+		[entries, emptyLog, bodyWidth],
 	);
-	const maxBodyScroll = maxScrollOf(body.length, bodyRows);
+	const bodyRows = layout === null ? 0 : Math.min(renderedBody.length, layout.paneRows);
+	const maxBodyScroll = maxScrollOf(renderedBody.length, bodyRows);
 	// A settled turn ends with its conclusion: open at the bottom, with the
 	// newest line in view. `null` pins the view to the bottom until the
 	// operator scrolls: the bottom's index moves while the box grows in.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-	const selection = useActionSelection(actions);
+	// The region's selection, its wrap, its auto-scroll, its visible window,
+	// and its range text are the shared region's, beside the field, the
+	// selector row, and the form (ADR 0039 and ADR 0040).
+	const region = useDecisionRegion(actions, layout?.regionVisible ?? 0);
 	// The fact the gate and the bar share: the row under the cursor carries
 	// settings to edit, and this surface can open the panel for them. Close
 	// and Goto decide about the turn that ended, so their rows leave the
 	// control dimmed and say why when it is pressed.
 	const editableActionSelected =
-		onEditAction !== undefined && actions[selection.at]?.editable === true;
-	const modalContext = { ...context, editableActionSelected };
+		onEditAction !== undefined && actions[region.at]?.editable === true;
+	const modalContext = {
+		...context,
+		editableActionSelected,
+		bodyScrollable: !emptyLog && maxBodyScroll > 0,
+		bodyEmpty: emptyLog,
+		actionRowCount: actions.length,
+	};
 
-	// Scroll the log by one step of the named key: a page moves one viewport
+	// Scroll the body by one step of the named key: a page moves one viewport
 	// minus the shared row, and the jump keys take either edge. A null view
 	// is the bottom, so the first step reads the bottom's index.
-	const scrollLog = (name: string) => {
+	const scrollBody = (name: string) => {
 		if (name === "pageup")
 			setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
 		else if (name === "pagedown")
@@ -317,7 +320,7 @@ export function DecisionModal({
 
 	useControlDispatch({
 		mode: "decision-modal",
-		context: modalContext,
+		context: contextFor("decision-modal", modalContext),
 		active: inputActive,
 		onUnavailable,
 		onEmergencyExit,
@@ -325,45 +328,46 @@ export function DecisionModal({
 			help: () => onHelp?.(),
 			message: () => onMessage?.(),
 			"cancel-action": onCancel,
-			"confirm-action": () => selection.confirm((row) => onAction(row.key)),
+			"confirm-action": () => region.confirm((row) => onAction(row.key)),
 			"edit-action": () => {
-				const row = actions[selection.at];
+				const row = actions[region.at];
 				if (row !== undefined && editableActionSelected) onEditAction?.(row.key);
 			},
-			"select-action": ({ key }) => selection.move(key.name === "up" ? -1 : 1),
-			"scroll-turn-log": ({ key }) => scrollLog(key.name),
+			"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
+			"scroll-body": ({ key }) => scrollBody(key.name),
 		},
 	});
 
 	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
-	const thumbRows = hasScrollbar ? scrollbarRows(body.length, bodyRows, scroll) : null;
-	return createElement(ModalSurface, {
-		frame,
-		width: terminalWidth,
-		title: `Decision: ${title}`,
-		borderColor: paint("accent"),
-		// The context row and every action row: without them the modal is
-		// not a decision, so it holds itself back at that size.
-		minContentRows: actions.length + CONTEXT_ROWS + reservedRows,
-		opacity: pop,
-		message,
-		bar: {
-			mode: "decision-modal",
-			context: contextFor("decision-modal", modalContext),
-		},
-		children: [
+	const visibleBody = windowOf(renderedBody, scroll, bodyRows);
+	const thumbRows = hasScrollbar ? scrollbarRows(renderedBody.length, bodyRows, scroll) : null;
+
+	const modalBody: ModalBody = {
+		above: [
 			createElement(
 				"text",
 				{ key: "context", fg: paint("subtext0") },
 				truncateToWidth(contextLine, frame.contentWidth),
 			),
-			...windowOf(body, scroll, bodyRows).map((line, index) =>
-				createElement(
-					"text",
-					{ key: `body-${index}` },
-					...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
-				),
-			),
+		],
+		pane:
+			layout === null
+				? undefined
+				: {
+						title: TURN_LOG_PANE,
+						rows: visibleBody.map((line, index) =>
+							createElement(
+								"text",
+								{ key: `body-${index}` },
+								...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
+							),
+						),
+						// The pane's padding is the one its layout decided, and the
+						// height is the one the layout reserved it.
+						vpad: panePadding,
+						height: layout.paneRows + PANE_BORDERS + 2 * panePadding,
+					},
+		below: [
 			...(held
 				? [
 						createElement(
@@ -380,14 +384,37 @@ export function DecisionModal({
 					truncateToWidth(line, frame.contentWidth),
 				),
 			),
-			...actions.map((row, index) =>
+			...region.window.map((row) =>
 				createElement(ActionItem, {
 					key: row.key,
 					row,
-					focused: index === selection.at,
+					// The window's rows are objects of `actions`: the selected
+					// row is the one the region's selection stands on.
+					focused: actions[region.at] === row,
 					width: frame.contentWidth,
 				}),
 			),
 		],
+		minRows:
+			CONTEXT_ROWS +
+			(held ? 1 : 0) +
+			factRows +
+			PANE_BORDERS +
+			DECISION_LOG_MIN +
+			Math.min(1, actions.length),
+	};
+
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		title: decisionTitle(title),
+		opacity: pop,
+		body: modalBody,
+		message,
+		bar: {
+			mode: "decision-modal",
+			context: contextFor("decision-modal", modalContext),
+			rangeIndicator: region.rangeText,
+		},
 	});
 }

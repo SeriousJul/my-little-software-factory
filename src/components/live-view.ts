@@ -1,48 +1,68 @@
 /**
  * The Live view: the agent's terminal, streamed, above an in-flight ticket.
  *
- * The control plane opens it on a `handed-off` or `running` ticket. It is
- * the Decision modal's shape - near-fullscreen, one cell of margin, the
- * pop-in, the context line, the scrolling body, the action rows, the hint
- * line - with the body swapped for the agent's live terminal output: plain
- * text, the tail the completion-message-lines setting names, refreshed at
- * the one-second cadence.
+ * The control plane opens it on a `handed-off` or `running` ticket. It is a
+ * shared-chrome surface (ADR 0040): the shared modal's box, the Message
+ * line, and the Action bar, with the body in its own Body pane (ADR 0039).
+ * While the agent works the pane is the Agent view: plain text, the tail
+ * the completion-message-lines setting names, refreshed at the one-second
+ * cadence, pinned to the bottom while new output arrives. When the turn
+ * settles and the factory waits for the operator's decision, the same box
+ * carries the decision sub-mode: the pane re-titles to the Turn log, the
+ * region's rows and their keys come in, and the border re-titles `Live:` to
+ * `Decision:` in place - one screen, one pop-in per opening, the prefix the
+ * shared chrome owns, so Enter on an `awaiting` ticket and a turn settling
+ * under an open Live view end at one screen with one name. A settled turn
+ * the factory decides for itself (auto-close) keeps streaming, because the
+ * factory keeps working.
  *
- * While the agent works, the body is the stream and the one row is Goto.
- * When the turn settles and the factory waits for the operator's decision,
- * the same box carries the decision sub-mode: the turn log's body, the
- * decision's action rows, and their keys. Watching flows into deciding
- * without a screen change.
- *
- * The stream's keys: j/k scroll the body one row, pgup and pgdn page it,
- * home and end jump to its ends, enter confirms the Goto, and esc cancels.
- * The decision sub-mode adds the Decision modal's: up and down move the
- * action rows, and e edits a selected handoff row. The bottom pin holds
- * while new output arrives; any manual scroll releases it.
+ * The keys dispatch from the Control catalogue. The streaming sub-mode
+ * answers to a `live-view` mode of its own: the body's scroll, the Goto
+ * confirm, and the leave. The settled sub-mode dispatches in the existing
+ * `decision-modal` mode: up and down move the region's rows, and e edits a
+ * selected handoff row. The bar's hints follow the mode, and the Key guide
+ * names it. The sub-mode switch is in place: the surface keeps its pop-in,
+ * its scroll, and its box, and no in-box hint row stands in the box.
  */
-import { createElement, useKeyboard, useTerminalDimensions } from "@opentui/react";
-import { useMemo, useRef, useState } from "react";
+import { createElement, useTerminalDimensions } from "@opentui/react";
+import { useMemo, useState } from "react";
 
-import type { TurnLogEntry } from "../turn-log.ts";
-import {
-	DECISION_HINT,
-	decisionBoxSize,
-	decisionLayout,
-	turnLogBody,
-	useModalPopIn,
-} from "./decision-modal.ts";
+import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
+import { useControlDispatch } from "./control-dispatch.ts";
+import { type ControlContext, contextFor, type InteractionMode } from "./controls.ts";
+import { decisionBodyLayout, turnLogBody } from "./decision-modal.ts";
 import { maxScrollOf, windowOf } from "./geometry.ts";
 import type { MdLine, MdSpan } from "./markdown.ts";
-import { type ActionRow, bodyRowSpans, scrollbarRows } from "./modal-chrome.ts";
+import type { MessageFact } from "./messages.ts";
+import {
+	type ActionRow,
+	AGENT_VIEW_PANE,
+	bodyRowSpans,
+	decisionTitle,
+	liveTitle,
+	type ModalBody,
+	ModalSurface,
+	modalFrame,
+	scrollbarRows,
+	TURN_LOG_PANE,
+	useModalPopScale,
+} from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
-import { controlInk } from "./shared/presentation.ts";
+import { turnEndCauseLine } from "./shared/presentation.ts";
+import { useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
-/** The stream's hint: the scroll keys, enter, and esc. No row selection. */
-const STREAM_HINT = "j/k scroll  pgup/pgdn page  home/end  enter goto  esc";
+/** The Live view leaves one cell of margin on every side. */
+const MARGIN = 1;
+/** The one row under the border that names the context. */
+const CONTEXT_ROWS = 1;
+/** The pane's border cells, top and bottom. */
+const PANE_BORDERS = 2;
+/** The rows the body keeps behind the pane's border alone. */
+const BODY_MIN = 1;
 
-/** The body the Live view box shows. */
+/** The body the Live view pane shows. */
 export type LiveViewBody =
 	| { kind: "stream"; lines: readonly string[]; note: string | null }
 	| { kind: "turn-log"; entries: readonly TurnLogEntry[] };
@@ -54,15 +74,31 @@ interface LiveViewProps {
 	contextLine: string;
 	/** True while the latest observation reports the agent as blocked. */
 	blocked: boolean;
+	/** The pane's body: the stream, or the settled turn's log. */
 	body: LiveViewBody;
-	/** The action rows at the bottom of the box. */
+	/** The turn's end cause; a held cause stands in the region, above its rows. */
+	cause?: TurnEndCause | null;
+	/** The agent's or provider's text for the cause; empty when none. */
+	detail?: string;
+	/** The decision's rows, shown in the decision sub-mode. */
 	actions: readonly ActionRow[];
-	/** True in the decision sub-mode: row selection and e edit are live. */
-	decideable: boolean;
 	onAction: (key: string) => void;
 	/** The `e` key on a row flagged editable: change its Handoff's settings. */
 	onEditAction?: (key: string) => void;
+	/** The Goto confirm of the streaming sub-mode: focus the pane, close. */
+	onGoto: () => void;
 	onCancel: () => void;
+	/** The base control facts, preserved when this view owns input. */
+	context: ControlContext;
+	/** False while a Key guide or Message view is above this view. */
+	inputActive?: boolean;
+	onHelp?: () => void;
+	onMessage?: () => void;
+	/** Reports the catalogue reason for a refused control on the Message line. */
+	onUnavailable?: (reason: string) => void;
+	/** The Message fact this view's own Message line shows. */
+	message: MessageFact | null;
+	onEmergencyExit: () => void;
 }
 
 /** One stream row as styled lines: plain text, the palette's prose voice. */
@@ -73,16 +109,13 @@ function streamLines(lines: readonly string[], note: string | null, width: numbe
 			{ text: row, fg: paint("text") } satisfies MdSpan,
 		]);
 	});
-	// A failed read keeps the last lines, with the stale note under them.
+	// The read's trailing newline is not a line: the tail's last row is the
+	// agent's last output, so the bottom pin rests on it, not on a blank.
+	if (out.length > 0 && out[out.length - 1].length === 0) out.pop();
+	// A failed read keeps the last lines, with the stale note as the body's
+	// last line, inside the pane.
 	if (note !== null) out.push([{ text: note, fg: paint("subtext0") }]);
 	return out;
-}
-
-/** The box's body at a width: the turn log's rows, or the stream's. */
-function buildBodyLines(body: LiveViewBody, width: number): MdLine[] {
-	return body.kind === "turn-log"
-		? turnLogBody(body.entries, width)
-		: streamLines(body.lines, body.note, width);
 }
 
 export function LiveView({
@@ -90,182 +123,212 @@ export function LiveView({
 	contextLine,
 	blocked,
 	body,
+	cause = null,
+	detail = "",
 	actions,
-	decideable,
 	onAction,
 	onEditAction,
+	onGoto,
 	onCancel,
+	context,
+	inputActive = true,
+	onHelp,
+	onMessage,
+	onUnavailable,
+	message,
+	onEmergencyExit,
 }: LiveViewProps) {
-	const hint = decideable ? DECISION_HINT : STREAM_HINT;
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	// The box size the pop-in grows into, decided at the terminal's size. The
-	// content layout follows the box while it grows; the hint and the
-	// scrollbar are decided at the final size, so neither flickers in and
-	// out during the pop.
-	const finalBox = decisionBoxSize(terminalWidth, terminalHeight);
-	const finalLayout = useMemo(
-		() => decisionLayout(finalBox.width, finalBox.height, actions.length, hint),
-		[finalBox.width, finalBox.height, actions.length, hint],
+	// The decision sub-mode, from the body the pane holds: a turn settling
+	// for the operator flips it in place, without a second pop-in.
+	const decideable = body.kind === "turn-log";
+	const { pop, scale } = useModalPopScale();
+	const frame = modalFrame(terminalWidth, terminalHeight, { margin: MARGIN, scale });
+	// A held turn shows its cause in the region, above the rows it refuses
+	// (ADR 0016): one row the body yields to, so the operator reads why the
+	// turn is held before the rows that decide it.
+	const held = decideable && cause !== null && isHeldCause(cause);
+	const regionRows = decideable ? actions.length : 0;
+	// The regions of the box: the pane's chrome, the body's rows, the
+	// region's visible rows. The layout is decided at the final size, so
+	// the scrollbar never flickers in and out while the pop-in grows the box.
+	const finalLayout = decisionBodyLayout(
+		modalFrame(terminalWidth, terminalHeight, { margin: MARGIN }).contentRows,
+		regionRows,
+		held,
 	);
-	const { pop, boxWidth, boxHeight } = useModalPopIn(finalBox.width, finalBox.height);
-	const geometry = decisionLayout(boxWidth, boxHeight, actions.length, hint);
-
-	// Reserve a column for the scrollbar only when the body needs one. A
-	// scrollbar can add wrap rows, so determine overflow once at the final
-	// width, then make the final window from the narrower text width.
+	const layout = decisionBodyLayout(frame.contentRows, regionRows, held);
+	// The pane's padding is the one its layout decided, on every side: the
+	// body's width is the box's content minus the pane's border and padding,
+	// and one column for the inline thumb when the body scrolls. A scrollbar
+	// can add wrap rows, so determine overflow once at the full pane width,
+	// then wrap at the narrower text width.
+	const panePadding = layout?.panePadding ?? 0;
+	const paneInnerWidth = Math.max(1, frame.contentWidth - PANE_BORDERS - 2 * panePadding);
 	const fullWidthBody = useMemo(
-		() => buildBodyLines(body, finalLayout.contentWidth),
-		[body, finalLayout.contentWidth],
+		() =>
+			body.kind === "turn-log"
+				? turnLogBody(body.entries, paneInnerWidth)
+				: streamLines(body.lines, body.note, paneInnerWidth),
+		[body, paneInnerWidth],
 	);
-	const hasScrollbar = fullWidthBody.length > finalLayout.bodyRows;
-	const bodyWidth = Math.max(1, geometry.contentWidth - (hasScrollbar ? 1 : 0));
+	const hasScrollbar = finalLayout !== null && fullWidthBody.length > finalLayout.paneRows;
+	const bodyWidth = Math.max(1, paneInnerWidth - (hasScrollbar ? 1 : 0));
 	// Wrap at the width the box has right now, so a line is never wider
 	// than the frame being drawn while the pop-in grows the box.
-	const renderedBody = useMemo(() => buildBodyLines(body, bodyWidth), [body, bodyWidth]);
-	const bodyRows = Math.min(renderedBody.length, geometry.bodyRows);
+	const renderedBody = useMemo(
+		() =>
+			body.kind === "turn-log"
+				? turnLogBody(body.entries, bodyWidth)
+				: streamLines(body.lines, body.note, bodyWidth),
+		[body, bodyWidth],
+	);
+	const bodyRows = layout === null ? 0 : Math.min(renderedBody.length, layout.paneRows);
 	const maxBodyScroll = maxScrollOf(renderedBody.length, bodyRows);
-
 	// The newest output is in front: the body opens at its bottom and stays
 	// pinned to it while new rows arrive, until the operator scrolls.
 	const [bodyScroll, setBodyScroll] = useState<number | null>(null);
-	const [selected, setSelected] = useState(0);
-	const selectedRef = useRef(0);
-
-	const move = (delta: number) => {
-		if (decideable === false || actions.length === 0) return;
-		const next = (selectedRef.current + delta + actions.length) % actions.length;
-		selectedRef.current = next;
-		setSelected(next);
+	// The region's selection, its wrap, its auto-scroll, its visible window,
+	// and its range text are the shared region's, beside the field, the
+	// selector row, and the form (ADR 0039 and ADR 0040).
+	const region = useDecisionRegion(decideable ? actions : [], layout?.regionVisible ?? 0);
+	const bodyEmpty =
+		body.kind === "turn-log"
+			? body.entries.length === 0
+			: body.lines.length === 0 && body.note === null;
+	const editableActionSelected =
+		decideable && onEditAction !== undefined && actions[region.at]?.editable === true;
+	// The sub-mode dispatches from the catalogue: the streaming sub-mode
+	// answers to a live-view mode of its own, the settled sub-mode to the
+	// decision-modal mode the glossary already names.
+	const mode: InteractionMode = decideable ? "decision-modal" : "live-view";
+	const surfaceContext = {
+		...context,
+		editableActionSelected,
+		bodyScrollable: maxBodyScroll > 0,
+		bodyEmpty,
+		actionRowCount: regionRows,
 	};
 
-	useKeyboard((key) => {
-		if (key.ctrl || key.meta) return;
-		switch (key.name) {
-			case "escape":
-				onCancel();
-				break;
-			case "return": {
-				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
-				if (action !== undefined) onAction(action.key);
-				break;
-			}
-			case "e": {
-				if (decideable === false || onEditAction === undefined) break;
-				const action = actions[Math.min(selectedRef.current, actions.length - 1)];
-				if (action !== undefined && action.editable === true) onEditAction(action.key);
-				break;
-			}
-			case "down":
-				move(1);
-				break;
-			case "up":
-				move(-1);
-				break;
-			case "j":
-				// Scrolling back to the bottom re-pins the stream: new output
-				// comes into view again without the operator asking.
-				setBodyScroll((s) => {
-					const next = Math.min((s === null ? maxBodyScroll : s) + 1, maxBodyScroll);
-					return next >= maxBodyScroll ? null : next;
-				});
-				break;
-			case "k":
-				setBodyScroll((s) => Math.max((s === null ? maxBodyScroll : s) - 1, 0));
-				break;
-			case "pageup":
-				// The Decision modal pages by the same count: a body with no
-				// rows still moves one row, so the page size never collapses
-				// to zero on a very small terminal.
-				setBodyScroll((s) => Math.max((s === null ? maxBodyScroll : s) - Math.max(1, bodyRows), 0));
-				break;
-			case "pagedown":
-				setBodyScroll((s) => {
-					const next = Math.min(
-						(s === null ? maxBodyScroll : s) + Math.max(1, bodyRows),
-						maxBodyScroll,
-					);
-					return next >= maxBodyScroll ? null : next;
-				});
-				break;
-			case "home":
-				setBodyScroll(0);
-				break;
-			case "end":
-				// Reaching the bottom by key re-pins the stream, like j and
-				// PgDn: new output comes into view again without the operator
-				// asking.
-				setBodyScroll(null);
-				break;
-		}
+	// Scroll the body by one step of the named key: a page moves one viewport
+	// minus the shared row, and the jump keys take either edge. A null view
+	// is the bottom, so the first step reads the bottom's index. Reaching
+	// the bottom re-pins the stream: new output comes into view again without
+	// the operator asking.
+	const scrollBody = (name: string) => {
+		if (name === "pageup")
+			setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - Math.max(1, bodyRows)));
+		else if (name === "pagedown")
+			setBodyScroll((current) => {
+				const next = Math.min((current ?? maxBodyScroll) + Math.max(1, bodyRows), maxBodyScroll);
+				return next >= maxBodyScroll ? null : next;
+			});
+		else if (name === "home") setBodyScroll(0);
+		else if (name === "end") setBodyScroll(null);
+		else if (name === "j")
+			setBodyScroll((current) => {
+				const next = Math.min((current ?? maxBodyScroll) + 1, maxBodyScroll);
+				return next >= maxBodyScroll ? null : next;
+			});
+		// The catalogue feeds this handler only the named keys, so an unknown
+		// name is a no-op, not a guess for `k`.
+		else if (name === "k") setBodyScroll((current) => Math.max(0, (current ?? maxBodyScroll) - 1));
+	};
+
+	useControlDispatch({
+		mode,
+		context: contextFor(mode, surfaceContext),
+		active: inputActive,
+		onUnavailable,
+		onEmergencyExit,
+		handlers: {
+			help: () => onHelp?.(),
+			message: () => onMessage?.(),
+			"cancel-action": onCancel,
+			"scroll-body": ({ key }) => scrollBody(key.name),
+			...(decideable
+				? {
+						"confirm-action": () => region.confirm((row) => onAction(row.key)),
+						"select-action": ({ key }) => region.move(key.name === "up" ? -1 : 1),
+						"edit-action": () => {
+							const row = actions[region.at];
+							if (row !== undefined && editableActionSelected) onEditAction?.(row.key);
+						},
+					}
+				: { "live-goto": () => onGoto() }),
+		},
 	});
 
 	const scroll = bodyScroll === null ? maxBodyScroll : Math.min(bodyScroll, maxBodyScroll);
 	const visibleBody = windowOf(renderedBody, scroll, bodyRows);
 	const thumbRows = hasScrollbar ? scrollbarRows(renderedBody.length, bodyRows, scroll) : null;
 
-	// The context line carries the blocked status in the warning color.
+	// The context row carries the blocked status in the warning color.
 	const blockedSuffix = " · blocked";
 	const baseWidth = blocked
-		? Math.max(0, geometry.contentWidth - widthOf(blockedSuffix))
-		: geometry.contentWidth;
+		? Math.max(0, frame.contentWidth - widthOf(blockedSuffix))
+		: frame.contentWidth;
 
-	return createElement(
-		"box",
-		{
-			style: {
-				position: "absolute",
-				top: 0,
-				left: 0,
-				width: terminalWidth,
-				height: terminalHeight,
-				zIndex: 10,
-				backgroundColor:
-					controlInk().surface.on === "default" ? undefined : controlInk().surface.on,
-				alignItems: "center",
-				justifyContent: "center",
-			},
-		},
-		createElement(
-			"box",
-			{
-				border: true,
-				borderColor: paint("accent"),
-				title: truncateToWidth(`Live: ${title}`, geometry.contentWidth),
-				padding: 1,
-				style: {
-					flexDirection: "column",
-					width: boxWidth,
-					height: boxHeight,
-					opacity: pop,
-				},
-			},
+	const liveBody: ModalBody = {
+		above: [
 			createElement(
 				"text",
 				{ key: "context" },
 				createElement("span", { fg: paint("subtext0") }, truncateToWidth(contextLine, baseWidth)),
 				blocked && createElement("span", { fg: paint("yellow") }, blockedSuffix),
 			),
-			...visibleBody.map((line, index) =>
-				createElement(
-					"text",
-					{ key: `body-${index}` },
-					...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
-				),
-			),
-			...actions.map((row, index) =>
+		],
+		pane:
+			layout === null
+				? undefined
+				: {
+						title: decideable ? TURN_LOG_PANE : AGENT_VIEW_PANE,
+						rows: visibleBody.map((line, index) =>
+							createElement(
+								"text",
+								{ key: `body-${index}` },
+								...bodyRowSpans(line, bodyWidth, thumbRows?.has(index)),
+							),
+						),
+						vpad: panePadding,
+						height: layout.paneRows + PANE_BORDERS + 2 * panePadding,
+					},
+		below: [
+			...(held
+				? [
+						createElement(
+							"text",
+							{ key: "held", fg: paint("yellow") },
+							truncateToWidth(turnEndCauseLine(cause, detail), frame.contentWidth),
+						),
+					]
+				: []),
+			...region.window.map((row) =>
 				createElement(ActionItem, {
 					key: row.key,
 					row,
-					focused: index === selected,
-					width: geometry.contentWidth,
+					focused: actions[region.at] === row,
+					width: frame.contentWidth,
 				}),
 			),
-			finalLayout.showHint &&
-				createElement(
-					"text",
-					{ fg: paint("subtext0") },
-					truncateToWidth(hint, geometry.contentWidth),
-				),
-		),
-	);
+		],
+		minRows: CONTEXT_ROWS + (held ? 1 : 0) + PANE_BORDERS + BODY_MIN + Math.min(1, regionRows),
+	};
+
+	return createElement(ModalSurface, {
+		frame,
+		width: terminalWidth,
+		// The border re-titles `Live:` to `Decision:` when the turn settles
+		// for the operator: the prefix is the chrome's, so both paths into
+		// the decision end at one screen with one name (ADR 0040).
+		title: decideable ? decisionTitle(title) : liveTitle(title),
+		opacity: pop,
+		body: liveBody,
+		message,
+		bar: {
+			mode,
+			context: contextFor(mode, surfaceContext),
+			rangeIndicator: region.rangeText,
+		},
+	});
 }

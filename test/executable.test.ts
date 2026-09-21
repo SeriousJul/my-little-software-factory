@@ -6,12 +6,13 @@
  * Ticket controls need mouse reporting for wheel input, track clicks, and
  * thumb drags. This later control decision supersedes host text selection.
  */
+
+import { afterAll, describe, expect, it } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
 
-import { openControlPlanePty, type PtySession } from "./executable-pty.ts";
+import { openControlPlanePty, type PtySession, ptyAvailable } from "./executable-pty.ts";
 
 /** The reporting modes required for the control plane's pointer controls. */
 const MOUSE_ENABLE: readonly (readonly [name: string, sequence: string])[] = [
@@ -31,7 +32,7 @@ const STABLE_TIMEOUT_MS = 8_000;
 const EXIT_TIMEOUT_MS = 8_000;
 const TEST_TIMEOUT_MS = 30_000;
 
-describe("control plane executable, terminal protocol", () => {
+describe.skipIf(!ptyAvailable())("control plane executable, terminal protocol", () => {
 	let dir: string | undefined;
 	let session: PtySession | null = null;
 
@@ -42,15 +43,14 @@ describe("control plane executable, terminal protocol", () => {
 
 	it(
 		"enables terminal mouse reporting and quits cleanly",
-		async (ctx) => {
+		async () => {
 			dir = mkdtempSync(join(tmpdir(), "factory-exec-"));
 			const configPath = join(dir, "config.toml");
 			writeFileSync(configPath, configToml(join(dir, "state.sqlite")), "utf8");
 
 			session = await openControlPlanePty(["--config", configPath], isolatedEnv(dir));
 			if (session === null) {
-				ctx.skip("cannot open a pseudo-terminal on this platform");
-				return;
+				throw new Error("cannot open a pseudo-terminal on this platform");
 			}
 
 			try {
@@ -88,8 +88,8 @@ describe("control plane executable, terminal protocol", () => {
 	);
 
 	it(
-		"forwards a shutdown signal to the entry and dies from it instead of looping",
-		async (ctx) => {
+		"exits cleanly on SIGINT instead of hanging",
+		async () => {
 			const isolated = mkdtempSync(join(tmpdir(), "factory-exec-signal-"));
 			let sig: PtySession | null = null;
 			try {
@@ -97,11 +97,10 @@ describe("control plane executable, terminal protocol", () => {
 				writeFileSync(configPath, configToml(join(isolated, "state.sqlite")), "utf8");
 				sig = await openControlPlanePty(["--config", configPath], isolatedEnv(isolated));
 				if (sig === null) {
-					ctx.skip("cannot open a pseudo-terminal on this platform");
-					return;
+					throw new Error("cannot open a pseudo-terminal on this platform");
 				}
-				// Reach normal startup: the renderer is live, the wrapper has
-				// spawned the entry, and its signal handlers are registered.
+				// Reach normal startup: the renderer is live on the alternate
+				// screen before the shutdown signal is sent.
 				await sig.waitFor(
 					(out) => out.includes(ALT_SCREEN),
 					"the alternate screen",
@@ -109,19 +108,20 @@ describe("control plane executable, terminal protocol", () => {
 				);
 				await sig.waitForStable(500, STABLE_TIMEOUT_MS);
 
-				// SIGINT to the wrapper, as Ctrl-C reaches it. The wrapper must
-				// forward it to the entry and die from the same signal. With a
-				// handler left registered, the re-raise re-enters the handler
-				// and loops, so this never resolves and the timeout fails.
+				// SIGINT, as Ctrl-C reaches the running control plane. The entry
+				// runs in the same process as the bin, so the signal must
+				// terminate it promptly with a clean exit, not hang or spin in a
+				// handler: a hung process never resolves the exit and the timeout
+				// fails.
 				const pid = sig.child.pid;
-				if (pid === undefined) throw new Error("the wrapper reported no pid");
+				if (pid === undefined) throw new Error("the control plane reported no pid");
 				process.kill(pid, "SIGINT");
 				const exit = await withTimeout(
 					sig.exit(),
 					EXIT_TIMEOUT_MS,
-					"the wrapper to die from SIGINT",
+					"the control plane to exit from SIGINT",
 				);
-				expect(exit.signal).toBe("SIGINT");
+				expect(exit.code).toBe(0);
 			} finally {
 				sig?.dispose();
 				rmSync(isolated, { recursive: true, force: true });
@@ -178,14 +178,13 @@ describe("control plane executable, terminal protocol", () => {
 	for (const failure of startupFailures) {
 		it(
 			`exits with a readable error before the UI starts for ${failure.name}`,
-			async (ctx) => {
+			async () => {
 				const isolated = mkdtempSync(join(tmpdir(), "factory-exec-failure-"));
 				let bad: PtySession | null = null;
 				try {
 					bad = await openControlPlanePty(failure.argv(isolated), isolatedEnv(isolated));
 					if (bad === null) {
-						ctx.skip("cannot open a pseudo-terminal on this platform");
-						return;
+						throw new Error("cannot open a pseudo-terminal on this platform");
 					}
 					const output = await bad.waitFor(
 						(out) => out.toString("utf8").includes(failure.needle),
@@ -211,15 +210,14 @@ describe("control plane executable, terminal protocol", () => {
 
 	it(
 		"starts from the seeded Default configuration with a note when the config file is missing",
-		async (ctx) => {
+		async () => {
 			const isolated = mkdtempSync(join(tmpdir(), "factory-exec-defaults-"));
 			let defaults: PtySession | null = null;
 			try {
 				const missing = join(isolated, "does-not-exist.toml");
 				defaults = await openControlPlanePty(["--config", missing], isolatedEnv(isolated));
 				if (defaults === null) {
-					ctx.skip("cannot open a pseudo-terminal on this platform");
-					return;
+					throw new Error("cannot open a pseudo-terminal on this platform");
 				}
 				await defaults.waitFor(
 					(out) => out.includes(ALT_SCREEN),
@@ -253,7 +251,7 @@ describe("control plane executable, terminal protocol", () => {
 	);
 });
 
-describe("control plane executable, the startup Model list check", () => {
+describe.skipIf(!ptyAvailable())("control plane executable, the startup Model list check", () => {
 	/**
 	 * The config the check reads: one task profile that names a model, against
 	 * one `pi` agent that maps the setting (ADR 0010).
@@ -313,13 +311,12 @@ describe("control plane executable, the startup Model list check", () => {
 
 	it(
 		"a config that names an unavailable model stops the control plane before it opens anything",
-		async (ctx) => {
+		async () => {
 			const dir = mkdtempSync(join(tmpdir(), "factory-exec-model-"));
 			const { session, statePath } = await boot(dir, true);
 			if (session === null) {
 				rmSync(dir, { recursive: true, force: true });
-				ctx.skip("cannot open a pseudo-terminal on this platform");
-				return;
+				throw new Error("cannot open a pseudo-terminal on this platform");
 			}
 			try {
 				// The error line the operator reads instead of losing a ticket.
@@ -344,15 +341,14 @@ describe("control plane executable, the startup Model list check", () => {
 
 	it(
 		"a Model list that cannot be fetched warns and lets the control plane start",
-		async (ctx) => {
+		async () => {
 			const dir = mkdtempSync(join(tmpdir(), "factory-exec-model-"));
 			// No `pi` on PATH: the query fails, so the value stays unchecked and the
 			// boot continues. One silent agent kind must not block the control plane.
 			const { session, statePath } = await boot(dir, false);
 			if (session === null) {
 				rmSync(dir, { recursive: true, force: true });
-				ctx.skip("cannot open a pseudo-terminal on this platform");
-				return;
+				throw new Error("cannot open a pseudo-terminal on this platform");
 			}
 			try {
 				await session.waitFor(

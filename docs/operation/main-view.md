@@ -8,14 +8,47 @@ description: The Main view's two sections, its counts, its controls, and the lay
 ![The Main view: the Ticket and Consultation sections on the left, the
 detail of the selected ticket on the right](images/main-view.png)
 
-The Main view holds two list sections on the left, the Ticket section on
-top and the Consultation section below, and one context-dependent detail
-pane on the right that shows the detail of the item the cursor holds. One
-control catalogue, one Action bar, and one Message line answer for both.
-Both sections start expanded; `x` or a click on a section header collapses
-the section under the cursor to its header row, and the same toggle restores
-it. Up and down move the cursor through the visible rows and cross the
-section boundary when the sections are adjacent. The mode the bar and the
+The Main view holds three list sections on the left, the Ticket section on
+top, the Consultation section below it, and the Work section below that,
+plus one context-dependent detail pane on the right that shows the detail
+of the item the cursor holds. One control catalogue, one Action bar, and
+one Message line answer for all of them. The Ticket and Consultation
+sections start expanded; `x` or a click on a section header collapses the
+section under the cursor to its header row, and the same toggle restores
+it. The Work section holds the manual starts that wait for a Parallel
+limit seat (ADR 0034): its header carries the depth, and it stays hidden
+while it is empty and collapsed, so an idle factory keeps its two-Section
+frame. A queued Handoff start carries the ticket's title, the start's
+origin, and its place in the queue; the detail pane shows the choice the
+start carried. A queued Consultation start (issue #90) carries the kind
+word and the record's identity prefix, and the detail pane reads the record
+the item names - the ask, the type, the state - with the record gone saying
+so in its place. `u` and `d` move the item under the cursor one place toward
+the front or the back, `Delete` removes it - the ticket keeps the state it
+wore while it waited, and a Consultation item unschedules the record (issue
+#91): the record keeps its ask in `unscheduled` state, listed in the
+Consultation section - and Enter force-dispatches the item under the cursor
+(issue #89, ADR 0034): it starts now, even when the Parallel limit is full,
+and re-runs every start check the queue's pickup runs except the cap, so the
+seat count can stand over the limit until the work settles. A force-dispatch
+that fails leaves the item out of the queue with the failure on the Message
+line, and the ticket keeps its state. A Consultation item runs the same
+force-dispatch over the cap (ADR 0034, issue #90): its record takes its seat
+in the atomic move to `opening`, the line names the cap when the seat count
+stood over it, and the item leaves the queue on the answer. A Handoff in
+flight refuses the key on a Handoff item only: a Consultation start never
+parks on the herdr seat a Handoff holds, the way a launcher submit does not. The removal cancels the start
+everywhere the factory
+holds it: a claim its pickup already made and the herdr seat parked ends with
+the row, and it never starts an Agent the operator removed. The one exception
+is a start whose work had already reached herdr: that Agent runs, and the
+removed row adds no second line about it. The line the cancel writes states
+only what the module measured: a removal when a row stood under the cursor,
+and the queue holding no such row when its pickup had already taken it. Up and down move
+the cursor through the visible rows and cross the section boundary when the
+sections are adjacent. `d` and `f` belong to the Consultation section: in the
+Work queue they state that section's refusal, and the queue's guide and Action
+bar name neither key (issue #85, ADR 0034). The mode the bar and the
 guide state derives from the section that holds the cursor and its focused
 pane.
 
@@ -50,7 +83,8 @@ ticket off with `Enter`, open the decision modal on an awaiting one, the
 missing modal on a ticket whose agent is gone, and the override panel with
 `e`. `=`, `+`, and `-` bump a ticket's priority up and down through the
 configured rank, and Backspace clears it to the label rank or unranked. `a` toggles
-auto-handoff, `r` refreshes, and `q` quits.
+auto-handoff, `r` refreshes, `g` goes to the agent's pane, `w` closes the work
+cycle of the selected ticket behind a confirmation (ADR 0031), and `q` quits.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -58,9 +92,11 @@ the Action bar reserve the two bottom rows at every terminal size, and each
 list section reserves its header row plus a minimum of three content rows:
 below the smallest useful frame (40 columns by 19 rows) the panes give way
 to a size message and a compact Help control, a section that cannot hold its
-minimum collapses rather than vanishing so both headers keep their counts, and
-a surface that cannot draw its own rows says so instead of painting them over
-its border. One hint holds the row's end cells: Help on a
+minimum collapses rather than vanishing so the section headers keep their
+counts, and a surface that cannot draw its own rows says so instead of
+painting them over its border. The Work section burns no such row while it
+is empty and collapsed, so an idle factory keeps its two-Section frame at
+the smallest terminal. One hint holds the row's end cells: Help on a
 bar that can open the Key guide, and the overlay's own Close on a utility
 overlay. A frame too narrow for that hint states one of its whole keys, so the
 way out of a screen is named at any width and never cut in half.
@@ -70,11 +106,15 @@ The keys the override panel answers with live on the
 
 ## Layout
 
-The Main view is one surface with two list sections, the Ticket section on
-top and the Consultation section below, and one context-dependent detail pane
-on the right (ADR 0019). Both sections start expanded, and the detail pane
-shows the detail of whichever item the cursor holds: the ticket detail on a
-ticket, the Consultation detail on a Consultation. `x` or a click on a header
+The Main view is one surface with three list sections, the Ticket section
+on top, the Consultation section below it, and the Work section below
+that, and one context-dependent detail pane on the right (ADR 0019, and
+ADR 0034 for the Work section). The Ticket and Consultation sections start
+expanded, and the detail pane shows the detail of whichever item the
+cursor holds: the ticket detail on a ticket, the Consultation detail on a
+Consultation, and the queued start's captured choice on a Work row. The
+Work section hides itself while it is empty and collapsed, so an idle
+factory draws its two-Section frame. `x` or a click on a header
 toggles the section under the cursor: it shrinks to its header row and its
 rows leave the navigation flow, and the same toggle restores it. A collapsed
 section keeps its list selection, and the selection and detail of a collapsed
@@ -92,9 +132,10 @@ non-zero. The Consultation header carries that section's attention facts, its
 awaiting-response and recovery counts, the bell marker while the bell rings,
 and "new output" while that fact holds, so a Consultation that needs
 the operator is visible whether the section is expanded or collapsed and no
-free-standing attention line exists. A section that cannot hold its minimum collapses rather than
-vanishing, so both headers keep their counts; below the smallest useful frame
-the compact frame drops the panes with a size message.
+free-standing attention line exists. The Work header carries its queue
+depth. A section that cannot hold its minimum collapses rather than
+vanishing, so the section headers keep their counts; below the smallest
+useful frame the compact frame drops the panes with a size message.
 
 Two panes side by side, flex-sized to the terminal.
 The list pane on the left shows the tickets of the Ticket section with their
@@ -131,7 +172,8 @@ The vertical keys act on the focused pane.
 With the list focused, they move the selection and cross the section boundary
 when the sections are adjacent: from the last row of the Ticket list the next
 down lands on the Consultation list, and the next up from its first row lands
-back on the tickets. Page keys move by one visible
+back on the tickets. While the Work section stands expanded, the same step
+crosses from the Consultation list down into it and back up. Page keys move by one visible
 list page, and Home and End select the list edges. With the detail focused,
 the row keys move at the configured speed, PageUp and PageDown retain one row
 of context, and Home and End move to the detail edges. A new selection starts
@@ -173,16 +215,37 @@ a handoff is in flight keys keep working, and `e` is refused with a warning. A s
 records its attempt, which blocks a further claim on the same ticket, and
 queues its external work until the in-flight handoff settles; the ticket
 moves to `handed-off` only when the handoff settles and its agent starts,
-so claims never race each other. A leftover clear holds that same seat,
-and so does the Close cleanup of any path that runs one: an environment
-change and a handoff never work beside each other.
+so claims never race each other. The Close cleanup of any path that runs
+one holds that same seat: an environment change and a handoff never work
+beside each other.
 
 Above the panes sits a mode line. It shows the auto-handoff state and the
-live agents against the parallel limit: `auto: on 1/2`, or `auto: off 1`
-when no limit is set. The count is the in-flight tickets whose agent was
-alive in the latest herdr poll. The `a` key toggles the mode for the
-session from the Ticket section; the config's `auto-handoff` key sets the
-startup value only.
+Parallel limit seat count against the parallel limit: `auto: on 2/2`, or
+`auto: off 1` when no limit is set. The count is the one shared
+seat-count source the automatic start gates read: the in-flight tickets
+whose agent was alive in the latest herdr poll, or is still inside its
+startup grace, the handoffs still in progress, and every Consultation in
+`opening` or `working`. The gates and the mode line read the same source,
+so the two never disagree. The `a` key in the Ticket section toggles the
+mode and writes it to the state file at once, so a restart or a dev reload
+finds the mode where the operator left it; a state file the plane has just
+created starts with the mode off (ADR 0036). A write the state file refuses
+reports on the Message line, and the flip stands for the session.
+
+A ticket in the Starting window wears the window's face in the state badge
+slot: the Handoff is claimed and not yet settled, or the ticket is
+`handed-off`. The face is an animated spinner with the written word
+`starting`, and it stands in the list row and the detail pane's state line
+in place of the state badge. The `[handed-off]` badge is never drawn: the
+face wears the badge's slot from the keypress, and the row's timeline is
+`[open]`, face, `[running]` - one face on the way in, one flip when the work
+is observed. The face ends when the observation moves the ticket to
+`running`, when a settle moves it to `awaiting` or held, or when a start
+fails and returns the row to its state with the error line. Every origin
+wears the same face: a manual hand-off, a workflow route, a restart, and an
+auto hand-off. The face is a shared control with a gallery example, and the
+animated glyph is not what the frame snapshots verify: the checks run on the
+written word beside any glyph of the face.
 
 A blocked agent replaces the state badge in the list row with a `blocked`
 badge: the agent shows an approval or question UI and waits for a human.
@@ -191,11 +254,17 @@ against the parallel limit. A missing agent replaces the state badge with a
 `missing` badge: the stored pane is gone or holds no agent, so the work
 stops there until the operator restarts or abandons the cycle. Both badges
 clear when the next poll no longer shows the condition. The first poll has
-not landed yet, so no badge appears before it.
+not landed yet, so no badge appears before it. The failure markers beat the
+Starting window's face the way they beat the state badge: a dead or blocked
+agent is never hidden behind a spinner, and a crash remnant shows its
+recovery fact, not the spinner. A `handed-off` ticket under a marker wears
+that marker's own word in the detail's state line too: the `[handed-off]`
+badge is drawn by no surface, and the row and the detail never disagree.
 A ticket that has used up its per-ticket handoff limit wears a trailing
 `handoff limit` marker at the end of the row, and the detail pane shows the
 count as `Handoffs: 2/2`. Auto-handoff leaves such a ticket open; a manual
 handoff may still pass the limit.
 A ticket whose previous herdr environment is still alive wears a trailing
 `leftover` marker, and its detail pane names the workspace, tab, and pane that
-remain, the reason the control plane knows, and since when. `w` clears it.
+remain, the reason the control plane knows, and since when. The detail states
+that the cleanup runs in herdr, not in the control plane (ADR 0032).

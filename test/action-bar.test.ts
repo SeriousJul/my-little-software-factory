@@ -12,10 +12,11 @@
  * The frame tests boot the real app through the shared harness; no mock
  * sees a key.
  */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
@@ -46,6 +47,7 @@ import {
 	settle,
 	sleep,
 	spanColorAt,
+	startingFaceOf,
 	WIDTH,
 	withApp,
 } from "./app-harness.ts";
@@ -128,6 +130,10 @@ describe("the contextual Action bar", () => {
 				}
 				// Help stays discoverable at the right end of the row.
 				expect(bar.endsWith("? Help")).toBe(true);
+				// Delete and History belong to the Consultation section's
+				// catalog: the Ticket bar omits the keys the Ticket guide omits.
+				expect(bar).not.toContain("f History");
+				expect(bar).not.toContain("d Delete");
 				const barRow = rowsOf(frame).length - 1;
 				// Available: the key wears the focus color, the label the text color.
 				expect(spanColorAt(setup, barRow, "→/l ")).toEqual(rgb(roleColor("accent")));
@@ -275,7 +281,7 @@ describe("the contextual Action bar", () => {
 				const panelBar = actionBarRowOf(panelFrame);
 				for (const hint of [
 					"↑↓ Select action",
-					"j/k Scroll log",
+					"j/k Scroll body",
 					"Enter Confirm action",
 					"Esc Cancel",
 					"F1/? Help",
@@ -351,10 +357,11 @@ describe("the contextual Action bar", () => {
 			async (setup) => {
 				// Every step of the packing ladder, with the hints that must
 				// survive it. The removal order is the catalogue priority:
-				// Launch, Section, Refresh, Override, Hand off, Detail, Move,
-				// and Help last. The spec's common controls of the base modes,
-				// Override and Refresh, therefore outlive the Launch entry the
-				// control plane reached for.
+				// Launch, Section, Close, Refresh, Override, Goto, Hand off,
+				// Detail, Move, and Help last. The spec's common controls of the
+				// base modes, Override and Refresh, therefore outlive the Launch
+				// entry the control plane reached for, and the Ticket's Close
+				// (ADR 0031) keeps the Consultation section's rank.
 				const ladder: Array<[number, string[]]> = [
 					[
 						120,
@@ -362,6 +369,8 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
+							"g Goto",
+							"w Close",
 							"x Section",
 							"c Launch",
 							"e Override",
@@ -369,16 +378,17 @@ describe("the contextual Action bar", () => {
 							"? Help",
 						],
 					],
-					// The widths the last review measured: the Launch entry gives
-					// way first, and the spec's common controls stay.
+					// The widths the last review measured: the spec's common
+					// controls stay.
 					[
 						100,
 						[
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
+							"g Goto",
+							"w Close",
 							"x Section",
-							"c Launch",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -390,8 +400,8 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
-							"x Section",
-							"c Launch",
+							"g Goto",
+							"w Close",
 							"e Override",
 							"r Refresh",
 							"? Help",
@@ -403,15 +413,15 @@ describe("the contextual Action bar", () => {
 							"↑↓/jk Move",
 							"→/l Detail",
 							"Enter Hand off",
-							"x Section",
+							"g Goto",
 							"e Override",
 							"r Refresh",
 							"? Help",
 						],
 					],
-					[75, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "r Refresh", "? Help"]],
-					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "e Override", "? Help"]],
-					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "? Help"]],
+					[75, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "g Goto", "e Override", "? Help"]],
+					[65, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "g Goto", "? Help"]],
+					[55, ["↑↓/jk Move", "→/l Detail", "Enter Hand off", "g Goto", "? Help"]],
 					[45, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 					[40, ["↑↓/jk Move", "→/l Detail", "? Help"]],
 				];
@@ -422,7 +432,16 @@ describe("the contextual Action bar", () => {
 					const bar = rows.at(-1) ?? "";
 					for (const hint of kept) expect(bar).toContain(hint);
 					expect(bar.trimEnd().endsWith("? Help")).toBe(true);
-					for (const gone of ["Detail", "Hand off", "Section", "Launch", "Override", "Refresh"]) {
+					for (const gone of [
+						"Detail",
+						"Hand off",
+						"Goto",
+						"Section",
+						"Launch",
+						"Close",
+						"Override",
+						"Refresh",
+					]) {
 						if (!kept.some((hint) => hint.includes(gone))) expect(bar).not.toContain(gone);
 					}
 				}
@@ -564,9 +583,17 @@ describe("the contextual Action bar", () => {
 				// Help: ? opens the guide, F1 closes it.
 				await openGuide(setup, "?");
 				await closeOverlay(setup, "Key guide", "the guide to close", "F1");
-				// Hand off: Enter starts the handoff, and it settles.
-				await press(setup, "return", "the handoff to settle", (f) =>
-					(rowsOf(f)[markerRowOf(f)] ?? "").includes("[handed-off]"),
+				// Hand off: Enter starts the handoff, and it settles. The row
+				// takes the Starting window's spinner face on the keypress
+				// (ADR 0030), and the face stays with the settled `handed-off`
+				// state: the settle is the Working line clearing.
+				await press(
+					setup,
+					"return",
+					"the handoff to settle",
+					(f) =>
+						startingFaceOf(rowsOf(f)[markerRowOf(f)] ?? "") !== null &&
+						!messageRowOf(f).includes("Working:"),
 				);
 				expect(runner.commands()).toHaveLength(7);
 			},
@@ -1008,7 +1035,9 @@ describe("the contextual Action bar", () => {
 					async (setup) => {
 						await crossToConsultations(setup);
 						await awaitFrame(setup, (f) => f.includes("State: opening"), "the consultations view");
-						await press(setup, "z", "the close panel", (f) => f.includes("Close Consultation"));
+						await press(setup, "w", "the close confirmation", (f) =>
+							f.includes("Close Consultation"),
+						);
 						pressCtrlC(setup);
 						await destroyed(setup);
 					},

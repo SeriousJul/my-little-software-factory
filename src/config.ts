@@ -203,7 +203,34 @@ export interface TransitionOutcome {
 	positionTicketIdentity: string | null;
 }
 
-export type GitHubSourceKind = "github-issues" | "github-pull-requests";
+export type GitHubSourceKind =
+	| "github-issues"
+	| "github-pull-requests"
+	| "github-security-advisories"
+	| "github-dependabot-alerts"
+	| "github-secret-scanning-alerts";
+
+/**
+ * The security feed source kinds (issue #73). They read the repository
+ * security endpoints as REST calls, not GitHub searches, so they take no
+ * `filter`: a filter there would be silently ignored and misread as applied.
+ */
+export const SECURITY_SOURCE_KINDS = [
+	"github-security-advisories",
+	"github-dependabot-alerts",
+	"github-secret-scanning-alerts",
+] as const;
+
+export function isSecuritySourceKind(kind: string): kind is (typeof SECURITY_SOURCE_KINDS)[number] {
+	return (SECURITY_SOURCE_KINDS as readonly string[]).includes(kind);
+}
+
+/** The source kinds the config validator accepts. */
+const GITHUB_SOURCE_KINDS: readonly string[] = [
+	"github-issues",
+	"github-pull-requests",
+	...SECURITY_SOURCE_KINDS,
+];
 
 export interface GitHubAuthentication {
 	/** A literal token. It is never passed in argv. */
@@ -254,8 +281,6 @@ export interface FactoryConfig {
 	attentionBell: boolean;
 	/** The semantic key which exits Agent interaction mode. */
 	interactionExitKey: InteractionExitKey;
-	/** Whether the control plane auto-hands-off open tickets. Off at startup. */
-	autoHandoff: boolean;
 	/** Agents the control plane keeps in flight; 0 means unlimited. */
 	maxParallelAgents: number;
 	/** How often the control plane polls herdr for agent states. */
@@ -534,7 +559,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		"ticket-sources",
 		"states",
 		"state-file",
-		"auto-handoff",
 		"max-parallel-agents",
 		"agent-poll-interval-seconds",
 		"completion-message-lines",
@@ -542,16 +566,19 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		"scroll",
 		"priority",
 	]);
+	// The pre-workflow-machine keys (ADR 0027) are named before any other key
+	// is judged: the load migrates a file that carries them, and a file that
+	// still does after the migration, or a config validated without going
+	// through the load, is a config error that points at the backup the
+	// migration left, whatever other key the file also holds.
 	for (const key of Object.keys(data)) {
 		if (key === "task-rules" || key === "workflows") {
-			// The pre-workflow-machine keys (ADR 0027). The load migrates a file
-			// that carries them; a file that still does after the migration, or
-			// a config validated without going through the load, is a config
-			// error that points at the backup the migration left.
 			throw new ConfigError(
 				`config: "${key}" is a pre-workflow-machine key; the config migrates to "states" and task-type transitions at load (see the .bak backup and the migration report)`,
 			);
 		}
+	}
+	for (const key of Object.keys(data)) {
 		if (!knownTop.has(key)) {
 			throw new ConfigError(`config: unknown top-level key "${key}"`);
 		}
@@ -615,7 +642,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		}
 	}
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
-	const autoHandoff = booleanField(data, "auto-handoff", false);
 	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
 	const agentPollIntervalSeconds = positiveNumberField(data, "agent-poll-interval-seconds", 5);
 	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
@@ -636,7 +662,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		consultationTypes,
 		attentionBell,
 		interactionExitKey,
-		autoHandoff,
 		maxParallelAgents,
 		agentPollIntervalSeconds,
 		completionMessageLines,
@@ -928,7 +953,10 @@ function validateConsultationTypes(
 		if (agentConfig === undefined)
 			throw new ConfigError(`${where}.agent: unknown agent "${agentName}"`);
 		const agent: ResolvedAgentType = { agentType: agentName, agent: agentConfig };
-		const environment = stringField(raw, "environment", where);
+		// A type that names no environment starts in an isolated worktree, not
+		// in the operator's live checkout.
+		const environment =
+			raw.environment === undefined ? "worktree" : stringField(raw, "environment", where);
 		if (!(HANDOFF_ENVIRONMENT_KINDS as readonly string[]).includes(environment))
 			throw new ConfigError(
 				`${where}.environment: must be one of: ${HANDOFF_ENVIRONMENT_KINDS.join(", ")}`,
@@ -1294,8 +1322,18 @@ function validateSources(value: unknown): TicketSourceConfig[] {
 		if (names.has(name)) throw new ConfigError(`config: duplicate source name "${name}"`);
 		names.add(name);
 		const kind = stringField(raw, "kind", where);
-		if (kind !== "github-issues" && kind !== "github-pull-requests") {
-			throw new ConfigError(`config: ${where}.kind: unknown source kind "${kind}"`);
+		if (!(GITHUB_SOURCE_KINDS as readonly string[]).includes(kind)) {
+			throw new ConfigError(
+				`config: ${where}.kind: unknown source kind "${kind}"; use ${GITHUB_SOURCE_KINDS.join(", ")}`,
+			);
+		}
+		// The security feeds are REST endpoints, not GitHub searches. A filter
+		// on one would be silently ignored, so a source that misreads it as
+		// applied never starts (issue #73).
+		if (isSecuritySourceKind(kind) && raw.filter !== undefined) {
+			throw new ConfigError(
+				`config: ${where}.filter: the ${kind} source kind lists its items by state and takes no filter; a filter would be silently ignored`,
+			);
 		}
 		const interval = raw["refresh-interval-seconds"];
 		if (typeof interval !== "number" || !Number.isFinite(interval) || interval <= 0) {
@@ -1317,7 +1355,7 @@ function validateSources(value: unknown): TicketSourceConfig[] {
 		const auth = raw.auth === undefined ? undefined : validateAuth(raw.auth, `${where}.auth`);
 		return {
 			name,
-			kind,
+			kind: kind as GitHubSourceKind,
 			refreshIntervalSeconds: interval,
 			repositories: [...raw.repositories] as string[],
 			host,
@@ -1517,7 +1555,6 @@ export function configToToml(config: FactoryConfig): string {
 		),
 		"attention-bell": config.attentionBell,
 		"interaction-exit-key": config.interactionExitKey,
-		"auto-handoff": config.autoHandoff,
 		"max-parallel-agents": config.maxParallelAgents,
 		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
 		"completion-message-lines": config.completionMessageLines,

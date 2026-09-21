@@ -1,13 +1,14 @@
 /**
- * The Consultation confirm panel: a read-only message and the rows the
- * operator can confirm on it.
+ * The confirmation panel: a read-only message and the rows the operator can
+ * confirm on it.
  *
- * It serves the Consultation surfaces that predate the control catalogue:
- * closing, deleting, and the live-checkout conflict. The control plane's own
- * decisions render through the decision modal and the missing modal, which
- * share this module's chrome but dispatch their keys through the catalogue.
+ * It serves the surfaces that ask before they act: the Consultation close,
+ * delete, and live-checkout conflict, and the Ticket close the control plane
+ * confirms key `w` behind (ADR 0031). The plane's turn decisions render
+ * through the decision modal and the missing modal, which share this
+ * module's chrome and dispatch.
  *
- * The keys stay the panel's own until the Consultations port lands: up and
+ * The panel dispatches through the catalogue like every other surface: up and
  * down move the action rows, j/k scroll the message, enter confirms the
  * selected action, esc cancels. While it is open, the keys of the app below
  * are disabled.
@@ -19,8 +20,9 @@ import { useControlDispatch } from "./control-dispatch.ts";
 import { type ControlContext, contextFor } from "./controls.ts";
 import { windowOf } from "./geometry.ts";
 import type { MessageFact } from "./messages.ts";
-import { type ActionRow, ModalSurface, modalFrame, useActionSelection } from "./modal-chrome.ts";
+import { type ActionRow, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ActionItem } from "./shared/choices.ts";
+import { useDecisionRegion } from "./shared/region.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import { paint } from "./theme.ts";
 
@@ -44,18 +46,6 @@ interface ActionPanelProps {
 
 /** The message column stops at 60 cells: a confirmation line is short. */
 const CONTENT_WIDTH = 60;
-/** The modal chrome: one border and one padding cell on each side. */
-const CHROME = 4;
-
-/**
- * The columns the panel gives its message.
- *
- * The caller that builds the body lines clips to this width, so a line the
- * panel would have to wrap or drop is cut where the panel really renders it
- * instead of at a width the panel only has on a wide terminal.
- */
-export const panelBodyCols = (terminalWidth: number): number =>
-	Math.max(1, Math.min(CONTENT_WIDTH, terminalWidth - CHROME));
 
 /** The message window caps here; the rest scrolls. */
 const MAX_BODY_ROWS = 8;
@@ -104,7 +94,9 @@ export function ActionPanel({
 		: Math.min(wrapped.length, bodyRows);
 	const maxBodyScroll = Math.max(0, wrapped.length - shownBodyRows);
 	const [bodyScroll, setBodyScroll] = useState(0);
-	const selection = useActionSelection(actions);
+	// The panel's rows are the region's: the shared selection, its wrap, and
+	// its window, with every row shown, the way the decision's region does.
+	const selection = useDecisionRegion(actions, actions.length);
 	const actionContext = contextFor("action-panel", {
 		...(context ?? {
 			listCanMove: false,
@@ -115,6 +107,7 @@ export function ActionPanel({
 			messageTruncated: false,
 			consultationTypesConfigured: false,
 		}),
+		actionRowCount: actions.length,
 	});
 	useControlDispatch({
 		mode: "action-panel",
@@ -144,28 +137,30 @@ export function ActionPanel({
 		frame,
 		width: terminalWidth,
 		title,
-		borderColor: paint("accent"),
 		// Every action row plus one line of body: without them the panel states a
 		// problem with no way to answer it.
-		minContentRows: actions.length + 1,
+		body: {
+			above: [],
+			below: [
+				...bodyShown.map((line, index) =>
+					createElement(
+						"text",
+						{ key: `body-${index}`, fg: paint("subtext0") },
+						truncateToWidth(line, frame.contentWidth),
+					),
+				),
+				...selection.window.map((row) =>
+					createElement(ActionItem, {
+						key: row.key,
+						row,
+						focused: actions[selection.at] === row,
+						width: frame.contentWidth,
+					}),
+				),
+			],
+			minRows: actions.length + 1,
+		},
 		message,
 		bar: { mode: "action-panel", context: actionContext },
-		children: [
-			...bodyShown.map((line, index) =>
-				createElement(
-					"text",
-					{ key: `body-${index}`, fg: paint("subtext0") },
-					truncateToWidth(line, frame.contentWidth),
-				),
-			),
-			...actions.map((row, index) =>
-				createElement(ActionItem, {
-					key: row.key,
-					row,
-					focused: index === selection.at,
-					width: frame.contentWidth,
-				}),
-			),
-		],
 	});
 }

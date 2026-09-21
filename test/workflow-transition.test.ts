@@ -9,10 +9,11 @@
  * Every test runs on a real in-memory state, a fake command runner, and
  * isolated test tickets. No test reaches GitHub or a real herdr session.
  */
+
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
 
 import type { FactoryConfig, WorkflowTransition } from "../src/config.ts";
 import type {
@@ -29,7 +30,7 @@ import {
 	fireTransition,
 	isDraft,
 	scoreFromMessage,
-	workflowLabelSet,
+	transitionLabelSet,
 } from "../src/workflow.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
@@ -338,11 +339,18 @@ describe("the review score", () => {
 		).toBe(85);
 	});
 
-	test("a plain score line is read too", () => {
-		expect(scoreFromMessage("Score: 92 out of 100.")).toBe(92);
-		// A score named in loose prose is not the fixed format: the plane
-		// reads the line the template's format carries, not any number.
+	test("a score named in loose prose is not a score", () => {
+		// The plane reads only the fixed format line the template carries, not
+		// any number in the message: a prose sentence that names a number is
+		// not the agent's verdict.
+		expect(scoreFromMessage("Score: 92 out of 100.")).toBeNull();
 		expect(scoreFromMessage("The total score is 61.")).toBeNull();
+	});
+
+	test("the last score line is the verdict", () => {
+		// The agent restates the score after a final pass: the earlier line is
+		// scratch, and the quoted number in between is not a line at all.
+		expect(scoreFromMessage("- **Score:** 40 / 100\nOn re-check: **Score:** 92 / 100")).toBe(92);
 	});
 
 	test("no score, and a number out of range, read as no score", () => {
@@ -352,8 +360,8 @@ describe("the review score", () => {
 	});
 });
 
-describe("the machine's workflow label set", () => {
-	test("it holds the labels the states match and the transitions write, and not the none set", () => {
+describe("the machine's written label set", () => {
+	test("it holds the labels the transitions write, and not the states' scoping labels", () => {
 		const config: FactoryConfig = {
 			...MACHINE_CONFIG,
 			workflowStates: [
@@ -372,11 +380,48 @@ describe("the machine's workflow label set", () => {
 				},
 			},
 		};
-		const labels = workflowLabelSet(config);
-		expect([...labels].sort()).toEqual(["mine", "mixed-case", "needs-triage"]);
+		const labels = transitionLabelSet(config);
+		expect([...labels].sort()).toEqual(["mine", "mixed-case"]);
+		// A scoping label the operator matches on is not a write fact: the
+		// fire never removes it.
+		expect(labels.has("needs-triage")).toBe(false);
 		expect(labels.has("do-not-process")).toBe(false);
-		expect(workflowLabelSet(config).has("mine")).toBe(true);
-		expect(workflowLabelSet(config).has("mixed-case")).toBe(true);
+		expect(labels.has("mine")).toBe(true);
+		expect(labels.has("mixed-case")).toBe(true);
+	});
+
+	test("a fire leaves a scoping label the state match names but no transition writes", async () => {
+		const config: FactoryConfig = {
+			...MACHINE_CONFIG,
+			workflowStates: [
+				{
+					name: "scoped",
+					taskType: "implement",
+					match: { sourceKind: "github-issue", labelsAll: ["factory"] },
+				},
+			],
+		};
+		const state = seededState(
+			issueTicketData({ labels: ["factory", "ready-for-agent"] }),
+			pullTicketData({ labels: ["factory"] }),
+		);
+		const runner = new FakeRunner();
+		const outcome = await fireTransition({
+			config,
+			state,
+			runner,
+			ticketIdentity: issueIdentity,
+			taskType: "implement",
+			message: "Opened the pull request.",
+		});
+		// The scoping label outlives the fire on both surfaces: the issue's
+		// write adds nothing and removes nothing, and the pull request's adds
+		// the fact and removes nothing.
+		expect(outcome?.ticketWrite).toBeNull();
+		expect(outcome?.pullRequestWrite).toEqual({ added: ["ready-for-review"], removed: [] });
+		expect(runner.commands()).toEqual([
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
 	});
 });
 
@@ -534,20 +579,20 @@ describe("the transition fire", () => {
 			positionTaskType: "review",
 			positionTicketIdentity: pullIdentity,
 		});
-		// The issue converges to no workflow label: the plane removes
-		// `ready-for-agent` itself, and never touches a label the machine
-		// does not own.
-		expect(outcome?.ticketWrite).toEqual({ added: [], removed: ["ready-for-agent"] });
-		// The pull request wore `ready-for-agent` too, the mistake issue #70
-		// records: the machine owns that label, so the write takes it off the
-		// pull request as well and leaves it on the review fact alone.
+		// The issue keeps its labels: `ready-for-agent` is a scoping label a
+		// state match names, and no transition writes it, so the fire never
+		// removes it, and the machine's own labels the issue does not wear
+		// add nothing.
+		expect(outcome?.ticketWrite).toBeNull();
+		// The pull request wears the written fact alone: the write adds it and
+		// removes no label, because the issue's scoping label is not a write
+		// fact.
 		expect(outcome?.pullRequestWrite).toEqual({
 			added: ["ready-for-review"],
-			removed: ["ready-for-agent"],
+			removed: [],
 		});
 		expect(runner.commands()).toEqual([
-			"gh issue edit #5 --repo github.com/acme/factory --remove-label ready-for-agent",
-			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review --remove-label ready-for-agent",
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
 		]);
 	});
 
@@ -651,10 +696,8 @@ describe("the transition fire", () => {
 			reason: "no linked pull request was found for the ticket",
 			positionTaskType: null,
 		});
-		expect(outcome?.ticketWrite).toEqual({ added: [], removed: ["ready-for-agent"] });
-		expect(runner.commands()).toEqual([
-			"gh issue edit #5 --repo github.com/acme/factory --remove-label ready-for-agent",
-		]);
+		expect(outcome?.ticketWrite).toBeNull();
+		expect(runner.commands()).toEqual([]);
 	});
 
 	test("a blocked merge moves the pull request to rework, and a merged one writes nothing", async () => {

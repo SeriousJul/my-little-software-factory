@@ -11,7 +11,8 @@
  * the Goto, and becomes the decision modal when the turn settles and the
  * factory waits for the operator; Enter on an in-flight ticket whose pane
  * herdr no longer lists opens the missing modal (restart or abandon).
- * `a` toggles auto-handoff in the Ticket section.
+ * `a` toggles auto-handoff in the Ticket section and writes the mode to the
+ * state file at once, so the next run reads it back (ADR 0036).
  *
  * The Main view is one surface with two independently collapsable sections
  * (ADR 0019): both lists stay in the left column, both expanded by default,
@@ -61,13 +62,15 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
+import type { HerdrAgent } from "../herdr.ts";
 import {
-	type HerdrAgent,
 	HerdrAgentReader,
 	matchConsultationAgent,
 	normalizeAgentStatus,
 	ObservationCoordinator,
+	STARTUP_GRACE_MS,
 } from "../observation.ts";
+import { parallelSeatCount } from "../parallel.ts";
 import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -79,7 +82,12 @@ import {
 	supportsModelList,
 } from "../runner.ts";
 import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts";
-import type { Consultation, FactoryState } from "../state.ts";
+import {
+	type Consultation,
+	type FactoryState,
+	type WorkQueueItem,
+	workQueueIdentityOf,
+} from "../state.ts";
 import { currentThemeResolution } from "../theme-source.ts";
 import type { TicketSource } from "../ticket-source.ts";
 import {
@@ -90,8 +98,9 @@ import {
 } from "../turn-log.ts";
 import { fireTransition } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
-import { ActionPanel, panelBodyCols } from "./action-panel.ts";
+import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
+import { consultationClosePanel } from "./consultation-close-panel.ts";
 import {
 	ConsultationDetail,
 	consultationDetailBody,
@@ -100,6 +109,7 @@ import {
 } from "./consultation-detail.ts";
 import { ConsultationLauncher, type LauncherDraft } from "./consultation-launcher.ts";
 import { ConsultationList } from "./consultation-list.ts";
+import { consultationRecoveryPanel } from "./consultation-recovery-panel.ts";
 import { createControlDispatch, refusalReason, refusalText } from "./control-dispatch.ts";
 import {
 	availabilityFor,
@@ -125,16 +135,14 @@ import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
-import { padToWidth, truncateToWidth, truncateWithEllipsis, widthOf } from "./text.ts";
-import { paint } from "./theme.ts";
-import {
-	detailScrollRoom,
-	leftoverWhere,
-	TicketDetail,
-	type TicketDetailHandle,
-} from "./ticket-detail.ts";
+import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
+import { inStartingWindow, paint } from "./theme.ts";
+import { ticketCloseDialog } from "./ticket-close.ts";
+import { detailScrollRoom, TicketDetail, type TicketDetailHandle } from "./ticket-detail.ts";
 import { TicketList } from "./ticket-list.ts";
 import { KeyGuide, MessageView } from "./utility.ts";
+import { workQueueDetailLines } from "./work-queue-detail.ts";
+import { WorkQueueList, type WorkQueueRow } from "./work-queue-list.ts";
 
 type Pane = "list" | "detail";
 interface StatusMessage {
@@ -146,11 +154,12 @@ type Panel =
 	| null
 	| { kind: "decision"; identity: string }
 	| { kind: "missing"; identity: string }
+	| { kind: "ticket-close"; identity: string }
 	| { kind: "consultation-close"; identity: string }
+	| { kind: "consultation-recovery"; identity: string }
 	| { kind: "consultation-force"; identity: string }
 	| { kind: "consultation-delete"; identity: string }
 	| { kind: "consultation-safety"; identity: string }
-	| { kind: "leftover"; identity: string }
 	| { kind: "live"; identity: string };
 
 /**
@@ -199,9 +208,8 @@ export type AppKey =
 	| "c"
 	| "f"
 	| "x"
-	| "z"
-	| "d"
 	| "w"
+	| "d"
 	| "up"
 	| "down"
 	| "left"
@@ -221,6 +229,7 @@ type Utility =
 	| null
 	| { kind: "guide"; mode: InteractionMode }
 	| { kind: "message"; mode: InteractionMode; fact: MessageFact };
+
 export interface AppProps {
 	/**
 	 * The validated config. The production entry always supplies it from the
@@ -295,8 +304,18 @@ export function App({
 	const ticketsExpandedRef = useRef(true);
 	const [consultationsExpanded, setConsultationsExpanded] = useState(true);
 	const consultationsExpandedRef = useRef(true);
-	const [selection, setSelection] = useState<"ticket" | "consultation">("ticket");
-	const selectionRef = useRef<"ticket" | "consultation">("ticket");
+	// The Work queue's section (ADR 0034): it stays hidden while it is empty
+	// and collapsed, so an idle factory keeps the two-section frame it had.
+	const [workExpanded, setWorkExpanded] = useState(false);
+	const workExpandedRef = useRef(false);
+	const [selection, setSelection] = useState<"ticket" | "consultation" | "queue">("ticket");
+	const selectionRef = useRef<"ticket" | "consultation" | "queue">("ticket");
+	// The queue row under the unified cursor, kept like the Consultation's:
+	// the section re-expands on the same row it left.
+	const [workQueueIndex, setWorkQueueIndex] = useState(0);
+	const workQueueIndexRef = useRef(0);
+	const [workQueueDetailScroll, setWorkQueueDetailScroll] = useState(0);
+	const workQueueDetailScrollRef = useRef(0);
 	const [consultations, setConsultations] = useState<Consultation[]>(
 		() => state?.consultations("open") ?? [],
 	);
@@ -342,8 +361,47 @@ export function App({
 	configRef.current = config;
 	ticketsExpandedRef.current = ticketsExpanded;
 	consultationsExpandedRef.current = consultationsExpanded;
+	workExpandedRef.current = workExpanded;
 	selectionRef.current = selection;
+	workQueueIndexRef.current = workQueueIndex;
+	workQueueDetailScrollRef.current = workQueueDetailScroll;
 	historyFilterRef.current = historyFilter;
+	// The Work queue read in queue order (ADR 0034): the manual starts waiting
+	// for a Parallel limit seat. It follows the other two projections: one read
+	// into UI state, re-read on the refresh every change ends in - the dispatch
+	// module's own report for an enqueue, a pickup, and a cancel it made, and the
+	// App's own re-read for the reorder and the cancel the operator asked for.
+	// The render never queries the state.
+	const [workQueue, setWorkQueue] = useState<readonly WorkQueueItem[]>(
+		() => state?.workQueue() ?? [],
+	);
+	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
+	workQueueRef.current = workQueue;
+	// The row the list draws: the item's ticket by its title while the ticket
+	// is still in the projection, by its identity once it is gone, and the
+	// Consultation's item by the record's identity prefix (ADR 0034, issue #90).
+	const workQueueRows: readonly WorkQueueRow[] = workQueue.map((item) => ({
+		item,
+		title:
+			item.kind === "consultation"
+				? item.consultationId.slice(0, 8)
+				: (tickets.find((ticket) => ticket.identity === item.ticketIdentity)?.title ??
+					item.ticketIdentity),
+	}));
+	// The cursor never rests on a queue that no longer holds its row: a pickup
+	// or a cancel that empties the section sends the selection home, and the
+	// retained index clamps to the rows that remain.
+	useEffect(() => {
+		if (workQueue.length === 0 && selection === "queue") {
+			selectionRef.current = "ticket";
+			setSelection("ticket");
+		}
+		const last = Math.max(0, workQueue.length - 1);
+		if (workQueueIndexRef.current > last) {
+			workQueueIndexRef.current = last;
+			setWorkQueueIndex(last);
+		}
+	}, [workQueue.length, selection]);
 	const [focusedPane, setFocusedPane] = useState<Pane>("list");
 	// Focus keys can arrive before React publishes the next render. The ref
 	// records that immediate intent, so the next navigation key stays with
@@ -371,20 +429,51 @@ export function App({
 		lines: readonly string[];
 		note: string | null;
 	} | null>(null);
-	const [autoMode, setAutoMode] = useState<boolean>(() => configProp.autoHandoff);
+	// The Auto-handoff mode is factory state (ADR 0036): the plane reads the
+	// operator's last choice back from the state file, so a restart or a dev
+	// reload finds the mode where it was left. A plane with no state has no
+	// durable mode to read, and starts with the mode off.
+	const [autoMode, setAutoMode] = useState<boolean>(() => state?.autoHandoffMode() ?? false);
 	const autoModeRef = useRef(autoMode);
 	const [agents, setAgents] = useState<readonly HerdrAgent[] | null>(null);
 	// The key handler outlives the render that made the decision it acts on,
 	// so the marker it re-checks reads the latest list through a ref.
 	const agentsRef = useRef<readonly HerdrAgent[] | null>(null);
 	agentsRef.current = agents;
+	/**
+	 * The one count the Parallel limit reads (issue #87, ADR 0034): the shared
+	 * seat count of the in-flight tickets, the in-progress handoffs, and the
+	 * Consultations in `opening` or `working`, from the latest herdr poll. The
+	 * dispatch module gates a manual start on it, the observation loop gates the
+	 * automatic starts on the same facts each cycle, and the mode line displays
+	 * it, so the three never disagree.
+	 */
+	const currentSeatCount = (): number =>
+		state === undefined
+			? 0
+			: parallelSeatCount({
+					state,
+					agents: agentsRef.current,
+					now: Date.now(),
+					startupGraceMs: STARTUP_GRACE_MS,
+				});
 	// The herdr seat: one external change to a ticket's environment at a time.
 	// A handoff holds it while herdr builds the environment and starts the
-	// agent. Close cleanups and leftover clears queue behind that work, and a
-	// queued cleanup reserves the seat until every earlier cleanup ends.
+	// agent. Close cleanups queue behind that work, and a queued cleanup
+	// reserves the seat until every earlier cleanup ends.
 	// The no-state test projection has no durable claim or queue. The real
 	// dispatch module owns the seat for every state-backed app.
 	const noStateHandoffInFlightRef = useRef(false);
+	// The tickets this run claimed and has not yet settled in a handoff
+	// (ADR 0030): the Starting window the row's spinner face reads. The
+	// dispatch module reports the add on the claim and the remove on the
+	// settle, so the set is per run: a restart starts empty, and the
+	// unresolved attempt a crashed run left behind is never in it.
+	const [startingTickets, setStartingTickets] = useState<ReadonlySet<string>>(() => new Set());
+	// The key handlers outlive the render that made the set, so the marker they
+	// check reads the latest set through the ref.
+	const startingTicketsRef = useRef(startingTickets);
+	startingTicketsRef.current = startingTickets;
 	const handoffDispatchRef = useRef<{ state: FactoryState; dispatch: HandoffDispatch } | undefined>(
 		undefined,
 	);
@@ -470,19 +559,14 @@ export function App({
 	}, [renderer, setWarningMessage]);
 	const visibleMessageText = visibleMessage === null ? "" : formatMessage(visibleMessage);
 	const messageTruncated = visibleMessage !== null && widthOf(visibleMessageText) > terminalWidth;
-	// The mode line carries the auto-handoff state and the live agent count:
-	// the in-flight tickets whose agent was alive in the latest poll, against
-	// the parallel limit. It exists only when the control plane has state to
-	// observe.
-	const liveCount =
-		agents === null
-			? 0
-			: tickets.filter(
-					(ticket) =>
-						(ticket.state === "handed-off" || ticket.state === "running") &&
-						(ticket.handoff?.paneId ?? null) !== null &&
-						agents.some((agent) => agent.paneId === ticket.handoff?.paneId),
-				).length;
+	// The mode line carries the auto-handoff state and the Parallel limit
+	// seat count: the same shared seat count the observation gates and the
+	// dispatch gate read (issue #87, ADR 0034) - the in-flight tickets the
+	// latest successful poll listed or still holds in their startup grace,
+	// every in-progress handoff, and every Consultation in opening or working
+	// - against the parallel limit. It exists only when the control plane has
+	// state to observe.
+	const liveCount = currentSeatCount();
 	// The Dispatch pause (ADR 0016): a held failed trace holds the automatic
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
@@ -558,36 +642,65 @@ export function App({
 	// and the minimum terminal holds exactly that (user story 29).
 	const SECTION_BOX_CHROME = 4;
 	const MIN_SECTION_BOX_ROWS = 3 + SECTION_BOX_CHROME;
+	// The Work section shows its header row only while it holds a row or the
+	// operator expanded it; a hidden Work section costs no row, so an idle
+	// factory keeps the two-section frame the minimum terminal holds.
+	const workVisible = workExpanded || workQueue.length > 0;
+	const sectionOpen: Record<"tickets" | "consultations" | "work", boolean> = {
+		tickets: ticketsExpanded,
+		consultations: consultationsExpanded,
+		work: workVisible && workExpanded,
+	};
 	let ticketsBoxRows = 0;
 	let consultationsBoxRows = 0;
+	let workBoxRows = 0;
 	if (!tooSmall) {
-		if (ticketsExpanded && consultationsExpanded) {
+		const openKeys = (["tickets", "consultations", "work"] as const).filter(
+			(key) => sectionOpen[key],
+		);
+		if (openKeys.length > 0) {
 			// The section under the cursor takes the remaining rows after the
-			// other section claims its minimum; at the minimum frame both
-			// hold their minimum.
-			const total = Math.max(0, bodyRows - 2);
-			const other = Math.min(MIN_SECTION_BOX_ROWS, Math.floor(total / 2));
-			const cursorSection = total - other;
-			if (selection === "ticket") {
-				ticketsBoxRows = cursorSection;
-				consultationsBoxRows = other;
-			} else {
-				ticketsBoxRows = other;
-				consultationsBoxRows = cursorSection;
+			// other open sections claim their minimum; at the minimum frame
+			// every open section holds its minimum. A collapsed section keeps
+			// its header as the row it expands from, so the headers count
+			// against the body's rows before the boxes split them.
+			const total = Math.max(0, bodyRows - (2 + (workVisible ? 1 : 0)));
+			const cursorKey =
+				selection === "ticket"
+					? "tickets"
+					: selection === "consultation"
+						? "consultations"
+						: "work";
+			const take: Partial<Record<"tickets" | "consultations" | "work", number>> = {};
+			let remaining = total;
+			for (const key of openKeys) {
+				if (key === cursorKey) continue;
+				const claim = Math.min(
+					MIN_SECTION_BOX_ROWS,
+					Math.max(0, Math.floor(remaining / openKeys.length)),
+				);
+				take[key] = claim;
+				remaining -= claim;
 			}
-		} else if (ticketsExpanded) {
-			// One expanded section owns the whole body: both header rows stay
-			// visible, because a collapsed section keeps its header as the
-			// row it expands from.
-			ticketsBoxRows = Math.max(0, bodyRows - 2);
-		} else if (consultationsExpanded) {
-			consultationsBoxRows = Math.max(0, bodyRows - 2);
+			if (openKeys.includes(cursorKey)) {
+				take[cursorKey] = Math.max(0, remaining);
+			} else {
+				// The cursor's section is not open (the queue emptied under
+				// the cursor): the last open section takes the remainder.
+				const last = openKeys[openKeys.length - 1];
+				take[last] = (take[last] ?? 0) + Math.max(0, remaining);
+			}
+			ticketsBoxRows = take.tickets ?? 0;
+			consultationsBoxRows = take.consultations ?? 0;
+			workBoxRows = take.work ?? 0;
 		}
 	}
 	const ticketsContentRows = ticketsExpanded ? Math.max(1, ticketsBoxRows - SECTION_BOX_CHROME) : 0;
 	const consultationsContentRows = consultationsExpanded
 		? Math.max(1, consultationsBoxRows - SECTION_BOX_CHROME)
 		: 0;
+	const workContentRows =
+		workVisible && workExpanded ? Math.max(1, workBoxRows - SECTION_BOX_CHROME) : 0;
 	// The Scroll control's availability must agree with the native detail's
 	// own overflow, so it asks the pane for the measurement rather than
 	// repeating the pane's gutter rule here.
@@ -619,6 +732,13 @@ export function App({
 	const selectedConsultationPaneAlive =
 		typeof selectedConsultation?.paneId === "string" &&
 		agents?.some((agent) => agent.paneId === selectedConsultation.paneId) === true;
+	// The same fact for the selected Ticket's handoff pane (ADR 0033): Goto
+	// focuses that pane, so an in-flight Ticket needs it alive in the last
+	// poll. An awaiting Ticket keeps its recorded pane instead.
+	const selectedTicketPaneId = selectedTicket?.handoff?.paneId ?? null;
+	const selectedTicketPaneAlive =
+		typeof selectedTicketPaneId === "string" &&
+		agents?.some((agent) => agent.paneId === selectedTicketPaneId) === true;
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
@@ -669,6 +789,30 @@ export function App({
 		detailGeometry.visibleRows,
 	);
 	const consultationDetailScroll = Math.min(consultationScroll, consultationMaxScroll);
+	// The Work queue's detail pane (ADR 0034): the facts of the item under the
+	// cursor - its ticket, its origin, its place in the queue, the choice it
+	// captured, and the message the start would carry in. The shared line
+	// pane scrolls it, like the Consultation detail.
+	const selectedWorkQueueRow = workQueueRows[workQueueIndex];
+	// A Consultation item's facts stand on the record it names (ADR 0034,
+	// issue #90), so the pane reads the record from the Consultation
+	// projection the app holds, the way the Consultation detail reads its
+	// own.
+	const selectedWorkQueueConsultationId =
+		selectedWorkQueueRow !== undefined && selectedWorkQueueRow.item.kind === "consultation"
+			? selectedWorkQueueRow.item.consultationId
+			: undefined;
+	const selectedWorkQueueRecord =
+		selectedWorkQueueConsultationId === undefined
+			? undefined
+			: consultations.find((record) => record.id === selectedWorkQueueConsultationId);
+	const queueDetailLines = workQueueDetailLines(
+		selectedWorkQueueRow,
+		workQueueRows.length,
+		selectedWorkQueueRecord,
+	);
+	const workQueueDetailMaxScroll = maxScrollOf(queueDetailLines.length, detailGeometry.visibleRows);
+	const workQueueDetailClampedScroll = Math.min(workQueueDetailScroll, workQueueDetailMaxScroll);
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
 		const currentConfig = configRef.current;
@@ -690,6 +834,10 @@ export function App({
 		setTickets(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
+		// The Work queue rides on the same re-read: an enqueue, a pickup, and a
+		// removal all report their refresh through here, so the section never
+		// shows a row the durable queue no longer holds.
+		setWorkQueue(state.workQueue());
 	}, [state]);
 	const replaceConsultations = useCallback(() => {
 		if (state === undefined) return;
@@ -778,6 +926,30 @@ export function App({
 		if (agent === undefined) return "missing";
 		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
 	};
+	/**
+	 * The Starting window (ADR 0030) one ticket reads from the app's facts:
+	 * the claim this run holds on it, or its `handed-off` state. The row and
+	 * the detail header wear the spinner face it opens in place of the state
+	 * badge, and the failure marker rules it out before it is read.
+	 */
+	const startingWindow = (ticket: Ticket): boolean =>
+		inStartingWindow(ticket, startingTickets.has(ticket.identity));
+	/**
+	 * The Queue wait (CONTEXT.md) one ticket reads from the app's facts: its
+	 * open-origin item in the Work queue while the ticket rests open. The row
+	 * and the detail state line wear the `queued` badge in place of their
+	 * state badge, and the Starting window rules it out before it is read.
+	 * The ticket keeps its open state, so the counts and the state file
+	 * never learn the badge.
+	 */
+	const queueWait = (ticket: Ticket): boolean =>
+		ticket.state === "open" &&
+		workQueue.some(
+			(item) =>
+				item.kind === "handoff" &&
+				item.origin === "open" &&
+				item.ticketIdentity === ticket.identity,
+		);
 	const persistMapping = async (mapping: RepositoryMapping): Promise<string | undefined> => {
 		const write = configWriteQueue.current
 			.catch(() => undefined)
@@ -840,13 +1012,36 @@ export function App({
 				state,
 				runner: commandRunner,
 				config: () => configRef.current,
+				seatCount: currentSeatCount,
+				// The Work queue's Consultation side (ADR 0034, issue #90): the
+				// pickup crosses to the Consultation operations, which own the
+				// record's settings re-read, its seat move, and its opening. The
+				// module owns the seat and the queue's shared order. The `moved`
+				// fallback stands only where the operations are absent - the
+				// no-state test projection, where the module removes the item and
+				// the still-`queued` record loses its pointer, and a removal of the
+				// item through the module's seam moves the record to `unscheduled`
+				// the way the Main view's Delete does (issue #91).
+				pickupConsultation: (consultationId) =>
+					consultationOperationsRef.current?.pickup(consultationId) ??
+					Promise.resolve({ kind: "moved" } as const),
 				home: homeDir,
 				controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 				working: (text) => setWorkingMessage(text, "handoff"),
 				warning: setWarningMessage,
 				error: setErrorMessage,
+				notice: setNoticeMessage,
 				clearWorking: () => clearWorkingMessage("handoff"),
 				refresh: replaceTickets,
+				starting: (identity, active) => {
+					setStartingTickets((current) => {
+						if (current.has(identity) === active) return current;
+						const next = new Set(current);
+						if (active) next.add(identity);
+						else next.delete(identity);
+						return next;
+					});
+				},
 				persistMapping,
 			}),
 		};
@@ -901,21 +1096,6 @@ export function App({
 		[state],
 	);
 	/**
-	 * Start the Clear action. The dispatch module owns its durable work and
-	 * Message-line reports; this caller only handles an unexpected rejection.
-	 */
-	const clearLeftover = (ticket: Ticket, force: boolean) => {
-		if (handoffDispatch === undefined) {
-			setWarningMessage("no factory state is open, so a leftover environment cannot be cleared");
-			return;
-		}
-		// The module reports guards and cleanup failures on the same Message line
-		// channel as the handoff. The catch is only for an unexpected module error.
-		void handoffDispatch.clearLeftover(ticket.identity, force).catch((error) => {
-			setErrorMessage(`clearing the leftover environment failed: ${errorMessage(error)}`);
-		});
-	};
-	/**
 	 * Report the outcome of the handoffs that stayed in the App: the no-state test
 	 * projection. State-backed Ticket handoffs report through the dispatch module,
 	 * and both cross the one shared wording in `reportHandoffOutcome`, so the
@@ -931,82 +1111,6 @@ export function App({
 			},
 			persistMapping,
 		);
-	/**
-	 * The leftover panel: what still lives in herdr for this ticket, and the
-	 * one action that ends it.
-	 *
-	 * The guidance leads the body, and the rows above the action rows are where
-	 * the variable fact lines scroll, so the meaning of the rows - and the
-	 * branch fact - stays on screen with them however many facts the ticket
-	 * holds. Each fact carries its own reason on the line below its
-	 * environment: one line, cut where the panel really renders it and marked
-	 * with the ellipsis, because the panel is the hint and the detail pane
-	 * carries the whole reason. Rows the window does not hold come back as a
-	 * count from ActionPanel, so nothing leaves the screen silently.
-	 *
-	 * herdr's force is a row of its own, and its guidance stands only while a
-	 * leftover worktree checkout can be discarded: a tab leftover has no
-	 * checkout to force. A forced removal discards the checkout, so the
-	 * control plane never reaches for it on the operator's behalf; the
-	 * operator chooses it with their own hands, and the git branch stays
-	 * either way.
-	 */
-	const createLeftoverPanel = (ticket: Ticket) => {
-		const leftovers = state?.leftoverEnvironments(ticket.identity) ?? [];
-		const forced = leftovers.some((leftover) => leftover.environment === "worktree");
-		const cols = panelBodyCols(terminalWidth);
-		const facts = leftovers.flatMap((leftover) => [
-			// One row per fact and one per reason, with the meaning first: a
-			// long handle list cut at a narrow width loses handles, not the
-			// fact that the environment is still open.
-			truncateWithEllipsis(`still open: ${leftoverWhere(leftover)}`, cols),
-			truncateWithEllipsis(leftover.reason, cols),
-		]);
-		return createElement(ActionPanel, {
-			title: `Leftover environment ${ticket.identity}`,
-			bodyLines: [
-				"Retry runs the Close cleanup again.",
-				...(forced ? ["Force adds --force and discards the checkout."] : []),
-				"The git branch stays either way.",
-				"",
-				...facts,
-			],
-			actions: [
-				{ key: "retry", label: "Retry", detail: "clean the environment up again" },
-				...(forced
-					? [{ key: "force", label: "Force", detail: "remove the checkout by force" }]
-					: []),
-				{ key: "cancel", label: "Cancel", detail: "leave the environment as it is" },
-			],
-			onAction: (key) => {
-				setPanel(null);
-				if (key === "retry" || key === "force") clearLeftover(ticket, key === "force");
-			},
-			onCancel: () => setPanel(null),
-			message: visibleMessage,
-		});
-	};
-	/** Offer the one action that ends a ticket's leftover environment. */
-	const openLeftoverPanel = () => {
-		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) {
-			setWarningMessage("no ticket is selected");
-			return;
-		}
-		if (ticket.leftover === null) {
-			setWarningMessage(`no leftover environment is recorded for ticket ${ticket.identity}`);
-			return;
-		}
-		setPanel({ kind: "leftover", identity: ticket.identity });
-	};
-	// A leftover panel lists the facts it would clear. When the last one is
-	// gone, the panel has nothing to show, and the ticket keys must return at
-	// that moment: the panel closes itself.
-	useEffect(() => {
-		if (panel?.kind !== "leftover") return;
-		const ticket = tickets.find((candidate) => candidate.identity === panel.identity);
-		if (ticket === undefined || ticket.leftover === null) setPanel(null);
-	}, [panel, tickets]);
 	const startHandoff = (ticket: Ticket, choice: HandoffChoice) => {
 		const availability = availabilityFor(
 			controlById("handoff"),
@@ -1033,11 +1137,26 @@ export function App({
 		}
 		// The no-state test projection: no claim, and the settle patches the
 		// ticket list by hand instead of reading it back from SQLite. It has no
-		// queue, so it refuses to run behind a handoff already in flight.
+		// queue, so it refuses to run behind a handoff already in flight. The
+		// Starting window (ADR 0030) is the in-flight handoff itself here: the
+		// add lands on the keypress, and the settle leaves the face to the
+		// `handed-off` state on a start and drops it on a failure.
 		noStateHandoffInFlightRef.current = true;
+		setStartingTickets((current) => {
+			if (current.has(ticket.identity)) return current;
+			const next = new Set(current);
+			next.add(ticket.identity);
+			return next;
+		});
 		setWorkingMessage(`handing off "${ticket.title}"...`, "handoff");
 		void handOffTicket(ticket, choice, { config, runner: commandRunner, home: homeDir })
 			.then(async (outcome) => {
+				setStartingTickets((current) => {
+					if (!current.has(ticket.identity)) return current;
+					const next = new Set(current);
+					next.delete(ticket.identity);
+					return next;
+				});
 				if (outcome.status !== "failed") {
 					const handoff: Handoff = {
 						agentType: choice.agentType,
@@ -1065,6 +1184,12 @@ export function App({
 				noStateHandoffInFlightRef.current = false;
 			})
 			.catch((error) => {
+				setStartingTickets((current) => {
+					if (!current.has(ticket.identity)) return current;
+					const next = new Set(current);
+					next.delete(ticket.identity);
+					return next;
+				});
 				setErrorMessage(`handoff failed: ${errorMessage(error)}`);
 				noStateHandoffInFlightRef.current = false;
 			});
@@ -1138,13 +1263,27 @@ export function App({
 		}
 	};
 	/**
-	 * Toggle auto-handoff for this session. The config's value is the
-	 * startup default only; the toggle never writes the config.
+	 * Toggle the Auto-handoff mode (ADR 0036).
+	 *
+	 * The flip lands in the session at once, and the new mode is written to the
+	 * state file at once: the next startup and the next dev reload read it back.
+	 * A write that fails reports the state file it could not write on the Message
+	 * line, and the in-session flip stands: the operator keeps working in the mode
+	 * they asked for, so the failure is news about the next run, not a refusal of
+	 * this one.
 	 */
 	const toggleAutoHandoff = () => {
 		const next = !autoModeRef.current;
 		autoModeRef.current = next;
 		setAutoMode(next);
+		if (state === undefined) return;
+		try {
+			state.setAutoHandoffMode(next);
+		} catch (error) {
+			setErrorMessage(
+				`auto-handoff is ${next ? "on" : "off"} for this session only: ${errorMessage(error)}`,
+			);
+		}
 	};
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
@@ -1253,32 +1392,58 @@ export function App({
 		if (outcome.environment !== undefined) detail.push(`environment ${outcome.environment}`);
 		return detail.join(", ");
 	};
-	// Goto: the operator focuses the agent's pane in herdr and the handoff
-	// stays open. The ticket moves awaiting to running; the trace does not
-	// record it, and the next settle refreshes the turn's pending trace.
+	/**
+	 * The label of one workspace in herdr's own navigator.
+	 *
+	 * Herdr 0.9 keeps one view per attached client, so a CLI focus no longer
+	 * moves the operator's view. A Goto confirmation names the workspace herdr
+	 * shows, and the operator switches there. A read that fails names nothing:
+	 * the line keeps its old shape rather than stating a wrong fact.
+	 */
+	const workspaceLabelOf = async (workspaceId: string): Promise<string | null> => {
+		const result = await commandRunner.run("herdr", ["workspace", "get", workspaceId]);
+		if (result.code !== 0) return null;
+		try {
+			const data = JSON.parse(result.stdout) as {
+				result?: { workspace?: { label?: unknown } };
+			};
+			const label = data.result?.workspace?.label;
+			return typeof label === "string" && label !== "" ? label : null;
+		} catch {
+			return null;
+		}
+	};
+	// Goto is navigation (ADR 0033): the operator focuses the agent's pane
+	// in herdr and the handoff stays open. The ticket, its work cycle, and
+	// its traces stay exactly where they are: an awaiting ticket rests
+	// awaiting until the poll or a decision moves it, and an in-flight one
+	// stays in flight.
 	const runGoto = (ticket: Ticket) => {
-		if (state === undefined) return;
 		const paneId = ticket.handoff?.paneId ?? null;
 		if (paneId === null) {
 			setWarningMessage("no agent pane is recorded for this ticket");
 			return;
 		}
-		void commandRunner.run("herdr", ["agent", "focus", paneId]).then((result) => {
+		void commandRunner.run("herdr", ["agent", "focus", paneId]).then(async (result) => {
 			if (result.code !== 0) {
 				setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
 				return;
 			}
-			state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId: ticket.handoff?.attemptId ?? "",
-				decision: "goto",
-				decidedAt: new Date().toISOString(),
-			});
-			replaceTickets();
 			// The Live view closes on a Goto, so the confirmation stands on the
-			// Message line. The trace does not record a Goto, and a Handoff or
-			// refresh still running stands alone.
-			setNoticeMessage(`focused the agent of ticket ${ticket.identity}`);
+			// Message line as a result, never as a warning. A Goto records no
+			// trace, and a Handoff or refresh still running stands alone. The
+			// line names the workspace, and the operator switches herdr's view
+			// there: since herdr 0.9 a CLI focus no longer moves an attached
+			// client's view.
+			const workspaceId = ticket.handoff?.workspaceId ?? null;
+			const label = workspaceId === null ? null : await workspaceLabelOf(workspaceId);
+			reportMessage({
+				severity: "info",
+				text:
+					label === null
+						? `focused the agent of ticket ${ticket.identity}`
+						: `focused the agent of ticket ${ticket.identity} in workspace ${label}`,
+			});
 		});
 	};
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
@@ -1288,25 +1453,8 @@ export function App({
 		// stream resumes for the new agent pane on its next tick.
 		if (!(panel?.kind === "live" && key === "route")) setPanel(null);
 		if (state === undefined) return;
-		const handoffId = ticket.handoff?.attemptId ?? "";
 		if (key === "close") {
-			const applied = state.applyCompletionDecision({
-				ticketIdentity: ticket.identity,
-				handoffId,
-				decision: "closed",
-				decidedAt: new Date().toISOString(),
-			});
-			replaceTickets();
-			if (!applied) {
-				setWarningMessage(`ticket ${ticket.identity} already decided`);
-				return;
-			}
-			refreshTicketSources(ticket.identity);
-			// The Close cleanup: the environment of the handoff the decision ends.
-			const stored = state.latestHandoff(ticket.identity);
-			if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
-			// The Close action writes no progress line of its own.
-			clearOperationMessage("none");
+			closeDecidedCycle(ticket);
 			return;
 		}
 		if (key === "goto") {
@@ -1319,8 +1467,100 @@ export function App({
 	};
 
 	/**
-	 * The choice the `route` row resolves to.
+	 * Close the work cycle of an `awaiting` Ticket: the `closed` decision on its
+	 * settled turn, then the Close cleanup.
 	 *
+	 * One function runs the close the Decision modal's Close row offers and the
+	 * one key `w` confirms (ADR 0031): the two routes are the same operation, so
+	 * they cannot drift. The Close cleanup goes through the dispatch seat, which
+	 * already holds it behind a Handoff of the same ticket.
+	 */
+	const closeDecidedCycle = (ticket: Ticket) => {
+		if (state === undefined) return;
+		const applied = state.applyCompletionDecision({
+			ticketIdentity: ticket.identity,
+			handoffId: ticket.handoff?.attemptId ?? "",
+			decision: "closed",
+			decidedAt: new Date().toISOString(),
+		});
+		replaceTickets();
+		if (!applied) {
+			setWarningMessage(`ticket ${ticket.identity} already decided`);
+			return;
+		}
+		refreshTicketSources(ticket.identity);
+		// The Close cleanup: the environment of the handoff the decision ends.
+		const stored = state.latestHandoff(ticket.identity);
+		if (stored !== null) runCloseCleanup(ticket.identity, stored, "closed");
+		// The Close action writes no progress line of its own.
+		clearOperationMessage("none");
+	};
+
+	/**
+	 * Close the work cycle of an in-flight Ticket (ADR 0031).
+	 *
+	 * The turn never settled, so the cycle ends with no completion trace, and
+	 * the Handoff it ran in is stopped by the Close cleanup. The dispatch module
+	 * holds the whole close on the shared environment seat, so a close that met a
+	 * Handoff of the same ticket ran after it settled. A cleanup herdr refused is
+	 * the same failure the other close paths report, and the leftover it leaves
+	 * is the ticket's fact from there on (ADR 0032).
+	 */
+	const closeInFlightCycle = (ticket: Ticket) => {
+		const dispatch = handoffDispatch;
+		if (dispatch === undefined) return;
+		void dispatch.closeWorkCycle(ticket.identity).then(
+			(outcome) => {
+				if (!outcome.ended) {
+					setWarningMessage(`ticket ${ticket.identity} did not close: ${outcome.reason}`);
+					return;
+				}
+				// The ended cycle may have changed the ticket's source item.
+				refreshTicketSources(ticket.identity);
+				if (outcome.cleanupFailure === undefined)
+					// The stop of a live Agent is the fact the operator asked for, so
+					// it reads like the Abandon of a missing one: a warning, not an error.
+					setWarningMessage(`ticket ${ticket.identity} closed`);
+				else
+					setErrorMessage(
+						`ticket ${ticket.identity} closed; the close cleanup failed: ${outcome.cleanupFailure}`,
+					);
+			},
+			(error) =>
+				setErrorMessage(
+					`ticket ${ticket.identity} closed; the close could not be reported: ${errorMessage(error)}`,
+				),
+		);
+	};
+
+	/**
+	 * Run the Close the operator confirmed on `w`.
+	 *
+	 * The route reads the Ticket's state now, not the state the dialog was drawn
+	 * on: the poll can settle the turn, or a decision can land, while the
+	 * confirmation stands. An `awaiting` Ticket runs the Decision modal's Close
+	 * row, and an in-flight one ends its cycle with no completion record.
+	 */
+	const runTicketClose = (asked: Ticket) => {
+		const ticket =
+			ticketsRef.current.find((candidate) => candidate.identity === asked.identity) ?? asked;
+		if (ticket.state === "awaiting") {
+			closeDecidedCycle(ticket);
+			return;
+		}
+		if (ticket.state === "handed-off" || ticket.state === "running") {
+			closeInFlightCycle(ticket);
+			return;
+		}
+		// The cycle ended from under the dialog: nothing is in flight to close. The
+		// refusal reads in the same words the seat close reads it in, so the one
+		// fact a moved Ticket states never has two phrasings.
+		setWarningMessage(`ticket ${ticket.identity} did not close: the ticket is ${ticket.state}`);
+	};
+
+	/**
+	 * The choice the `route` row resolves to.
+
 	 * The row stands on the settled turn's transition outcome: the plane
 	 * wrote the facts and re-derived the position, so the action re-reads
 	 * nothing from the config but the choice the position resolves to. A
@@ -1369,15 +1609,13 @@ export function App({
 				previousMessage: ticket.lastCompletion?.message ?? "",
 				// The routed handoff started: the operator's decision on the turn
 				// it routes from is `handed-off`, and the ticket reads as
-				// handed-off where the agent is.
+				// handed-off where the agent is. The dispatch module holds that one
+				// fact (`recordRoutedDecision`): the queue pickup of a start that
+				// waited for a seat records the same decision through it, on the
+				// same clock, so the two paths cannot drift.
 				onStarted: (started) => {
 					if (!started.ok || previousHandoffId === "") return;
-					state?.applyCompletionDecision({
-						ticketIdentity: ticket.identity,
-						handoffId: previousHandoffId,
-						decision: "handed-off",
-						decidedAt: new Date().toISOString(),
-					});
+					handoffDispatch.recordRoutedDecision(ticket.identity, previousHandoffId);
 					replaceTickets();
 				},
 			})
@@ -1425,6 +1663,15 @@ export function App({
 			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
 			return;
 		}
+		// The Parallel limit is full: the submit creates the durable record in
+		// `queued` state instead of starting (ADR 0034, issue #90). No
+		// environment and no agent until the Work queue's pickup starts the
+		// record when a seat frees, before the automatic starts do. The seat
+		// count is the same shared source the mode line and the handoff's
+		// queue gate read, so the launcher's submit and the mode line cannot
+		// disagree about the cap.
+		const cap = configRef.current.maxParallelAgents;
+		const queued = cap > 0 && currentSeatCount() >= cap;
 		const replaced =
 			replacementConsultationId === null
 				? undefined
@@ -1436,8 +1683,14 @@ export function App({
 						repository,
 						initialInput: input,
 						replacementOf: replacementConsultationId,
+						queued,
 					})
-				: consultationOperations.replace(replaced, { typeName, repository, initialInput: input });
+				: consultationOperations.replace(replaced, {
+						typeName,
+						repository,
+						initialInput: input,
+						queued,
+					});
 		if (consultation === undefined) return;
 		setLauncher(false);
 		setReplacementConsultationId(null);
@@ -1446,6 +1699,16 @@ export function App({
 		// Stay on the record the replacement points back at, or on the
 		// launched Consultation when it replaces nothing.
 		selectConsultationById(consultation.replacementOf ?? consultation.id);
+		if (queued) {
+			// The record and its item committed in one write: the queue re-reads
+			// it through the same refresh a handoff enqueue runs, and the Message
+			// line says the wait stands.
+			replaceTickets();
+			setNoticeMessage(
+				`consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+			);
+			return;
+		}
 		// A Replacement opens like a new Consultation: the module builds the
 		// linked record with its bounded recovery context, then the same launch
 		// route starts it.
@@ -1454,6 +1717,58 @@ export function App({
 	const recoverConsultationOpening = (consultation: Consultation) => {
 		if (consultation.state !== "opening") return;
 		void consultationOperations?.recover(consultation);
+	};
+	/**
+	 * Whether this record holds no Agent the close could stop.
+	 *
+	 * The two Recovery required states are the two an interrupted run cannot
+	 * bring back: herdr reports no pane, and nothing waits for a reply.
+	 */
+	const consultationHasNoAgent = (consultation: Consultation) =>
+		consultation.state === "missing" || consultation.state === "failed";
+	/**
+	 * Whether this record's close has nothing to stop and nothing to keep.
+	 *
+	 * The two states Recovery names, plus a `queued` or an `unscheduled`
+	 * record (issue #90, issue #91): it has never had an Agent, an
+	 * environment, or a worktree, so its close confirms nothing and cleans
+	 * nothing. It is not one the launcher replaces: its ask still stands, and
+	 * the record closes to the delete that follows it.
+	 */
+	const consultationCloseNeedsNoAgent = (consultation: Consultation) =>
+		consultation.state === "queued" ||
+		consultation.state === "unscheduled" ||
+		consultationHasNoAgent(consultation);
+	/**
+	 * Whether this record is one a Replacement continues.
+	 *
+	 * The same two states the close cannot stop: a record with no Agent left
+	 * cannot be reopened, so the launcher replaces it instead, on the durable
+	 * recovery context, and links the new record back here.
+	 */
+	const isReplacedConsultation = consultationHasNoAgent;
+	/**
+	 * Open the launcher as the Replacement launcher of one record.
+	 *
+	 * One path for both ways in: the `c` Launch of a `missing` or a `failed`
+	 * row, and that row's recovery panel. The panel below this one closes, so
+	 * the launcher holds the keys alone.
+	 */
+	const openReplacementLauncher = (consultation: Consultation) => {
+		setPanel(null);
+		setReplacementConsultationId(consultation.id);
+		setLauncher(true);
+	};
+	/**
+	 * Run the close the operator asked for, in the shape the record needs.
+	 *
+	 * A record with no Agent to stop has nothing to confirm, so the close runs
+	 * on the keypress. A live record confirms first, and a `closing` one opens
+	 * its Retry and Force-close recovery rows.
+	 */
+	const runConsultationClose = (consultation: Consultation) => {
+		if (consultationCloseNeedsNoAgent(consultation)) closeConsultation(consultation);
+		else setPanel({ kind: "consultation-close", identity: consultation.id });
 	};
 	const beginResponse = (consultation: Consultation) => {
 		if (consultation.state !== "awaiting-response") {
@@ -1536,7 +1851,8 @@ export function App({
 	 */
 	const clickSection = (next: MainSection) => {
 		if (flipSectionExpanded(next)) {
-			selectionRef.current = next === "tickets" ? "ticket" : "consultation";
+			selectionRef.current =
+				next === "tickets" ? "ticket" : next === "consultations" ? "consultation" : "queue";
 			setSelection(selectionRef.current);
 			focusPane("list");
 		}
@@ -1630,6 +1946,115 @@ export function App({
 				if (!result.ok) setWarningMessage(result.reason);
 			});
 	};
+	/**
+	 * Move the queue's item under the cursor (ADR 0034): the reorder runs in
+	 * state, and the list re-reads the queue on the refresh the dispatch
+	 * module uses everywhere else. The captured choice travels with the item,
+	 * so a reorder changes only the order the free seats take.
+	 */
+	const moveQueueItem = (direction: "up" | "down") => {
+		if (state === undefined) return;
+		const item = workQueueRef.current[workQueueIndexRef.current];
+		if (item === undefined) return;
+		if (
+			!state.moveWorkItem(
+				item.kind === "handoff" ? item.ticketIdentity : item.consultationId,
+				direction,
+			)
+		) {
+			setWarningMessage(
+				direction === "up" ? "the item is first in the queue" : "the item is last in the queue",
+			);
+			return;
+		}
+		selectionRef.current = "queue";
+		setSelection("queue");
+		workQueueIndexRef.current = workQueueIndexRef.current + (direction === "up" ? -1 : 1);
+		setWorkQueueIndex(workQueueIndexRef.current);
+		replaceTickets();
+	};
+	/**
+	 * Remove the queue's item under the cursor (ADR 0034). A handoff item's
+	 * removal cancels the intent: the ticket keeps the state it has while it
+	 * waits, and the row the list kept clamps to the rows that remain. A
+	 * Consultation item's removal unschedules the record (issue #91): the ask
+	 * is kept in `unscheduled` state, listed in the Consultation section, and
+	 * the pickup never runs for it.
+	 *
+	 * The line states only what the module measured. Its answer says whether a
+	 * row stood when the cancel ran, and a row that left between the render and
+	 * the keypress had already left through its own pickup: the Agent is on its
+	 * way, and the plane says that instead of a removal the operator did not
+	 * cause.
+	 */
+	const removeQueueItem = () => {
+		if (handoffDispatch === undefined) return;
+		const item = workQueueRef.current[workQueueIndexRef.current];
+		if (item === undefined) return;
+		if (item.kind === "consultation") {
+			// A Consultation item's removal unschedules the record (ADR 0034,
+			// issue #91): the ask is kept in `unscheduled` state behind the
+			// pointer it loses, and the pickup never runs for it. The module
+			// holds no claim for the record, so only the row and its pickup note
+			// leave through the module's seam.
+			const removed = handoffDispatch.removeConsultationQueueItem(item.consultationId);
+			if (removed) {
+				setNoticeMessage(
+					`consultation ${item.consultationId.slice(0, 8)}: removed from the queue; the record is unscheduled`,
+				);
+			} else {
+				setWarningMessage(
+					`consultation ${item.consultationId.slice(0, 8)}: the queue item was already gone`,
+				);
+			}
+			replaceTickets();
+			// The record's state moved in the same write the item left, so the
+			// Consultation section re-reads its rows: the row the operator just
+			// removed reappears as the `unscheduled` ask.
+			replaceConsultations();
+			return;
+		}
+		// Route the removal through the module so the waiting start and its
+		// once-per-reason pickup warning leave together (ADR 0034): a bare
+		// state delete would strand the warning and mute a later re-enqueue.
+		const removed = handoffDispatch.removeQueueItem(item.ticketIdentity);
+		// The name the operator reads on the line: the title while the ticket
+		// is still in the projection, its identity once it is gone.
+		const title = ticketsRef.current.find(
+			(candidate) => candidate.identity === item.ticketIdentity,
+		)?.title;
+		const name = title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`;
+		if (removed) {
+			setNoticeMessage(`the waiting start for ${name} was removed`);
+		} else {
+			// Nothing to cancel: the keypress met a queue that no longer held the
+			// row, so the line refuses the removal it could not make.
+			setWarningMessage(`the Work queue no longer held a waiting start for ${name}`);
+		}
+		replaceTickets();
+	};
+	/**
+	 * Enter on a Work queue row (issue #89, ADR 0034): the force-dispatch.
+	 *
+	 * The item starts now, even when the Parallel limit is full: the dispatch
+	 * module re-runs every hard start check the pickup runs and skips only the
+	 * cap, so the seat count may stand over the limit until the work settles.
+	 * The module owns the seam end to end - the claim, the row, and every
+	 * Message line the start or its failure leaves - and the catalogue gated
+	 * the availability: an empty queue never reaches here, and for a Handoff
+	 * item a Handoff already in flight never does. A Consultation item runs its
+	 * own pickup seam, the way the queue's pickup does (ADR 0034, issue #90):
+	 * the seat move is the claim, and a Consultation start never parks behind
+	 * the herdr seat a Handoff in flight holds. A seat a Close cleanup holds
+	 * while it queues parks a Handoff claim in the module, and the row leaves
+	 * only when that parked start settles.
+	 */
+	const forceDispatchQueueItem = () => {
+		if (handoffDispatch === undefined) return;
+		const item = workQueueRef.current[workQueueIndexRef.current];
+		if (item === undefined) return;
+		handoffDispatch.forceDispatchWorkQueueItem(workQueueIdentityOf(item));
+	};
 	const currentBaseMode = (): InteractionMode =>
 		interaction
 			? "consultation-interaction"
@@ -1639,9 +2064,13 @@ export function App({
 					? focusedPaneRef.current === "list"
 						? "consultation-list"
 						: "consultation-detail"
-					: focusedPaneRef.current === "list"
-						? "ticket-list"
-						: "ticket-detail";
+					: selectionRef.current === "queue"
+						? focusedPaneRef.current === "list"
+							? "work-queue-list"
+							: "work-queue-detail"
+						: focusedPaneRef.current === "list"
+							? "ticket-list"
+							: "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
 		contextFor(mode, {
 			selectedTicket: ticketsRef.current[selectedIndexRef.current],
@@ -1656,10 +2085,27 @@ export function App({
 			listCanMove: (() => {
 				const t = ticketsRef.current.length;
 				const c = consultationsRef.current.length;
+				const w = workQueueRef.current.length;
 				const tOpen = ticketsExpandedRef.current;
 				const cOpen = consultationsExpandedRef.current;
+				const wOpen = workVisible && workExpandedRef.current;
 				// A cross reaches an empty section too, so the step into it is
-				// always possible while the other section is expanded.
+				// always possible while the other section is expanded. The Work
+				// queue's header row stays visible while it holds a row, so the
+				// cross into it counts while the queue is not empty.
+				if (selectionRef.current === "queue") {
+					// Up out of the queue crosses into the Consultation section, or into
+					// the Ticket section while the Consultation section is collapsed, and
+					// the cross opens at the queue's own first row. Where the other
+					// section happens to hold its cursor says nothing about where this
+					// one stands: a direct click on the Work header can land the cursor on
+					// the only row of a queue the Consultation cursor never touched.
+					const crossUp = cOpen || tOpen;
+					return (
+						(wOpen && (w > 1 || (workQueueIndexRef.current === 0 && crossUp))) ||
+						(!wOpen && crossUp)
+					);
+				}
 				if (selectionRef.current === "consultation")
 					return (
 						(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
@@ -1669,7 +2115,16 @@ export function App({
 				);
 			})(),
 			detailCanScroll:
-				mode === "consultation-detail" ? consultationMaxScroll > 0 : detailMaxScroll > 0,
+				mode === "consultation-detail"
+					? consultationMaxScroll > 0
+					: mode === "work-queue-detail"
+						? workQueueDetailMaxScroll > 0
+						: detailMaxScroll > 0,
+			selectedWorkQueueItem:
+				selectionRef.current === "queue"
+					? (workQueueRef.current[workQueueIndexRef.current] ?? null)
+					: undefined,
+			workQueueDepth: workQueueRef.current.length,
 			sourceCount: sources.length,
 			refreshingSourceCount: sources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
@@ -1679,6 +2134,7 @@ export function App({
 			consultationRefreshAvailable: state !== undefined,
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationPaneAlive: selectedConsultationPaneAlive,
+			ticketPaneAlive: selectedTicketPaneAlive,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
 		});
@@ -1826,10 +2282,43 @@ export function App({
 						setPanel({ kind: "missing", identity: ticket.identity });
 					else setPanel({ kind: "live", identity: ticket.identity });
 				},
+				// `g` focuses the agent's pane in herdr and changes nothing
+				// (ADR 0033): the catalogue gated the pane, so this runs the
+				// focus and the confirmation stands on the Message line.
+				"ticket-goto": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket !== undefined) runGoto(ticket);
+				},
+				// `w` ends the selected Ticket's work cycle (ADR 0031). The catalogue
+				// refused an open Ticket, so every Ticket that reaches here has a live
+				// Agent or a settled turn behind it, and both confirm first: the dialog
+				// states who is alive and what survives, and nothing runs until the
+				// operator answers it.
+				"ticket-close": ({ context }) => {
+					const ticket = context.selectedTicket;
+					if (ticket === undefined) return;
+					if (state === undefined) {
+						// A work cycle is durable factory state: the projection the App
+						// holds in memory has none to end, and the key says so instead of
+						// opening a dialog that could run nothing.
+						setWarningMessage("closing a Ticket needs SQLite state");
+						return;
+					}
+					setPanel({ kind: "ticket-close", identity: ticket.identity });
+				},
 				quit: () => renderer.destroy(),
 				detail: () => focusPane("detail"),
 				"consultation-list": () => focusPane("list"),
 				tickets: () => focusPane("list"),
+				"queue-list": () => focusPane("list"),
+				"queue-up": () => moveQueueItem("up"),
+				"queue-down": () => moveQueueItem("down"),
+				"queue-remove": () => removeQueueItem(),
+				// Enter on a queue row force-dispatches the item under the cursor over a
+				// full Parallel limit (issue #89). The catalogue gated the availability,
+				// so this runs the dispatch and nothing else; the module owns every line
+				// the start or its failure leaves.
+				"queue-force-dispatch": () => forceDispatchQueueItem(),
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				"section-toggle": () => toggleSection(),
@@ -1846,32 +2335,84 @@ export function App({
 							selectionRef.current === "consultation"
 								? consultationsRef.current[consultationIndexRef.current]
 								: undefined;
-						if (selected?.state === "missing" || selected?.state === "failed")
-							setReplacementConsultationId(selected.id);
-						setLauncher(true);
+						if (selected !== undefined && isReplacedConsultation(selected))
+							openReplacementLauncher(selected);
+						else setLauncher(true);
 					}
 				},
 				history: cycleConsultationHistory,
+				"consultation-recovery": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					// A closing record's recovery is the close panel's own: its Retry
+					// and Force-close rows already answer the stuck cleanup. Every other
+					// broken or stuck state opens the recovery panel, whose rows the
+					// record's state names.
+					setPanel({
+						kind: selected.state === "closing" ? "consultation-close" : "consultation-recovery",
+						identity: selected.id,
+					});
+				},
 				"consultation-close": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
-					if (
-						selected.state === "opening" ||
-						selected.state === "working" ||
-						selected.state === "closing"
-					)
-						setPanel({ kind: "consultation-close", identity: selected.id });
-					else if (
-						selected.state === "awaiting-response" ||
-						selected.state === "missing" ||
-						selected.state === "failed"
-					)
-						closeConsultation(selected);
+					runConsultationClose(selected);
 				},
 				"consultation-delete": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected !== undefined)
 						setPanel({ kind: "consultation-delete", identity: selected.id });
+				},
+				// `s` schedules the unscheduled record back into the Work queue
+				// (issue #91): the state's one write moves it to `queued` at the
+				// queue's tail, and the pickup is its only starter from there.
+				"consultation-schedule": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					if (consultationOperations === undefined) {
+						setWarningMessage("Consultations require SQLite state");
+						return;
+					}
+					// The operations own the Message line and the Consultation rows,
+					// but the queue rows re-read only here: the item lands at the
+					// queue's tail in the same write the section's Delete path
+					// refreshes, so the schedule path does the same.
+					const scheduled = consultationOperations.schedule(selected);
+					if (scheduled) {
+						replaceTickets();
+					}
+				},
+				// Enter starts the unscheduled record now (issue #91): the pickup
+				// seam with the cap skipped. The operations own every line the
+				// start or its failure leaves; the key names the cap when the seat
+				// count stood over it at the key, the way the queue's force-
+				// dispatch line does, and says when a race out-waited it.
+				"consultation-start-now": () => {
+					const selected = consultationsRef.current[consultationIndexRef.current];
+					if (selected === undefined) return;
+					if (consultationOperations === undefined) {
+						setWarningMessage("Consultations require SQLite state");
+						return;
+					}
+					// The line states only what the key measured, the way the
+					// queue's force-dispatch line does: the cap stands when the
+					// seat count stood over the limit at the key.
+					const cap = configRef.current.maxParallelAgents;
+					const overCap = cap > 0 && currentSeatCount() >= cap;
+					void consultationOperations.pickup(selected.id).then((outcome) => {
+						if (outcome.kind === "moved") {
+							setWarningMessage(
+								`consultation ${selected.id.slice(0, 8)}: the record is no longer unscheduled`,
+							);
+							return;
+						}
+						if (outcome.kind === "started")
+							setNoticeMessage(
+								overCap
+									? `starting Consultation ${selected.id.slice(0, 8)} over the Parallel limit`
+									: `starting Consultation ${selected.id.slice(0, 8)}`,
+							);
+					});
 				},
 				"consultation-respond": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
@@ -1883,14 +2424,27 @@ export function App({
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined || selected.paneId === null) return;
 					// Navigation only (ADR 0025): the Consultation record stays
-					// untouched, and the confirmation stands on the Message line.
-					void commandRunner.run("herdr", ["agent", "focus", selected.paneId]).then((result) => {
-						if (result.code === 0)
-							setNoticeMessage(
-								`focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`,
-							);
-						else setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
-					});
+					// untouched, and the confirmation stands on the Message line
+					// as a result, never as a warning. Since herdr 0.9 a CLI
+					// focus no longer moves an attached client's view, so the
+					// line names the workspace the operator switches to.
+					void commandRunner
+						.run("herdr", ["agent", "focus", selected.paneId])
+						.then(async (result) => {
+							if (result.code !== 0) {
+								setErrorMessage(`agent focus failed: ${commandFailureText(result)}`);
+								return;
+							}
+							const workspaceId = selected.workspaceId;
+							const label = workspaceId === null ? null : await workspaceLabelOf(workspaceId);
+							reportMessage({
+								severity: "info",
+								text:
+									label === null
+										? `focused the Agent pane for Consultation ${selected.id.slice(0, 8)}`
+										: `focused the Agent pane for Consultation ${selected.id.slice(0, 8)} in workspace ${label}`,
+							});
+						});
 				},
 				override: openOverride,
 				recover: () => {
@@ -1905,7 +2459,6 @@ export function App({
 						replaceConsultations();
 					refreshNow();
 				},
-				leftover: openLeftoverPanel,
 				// `+` (or `=`, its unshifted form) raises the rank and `-` lowers
 				// it (ADR 0022). The catalogue gated the key, so this runs the
 				// movement and reports the outcome on the Message line, accepted
@@ -1970,7 +2523,10 @@ export function App({
 		// auto-handoff - run on the observation's tick; the decision modal
 		// shows what the transition wrote (ADR 0027).
 		const outcome = ticket.lastCompletion?.transition ?? null;
-		if (outcome?.autoAdvance) {
+		// Gate the notice on the fire as well as the flag: a transition whose
+		// branch did not hold auto-advances nothing, so the factory decides
+		// nothing and the decision modal opens (ADR 0027).
+		if (outcome?.fired === true && outcome.autoAdvance) {
 			setNoticeMessage(`task type ${taskType} auto-advances: the factory decides this ticket`);
 			observationRef.current?.tick();
 			return;
@@ -2205,6 +2761,9 @@ export function App({
 					refresh,
 				});
 			},
+			// The Work queue's pickup (ADR 0034): the cycle starts the waiting
+			// manual starts before auto-dispatch, in queue order.
+			pickupWorkQueue: () => dispatch.pickupWorkQueue(),
 			// The cycle's end may have changed the ticket's source item (a merged
 			// pull request, a closed issue): re-read the sources now, so the
 			// ticket is re-verified - or drops off the list - before the next
@@ -2227,6 +2786,9 @@ export function App({
 				),
 			now: () => Date.now(),
 			mode: () => autoModeRef.current,
+			// The mode line's shared seat count and the cycle's gates share this
+			// grace, so the booting seats they count agree.
+			startupGraceMs: STARTUP_GRACE_MS,
 			intervalMs: pollIntervalMs ?? configRef.current.agentPollIntervalSeconds * 1000,
 			onChanged: () => {
 				replaceTickets();
@@ -2296,7 +2858,7 @@ export function App({
 	 * wheels pass through it, so a click in one section never leaves the
 	 * cursor on a row the operator is not looking at.
 	 */
-	function focusListSection(next: "ticket" | "consultation") {
+	function focusListSection(next: "ticket" | "consultation" | "queue") {
 		if (selectionRef.current !== next) {
 			selectionRef.current = next;
 			setSelection(next);
@@ -2311,6 +2873,14 @@ export function App({
 	}
 	function moveList(delta: number) {
 		selectTicket(selectedIndexRef.current + delta);
+	}
+	function selectWorkQueue(index: number) {
+		const next = clamp(index, 0, Math.max(0, workQueueRef.current.length - 1));
+		if (next === workQueueIndexRef.current) return;
+		workQueueIndexRef.current = next;
+		setWorkQueueIndex(next);
+		workQueueDetailScrollRef.current = 0;
+		setWorkQueueDetailScroll(0);
 	}
 	function selectConsultation(index: number) {
 		const next = clamp(index, 0, Math.max(0, consultationsRef.current.length - 1));
@@ -2345,12 +2915,23 @@ export function App({
 			setTicketsExpanded(ticketsExpandedRef.current);
 			return ticketsExpandedRef.current;
 		}
+		if (section === "work") {
+			workExpandedRef.current = !workExpandedRef.current;
+			setWorkExpanded(workExpandedRef.current);
+			return workExpandedRef.current;
+		}
 		consultationsExpandedRef.current = !consultationsExpandedRef.current;
 		setConsultationsExpanded(consultationsExpandedRef.current);
 		return consultationsExpandedRef.current;
 	}
 	function toggleSection() {
-		flipSectionExpanded(selectionRef.current === "ticket" ? "tickets" : "consultations");
+		flipSectionExpanded(
+			selectionRef.current === "ticket"
+				? "tickets"
+				: selectionRef.current === "consultation"
+					? "consultations"
+					: "work",
+		);
 	}
 	/**
 	 * Move the unified cursor by one row. The cursor walks the visible flow,
@@ -2362,6 +2943,47 @@ export function App({
 	 * that would leave the visible rows does nothing (user story 21).
 	 */
 	function moveVertical(delta: number) {
+		if (selectionRef.current === "queue") {
+			if (focusedPaneRef.current === "detail") {
+				setWorkQueueDetailScroll((current) => clamp(current + delta, 0, workQueueDetailMaxScroll));
+				return;
+			}
+			if (workVisible && workExpandedRef.current) {
+				if (delta < 0 && workQueueIndexRef.current === 0) {
+					// The cross reaches even an empty Consultation list: its
+					// empty message is the row the cursor takes, and it crosses
+					// into the Ticket list when the Consultation section is
+					// collapsed.
+					if (consultationsExpandedRef.current) {
+						selectionRef.current = "consultation";
+						setSelection("consultation");
+						selectConsultation(Math.max(0, consultationsRef.current.length - 1));
+					} else if (ticketsExpandedRef.current) {
+						selectionRef.current = "ticket";
+						setSelection("ticket");
+						selectTicket(Math.max(0, ticketsRef.current.length - 1));
+					}
+					return;
+				}
+				selectWorkQueue(workQueueIndexRef.current + delta);
+				return;
+			}
+			// The Work section is collapsed: the cursor rests on its boundary,
+			// and the only visible step is up to the last Consultation, or to
+			// the last Ticket when that section is collapsed as well.
+			if (delta < 0) {
+				if (consultationsExpandedRef.current) {
+					selectionRef.current = "consultation";
+					setSelection("consultation");
+					selectConsultation(Math.max(0, consultationsRef.current.length - 1));
+				} else if (ticketsExpandedRef.current) {
+					selectionRef.current = "ticket";
+					setSelection("ticket");
+					selectTicket(Math.max(0, ticketsRef.current.length - 1));
+				}
+			}
+			return;
+		}
 		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = false;
@@ -2377,6 +2999,19 @@ export function App({
 						setSelection("ticket");
 						selectTicket(Math.max(0, ticketsRef.current.length - 1));
 					}
+					return;
+				}
+				if (
+					delta > 0 &&
+					consultationIndexRef.current >= consultationsRef.current.length - 1 &&
+					workVisible &&
+					workExpandedRef.current
+				) {
+					// The Work queue is the last section of the visible flow,
+					// so down from the last Consultation crosses into it (ADR 0034).
+					selectionRef.current = "queue";
+					setSelection("queue");
+					selectWorkQueue(0);
 					return;
 				}
 				selectConsultation(consultationIndexRef.current + delta);
@@ -2399,11 +3034,16 @@ export function App({
 			if (delta > 0 && selectedIndexRef.current >= ticketsRef.current.length - 1) {
 				// The cross reaches even an empty Consultation list: its empty
 				// message is the row the cursor takes, and the history filter
-				// still operates from there.
+				// still operates from there. It crosses into the Work queue when
+				// the Consultation section is collapsed (ADR 0034).
 				if (consultationsExpandedRef.current) {
 					selectionRef.current = "consultation";
 					setSelection("consultation");
 					selectConsultation(0);
+				} else if (workVisible && workExpandedRef.current) {
+					selectionRef.current = "queue";
+					setSelection("queue");
+					selectWorkQueue(0);
 				}
 				return;
 			}
@@ -2419,6 +3059,18 @@ export function App({
 		}
 	}
 	function movePage(direction: 1 | -1) {
+		if (selectionRef.current === "queue") {
+			if (focusedPaneRef.current === "detail")
+				setWorkQueueDetailScroll((current) =>
+					clamp(
+						current + direction * Math.max(1, detailGeometry.visibleRows - 2),
+						0,
+						workQueueDetailMaxScroll,
+					),
+				);
+			else selectWorkQueue(workQueueIndexRef.current + direction * workContentRows);
+			return;
+		}
 		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") moveConsultationDetailPage(direction);
 			else selectConsultation(consultationIndexRef.current + direction * consultationsContentRows);
@@ -2429,6 +3081,13 @@ export function App({
 		else moveList(direction * ticketsContentRows);
 	}
 	function moveEdge(edge: "start" | "end") {
+		if (selectionRef.current === "queue") {
+			if (focusedPaneRef.current === "detail")
+				setWorkQueueDetailScroll(edge === "start" ? 0 : workQueueDetailMaxScroll);
+			else if (workVisible && workExpandedRef.current)
+				selectWorkQueue(edge === "start" ? 0 : workQueueRef.current.length - 1);
+			return;
+		}
 		if (selectionRef.current === "consultation") {
 			if (focusedPaneRef.current === "detail") {
 				consultationFollowRef.current = edge === "end";
@@ -2445,16 +3104,16 @@ export function App({
 			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
-	// live view over an in-flight agent, the missing-agent choice, and the
-	// leftover environment. Everything that reads an open panel goes through
-	// this list, so a new consultation kind can never be taken for a ticket
-	// panel by falling through the exclusions.
+	// live view over an in-flight agent, the missing-agent choice, and the Close
+	// confirmation. Everything that reads an open panel goes through this list,
+	// so a new consultation kind can never be taken for a ticket panel by
+	// falling through the exclusions.
 	const ticketPanel =
 		panel !== null &&
 		(panel.kind === "decision" ||
 			panel.kind === "live" ||
 			panel.kind === "missing" ||
-			panel.kind === "leftover")
+			panel.kind === "ticket-close")
 			? panel
 			: null;
 	const panelTicket =
@@ -2464,6 +3123,19 @@ export function App({
 	const panelConsultation =
 		panel !== null && ticketPanel === null
 			? consultationsRef.current.find((item) => item.id === panel.identity)
+			: undefined;
+	// The open close panel's own copy, re-derived from the record on every
+	// render: the record's state picks the shape, so the panel follows the
+	// record without the operator asking.
+	const closePanel =
+		panel !== null && panel.kind === "consultation-close" && panelConsultation !== undefined
+			? consultationClosePanel(panelConsultation)
+			: undefined;
+	// The open recovery panel's own copy, derived the same way: the record's
+	// state names its rows, so the panel follows the record.
+	const recoveryPanel =
+		panel !== null && panel.kind === "consultation-recovery" && panelConsultation !== undefined
+			? consultationRecoveryPanel(panelConsultation)
 			: undefined;
 	const decision =
 		panel !== null && panel.kind === "decision" && panelTicket !== undefined
@@ -2480,7 +3152,9 @@ export function App({
 			? panelTicket.state === "open"
 				? "closed"
 				: panelTicket.state === "awaiting"
-					? autoMode || panelTicket.lastCompletion?.transition?.autoAdvance === true
+					? autoMode ||
+						(panelTicket.lastCompletion?.transition?.fired === true &&
+							panelTicket.lastCompletion?.transition?.autoAdvance === true)
 						? "stream"
 						: "decision"
 					: markerOf(panelTicket) === "missing"
@@ -2490,23 +3164,52 @@ export function App({
 	const liveDecision =
 		panelTicket !== undefined && liveMode === "decision" ? decisionFor(panelTicket) : undefined;
 	/**
-	 * Whether the open ticket panel has nothing left to show.
+	 * Whether the open panel has nothing left to show.
 	 *
-	 * Each ticket panel kind says which fact of the ticket it is drawn from,
-	 * and that fact is what can run out from under the modal: the decision the
-	 * observation takes, the leftover environment a clear or a Close cleanup
-	 * ends, the ticket that leaves the projection. A panel that is not drawn
-	 * must not keep holding the keys the ticket panels swallow.
+	 * Each panel kind says which fact it is drawn from, and that fact is what
+	 * can run out from under the modal: the decision the observation takes,
+	 * the agent whose pane is gone, the ticket that leaves the projection, and
+	 * the Consultation whose state moves while its close confirmation is open
+	 * (a background refresh that finds the Agent gone makes the record
+	 * `missing`, and neither close branch draws an `missing` record). A panel
+	 * that is not drawn must not keep holding the keys the panels swallow.
 	 */
+	const closePanelHasNothingToShow =
+		panel?.kind === "consultation-close" &&
+		(panelConsultation === undefined || closePanel === undefined);
+	// The recovery panel reads the same fact: a record that reaches a live
+	// state, or a closed one, has no recovery row left to draw.
+	const recoveryPanelHasNothingToShow =
+		panel?.kind === "consultation-recovery" &&
+		(panelConsultation === undefined || recoveryPanel === undefined);
 	const panelHasNothingToShow =
-		ticketPanel !== null &&
-		(panelTicket === undefined ||
-			(ticketPanel.kind === "decision" && decision === undefined) ||
-			(ticketPanel.kind === "live" && liveMode === "closed") ||
-			(ticketPanel.kind === "leftover" && panelTicket.leftover === null));
+		(ticketPanel !== null &&
+			(panelTicket === undefined ||
+				(ticketPanel.kind === "decision" && decision === undefined) ||
+				(ticketPanel.kind === "live" && liveMode === "closed") ||
+				// The Close confirmation is drawn from work in flight: a cycle that
+				// ended from under the dialog leaves the panel with nothing to show.
+				(ticketPanel.kind === "ticket-close" && panelTicket.state === "open"))) ||
+		closePanelHasNothingToShow ||
+		recoveryPanelHasNothingToShow;
+	// The reason the guard stands on the Message line when it drops an open
+	// Consultation panel: the record moved out of the states the panel draws,
+	// or it left the list while the panel was up. The panel keeps its own name
+	// in the sentence, so the line says which screen let go.
+	const consultationPanelName = panel?.kind === "consultation-recovery" ? "recovery" : "close";
+	const consultationPanelReleaseNote =
+		closePanelHasNothingToShow === true || recoveryPanelHasNothingToShow === true
+			? panelConsultation === undefined
+				? `the Consultation left the list; the ${consultationPanelName} panel closed`
+				: `the Consultation moved to ${panelConsultation.state}; the ${consultationPanelName} panel closed`
+			: null;
 	useEffect(() => {
+		if (consultationPanelReleaseNote !== null)
+			// The note is the outcome of the operation the operator opened, so it
+			// stands as news, not as a warning the plane wrote on its own.
+			reportMessage({ severity: "info", text: consultationPanelReleaseNote });
 		if (panelHasNothingToShow) setPanel(null);
-	}, [panelHasNothingToShow]);
+	}, [panelHasNothingToShow, consultationPanelReleaseNote, reportMessage]);
 
 	// The Live view's stream: while the view shows the stream, a dedicated
 	// refresh reads the pane the ticket's current handoff records at the
@@ -2735,6 +3438,8 @@ export function App({
 									emptyMessage,
 									markerOf,
 									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
+									starting: startingWindow,
+									queueWait,
 									active: mainSurfaceActive,
 									onFocus: () => focusListSection("ticket"),
 									onSelect: (index: number) => {
@@ -2787,63 +3492,112 @@ export function App({
 													? "no Consultations"
 													: "no open Consultations",
 								}),
-						),
-						selection === "ticket"
-							? createElement(TicketDetail, {
-									ref: detailRef,
-									ticket: selectedTicket,
-									focused: focusedPane === "detail",
+							workVisible &&
+								createElement(SectionHeader, {
+									section: "work",
+									expanded: workExpanded,
+									terminalWidth,
+									width: leftCols,
+									waiting: workQueue.length,
 									active: mainSurfaceActive,
-									reservedRows: detailReservedRows,
-									handoffLimit: config.maxHandoffsPerTicket,
-									priorityOverride:
-										state !== undefined && selectedTicket !== undefined
-											? state.priorityOverride(selectedTicket.identity)
-											: null,
-									suggestedChoice:
-										selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
-									scroll: config.scroll,
-									onFocus: () => focusPane("detail"),
-									scrollSlot: detailScrollSlot,
-								})
-							: createElement(
+									onToggle: () => clickSection("work"),
+								}),
+							workVisible &&
+								workExpanded &&
+								createElement(WorkQueueList, {
+									rows: workQueueRows,
+									selectedIndex: workQueueIndex,
+									focused: focusedPane === "list" && selection === "queue",
+									height: workBoxRows,
+									active: mainSurfaceActive,
+									onFocus: () => focusListSection("queue"),
+									onSelect: (index: number) => {
+										focusListSection("queue");
+										selectWorkQueue(index);
+									},
+									onMove: (delta: number) => {
+										focusListSection("queue");
+										selectWorkQueue(workQueueIndexRef.current + delta);
+									},
+									emptyMessage: "no waiting starts",
+								}),
+						),
+						selection === "queue"
+							? createElement(
 									"box",
 									{ style: { flexGrow: 1, flexDirection: "column" } },
 									createElement(ConsultationDetail, {
-										lines: consultationLines,
-										ansiLines,
-										bodyTitle: consultationDetailTitle(consultationBody),
-										visibleRows: Math.max(
-											1,
-											detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
-										),
-										scroll: consultationDetailScroll,
-										focused: focusedPane === "detail" && !responseEditor,
+										lines: queueDetailLines,
+										visibleRows: Math.max(1, detailGeometry.visibleRows),
+										scroll: workQueueDetailClampedScroll,
+										focused: focusedPane === "detail" && selection === "queue",
 										active: mainSurfaceActive,
 										onFocus: () => focusPane("detail"),
 										onWheel: (delta) => moveVertical(delta),
 									}),
-									responseEditor &&
-										createElement(ResponseEditor, {
-											draft: responseDraft,
-											width: consultationWidth,
-											rows: RESPONSE_EDITOR_ROWS,
-											focused: true,
-											context: controlContextFor("form-field"),
-											inputActive: utility === null,
-											onSend: sendResponseText,
-											onDiscard: discardResponseDraft,
-											onDraftChange: storeResponseDraft,
-											onClose: closeResponseEditor,
-											onHelp: () => openGuide("form-field"),
-											onMessage: () => openMessage("form-field"),
-											onUnavailable: (reason: string) =>
-												setStatus({ kind: "warning", text: reason }),
-											onCopy: reportMessage,
-											message: visibleMessage,
-											onEmergencyExit: () => renderer.destroy(),
+								)
+							: selection === "ticket"
+								? createElement(TicketDetail, {
+										ref: detailRef,
+										ticket: selectedTicket,
+										focused: focusedPane === "detail",
+										active: mainSurfaceActive,
+										reservedRows: detailReservedRows,
+										handoffLimit: config.maxHandoffsPerTicket,
+										priorityOverride:
+											state !== undefined && selectedTicket !== undefined
+												? state.priorityOverride(selectedTicket.identity)
+												: null,
+										suggestedChoice:
+											selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
+										starting:
+											selectedTicket !== undefined &&
+											markerOf(selectedTicket) === null &&
+											startingWindow(selectedTicket),
+										marker: selectedTicket === undefined ? null : markerOf(selectedTicket),
+										queueWait: selectedTicket !== undefined && queueWait(selectedTicket),
+										scroll: config.scroll,
+										onFocus: () => focusPane("detail"),
+										scrollSlot: detailScrollSlot,
+									})
+								: createElement(
+										"box",
+										{ style: { flexGrow: 1, flexDirection: "column" } },
+										createElement(ConsultationDetail, {
+											lines: consultationLines,
+											ansiLines,
+											bodyTitle: consultationDetailTitle(consultationBody),
+											visibleRows: Math.max(
+												1,
+												detailGeometry.visibleRows - (responseEditor ? RESPONSE_EDITOR_ROWS : 0),
+											),
+											scroll: consultationDetailScroll,
+											focused: focusedPane === "detail" && !responseEditor,
+											active: mainSurfaceActive,
+											onFocus: () => focusPane("detail"),
+											onWheel: (delta) => moveVertical(delta),
 										}),
-								),
+										responseEditor &&
+											createElement(ResponseEditor, {
+												draft: responseDraft,
+												width: consultationWidth,
+												rows: RESPONSE_EDITOR_ROWS,
+												focused: true,
+												context: controlContextFor("form-field"),
+												inputActive: utility === null,
+												onSend: sendResponseText,
+												onDiscard: discardResponseDraft,
+												onDraftChange: storeResponseDraft,
+												onClose: closeResponseEditor,
+												onHelp: () => openGuide("form-field"),
+												onMessage: () => openMessage("form-field"),
+												onUnavailable: (reason: string) =>
+													setStatus({ kind: "warning", text: reason }),
+												onCopy: reportMessage,
+												message: visibleMessage,
+												onEmergencyExit: () => renderer.destroy(),
+											}),
+									),
 					),
 				),
 		launcher &&
@@ -2906,8 +3660,8 @@ export function App({
 				onConfirm: confirmOverride,
 				onCancel: cancelOverride,
 			}),
-		// Each ticket panel kind renders its own modal: a leftover panel is neither
-		// a decision nor a missing-agent choice, and must not fall through to one.
+		// Each ticket panel kind renders its own modal: a decision is neither a
+		// live view nor a missing-agent choice, and must not fall through to one.
 		panel !== null &&
 			panelTicket !== undefined &&
 			panel.kind === "decision" &&
@@ -2934,7 +3688,8 @@ export function App({
 		// The Live view streams the agent's terminal while the ticket is in
 		// flight. When the turn settles and the factory waits for the
 		// operator, the same box carries the decision sub-mode: the turn
-		// log, the decision's rows, and their keys.
+		// log in the pane, the decision's rows in the region, and their keys,
+		// the border re-titled by the shared chrome.
 		panel !== null &&
 			panel.kind === "live" &&
 			panelTicket !== undefined &&
@@ -2950,20 +3705,30 @@ export function App({
 						: liveStream === null
 							? { kind: "stream" as const, lines: [], note: null }
 							: { kind: "stream" as const, lines: liveStream.lines, note: liveStream.note },
-				actions:
-					liveDecision !== undefined
-						? liveDecision.actions
-						: [
-								{
-									key: "goto",
-									label: "Goto",
-									detail: "focus the agent's pane; the handoff stays open",
-								},
-							],
-				decideable: liveDecision !== undefined,
+				cause: liveDecision?.cause ?? null,
+				detail: liveDecision?.detail ?? "",
+				actions: liveDecision?.actions ?? [],
 				onAction: (key) => runDecisionAction(panelTicket, key),
 				onEditAction: (key) => openRouteOverride(panelTicket, key),
+				// The streaming sub-mode's Goto: the decision's own Goto row's
+				// behavior, so the two paths cannot drift.
+				onGoto: () => runDecisionAction(panelTicket, "goto"),
 				onCancel: () => setPanel(null),
+				context: {
+					...ticketContext,
+					// The view's own ticket is the Goto's pane fact, whatever
+					// the list below points at.
+					selectedTicket: panelTicket,
+					ticketPaneAlive:
+						panelTicket.handoff?.paneId !== null &&
+						agents?.some((agent) => agent.paneId === panelTicket.handoff?.paneId) === true,
+				},
+				inputActive: utility === null,
+				onHelp: () => openGuide(liveMode === "decision" ? "decision-modal" : "live-view"),
+				onMessage: () => openMessage(liveMode === "decision" ? "decision-modal" : "live-view"),
+				onUnavailable: setWarningMessage,
+				message: visibleMessage,
+				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&
 			panelTicket !== undefined &&
@@ -2989,10 +3754,25 @@ export function App({
 				onEmergencyExit: () => renderer.destroy(),
 			}),
 		panel !== null &&
-			panel.kind === "leftover" &&
+			panel.kind === "ticket-close" &&
 			panelTicket !== undefined &&
-			panelTicket.leftover !== null &&
-			createLeftoverPanel(panelTicket),
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				...ticketCloseDialog(panelTicket, markerOf(panelTicket)),
+				onAction: (key) => {
+					setPanel(null);
+					if (key === "close") runTicketClose(panelTicket);
+				},
+				// Cancel is the way out with nothing changed: the Ticket, its cycle,
+				// and its Agent stay exactly where the dialog found them.
+				onCancel: () => setPanel(null),
+				context: ticketContext,
+				inputActive: utility === null,
+				onHelp: () => openGuide("action-panel"),
+				onMessage: () => openMessage("action-panel"),
+				onUnavailable: setWarningMessage,
+				onEmergencyExit: () => renderer.destroy(),
+			}),
 		panel !== null &&
 			panel.kind === "consultation-safety" &&
 			panelConsultation !== undefined &&
@@ -3032,36 +3812,60 @@ export function App({
 					});
 				},
 			}),
+		// One panel element for the Consultation recovery: the record's state
+		// names its rows through consultationRecoveryPanel, the retry of an
+		// interrupted opening and the replacement of a record with no Agent.
+		// A `closing` record never reaches this element: its Enter opens the
+		// close panel below, which already carries its recovery rows.
+		panel !== null &&
+			panel.kind === "consultation-recovery" &&
+			panelConsultation !== undefined &&
+			recoveryPanel !== undefined &&
+			createElement(ActionPanel, {
+				message: visibleMessage,
+				title: recoveryPanel.title,
+				bodyLines: recoveryPanel.bodyLines,
+				actions: recoveryPanel.actions,
+				onAction: (key) => {
+					if (key === "recover") {
+						setPanel(null);
+						recoverConsultationOpening(panelConsultation);
+					} else if (key === "replace") {
+						openReplacementLauncher(panelConsultation);
+					} else if (key === "close") {
+						// The close path owns the dialog: an interrupted opening
+						// still holds a live Agent and confirms, and a record with
+						// no Agent closes on this action alone.
+						setPanel(null);
+						runConsultationClose(panelConsultation);
+					}
+				},
+				onCancel: () => setPanel(null),
+			}),
+		// One panel element for the Consultation close: the record's state
+		// selects the shape through consultationClosePanel, the recovery rows
+		// while the record is closing and the confirmation rows while a close
+		// would stop a live Agent. A state with no shape never reaches the
+		// render: the guard above already dropped the panel.
 		panel !== null &&
 			panelConsultation !== undefined &&
 			panel.kind === "consultation-close" &&
+			closePanel !== undefined &&
 			createElement(ActionPanel, {
 				message: visibleMessage,
-				title: `Close Consultation ${panelConsultation.id.slice(0, 8)}`,
-				bodyLines: [
-					panelConsultation.environment === "worktree"
-						? "The Agent may still be working. Close keeps the worktree and branch."
-						: "The Agent may still be working. Close only on an explicit operator decision.",
-					...(panelConsultation.state === "closing"
-						? ["Cleanup is already in progress. Force-close records remaining resources."]
-						: []),
-				],
-				actions: [
-					...(panelConsultation.state === "closing"
-						? [
-								{ key: "retry", label: "Retry", detail: "retry unconfirmed cleanup" },
-								{ key: "force", label: "Force-close", detail: "record cleanup for later recovery" },
-							]
-						: [{ key: "close", label: "Close", detail: "stop the Agent and retain the checkout" }]),
-					{ key: "cancel", label: "Cancel", detail: "keep the Consultation running" },
-				],
+				title: closePanel.title,
+				bodyLines: closePanel.bodyLines,
+				actions: closePanel.actions,
 				onAction: (key) => {
-					if (key === "close" || key === "retry") {
+					if (key === "retry") {
+						setPanel(null);
+						closeConsultation(panelConsultation);
+					} else if (key === "force") {
+						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
+					} else if (key === "close") {
 						setPanel(null);
 						closeConsultation(panelConsultation);
 					}
-					if (key === "force")
-						setPanel({ kind: "consultation-force", identity: panelConsultation.id });
 				},
 				onCancel: () => setPanel(null),
 			}),

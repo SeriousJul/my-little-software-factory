@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 # crash-guard: run a command with crash containment.
 #
-# The test suite spawns `node factory.ts` children. When a runner process
-# dies on a native crash (the node 26.5.0 node:sqlite use-after-free under
-# Stryker is the known case), those children are left orphaned under
-# systemd, and the OS records a crash report for every death. This guard
-# contains both:
+# Run a command whose process tree might die on a native crash - the
+# control plane's OpenTUI native core and its SQLite binding are the class.
+# When such a process dies, the OS records a crash report for the death and
+# any siblings are left orphaned under systemd. This guard contains both:
 #
-# 1. RLIMIT_CORE is set to 0 for the command and everything it spawns.
-#    A crashed process writes no core file, so the OS records no crash
-#    and the desktop shows no crash report.
-# 2. The command runs as the leader of its own session (setsid), so its
+# 1. The command and its whole process tree run non-dumpable. A
+#    non-dumpable process that dies on a fatal signal invokes no coredump
+#    handler at all: the kernel records no core file and no journal entry,
+#    so the OS records no crash and the desktop shows no crash report.
+#    The guard builds the tiny library in scripts/nondumpable.c once, in
+#    the user's cache, and exports it as LD_PRELOAD: the loader re-runs
+#    its constructor in the command and in every descendant that execs,
+#    and forked children inherit the flag. A statically linked binary
+#    skips the loader, and the backup below still covers it.
+# 2. RLIMIT_CORE is set to 0 for the command and everything it spawns.
+#    When the library cannot be built, or the binary skips the loader,
+#    a crashed process still writes no core file, though the OS records
+#    the crash in the journal.
+# 3. The command runs as the leader of its own session (setsid), so its
 #    whole process tree is one unit. When the command exits, by success,
 #    failure, or crash, the guard terminates every surviving descendant:
 #    SIGTERM, a grace period, then SIGKILL.
@@ -30,6 +39,34 @@ fi
 
 # No core file for this process or any of its descendants.
 ulimit -c 0
+
+# Build the non-dumpable library once, in the user's cache. The guard
+# needs a C compiler only for this; when it is missing the run falls
+# back to the core-file limit alone, which still contains the core file
+# but not the journal entry.
+nondumpable=0
+NONDUMPABLE_LIB="${XDG_CACHE_HOME:-${HOME:-.}/.cache}/my-little-software-factory/crash-guard/libnondumpable.so"
+NONDUMPABLE_SRC="$(cd "$(dirname "$0")" && pwd)/nondumpable.c"
+if command -v cc > /dev/null 2>&1; then
+	if [ ! -f "$NONDUMPABLE_LIB" ] || [ "$NONDUMPABLE_SRC" -nt "$NONDUMPABLE_LIB" ]; then
+		mkdir -p "$(dirname "$NONDUMPABLE_LIB")" 2>/dev/null &&
+			cc -shared -fPIC -O2 -o "$NONDUMPABLE_LIB" "$NONDUMPABLE_SRC" 2>/dev/null
+	fi
+	[ -f "$NONDUMPABLE_LIB" ] && nondumpable=1
+else
+	echo "crash-guard: no C compiler found; the OS will record any crash in the journal." >&2
+fi
+
+# Put the library in LD_PRELOAD, appending so a pre-set LD_PRELOAD
+# survives. The loader re-runs the constructor in the command and in
+# every descendant that execs, so the whole tree runs non-dumpable.
+if [ "$nondumpable" -eq 1 ]; then
+	if [ -n "${LD_PRELOAD:-}" ]; then
+		export LD_PRELOAD="${LD_PRELOAD} ${NONDUMPABLE_LIB}"
+	else
+		export LD_PRELOAD="$NONDUMPABLE_LIB"
+	fi
+fi
 
 # Start the command in its own session. It becomes the session and the
 # process group leader, so its whole tree answers to one group id.
@@ -125,7 +162,11 @@ fi
 if [ "$code" -gt 128 ]; then
 	sig=$((code - 128))
 	signame=$(kill -l "$sig" 2>/dev/null || echo "unknown")
-	echo "crash-guard: the command died of signal $sig ($signame), exit code $code. No core file was written." >&2
+	if [ "$nondumpable" -eq 1 ]; then
+		echo "crash-guard: the command died of signal $sig ($signame), exit code $code. The OS recorded no crash." >&2
+	else
+		echo "crash-guard: the command died of signal $sig ($signame), exit code $code. No core file was written." >&2
+	fi
 elif [ "$code" -ne 0 ]; then
 	echo "crash-guard: the command exited with code $code." >&2
 fi

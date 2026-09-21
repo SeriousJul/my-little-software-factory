@@ -63,9 +63,38 @@ export function stateColor(state: TicketState): string | undefined {
 /** The widest badge, "[handed-off]". State badges are padded to this width. */
 export const BADGE_WIDTH = 12;
 
+/** The written word the Starting window's spinner face wears (ADR 0030). */
+export const STARTING_WORD = "starting";
+
+/**
+ * Whether the ticket's Starting window (ADR 0030) is open against these facts.
+ *
+ * The window is the claim this run made, reported by the hand-off dispatch on
+ * claim and on settle, or the `handed-off` state the claim settled into.
+ * The claim outranks the recovery fact: a claim in flight of this run writes
+ * its own unresolved attempt, so the projection reads its work as a recovery
+ * while it runs, and the face wears that window. The fact still rules out a
+ * crash remnant - the ticket whose claim belongs to a run that is gone, and
+ * the set this run holds does not carry. A failure marker outranks the window
+ * the way it outranks the state badge, so it is checked by the caller before
+ * this.
+ */
+export function inStartingWindow(ticket: Ticket, claimInFlight: boolean): boolean {
+	return claimInFlight || (!ticket.handoffRecoveryRequired && ticket.state === "handed-off");
+}
+
 /** Render a ticket state as a colored, fixed-width badge like `[open]`. */
 export function stateBadge(state: TicketState): string {
 	return `[${state}]`.padEnd(BADGE_WIDTH);
+}
+
+/**
+ * The badge the Queue wait (CONTEXT.md) wears in the state badge's slot:
+ * the ticket's manual start waits in the Work queue, and the ticket keeps
+ * its open state, so the badge paints the open role.
+ */
+export function queuedBadge(): string {
+	return `[queued]`.padEnd(BADGE_WIDTH);
 }
 
 /** The theme role each failure badge paints in. */

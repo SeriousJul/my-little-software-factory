@@ -5,8 +5,7 @@ default-environment = "worktree"
 default-task-type = "implement"
 attention-bell = true
 interaction-exit-key = "f12"
-auto-handoff = false
-max-parallel-agents = 2
+max-parallel-agents = 1
 agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 20
@@ -19,6 +18,9 @@ max-handoffs-per-ticket = 20
 speed = 1
 acceleration = 0.8
 maximum-speed = 6
+
+[priority]
+labels = ["critical", "high", "low"]
 
 [agents.pi]
 kind = "pi"
@@ -42,13 +44,11 @@ context-window = "--autocompact {value}"
 
 [consultation-types.grill-with-docs]
 agent = "pi"
-environment = "live-worktree"
 thinking = "xhigh"
 template = "/skill:grill-with-docs {input}"
 
 [consultation-types.free]
 agent = "pi"
-environment = "live-worktree"
 template = "{input}"
 
 # --- The workflow machine (ADR 0027) --------------------------------------

@@ -95,7 +95,7 @@ import { MARKER_WIDTH, ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { ChoiceRow, cycleChoice } from "./shared/choices.ts";
 import { type FieldFacts, type FieldHandle, TextField } from "./shared/fields.ts";
 import { copySelectionWith, useFormSlots } from "./shared/form.ts";
-import { controlInk, STATE_WORDS } from "./shared/presentation.ts";
+import { STATE_WORDS } from "./shared/presentation.ts";
 import { type TypeAheadHandle, type TypeAheadMatch, TypeAheadRow } from "./shared/type-ahead.ts";
 
 /**
@@ -312,7 +312,6 @@ export function OverridePanel({
 	onEmergencyExit,
 }: OverridePanelProps) {
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
-	const ink = controlInk();
 	const [choice, setChoice] = useState<HandoffChoice>({ ...initial });
 	// The shared form route owns the selected row. Its ref keeps two keys in one
 	// renderer tick on the row the first key reached, while its state repaints
@@ -566,27 +565,28 @@ export function OverridePanel({
 		frame,
 		width: terminalWidth,
 		title: "Override",
-		borderColor: ink.indicator.fg ?? undefined,
-
-		// One row is enough to be a panel: the rows that do not fit scroll.
-		minContentRows: 1,
+		body: {
+			above: [],
+			below: rows.map((r) =>
+				rowElement(
+					r,
+					choice[r.key],
+					r.key === row.key,
+					geometry,
+					inputActive,
+					fieldChanged,
+					searchChanged,
+					typeAhead,
+					fields,
+					searchField,
+					setHasSelection,
+				),
+			),
+			// One row is enough to be a panel: the rows that do not fit scroll.
+			minRows: 1,
+		},
 		message,
 		bar: { mode, context: panelContext(mode) },
-		children: rows.map((r) =>
-			rowElement(
-				r,
-				choice[r.key],
-				r.key === row.key,
-				geometry,
-				inputActive,
-				fieldChanged,
-				searchChanged,
-				typeAhead,
-				fields,
-				searchField,
-				setHasSelection,
-			),
-		),
 	});
 }
 

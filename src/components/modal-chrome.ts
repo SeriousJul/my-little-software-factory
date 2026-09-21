@@ -19,7 +19,7 @@
  *   surface counts its rows against `contentRows` and drops the rest.
  */
 import { createElement } from "@opentui/react";
-import { Fragment, type ReactElement, useRef, useState } from "react";
+import { Fragment, type ReactElement, useEffect, useState } from "react";
 
 import { ActionBar } from "./action-bar.ts";
 import type { ControlContext, InteractionMode } from "./controls.ts";
@@ -59,6 +59,67 @@ export interface ActionRow {
 	detail?: string;
 	/** The row starts a Handoff whose settings `e` edits before it starts. */
 	editable?: boolean;
+}
+
+/**
+ * The border title of the Decision modal, in its own prefix.
+ *
+ * The prefix is the chrome's: the modal opened on an `awaiting` ticket and
+ * the Live view that settles under an open screen both name their box this
+ * way, so the two paths into the decision end at one screen with one name
+ * (ADR 0040).
+ */
+export function decisionTitle(title: string): string {
+	return `Decision: ${title}`;
+}
+
+/**
+ * The border title of the Live view in its streaming sub-mode.
+ *
+ * A turn settling for the operator re-titles the same box to
+ * `decisionTitle` in place: one screen, one name per sub-mode, the prefix
+ * the shared chrome owns in both.
+ */
+export function liveTitle(title: string): string {
+	return `Live: ${title}`;
+}
+
+/** The pane's border title over the agent's streaming terminal (ADR 0039). */
+export const AGENT_VIEW_PANE = "Agent view";
+/** The pane's border title over the settled turn's log (ADR 0039). */
+export const TURN_LOG_PANE = "Turn log";
+
+/**
+ * The one Body a modal box can hold.
+ *
+ * The box is the chrome's, and a surface cannot hand it a box of its own: it
+ * hands the chrome its rows in the stated places. The rows above the pane
+ * stand under the box's border (the context row), the pane holds one body by
+ * itself - the Turn log, or the Agent view - under its own border and title,
+ * and the rows below the pane are the region's: the held cause row and the
+ * rows the operator confirms (ADR 0039). A surface with no long body holds
+ * no pane and puts every row below, the way the Missing modal and the
+ * action panels do: the pane is opt-in, and no surface is forced to draw an
+ * empty one.
+ */
+export interface ModalBody {
+	/** The rows above the pane, under the box's border. */
+	above: ReactElement[];
+	/** The Body pane, when the surface holds one. */
+	pane?: {
+		/** The body's name: the title the pane's border carries. */
+		title: string;
+		/** The rows the pane's border holds, in order, windowed to its rows. */
+		rows: ReactElement[];
+		/** The pane's padding cells per side: 1 with its full chrome, 0 where the layout has yielded it. */
+		vpad: 0 | 1;
+		/** The pane's outer height, border and padding included: the rows the layout reserved it. */
+		height: number;
+	};
+	/** The rows below the pane: the held cause row, then the region's rows. */
+	below: ReactElement[];
+	/** The rows the box must hold to be itself, pane's floor included. */
+	minRows: number;
 }
 
 /** Whether the terminal is below the minimum useful size. */
@@ -182,10 +243,8 @@ interface ModalSurfaceProps {
 	 */
 	width: number;
 	title: string;
-	borderColor?: string;
-	/** The rows this surface must draw to be itself. */
-	minContentRows: number;
-	children: ReactElement[];
+	/** The one Body the box holds: its rows, and the pane within them. */
+	body: ModalBody;
 	/** The Message fact the surface's Message line shows. */
 	message: MessageFact | null;
 	/** The catalogue bar this surface owns, if it owns one. */
@@ -208,15 +267,13 @@ export function ModalSurface({
 	frame,
 	width,
 	title,
-	borderColor,
-	minContentRows,
-	children,
+	body,
 	message,
 	bar,
 	opacity,
 	zIndex = 10,
 }: ModalSurfaceProps) {
-	const held = frame.contentRows < minContentRows || frame.boxHeight < 2;
+	const held = frame.contentRows < body.minRows || frame.boxHeight < 2;
 	return createElement(
 		"box",
 		{ style: overlaySurfaceStyle(zIndex) },
@@ -244,7 +301,11 @@ export function ModalSurface({
 						"box",
 						{
 							border: true,
-							borderColor,
+							// The box and the pane paint one ink: the control ink's
+							// indicator. No surface states a border color, so the
+							// no-color presentation and the inherited theme reach
+							// every border at once (ADR 0040).
+							borderColor: controlInk().indicator.fg ?? undefined,
 							title: truncateToWidth(title, frame.contentWidth),
 							padding: frame.padding,
 							style: {
@@ -255,7 +316,9 @@ export function ModalSurface({
 								opacity,
 							},
 						},
-						...children,
+						...body.above,
+						...(body.pane !== undefined ? [paneElement(body.pane, frame.contentWidth)] : []),
+						...body.below,
 					),
 		),
 		messageLineRow(message, width, frame),
@@ -267,6 +330,62 @@ export function ModalSurface({
 					width,
 					rangeIndicator: bar.rangeIndicator,
 				}),
+	);
+}
+
+/** The pop-in: a short fade with the box growing to its final size. */
+const POP_MS = 120;
+const POP_TICK_MS = 16;
+/** The box's size at the pop-in's start, of its final size. */
+const POP_START = 0.94;
+
+/**
+ * The modal pop-in's progress, shared by every surface the chrome owns.
+ *
+ * A self-driven progress keeps it deterministic in the test renderer, where
+ * the animation engine never ticks. One hook per opening: a surface that
+ * switches sub-modes under the operator keeps the one it opened with, so
+ * the switch is in place, without a second pop-in (ADR 0040).
+ */
+export function useModalPopScale(): { pop: number; scale: number } {
+	const [pop, setPop] = useState(0);
+	useEffect(() => {
+		const startedAt = performance.now();
+		const id = setInterval(() => {
+			const t = Math.min(1, (performance.now() - startedAt) / POP_MS);
+			setPop(1 - (1 - t) ** 3);
+			if (t >= 1) clearInterval(id);
+		}, POP_TICK_MS);
+		return () => clearInterval(id);
+	}, []);
+	return { pop, scale: POP_START + (1 - POP_START) * pop };
+}
+
+/**
+ * The Body pane the box holds: one body by itself, under its own border and
+ * title (ADR 0039).
+ *
+ * The pane's rows and its height are the ones the caller's layout reserved:
+ * the layout has decided the pane's chrome, so the pane draws it - its
+ * border, its padding, and its height - without re-deciding it. The region
+ * below stays pinned to the box's floor, whatever the body's length.
+ */
+function paneElement(pane: NonNullable<ModalBody["pane"]>, width: number): ReactElement {
+	return createElement(
+		"box",
+		{
+			border: true,
+			borderColor: controlInk().indicator.fg ?? undefined,
+			title: truncateToWidth(pane.title, Math.max(1, width - BORDERS - 2 * pane.vpad)),
+			padding: pane.vpad,
+			style: {
+				width,
+				height: pane.height,
+				flexDirection: "column",
+				overflow: "hidden",
+			},
+		},
+		...pane.rows,
 	);
 }
 
@@ -415,35 +534,4 @@ export function bodyRowSpans(
 		);
 	}
 	return spans;
-}
-
-/**
- * The selected action row of a modal.
- *
- * The index lives in a ref as well as in state: the operator can press the
- * next key before React re-renders, and the step must count from the row
- * they landed on rather than from the row last painted. Selecting wraps, so
- * every action stays one step away in either direction.
- */
-export function useActionSelection(actions: readonly ActionRow[]) {
-	const [selected, setSelected] = useState(0);
-	const ref = useRef(0);
-	const count = actions.length;
-	const last = Math.max(0, count - 1);
-	return {
-		/** The row to paint as selected. */
-		at: Math.min(selected, last),
-		move: (delta: number) => {
-			if (count === 0) return;
-			ref.current = (Math.min(ref.current, last) + delta + count) % count;
-			setSelected(ref.current);
-		},
-		/** Confirm the selected row, then clear the selection. */
-		confirm: (run: (row: ActionRow) => void) => {
-			const row = actions[Math.min(ref.current, last)];
-			ref.current = 0;
-			setSelected(0);
-			if (row !== undefined) run(row);
-		},
-	};
 }

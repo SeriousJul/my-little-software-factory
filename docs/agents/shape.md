@@ -7,12 +7,14 @@ description: The module map of the source tree, for agents working in this repos
 
 - `src/factory.ts`: the entry module. Wires the startup: checks the node
 	version, runs the startup decisions, prints the lines the result carries,
-	and either exits or boots the renderer and mounts the app.
+	and either exits or boots the renderer and mounts the app. Once the renderer
+	exists it wires the shutdown the startup module decides.
 - `src/startup.ts`: the startup decisions. Parses the arguments, loads and
 	validates the config, checks the config's model values against what the
 	agent runtimes report, and opens the state. A startup failure is a value
 	(the operator-facing lines and the exit status), so a test reads it
-	without a process.
+	without a process. It also owns the shutdown install: which process endings
+	close the state and give the lease back.
 - `src/runtime.ts`: the node version gate.
 - `src/config.ts`: config types, strict startup validation, state path
 	resolution, and atomic TOML write-back.
@@ -25,8 +27,8 @@ description: The module map of the source tree, for agents working in this repos
 	`awaiting`, applies the automatic completion rule, and dispatches open
 	tickets in auto-handoff mode.
 - `src/state.ts`: SQLite migrations, source reconciliation, work cycles,
-	completion traces, completion decisions, handoff attempts, and the
-	process lease.
+	completion traces, completion decisions, handoff attempts, the Auto-handoff
+	mode, and the process lease.
 - `src/task-selection.ts`: ordered task-rule selection.
 - `src/setting-resolution.ts`: the handoff setting chains (ADR 0009). The Task
 	profile of each task type, and the agent, model, and thinking one handoff
@@ -55,8 +57,8 @@ description: The module map of the source tree, for agents working in this repos
 - `src/handoff-dispatch.ts`: the Handoff dispatch module (ADR 0012). The one
 	seat a handoff or a herdr environment change holds, the handoff queue and
 	its claim order, the durable claim and settle of every origin, the Close
-	cleanup with the leftover fact it leaves, the Clear action and its guards,
-	and the name fact of a leftover agent. It reports through plain callbacks,
+	cleanup with the leftover fact it leaves, and the name fact of a leftover
+	agent. It reports through plain callbacks,
 	so a test drives it with the fake runner and an in-memory state, and the
 	App and the observation loop cross the same interface.
 - `src/repo.ts`: the repository resolution and the sibling clone.
@@ -73,6 +75,9 @@ description: The module map of the source tree, for agents working in this repos
 	Action bar and control catalogue, the Key guide and Message view, the
 	shared pane geometry, the shared palette, message facts, and
 	display-width-aware text helpers.
+- `src/components/ticket-close.ts`: the Ticket Close dialog's facts. The shell
+	renders them and the gallery shows them, so the confirmation an operator
+	reads and the example a review reads are one definition (ADR 0031).
 - `test/`: the test suite.
 	The seam is the rendered terminal frame and the recorded command sequence.
 	No test touches a real herdr session or a real git repository.

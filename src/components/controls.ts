@@ -15,7 +15,7 @@
  * rows may name.
  */
 import type { Ticket } from "../domain/ticket.ts";
-import type { Consultation } from "../state.ts";
+import type { Consultation, WorkQueueItem } from "../state.ts";
 import { widthOf } from "./text.ts";
 
 export type InteractionMode =
@@ -23,6 +23,9 @@ export type InteractionMode =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
+	/** The Work queue's list and detail panes (ADR 0034). */
+	| "work-queue-list"
+	| "work-queue-detail"
 	| "override-list"
 	| "override-model"
 	| "override-text"
@@ -33,6 +36,8 @@ export type InteractionMode =
 	| "action-panel"
 	| "decision-modal"
 	| "missing-modal"
+	/** The Live view's streaming sub-mode (ADR 0040). */
+	| "live-view"
 	| "key-guide"
 	| "message-view"
 	| "consultation-interaction";
@@ -50,6 +55,8 @@ type ControlScope =
 	| "ticket-detail"
 	| "consultation-list"
 	| "consultation-detail"
+	| "work-queue-list"
+	| "work-queue-detail"
 	| "override"
 	| "modal"
 	| "utility"
@@ -76,8 +83,9 @@ type ControlKey =
 	| "c"
 	| "f"
 	| "g"
+	| "s"
 	| "x"
-	| "z"
+	| "u"
 	| "d"
 	| "w"
 	| "delete"
@@ -126,6 +134,12 @@ export interface ControlContext {
 	selectedTicket?: Ticket;
 	/** The Consultation the base panes point at, if the list holds one. */
 	selectedConsultation?: Consultation;
+	/**
+	 * The Work queue's item under the cursor, with the queue's depth beside it
+	 * (ADR 0034). The item's own position is the queue order's.
+	 */
+	selectedWorkQueueItem?: WorkQueueItem | null;
+	workQueueDepth?: number;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -139,6 +153,11 @@ export interface ControlContext {
 	 * herdr poll. Goto focuses that pane, so it needs it.
 	 */
 	consultationPaneAlive?: boolean;
+	/**
+	 * Whether the selected Ticket's Agent pane is alive in the last herdr
+	 * poll. Goto focuses that pane, so an in-flight Ticket needs it (ADR 0033).
+	 */
+	ticketPaneAlive?: boolean;
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
@@ -153,6 +172,23 @@ export interface ControlContext {
 	 * `e` key by control id.
 	 */
 	editableActionSelected?: boolean;
+	/**
+	 * Whether the surface's Body pane scrolls: the body holds more rows than
+	 * its window. The surface states it from its own rows, and the catalogue
+	 * gates the body's scroll on it, so the bar never hints a scroll that
+	 * cannot run (ADR 0039).
+	 */
+	bodyScrollable?: boolean;
+	/** Whether the surface's Body pane carries nothing at all. */
+	bodyEmpty?: boolean;
+	/**
+	 * The rows the surface's Decision region holds.
+	 *
+	 * The surface states it from its own rows, and the catalogue refuses the
+	 * region's selection when the region holds one row, on the same rule the
+	 * form's selector already uses for a cycle that goes nowhere.
+	 */
+	actionRowCount?: number;
 	/**
 	 * The slot of the active form that holds the focus.
 	 *
@@ -233,6 +269,19 @@ export interface ControlDefinition {
 	 * keys an operator uses most must not stay an undocumented exception.
 	 */
 	guideOnly?: boolean;
+	/**
+	 * The control belongs to the Consultation section alone (issue #85).
+	 *
+	 * Stated once here, and read by every place the section shows: every other
+	 * section's modes state the section refusal for the key (availabilityFor),
+	 * those sections' guides omit the control (omitFromOtherSection), and their
+	 * bars omit its hint (actionBarControls). A future Consultation-only key
+	 * cannot refuse in another section and still show up in that section's
+	 * guide or bar: the three rules read this one marker, and the catalogue
+	 * guard test fails if a refused key is hinted where the guide does not name
+	 * it.
+	 */
+	consultationSectionOnly?: true;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -342,8 +391,31 @@ function interactionExitLabel(exitKey: string | undefined): string {
 const LIVE_VIEW_NOTE = "opens the Live view on an in-flight Ticket";
 const consultationMode = (mode: InteractionMode): boolean =>
 	mode === "consultation-list" || mode === "consultation-detail";
+const workQueueMode = (mode: InteractionMode): boolean =>
+	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
+/**
+ * The base modes of a section other than the Consultation section.
+ *
+ * The plane has three sections that share one list surface, and a control one
+ * section owns answers nothing in the others: the key still resolves there and
+ * states the owning section's refusal, but the guide and the Action bar of a
+ * section that does not own it name it nowhere (issue #85, ADR 0034).
+ */
+const otherSectionMode = (mode: InteractionMode): boolean =>
+	ticketBaseMode(mode) || workQueueMode(mode);
+/** The Ticket section's refusal words, mirrored by ticketOnly. */
+const TICKET_ONLY = "this control is available only in the Ticket section";
+/**
+ * The Consultation section's refusal words, the mirror of TICKET_ONLY.
+ *
+ * availabilityFor states them for every Consultation-section control in the
+ * Ticket base modes and in the Work queue's two, so the key the operator
+ * already knows from the owning section refuses readably instead of doing
+ * nothing at all.
+ */
+const CONSULTATION_ONLY = "this control is available only in the Consultation section";
 /**
  * Why a Ticket-section control answers nothing in the Consultation section.
  *
@@ -351,9 +423,7 @@ const ticketBaseMode = (mode: InteractionMode): boolean =>
  * already knows states a readable refusal instead of doing nothing at all.
  */
 const ticketOnly = (context: ControlContext): ControlAvailability =>
-	ticketBaseMode(context.mode)
-		? available()
-		: unavailable("this control is available only in the Ticket section");
+	ticketBaseMode(context.mode) ? available() : unavailable(TICKET_ONLY);
 const listMove = (context: ControlContext): ControlAvailability =>
 	context.mode === "override-list" ||
 	context.mode === "override-model" ||
@@ -363,7 +433,9 @@ const listMove = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				consultationMode(context.mode)
 					? "the Consultation list has nowhere to move"
-					: "the Ticket list has nowhere to move",
+					: workQueueMode(context.mode)
+						? "the Work queue has nowhere to move"
+						: "the Ticket list has nowhere to move",
 			);
 const detailScroll = (context: ControlContext): ControlAvailability =>
 	context.detailCanScroll
@@ -371,8 +443,51 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
 		: unavailable(
 				context.mode === "consultation-detail"
 					? "the Consultation detail has nowhere to scroll"
-					: "the Ticket detail has nowhere to scroll",
+					: workQueueMode(context.mode)
+						? "the Work queue detail has nowhere to scroll"
+						: "the Ticket detail has nowhere to scroll",
 			);
+const queueMove =
+	(direction: "up" | "down") =>
+	(context: ControlContext): ControlAvailability => {
+		const item = context.selectedWorkQueueItem;
+		if (item === null || item === undefined)
+			return unavailable("no queue item is under the cursor");
+		const depth = context.workQueueDepth ?? 0;
+		if (direction === "up" && item.position > 0) return available();
+		if (direction === "down" && item.position < depth - 1) return available();
+		return unavailable(
+			direction === "up" ? "the item is first in the queue" : "the item is last in the queue",
+		);
+	};
+const queueRemove = (context: ControlContext): ControlAvailability =>
+	context.selectedWorkQueueItem !== null && context.selectedWorkQueueItem !== undefined
+		? available()
+		: unavailable("no queue item is under the cursor");
+/**
+ * Why Enter answers a Work queue item with the force-dispatch (issue #89,
+ * ADR 0034).
+ *
+ * The force-dispatch is the queue's only meaning of Enter, and it starts the
+ * item now, over a full Parallel limit: every hard start check the pickup
+ * runs still runs, only the cap is skipped. For a Handoff item, a Handoff
+ * already in flight holds the shared environment seat, and the key refuses
+ * rather than queue the item behind it, the way the Ticket section's Hand off
+ * refuses the same fact. A cleanup that holds the seat while a Handoff does
+ * not still lets the key through: the module parks the claim, and the item
+ * leaves the queue when that parked start settles. A Consultation item runs
+ * its own pickup seam and never parks on the herdr seat, so the refusal does
+ * not reach it: a Consultation start stands while a Handoff is active, the
+ * way a launcher submit does (ADR 0034, issue #90). An empty queue refuses
+ * with the one reason the operator can act on, like the queue's other row
+ * keys.
+ */
+const queueForceDispatch = (context: ControlContext): ControlAvailability => {
+	const item = context.selectedWorkQueueItem;
+	if (item === null || item === undefined) return unavailable("no queue item is under the cursor");
+	if (item.kind === "handoff" && context.handoffActive) return unavailable("a Handoff is active");
+	return available();
+};
 const refresh = (context: ControlContext): ControlAvailability => {
 	if (consultationMode(context.mode))
 		return context.consultationRefreshAvailable === true
@@ -382,6 +497,51 @@ const refresh = (context: ControlContext): ControlAvailability => {
 	if (context.refreshingSourceCount >= context.sourceCount)
 		return unavailable("every Ticket source is already refreshing");
 	return available();
+};
+/**
+ * The one reason a closed record gives for any control that asks it to work.
+ *
+ * The close and the recovery control both refuse a `closed` Consultation, and
+ * the two sentences must not drift: one fact, one string.
+ */
+const CONSULTATION_CLOSED_REASON = "the selected Consultation is already closed";
+/**
+ * Why Enter opens the recovery panel, and why it opens nothing elsewhere.
+ *
+ * One rule, stated per record state: Enter reaches the Agent or the response
+ * on a live record, opens the surface the record needs on a broken or stuck
+ * one, and says so on a closed one. A `closing` record is stuck mid-cleanup,
+ * and its recovery is the close panel's own Retry and Force-close rows, so
+ * this control answers for it too and its behavior sends it there.
+ *
+ * The live states carry a reason rather than staying silent because this is
+ * the first `return` candidate in the Consultation section: a record whose
+ * Agent cannot be reached at all resolves to no available meaning, and then
+ * it is this sentence the operator reads.
+ */
+const consultationRecovery = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (
+		consultation.state === "opening" ||
+		consultation.state === "missing" ||
+		consultation.state === "failed" ||
+		consultation.state === "closing"
+	)
+		return available();
+	if (consultation.state === "closed") return unavailable(CONSULTATION_CLOSED_REASON);
+	// A `queued` record (ADR 0034, issue #90) has no Agent to reach: it waits
+	// in the Work queue for a free seat, and the pickup is the only starter.
+	if (consultation.state === "queued")
+		return unavailable("the selected Consultation waits in the Work queue for a free seat");
+	// An `unscheduled` record (issue #91) starts with Enter over the cap: the
+	// start control owns that meaning, and its refusal stands here for the
+	// guide's rows.
+	if (consultation.state === "unscheduled")
+		return unavailable(
+			"the selected Consultation is unscheduled; Enter starts it now over the cap",
+		);
+	return unavailable("the selected Consultation reaches its Agent or its response with Enter");
 };
 const consultationResponse = (context: ControlContext): ControlAvailability =>
 	context.selectedConsultation?.state === "awaiting-response" &&
@@ -408,30 +568,114 @@ const consultationGoto = (context: ControlContext): ControlAvailability =>
 	context.consultationPaneAlive === true
 		? available()
 		: unavailable("the Agent's pane is not alive in the last poll");
+/**
+ * Why Goto answers nothing on a Ticket (ADR 0033): the Ticket needs a
+ * selected row with a handoff pane, an in-flight Ticket needs the Agent's
+ * pane alive in the last herdr poll, and an `awaiting` Ticket keeps its
+ * recorded pane. Goto is navigation: it focuses the pane and leaves the
+ * Ticket, its work cycle, and its traces untouched.
+ */
+const ticketGoto = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	const paneId = ticket.handoff?.paneId;
+	if (paneId === null || paneId === undefined)
+		return unavailable("the Agent's pane is not alive in the last poll");
+	if (ticket.state === "awaiting") return available();
+	if (
+		(ticket.state === "handed-off" || ticket.state === "running") &&
+		context.ticketPaneAlive === true
+	)
+		return available();
+	return unavailable("the Agent's pane is not alive in the last poll");
+};
+/**
+ * Why Close answers nothing on a Ticket (ADR 0031). Key `w` ends the work
+ * cycle of the selected Ticket, in both Ticket base modes. An `open` Ticket
+ * holds no work in flight, so the close refuses it with that reason; every
+ * state the close runs on - `handed-off`, `running`, and `awaiting` - has a
+ * live agent or a settled turn behind it, and both open the confirmation
+ * dialog before anything moves.
+ *
+ * A Handoff in flight is no refusal here: the close takes the shared
+ * environment seat and queues behind that Handoff, so a hung start still ends
+ * in the close the operator asked for (ADR 0031).
+ */
+const ticketClose = (context: ControlContext): ControlAvailability => {
+	const ticket = context.selectedTicket;
+	if (ticket === undefined) return unavailable("no Ticket is selected");
+	if (ticket.state === "open")
+		return unavailable("the selected Ticket is open: no work is in flight to close");
+	return available();
+};
 const consultationClose = (context: ControlContext): ControlAvailability => {
 	const consultation = context.selectedConsultation;
 	if (consultation === undefined) return unavailable("no Consultation is selected");
-	return consultation.state === "closed"
-		? unavailable("the selected Consultation is already closed")
-		: available();
+	return consultation.state === "closed" ? unavailable(CONSULTATION_CLOSED_REASON) : available();
 };
-const consultationDelete = (context: ControlContext): ControlAvailability =>
-	context.selectedConsultation?.state === "closed"
-		? available()
-		: unavailable("only a closed Consultation can be deleted");
+/**
+ * Why Delete answers nothing (issue #91).
+ *
+ * A `closed` record's history is removable, and an `unscheduled` record is
+ * the ask itself: it holds no environment and no Agent, so deleting it
+ * removes the record and nothing else. Every other state still runs - the
+ * close or the recovery answers the key - and the delete refuses it.
+ */
+const consultationDelete = (context: ControlContext): ControlAvailability => {
+	const state = context.selectedConsultation?.state;
+	if (state === "closed" || state === "unscheduled") return available();
+	return unavailable("only a closed or unscheduled Consultation can be deleted");
+};
+/**
+ * Why Schedule answers nothing (issue #91).
+ *
+ * `s` puts an `unscheduled` Consultation back into the Work queue, at its
+ * tail: the record the queue's pickup takes when a seat frees. Every other
+ * state refuses the key with the state's own fact, so a record that is
+ * started, waiting, or broken never silently re-enters the queue.
+ */
+const consultationSchedule = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (consultation.state === "unscheduled") return available();
+	if (consultation.state === "queued")
+		return unavailable("the selected Consultation already waits in the Work queue");
+	if (consultation.state === "closed") return unavailable(CONSULTATION_CLOSED_REASON);
+	return unavailable("only an unscheduled Consultation can be scheduled");
+};
+/**
+ * Why Start now answers nothing (issue #91).
+ *
+ * Enter starts an `unscheduled` Consultation now, over the Parallel limit,
+ * the Consultation's face of the queue's force-dispatch: every start check
+ * the pickup runs still runs, only the cap is skipped. A `queued` record's
+ * start is the Work queue's pickup, and a started or broken record reaches
+ * its Agent or its recovery with Enter instead.
+ */
+const consultationStartNow = (context: ControlContext): ControlAvailability => {
+	const consultation = context.selectedConsultation;
+	if (consultation === undefined) return unavailable("no Consultation is selected");
+	if (consultation.state === "unscheduled") return available();
+	if (consultation.state === "queued")
+		return unavailable("the selected Consultation waits in the Work queue for a free seat");
+	return unavailable("only an unscheduled Consultation can be started now");
+};
 const activeQuit = (context: ControlContext): ControlAvailability =>
 	context.handoffActive ? unavailable("normal Quit is unavailable during a Handoff") : available();
 const message = (context: ControlContext): ControlAvailability =>
 	context.messageTruncated
 		? available()
 		: unavailable("the current Message fits on the Message line");
-
-/** The selected Ticket's leftover environment, and the reason one is missing. */
-const leftoverClear = (context: ControlContext): ControlAvailability => {
-	const ticket = context.selectedTicket;
-	if (ticket === undefined) return unavailable("no Ticket is selected");
-	if (ticket.leftover === null)
-		return unavailable(`no leftover environment is recorded for ticket ${ticket.identity}`);
+/**
+ * Why the body's scroll answers nothing (ADR 0039).
+ *
+ * The control is gated on the facts: unavailable, with a stated reason, when
+ * the body already fills the pane's window or carries nothing, so the Action
+ * bar never hints a scroll that cannot run and a pressed key says why.
+ */
+const bodyScroll = (context: ControlContext): ControlAvailability => {
+	if (context.bodyEmpty === true) return unavailable("the body carries no rows");
+	if (context.bodyScrollable === false) return unavailable("the body fills its pane");
 	return available();
 };
 
@@ -443,15 +687,15 @@ const leftoverClear = (context: ControlContext): ControlAvailability => {
  * are reasons the operator can act on, not silent keys.
  */
 const priorityEligibility = (context: ControlContext): ControlAvailability => {
-	if (!ticketBaseMode(context.mode))
-		return unavailable("this control is available only in the Ticket section");
+	if (!ticketBaseMode(context.mode)) return unavailable(TICKET_ONLY);
 	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
 	return available();
 };
 
 const ticketBaseModes = ["ticket-list", "ticket-detail"] as const;
 const consultationBaseModes = ["consultation-list", "consultation-detail"] as const;
-const baseModes = [...ticketBaseModes, ...consultationBaseModes] as const;
+const workQueueBaseModes = ["work-queue-list", "work-queue-detail"] as const;
+const baseModes = [...ticketBaseModes, ...consultationBaseModes, ...workQueueBaseModes] as const;
 const overrideModes = ["override-list", "override-model", "override-text"] as const;
 /**
  * The modes one shared form surface runs, one per slot kind.
@@ -470,6 +714,7 @@ const planeModes: readonly InteractionMode[] = [
 	...formModes,
 	"action-panel",
 	...modalModes,
+	"live-view",
 	"key-guide",
 	"message-view",
 ];
@@ -550,12 +795,21 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 					? ["up", "down", "j", "k", "tab"]
 					: mode === "consultation-list"
 						? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
-						: ["up", "down", "tab"],
+						: mode === "work-queue-list"
+							? ["up", "down", "j", "k", "pageup", "pagedown", "home", "end"]
+							: ["up", "down", "tab"],
 		keyLabel: "↑↓/jk",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-list", "consultation-list", "override-list", "override-model", "override-text"],
+		modes: [
+			"ticket-list",
+			"consultation-list",
+			"work-queue-list",
+			"override-list",
+			"override-model",
+			"override-text",
+		],
 		availability: listMove,
 	},
 	{
@@ -566,7 +820,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-list",
 		actionBar: true,
 		priority: 75,
-		modes: ["ticket-list", "consultation-list"],
+		modes: ["ticket-list", "consultation-list", "work-queue-list"],
 		availability: available,
 	},
 	{
@@ -577,7 +831,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "ticket-detail",
 		actionBar: true,
 		priority: 80,
-		modes: ["ticket-detail", "consultation-detail"],
+		modes: ["ticket-detail", "consultation-detail", "work-queue-detail"],
 		availability: detailScroll,
 	},
 	{
@@ -602,6 +856,19 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 75,
 		modes: ["consultation-detail"],
+		availability: available,
+	},
+	{
+		// The same pane navigation, named for the section that owns it. Left
+		// returns to the Work queue's list (ADR 0034).
+		id: "queue-list",
+		label: "List",
+		keys: () => ["left", "h"],
+		keyLabel: "←/h",
+		scope: "work-queue-detail",
+		actionBar: true,
+		priority: 75,
+		modes: ["work-queue-detail"],
 		availability: available,
 	},
 	{
@@ -703,9 +970,44 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: DECIDE_NOTE,
 	},
 	{
+		id: "ticket-goto",
+		label: "Goto",
+		// `g` focuses the Agent's pane in herdr from either Ticket pane, the
+		// way `g` does from either Consultation pane, and changes nothing
+		// (ADR 0033).
+		keys: () => ["g"],
+		keyLabel: "g",
+		scope: "control-plane",
+		actionBar: true,
+		// Below the Enter meanings, above Override: navigation outranks the
+		// re-read and the one-shot setting, the way it does in the
+		// Consultation section.
+		priority: 68,
+		modes: [...ticketBaseModes],
+		availability: ticketGoto,
+	},
+	{
+		id: "ticket-close",
+		label: "Close",
+		// `w` ends the selected Ticket's work cycle from either Ticket pane,
+		// behind the shared confirmation panel, the way the Consultation section's
+		// Close asks (ADR 0031). The Decision modal keeps its Close row: it is the
+		// close with the turn log beside it, and `w` is the direct route to that
+		// same action.
+		keys: () => ["w"],
+		keyLabel: "w",
+		scope: "control-plane",
+		actionBar: true,
+		// One ladder place with the Consultation section's Close: below Goto and
+		// the re-read, above the section toggle and the Launch.
+		priority: 50,
+		modes: [...ticketBaseModes],
+		availability: ticketClose,
+	},
+	{
 		id: "section-toggle",
 		label: "Section",
-		// `x` collapses the section the cursor is in, or expands it back. Both
+		// `x` collapses the section the cursor is in, or expands it back. The
 		// sections stay visible as long as the frame can hold them, so the
 		// toggle is a matter of room, not of access.
 		keys: () => ["x"],
@@ -716,6 +1018,62 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...baseModes],
 		availability: available,
 		guideNote: SECTION_TOGGLE_NOTE,
+	},
+	{
+		// The queue's own keys (ADR 0034): `u` and `d` move the item under the
+		// cursor in the queue, and Delete cancels the item's waiting start.
+		// Reordering never changes an item's captured choice, and cancelling
+		// leaves the ticket in the state it keeps while it waits.
+		id: "queue-up",
+		label: "Queue up",
+		keys: () => ["u"],
+		keyLabel: "u",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 60,
+		modes: ["work-queue-list"],
+		availability: queueMove("up"),
+	},
+	{
+		id: "queue-down",
+		label: "Queue down",
+		keys: () => ["d"],
+		keyLabel: "d",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 60,
+		modes: ["work-queue-list"],
+		availability: queueMove("down"),
+	},
+	{
+		id: "queue-remove",
+		label: "Remove",
+		keys: () => ["delete"],
+		keyLabel: "Delete",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 55,
+		modes: ["work-queue-list"],
+		availability: queueRemove,
+	},
+	{
+		// Enter on a queue row force-dispatches the item under the cursor
+		// (issue #89, ADR 0034): the start runs now, over a full Parallel
+		// limit, and the dispatch module owns the claim, the row, and every
+		// line the start or its failure leaves.
+		id: "queue-force-dispatch",
+		label: "Force-dispatch",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "work-queue-list",
+		actionBar: true,
+		// Below the queue's row keys, at the primary-action rung the other
+		// sections give their Enter meaning: the bar's packing order stays
+		// total.
+		priority: 70,
+		modes: ["work-queue-list"],
+		availability: queueForceDispatch,
+		guideNote: "starts the item over a full Parallel limit; a failure leaves the queue",
 	},
 	{
 		id: "launch",
@@ -741,15 +1099,18 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 55,
-		modes: [...consultationBaseModes],
+		modes: [...baseModes],
 		availability: available,
+		// A Consultation-section control: in the Ticket section the key states
+		// the section refusal, and the Ticket guide and bar omit the control.
+		consultationSectionOnly: true,
 	},
 	{
 		id: "consultation-close",
 		label: "Close",
-		// `z` closes the Consultation: `x` is the shared section toggle.
-		keys: () => ["z"],
-		keyLabel: "z",
+		// `w` closes the Consultation: `x` is the shared section toggle.
+		keys: () => ["w"],
+		keyLabel: "w",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 50,
@@ -764,8 +1125,50 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "control-plane",
 		actionBar: true,
 		priority: 35,
-		modes: [...consultationBaseModes],
+		modes: [...baseModes],
 		availability: consultationDelete,
+		// A Consultation-section control: in the Ticket section the key states
+		// the section refusal, and the Ticket guide and bar omit the control.
+		consultationSectionOnly: true,
+		guideNote: "removes a closed or unscheduled record and its history",
+	},
+	{
+		// `s` schedules an `unscheduled` Consultation back into the Work queue
+		// (issue #91): the record returns to `queued` at the queue's tail, and
+		// the pickup is the only starter, the way the launcher's submit is.
+		id: "consultation-schedule",
+		label: "Schedule",
+		keys: () => ["s"],
+		keyLabel: "s",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 52,
+		modes: [...consultationBaseModes],
+		availability: consultationSchedule,
+		// A Consultation-section control: the section that does not own it
+		// states the section refusal and names it nowhere.
+		consultationSectionOnly: true,
+		guideNote: "puts the unscheduled Consultation back into the Work queue",
+	},
+	{
+		id: "consultation-recovery",
+		label: "Recovery",
+		// Enter answers a broken or stuck Consultation with the surface its
+		// state needs. It is cataloged ahead of Respond and Interact on purpose:
+		// a live record resolves to those, because an available meaning outranks
+		// an unavailable one, and a record with no meaning at all reads this
+		// control's reason.
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 70,
+		modes: [...consultationBaseModes],
+		availability: consultationRecovery,
+		// The Key guide names what this meaning of Enter is for, so a row that
+		// only says "Recovery" cannot be taken for the `r` recovery of an
+		// interrupted opening.
+		guideNote: "opens the recovery surface a broken or stuck Consultation needs",
 	},
 	{
 		id: "consultation-respond",
@@ -790,6 +1193,27 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 69,
 		modes: [...consultationBaseModes],
 		availability: consultationInteraction,
+	},
+	{
+		// Enter starts an `unscheduled` Consultation now (issue #91): the
+		// pickup seam with the cap skipped, the Consultation section's face of
+		// the queue's force-dispatch. The record's own progress line takes
+		// over from the start. It is cataloged after the other Enter meanings,
+		// so a record with no Enter meaning at all still reads Recovery's
+		// reason, and the start is found wherever its record stands.
+		id: "consultation-start-now",
+		label: "Start now",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		// The primary-action rung the other sections give their Enter meaning:
+		// it is available only where their Enter meanings are not.
+		priority: 70,
+		modes: [...consultationBaseModes],
+		availability: consultationStartNow,
+		consultationSectionOnly: true,
+		guideNote: "starts the unscheduled Consultation over the Parallel limit",
 	},
 	{
 		id: "consultation-goto",
@@ -848,18 +1272,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 60,
 		modes: [...baseModes],
 		availability: refresh,
-	},
-	{
-		id: "leftover",
-		label: "clear leftover",
-		keys: () => ["w"],
-		keyLabel: "w",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 35,
-		modes: [...baseModes],
-		availability: (context) =>
-			ticketBaseMode(context.mode) ? leftoverClear(context) : ticketOnly(context),
 	},
 	{
 		id: "bump-priority",
@@ -1052,7 +1464,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		label: "Message",
 		// `m` opens the Message view only from the base panes. F2 is the
 		// alias in every interaction mode, so text input keeps its `m`.
-		keys: (mode) => (ticketBaseMode(mode) || consultationMode(mode) ? ["m", "f2"] : ["f2"]),
+		keys: (mode) =>
+			ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode) ? ["m", "f2"] : ["f2"],
 		keyLabel: "m/F2",
 		scope: "global",
 		actionBar: true,
@@ -1104,22 +1517,31 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "↑↓",
 		scope: "modal",
 		actionBar: true,
+		// The region's range rides the bar behind this hint, the way the Key
+		// guide and the Message view already use the range anchor.
+		rangeAnchor: true,
 		priority: 80,
 		modes: [...modalModes, "action-panel"],
-		availability: available,
+		// A selection in a region that holds one row goes nowhere: the same
+		// rule the form's selector already uses for a cycle with no other
+		// value, and the reason lands on the Message line.
+		availability: (context) =>
+			context.actionRowCount === 1 ? unavailable("the region holds one row") : available(),
 	},
 	{
-		id: "scroll-turn-log",
-		label: "Scroll log",
+		id: "scroll-body",
+		label: "Scroll body",
 		// The page and jump keys are aliases of the same scroll: they are
-		// accepted, and the j/k hint is the one the bar and guide show.
+		// accepted, and the j/k hint is the one the bar and guide show. The
+		// body it scrolls may be the Agent view and not the Turn log
+		// (ADR 0039), so it carries the shared name.
 		keys: () => ["j", "k", "pageup", "pagedown", "home", "end"],
 		keyLabel: "j/k",
 		scope: "modal",
 		actionBar: true,
 		priority: 75,
-		modes: ["decision-modal"],
-		availability: available,
+		modes: ["decision-modal", "live-view"],
+		availability: bodyScroll,
 	},
 	{
 		id: "scroll-message",
@@ -1167,8 +1589,25 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		scope: "modal",
 		actionBar: true,
 		priority: 90,
-		modes: [...modalModes, "action-panel"],
+		modes: [...modalModes, "action-panel", "live-view"],
 		availability: available,
+	},
+	{
+		// Enter in the Live view's streaming sub-mode is the Goto: pure focus,
+		// the same navigation the Ticket section runs on `g` (ADR 0033), and
+		// the row it confirms on the decision sub-mode is the decision's own
+		// Goto row. A turn settling under the open view stays a live view
+		// until the factory leaves the decision to the operator, so the pane
+		// fact the Ticket Goto gates on is the gate here too.
+		id: "live-goto",
+		label: "Goto",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "modal",
+		actionBar: true,
+		priority: 70,
+		modes: ["live-view"],
+		availability: (context) => ticketGoto(context),
 	},
 	{
 		id: "guide-scroll",
@@ -1220,7 +1659,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	},
 ];
 
-function controlsForMode(mode: InteractionMode): ControlDefinition[] {
+/** Every control the mode dispatches a key for, in the catalogue's order. */
+export function controlsForMode(mode: InteractionMode): ControlDefinition[] {
 	return CONTROL_DEFINITIONS.filter((control) => control.modes.includes(mode));
 }
 
@@ -1237,6 +1677,7 @@ export function actionBarControls(
 	return controlsForMode(mode).filter(
 		(control) =>
 			control.actionBar &&
+			!omitFromOtherSection(mode, control) &&
 			isReachableInMode(mode, control, context) &&
 			(control.showInBar?.(context) ?? true),
 	);
@@ -1302,12 +1743,12 @@ const KEY_NAMES: Record<string, string> = {
 	e: "e",
 	f: "f",
 	x: "x",
-	z: "z",
 	d: "d",
 	r: "r",
 	a: "a",
 	m: "m",
 	c: "c",
+	s: "s",
 	f1: "F1",
 	f2: "F2",
 	f3: "F3",
@@ -1337,7 +1778,6 @@ const KEY_NAMES: Record<string, string> = {
 	escape: "Esc",
 	backspace: "Backspace",
 	delete: "Delete",
-	w: "w",
 	"ctrl+c": "Ctrl+C",
 };
 
@@ -1385,19 +1825,50 @@ export function availabilityFor(
 	control: ControlDefinition,
 	context: ControlContext,
 ): ControlAvailability {
+	// A Consultation-section control states the section refusal in every other
+	// section's modes: the Ticket section and the Work queue both answer the key
+	// with the owning section's words. The marker is the single place the
+	// ownership is written, so the dispatch, the guide, and the bar all read the
+	// same words.
+	if (control.consultationSectionOnly === true && otherSectionMode(context.mode))
+		return unavailable(CONSULTATION_ONLY);
 	return control.availability(context);
 }
 
 /** Ticket-section controls have no useful meaning in a Consultation guide. */
-function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefinition): boolean {
-	return (
+function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boolean {
+	if (
 		consultationMode(mode) &&
 		control.scope !== "global" &&
 		(control.scope === "control-plane" ||
 			control.scope === "ticket-list" ||
 			control.scope === "ticket-detail") &&
 		!control.modes.some(consultationMode)
+	)
+		return true;
+	// The Work queue's own keys stay out of the other sections' guides
+	// (ADR 0034): each section's guide names the keys it dispatches, and the
+	// queue's reorder, cancel, and list-focus keys belong to the queue alone.
+	return (
+		!workQueueMode(mode) &&
+		(control.scope === "work-queue-list" || control.scope === "work-queue-detail")
 	);
+}
+
+/**
+ * Whether a section other than the Consultation's omits a Consultation-section
+ * control from its guide and its bar.
+ *
+ * Delete and History keep their catalog place in the Consultation section
+ * alone (issue #85): the key still resolves in the Ticket section and in the
+ * Work queue and refuses there, in the catalogue's words, but the section that
+ * does not own the control names it nowhere, and the bar hints no key its
+ * guide omits. The rule reads the control's own section marker, so a future
+ * Consultation-only key is omitted from the same two places at once, in every
+ * other section (ADR 0034 widened the base modes with the Work queue's two).
+ */
+function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
+	return otherSectionMode(mode) && control.consultationSectionOnly === true;
 }
 
 /**
@@ -1408,7 +1879,11 @@ function omitFromConsultationGuide(mode: InteractionMode, control: ControlDefini
  * a settled one, and an operator on either one has to learn that the other
  * exists (user stories 12 and 16). A control whose keys the mode hands to
  * another control outright, as both utility overlays take F1 and ?, is not a
- * control of this mode, so neither the bar nor the guide may name it.
+ * control of this mode, so neither the bar nor the guide may name it. The one
+ * exception is a key that carries only the other section's refusal: a
+ * Consultation-section control refuses in the Ticket base modes and in the
+ * Work queue's two, and those sections name it in neither their guide nor
+ * their bar (issue #85, ADR 0034).
  */
 function isCataloguedInMode(
 	mode: InteractionMode,
@@ -1439,6 +1914,7 @@ export function guideControls(context: ControlContext): Array<{
 			control.actionBar &&
 			control.id !== "emergency-exit" &&
 			control.guideOnly !== true &&
+			!omitFromOtherSection(mode, control) &&
 			isCataloguedInMode(mode, control, context),
 	);
 	const seen = new Set(current.map((control) => control.id));
@@ -1447,7 +1923,8 @@ export function guideControls(context: ControlContext): Array<{
 			(control) =>
 				!seen.has(control.id) &&
 				control.guideOnly !== true &&
-				!omitFromConsultationGuide(mode, control) &&
+				!omitFromGuide(mode, control) &&
+				!omitFromOtherSection(mode, control) &&
 				predicate(control) &&
 				isCataloguedInMode(mode, control, context),
 		).map((control) => {
@@ -1479,6 +1956,10 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Consultation list";
 		case "consultation-detail":
 			return "Consultation detail";
+		case "work-queue-list":
+			return "Work queue list";
+		case "work-queue-detail":
+			return "Work queue detail";
 		case "override-list":
 			return "Override list row";
 		case "override-model":
@@ -1489,6 +1970,8 @@ export function modeTitle(mode: InteractionMode): string {
 			return "Decision modal";
 		case "missing-modal":
 			return "Missing modal";
+		case "live-view":
+			return "Live view";
 		case "form-field":
 			return "Form field";
 		case "form-selector":
@@ -1521,10 +2004,12 @@ function displayKeyLabel(
 		// modes only F1 opens the guide.
 		if (fieldModes.includes(mode)) return "F1";
 		if (mode === "override-list") return includeAllAliases ? "F1/?" : "F1";
-		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "F1/?" : "?";
+		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+			return includeAllAliases ? "F1/?" : "?";
 	}
 	if (control.id === "message") {
-		if (ticketBaseMode(mode) || consultationMode(mode)) return includeAllAliases ? "m/F2" : "m";
+		if (ticketBaseMode(mode) || consultationMode(mode) || workQueueMode(mode))
+			return includeAllAliases ? "m/F2" : "m";
 		return "F2";
 	}
 	return control.keyLabel;

@@ -1,11 +1,11 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, mock, test } from "bun:test";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { DispatchResult, HandoffIntent } from "../src/handoff-dispatch.ts";
+import type { HerdrAgent } from "../src/herdr.ts";
 import {
 	type AgentReader,
-	type HerdrAgent,
 	HerdrAgentReader,
 	normalizeAgentStatus,
 	ObservationCoordinator,
@@ -13,7 +13,7 @@ import {
 	stripAnsi,
 } from "../src/observation.ts";
 import type { RefreshClock } from "../src/refresh.ts";
-import { type FactoryState, openFactoryState } from "../src/state.ts";
+import { type ConsultationState, type FactoryState, openFactoryState } from "../src/state.ts";
 import type { SessionTurnRead, TurnEndCause, TurnLogEntry } from "../src/turn-log.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { FakeRunner } from "./fake-runner.ts";
@@ -146,12 +146,10 @@ interface Rig {
 	intents: HandoffIntent[];
 	/** The attempt ids of the claims the dispatching rig made, in dispatch order. */
 	claims: string[];
-	/**
-	 * Report the start of the oldest dispatch still waiting for one, the way
-	 * the app's handoff settle path does. The loop holds a route's decision
-	 * back to this report.
-	 */
+	/** Report the start of the oldest dispatch still waiting for one. */
 	reportStart: (started?: DispatchResult) => void;
+	/** The loop's own calls and dispatches in order, when the rig records them. */
+	order: string[] | undefined;
 	statuses: Array<{ kind: "info" | "warning" | "error"; text: string }>;
 	cleanups: Array<{ paneId: string | null; tabId: string | null; workspaceId: string | null }>;
 	coordinator: ObservationCoordinator;
@@ -181,6 +179,18 @@ function rig(options: {
 	 * loop-level tests drive the state by hand.
 	 */
 	dispatchClaims?: boolean;
+	/**
+	 * The Work queue's pickup (ADR 0034): the number of waiting starts this
+	 * cycle's free seats take. The coordinator calls it before auto-dispatch
+	 * and holds each picked claim's seat against the later dispatches of the
+	 * same cycle. Absent by default, the way an app without a queue is.
+	 */
+	pickupWorkQueue?: () => Promise<number>;
+	/**
+	 * The loop's own calls and dispatches in order, so a test can see where
+	 * the queue step sits in the cycle.
+	 */
+	order?: string[];
 	startupGraceMs?: number;
 	/**
 	 * The transition fire seam (ADR 0027). The app injects the real one; a
@@ -206,6 +216,8 @@ function rig(options: {
 	state.applyFetch(source, success([fetched()]));
 	const intents: HandoffIntent[] = [];
 	const claims: string[] = [];
+	const order = options.order;
+	const pickup = options.pickupWorkQueue;
 	// The start reports the dispatches still owe the loop. The app answers a
 	// claim first and reports the start when its external work settles, so
 	// the rig holds each report back until a test fires it.
@@ -221,14 +233,22 @@ function rig(options: {
 		config: () => ({ ...config, ...options.config }),
 		onCycleEnd: options.onCycleEnd,
 		dispatch: async (intent) => {
+			order?.push(`dispatch:${intent.origin}`);
 			intents.push(intent);
 			if (options.dispatchClaims) {
 				const claim = state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
 				if (claim.ok) claims.push(claim.claim.attemptId);
 			}
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-			return { ok: true };
+			return { ok: true, queued: false };
 		},
+		pickupWorkQueue:
+			pickup === undefined
+				? undefined
+				: async () => {
+						order?.push("pickup");
+						return await pickup();
+					},
 		cleanup: async (handoff) => {
 			cleanups.push({
 				paneId: handoff.paneId,
@@ -251,11 +271,12 @@ function rig(options: {
 		state,
 		intents,
 		claims,
-		reportStart: (started: DispatchResult = { ok: true }) => {
+		reportStart: (started: DispatchResult = { ok: true, queued: false }) => {
 			const next = pending.shift();
 			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
 			next(started);
 		},
+		order,
 		statuses,
 		cleanups,
 		coordinator,
@@ -1000,7 +1021,7 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: vi.fn().mockResolvedValue({ ok: true }),
+			dispatch: mock().mockResolvedValue({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,
@@ -1135,6 +1156,7 @@ describe("missing agents", () => {
 		expect(intents).toEqual([
 			expect.objectContaining({
 				origin: "restart",
+				automatic: true,
 				ticketIdentity: "github:github.com:I_5",
 				previousMessage: "",
 				choice: expect.objectContaining({ taskType: "implement" }),
@@ -1147,17 +1169,19 @@ describe("missing agents", () => {
 	});
 
 	test("a restart carries the last completion message", async () => {
-		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		const rigHandle = rig({ autoOn: true, agents: [] });
+		const { state, intents, coordinator, advance } = rigHandle;
 		const identity = "github:github.com:I_5";
-		const attempt = settleFor(state, identity, "implement");
-		// The operator went to the agent: the ticket is in flight again on the
-		// same pane, which then disappears from the herdr list.
-		state.applyCompletionDecision({
-			ticketIdentity: identity,
-			handoffId: attempt,
-			decision: "goto",
-			decidedAt: "2026-08-31T11:00:30Z",
-		});
+		settleFor(state, identity, "implement");
+		// The poll sees the agent working on its still-pending turn: the
+		// ticket is in flight again on the same pane, which then disappears
+		// from the herdr list.
+		rigHandle.setAgents([agent("pane-implement", "working")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["running"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity }),
+		]);
+		rigHandle.setAgents([]);
 		// The agent ran past the startup grace, then disappeared.
 		advance(STARTUP_GRACE_MS + 1);
 		await coordinator.tick();
@@ -1296,6 +1320,29 @@ describe("missing agents", () => {
 		state.close();
 	});
 
+	test("a missing restart skips a ticket the Work queue already waits for", async () => {
+		const { state, intents, coordinator, advance } = rig({ autoOn: true, agents: [] });
+		const identity = "github:github.com:I_5";
+		handOut(state, identity);
+		// The operator's restart waits in the Work queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: identity,
+				origin: "restart",
+				choice,
+				previousMessage: "",
+			}),
+		).toEqual({ ok: true });
+		// The agent ran past the startup grace, then disappeared.
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		// The automatic restart holds: the missing agent holds no slot, so the
+		// seat is the operator's, and the pickup starts the ticket with the
+		// operator's captured choice, not the automatic one.
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
 	test("a missing agent past the startup grace does not hold a parallel slot", async () => {
 		const { state, intents, coordinator, advance } = rig({
 			autoOn: true,
@@ -1420,6 +1467,26 @@ describe("the awaiting rule", () => {
 		expect(
 			statuses.some((entry) => entry.text === "ticket github:github.com:I_5 routed to implement"),
 		).toBe(true);
+		state.close();
+	});
+
+	test("an automatic route skips a ticket the Work queue already waits for", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		settleFor(state, "github:github.com:I_5", "route");
+		// The operator's route waits in the Work queue for a seat.
+		expect(
+			state.enqueueWork({
+				ticketIdentity: "github:github.com:I_5",
+				origin: "workflow",
+				choice,
+				previousMessage: "settled the turn",
+			}),
+		).toEqual({ ok: true });
+		await coordinator.tick();
+		// The automatic route holds: the seat is the operator's, and the
+		// pickup starts the ticket with the operator's captured choice, not
+		// the automatic one. It mirrors the skip the automatic restart keeps.
+		expect(intents).toHaveLength(0);
 		state.close();
 	});
 
@@ -2046,6 +2113,75 @@ describe("the open dispatch", () => {
 		expect(intents).toHaveLength(0);
 		state.close();
 	});
+
+	test("the Work queue takes the free seats before the open dispatch fills the rest", async () => {
+		// The cycle's one order and one count (ADR 0034): the pickup runs
+		// before the open dispatch, and each picked start holds its seat
+		// against the later dispatches of the same cycle, so one cycle never
+		// starts more agents than the cap.
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => 1,
+			order,
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		await coordinator.tick();
+		// The queue's one start takes a seat, and the open dispatch fills only
+		// the seat that is left: the queue ran first, and the picked claim held
+		// its seat across the cycle.
+		expect(order).toEqual(["pickup", "dispatch:open"]);
+		expect(intents).toHaveLength(1);
+		expect(intents[0]).toEqual(expect.objectContaining({ origin: "open" }));
+		state.close();
+	});
+
+	test("a queue that takes every free seat holds the open dispatch entirely", async () => {
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			pickupWorkQueue: async () => config.maxParallelAgents,
+			order,
+		});
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		await coordinator.tick();
+		// Both seats go to the queue: the cycle's measurement leaves no room,
+		// and the open dispatch starts nothing past the cap.
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
+		state.close();
+	});
+
+	/**
+	 * ADR 0034 says a pickup is a manual start, so it runs "in auto or manual
+	 * mode alike", and the cycle places the step outside the `autoOn` branch.
+	 * This walks that placement: with Auto-handoff off the queue still takes the
+	 * free seats, and the automatic dispatches stay held (issue #92).
+	 */
+	test("the queue picks up with Auto-handoff off, and the automatic dispatches stay held", async () => {
+		const order: string[] = [];
+		const { state, intents, coordinator } = rig({
+			autoOn: false,
+			agents: [],
+			pickupWorkQueue: async () => 1,
+			order,
+		});
+		// Two open tickets, and a settled awaiting ticket whose type would route
+		// in auto mode: with Auto-handoff off only the queue's pickup may start.
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched(), fetched("github:github.com:I_7", [])]),
+		);
+		settleFor(state, "github:github.com:I_7", "implement");
+		await coordinator.tick();
+		// The pickup ran, and nothing else did: the open dispatch and the
+		// awaiting route both sit behind the `autoOn` gate.
+		expect(order).toEqual(["pickup"]);
+		expect(intents).toEqual([]);
+		state.close();
+	});
 });
 
 describe("the priority order (ADR 0022)", () => {
@@ -2613,7 +2749,7 @@ describe("the injectable clock", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
+			dispatch: async () => ({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => false,
@@ -2639,6 +2775,144 @@ describe("the injectable clock", () => {
 		coordinator.stop();
 		expect(clock.pending).toBe(0);
 		state.close();
+	});
+});
+
+describe("the Consultation parallel seats", () => {
+	/**
+	 * Seed a Consultation in the given state with a stored Agent in the given
+	 * pane, the way a launch records it.
+	 */
+	function consultationIn(
+		state: FactoryState,
+		id: string,
+		paneId: string,
+		stateName: ConsultationState,
+	): void {
+		state.createConsultation({
+			id,
+			typeName: "grill",
+			agentType: "pi",
+			environment: "worktree",
+			template: "/grill {input}",
+			initialInput: "review auth",
+			renderedOpeningPrompt: "/grill review auth",
+			repository: { ...fetched().repository, path: "/tmp/factory" },
+			agentName: `consultation-${id}`,
+		});
+		state.recordConsultationAgentHandles(id, {
+			paneId,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			sessionId: `session-${id}`,
+		});
+		if (stateName !== "opening") state.setConsultationState(id, stateName);
+	}
+
+	test("a working Consultation holds a seat the open dispatch respects", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			dispatchClaims: true,
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			state.applyFetch(
+				source,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			await coordinator.tick();
+			// Three eligible tickets, a cap of two: the working Consultation
+			// holds one seat, so only one ticket dispatches.
+			expect(intents).toHaveLength(1);
+			await coordinator.tick();
+			// The dispatched handoff's in-progress seat plus the Consultation's
+			// seat fill the cap: the other tickets still wait.
+			expect(intents).toHaveLength(1);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a working Consultation holds a seat the workflow route respects", async () => {
+		const { state, intents, coordinator } = rig({
+			agents: [agent("pane-consult", "working")],
+			config: { maxParallelAgents: 1 },
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			settleFor(state, "github:github.com:I_5", "route");
+			await coordinator.tick();
+			// The route's single edge wants a seat the working Consultation
+			// holds: the ticket rests in awaiting instead of routing.
+			expect(intents).toHaveLength(0);
+			expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a working Consultation holds a seat the restart respects", async () => {
+		const { state, intents, coordinator, advance } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			config: { maxParallelAgents: 1 },
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			handOut(state, "github:github.com:I_5");
+			advance(STARTUP_GRACE_MS + 1);
+			await coordinator.tick();
+			// The missing agent holds no seat, but the working Consultation
+			// holds the one the cap allows: the restart waits.
+			expect(intents).toHaveLength(0);
+			expect(state.ticketState("github:github.com:I_5")).toBe("handed-off");
+		} finally {
+			state.close();
+		}
+	});
+
+	test("a Consultation in any other state holds no seat", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			dispatchClaims: true,
+		});
+		try {
+			consultationIn(state, "consultation-awaiting", "pane-consult", "awaiting-response");
+			state.applyFetch(
+				source,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			await coordinator.tick();
+			// The awaiting-response Consultation holds no seat: the cap of two
+			// still takes two tickets.
+			expect(intents).toHaveLength(2);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("with the cap at 0 the Consultation seats never engage", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [agent("pane-consult", "working")],
+			config: { maxParallelAgents: 0 },
+			dispatchClaims: true,
+		});
+		try {
+			consultationIn(state, "consultation-working", "pane-consult", "working");
+			state.applyFetch(
+				source,
+				success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+			);
+			await coordinator.tick();
+			// Unlimited: every eligible ticket dispatches, the Consultation
+			// seats included in the count but never against a cap.
+			expect(intents).toHaveLength(3);
+		} finally {
+			state.close();
+		}
 	});
 });
 
@@ -3232,7 +3506,7 @@ describe("an agent that outlives its work cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true }),
+			dispatch: async () => ({ ok: true, queued: false }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:05:00Z"),
 			mode: () => false,

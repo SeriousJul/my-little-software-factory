@@ -1,7 +1,8 @@
 /** The Missing modal keeps recovery choices while its reason scrolls. */
+
+import { describe, expect, test } from "bun:test";
 import { createElement } from "@opentui/react";
 import { testRender } from "@opentui/react/test-utils";
-import { describe, expect, test } from "vitest";
 
 import type { ControlContext } from "../src/components/controls.ts";
 import { MissingModal } from "../src/components/missing-modal.ts";
