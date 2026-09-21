@@ -735,6 +735,12 @@ for keys, and it follows the mode the box is in.
 
 What is measured automatically, on this branch:
 
+- The chrome's box contract (issue #121): the `ModalSurface` interface takes
+  its body as the typed body region with no raw children and no border color
+  argument, the chrome paints the control ink's indicator for the box and the
+  pane and only there, and no modal surface states a border color - the
+  architecture check holds all three and names the offender by file
+  (`test/shared-control-architecture.test.ts`).
 - The nested border at the plane's declared minimum (40 by 19): the box's
   border one cell in on every side, the pane's border and its padding inside
   the box's padding, the log's floor of three rows held inside the pane,

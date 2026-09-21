@@ -209,6 +209,41 @@ describe("the shared control library is the only control implementation", () => 
 		expect(offenders).toEqual([]);
 	});
 
+	test("the shared modal surface takes a typed body, not raw children or a border color", () => {
+		// The chrome owns the box (ADR 0040): a surface hands the chrome its rows
+		// in the stated regions of the typed body, so it cannot hand it a box of
+		// its own or spell the box's border ink. The interface refuses the next
+		// drift: no children argument and no border color argument, and the body
+		// region is the one stated type.
+		const chrome = readFileSync("src/components/modal-chrome.ts", "utf8");
+		const props = chrome.match(/interface\s+ModalSurfaceProps\s*\{[\s\S]*?\n\}/u)?.[0] ?? "";
+		const code = props.replace(/\/\*[\s\S]*?\*\//gu, "");
+		expect(props, "ModalSurfaceProps must be declared in the shared chrome").not.toBe("");
+		expect(code, "the body must be the typed body region").toMatch(/\bbody\s*:\s*ModalBody\s*;/u);
+		expect(code, "raw children are gone from the interface").not.toMatch(/\bchildren\b/u);
+		expect(code, "no surface states the box's border color").not.toMatch(/\bborderColor\b/u);
+		// The box and the pane paint one ink: the control ink's indicator, and
+		// the chrome is the one place that says it.
+		const inkedBorders =
+			chrome.match(/borderColor:\s*controlInk\(\)\.indicator\.fg\s*\?\?\s*undefined/gu)?.length ??
+			0;
+		expect(inkedBorders, "the chrome paints the indicator ink for box and pane").toBe(2);
+	});
+
+	test("no modal surface states the box's border color", () => {
+		// The plane spelled the same border ink five ways; the chrome paints it
+		// once, and a modal surface that states a border color is back to
+		// per-caller ink (ADR 0040), so this names it by file, the way the other
+		// checks do.
+		const offenders: string[] = [];
+		for (const file of screens) {
+			const source = readFileSync(file, "utf8");
+			if (!/createElement\(\s*ModalSurface\s*,/u.test(source)) continue;
+			if (/\bborderColor\b/u.test(source)) offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
+	});
+
 	test("every action surface takes its rows from the library", () => {
 		// An action row is shared presentation: the marker, the label, the
 		// refusal word, and the ink all come from one place. Each surface that
