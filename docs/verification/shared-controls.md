@@ -770,12 +770,36 @@ What is measured automatically, on this branch:
   settled Live view recaptured at the shared fixture, and verified by eye
   for the pane's border, title, and the region's rows (`test/screenshot-drift.test.ts`).
 
-The stand-down step of the payment order is measured as the step the
-declared minimum cannot reach: at 40 by 19 the box holds twelve body rows,
-and the context row, the pane's chrome, the log's floor, and the region's
-minimum of one row fit within them, so the size message is the fallback the
-shorter surfaces use, not one the decision surface paints at a legal
-terminal size.
+What the decision modal's own frames measure (issue #123), beside the
+nested border above:
+
+- The pinned floor with a short log: a body that fills none of the pane's
+  window carries no thumb, the region stands directly under the pane's
+  bottom border, and the box's border closes the floor below it - the
+  region stays pinned whatever the body's length (`test/decision-modal.test.ts`).
+- The capped region with a dozen handoff rows at a small terminal: the log
+  keeps its floor of three rows with its thumb, the region shows its four
+  rows and hides the rest, the bar states the window's range behind the
+  selection's hint, and the window slides with the selection, the range
+  following (`test/decision-modal.test.ts`).
+- The pane's yield steps, walked by resizing the terminal over the open
+  modal: the padding yields before the border, the border keeps and the log
+  keeps its floor, only then does the log yield rows to the region's one
+  row, and a box below even that stands down to the size message with the
+  modal's own bar keeping the way out (`test/decision-modal.test.ts`).
+- An empty Turn log: the reason stands as one row inside the pane, the pane
+  keeps its border and title, the pane carries no thumb, and the scroll's
+  key refuses with its reason on the Message line (`test/decision-modal.test.ts`).
+- The gallery holds the reviewer's states: the capped region with the held
+  cause above its rows, the short log's pinned floor, and the empty log's
+  reason in its pane (`test/shared-gallery.test.ts`).
+
+On first paint, the declared minimum (40 by 19) cannot reach the
+stand-down: the box holds twelve body rows, and the context row, the pane's
+chrome, the log's floor, and the region's minimum of one row fit within
+them. The operator reaches it by resizing the terminal over the open
+modal, which the yield steps above walk in the harness's frames. Nothing is
+claimed for a walk that was not run.
 
 What remains unverified:
 
