@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import {
 	type FactoryState,
@@ -380,6 +381,62 @@ describe("factory SQLite state", () => {
 				decision: null,
 			}),
 		);
+		state.close();
+	});
+
+	test("the transition outcome the fire wrote is stored on the trace and reads back", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		const written: TransitionOutcome = {
+			fired: true,
+			when: "score-above-threshold",
+			reason: "",
+			ticketFacts: [],
+			pullRequestFacts: ["ready-to-ship"],
+			autoAdvance: true,
+			agent: "codex",
+			environment: "worktree",
+			ticketWrite: null,
+			pullRequestWrite: { added: ["ready-to-ship"], removed: ["ready-for-review"] },
+			pullRequestIdentity: ticket.identity,
+			pullRequestKey: "#5",
+			writeFailure: "",
+			positionTaskType: "merge",
+			positionTicketIdentity: ticket.identity,
+		};
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "- **Score:** 95 / 100",
+			turnLog: textLog("- **Score:** 95 / 100"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: written,
+		});
+
+		// The decision modal and the automatic decision read the facts the
+		// plane wrote, not a re-read of the source (ADR 0027).
+		expect(state.lastCompletion(ticket.identity)?.transition).toEqual(written);
+
+		// A turn that settled with no fire stores null, and a stored record
+		// that no longer parses fails open the same way a broken cause does.
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "second",
+			turnLog: textLog("second"),
+			completedAt: "2026-08-31T12:00:00Z",
+		});
+		expect(state.lastCompletion(ticket.identity)?.transition).toBeNull();
 		state.close();
 	});
 
@@ -1058,6 +1115,9 @@ describe("factory SQLite state", () => {
 		);
 		// The v11 override belongs to the run after this record: a v2 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v2 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
@@ -1135,6 +1195,9 @@ describe("factory SQLite state", () => {
 		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v5 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v5 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 5").run();
 		db.prepare(
@@ -1210,6 +1273,9 @@ describe("factory SQLite state", () => {
 		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v7 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v7 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 7").run();
 		db.prepare(

@@ -67,6 +67,11 @@ interface DecisionModalProps {
 	cause?: TurnEndCause | null;
 	/** The agent's or provider's text for the cause; empty when none. */
 	detail?: string;
+	/**
+	 * The label facts the settled turn's transition wrote, one line per
+	 * surface (ADR 0027), above the rows that decide on them.
+	 */
+	factLines?: readonly string[];
 	actions: readonly ActionRow[];
 	onAction: (key: string) => void;
 	/** The `e` key on a row flagged editable: change its Handoff's settings. */
@@ -111,15 +116,17 @@ export const EMPTY_TURN_LOG_NOTE = "No turn log is recorded for this turn";
  * a box without room for the floor holds the region, the border, and a
  * one-row body. An action row is the only way out, so the region keeps at
  * least its one row before the surface stands down to the size message. The
- * caller passes the box's content rows, the region's rows, and the held
- * cause; `null` is the stand-down.
+ * caller passes the box's content rows, the region's rows, the held
+ * cause, and the extra region rows above the actions - the transition's
+ * fact lines (ADR 0027); `null` is the stand-down.
  */
 export function decisionBodyLayout(
 	contentRows: number,
 	actionRows: number,
 	heldCause: boolean,
+	extraRegionRows = 0,
 ): { paneRows: number; panePadding: 0 | 1; regionVisible: number } | null {
-	const held = heldCause ? 1 : 0;
+	const held = (heldCause ? 1 : 0) + extraRegionRows;
 	// The region's one row is its only way out; a region with no rows asks
 	// for none, the way the streaming sub-mode's body does.
 	const regionMinimum = Math.min(1, actionRows);
@@ -201,6 +208,7 @@ export function DecisionModal({
 	entries,
 	cause = null,
 	detail = "",
+	factLines = [],
 	actions,
 	onAction,
 	onEditAction,
@@ -230,12 +238,17 @@ export function DecisionModal({
 	// border second, and only then does the surface stand down to the size
 	// message. The scrollbar is decided at the final size, so the thumb does
 	// not flicker in and out while the pop-in grows the box.
+	// The transition's fact lines stand above the action rows, like the
+	// held-cause row: the rows decide on the facts, so the log yields to
+	// them (ADR 0027).
+	const factRows = factLines.length;
 	const finalLayout = decisionBodyLayout(
 		modalFrame(terminalWidth, terminalHeight, { margin: MARGIN }).contentRows,
 		actions.length,
 		held,
+		factRows,
 	);
-	const layout = decisionBodyLayout(frame.contentRows, actions.length, held);
+	const layout = decisionBodyLayout(frame.contentRows, actions.length, held, factRows);
 	// An empty turn log states its reason as one row inside the pane, and
 	// the pane keeps its chrome.
 	const emptyLog = entries.length === 0;
@@ -364,6 +377,13 @@ export function DecisionModal({
 						),
 					]
 				: []),
+			...factLines.map((line, index) =>
+				createElement(
+					"text",
+					{ key: `fact-${index}`, fg: paint("blue") },
+					truncateToWidth(line, frame.contentWidth),
+				),
+			),
 			...region.window.map((row) =>
 				createElement(ActionItem, {
 					key: row.key,
@@ -376,7 +396,12 @@ export function DecisionModal({
 			),
 		],
 		minRows:
-			CONTEXT_ROWS + (held ? 1 : 0) + PANE_BORDERS + DECISION_LOG_MIN + Math.min(1, actions.length),
+			CONTEXT_ROWS +
+			(held ? 1 : 0) +
+			factRows +
+			PANE_BORDERS +
+			DECISION_LOG_MIN +
+			Math.min(1, actions.length),
 	};
 
 	return createElement(ModalSurface, {

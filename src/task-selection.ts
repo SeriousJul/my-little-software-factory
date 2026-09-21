@@ -1,32 +1,50 @@
-/** Ordered, provider-neutral task rule selection. */
-import type { TaskRule } from "./config.ts";
+/** Ordered, provider-neutral state-based task selection (ADR 0027). */
+import type { WorkflowState } from "./config.ts";
 import type { SourceMembership } from "./domain/ticket.ts";
 
-/** The first rule that matches any current membership wins. */
+/**
+ * The suggested task type of a ticket, or null when the machine offers none.
+ *
+ * The first state whose match holds on any current membership wins, and the
+ * ticket takes the task that state offers. A state that offers no task is a
+ * parking state: the plane suggests nothing and does nothing on the ticket,
+ * so the result is null and only an external label write moves it. The
+ * fallback task type stands when no state matches at all (ADR 0027).
+ */
 export function selectTaskType(
 	memberships: readonly SourceMembership[],
-	rules: readonly TaskRule[],
+	states: readonly WorkflowState[],
 	fallback: string,
-): string {
-	for (const rule of rules) {
-		if (memberships.some((membership) => membershipMatches(membership, rule))) return rule.taskType;
+): string | null {
+	for (const state of states) {
+		if (memberships.some((membership) => membershipMatchesState(membership, state))) {
+			return state.taskType ?? null;
+		}
 	}
 	return fallback;
 }
 
-function membershipMatches(membership: SourceMembership, rule: TaskRule): boolean {
-	const { when } = rule;
-	if (when.sourceName !== undefined && when.sourceName !== membership.sourceName) return false;
-	if (when.sourceKind !== undefined && when.sourceKind !== membership.sourceKind) return false;
-	if (when.repository !== undefined && when.repository !== membership.repository.identity)
+/**
+ * Whether one state's match holds on one membership. Every named condition
+ * must hold; an omitted condition holds for anything, so a state whose match
+ * names nothing matches every membership: a catch-all.
+ */
+export function membershipMatchesState(
+	membership: SourceMembership,
+	state: WorkflowState,
+): boolean {
+	const { match } = state;
+	if (match.sourceName !== undefined && match.sourceName !== membership.sourceName) return false;
+	if (match.sourceKind !== undefined && match.sourceKind !== membership.sourceKind) return false;
+	if (match.repository !== undefined && match.repository !== membership.repository.identity)
 		return false;
 	const labels = new Set(membership.labels.map((label) => label.toLocaleLowerCase()));
-	if (when.labelsAll?.some((label) => !labels.has(label.toLocaleLowerCase()))) return false;
+	if (match.labelsAll?.some((label) => !labels.has(label.toLocaleLowerCase()))) return false;
 	if (
-		when.labelsAny !== undefined &&
-		!when.labelsAny.some((label) => labels.has(label.toLocaleLowerCase()))
+		match.labelsAny !== undefined &&
+		!match.labelsAny.some((label) => labels.has(label.toLocaleLowerCase()))
 	)
 		return false;
-	if (when.labelsNone?.some((label) => labels.has(label.toLocaleLowerCase()))) return false;
+	if (match.labelsNone?.some((label) => labels.has(label.toLocaleLowerCase()))) return false;
 	return true;
 }

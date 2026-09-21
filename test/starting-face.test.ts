@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { AppProps } from "../src/components/app.ts";
-import type { FactoryConfig } from "../src/config.ts";
+import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import type { FactoryState } from "../src/state.ts";
 import { openFactoryState } from "../src/state.ts";
@@ -116,6 +116,11 @@ interface SeedDetail {
 	 * `auto-handoff` line is no longer read for it.
 	 */
 	autoMode?: boolean;
+	/**
+	 * The transition outcome the settled turn carries (ADR 0027): the decision
+	 * modal offers the position's handoff from it.
+	 */
+	transition?: TransitionOutcome;
 }
 
 /**
@@ -157,6 +162,7 @@ function seed(shape: "open" | "in-flight" | "awaiting", detail: SeedDetail = {})
 				turnLog: [{ kind: "text", text: "The turn is done." }],
 				completedAt: "2026-08-31T11:00:00Z",
 				cause: detail.cause,
+				...(detail.transition === undefined ? {} : { transition: detail.transition }),
 			});
 		}
 	}
@@ -421,11 +427,24 @@ describe("the Starting window's timeline", () => {
 	});
 
 	test("a workflow route over a held turn wears the face, and a failed start gives the held face back", async () => {
-		const app = seededApp(
-			"awaiting",
-			{ workflows: [{ from: "implement", to: ["review"] }] },
-			{ cause: "failed" },
-		);
+		// The settled turn's transition wrote the position on this ticket: the
+		// decision modal offers its handoff as the last row (ADR 0027).
+		const outcome: TransitionOutcome = {
+			fired: true,
+			when: null,
+			reason: "",
+			ticketFacts: [],
+			pullRequestFacts: [],
+			autoAdvance: false,
+			ticketWrite: null,
+			pullRequestWrite: null,
+			pullRequestIdentity: null,
+			pullRequestKey: null,
+			writeFailure: "",
+			positionTaskType: "review",
+			positionTicketIdentity: identity,
+		};
+		const app = seededApp("awaiting", {}, { cause: "failed", transition: outcome });
 		stubCheckout(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The stored workspace still holds: the route reuses it in a new tab,

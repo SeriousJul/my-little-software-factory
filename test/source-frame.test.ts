@@ -275,7 +275,7 @@ describe("source-driven frames", () => {
 				ticket("github:github.com:I_9", { externalKey: "#9", title: "Another open item" }),
 			]),
 		);
-		const [first] = state.visibleTickets(BASE_CONFIG.taskRules, BASE_CONFIG.defaultTaskType);
+		const [first] = state.visibleTickets(BASE_CONFIG.workflowStates, BASE_CONFIG.defaultTaskType);
 		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		state.settleHandoff(claim.claim.attemptId, true);
@@ -350,7 +350,13 @@ describe("source-driven frames", () => {
 				},
 				review: { ...BASE_CONFIG.taskTypes.review, agent: "claude" },
 			},
-			taskRules: [{ taskType: "review", when: { labelsAny: ["ready-for-review"] } }],
+			workflowStates: [
+				{
+					name: "ready-for-review",
+					taskType: "review",
+					match: { labelsAny: ["ready-for-review"] },
+				},
+			],
 		};
 		try {
 			await withApp(
@@ -470,7 +476,7 @@ describe("source-driven frames", () => {
 		state.applyFetch(issues, success([runTicket, offTicket, openTicket, awaitTicket]));
 		state.applyFetch(pulls, success([pendingTicket]));
 		const off = state
-			.visibleTickets(BASE_CONFIG.taskRules, "implement")
+			.visibleTickets(BASE_CONFIG.workflowStates, "implement")
 			.find((t) => t.title === "Off ticket");
 		if (off === undefined) throw new Error("Off ticket is missing");
 		const claim = state.claimHandoff(off.identity, HANDOFF_CHOICE, "open");
@@ -609,7 +615,7 @@ describe("source-driven frames", () => {
 		const definition = { name: "issues", kind: "github-issues" };
 		state.initializeSources([definition]);
 		state.applyFetch(definition, success([ticket()]));
-		const [first] = state.visibleTickets(BASE_CONFIG.taskRules, BASE_CONFIG.defaultTaskType);
+		const [first] = state.visibleTickets(BASE_CONFIG.workflowStates, BASE_CONFIG.defaultTaskType);
 		const claim = state.claimHandoff(first.identity, HANDOFF_CHOICE, "open");
 		if (!claim.ok) throw new Error(claim.reason);
 		// The attempt stays unresolved: the process died before settling it.

@@ -387,7 +387,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
 		const config = this.config();
 		const ticket = this.state
-			.visibleTickets(config.taskRules, config.defaultTaskType)
+			.visibleTickets(config.workflowStates, config.defaultTaskType)
 			.find((candidate) => candidate.identity === intent.ticketIdentity);
 		if (ticket === undefined)
 			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
@@ -413,6 +413,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				choice: intent.choice,
 				origin: intent.origin,
 				claim: claim.claim,
+				claimedState: ticket.state,
 				previousMessage: intent.previousMessage,
 			},
 			intent.onStarted,
@@ -664,7 +665,18 @@ class HandoffDispatchModule implements HandoffDispatch {
 			}
 		}
 		const currentState = this.state.ticketState(item.ticketIdentity);
-		if (currentState === undefined || !handoffAllowsState(item.origin, currentState)) {
+		// A queued route is the operator's decision on the turn the item's
+		// ticket awaited when the route was asked for: it stands while the
+		// ticket keeps awaiting that decision, and a ticket that closed the
+		// turn - back to open - or moved on leaves the route stale, so the
+		// item keeps its place with the state it moved to.
+		const routeStillStands =
+			item.origin !== "workflow" || (currentState !== undefined && currentState === "awaiting");
+		if (
+			currentState === undefined ||
+			!handoffAllowsState(item.origin, currentState) ||
+			!routeStillStands
+		) {
 			return {
 				ok: false,
 				reason:
@@ -680,7 +692,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// the same fact and the row's spinner face does not wait for a seat.
 		this.reports.starting(item.ticketIdentity, true);
 		const ticket = this.state
-			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
+			.visibleTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
 			// The claim's hard checks passed but the projection holds no ticket
@@ -718,6 +730,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				choice: item.choice,
 				origin: item.origin,
 				claim: claimed.claim,
+				claimedState: claimed.ticket.state,
 				previousMessage: item.previousMessage,
 				workQueuePickup: true,
 			},
@@ -806,6 +819,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				choice: item.choice,
 				origin: item.origin,
 				claim: claimed.claim,
+				claimedState: claimed.ticket.state,
 				previousMessage: item.previousMessage,
 				workQueuePickup: true,
 			},
@@ -842,7 +856,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	 * ticket is still in the projection, its identity once it is gone. */
 	private ticketName(identity: string): string {
 		const title = this.state
-			.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
+			.visibleTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
 	}
@@ -1083,7 +1097,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 			const next = this.handoffQueue.shift();
 			if (next === undefined) return;
 			const currentState = this.state.ticketState(next.ticket.identity);
-			if (currentState === undefined || !handoffAllowsState(next.origin, currentState)) {
+			// A workflow route runs from the state its claim made: the route
+			// stands on the settled turn the claim waited on, and a ticket that
+			// moved on while the queue held - the turn closed, the ticket back
+			// to open - no longer waits on it. A claim that made on an open
+			// position ticket (the machine's pull request) still runs while it
+			// stays open, and stops when any other work takes the ticket.
+			const movedWhileQueued =
+				next.origin === "workflow" &&
+				currentState !== undefined &&
+				currentState !== next.claimedState;
+			if (
+				currentState === undefined ||
+				!handoffAllowsState(next.origin, currentState) ||
+				movedWhileQueued
+			) {
 				// One fact, said once: what the ticket is now. A ticket the state no
 				// longer holds is the harder case, and the state it moved to is the
 				// one the operator and the attempt both record.
@@ -1112,7 +1140,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// snapshot: the handoff runs on the ticket it claimed.
 			const snapshot =
 				this.state
-					.visibleTickets(this.config().taskRules, this.config().defaultTaskType)
+					.visibleTickets(this.config().workflowStates, this.config().defaultTaskType)
 					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
 			this.runClaimedHandoff({ ...next, ticket: snapshot }, next.onStarted);
 		}
@@ -1177,6 +1205,8 @@ interface ClaimedHandoff {
 	choice: HandoffChoice;
 	origin: HandoffOrigin;
 	claim: HandoffClaim;
+	/** The ticket's state when the claim made, the way the drain re-checks it. */
+	claimedState: TicketState;
 	previousMessage: string;
 	/**
 	 * True for the claim a Work queue pickup or force-dispatch made (ADR 0034):
@@ -1207,7 +1237,10 @@ function handoffAllowsState(origin: HandoffOrigin, state: TicketState): boolean 
 		case "open":
 			return state === "open";
 		case "workflow":
-			return state === "awaiting";
+			// A transition route may land on the position's own ticket, open
+			// or awaiting alike: the machine re-derives the position, so the
+			// routed ticket is the surface the facts now sit on (ADR 0027).
+			return state === "open" || state === "awaiting";
 		case "restart":
 			return state === "handed-off" || state === "running";
 	}

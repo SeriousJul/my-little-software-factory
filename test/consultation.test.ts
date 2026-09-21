@@ -766,6 +766,9 @@ describe("pending responses across restart and migration", () => {
 		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v4 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v4 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 4").run();
 		db.close();
@@ -798,6 +801,9 @@ describe("pending responses across restart and migration", () => {
 		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v11 override belongs to the run after this record: a v9 ticket
 		// never stored a Priority override.
+		// The v13 fact belongs to the run after this record: a v9 trace never
+		// stored the transition outcome.
+		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
 		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 9").run();
 		db.close();

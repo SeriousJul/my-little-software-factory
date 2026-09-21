@@ -488,6 +488,7 @@ function sampleTicket(
 			state === "awaiting"
 				? {
 						taskType: "implement",
+						transition: null,
 						agentType: "pi",
 						agentName: "fix-the-layout-math",
 						model: "",

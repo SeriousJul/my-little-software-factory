@@ -12,8 +12,8 @@ turn above the choice rows](images/decision-modal.png)
 
 Enter on an `awaiting` ticket opens the decision modal: a near-fullscreen
 modal that pops in over the app with a short fade and grow, one cell of
-margin on every side. In auto mode, and on an auto-close task type, the
-factory decides the ticket itself: Enter only reports that, and the modal
+margin on every side. In auto mode, and on a transition that auto-advances,
+the factory decides the ticket itself: Enter only reports that, and the modal
 stays closed. Its border reads `Decision: <ticket title>`, and the
 first row under the border names the context: repository, task type,
 agent, completion time.
@@ -63,19 +63,26 @@ focus no longer moves the operator's view (the Live view page carries the
 full note). Goto is navigation, not a completion decision, so the trace
 does not record it: the turn's pending trace stays pending, and the next
 settle refreshes it with the agent's new last message.
-Then one "Handoff: `<task type>`" row per outgoing workflow edge the
-completed task type has, in config order: an edge naming several targets
-offers one row per target, and two edges to the same target keep both
-rows, so every edge stays reachable. The row's detail shows the Agent the
-arriving handoff resolves to (the edge's pin, else the target Task profile's
-agent, else `default-agent`), and the edge's pinned environment when the edge
-defines one. Choosing a row hands the ticket off again with that target task
-type. `e` on such a row opens the override panel on the choice the edge
-resolved, so the operator can change the agent, environment, Model, or
-Thinking for this one handoff before it starts; the override outranks the
-edge pin, the Task profile, and the defaults. Moving that panel to another
-Task type re-derives the rows the operator never touched from the type's own
-profile, so the route's Agent pin goes with the target the edge named.
+The settled turn's transition facts stand above those rows (ADR 0027): one
+line per surface the fire wrote on, the ticket's reading `ticket · added
+ready-for-review · removed ready-for-agent` and the pull request's the same
+shape behind its external key; one line for a label write that failed; and
+one for a fire whose judgment never held or that found no linked pull
+request. The rows decide on those facts, so the turn log yields its rows to
+them.
+Then one "Handoff: `<task type>`" row when the fire's written labels put a
+ticket in a state that offers a task. The row's detail shows the Agent the
+arriving handoff resolves to (the fired branch's pin, else the target Task
+profile's agent, else `default-agent`), and the branch's pinned environment
+when it defines one. Choosing a row hands that ticket off - the linked pull
+request when the written labels sit there, else the ticket whose turn
+settled. `e` on such a row opens the override panel on the choice the
+position resolved, so the operator can change the agent, environment, Model,
+or Thinking for this one handoff before it starts; the override outranks the
+Transition pin, the Task profile, and the defaults. Moving that panel to
+another Task type re-derives the rows the operator never touched from that
+type's own profile, so the route's Agent pin goes with the position the fire
+named.
 `Esc` there closes the panel
 back to the decision: nothing is claimed and nothing runs. Enter on an
 awaiting ticket keeps the direct route, so a route the operator wants

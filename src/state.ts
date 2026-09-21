@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import { dirname } from "node:path";
-import type { TaskRule } from "./config.ts";
+import type { TransitionOutcome, WorkflowState } from "./config.ts";
 import {
 	isStaleAgentOutputWarning,
 	isTurnEndWarning,
@@ -47,7 +47,7 @@ import {
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -142,6 +142,14 @@ interface SettleTurnInput {
 	/** The agent's or the provider's own text for the cause; empty when none. */
 	detail?: string;
 	completedAt: string;
+	/**
+	 * The transition the plane fired on this completed turn (ADR 0027). The
+	 * trace holds its outcome, so the decision modal and the automatic
+	 * decision read the facts the plane wrote, not a re-read of the source.
+	 * Null: the settle fired no transition (not completed, no transition
+	 * configured, or the fire refused).
+	 */
+	transition?: TransitionOutcome | null;
 }
 
 interface CompletionDecisionInput {
@@ -653,6 +661,9 @@ const WORK_QUEUE_TABLE = `
 /** The v14 step: the Work queue (ADR 0034). */
 const MIGRATION_V13_TO_V14 = WORK_QUEUE_TABLE;
 
+/** The v17 step: the transition outcome the plane fired on a settled turn (ADR 0027). */
+const MIGRATION_V16_TO_V17 = "ALTER TABLE completion_traces ADD COLUMN transition_json TEXT;";
+
 /**
  * The v16 columns: the Work queue grows the `queued` Consultation's item
  * (ADR 0034, issue #90) beside the handoff item, in the one shared order.
@@ -853,6 +864,11 @@ export class FactoryState {
 			if (version < 15 && !this.hasColumn("work_queue", "position"))
 				this.db.exec(MIGRATION_V14_TO_V15);
 			if (version < 16) this.db.exec(MIGRATION_V15_TO_V16);
+			// The column may already stand on a file the version stamp alone does
+			// not describe (a downgrade left the column in place), so the stamp
+			// and the file both get asked before the step runs.
+			if (version < 17 && !this.hasColumn("completion_traces", "transition_json"))
+				this.db.exec(MIGRATION_V16_TO_V17);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1110,7 +1126,7 @@ export class FactoryState {
 	 * behind ranked work.
 	 */
 	visibleTickets(
-		rules: readonly TaskRule[],
+		states: readonly WorkflowState[],
 		fallbackTaskType: string,
 		priorityLabels: readonly string[] = [],
 	): Ticket[] {
@@ -1176,7 +1192,7 @@ export class FactoryState {
 				memberships: storedMemberships.map(({ active: _active, ...membership }) => membership),
 				suggestedTaskType: selectTaskType(
 					storedMemberships.filter((membership) => membership.active),
-					rules,
+					states,
 					fallbackTaskType,
 				),
 				actionable,
@@ -1300,7 +1316,7 @@ export class FactoryState {
 	lastCompletion(identity: string): Completion | null {
 		const row = this.db
 			.prepare(
-				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				"SELECT task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, decision, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
@@ -1316,6 +1332,7 @@ export class FactoryState {
 					cause: string | null;
 					detail: string | null;
 					decision: string | null;
+					transition_json: string | null;
 			  }
 			| undefined;
 		if (row == null) return null;
@@ -1332,6 +1349,7 @@ export class FactoryState {
 			cause: turnEndCauseOf(row.cause),
 			detail: row.detail ?? "",
 			decision: row.decision as CompletionDecision | null,
+			transition: transitionOf(row.transition_json),
 		};
 	}
 
@@ -1440,7 +1458,7 @@ export class FactoryState {
 	 * turn is not this cycle's fact. It gates the open auto-handoff only; a
 	 * manual handoff passes.
 	 */
-	sameTypeHoldActive(identity: string, suggestedTaskType: string): boolean {
+	sameTypeHoldActive(identity: string, suggestedTaskType: string | null): boolean {
 		const ended = this.lastCycleEnd(identity);
 		if (ended === null) return false;
 		return ended.cause === "completed" && ended.taskType === suggestedTaskType;
@@ -2213,7 +2231,7 @@ export class FactoryState {
 				// turn it became.
 				this.db
 					.prepare(
-						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ? WHERE id = ?",
+						"UPDATE completion_traces SET last_message = ?, turn_log_json = ?, completed_at = ?, cause = ?, detail = ?, transition_json = ? WHERE id = ?",
 					)
 					.run(
 						input.message,
@@ -2221,12 +2239,13 @@ export class FactoryState {
 						input.completedAt,
 						cause,
 						detail,
+						input.transition == null ? null : JSON.stringify(input.transition),
 						pending.id,
 					);
 			} else {
 				this.db
 					.prepare(
-						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO completion_traces(id, handoff_id, ticket_identity, work_cycle, task_type, agent_type, agent_name, model, thinking, context_window, completed_at, last_message, turn_log_json, cause, detail, transition_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						randomUUID(),
@@ -2244,6 +2263,7 @@ export class FactoryState {
 						JSON.stringify(input.turnLog),
 						cause,
 						detail,
+						input.transition == null ? null : JSON.stringify(input.transition),
 					);
 			}
 		});
@@ -2432,10 +2452,10 @@ export class FactoryState {
 								"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
 						};
 				}
-				if (origin === "workflow" && ticket.state !== "awaiting")
+				if (origin === "workflow" && ticket.state !== "awaiting" && ticket.state !== "open")
 					return {
 						ok: false,
-						reason: `only awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
+						reason: `only open or awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
 					};
 				if (origin === "restart" && ticket.state !== "handed-off" && ticket.state !== "running")
 					return {
@@ -3728,6 +3748,27 @@ interface HandoffRow {
 	pane_id: string | null;
 	tab_id: string | null;
 	workspace_id: string | null;
+}
+
+/**
+ * The transition outcome stored on a trace; null when the turn settled
+ * without a fire, and null when a stored record does not parse: a broken
+ * record fails open, the same way a broken cause does.
+ */
+function transitionOf(json: string | null): TransitionOutcome | null {
+	if (json === null) return null;
+	try {
+		const parsed: unknown = JSON.parse(json);
+		return isRecordOutcome(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+function isRecordOutcome(value: unknown): value is TransitionOutcome {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const outcome = value as Record<string, unknown>;
+	return typeof outcome.fired === "boolean" && typeof outcome.writeFailure === "string";
 }
 
 function jsonChoice(value: string): HandoffChoice | undefined {

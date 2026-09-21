@@ -29,7 +29,7 @@ line for line. The values are illustrative.
 # --- Handoff defaults ----------------------------------------------
 
 # The agent type a handoff starts with when neither its Task profile names
-# one nor a workflow edge pins one. It must name an [agents.*] table.
+# one nor a transition pins one. It must name an [agents.*] table.
 default-agent = "pi"
 
 # The model a handoff starts with when its Task profile names none. Free
@@ -38,11 +38,11 @@ default-agent = "pi"
 # It is checked at startup through every task profile that resolves it.
 default-model = "anthropic/claude-opus-4-6"
 
-# The environment a handoff starts with when the workflow edge does not
+# The environment a handoff starts with when a transition does not
 # pin one. One of "live-worktree" or "worktree".
 default-environment = "worktree"
 
-# The task type of a handoff when no task rule matches.
+# The task type of a handoff when no state matches.
 # It must name a [task-types.*] table.
 default-task-type = "implement"
 
@@ -142,8 +142,10 @@ context-window = "--autocompact {value}"
 # default-model, and an omitted level or window leaves it to the agent. The
 # override panel prefills all four, and each one applies to its own setting
 # only.
-# auto-close lets the control plane decide the completions of this type
-# without the operator even in manual mode.
+# A [task-types.X.transition] table fires when a turn of this type
+# completes: it writes the label facts on the ticket and its linked pull
+# request, and the machine re-derives every position from the written labels
+# (ADR 0027). The agents never write workflow labels.
 [task-types.implement]
 agent = "pi"
 model = "anthropic/claude-sonnet-4-5"
@@ -161,7 +163,9 @@ Labels: {labels}
 Description:
 {description}'''
 thinking = "medium"
-auto-close = false
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.review]
 template = '''
@@ -176,7 +180,20 @@ Description:
 {description}'''
 agent = "codex"
 context-window = 272000
-auto-close = false
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+score-threshold = 90
+[[task-types.review.transition.branches]]
+when = "score-above-threshold"
+pull-request-facts = ["ready-to-ship"]
+auto-advance = true
+agent = "codex"
+environment = "worktree"
+[[task-types.review.transition.branches]]
+when = "score-below-threshold"
+pull-request-facts = ["needs-work"]
+ticket-facts = ["blocked"]
 
 [task-types.rework]
 template = '''
@@ -189,7 +206,11 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+agent = "pi"
+environment = "worktree"
 
 [task-types.merge]
 template = '''
@@ -203,7 +224,10 @@ Labels: {labels}
 Description:
 {description}'''
 thinking = "low"
-auto-close = true
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+auto-advance = true
 
 # --- Consultation types ----------------------------------------------------
 
@@ -219,23 +243,46 @@ model = "gpt-5.6-codex"
 thinking = "medium"
 context-window = 272000
 
-# --- Workflows ----------------------------------------------------------------
+# --- The workflow machine -----------------------------------------------------
 
-# from and to name [task-types.*] tables. to is a non-empty list.
-# agent and environment pin the handoff the edge triggers.
-[[workflows]]
-from = "implement"
-to = ["review"]
-agent = "pi"
-environment = "worktree"
+# The states a ticket can sit in. name is one word. task-type names a
+# [task-types.*] table: the task the plane suggests for a ticket on the
+# state. The match sets the conditions that put a ticket on the state; the
+# set conditions must all hold. Order decides: the first matching state
+# wins. A state with no task-type is a parking state: the plane suggests
+# nothing for it.
+[[states]]
+name = "needs-work"
+task-type = "rework"
+[states.match]
+source-name = "my-app-pull-requests"
+source-kind = "github-pull-request"
+repository = "github.com/seriousjul/my-app"
+labels-all = ["factory"]
+labels-any = ["needs-work"]
+labels-none = ["do-not-process"]
 
-[[workflows]]
-from = "review"
-to = ["merge", "rework"]
+[[states]]
+name = "ready-for-review"
+task-type = "review"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-for-review"]
 
-[[workflows]]
-from = "rework"
-to = ["review"]
+[[states]]
+name = "ready-to-ship"
+task-type = "merge"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-to-ship"]
+
+# The park: a pull request no state above placed. No task-type, so the plane
+# suggests nothing for it, and a label write is the only engine that moves it.
+[[states]]
+name = "pull-request-unlabeled"
+[states.match]
+source-kind = "github-pull-request"
+labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
 
 # --- Repository mappings --------------------------------------------------------
 
@@ -277,32 +324,13 @@ filter = "is:open label:factory"
 [sources.auth]
 account = "my-account"
 
+
 [[sources]]
 name = "my-app-dependabot-alerts"
 kind = "github-dependabot-alerts"
 refresh-interval-seconds = 300
 repositories = ["SeriousJul/my-app"]
 host = "github.com"
-
-# --- Task rules ----------------------------------------------------------------------
-
-# Ordered. The first rule whose when table matches a ticket wins.
-# The set conditions in one when table must all hold. An empty when
-# table matches every ticket.
-[[task-rules]]
-task-type = "review"
-[task-rules.when]
-source-name = "my-app-pull-requests"
-source-kind = "github-pull-request"
-repository = "github.com/seriousjul/my-app"
-labels-all = ["ready"]
-labels-any = ["ready-for-review", "needs-work"]
-labels-none = ["do-not-process"]
-
-[[task-rules]]
-task-type = "implement"
-[task-rules.when]
-source-kind = "github-issue"
 ```
 
 ## Key reference
@@ -311,10 +339,10 @@ source-kind = "github-issue"
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `default-agent` | yes | - | The agent type a handoff starts with when neither its Task profile names one nor a workflow edge pins one. It must name an `[agents.*]` table. |
+| `default-agent` | yes | - | The agent type a handoff starts with when neither its Task profile names one nor a transition pins one. It must name an `[agents.*]` table. |
 | `default-model` | no | empty | The model a handoff starts with when its Task profile names none, and the starting value of the Model row. Free text, and it is left to the agent when empty. The resolved agent must map a model for a handoff to carry one. A list the agent reports is checked at startup through every task profile that resolves it (ADR 0010). |
-| `default-environment` | yes | - | The environment a handoff starts with when the workflow edge does not pin one. One of `live-worktree` or `worktree`. |
-| `default-task-type` | yes | - | The task type of a handoff when no task rule matches. It must name a `[task-types.*]` table. |
+| `default-environment` | yes | - | The environment a handoff starts with when a transition does not pin one. One of `live-worktree` or `worktree`. |
+| `default-task-type` | yes | - | The task type of a handoff when no state matches. It must name a `[task-types.*]` table. |
 | `state-file` | no | `$XDG_STATE_HOME/my-little-software-factory/state.sqlite`, else `~/.local/state/my-little-software-factory/state.sqlite` | The SQLite state file. A relative path resolves against the directory of this config file. |
 | `max-parallel-agents` | no | `2` | The one cap over all running work: the in-flight ticket seats and every Consultation in `opening` or `working`. `0` means unlimited. |
 | `agent-poll-interval-seconds` | no | `5` | Seconds between herdr polls. A positive number. |
@@ -327,10 +355,9 @@ source-kind = "github-issue"
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |
 | `consultation-types` | no | none | The Consultation patterns. |
-| `workflows` | no | none | The workflow edges. |
+| `states` | no | none | The states of the workflow machine, in match order. |
 | `repos` | no | none | The repository identity to checkout path mappings. |
 | `sources` | no | none | The ticket sources. `ticket-sources` is an alias for the same key; use one name, not both. |
-| `task-rules` | no | none | The ordered task rules. |
 
 **`[scroll]`** (optional table).
 
@@ -361,11 +388,11 @@ source-kind = "github-issue"
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `template` | yes | - | The prompt. Placeholders: `{repository}`, `{title}`, `{description}`, `{source-kind}`, `{external-key}`, `{source-url}`, `{labels}`, `{previous-message}`. Any other brace pair is a startup error, so an unknown name cannot stay literal in the prompt an agent receives. `{previous-message}` is empty on a first handoff and carries the previous agent's last message on a workflow handoff. |
-| `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A workflow edge's pin beats it. |
+| `agent` | no | `default-agent` | The Task profile's agent type: the agent a handoff of this type starts on. It must name an `[agents.*]` table. A transition's pin beats it. |
 | `model` | no | `default-model` | The Task profile's model: free text the resolved agent's model template renders, so that agent must define one. The override panel prefills it, and clearing that row leaves the model to the agent. |
 | `thinking` | no | - | The Task profile's thinking level: the level this task type's handoffs start on, and the starting value of the override panel's thinking row. It must be one of the profile agent's `thinking-values`. |
 | `context-window` | no | - | The Task profile's context window: a whole count of tokens, written as digits with no separators, that this task type's handoffs start their agent with. The profile agent must define a `context-window` template. There is no top-level default: a profile that names none leaves the room to the agent. |
-| `auto-close` | no | `false` | The control plane decides the completions of this type without the operator even in manual mode. |
+| `transition` | no | none | The transition that fires when a turn of this type completes. |
 
 **`[consultation-types.<name>]`** (one table per Consultation type).
 
@@ -378,14 +405,13 @@ source-kind = "github-issue"
 | `thinking` | no | - | The thinking level, passed through the agent's thinking template. The agent must define one, and the level must be one of its `thinking-values`. |
 | `context-window` | no | - | The context window, a whole count of tokens in digits, passed through the agent's context-window template. The agent must define one. |
 
-**`[[workflows]]`** (one table per workflow edge).
+**`[[states]]`** (one table per state, in match order).
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `from` | yes | - | The task type the edge routes from. |
-| `to` | yes | - | The task types the edge may start. A non-empty list. |
-| `agent` | no | - | The agent type the handoff the edge triggers runs on. |
-| `environment` | no | - | The environment the handoff the edge triggers runs in. One of `live-worktree` or `worktree`. |
+| `name` | yes | - | The state name. One word. |
+| `task-type` | no | none | The task type the plane suggests for a ticket on the state. It must name a `[task-types.*]` table. Omitted: a parking state the plane suggests nothing for. |
+| `match` | yes | - | The condition table. The set conditions must all hold. An empty table matches every ticket. |
 
 **`[repos]`** (a table, repository identity to checkout path).
 
@@ -398,22 +424,15 @@ for the match rules and the sibling clone.
 
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
-| `name` | yes | - | The source name. It must be unique, and it is what a rule's `source-name` matches. |
+| `name` | yes | - | The source name. It must be unique, and it is what a state match's `source-name` matches. |
 | `kind` | yes | - | `github-issues`, `github-pull-requests`, or one of the security feed kinds `github-security-advisories`, `github-dependabot-alerts`, `github-secret-scanning-alerts`. See the security source note below. |
 | `refresh-interval-seconds` | yes | - | The refresh interval. A positive number. |
 | `repositories` | yes | - | A non-empty list of `owner/name` strings. |
 | `host` | no | `github.com` | The GitHub host. |
-| `filter` | no | - | A GitHub search applied to the list. See the filter note below. The security feed kinds reject the key at startup. |
-| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). The security feeds reuse this table. |
+| `filter` | no | - | A GitHub search applied to the list. Omitted on the issue and pull request sources: the default policy lists every open item of the source's kind that is not `blocked`, and a pull request that is not a draft unless it carries `needs-work`. The security feed kinds reject the key at startup. See the filter note below. |
+| `auth` | no | gh's current authentication | The authentication. Exactly one of `token` (a literal token; the file then carries mode 0600), `token-env` (an environment variable name), or `account` (a gh-authenticated account name). The security feeds reuse this table. The plane's transition writes reuse it too: a fire runs `gh issue edit` and `gh pr edit` under the source's configured authentication, so the labels the plane writes and the items it reads come from the same account.
 
-**`[[task-rules]]`** (one table per rule, in order).
-
-| Key | Required | Default | What it does |
-| --- | --- | --- | --- |
-| `task-type` | yes | - | The task type the rule selects. It must name a `[task-types.*]` table. |
-| `when` | yes | - | The condition table. The set conditions must all hold. An empty table matches every ticket. |
-
-**`[task-rules.when]`** conditions (all optional; omitted conditions are ignored).
+**`[states.match]`** conditions (all optional; omitted conditions are ignored).
 
 | Key | Required | What it does |
 | --- | --- | --- |
@@ -424,15 +443,59 @@ for the match rules and the sibling clone.
 | `labels-any` | no | At least one listed label must be present. Case-insensitive. |
 | `labels-none` | no | No listed label may be present. Case-insensitive. |
 
+A label named in `labels-all` or `labels-any` but written by no transition
+is a scoping label the operator owns: a fire never removes it, so a state
+can gate on a label the machine never writes, such as `labels-all =
+["factory"]` keeping the machine to one project's items. A label a
+transition writes must already exist in the repository: a write that names a
+missing label fails, and [the ticket labels page](../development/labels.md)
+carries the command that creates them.
+
+**`[task-types.<name>.transition]`** (one table per task type that fires a transition).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
+| `pull-request-facts` | no | none | The labels the transition writes on the ticket's linked pull request, the same convergence. No linked pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own linked pull request: one surface takes both fact lists in one write. |
+| `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the completion's score against. A whole number from 0 to 100. A score branch requires it. |
+| `auto-advance` | no | `false` | The factory decides the completed turn without the operator: the position it derives hands off at any time, and a transition with no position closes the cycle even in manual mode. |
+| `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
+| `environment` | no | - | The environment the route the transition derives runs in. One of `live-worktree` or `worktree`. |
+| `branches` | no | none | The judgment branches, in order. The first branch whose `when` holds fires; a branch with no `when` is the fallback the transition fires on when no judgment held. |
+
+**`[[task-types.<name>.transition.branches]]`** (one table per branch, in order).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `when` | no | fallback | The judgment: `score-above-threshold`, `score-below-threshold`, `pull-request-open`, or `pull-request-closed`. Omitted: the fallback branch, which fires when no judgment branch did. |
+| `ticket-facts` | no | the transition's | The labels this branch writes on the ticket, overriding the transition's when the branch fires. |
+| `pull-request-facts` | no | the transition's | The labels this branch writes on the linked pull request, overriding the transition's when the branch fires. |
+| `auto-advance` | no | the transition's | This branch's auto-advance, overriding the transition's when the branch fires. |
+| `agent` | no | the transition's | This branch's agent pin, overriding the transition's when the branch fires. |
+| `environment` | no | the transition's | This branch's environment pin, overriding the transition's when the branch fires. |
+
 ## Notes
 
-A task type can set `auto-close = true`. For its completions the control
-plane decides without the operator even in manual mode: exactly one outgoing
-workflow edge hands off with that task while the parallel limit has room,
-any other edge count closes the cycle, and a route at the per-ticket
-handoff limit degrades to close.
+A transition's `auto-advance` lets the control plane decide the completions
+of its task type without the operator even in manual mode. A branch carries
+its own `auto-advance` to decide one judgment's completion and leave the
+others to the transition's. The plane fires the transition on every completed
+turn: it writes the label facts, and the
+machine re-derives the position from the written labels on the ticket and
+its linked pull request. One ticket that is both the settled ticket and the
+linked pull request - a pull request ticket - is one surface: the plane
+converges it to the two fact lists at once, in one write. A derived position
+hands off while the parallel limit and the per-ticket handoff limit have
+room; a transition that derives no position closes the cycle, and a route at
+either limit degrades the same way the open dispatch does. The agents never
+write workflow labels (ADR 0027): the plane writes them, and a ticket's
+position is always re-derived from the labels it carries.
 
-The `filter` is a GitHub search string. GitHub search applies `AND`, `OR`,
+The `filter` is a GitHub search string. Without one, the source lists what
+the machine needs to see: the plane owns the workflow labels, so an item
+enters the list before it carries any - a pull request the agent just opened
+is invisible to no one, or the transition that labels it can never find it.
+GitHub search applies `AND`, `OR`,
 and `NOT` to search text only, and it has no parenthesized grouping.
 Parentheses, and logical operators next to `label:`-style qualifiers, are
 rejected at startup, so a source never degrades to a healthy-but-empty list.
@@ -477,6 +540,8 @@ administrator access to the repository (advisories: owner or security
 manager): a token without access makes the source stale with the readable
 reason, like any failed refresh. The control plane is read-only on all three
 feeds: it never writes labels, states, or dismissals to the security items.
+The security task types' transitions write `ready-for-review` on the pull
+request the agent opens for the finding, never on the finding itself.
 
 Repository mappings are the one section the control plane writes back: a
 sibling clone records its path there. The write-back is atomic: the config
@@ -489,16 +554,20 @@ write-back: the data round-trips, the comments do not.
 The shipped defaults define the three agent types `pi`, `codex`, and
 `claude`, the four task types `implement`, `review`, `rework`, and
 `merge`, the three security task types `resolve-security-advisory`,
-`resolve-dependabot-alert`, and `resolve-secret-scanning-alert`, the three
-task rules of the label workflow - `needs-work` pull requests to `rework`,
-`ready-for-review` to `review`, and `ready-to-ship` to `merge` - and one
-task rule per security source kind pointing at its task type. They also
+`resolve-dependabot-alert`, and `resolve-secret-scanning-alert`, and the
+states of the label workflow - the `ready-for-agent` issue to `implement`,
+the `needs-work`, `ready-for-review`, and `ready-to-ship` pull requests to
+`rework`, `review`, and `merge`, one state per security source kind pointing
+at its task type, and one parking state for a pull request that carries none
+of them - with the transitions that move a ticket between them. They also
 define one `consult` Consultation type that passes your input straight
 through. They carry the three priority labels `critical`, `high`, and `low`.
 They have no ticket sources and no repository mappings: uncommenting one
 security source block is the only setup a fresh install needs. The security
-task types carry `auto-close = true` and `thinking = "high"`: the cycle
-auto-closes on a completed settle, and the completed task type rests the
+task types carry `thinking = "high"` and a transition that writes
+`ready-for-review` on the opened pull request with `auto-advance = true`: the
+turn auto-advances into the pull request's review position, and a turn that
+opened no pull request settles closed, the completed task type resting the
 ticket while the item still lists upstream. `config/development.toml` in
 this repository configures the live development path through `--config`; it
 carries the `grill-with-docs` Consultation type.

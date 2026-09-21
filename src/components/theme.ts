@@ -126,15 +126,20 @@ export function heldBadge(): string {
 	return "held".padEnd(BADGE_WIDTH);
 }
 
+/** The badge a parking state's ticket wears in place of a suggested task type. */
+export const PARKED_TASK_TYPE = "parked";
+
 /**
  * The task type a ticket presents in its list row and its detail pane.
  *
  * One shared choice between the two existing domain facts: an `open`
- * ticket presents its Suggested task type, the first matching task rule or
- * the configured default. Every non-open ticket presents the Task type its
- * recorded handoff started with, so refreshed source facts never change the
- * meaning of active or settled work. A non-open ticket without a recorded
- * handoff presents `unknown`: the value is missing, not a task type.
+ * ticket presents its Suggested task type, the task of the first matching
+ * Workflow state or the configured default. Every non-open ticket presents
+ * the Task type its recorded handoff started with, so refreshed source facts
+ * never change the meaning of active or settled work. A non-open ticket
+ * without a recorded handoff presents `unknown`: the value is missing, not a
+ * task type. An open ticket on a parking state presents `parked`: the machine
+ * offers no task, and the plane starts nothing on it (ADR 0027).
  */
 export interface TaskTypePresentation {
 	/** The value the list badge and the detail pane show. */
@@ -145,7 +150,7 @@ export interface TaskTypePresentation {
 
 export function ticketTaskType(ticket: Ticket): TaskTypePresentation {
 	if (ticket.state === "open") {
-		return { value: ticket.suggestedTaskType, unknown: false };
+		return { value: ticket.suggestedTaskType ?? PARKED_TASK_TYPE, unknown: false };
 	}
 	const recorded = ticket.handoff?.taskType;
 	if (recorded === undefined || recorded === "") {

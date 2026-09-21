@@ -142,6 +142,9 @@ The list pane on the left shows the tickets of the Ticket section with their
 state badge, task type badge, title, and repository. The task type badge is the type the
 control plane would hand off: an open ticket shows its suggested task type,
 every other ticket shows the task type its recorded handoff started with.
+An open ticket on a parking state shows `[parked]`: the machine matched and
+offered no task, so the plane hands off nothing on its own, and a Hand off
+keypress starts the default task type (ADR 0027).
 A non-open ticket without a recorded handoff shows `[unknown]`, and only
 that badge wears a warning color; every configured task type uses one
 neutral style. The detail pane on the right shows the full detail of the

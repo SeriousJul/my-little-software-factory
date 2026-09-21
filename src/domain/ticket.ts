@@ -1,5 +1,6 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
+import type { TransitionOutcome } from "../config.ts";
 import type { TicketPriority } from "../priority.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 
@@ -39,6 +40,11 @@ export type CompletionDecision =
 /** One settled turn of one handoff, as the control plane stored it. */
 export interface Completion {
 	taskType: string;
+	/**
+	 * The TransitionOutcome the task type's transition wrote on this turn
+	 * (ADR 0027); null when the turn settled without a transition fire.
+	 */
+	transition: TransitionOutcome | null;
 	agentType: string;
 	agentName: string;
 	/** The model the handoff passed to its Agent, empty when left to the Agent. */
@@ -239,7 +245,13 @@ export interface Ticket {
 	labels: string[];
 	externalUpdatedAt: string;
 	memberships: SourceMembership[];
-	suggestedTaskType: string;
+	/**
+	 * The task the machine's first matching Workflow state offers, or null
+	 * when the ticket sits on a parking state: the control plane does nothing
+	 * on it, and only an external label write moves it (ADR 0027). An
+	 * operator's handoff of a parked ticket starts the default task type.
+	 */
+	suggestedTaskType: string | null;
 	actionable: boolean;
 	handoffRecoveryRequired: boolean;
 	/**

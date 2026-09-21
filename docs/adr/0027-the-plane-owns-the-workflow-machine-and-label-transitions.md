@@ -51,6 +51,18 @@ before. The plane's own write stands as fact until the next refresh. Writing
 labels through the command runner is the plane's first write path to an
 external source.
 
+**The plane owns only the labels its writes name.** A write removes only a
+label a transition or branch writes somewhere in the config, that the write's
+own facts do not name. A label a state match names in its all or any set but
+that no transition writes - the operator's scoping label, such as a
+`labels-all = ["factory"]` gate - is never removed by a fire, so a state that
+scopes on an operator label keeps the label it matched on. A write also runs
+as the source the item lists on: the source's `auth` table resolves to the
+credential the `gh edit` carries, so the plane's writes and its reads come
+from the same account. A label a transition writes must already exist in the
+repository: a write that names a missing label fails, and the fire records
+the failure as a fact instead of routing.
+
 **The linked pull request is found in the plane's own ticket list**, through
 the issue references the pull request tickets already carry (ADR 0023),
 after a forced refresh of the pull request source. The newest non-draft

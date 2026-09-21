@@ -1,0 +1,228 @@
+# The Default configuration.
+#
+# The control plane seeds its Config file from this file on first run and
+# loads the result. Edit the seeded file, not this one: the seed is a copy,
+# and every new machine starts from this template again.
+#
+# This file is meant to be extended:
+#   - The task types and task rules are the workflow template. Add your own
+#     task types and point your own rules at them.
+#   - The [[sources]] example below is the one block you uncomment and edit
+#     to add a repository feed.
+#   - The consult Consultation type passes your input straight through to
+#     the agent, so you can start one without configuring.
+
+default-agent = "pi"
+default-environment = "worktree"
+default-task-type = "implement"
+attention-bell = true
+interaction-exit-key = "f12"
+auto-handoff = false
+max-parallel-agents = 2
+agent-poll-interval-seconds = 5
+completion-message-lines = 200
+max-handoffs-per-ticket = 20
+workflows = []
+
+[scroll]
+speed = 1
+acceleration = 0.8
+maximum-speed = 6
+
+# --- Priority -------------------------------------------------------------
+# An ordered list of labels that ranks tickets: the first entry is the
+# highest rank. A ticket that carries one of these labels ranks by it. The
+# operator bumps a rank from the ticket detail, and a bump beats the label.
+# An "off" bump sets the ticket unranked. Omitted: tickets are not ranked
+# and the list keeps its previous order.
+#
+# [priority]
+# labels = ["critical", "high", "low"]
+
+[agents.pi]
+kind = "pi"
+model = "--model {value}"
+thinking = "--thinking {value}"
+thinking-values = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+[agents.codex]
+kind = "codex"
+model = "--model {value}"
+thinking = "-c model_reasoning_effort={value}"
+thinking-values = ["minimal", "low", "medium", "high"]
+context-window = "-c model_context_window={value}"
+
+[agents.claude]
+kind = "claude"
+model = "--model {value}"
+thinking = "--effort {value}"
+thinking-values = ["low", "medium", "high", "xhigh", "max"]
+context-window = "--autocompact {value}"
+
+[consultation-types.consult]
+agent = "pi"
+environment = "live-worktree"
+template = "{input}"
+
+# --- Workflow template: the task types ----------------------------------
+# The four task types of the label workflow and their prompt templates.
+# This template is meant to be extended: add a [task-types.<name>] table
+# per kind of work, and a [[task-rules]] entry that points at it.
+
+[task-types.implement]
+template = '''
+Implement the following {source-kind}. 
+
+### Instructions
+
+1. **Develop Code**
+   - Implement all acceptance criteria on this branch.
+   - Commit all changes to this branch.
+
+2. **Create Pull Request**
+   - Open a new Pull Request.
+   - Link the pull request to the ticket. Successfully merging this pull request may close these issues.
+   - List any technical choices made when specifications were not clear.
+   - Add the **`ready-for-review`** label to the pull request.
+   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request. Only the review task sets those.
+
+3. **Update Ticket**
+   - Remove the **`ready-for-agent`** label from the ticket.
+
+Repository: {repository}
+
+{external-key}: {title}
+
+URL: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+auto-close = false
+
+[task-types.review]
+template = '''
+Review pull request {external-key}: {title}.
+
+### Rules
+1. **Verify Specification**
+   - Check if the code satisfies all acceptance criteria in the ticket.
+   - List missing requirements or incorrect behavior.
+
+2. **Assess Code Quality**
+   - Check design, modularity, readability, and testing standards.
+   - List maintainability, security, or performance issues.
+
+3. **Calculate Score**
+   - Give a total score from 0 to 100 based on both areas.
+
+### Output Format
+
+- **Score:** [0-100] / 100
+- **Specification Check:** [Pass/Fail - Details]
+- **Quality Check:** [Pass/Fail - Details]
+- **Required Changes:** [Bullet points]
+
+### Outcome
+- Post the output as a comment on the pull request.
+- Remove label 'ready-for-review'.
+- Set label to **`ready-to-ship`** if score is 90 or higher.
+- Set label to **`needs-work`** if score is less than 90.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+auto-close = false
+
+[task-types.rework]
+template = '''
+Rework pull request {external-key}: {title}.
+
+### Instructions
+
+1. **Read Comments**
+   - Read last review comments.
+
+2. **Make Changes**
+   - Correct the code according to the review comments.
+
+3. **Update Repository**
+   - Commit and push changes to this branch.
+
+4. **Update Pull Request**
+   - Write a summary of your changes in a new comment.
+   - Remove the **`needs-work`** label.
+   - Add the **`ready-for-review`** label.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+auto-close = false
+
+[task-types.merge]
+thinking = "low"
+template = '''
+Merge pull request {external-key}: {title}.
+
+### Instructions
+
+1. **Squash and Merge**
+   - Squash and merge the pull request into its base branch.
+
+2. **On a Blocked Merge**
+   - If the pull request has a merge conflict or a failing CI check, do not merge.
+   - Remove the **`ready-to-ship`** label.
+   - Add the **`needs-work`** label.
+   - Post a comment explaining the reason for the blocked merge.
+
+Repository: {repository}
+Pull request: {source-url}
+
+Labels: {labels}
+
+Description:
+{description}'''
+auto-close = false
+
+# --- Ticket sources -------------------------------------------------------
+# No source is active out of the box, so the control plane starts with an
+# empty ticket list on any machine. Add one block per feed: uncomment the
+# example and name your repositories.
+
+# [[sources]]
+# name = "my-issues"
+# kind = "github-issues"
+# refresh-interval-seconds = 60
+# repositories = ["owner/name"]
+# host = "github.com"
+
+# --- Workflow template: the task rules ------------------------------------
+# The label workflow: each rule suggests a task type for a ticket whose
+# source labels match. Extend with your own rules.
+
+[[task-rules]]
+task-type = "rework"
+[task-rules.when]
+source-kind = "github-pull-request"
+labels-any = ["needs-work"]
+
+[[task-rules]]
+task-type = "review"
+[task-rules.when]
+source-kind = "github-pull-request"
+labels-any = ["ready-for-review"]
+
+[[task-rules]]
+task-type = "merge"
+[task-rules.when]
+source-kind = "github-pull-request"
+labels-any = ["ready-to-ship"]

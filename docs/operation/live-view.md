@@ -67,10 +67,11 @@ When the turn settles and the factory leaves the decision to the operator,
 the pane's body is the turn log of the settled turn, in the same dressing
 the [decision modal](modals.md) renders: the agent's text blocks, the tool
 calls as dim notes, and the choice rows below the pane. The choice rows and
-their keys are the modal's: Close, Goto, and one Handoff row per outgoing
-workflow edge, with `e` on a Handoff row editing that one handoff before it
-starts. When the choice rows hold more rows than the box has room for, the
-region shows as many as it can and scrolls, and its range rides the Action
-bar behind the selection's hint. The trace rules are the modal's rules, and
-the [completion guide](../work-flow/completion.md) records what a decision
-does to the ticket after.
+their keys are the modal's: Close, Goto, and the Handoff row of the position
+the settled turn's written labels derived, with `e` on a Handoff row editing
+that one handoff before it starts. When the choice rows hold more rows than
+the box has room for, the region shows as many as it can and scrolls, and
+its range rides the Action bar behind the selection's hint. The trace rules
+are the modal's rules, and the
+[completion guide](../work-flow/completion.md) records what a decision does
+to the ticket after.

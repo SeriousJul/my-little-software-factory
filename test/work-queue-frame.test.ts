@@ -604,7 +604,23 @@ describe("the Work queue section", () => {
 		const outcome = success(tickets);
 		// The first ticket ends its turn and awaits its route; the second holds the
 		// factory's one seat with a live agent.
-		seedAwaitingTurn(state, outcome, FIRST);
+		// The settled turn's transition wrote the review position on this
+		// ticket: the decision modal offers the handoff from it (ADR 0027).
+		seedAwaitingTurn(state, outcome, FIRST, {
+			fired: true,
+			when: null,
+			reason: "",
+			ticketFacts: [],
+			pullRequestFacts: [],
+			autoAdvance: false,
+			ticketWrite: null,
+			pullRequestWrite: null,
+			pullRequestIdentity: null,
+			pullRequestKey: null,
+			writeFailure: "",
+			positionTaskType: "review",
+			positionTicketIdentity: FIRST,
+		});
 		const held = state.claimHandoff(
 			SECOND,
 			{ ...baseChoice("pi", "live-worktree", "implement") },
@@ -633,7 +649,6 @@ describe("the Work queue section", () => {
 			...issuesConfig,
 			maxParallelAgents: 1,
 			agentPollIntervalSeconds: 60,
-			workflows: [{ from: "implement", to: ["review"] }],
 		};
 		try {
 			await withApp(

@@ -61,7 +61,6 @@ describe("task profile configuration", () => {
 			agent: "codex",
 			model: "task-model",
 			thinking: "high",
-			autoClose: false,
 		});
 		expect(validateConfig(parseToml(configToToml(parsed)))).toEqual(parsed);
 	});
@@ -209,8 +208,6 @@ describe("resolveHandoffChoice", () => {
 
 		expect(
 			resolveHandoffChoice(config, "implement", {
-				from: "review",
-				to: ["implement"],
 				agent: "claude",
 				environment: "worktree",
 			}),
@@ -258,16 +255,12 @@ describe("resolveHandoffChoice", () => {
 			},
 		};
 		expect(resolveHandoffChoice(profiled, "implement").contextWindow).toBe("272000");
-		// An edge reroutes the handoff onto another agent; it pins no context
-		// window, so the profile's value still resolves and reaches that
-		// agent, or fails the handoff there.
-		expect(
-			resolveHandoffChoice(profiled, "implement", {
-				from: "review",
-				to: ["implement"],
-				agent: "pi",
-			}).contextWindow,
-		).toBe("272000");
+		// A transition pin reroutes the handoff onto another agent; it pins no
+		// context window, so the profile's value still resolves and reaches
+		// that agent, or fails the handoff there.
+		expect(resolveHandoffChoice(profiled, "implement", { agent: "pi" }).contextWindow).toBe(
+			"272000",
+		);
 		expect(resolveHandoffChoice(profiled, "review").contextWindow).toBe("");
 		expect(resolveHandoffChoice(config, "implement").contextWindow).toBe("");
 	});

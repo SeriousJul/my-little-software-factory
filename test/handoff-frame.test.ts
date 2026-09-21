@@ -1267,7 +1267,6 @@ describe("the override panel", () => {
 				merge: {
 					template: "Merge pull request {external-key}.",
 					thinking: "low",
-					autoClose: false,
 				},
 			},
 		};
@@ -1313,7 +1312,6 @@ describe("the override panel", () => {
 				merge: {
 					template: "Merge pull request {external-key}.",
 					thinking: "low",
-					autoClose: false,
 				},
 			},
 		};
@@ -1369,7 +1367,6 @@ describe("the override panel", () => {
 				merge: {
 					template: "Merge pull request {external-key}.",
 					thinking: "low",
-					autoClose: false,
 				},
 			},
 		};
@@ -3446,7 +3443,6 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
-						autoClose: false,
 					},
 				},
 			};
@@ -3587,7 +3583,6 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
-						autoClose: false,
 					},
 				},
 			};
@@ -3640,7 +3635,6 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						model: "openai/gpt-5.1",
-						autoClose: false,
 					},
 				},
 			};
@@ -3696,7 +3690,6 @@ describe("the override panel", () => {
 					merge: {
 						template: "Merge pull request {external-key}.",
 						agent: "claude",
-						autoClose: false,
 					},
 				},
 			};

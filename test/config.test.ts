@@ -108,7 +108,7 @@ describe("the Default configuration", () => {
 		expect(fromFile).toBe(true);
 		expect(seeded).toBeUndefined();
 		// The four workflow task types, the three security task types, and
-		// the task rules of the label workflow.
+		// the states of the label workflow machine (ADR 0027).
 		expect(Object.keys(config.taskTypes).sort()).toEqual([
 			"implement",
 			"merge",
@@ -118,45 +118,99 @@ describe("the Default configuration", () => {
 			"review",
 			"rework",
 		]);
-		for (const name of ["implement", "merge", "review", "rework"]) {
-			expect(config.taskTypes[name].autoClose).toBe(false);
-		}
-		// The security task types auto-close on a completed settle and run on
-		// a high thinking level: one kind of finding per template.
+		// The security task types run on a high thinking level: one kind of
+		// finding per template.
 		for (const name of [
 			"resolve-security-advisory",
 			"resolve-dependabot-alert",
 			"resolve-secret-scanning-alert",
 		]) {
-			expect(config.taskTypes[name].autoClose).toBe(true);
 			expect(config.taskTypes[name].thinking).toBe("high");
 		}
-		expect(config.taskRules).toEqual([
+		expect(config.workflowStates).toEqual([
 			{
+				name: "ready-for-agent",
+				taskType: "implement",
+				match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+			},
+			{
+				name: "needs-work",
 				taskType: "rework",
-				when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+				match: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
 			},
 			{
+				name: "ready-for-review",
 				taskType: "review",
-				when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+				match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
 			},
 			{
+				name: "ready-to-ship",
 				taskType: "merge",
-				when: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+				match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
 			},
 			{
+				name: "security-advisory",
 				taskType: "resolve-security-advisory",
-				when: { sourceKind: "github-security-advisory" },
+				match: { sourceKind: "github-security-advisory" },
 			},
 			{
+				name: "security-dependabot-alert",
 				taskType: "resolve-dependabot-alert",
-				when: { sourceKind: "github-dependabot-alert" },
+				match: { sourceKind: "github-dependabot-alert" },
 			},
 			{
+				name: "security-secret-alert",
 				taskType: "resolve-secret-scanning-alert",
-				when: { sourceKind: "github-secret-scanning-alert" },
+				match: { sourceKind: "github-secret-scanning-alert" },
+			},
+			{
+				name: "pull-request-unlabeled",
+				match: {
+					sourceKind: "github-pull-request",
+					labelsNone: ["needs-work", "ready-for-review", "ready-to-ship"],
+				},
 			},
 		]);
+		// Every task type carries its transition: the plane fires it on a
+		// completed turn and writes the label facts the machine reads.
+		expect(config.taskTypes.implement.transition).toEqual({
+			ticketFacts: [],
+			pullRequestFacts: ["ready-for-review"],
+		});
+		expect(config.taskTypes.rework.transition).toEqual({
+			ticketFacts: [],
+			pullRequestFacts: ["ready-for-review"],
+		});
+		expect(config.taskTypes.review.transition).toEqual({
+			ticketFacts: [],
+			pullRequestFacts: [],
+			scoreThreshold: 90,
+			branches: [
+				{ when: "score-above-threshold", pullRequestFacts: ["ready-to-ship"] },
+				{ when: "score-below-threshold", pullRequestFacts: ["needs-work"] },
+			],
+		});
+		expect(config.taskTypes.merge.transition).toEqual({
+			ticketFacts: [],
+			pullRequestFacts: [],
+			branches: [
+				{ when: "pull-request-open", pullRequestFacts: ["needs-work"] },
+				{ pullRequestFacts: [] },
+			],
+		});
+		// The security transitions write ready-for-review on the opened pull
+		// request and auto-advance into its review position.
+		for (const name of [
+			"resolve-security-advisory",
+			"resolve-dependabot-alert",
+			"resolve-secret-scanning-alert",
+		]) {
+			expect(config.taskTypes[name].transition).toEqual({
+				ticketFacts: [],
+				pullRequestFacts: ["ready-for-review"],
+				autoAdvance: true,
+			});
+		}
 		// One neutral Consultation type that passes the operator's input
 		// straight through.
 		expect(config.consultationTypes).toEqual({
@@ -175,12 +229,11 @@ describe("the Default configuration", () => {
 		expect(config.agentPollIntervalSeconds).toBe(5);
 		expect(config.completionMessageLines).toBe(200);
 		expect(config.maxHandoffsPerTicket).toBe(20);
-		expect(config.workflows).toEqual([]);
 	});
 
-	test("it marks the workflow template as extensible and holds a source example", () => {
+	test("it marks the workflow machine as extensible and holds a source example", () => {
 		const text = readFileSync(SHIPPED_DEFAULT_CONFIG, "utf8");
-		expect(text).toContain("Workflow template");
+		expect(text).toContain("The workflow machine");
 		expect(text).toContain("meant to be extended");
 		// The commented-out source block the operator uncomments and edits.
 		expect(text).toContain("# [[sources]]");
@@ -348,7 +401,7 @@ describe("validateConfig", () => {
 		);
 	});
 
-	test("task-rule label conditions must be non-empty lists of strings", () => {
+	test("state match label conditions must be non-empty lists of strings", () => {
 		const base = {
 			"state-file": "~/factory/state.sqlite",
 			"default-agent": "pi",
@@ -357,13 +410,13 @@ describe("validateConfig", () => {
 			agents: { pi: { kind: "pi" } },
 			"task-types": { implement: { template: "{title}" } },
 		};
-		const rules = (when: Record<string, unknown>) => ({
+		const states = (match: Record<string, unknown>) => ({
 			...base,
-			"task-rules": [{ "task-type": "implement", when }],
+			states: [{ name: "x", "task-type": "implement", match }],
 		});
-		expectConfigError(rules({ "labels-all": [] }), "labels-all");
-		expectConfigError(rules({ "labels-any": ["ok", ""] }), "labels-any");
-		expectConfigError(rules({ "labels-none": 5 }), "labels-none");
+		expectConfigError(states({ "labels-all": [] }), "labels-all");
+		expectConfigError(states({ "labels-any": ["ok", ""] }), "labels-any");
+		expectConfigError(states({ "labels-none": 5 }), "labels-none");
 	});
 
 	describe("secret round-trip", () => {
@@ -437,11 +490,20 @@ describe("validateConfig", () => {
 				expect(source.auth).toBeUndefined();
 				expect(source.filter).toBeUndefined();
 			}
-			// The merge task type runs its handoffs on a low thinking level.
+			// The merge task type runs its handoffs on a low thinking level,
+			// and its transition returns a pull request that did not merge to
+			// the needs-work state.
 			expect(config.taskTypes.merge).toEqual({
 				template: expect.stringContaining("Squash and merge"),
 				thinking: "low",
-				autoClose: false,
+				transition: {
+					ticketFacts: [],
+					pullRequestFacts: [],
+					branches: [
+						{ when: "pull-request-open", pullRequestFacts: ["needs-work"] },
+						{ pullRequestFacts: [] },
+					],
+				},
 			});
 			// The review task type carries a template only: the live development
 			// path pins no Task profile settings in the file. The profile
@@ -450,7 +512,7 @@ describe("validateConfig", () => {
 			// they set.
 			expect(config.taskTypes.review).toEqual({
 				template: expect.stringContaining("Review pull request"),
-				autoClose: false,
+				transition: expect.objectContaining({ scoreThreshold: 90 }),
 			});
 			expect(config.taskTypes.review.agent).toBeUndefined();
 			expect(config.taskTypes.review.model).toBeUndefined();
@@ -462,18 +524,36 @@ describe("validateConfig", () => {
 			// pi takes no per-run context-window argument, so it maps none, and no
 			// profile may set one for it.
 			expect(config.agents.pi?.contextWindow).toBeUndefined();
-			expect(config.taskRules).toEqual([
+			expect(config.workflowStates).toEqual([
 				{
+					name: "ready-for-agent",
+					taskType: "implement",
+					match: { sourceKind: "github-issue", labelsAny: ["ready-for-agent"] },
+				},
+				{
+					name: "needs-work",
 					taskType: "rework",
-					when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+					match: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
 				},
 				{
+					name: "ready-for-review",
 					taskType: "review",
-					when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+					match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
 				},
 				{
+					name: "ready-to-ship",
 					taskType: "merge",
-					when: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+					match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+				},
+				{
+					// The park: an open pull request the plane has not labeled
+					// yet, which the implement transition still reaches through
+					// its Issue reference (ADR 0027).
+					name: "pull-request-unlabeled",
+					match: {
+						sourceKind: "github-pull-request",
+						labelsNone: ["needs-work", "ready-for-review", "ready-to-ship"],
+					},
 				},
 			]);
 		});
@@ -695,14 +775,12 @@ describe("validateConfig", () => {
 		expect(config.taskTypes.merge).toEqual({
 			template: "Merge {title}",
 			thinking: "low",
-			autoClose: false,
 		});
 		// The thinking default survives a write/read cycle.
 		const roundTrip = validateConfig(parseToml(configToToml(config)));
 		expect(roundTrip.taskTypes.merge).toEqual({
 			template: "Merge {title}",
 			thinking: "low",
-			autoClose: false,
 		});
 	});
 
@@ -739,7 +817,6 @@ describe("validateConfig", () => {
 			agent: "slow",
 			model: "openai/gpt-5.1",
 			thinking: "high",
-			autoClose: false,
 		});
 		// The profile keys survive a write/read cycle.
 		const roundTrip = validateConfig(parseToml(configToToml(config)));
@@ -962,7 +1039,7 @@ describe("validateConfig", () => {
 });
 
 describe("ticket source configuration", () => {
-	test("validates sources, authentication, task rules, and a relative state file", () => {
+	test("validates sources, authentication, states, and a relative state file", () => {
 		const config = validateConfig({
 			"default-agent": "pi",
 			"default-environment": "worktree",
@@ -981,19 +1058,21 @@ describe("ticket source configuration", () => {
 					auth: { "token-env": "FACTORY_TOKEN" },
 				},
 			],
-			"task-rules": [
+			states: [
 				{
+					name: "ready-for-agent",
 					"task-type": "implement",
-					when: { "source-kind": "github-issue", "labels-all": ["ready-for-agent"] },
+					match: { "source-kind": "github-issue", "labels-all": ["ready-for-agent"] },
 				},
 			],
 		});
 		expect(config.stateFile).toBe("state.sqlite");
 		expect(config.sources[0].auth).toEqual({ tokenEnv: "FACTORY_TOKEN" });
-		expect(config.taskRules).toEqual([
+		expect(config.workflowStates).toEqual([
 			{
+				name: "ready-for-agent",
 				taskType: "implement",
-				when: { sourceKind: "github-issue", labelsAll: ["ready-for-agent"] },
+				match: { sourceKind: "github-issue", labelsAll: ["ready-for-agent"] },
 			},
 		]);
 	});
@@ -1050,20 +1129,20 @@ describe("ticket source configuration", () => {
 			"owner/name",
 		);
 		expectConfigError(
-			{ ...base, "task-rules": [{ "task-type": "missing", when: { unknown: "x" } }] },
+			{ ...base, states: [{ name: "x", "task-type": "missing", match: {} }] },
 			"unknown task type",
 		);
 		expectConfigError(
-			{ ...base, "task-rules": [{ "task-type": "implement", when: { bogus: 1 } }] },
-			'when: unknown key "bogus"',
+			{ ...base, states: [{ name: "x", "task-type": "implement", match: { bogus: 1 } }] },
+			'match: unknown key "bogus"',
 		);
 		expectConfigError(
-			{ ...base, "task-rules": [{ "task-type": "implement", when: "labels" }] },
-			"when: must be a table",
+			{ ...base, states: [{ name: "x", "task-type": "implement", match: "labels" }] },
+			"match: must be a [states.match] table",
 		);
 		expectConfigError(
-			{ ...base, "task-rules": [{ "task-type": "implement", when: {}, bogus: 1 }] },
-			'task-rules[0]: unknown key "bogus"',
+			{ ...base, states: [{ name: "x", match: {}, bogus: 1 }] },
+			'states[0]: unknown key "bogus"',
 		);
 	});
 
@@ -1181,8 +1260,8 @@ describe("limits config keys", () => {
 		expect(config.completionMessageLines).toBe(200);
 		expect(config.maxHandoffsPerTicket).toBe(10);
 		expect(config.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
-		expect(config.workflows).toEqual([]);
-		expect(config.taskTypes.implement.autoClose).toBe(false);
+		expect(config.workflowStates).toEqual([]);
+		expect(config.taskTypes.implement.transition).toBeUndefined();
 	});
 
 	test("a config that still carries the removed auto-handoff key fails startup", () => {
@@ -1219,74 +1298,134 @@ describe("limits config keys", () => {
 		expect(three.maxParallelAgents).toBe(3);
 	});
 
-	test("a task type can set auto-close to a boolean only", () => {
-		const config = validateConfig({
-			...base(),
-			"task-types": { implement: { template: "x", "auto-close": true } },
-		});
-		expect(config.taskTypes.implement.autoClose).toBe(true);
-		expectConfigError(
-			{
-				...base(),
-				"task-types": { implement: { template: "x", "auto-close": "yes" } },
-			},
-			"auto-close: must be a boolean",
-		);
-	});
-
-	test("workflows route a completed task type and pin the handoff", () => {
+	test("a task type's transition sets the facts, threshold, and branches it writes", () => {
 		const config = validateConfig({
 			...base(),
 			"task-types": {
-				implement: { template: "x" },
-				review: { template: "x" },
+				implement: {
+					template: "x",
+					transition: {
+						"pull-request-facts": ["ready-for-review"],
+						"score-threshold": 90,
+						"auto-advance": true,
+						agent: "pi",
+						branches: [
+							{
+								when: "score-above-threshold",
+								"pull-request-facts": ["ready-to-ship"],
+							},
+						],
+					},
+				},
 			},
-			workflows: [
-				{ from: "implement", to: ["review"], agent: "pi", environment: "worktree" },
-				{ from: "implement", to: ["review", "implement"] },
-			],
 		});
-		expect(config.workflows).toEqual([
-			{ from: "implement", to: ["review"], agent: "pi", environment: "worktree" },
-			{ from: "implement", to: ["review", "implement"] },
+		expect(config.taskTypes.implement.transition).toEqual({
+			ticketFacts: [],
+			pullRequestFacts: ["ready-for-review"],
+			scoreThreshold: 90,
+			autoAdvance: true,
+			agent: "pi",
+			branches: [{ when: "score-above-threshold", pullRequestFacts: ["ready-to-ship"] }],
+		});
+		// A branch without a judgment is the fallback: it fires when no
+		// judgment branch does.
+		const fallback = validateConfig({
+			...base(),
+			"task-types": {
+				implement: {
+					template: "x",
+					transition: {
+						"pull-request-facts": ["a"],
+						branches: [
+							{ when: "pull-request-open", "pull-request-facts": ["b"] },
+							{ "pull-request-facts": ["c"] },
+						],
+					},
+				},
+			},
+		});
+		expect(fallback.taskTypes.implement.transition?.branches).toEqual([
+			{ when: "pull-request-open", pullRequestFacts: ["b"] },
+			{ pullRequestFacts: ["c"] },
 		]);
 	});
 
-	test("workflow edges reject unknown or malformed parts", () => {
-		const withReview = () => ({
+	test("a score judgment is legal only with a score threshold", () => {
+		expectConfigError(
+			{
+				...base(),
+				"task-types": {
+					implement: {
+						template: "x",
+						transition: { branches: [{ when: "score-above-threshold" }] },
+					},
+				},
+			},
+			"a score judgment needs score-threshold",
+		);
+	});
+
+	test("transitions reject unknown or malformed parts", () => {
+		const withTransition = () => ({
 			...base(),
-			"task-types": { implement: { template: "x" }, review: { template: "x" } },
+			"task-types": { implement: { template: "x", transition: {} } },
 		});
 		expectConfigError(
-			{ ...withReview(), workflows: "no" },
-			"workflows: must be a list of [[workflows]] tables",
-		);
-		expectConfigError(
-			{ ...withReview(), workflows: [{ from: "build", to: ["review"] }] },
-			'workflows[0].from: unknown task type "build"',
-		);
-		expectConfigError(
-			{ ...withReview(), workflows: [{ from: "implement", to: ["build"] }] },
-			'workflows[0].to: unknown task type "build"',
-		);
-		expectConfigError(
-			{ ...withReview(), workflows: [{ from: "implement", to: [] }] },
-			"workflows[0].to: must be a non-empty list of task types",
-		);
-		expectConfigError(
-			{ ...withReview(), workflows: [{ from: "implement", to: ["review"], agent: "cursor" }] },
-			'workflows[0].agent: unknown agent "cursor"',
+			{ ...withTransition(), "task-types": { implement: { template: "x", transition: "no" } } },
+			"transition: must be a table",
 		);
 		expectConfigError(
 			{
-				...withReview(),
-				workflows: [{ from: "implement", to: ["review"], environment: "container" }],
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { "ticket-facts": 3 } } },
 			},
-			"workflows[0].environment: must be one of",
+			"ticket-facts: must be a list of label names",
 		);
 		expectConfigError(
-			{ ...withReview(), workflows: [{ from: "implement", to: ["review"], pin: "x" }] },
-			'workflows[0]: unknown key "pin"',
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { "score-threshold": 150 } } },
+			},
+			"score-threshold: must be a number between 0 and 100",
+		);
+		expectConfigError(
+			{
+				...base(),
+				"task-types": {
+					implement: { template: "x", transition: { "auto-advance": "yes" } },
+				},
+			},
+			"auto-advance: must be a boolean",
+		);
+		expectConfigError(
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { agent: "cursor" } } },
+			},
+			'unknown agent "cursor"',
+		);
+		expectConfigError(
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { environment: "container" } } },
+			},
+			"environment: must be one of",
+		);
+		expectConfigError(
+			{
+				...base(),
+				"task-types": {
+					implement: { template: "x", transition: { branches: [{ when: "bogus" }] } },
+				},
+			},
+			"when: must be one of",
+		);
+		expectConfigError(
+			{
+				...withTransition(),
+				"task-types": { implement: { template: "x", transition: { pin: "x" } } },
+			},
+			'unknown key "pin"',
 		);
 	});
 

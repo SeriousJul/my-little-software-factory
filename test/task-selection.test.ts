@@ -1,15 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
-import type { TaskRule } from "../src/config.ts";
+import type { WorkflowState } from "../src/config.ts";
 import type { SourceMembership } from "../src/domain/ticket.ts";
 import { selectTaskType } from "../src/task-selection.ts";
 
-/** The shipped order: rework rules before review rules. */
-const RULES: TaskRule[] = [
-	{ taskType: "rework", when: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] } },
+/** The shipped order: the rework state before the review state. */
+const STATES: WorkflowState[] = [
 	{
+		name: "needs-work",
+		taskType: "rework",
+		match: { sourceKind: "github-pull-request", labelsAny: ["needs-work"] },
+	},
+	{
+		name: "ready-for-review",
 		taskType: "review",
-		when: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+		match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
 	},
 ];
 
@@ -36,52 +41,54 @@ function membership(over: Partial<SourceMembership> = {}): SourceMembership {
 	};
 }
 
-describe("task rule selection", () => {
+describe("state selection", () => {
 	test("needs-work wins when both pull request labels are present", () => {
 		expect(
 			selectTaskType(
 				[membership({ labels: ["needs-work", "ready-for-review"] })],
-				RULES,
+				STATES,
 				"implement",
 			),
 		).toBe("rework");
 	});
 
 	test("ready-for-review alone selects review", () => {
-		expect(selectTaskType([membership({ labels: ["ready-for-review"] })], RULES, "implement")).toBe(
-			"review",
-		);
+		expect(
+			selectTaskType([membership({ labels: ["ready-for-review"] })], STATES, "implement"),
+		).toBe("review");
 	});
 
 	test("label comparison does not depend on case", () => {
-		expect(selectTaskType([membership({ labels: ["Needs-Work"] })], RULES, "implement")).toBe(
+		expect(selectTaskType([membership({ labels: ["Needs-Work"] })], STATES, "implement")).toBe(
 			"rework",
 		);
 	});
 
-	test("the first matching rule wins, even when a later rule also matches", () => {
-		const rules: TaskRule[] = [
-			{ taskType: "fix", when: { labelsAny: ["needs-work", "other-label"] } },
-			{ taskType: "review", when: { labelsAny: ["needs-work"] } },
+	test("the first matching state wins, even when a later state also matches", () => {
+		const states: WorkflowState[] = [
+			{ name: "fix", taskType: "fix", match: { labelsAny: ["needs-work", "other-label"] } },
+			{ name: "review", taskType: "review", match: { labelsAny: ["needs-work"] } },
 		];
-		expect(selectTaskType([membership({ labels: ["needs-work"] })], rules, "implement")).toBe(
+		expect(selectTaskType([membership({ labels: ["needs-work"] })], states, "implement")).toBe(
 			"fix",
 		);
 	});
 
 	test("a source-name condition selects only that source", () => {
-		const rules: TaskRule[] = [{ taskType: "review", when: { sourceName: "pulls" } }];
-		expect(selectTaskType([membership({ sourceName: "issues" })], rules, "implement")).toBe(
+		const states: WorkflowState[] = [
+			{ name: "review", taskType: "review", match: { sourceName: "pulls" } },
+		];
+		expect(selectTaskType([membership({ sourceName: "issues" })], states, "implement")).toBe(
 			"implement",
 		);
-		expect(selectTaskType([membership({ sourceName: "pulls" })], rules, "implement")).toBe(
+		expect(selectTaskType([membership({ sourceName: "pulls" })], states, "implement")).toBe(
 			"review",
 		);
 	});
 
 	test("a repository condition matches the host-qualified identity", () => {
-		const rules: TaskRule[] = [
-			{ taskType: "review", when: { repository: "gitlab.com/acme/billing" } },
+		const states: WorkflowState[] = [
+			{ name: "review", taskType: "review", match: { repository: "gitlab.com/acme/billing" } },
 		];
 		expect(
 			selectTaskType(
@@ -94,7 +101,7 @@ describe("task rule selection", () => {
 						},
 					}),
 				],
-				rules,
+				states,
 				"implement",
 			),
 		).toBe("implement");
@@ -109,14 +116,16 @@ describe("task rule selection", () => {
 						},
 					}),
 				],
-				rules,
+				states,
 				"implement",
 			),
 		).toBe("review");
 	});
 
 	test("labels-all requires every label and labels-none excludes", () => {
-		const all: TaskRule[] = [{ taskType: "review", when: { labelsAll: ["needs-work", "draft"] } }];
+		const all: WorkflowState[] = [
+			{ name: "review", taskType: "review", match: { labelsAll: ["needs-work", "draft"] } },
+		];
 		expect(selectTaskType([membership({ labels: ["needs-work"] })], all, "implement")).toBe(
 			"implement",
 		);
@@ -124,7 +133,9 @@ describe("task rule selection", () => {
 			selectTaskType([membership({ labels: ["needs-work", "draft"] })], all, "implement"),
 		).toBe("review");
 
-		const none: TaskRule[] = [{ taskType: "review", when: { labelsNone: ["blocked"] } }];
+		const none: WorkflowState[] = [
+			{ name: "review", taskType: "review", match: { labelsNone: ["blocked"] } },
+		];
 		expect(selectTaskType([membership({ labels: ["blocked"] })], none, "implement")).toBe(
 			"implement",
 		);
@@ -133,26 +144,37 @@ describe("task rule selection", () => {
 		);
 	});
 
-	test("a rule with no conditions matches every membership", () => {
-		const rules: TaskRule[] = [{ taskType: "fix", when: {} }];
-		expect(selectTaskType([membership()], rules, "implement")).toBe("fix");
+	test("a state with no conditions matches every membership", () => {
+		const states: WorkflowState[] = [{ name: "fix", taskType: "fix", match: {} }];
+		expect(selectTaskType([membership()], states, "implement")).toBe("fix");
 	});
 
-	test("the fallback is used when no rule matches", () => {
-		expect(selectTaskType([membership({ labels: ["random-label"] })], RULES, "implement")).toBe(
+	test("the fallback is used when no state matches", () => {
+		expect(selectTaskType([membership({ labels: ["random-label"] })], STATES, "implement")).toBe(
 			"implement",
 		);
 	});
 
-	test("a matching membership from any source selects the rule", () => {
-		const rules: TaskRule[] = [{ taskType: "review", when: { labelsAny: ["ready-for-review"] } }];
+	test("a parking state offers no task: the plane suggests nothing", () => {
+		const states: WorkflowState[] = [{ name: "parked", match: { labelsAny: ["needs-work"] } }];
+		// Null, not the fallback: the parking state matched, and the default
+		// task type stands only when no state matches at all (ADR 0027).
+		expect(
+			selectTaskType([membership({ labels: ["needs-work"] })], states, "implement"),
+		).toBeNull();
+	});
+
+	test("a matching membership from any source selects the state", () => {
+		const states: WorkflowState[] = [
+			{ name: "review", taskType: "review", match: { labelsAny: ["ready-for-review"] } },
+		];
 		expect(
 			selectTaskType(
 				[
 					membership({ sourceName: "issues" }),
 					membership({ sourceName: "pulls", labels: ["ready-for-review"] }),
 				],
-				rules,
+				states,
 				"implement",
 			),
 		).toBe("review");

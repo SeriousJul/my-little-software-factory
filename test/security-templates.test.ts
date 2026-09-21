@@ -121,13 +121,28 @@ describe("the resolve-security-advisory template", () => {
 		);
 	});
 
-	test("it ends with the common steps", () => {
-		expect(prompt).toContain("Add the **`ready-for-review`** label to the pull request");
-		expect(prompt).toContain(
-			"Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request",
-		);
+	test("it ends with the pull request step, with no label instruction for the agent", () => {
+		expect(prompt).toContain("Open a pull request linking the source item by its URL");
 		expect(prompt).toContain("Never close, resolve, or withdraw the source item");
+		expect(prompt).not.toContain("ready-for-review");
 	});
+});
+
+// The plane owns the workflow labels (ADR 0027): the security transitions
+// write the review label on the pull request the turn opened, and no
+// template instruction carries a label fact.
+describe("the security transitions hand the opened pull request to review", () => {
+	for (const name of [
+		"resolve-security-advisory",
+		"resolve-dependabot-alert",
+		"resolve-secret-scanning-alert",
+	]) {
+		test(`${name} writes ready-for-review on the linked pull request`, () => {
+			const transition = config.taskTypes[name].transition;
+			expect(transition).not.toBeUndefined();
+			expect(transition?.pullRequestFacts).toContain("ready-for-review");
+		});
+	}
 });
 
 describe("the resolve-dependabot-alert template", () => {
@@ -166,9 +181,10 @@ describe("the resolve-dependabot-alert template", () => {
 		expect(prompt).toContain("remove or replace the dependency and record the choice");
 	});
 
-	test("it ends with the common steps", () => {
-		expect(prompt).toContain("Add the **`ready-for-review`** label to the pull request");
+	test("it ends with the pull request step, with no label instruction for the agent", () => {
+		expect(prompt).toContain("Open a pull request linking the source item by its URL");
 		expect(prompt).toContain("Never close, resolve, or withdraw the source item");
+		expect(prompt).not.toContain("ready-for-review");
 	});
 });
 
@@ -219,8 +235,9 @@ describe("the resolve-secret-scanning-alert template", () => {
 		);
 	});
 
-	test("it ends with the common steps", () => {
-		expect(prompt).toContain("Add the **`ready-for-review`** label to the pull request");
+	test("it ends with the pull request step, with no label instruction for the agent", () => {
+		expect(prompt).toContain("Open a pull request linking the source item by its URL");
 		expect(prompt).toContain("Never close, resolve, or withdraw the source item");
+		expect(prompt).not.toContain("ready-for-review");
 	});
 });

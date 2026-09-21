@@ -39,7 +39,7 @@
  * there: it starts under its cycle name, and the leftover environment stays
  * a fact on the ticket for the operator to clear in herdr (ADR 0012, ADR 0032).
  */
-import type { FactoryConfig, WorkflowEdge } from "./config.ts";
+import type { FactoryConfig, TransitionPin } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
 import {
 	branchNameFor,
@@ -103,8 +103,8 @@ export function baseChoice(
 
 /**
  * Resolve the start values for one handoff. Each setting has its own chain:
- * an edge can replace only the Agent and Environment, while the selected
- * Task profile supplies Model, Thinking, and the context window
+ * a transition pin can replace only the Agent and Environment, while the
+ * selected Task profile supplies Model, Thinking, and the context window
  * independently. An operator override changes this returned choice later,
  * before the handoff starts.
  *
@@ -115,14 +115,14 @@ export function baseChoice(
 export function resolveHandoffChoice(
 	config: FactoryConfig,
 	taskType: string,
-	edge?: WorkflowEdge,
+	pin?: TransitionPin,
 ): HandoffChoice {
 	// The setting chains live in one module (ADR 0009); this wrapper only
 	// shapes their result as the handoff's complete choice.
-	const settings = resolveSettings({ config, taskType, edgeAgent: edge?.agent });
+	const settings = resolveSettings({ config, taskType, edgeAgent: pin?.agent });
 	return baseChoice(
 		settings.agentType,
-		resolveEnvironment(config, edge?.environment),
+		resolveEnvironment(config, pin?.environment),
 		taskType,
 		settings.model,
 		settings.thinking,

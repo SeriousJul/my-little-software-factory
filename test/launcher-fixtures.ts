@@ -18,7 +18,7 @@ export function launcherConfig(checkout: string): FactoryConfig {
 		defaultEnvironment: "live-worktree",
 		defaultTaskType: "implement",
 		agents: { demo: { kind: "demo" } },
-		taskTypes: { implement: { template: "Implement {title}", autoClose: false } },
+		taskTypes: { implement: { template: "Implement {title}" } },
 		consultationTypes: {
 			grill: { agent: "demo", environment: "live-worktree", template: "/grill {input}" },
 			design: { agent: "demo", environment: "live-worktree", template: "/design {input}" },
@@ -30,10 +30,9 @@ export function launcherConfig(checkout: string): FactoryConfig {
 		completionMessageLines: 20,
 		maxHandoffsPerTicket: 3,
 		scroll: { speed: 2, acceleration: 0, maximumSpeed: 4 },
-		workflows: [],
+		workflowStates: [],
 		repos: { [LAUNCHER_IDENTITY]: checkout },
 		sources: [],
-		taskRules: [],
 	};
 }
 

@@ -29,7 +29,7 @@ import {
 	defaultConfigPath,
 	type FactoryConfig,
 	persistConfig,
-	type WorkflowEdge,
+	type TransitionOutcome,
 } from "../config.ts";
 import {
 	type ConsultationRepositoryOption,
@@ -96,6 +96,7 @@ import {
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
+import { fireTransition } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -818,7 +819,7 @@ export function App({
 		// The list orders by the config's Priority label list, so a bump that
 		// re-ranks the operator's ticket reorders the rows in the same pass.
 		const next = state.visibleTickets(
-			currentConfig.taskRules,
+			currentConfig.workflowStates,
 			currentConfig.defaultTaskType,
 			currentConfig.priority?.labels ?? [],
 		);
@@ -906,8 +907,13 @@ export function App({
 		// The resolved Task profile of the ticket's suggested task type: the
 		// panel prefills it, and Enter applies it (ADR 0009). The operator
 		// changes a row in the panel, or clears one to leave the setting to the
-		// agent.
-		return resolveHandoffChoice(configRef.current, ticket.suggestedTaskType);
+		// agent. A ticket on a parking state suggests nothing, and the plane
+		// starts nothing on its own: this manual path is the operator's choice,
+		// so it prefills the default task type (ADR 0027).
+		return resolveHandoffChoice(
+			configRef.current,
+			ticket.suggestedTaskType ?? configRef.current.defaultTaskType,
+		);
 	};
 	/** The failure marker of an in-flight ticket from the last observation. */
 	const markerOf = (ticket: Ticket): "blocked" | "missing" | null => {
@@ -1235,7 +1241,7 @@ export function App({
 			if (pending.from === "live") {
 				setPanel({ kind: "live", identity: pending.ticketIdentity });
 			}
-			runRouteHandoff(ticket, choice);
+			runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
 			return;
 		}
 		startHandoff(ticket, choice);
@@ -1282,7 +1288,10 @@ export function App({
 
 	/** The task type of the ticket's current turn: the settled turn's, else the handoff's, else the ticket's suggestion. */
 	const taskTypeOf = (ticket: Ticket): string =>
-		ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		ticket.lastCompletion?.taskType ??
+		ticket.handoff?.taskType ??
+		ticket.suggestedTaskType ??
+		configRef.current.defaultTaskType;
 
 	/** The Live view's context line: repository, task type, agent. No time: the turn has not settled. */
 	const liveContextLine = (ticket: Ticket): string =>
@@ -1291,21 +1300,22 @@ export function App({
 			.join(" · ");
 
 	// The decision modal's rows: Close first, selected by default, then a
-	// Goto, then one handoff row per outgoing workflow edge the completed
-	// task type has, in config order: every edge stays reachable, and an
-	// edge naming several targets offers one row per target. Two edges to
-	// the same target offer two rows, and a row's detail names the Agent its
-	// route resolves to, beside the edge's Environment pin. Two rows that
-	// read the same start the same handoff: an edge that pins the Agent the
-	// target's own Task profile names has nothing beside it to show. The
-	// modal's context row names the repository, the task type, the agent,
-	// and the completion time, so the operator knows what the log is about.
+	// Goto, then one handoff row when the settled turn's transition wrote a
+	// position the machine offers a task for (ADR 0027). The row's detail
+	// names the Agent its route resolves to, beside the pin's Environment.
+	// The fact lines state the label facts the transition wrote on the
+	// ticket and its pull request, and a failed write as its failure fact.
+	// The modal's context row names the repository, the task type, the
+	// agent, and the completion time, so the operator knows what the log is
+	// about.
 	const decisionFor = (
 		ticket: Ticket,
 	): {
 		actions: ActionRow[];
 		entries: readonly TurnLogEntry[];
 		contextLine: string;
+		/** The label facts the transition wrote, or its failure; empty when none. */
+		factLines: string[];
 		/** The turn's end cause, or null when the turn has no settled record. */
 		cause: TurnEndCause | null;
 		/** The agent's or provider's text for the cause; empty when none. */
@@ -1321,31 +1331,65 @@ export function App({
 			{ key: "close", label: "Close", detail: "end the work cycle; the ticket returns to open" },
 			{ key: "goto", label: "Goto", detail: "focus the agent's pane; the handoff stays open" },
 		];
-		configRef.current.workflows.forEach((edge, index) => {
-			if (edge.from !== taskType) return;
-			for (const target of edge.to) {
+		const factLines: string[] = [];
+		const outcome = completion?.transition ?? null;
+		if (outcome !== null) {
+			// The reason is a visible fact either way: the branch that did not
+			// hold, or the pull-request fact the fire skipped because no linked
+			// pull request was found (ADR 0027).
+			if (outcome.reason !== "")
+				factLines.push(
+					outcome.fired ? outcome.reason : `no transition branch held: ${outcome.reason}`,
+				);
+			if (outcome.ticketWrite !== null)
+				factLines.push(transitionFactLine("ticket", outcome.ticketWrite));
+			if (outcome.pullRequestWrite !== null && outcome.pullRequestIdentity !== null) {
+				const surface =
+					outcome.pullRequestKey !== null
+						? `pull request ${outcome.pullRequestKey}`
+						: "pull request";
+				factLines.push(transitionFactLine(surface, outcome.pullRequestWrite));
+			}
+			if (outcome.writeFailure !== "")
+				factLines.push(`label write failed: ${outcome.writeFailure}`);
+			if (outcome.positionTaskType !== null) {
 				actions.push({
-					key: `route:${index}:${target}`,
-					label: `Handoff: ${target}`,
-					detail: routeDetail(edge, target),
+					key: "route",
+					label: `Handoff: ${outcome.positionTaskType}`,
+					detail: routeDetail(outcome, outcome.positionTaskType),
 					editable: true,
 				});
 			}
-		});
+		}
 		return {
 			actions,
 			entries: completion?.turnLog ?? [],
 			contextLine,
+			factLines,
 			cause: completion?.cause ?? null,
 			detail: completion?.detail ?? "",
 		};
 	};
 
-	/** The workflow row states the Agent that will receive its handoff. */
-	const routeDetail = (edge: WorkflowEdge, target: string): string => {
-		const choice = resolveHandoffChoice(configRef.current, target, edge);
+	/** One surface's label write as the decision's fact line. */
+	const transitionFactLine = (
+		surface: string,
+		write: { added: string[]; removed: string[] },
+	): string => {
+		const parts = [surface];
+		if (write.added.length > 0) parts.push(`added ${write.added.join(", ")}`);
+		if (write.removed.length > 0) parts.push(`removed ${write.removed.join(", ")}`);
+		return parts.join(" · ");
+	};
+
+	/** The transition row states the Agent that will receive its handoff. */
+	const routeDetail = (outcome: TransitionOutcome, target: string): string => {
+		const choice = resolveHandoffChoice(configRef.current, target, {
+			...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
+			...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+		});
 		const detail = [`agent ${choice.agentType}`];
-		if (edge.environment !== undefined) detail.push(`environment ${edge.environment}`);
+		if (outcome.environment !== undefined) detail.push(`environment ${outcome.environment}`);
 		return detail.join(", ");
 	};
 	/**
@@ -1407,7 +1451,7 @@ export function App({
 	const runDecisionAction = (ticket: Ticket, key: string) => {
 		// A routed handoff from the Live view keeps the screen open: the
 		// stream resumes for the new agent pane on its next tick.
-		if (!(panel?.kind === "live" && key.startsWith("route:"))) setPanel(null);
+		if (!(panel?.kind === "live" && key === "route")) setPanel(null);
 		if (state === undefined) return;
 		if (key === "close") {
 			closeDecidedCycle(ticket);
@@ -1419,7 +1463,7 @@ export function App({
 		}
 		const choice = routeChoiceOf(ticket, key);
 		if (choice === null) return;
-		runRouteHandoff(ticket, choice);
+		runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
 	};
 
 	/**
@@ -1515,39 +1559,52 @@ export function App({
 	};
 
 	/**
-	 * The choice a `route:<edge index>:<target>` row resolves to.
-	 *
-	 * The edge is re-read from the config, so a runtime config change cannot
-	 * point the action at a moved or removed edge. A stale row reports on the
-	 * status line and comes back null.
+	 * The choice the `route` row resolves to.
+
+	 * The row stands on the settled turn's transition outcome: the plane
+	 * wrote the facts and re-derived the position, so the action re-reads
+	 * nothing from the config but the choice the position resolves to. A
+	 * stale row - the outcome is gone or wrote no position - reports on the
+	 * status line and comes back null (ADR 0027).
 	 */
 	const routeChoiceOf = (ticket: Ticket, key: string): HandoffChoice | null => {
-		const rest = key.slice("route:".length);
-		const separator = rest.indexOf(":");
-		const edge = configRef.current.workflows[Number(rest.slice(0, separator))];
-		const target = rest.slice(separator + 1);
-		const taskType = taskTypeOf(ticket);
-		if (edge === undefined || edge.from !== taskType || !edge.to.includes(target)) {
-			setWarningMessage(`no workflow edge from ${taskType} to ${target}`);
+		if (key !== "route") return null;
+		const outcome = ticket.lastCompletion?.transition ?? null;
+		if (outcome === null || outcome.positionTaskType === null) {
+			setWarningMessage(`no transition position is recorded for ticket ${ticket.identity}`);
 			return null;
 		}
-		// A Workflow Handoff resolves a fresh target profile and never
+		// A transition Handoff resolves a fresh target profile and never
 		// inherits the previous handoff's choice.
-		return resolveHandoffChoice(configRef.current, target, edge);
+		return resolveHandoffChoice(configRef.current, outcome.positionTaskType, {
+			...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
+			...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+		});
 	};
 
-	/** Start a workflow handoff with a resolved or overridden choice. */
-	const runRouteHandoff = (ticket: Ticket, choice: HandoffChoice) => {
+	/**
+	 * Start a transition handoff with a resolved or overridden choice. The
+	 * handoff starts on the position's own ticket: the machine re-derives
+	 * positions from the written labels, so the agent starts where the facts
+	 * now sit, while the decision records on the ticket whose turn settled
+	 * (ADR 0027).
+	 */
+	const runRouteHandoff = (
+		ticket: Ticket,
+		outcome: TransitionOutcome | null,
+		choice: HandoffChoice,
+	) => {
 		if (handoffDispatch === undefined) return;
 		// Claim first: a refused claim leaves the ticket where it was. The
 		// turn's decision is not recorded here: it lands when the routed
 		// handoff starts, on the settled turn's trace, and a route that never
 		// started leaves the trace pending, so Close and Goto keep working.
 		const previousHandoffId = ticket.handoff?.attemptId ?? "";
+		const targetIdentity = outcome?.positionTicketIdentity ?? ticket.identity;
 		void handoffDispatch
 			.dispatch({
 				origin: "workflow",
-				ticketIdentity: ticket.identity,
+				ticketIdentity: targetIdentity,
 				choice,
 				previousMessage: ticket.lastCompletion?.message ?? "",
 				// The routed handoff started: the operator's decision on the turn
@@ -2453,8 +2510,7 @@ export function App({
 	const decideCompletion = (context: ControlContext) => {
 		const ticket = context.selectedTicket;
 		if (ticket === undefined) return;
-		const taskType =
-			ticket.lastCompletion?.taskType ?? ticket.handoff?.taskType ?? ticket.suggestedTaskType;
+		const taskType = taskTypeOf(ticket);
 		if (autoModeRef.current) {
 			// The factory decides the ticket itself: the operator gets the
 			// notice on the Message line, and the observation makes the
@@ -2463,10 +2519,19 @@ export function App({
 			setNoticeMessage("auto-handoff is on: the factory decides this ticket");
 			return;
 		}
-		if (configRef.current.taskTypes[taskType]?.autoClose === true) {
-			setNoticeMessage(`task type ${taskType} is auto-close: the factory decides this ticket`);
+		// The factory's own decisions - an auto-advance transition or
+		// auto-handoff - run on the observation's tick; the decision modal
+		// shows what the transition wrote (ADR 0027).
+		const outcome = ticket.lastCompletion?.transition ?? null;
+		// Gate the notice on the fire as well as the flag: a transition whose
+		// branch did not hold auto-advances nothing, so the factory decides
+		// nothing and the decision modal opens (ADR 0027).
+		if (outcome?.fired === true && outcome.autoAdvance) {
+			setNoticeMessage(`task type ${taskType} auto-advances: the factory decides this ticket`);
 			observationRef.current?.tick();
-		} else setPanel({ kind: "decision", identity: ticket.identity });
+			return;
+		}
+		setPanel({ kind: "decision", identity: ticket.identity });
 	};
 	/**
 	 * One step of the Priority bump (ADR 0022): the movement the config's
@@ -2675,6 +2740,27 @@ export function App({
 			herdr: new HerdrAgentReader(commandRunner),
 			config: () => configRef.current,
 			dispatch: (intent) => dispatch.dispatch(intent),
+			// The transition fire of a completed settle (ADR 0027): pull the
+			// pull request sources fresh - the agent's new pull request must
+			// be in the list before the machine can find it - and fire the
+			// task type's transition through the command runner.
+			fireCompleted: async (ticket, message) => {
+				const refresh = async () => {
+					for (const source of configRef.current.sources) {
+						if (source.kind === "github-pull-requests")
+							await coordinatorRef.current?.refreshAndWait(source.name);
+					}
+				};
+				return await fireTransition({
+					config: configRef.current,
+					state,
+					runner: commandRunner,
+					ticketIdentity: ticket.ticketIdentity,
+					taskType: ticket.taskType,
+					message,
+					refresh,
+				});
+			},
 			// The Work queue's pickup (ADR 0034): the cycle starts the waiting
 			// manual starts before auto-dispatch, in queue order.
 			pickupWorkQueue: () => dispatch.pickupWorkQueue(),
@@ -3066,7 +3152,9 @@ export function App({
 			? panelTicket.state === "open"
 				? "closed"
 				: panelTicket.state === "awaiting"
-					? autoMode || configRef.current.taskTypes[taskTypeOf(panelTicket)]?.autoClose === true
+					? autoMode ||
+						(panelTicket.lastCompletion?.transition?.fired === true &&
+							panelTicket.lastCompletion?.transition?.autoAdvance === true)
 						? "stream"
 						: "decision"
 					: markerOf(panelTicket) === "missing"
@@ -3583,6 +3671,7 @@ export function App({
 				contextLine: decision.contextLine,
 				entries: decision.entries,
 				actions: decision.actions,
+				factLines: decision.factLines,
 				cause: decision.cause,
 				detail: decision.detail,
 				onAction: (key) => runDecisionAction(panelTicket, key),

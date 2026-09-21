@@ -5,12 +5,19 @@
 # and every new machine starts from this template again.
 #
 # This file is meant to be extended:
-#   - The task types and task rules are the workflow template. Add your own
-#     task types and point your own rules at them.
+#   - The states and the task types' transitions are the workflow machine
+#     (ADR 0027). Add your own states, task types, and transition branches.
 #   - The [[sources]] example below is the one block you uncomment and edit
 #     to add a repository feed.
 #   - The consult Consultation type passes your input straight through to
 #     the agent, so you can start one without configuring.
+#
+# The plane owns the workflow labels (ADR 0027). A ticket's position is the
+# first state whose match holds on it, re-derived on every refresh. When a
+# task completes, the plane fires that task type's transition: it writes the
+# label facts on the ticket and its linked pull request, and the machine
+# re-derives every position from the written labels. The agents never write
+# workflow labels.
 
 default-agent = "pi"
 default-environment = "worktree"
@@ -21,7 +28,6 @@ max-parallel-agents = 2
 agent-poll-interval-seconds = 5
 completion-message-lines = 200
 max-handoffs-per-ticket = 20
-workflows = []
 
 [scroll]
 speed = 1
@@ -62,10 +68,88 @@ context-window = "--autocompact {value}"
 agent = "pi"
 template = "{input}"
 
-# --- Workflow template: the task types ----------------------------------
-# The four task types of the label workflow and their prompt templates.
-# This template is meant to be extended: add a [task-types.<name>] table
-# per kind of work, and a [[task-rules]] entry that points at it.
+# --- The workflow machine (ADR 0027) --------------------------------------
+# The states of the label workflow. A state's match names the labels
+# that put a ticket on it; its task is what the plane suggests for a ticket
+# that sits there. Order decides: the first matching state wins.
+#
+# The transitions write `ready-for-review`, `ready-to-ship`, and
+# `needs-work` on pull requests, and a write that names a label the
+# repository does not have fails. Create the labels a transition writes
+# in the repository before a fire can succeed: `gh label create
+# <name> --repo <owner>/<name>`, or the repository's labels page.
+#
+# A label a state match names but no transition writes, such as
+# `ready-for-agent` above, is yours: the plane's fire leaves it alone, so a
+# state may gate on a scoping label the machine never touches.
+
+[[states]]
+name = "ready-for-agent"
+task-type = "implement"
+[states.match]
+source-kind = "github-issue"
+labels-any = ["ready-for-agent"]
+
+[[states]]
+name = "needs-work"
+task-type = "rework"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["needs-work"]
+
+[[states]]
+name = "ready-for-review"
+task-type = "review"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-for-review"]
+
+[[states]]
+name = "ready-to-ship"
+task-type = "merge"
+[states.match]
+source-kind = "github-pull-request"
+labels-any = ["ready-to-ship"]
+
+# The security feeds: one state per source kind, matching without a label
+# condition. The severity label is ranking data, not a gate. A finding that
+# its task completes rests on the same-type hold while the item still lists
+# upstream, the way a closed issue rests off the issue list.
+[[states]]
+name = "security-advisory"
+task-type = "resolve-security-advisory"
+[states.match]
+source-kind = "github-security-advisory"
+
+[[states]]
+name = "security-dependabot-alert"
+task-type = "resolve-dependabot-alert"
+[states.match]
+source-kind = "github-dependabot-alert"
+
+[[states]]
+name = "security-secret-alert"
+task-type = "resolve-secret-scanning-alert"
+[states.match]
+source-kind = "github-secret-scanning-alert"
+
+# A pull request the plane has not put in the machine parks: the plane offers
+# no task for it, so it hands off nothing, and a label write is the only
+# engine that moves it. That holds a stranger's pull request, and one an agent
+# opened but has not finished with, out of the queue; the implement transition
+# still reaches such a pull request as its ticket's linked pull request and
+# labels it from there. It sits last because the states match in order.
+[[states]]
+name = "pull-request-unlabeled"
+[states.match]
+source-kind = "github-pull-request"
+labels-none = ["needs-work", "ready-for-review", "ready-to-ship"]
+
+# --- The task types --------------------------------------------------------
+# Each task type is work only: a prompt template and a task profile. The
+# transition hangs off the type that completes it and writes the label facts
+# the machine then reads. The templates carry no label instructions: the
+# plane owns the labels.
 
 [task-types.implement]
 template = '''
@@ -81,11 +165,6 @@ Implement the following {source-kind}.
    - Open a new Pull Request.
    - Link the pull request to the ticket. Successfully merging this pull request may close these issues.
    - List any technical choices made when specifications were not clear.
-   - Add the **`ready-for-review`** label to the pull request.
-   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request. Only the review task sets those.
-
-3. **Update Ticket**
-   - Remove the **`ready-for-agent`** label from the ticket.
 
 Repository: {repository}
 
@@ -97,7 +176,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.implement.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.review]
 template = '''
@@ -124,9 +205,6 @@ Review pull request {external-key}: {title}.
 
 ### Outcome
 - Post the output as a comment on the pull request.
-- Remove label 'ready-for-review'.
-- Set label to **`ready-to-ship`** if score is 90 or higher.
-- Set label to **`needs-work`** if score is less than 90.
 
 Repository: {repository}
 Pull request: {source-url}
@@ -135,7 +213,16 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.review.transition]
+ticket-facts = []
+pull-request-facts = []
+score-threshold = 90
+[[task-types.review.transition.branches]]
+when = "score-above-threshold"
+pull-request-facts = ["ready-to-ship"]
+[[task-types.review.transition.branches]]
+when = "score-below-threshold"
+pull-request-facts = ["needs-work"]
 
 [task-types.rework]
 template = '''
@@ -154,8 +241,6 @@ Rework pull request {external-key}: {title}.
 
 4. **Update Pull Request**
    - Write a summary of your changes in a new comment.
-   - Remove the **`needs-work`** label.
-   - Add the **`ready-for-review`** label.
 
 Repository: {repository}
 Pull request: {source-url}
@@ -164,7 +249,9 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.rework.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
 
 [task-types.merge]
 thinking = "low"
@@ -175,11 +262,10 @@ Merge pull request {external-key}: {title}.
 
 1. **Squash and Merge**
    - Squash and merge the pull request into its base branch.
+   - Close the related ticket if all acceptance criteria are satisfied.
 
 2. **On a Blocked Merge**
    - If the pull request has a merge conflict or a failing CI check, do not merge.
-   - Remove the **`ready-to-ship`** label.
-   - Add the **`needs-work`** label.
    - Post a comment explaining the reason for the blocked merge.
 
 Repository: {repository}
@@ -189,19 +275,26 @@ Labels: {labels}
 
 Description:
 {description}'''
-auto-close = false
+[task-types.merge.transition]
+ticket-facts = []
+pull-request-facts = []
+[[task-types.merge.transition.branches]]
+when = "pull-request-open"
+pull-request-facts = ["needs-work"]
+[[task-types.merge.transition.branches]]
+pull-request-facts = []
 
 # --- Security task types ----------------------------------------------------
 # One task type per security ticket source, a sibling of implement. Each one
 # carries a template that resolves its kind of finding: verify the finding,
-# make the fix, and open a pull request labeled ready-for-review. From there
-# the review, rework, and merge workflow takes over. auto-close closes the
-# cycle on a completed settle, and the completed task type rests the ticket
-# while the item still lists upstream.
+# make the fix, and open a pull request. From there the review, rework, and
+# merge workflow takes over. The transition writes ready-for-review on the
+# opened pull request and auto-advances into its review position; a turn
+# that opened no pull request settles closed, and the completed task type
+# rests the ticket while the item still lists upstream.
 
 [task-types.resolve-security-advisory]
 thinking = "high"
-auto-close = true
 template = '''
 Resolve the following security advisory {external-key}: {title}.
 
@@ -226,8 +319,6 @@ Resolve the following security advisory {external-key}: {title}.
 5. **Commit and Open Pull Request**
    - Commit all changes to this branch.
    - Open a pull request linking the source item by its URL.
-   - Add the **`ready-for-review`** label to the pull request.
-   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request.
    - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
 
 Repository: {repository}
@@ -240,10 +331,13 @@ Labels: {labels}
 
 Description:
 {description}'''
+[task-types.resolve-security-advisory.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+auto-advance = true
 
 [task-types.resolve-dependabot-alert]
 thinking = "high"
-auto-close = true
 template = '''
 Resolve the following Dependabot alert {external-key}: {title}.
 
@@ -269,8 +363,6 @@ Resolve the following Dependabot alert {external-key}: {title}.
 5. **Commit and Open Pull Request**
    - Commit all changes to this branch.
    - Open a pull request linking the source item by its URL.
-   - Add the **`ready-for-review`** label to the pull request.
-   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request.
    - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
 
 Repository: {repository}
@@ -283,10 +375,13 @@ Labels: {labels}
 
 Description:
 {description}'''
+[task-types.resolve-dependabot-alert.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+auto-advance = true
 
 [task-types.resolve-secret-scanning-alert]
 thinking = "high"
-auto-close = true
 template = '''
 Resolve the following secret scanning alert {external-key}: {title}.
 
@@ -316,8 +411,6 @@ Resolve the following secret scanning alert {external-key}: {title}.
 7. **Commit and Open Pull Request**
    - Commit all changes to this branch.
    - Open a pull request linking the source item by its URL.
-   - Add the **`ready-for-review`** label to the pull request.
-   - Never add the **`ready-to-ship`** or **`needs-work`** labels to the pull request.
    - Never close, resolve, or withdraw the source item: closing a finding is a maintainer decision made after the fix merges.
 
 Repository: {repository}
@@ -330,11 +423,16 @@ Labels: {labels}
 
 Description:
 {description}'''
+[task-types.resolve-secret-scanning-alert.transition]
+ticket-facts = []
+pull-request-facts = ["ready-for-review"]
+auto-advance = true
 
 # --- Ticket sources -------------------------------------------------------
 # No source is active out of the box, so the control plane starts with an
 # empty ticket list on any machine. Add one block per feed: uncomment the
-# example and name your repositories.
+# example and name your repositories. The issue feed lists open issues
+# without pre-labeling: the plane runs in auto mode on whatever it finds.
 
 # [[sources]]
 # name = "my-issues"
@@ -365,44 +463,3 @@ Description:
 # kind = "github-secret-scanning-alerts"
 # refresh-interval-seconds = 300
 # repositories = ["owner/name"]
-
-# --- Workflow template: the task rules ------------------------------------
-# The label workflow: each rule suggests a task type for a ticket whose
-# source labels match. Extend with your own rules.
-
-[[task-rules]]
-task-type = "rework"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["needs-work"]
-
-[[task-rules]]
-task-type = "review"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["ready-for-review"]
-
-[[task-rules]]
-task-type = "merge"
-[task-rules.when]
-source-kind = "github-pull-request"
-labels-any = ["ready-to-ship"]
-
-# The security workflow: one rule per security source kind, pointing at its
-# task type. The rules carry no label conditions: the severity label is
-# ranking data, not a gate.
-
-[[task-rules]]
-task-type = "resolve-security-advisory"
-[task-rules.when]
-source-kind = "github-security-advisory"
-
-[[task-rules]]
-task-type = "resolve-dependabot-alert"
-[task-rules.when]
-source-kind = "github-dependabot-alert"
-
-[[task-rules]]
-task-type = "resolve-secret-scanning-alert"
-[task-rules.when]
-source-kind = "github-secret-scanning-alert"

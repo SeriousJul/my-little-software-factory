@@ -39,11 +39,21 @@ workflow handoff that follows an awaiting ticket renders its prompt with the
 `{previous-message}` placeholder filled from that last message, so the next
 agent reads what the previous one left behind.
 
+A turn that settles `completed` fires the task type's Transition first
+(ADR 0027), before any decision and in either mode: the plane writes the
+transition's label facts on the ticket and on its linked pull request through
+the command runner, and the [workflow machine](../configuration/index.md)
+re-derives every position from the labels it wrote. The fire is idempotent,
+so a second fire on the same labels writes nothing, and its outcome is stored
+on the completion trace: the written facts, the failure when a write failed,
+and the new position. No linked pull request is a visible fact on that trace,
+and it is not retried.
+
 In manual mode, `awaiting` waits for the operator. Enter opens the decision
-modal. The operator routes the ticket to a workflow target or closes the
-work cycle. Key `w` closes it too, from either Ticket pane and behind a
-confirmation, without the turn log beside it (ADR 0031): the two routes run
-one close, so they cannot drift.
+modal, which states what the transition wrote and offers the handoff of the
+position those labels derived, or the close of the cycle. Key `w` closes it
+too, from either Ticket pane and behind a confirmation, without the turn log
+beside it (ADR 0031): the two routes run one close, so they cannot drift.
 
 The same key closes a cycle whose turn never settled. An in-flight ticket -
 `handed-off` or `running` - has no settled turn to decide, so its close ends
@@ -58,20 +68,22 @@ hung start still ends in the close the operator asked for.
 Auto-handoff mode decides without the operator, within the configured
 limits:
 
-- With auto-handoff on, the control plane decides every settled turn
-	without the operator: it routes when the task type has exactly one
-	outgoing workflow edge with exactly one target, and the parallel limit
-	has room. At the per-ticket handoff limit the route degrades to close.
-	Zero or multiple edges close the cycle. A full parallel limit leaves the
-	ticket awaiting until a slot frees. The route's `auto-handed-off` decision
-	lands the same way the operator's does: only once the routed handoff has
-	started the agent. A route that cannot start - because its Agent takes one
-	of the settings its target Task profile names - records nothing on the
-	turn, says why on the status line, and leaves the turn undecided, so the
-	next poll can route it once the config or the panel fixes the pair.
-- With auto-handoff off, the same decisions apply to auto-close task
-	types only. A task type that is not auto-close leaves its settled turn
-	awaiting for the operator.
+- A fired transition that carries `auto-advance` routes the task of the
+	position it derived, while the parallel limit has room, in manual mode
+	too. The handoff starts on the ticket that position sits on, which is the
+	linked pull request when the written labels put the pull request in the
+	machine. At the per-ticket handoff limit the route degrades to close, and
+	a full parallel limit leaves the ticket awaiting until a slot frees. The
+	route's `auto-handed-off` decision lands the same way the operator's does:
+	only once the routed handoff has started the agent. A route that cannot
+	start - because its Agent takes one of the settings its target Task
+	profile names - records nothing on the turn, says why on the status line,
+	and leaves the turn undecided, so the next poll can route it once the
+	config or the panel fixes the pair.
+- Every other settled turn closes: with auto-handoff on, the control plane
+	closes a completion whose transition did not auto-advance, whose
+	transition found no position, or whose label write failed. With
+	auto-handoff off such a turn waits for the operator instead.
 - Every eligible open ticket is handed off with the config defaults when the
 	parallel limit allows it. The limit counts the live agents: the in-flight
 	tickets in `handed-off` or `running` whose agent was alive in the latest
@@ -115,8 +127,8 @@ the open handoff, the workflow route, and the restart of a missing agent - and
 it ends at the next `completed` settle, or when the operator decides the held
 turn that started it. It never blocks a manual handoff. The open handoff and
 the restart run only in auto mode; the route block applies in manual mode
-too, where the auto-close types still route without the operator, exactly
-like the Parallel limit. A Consultation never contributes to the pause.
+too, where an auto-advance transition still routes without the operator,
+exactly like the Parallel limit. A Consultation never contributes to the pause.
 
 Both cycle-end gates read the cycle that ended last, and a cycle that ended
 with no trace row is one of them (ADR 0031). The re-verify gate waits for the

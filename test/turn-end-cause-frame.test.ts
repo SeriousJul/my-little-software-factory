@@ -150,7 +150,6 @@ describe("the held turn through the real app flow", () => {
 		const config: FactoryConfig = {
 			...BASE_CONFIG,
 			repos: { [repoIdentity]: checkoutPath },
-			workflows: [{ from: "implement", to: ["review"] }],
 			maxParallelAgents: 3,
 		};
 		const src = new FakeSource("issues", "github-issues", {

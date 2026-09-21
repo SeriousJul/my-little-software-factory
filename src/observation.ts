@@ -35,13 +35,15 @@
  *    auto-handoff on the loop restarts a missing agent once per episode, or
  *    abandons the cycle when the ticket has used up its handoffs.
  * 4. Automatic completion decisions resolve the awaiting tickets: every
- *    one with auto-handoff on, the auto-close types alone without it.
- *    Exactly one outgoing edge routes (while the parallel limit has room),
- *    any other edge count closes, and a route at the handoff limit
- *    degrades to close. A full parallel limit leaves a route awaiting
- *    until a slot frees, and the rest wait for the operator. A route's
- *    decision follows its Handoff's start, which the app reports, so a
- *    route that cannot start leaves the turn for the next cycle.
+ *    one with auto-handoff on, and the auto-advance transitions alone
+ *    without it (ADR 0027). A completed turn's transition wrote its label
+ *    facts before the decision; a transition that auto-advances routes the
+ *    new position's task (while the parallel limit has room), and every
+ *    other completion closes. A route at the handoff limit degrades to
+ *    close, a full parallel limit leaves a route awaiting until a slot
+ *    frees, and the rest wait for the operator. A route's decision follows
+ *    its Handoff's start, which the app reports, so a route that cannot
+ *    start leaves the turn for the next cycle.
  * 5. With auto-handoff on, each eligible open ticket - actionable, under
  *    both limits - is handed off on its task profile's configured settings.
  *    The parallel count is the shared seat count (issue #87, ADR 0034):
@@ -66,7 +68,7 @@
  * restart anything.
  */
 
-import type { FactoryConfig, WorkflowEdge } from "./config.ts";
+import type { FactoryConfig, TransitionOutcome } from "./config.ts";
 import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
@@ -304,12 +306,13 @@ interface ParallelSlots {
  * The decision an awaiting ticket resolves to on a cycle.
  *
  * - `close`: the factory closes the cycle now (zero or multiple outgoing
- *   edges, or a route degraded at the handoff limit).
- * - `route`: the task type's one-and-only edge hands off, while the
- *   parallel limit has room.
+ *   transition that failed a write, or a route degraded at the handoff
+ *   limit).
+ * - `route`: the fired transition auto-advances into a position the machine
+ *   offers a task for, and routes it while the parallel limit has room.
  * - `wait`: the ticket rests in awaiting. A route waits for a free slot;
- *   in manual mode a non-auto-close type waits for the operator's
- *   decision.
+ *   in manual mode a completion that is neither auto-advance nor
+ *   auto-handoff waits for the operator's decision.
  */
 export type AwaitingDecision = "close" | "route" | "wait";
 
@@ -385,6 +388,13 @@ interface ObservationOptions {
 	 * the real reader.
 	 */
 	turnLogs?: TurnLogSource;
+	/**
+	 * The transition fire of a completed turn (ADR 0027): the app's seam
+	 * writes the task type's label facts through the command runner and
+	 * returns the outcome the completion decision reads. Omitted: the turn
+	 * settles without a transition.
+	 */
+	fireCompleted?: (ticket: HandoffTicket, message: string) => Promise<TransitionOutcome | null>;
 }
 
 export class ObservationCoordinator {
@@ -416,6 +426,10 @@ export class ObservationCoordinator {
 	) => void;
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
+	private readonly fireCompleted?: (
+		ticket: HandoffTicket,
+		message: string,
+	) => Promise<TransitionOutcome | null>;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
 	private cycleInFlight = false;
@@ -464,6 +478,7 @@ export class ObservationCoordinator {
 		this.onStatus = options.onStatus;
 		this.clock = options.clock ?? SYSTEM_CLOCK;
 		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
+		this.fireCompleted = options.fireCompleted;
 	}
 
 	/** Begin polling. The first cycle runs immediately. */
@@ -664,7 +679,7 @@ export class ObservationCoordinator {
 		// stored (ADR 0016). The Message line reports it when it trips and when
 		// it clears, so the operator hears about the factory stopping and
 		// resuming dispatch on the line it already watches, in any mode: the
-		// pause holds the auto-close types' routes in manual mode too. The
+		// pause holds the transition routes in manual mode too. The
 		// mode line wears it `paused` in auto mode, the state it names.
 		const effectivePause = this.state.dispatchPauseActive();
 		if (effectivePause !== this.pauseActive) {
@@ -928,12 +943,7 @@ export class ObservationCoordinator {
 	 * turn - and the capture stands in for the display only.
 	 */
 	private async settle(
-		ticket: {
-			ticketIdentity: string;
-			handoffAttemptId: string;
-			taskType: string;
-			agentType: string;
-		},
+		ticket: HandoffTicket,
 		agent: HerdrAgent,
 		turnRead: SessionTurnRead,
 	): Promise<boolean> {
@@ -955,6 +965,18 @@ export class ObservationCoordinator {
 				(await this.herdr.readPane(agent.paneId, this.config().completionMessageLines)) ?? "";
 		}
 		if (this.stopped) return true;
+		// The transition fires on a `completed` settle, before the completion
+		// decision, in manual mode and in auto mode alike (ADR 0027): it
+		// writes the label facts and the trace stores its outcome, so the
+		// decision the operator or the loop makes next reads the facts the
+		// plane wrote, not a re-read of the source.
+		let transition: TransitionOutcome | null;
+		if (cause === "completed" && this.fireCompleted !== undefined) {
+			transition = (await this.fireCompleted(ticket, message)) ?? null;
+			if (this.stopped) return true;
+		} else {
+			transition = null;
+		}
 		this.state.settleTurn({
 			ticketIdentity: ticket.ticketIdentity,
 			handoffId: ticket.handoffAttemptId,
@@ -965,6 +987,7 @@ export class ObservationCoordinator {
 			cause,
 			detail,
 			completedAt: new Date(this.now()).toISOString(),
+			...(transition === null ? {} : { transition }),
 		});
 		// The Message line reports the hold at the moment it happens (user story
 		// 29): a held settle is a warning that names the ticket and the cause,
@@ -1070,12 +1093,12 @@ export class ObservationCoordinator {
 	 * Resolve an awaiting ticket by the automatic rule. Returns whether the
 	 * cycle changed factory state.
 	 *
-	 * The rule applies to every ticket with auto-handoff on, and to the
-	 * auto-close types without it. A close decision lands as the cycle ends.
-	 * A route's decision waits for the routed Handoff to start: the claim
-	 * only says the app took the work, so a route that cannot start leaves
-	 * the pending trace for the next cycle instead of holding a decision the
-	 * handoff never made.
+	 * The rule applies to every ticket with auto-handoff on, and to a fired
+	 * transition that auto-advances without it (ADR 0027). A close decision
+	 * lands as the cycle ends. A route's decision waits for the routed
+	 * Handoff to start: the claim only says the app took the work, so a
+	 * route that cannot start leaves the pending trace for the next cycle
+	 * instead of holding a decision the handoff never made.
 	 */
 	private async handleAwaiting(
 		ticket: HandoffTicket,
@@ -1084,13 +1107,14 @@ export class ObservationCoordinator {
 	): Promise<boolean> {
 		const config = this.config();
 		const handoffCount = this.state.handoffCount(ticket.ticketIdentity);
-		const decision = this.decideAwaiting(ticket.taskType, slots.count, handoffCount, autoOn);
+		const completion = this.state.lastCompletion(ticket.ticketIdentity);
+		const outcome = completion?.transition ?? null;
+		const decision = this.decideAwaiting(slots.count, handoffCount, autoOn, outcome);
 		if (decision === "wait") return false;
 		// The held-turn gate (ADR 0016): a turn that failed, aborted, or was
 		// truncated is held. No automatic decision runs on it, in auto or
 		// manual mode; the operator's explicit close or route still
 		// works. The ticket rests in awaiting until then.
-		const completion = this.state.lastCompletion(ticket.ticketIdentity);
 		if (isHeldCompletion(completion)) return false;
 		const decidedAt = new Date(this.now()).toISOString();
 		if (decision === "close") {
@@ -1112,31 +1136,42 @@ export class ObservationCoordinator {
 			);
 			return true;
 		}
-		// `route` is only returned with exactly one edge and one target.
-		const edge = this.singleEdge(ticket.taskType);
-		if (edge === undefined || edge.to.length !== 1) return false;
+		// `route` is only returned with a fired transition that auto-advanced
+		// into a position the machine offers a task for (ADR 0027). The route
+		// lands on the position's own ticket: the machine re-derives positions
+		// from the written labels, so the handoff starts where the facts now
+		// sit, not on the ticket whose turn just settled.
+		if (
+			outcome === null ||
+			outcome.positionTaskType === null ||
+			outcome.positionTicketIdentity === null
+		)
+			return false;
 		// A waiting Work queue item routes the ticket with the operator's
 		// captured choice (ADR 0034): the automatic route must not take the
 		// seat the operator asked for, or the item's pickup would start a
 		// second handoff on the ticket it routed. It mirrors the skip the
 		// automatic restart keeps.
-		if (this.state.hasWorkItem(ticket.ticketIdentity)) return false;
+		if (this.state.hasWorkItem(outcome.positionTicketIdentity)) return false;
 		// A Dispatch pause holds the automatic route, not the close: it stops
 		// new work from starting, not a cycle from ending (ADR 0016). It holds
 		// the route in auto and manual mode alike, exactly like the Parallel
-		// limit: the auto-close types route even without the operator, so a
-		// pause that let their route through would start an agent into the
-		// wall it exists to stop.
+		// limit: a transition route moves without the operator, so a pause
+		// that let it through would start an agent into the wall it exists to
+		// stop.
 		if (this.state.dispatchPauseActive()) return false;
-		const target = edge.to[0];
+		const target = outcome.positionTaskType;
 		const previousMessage = this.promptPreviousMessage(completion);
-		// A Workflow Handoff resolves a fresh target profile and never
+		// A transition Handoff resolves a fresh target profile and never
 		// inherits the previous Handoff's model, thinking, or context window.
 		const result = await this.dispatch({
 			origin: "workflow",
 			automatic: true,
-			ticketIdentity: ticket.ticketIdentity,
-			choice: resolveHandoffChoice(config, target, edge),
+			ticketIdentity: outcome.positionTicketIdentity,
+			choice: resolveHandoffChoice(config, target, {
+				...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
+				...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+			}),
 			previousMessage,
 			// The decision belongs to the started Handoff, not to the claim, so
 			// it lands on the app's report and nowhere earlier: a route whose
@@ -1198,36 +1233,39 @@ export class ObservationCoordinator {
 	}
 
 	/**
-	 * The automatic completion rule: it applies to every task type with
-	 * auto-handoff on, and to the auto-close types without it.
+	 * The automatic completion rule (ADR 0027): it applies to every task type
+	 * with auto-handoff on, and to a fired transition that auto-advances
+	 * without it.
 	 *
 	 * A route at the handoff limit degrades to close: the ticket returns
-	 * to open wearing the handoff-limit marker, where the operator can
-	 * still hand it off manually. Exactly one outgoing edge routes while
-	 * the parallel limit has room; a full limit waits in awaiting until a
-	 * slot frees. Any other edge count closes. In manual mode a
-	 * non-auto-close type waits for the operator.
+	 * to open, where the operator can still act on it manually. A fired
+	 * transition that auto-advances routes the new position's task while the
+	 * parallel limit has room; a full limit waits in awaiting until a slot
+	 * frees. Every other completion closes: the plane wrote the facts, and
+	 * the loop does not carry a turn further. A transition that auto-advanced
+	 * into a parking state closes too: the machine offers no task there, so
+	 * the cycle ends. A transition that failed a write closes as well: the
+	 * plane does not route from labels it did not write. In manual mode a
+	 * completion that is neither waits for the operator.
 	 */
 	decideAwaiting(
-		taskType: string,
 		liveCount: number,
 		handoffCount: number,
 		autoOn: boolean,
+		outcome: TransitionOutcome | null,
 	): AwaitingDecision {
-		const config = this.config();
-		if (!autoOn && config.taskTypes[taskType]?.autoClose !== true) return "wait";
-		if (handoffCount >= config.maxHandoffsPerTicket) return "close";
-		const edge = this.singleEdge(taskType);
-		if (edge !== undefined && edge.to.length === 1) {
-			if (config.maxParallelAgents > 0 && liveCount >= config.maxParallelAgents) return "wait";
-			return "route";
-		}
-		return "close";
-	}
-
-	private singleEdge(taskType: string): WorkflowEdge | undefined {
-		const edges = this.config().workflows.filter((edge) => edge.from === taskType);
-		return edges.length === 1 ? edges[0] : undefined;
+		const autoAdvance = outcome === null ? false : outcome.fired && outcome.autoAdvance;
+		if (!autoOn && !autoAdvance) return "wait";
+		const routable =
+			autoAdvance &&
+			outcome !== null &&
+			outcome.writeFailure === "" &&
+			outcome.positionTaskType !== null;
+		if (!routable) return "close";
+		if (handoffCount >= this.config().maxHandoffsPerTicket) return "close";
+		const parallelLimit = this.config().maxParallelAgents;
+		if (parallelLimit > 0 && liveCount >= parallelLimit) return "wait";
+		return "route";
 	}
 
 	/**
@@ -1265,7 +1303,7 @@ export class ObservationCoordinator {
 		// a freed parallel slot starts the highest-ranked open ticket first
 		// (ADR 0022).
 		const tickets = this.state.visibleTickets(
-			config.taskRules,
+			config.workflowStates,
 			config.defaultTaskType,
 			config.priority?.labels ?? [],
 		);
@@ -1286,6 +1324,10 @@ export class ObservationCoordinator {
 			// finished; the item still lists it because no new signal landed.
 			// The dispatch waits for the suggestion to change, and holds the
 			// ticket, not a parallel slot.
+			// A parking state offers no task: the plane does nothing on the
+			// ticket, and an external label write is the only engine that moves
+			// it (ADR 0027).
+			if (ticket.suggestedTaskType === null) continue;
 			if (this.state.sameTypeHoldActive(ticket.identity, ticket.suggestedTaskType)) continue;
 			if (limit > 0 && count >= limit) break;
 			count += 1;

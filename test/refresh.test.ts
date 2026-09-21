@@ -251,3 +251,72 @@ describe("RefreshCoordinator", () => {
 		state.close();
 	});
 });
+
+describe("refreshAndWait", () => {
+	test("it waits for the source's own fetch to settle", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("pulls", 60_000);
+		const clock = new FakeClock();
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		coordinator.start();
+		await turns();
+		expect(source.calls).toBe(1);
+
+		// The fire's wait joins the fetch the coordinator already owns: it
+		// settles when that fetch does, and it never starts a second one.
+		let settled = false;
+		const waiting = coordinator.refreshAndWait(source.name).then(() => {
+			settled = true;
+		});
+		await turns();
+		expect(settled).toBe(false);
+		expect(source.calls).toBe(1);
+		source.settle(EMPTY);
+		await waiting;
+		expect(settled).toBe(true);
+		coordinator.stop();
+		state.close();
+	});
+
+	test("it pulls the next fetch forward and waits on it", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("pulls", 60_000);
+		const clock = new FakeClock();
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock);
+		coordinator.start();
+		await turns();
+		source.settle(EMPTY);
+		await turns();
+		expect(source.calls).toBe(1);
+
+		const waiting = coordinator.refreshAndWait(source.name);
+		await turns();
+		// The wait starts its own fetch and cancels the pending interval.
+		expect(source.calls).toBe(2);
+		expect(clock.pending).toBe(0);
+		source.settle(EMPTY);
+		await waiting;
+		// The fetch's own completion leaves exactly one schedule behind.
+		expect(clock.pending).toBe(1);
+		coordinator.stop();
+		state.close();
+	});
+
+	test("an unknown or stopped source resolves without fetching", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("pulls", 60_000);
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, new FakeClock());
+		coordinator.start();
+		await turns();
+		source.settle(EMPTY);
+		await turns();
+		coordinator.stop();
+		const calls = source.calls;
+		// A name no source holds, and a stopped coordinator, both settle at
+		// once: a transition fire never waits on a fetch that will not run.
+		await coordinator.refreshAndWait("absent");
+		await coordinator.refreshAndWait(source.name);
+		expect(source.calls).toBe(calls);
+		state.close();
+	});
+});
