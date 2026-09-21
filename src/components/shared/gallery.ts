@@ -18,6 +18,7 @@ import { useRef, useState } from "react";
 import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
 import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
+import type { TurnLogEntry } from "../../turn-log.ts";
 import { ActionBar } from "../action-bar.ts";
 import { ActionPanel } from "../action-panel.ts";
 import { consultationClosePanel } from "../consultation-close-panel.ts";
@@ -25,8 +26,17 @@ import { ConsultationDetail, consultationDetailLines } from "../consultation-det
 import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
 import { useControlDispatch } from "../control-dispatch.ts";
 import { type ControlContext, contextFor } from "../controls.ts";
+import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
-import { type ActionRow, MARKER_WIDTH, ModalSurface, modalFrame } from "../modal-chrome.ts";
+import {
+	type ActionRow,
+	bodyRowSpans,
+	MARKER_WIDTH,
+	ModalSurface,
+	modalFrame,
+	paneElement,
+	TURN_LOG_PANE,
+} from "../modal-chrome.ts";
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
@@ -36,7 +46,14 @@ import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
-import { controlInk, inkForTheme, NO_COLOR_INK, STATE_WORDS } from "./presentation.ts";
+import {
+	controlInk,
+	inkForTheme,
+	NO_COLOR_INK,
+	STATE_WORDS,
+	turnEndCauseLine,
+} from "./presentation.ts";
+import { useDecisionRegion } from "./region.ts";
 import { SPINNER_FRAMES, Spinner } from "./spinner.ts";
 import {
 	HERDR_THEME_VERSION,
@@ -309,6 +326,127 @@ function recoveryDialogElement(state: "opening" | "missing" | "failed", key: str
 		onAction: () => undefined,
 		onCancel: () => undefined,
 	});
+}
+
+/**
+ * The decision region the gallery holds: the library's region state driving
+ * the production's action rows. The gallery's own surface holds the
+ * selection's key; the window, its cap, and the rows are the region module's
+ * (ADR 0039), beside the field, the selector row, and the form.
+ */
+function GalleryDecisionRegion(props: {
+	rows: ActionRow[];
+	visibleRows: number;
+	focusedKey?: string;
+	width: number;
+}): ReactElement {
+	const region = useDecisionRegion(props.rows, props.visibleRows);
+	return createElement(
+		"box",
+		{ style: { flexDirection: "column" } },
+		...region.window.map((row) =>
+			createElement(ActionItem, {
+				key: row.key,
+				row,
+				focused: row.key === props.focusedKey,
+				width: props.width,
+			}),
+		),
+	);
+}
+
+/** The modal's dozen decision rows: Close, Goto, and ten handoff rows. */
+const DECISION_REGION_ROWS: ActionRow[] = [
+	{ key: "close", label: "Close" },
+	{ key: "goto", label: "Goto" },
+	...Array.from({ length: 10 }, (_, i) => ({
+		key: `route-${i}`,
+		label: `Handoff: task-${String(i + 1).padStart(2, "0")}`,
+		detail: "agent pi",
+	})),
+];
+
+/** A log for the capped example's pane: three rows. */
+const DECISION_LOG_ENTRIES: TurnLogEntry[] = [
+	{ kind: "text", text: "I traced the drop to the launcher's visibility filter." },
+	{ kind: "tool", name: "bash", target: "bun run test", failed: false },
+	{ kind: "text", text: "All 142 tests pass." },
+];
+
+/** The short log: two rows, filling none of the pane's window. */
+const DECISION_LOG_SHORT: TurnLogEntry[] = [
+	{ kind: "text", text: "The fix keeps the repository visible." },
+	{ kind: "tool", name: "bash", target: "bun run test", failed: false },
+];
+
+/**
+ * The decision modal's two regions, in the order the box takes them:
+ * the Turn log in its pane with its chrome, the held cause row, and the
+ * Decision region at the box's floor.
+ *
+ * The pane is the shared chrome's pane, the body's rows are the production
+ * turn log renderer's, and the region's window is the library's region
+ * state. The gallery holds a fixed box, not a terminal, so the example
+ * names the rows the modal's layout reserves at the size it shows; an empty
+ * log states its reason as one dim row inside the pane, and the pane keeps
+ * its chrome.
+ */
+function decisionModalRegions(
+	key: string,
+	columns: GalleryColumns,
+	log: readonly TurnLogEntry[],
+	options: {
+		held?: boolean;
+		region: ActionRow[];
+		visibleRows: number;
+		focusedKey?: string;
+	},
+): ReactElement {
+	// The pane's border and its padding leave the body four cells inside the
+	// box's content, the way the modal's layout pays them.
+	const bodyWidth = Math.max(1, columns.contentWidth - 4);
+	const lines =
+		log.length === 0
+			? [[{ text: EMPTY_TURN_LOG_NOTE, fg: paint("subtext0") }]]
+			: turnLogBody(log, bodyWidth);
+	return createElement(
+		"box",
+		{ key, style: { flexDirection: "column" } },
+		paneElement(
+			{
+				title: TURN_LOG_PANE,
+				rows: lines.map((line, index) =>
+					createElement(
+						"text",
+						{ key: `log-${index}` },
+						...bodyRowSpans(line, bodyWidth, undefined),
+					),
+				),
+				vpad: 1,
+				height: lines.length + 4,
+			},
+			columns.contentWidth,
+		),
+		...(options.held
+			? [
+					createElement(
+						"text",
+						{ key: "held", fg: paint("yellow") },
+						truncateToWidth(
+							turnEndCauseLine("failed", "the run stopped before it finished its tests"),
+							bodyWidth,
+						),
+					),
+				]
+			: []),
+		createElement(GalleryDecisionRegion, {
+			key: "region",
+			rows: options.region,
+			visibleRows: options.visibleRows,
+			focusedKey: options.focusedKey,
+			width: columns.contentWidth,
+		}),
+	);
 }
 
 /** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
@@ -773,6 +911,52 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				focused: false,
 				onFocus: () => undefined,
 				onWheel: () => undefined,
+			}),
+		],
+	},
+	{
+		// The decision modal's regions (ADR 0039): the Turn log in its pane
+		// with its chrome, the held cause row above the rows it qualifies,
+		// and the Decision region capped to the box's rows at the box's
+		// floor. The pane, the body's rows, and the region's window are the
+		// production modules, drawn here without the modal around them.
+		id: "decision-region-capped",
+		state: "Decision region: capped to the box's rows",
+		rows: 13,
+		render: (columns) => [
+			decisionModalRegions("capped", columns, DECISION_LOG_ENTRIES, {
+				held: true,
+				region: DECISION_REGION_ROWS,
+				visibleRows: 4,
+				focusedKey: "route-1",
+			}),
+		],
+	},
+	{
+		// A short log fills none of the pane's window, and the region shows
+		// every row it holds: the log's floor is paid, and the region stays
+		// the rows the box's floor carries, uncapped.
+		id: "decision-region-pinned",
+		state: "Decision region: the short log's pinned floor",
+		rows: 13,
+		render: (columns) => [
+			decisionModalRegions("pinned", columns, DECISION_LOG_SHORT, {
+				region: DECISION_REGION_ROWS.slice(0, 6),
+				visibleRows: 6,
+				focusedKey: "close",
+			}),
+		],
+	},
+	{
+		// An empty Turn log states its reason as one dim row inside the pane,
+		// and the pane keeps its chrome.
+		id: "decision-log-empty",
+		state: "Turn log: the empty log's reason in its pane",
+		render: (columns) => [
+			decisionModalRegions("empty", columns, [], {
+				region: DECISION_REGION_ROWS.slice(0, 2),
+				visibleRows: 2,
+				focusedKey: "close",
 			}),
 		],
 	},

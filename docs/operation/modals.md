@@ -38,6 +38,12 @@ the rows it shows riding the Action bar behind the selection's hint. A held
 turn stands one warning row between the pane and its rows: the cause the
 turn ended on, and the agent's text for it.
 
+The rows pay in a stated order: the log keeps a floor of three rows, the
+pane yields its padding before its border, and only then does the log yield
+rows to the region. A box that cannot hold the floor, the pane's border,
+and the region's one row draws the size message instead of a clipped pane,
+and the modal's own bar keeps the way out.
+
 The modal offers the choices the state allows. `Up` and `Down` move between
 the choice rows; `j` and `k` scroll the body one row, with the page and
 jump keys as aliases. `Enter` chooses the selected row, `e` edits the

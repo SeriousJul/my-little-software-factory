@@ -90,6 +90,9 @@ describe("the shared control gallery", () => {
 			"session-view",
 			"agent-view-fallback",
 			"captured-history-fallback",
+			"decision-region-capped",
+			"decision-region-pinned",
+			"decision-log-empty",
 			"close-dialog-opening",
 			"close-dialog-working",
 			"close-dialog-awaiting-response",
@@ -404,6 +407,58 @@ describe("the shared control gallery", () => {
 			"the Captured history fallback",
 		);
 		expect(frameText(captured)).toContain("review the auth design");
+	});
+
+	test("the decision modal's regions hold the pane, the cap, and the empty log", async () => {
+		// The examples own the same frame as the dialog examples: a box that
+		// must hold the pane's chrome, the held cause, and the region's rows.
+		const setup = await gallery("decision-region-capped", 80, 20);
+		let frame = frameText(setup.captureCharFrame());
+		expect(frame).toContain(stateLine("decision-region-capped"));
+		// The Turn log pane keeps its border and its title, and the held cause
+		// stands above the rows it qualifies.
+		expect(frame).toContain("Turn log");
+		expect(frame).toContain("Turn ended failed: the run stopped before it finished its tests");
+		// The region is capped to four of its twelve rows: the window shows
+		// Close, Goto, and the first two handoffs, and hides the rest.
+		expect(frame).toContain("Close");
+		expect(frame).toContain("Goto");
+		expect(frame).toContain("Handoff: task-01");
+		expect(frame).toContain("Handoff: task-02");
+		expect(frame).not.toContain("task-03");
+		// The selection stands on the window's last row.
+		const rows = rowsOf(setup.captureCharFrame());
+		expect(rows.some((row) => row.includes("❯ Handoff: task-02"))).toBe(true);
+
+		setup.mockInput.pressTab();
+		frame = frameText(
+			await awaitFrame(
+				setup,
+				(f) => frameText(f).includes(stateLine("decision-region-pinned")),
+				"the pinned example",
+			),
+		);
+		// The short log fills none of the pane's window, and the region shows
+		// every row it holds, uncapped.
+		expect(frame).toContain("Turn log");
+		expect(frame).toContain("The fix keeps the repository visible.");
+		expect(frame).toContain("Handoff: task-04");
+		expect(frame).not.toContain("task-05");
+		expect(frame).toContain("❯ Close");
+
+		setup.mockInput.pressTab();
+		frame = frameText(
+			await awaitFrame(
+				setup,
+				(f) => frameText(f).includes(stateLine("decision-log-empty")),
+				"the empty log example",
+			),
+		);
+		// The empty log states its reason inside the pane, and the pane keeps
+		// its chrome.
+		expect(frame).toContain("Turn log");
+		expect(frame).toContain("No turn log is recorded for this turn");
+		expect(frame).toContain("❯ Close");
 	});
 
 	test("the close dialog examples hold every state a live Agent can be in", async () => {

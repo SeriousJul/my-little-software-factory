@@ -369,8 +369,11 @@ export function useModalPopScale(): { pop: number; scale: number } {
  * the layout has decided the pane's chrome, so the pane draws it - its
  * border, its padding, and its height - without re-deciding it. The region
  * below stays pinned to the box's floor, whatever the body's length.
+ *
+ * The gallery draws this element with the pane the modal's layout reserved,
+ * so a reviewer sees the pane's chrome without the modal around it.
  */
-function paneElement(pane: NonNullable<ModalBody["pane"]>, width: number): ReactElement {
+export function paneElement(pane: NonNullable<ModalBody["pane"]>, width: number): ReactElement {
 	return createElement(
 		"box",
 		{
