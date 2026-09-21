@@ -61,8 +61,8 @@ and `bun run test`.
 | The no-color presentation strips color and keeps labels, the focus marker, and state words | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The spinner paints its named first frame beside its written word in the state-word tone, drives its own frames in the test renderer through the shared `useSpinnerFrame`, stands still on that hook's inactive flag, and the no-color presentation keeps its word and drops only its color | `test/shared-controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Starting window (ADR 0030): a claim in flight or a `handed-off` ticket wears the face - the animated glyph with the written word `starting` - in the state badge slot of the list row and of the detail's state line, from the keypress, for every origin (manual, auto, workflow route, restart), and the `[handed-off]` badge is never drawn; a failed start ends the face and returns the row to its state, a turn that settles under a `handed-off` ticket ends it at the badge that state rests in, and the observation ends it at `[running]`; the failure markers (`blocked`, `missing`) and a crash remnant's recovery fact beat the face, and the detail states the marker's word in the line the face held; `NO_COLOR` keeps the written word in row and detail and drops only the color | `test/starting-face.test.ts`, `test/app.test.ts`, `test/handoff-frame.test.ts`, `test/live-view.test.ts`, `test/action-bar.test.ts`, `test/theme-frame.test.ts` | Passed by the automated suite. The animated frame is not something a frame snapshot verifies: the checks run on the written word beside any glyph of the face. The row and the detail drive the shared frame separately, so the two glyphs can stand on different frames for a moment; the word carries the fact. The terminal walks above have not been run for the face, and the suite has not been re-run on a herdr-inherited theme for it. |
-| The overlay surface paints the theme's own `panel_bg` role, and the text the surface's own rows paint clears the measured contrast on the surface it landed on | `test/reserved-rows.test.ts`, `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed, but with the shared-presentation contrast checks skipped (issue #103) |
-| The plane paints the Theme the environment resolves: the inherited herdr theme's colors on rows, borders, badges, and the Message line, a light theme painting the whole plane light, the fallback warning on an unknown name, the standalone theme outside herdr, and `reset` roles and `NO_COLOR` painting no color | `test/theme-resolver.test.ts`, `test/theme-source.test.ts`, `test/theme-frame.test.ts` | Passed, but with the theme-frame inheritance checks skipped (issue #103) |
+| The overlay surface paints the theme's own `panel_bg` role, and the text the surface's own rows paint clears the measured contrast on the surface it landed on | `test/reserved-rows.test.ts`, `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed |
+| The plane paints the Theme the environment resolves: the inherited herdr theme's colors on rows, borders, badges, and the Message line, a light theme painting the whole plane light, the fallback warning on an unknown name, the standalone theme outside herdr, and `reset` roles and `NO_COLOR` painting no color | `test/theme-resolver.test.ts`, `test/theme-source.test.ts`, `test/theme-frame.test.ts` | Passed |
 | The gallery shows the states a theme change must keep: the inherited theme's swatches, the fallback warning, a light theme painting the shared controls' ink, the per-token `[theme.custom]` overrides, and the no-color presentation | `test/shared-gallery.test.ts` | Passed |
 | Decorative animation and caret blinking are off by default, and no check depends on a blink or a timer | `test/shared-presentation.test.ts`, the frame suite's bounded waits | Passed |
 | Small and narrow frames keep the focused control and the way out; below a usable size the surface states its size and how to leave | `test/reserved-rows.test.ts`, `test/handoff-frame.test.ts`, `test/consultation-frame.test.ts`, `test/shared-gallery.test.ts` | Passed |
@@ -342,25 +342,23 @@ screenshotted, so `test/screenshot-drift.test.ts` re-runs clean on the
 committed images. The terminal walks are not re-run for this change, and the
 screen-reader target remains unverified.
 
-## The Work queue's seat count on the skipped held-turn frame (issue #87, ADR 0034)
+## The Work queue's seat count on the held-turn frame (issue #87, ADR 0034)
 
 The Parallel limit's combined count reaches every surface that shows it, and
 the held-turn frame's mode line is one of them: it reads `auto: on 2/3 paused`
-where it read `1/3` before a Consultation held a seat. That frame is one of the
-checks issue #103 skips (it fails in the full suite and passes in isolation), so
-the automated run does not exercise the edited number.
+where it read `1/3` before a Consultation held a seat. When that change
+landed, the frame was one of the checks issue #103 skipped, so the automated
+run did not exercise the edited number and the case was run by hand once on
+that head, with the skip lifted and the file run alone:
+`bun test test/turn-end-cause-frame.test.ts --isolate`, one pass, 25
+assertions, 0 fail, so the mode line showed the combined count with the held
+turn and the seeded Consultation both in it.
 
-The case was therefore run by hand once on this head, with the skip lifted and
-the file run alone: `bun test test/turn-end-cause-frame.test.ts --isolate`, one
-pass, 25 assertions, 0 fail, so the mode line showed the combined count with
-the held turn and the seeded Consultation both in it. That is a single manual
-measurement, not a suite result: the case stays skipped for issue #103, the
-full-suite run still does not exercise it, and the number carries no
-continuous guard until that skip goes away. The assertion change and this
-measurement are recorded here so the next contributor knows which part of the
-count the suite actually re-checks on every run (the active frames in
-`test/auto-mode.test.ts` and `test/parallel.test.ts`) and which part rests on
-one hand run.
+Issue #103's fix lifted that skip, so the full-suite run now exercises the
+mode line on every run: the hand measurement stands as history for the head
+it measured, and the continuous guard for the number is the suite itself
+(`test/turn-end-cause-frame.test.ts`), beside the active frames in
+`test/auto-mode.test.ts` and `test/parallel.test.ts`.
 
 ## The Ticket section's Goto key (issue #82, ADR 0033)
 
@@ -954,3 +952,25 @@ holds for issue #103.
 The terminal walks were not re-run for this change: the Key guide's frame is
 measured in the harness's frames, and the walks recorded earlier in this
 file have not been re-run. The screen-reader target remains unverified.
+
+## The twelve skipped frame and theme tests run in the full suite (issue #103)
+
+The twelve skips of issue #103 lift on this branch. Nine of the twelve
+flake from the theme environment one file held for the files beside it, and
+the isolation main already carries closes that leak: the suite's per-file
+processes, the preload that clears the theme environment and the cached
+resolution before every test, and the `NO_COLOR` delete at the no-color
+tests' end. The three that still failed, the theme-frame inheritance
+checks, carried stale expectations: the harness' `roleColor` resolves the
+standalone theme, so an inherited-theme frame was judged against the wrong
+palette. The expectations now resolve the theme the test's config names
+through the pure `resolveTheme` on the exact config text the test writes, the
+same resolution the app's own path runs (`readHerdrConfig` plus
+`resolveTheme(..., true)` in `src/theme-source.ts`), beside the literal hex
+pins, so a theme table that moves still fails the test.
+
+The two table rows that now stand `Passed` rest on a re-measurement of this
+branch, rebased on origin/main: `bun run lint` and `bun run typecheck` pass,
+and `bun run test` passes in full (1816 pass, 0 skip, 0 fail, 75 files,
+twice in a row, about 38 s per run, on Bun 1.4.2, no concurrent `bun test`
+on the machine), no test skipped.
