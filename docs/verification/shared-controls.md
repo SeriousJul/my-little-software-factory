@@ -60,7 +60,7 @@ and `bun run test`.
 | The no-color presentation strips color and keeps labels, the focus marker, and state words | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The spinner paints its named first frame beside its written word in the state-word tone, drives its own frames in the test renderer through the shared `useSpinnerFrame`, stands still on that hook's inactive flag, and the no-color presentation keeps its word and drops only its color | `test/shared-controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The Starting window (ADR 0030): a claim in flight or a `handed-off` ticket wears the face - the animated glyph with the written word `starting` - in the state badge slot of the list row and of the detail's state line, from the keypress, for every origin (manual, auto, workflow route, restart), and the `[handed-off]` badge is never drawn; a failed start ends the face and returns the row to its state, a turn that settles under a `handed-off` ticket ends it at the badge that state rests in, and the observation ends it at `[running]`; the failure markers (`blocked`, `missing`) and a crash remnant's recovery fact beat the face, and the detail states the marker's word in the line the face held; `NO_COLOR` keeps the written word in row and detail and drops only the color | `test/starting-face.test.ts`, `test/app.test.ts`, `test/handoff-frame.test.ts`, `test/live-view.test.ts`, `test/action-bar.test.ts`, `test/theme-frame.test.ts` | Passed by the automated suite. The animated frame is not something a frame snapshot verifies: the checks run on the written word beside any glyph of the face. The row and the detail drive the shared frame separately, so the two glyphs can stand on different frames for a moment; the word carries the fact. The terminal walks above have not been run for the face, and the suite has not been re-run on a herdr-inherited theme for it. |
-| The overlay surface paints the theme's own `panel_bg` role, and the text the surface's own rows paint clears the measured contrast on the surface it landed on | `test/reserved-rows.test.ts`, `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed, but with the shared-presentation contrast checks skipped (issue #103) and the Key guide 44-column reason walk skipped (issue #104) |
+| The overlay surface paints the theme's own `panel_bg` role, and the text the surface's own rows paint clears the measured contrast on the surface it landed on | `test/reserved-rows.test.ts`, `test/shared-gallery.test.ts`, `test/key-guide.test.ts`, `test/shared-presentation.test.ts` | Passed, but with the shared-presentation contrast checks skipped (issue #103) |
 | The plane paints the Theme the environment resolves: the inherited herdr theme's colors on rows, borders, badges, and the Message line, a light theme painting the whole plane light, the fallback warning on an unknown name, the standalone theme outside herdr, and `reset` roles and `NO_COLOR` painting no color | `test/theme-resolver.test.ts`, `test/theme-source.test.ts`, `test/theme-frame.test.ts` | Passed, but with the theme-frame inheritance checks skipped (issue #103) |
 | The gallery shows the states a theme change must keep: the inherited theme's swatches, the fallback warning, a light theme painting the shared controls' ink, the per-token `[theme.custom]` overrides, and the no-color presentation | `test/shared-gallery.test.ts` | Passed |
 | Decorative animation and caret blinking are off by default, and no check depends on a blink or a timer | `test/shared-presentation.test.ts`, the frame suite's bounded waits | Passed |
@@ -777,11 +777,12 @@ nested border above:
   window carries no thumb, the region stands directly under the pane's
   bottom border, and the box's border closes the floor below it - the
   region stays pinned whatever the body's length (`test/decision-modal.test.ts`).
-- The capped region with a dozen handoff rows at a small terminal: the log
-  keeps its floor of three rows with its thumb, the region shows its four
-  rows and hides the rest, the bar states the window's range behind the
-  selection's hint, and the window slides with the selection, the range
-  following (`test/decision-modal.test.ts`).
+- The capped region on a dense turn at a small terminal: the log keeps its
+  floor of three rows with its thumb, the held cause and the transition's
+  fact rows stand pinned above the region's action rows, the region shows
+  the two action rows they fit and hides the rest, the bar states the
+  window's range behind the selection's hint, and the window slides with
+  the selection, the range following (`test/decision-modal.test.ts`).
 - The pane's yield steps, walked by resizing the terminal over the open
   modal: the padding yields before the border, the border keeps and the log
   keeps its floor, only then does the log yield rows to the region's one
@@ -917,3 +918,38 @@ no-color tests and the badge's frame test passed four times in a row
 The terminal walks were not re-run on the queued badge: they are recorded as
 not re-verified for this change, not as a pass. The screen-reader target
 remains unverified.
+
+## The Key guide's reason walk at 44 columns (issue #104)
+
+The Key guide's 44-column reason walk timed out, and the skip was recorded
+for issue #104. This branch removes the skip and re-measures the walk. The
+guide is not the cause:
+
+- The guide's scroll is right at 44 columns. The list holds 135 rows - the
+  long reasons flow into the narrow reason column - the visible window is
+  sixteen rows, and the bar's range indicator tracks the selection from the
+  top of the list to its bottom, every step.
+- The old walk overran its budget. It walked to each reason in turn, and it
+  paid a full settle wait after every step. At the narrowest size the flowed
+  reasons run the guide past a hundred rows, and the settle per step added
+  to more than the test's allowance under load.
+
+The walk now runs once from the top, and waits on the guide's own range
+indicator advancing one row - the step's effect - instead of a full settle.
+It reads the text of every window the walk shows, by the cells, not the
+lines, because the narrow guide breaks a long word across rows, and it
+searches the reasons in that collection of windows, the windows kept apart
+by a separator, so a reason split between two windows never reads as whole.
+The width check holds at every width, the 44 columns included: no row of
+the guide is wider than the terminal.
+
+The 44-column case runs in about 2.3 s on this machine, and the key guide
+file passed five times in a row, once of them under a full-CPU load on all
+cores. The full suite passed in full on this branch: `bun run lint` and
+`bun run typecheck` pass, and `bun run test` passes (1748 pass, 12 skip,
+0 fail, about 40 s, on Bun 1.4.2). The 12 skips are the ones this record
+holds for issue #103.
+
+The terminal walks were not re-run for this change: the Key guide's frame is
+measured in the harness's frames, and the walks recorded earlier in this
+file have not been re-run. The screen-reader target remains unverified.
