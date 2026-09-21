@@ -66,14 +66,20 @@ travels the link, and a ticket that left its source leaves the pull request
 unranked. The pull request sorts under the ordinary rank rule; it takes no
 special position.
 
-**A recorded skip re-fires when the link appears.** A refresh that finds a
-fixing pull request for a ticket re-fires the newest completion trace of
-that ticket that recorded the reason `no linked pull request was found for
-the ticket`. The fire is idempotent: a label set that already matches its
+**A recorded skip re-fires when the link appears - deferred to #147.** The
+accepted design for the recorded skip is that a refresh that finds a fixing
+pull request for a ticket re-fires the newest completion trace of that
+ticket that recorded the reason `no linked pull request was found for the
+ticket`. The fire is idempotent: a label set that already matches its
 spec writes nothing, so the re-fire takes a new egress point beside the
 settle-time fire only when labels actually differ. The re-fire writes the
 facts the skip left unwritten and derives the position the fire derives, so
-an auto-advance task type advances through it.
+an auto-advance task type advances through it. Issue #146 does not build
+it; it lands with #147, the follow-up that carries the pickup guard beside
+it. Until then the plane makes no refresh-time write: the skip stands as a
+visible fact on the ticket's newest completion trace, the pull request
+stays listed with its inherited rank and no task, and the pair heals on
+the next completed turn that fires on it.
 
 ## Considered options
 
@@ -91,9 +97,9 @@ an auto-advance task type advances through it.
   recorded skip handles.
 - **No heal for pairs that already exist.** The operator fixes the broken
   pair by hand and the change applies to future tickets only. Rejected: the
-  re-fire path is idempotent, bounded to traces that recorded the exact
-  skip reason, and serves the future race - a pull request whose refresh
-  lands after the settle - with the same code.
+  re-fire path, deferred to #147, is idempotent, bounded to traces that
+  recorded the exact skip reason, and serves the future race - a pull
+  request whose refresh lands after the settle - with the same code.
 - **A special list position for a newly covered ticket.** Rejected: ticket
   priority is a fact of the ticket identity that orders the list, and a
   second ordering rule would contradict it. In the case that motivated this
@@ -106,18 +112,27 @@ an auto-advance task type advances through it.
 
 - The pull request fetch gains one scalar field. The possible-node budget
   note in ADR 0023 is unaffected: a scalar is not a connection.
-- The plane's write surface to an external source widens from the
-  settle-time fire to the settle-time fire plus the catch-up re-fire. The
-  re-fire is the only refresh-time write the plane makes, and it is bounded
-  to a recorded skip.
+- In this implementation the plane's write surface to an external source
+  is the settle-time fire alone. The catch-up re-fire, deferred to #147,
+  is the only refresh-time write the design makes; when it lands it
+  widens the surface and stays bounded to a recorded skip.
 - The branch name `factory/<ticket id>-<slug>` becomes a contract: it is
   read back from the source and decides list membership and rank. Renaming
   the branch severs the link, and the severed link stands as a
   recorded skip, not a silent gap.
-- The legacy pair heals on the next refresh: the re-fire writes
-  `ready-for-review` onto the pull request, the pull request takes the
-  review position and its inherited rank, and the covered alert leaves the
-  list. No operator step.
+- The number-only closing-reference match can link across source kinds
+  when the numbers collide in one repository: a pull request that closes
+  issue #9 by number in a repository that also lists alert #9 fixes both.
+  The identity match is exact, and the branch match is structurally
+  unique to one ticket; the number match is the fallback for a reference
+  the source never learned an identity for.
+- The legacy pair heals in steps. The next refresh applies the list rule
+  and the rank: the covered alert leaves the list, and the pull request
+  takes its inherited rank. The `ready-for-review` fact the skip left
+  unwritten lands on the next completed turn that fires on the pair - the
+  ticket's while it is still in flight, or the pull request's when the
+  operator starts it. When the re-fire lands with #147, the refresh writes
+  the fact instead of waiting for a turn.
 - A covered ticket leaves the auto-handoff's candidate set and the section
   header counts with it. A covered ticket's re-handoff in flight stays
   visible, and when its cycle closes the ticket is covered again and leaves

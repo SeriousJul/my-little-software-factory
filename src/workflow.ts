@@ -439,7 +439,7 @@ export async function fireTransition(
 	};
 	if (!evaluation.fired) return outcome;
 	const machine = transitionLabelSet(request.config);
-	// The two surfaces the facts name. A pull request ticket is its own linked
+	// The two surfaces the facts name. A pull request ticket is its own fixing
 	// pull request, so one surface carries both fact lists and the plane
 	// converges it once: a second write would strip what the first wrote.
 	const surfaces: PullRequestSurface[] =

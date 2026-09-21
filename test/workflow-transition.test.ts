@@ -620,6 +620,27 @@ function pullStubWith(attributes: Record<string, string>, over: Partial<SourceMe
 	});
 }
 
+/** A stub pull request with its own identity and number, for the ordering. */
+function pullStubAs(
+	number: number,
+	attributes: Record<string, string>,
+	externalUpdatedAt: string,
+): Ticket {
+	const identity = `github:github.com:P_${number}`;
+	const key = `#${number}`;
+	return {
+		...stubTicket(identity, "github-pull-request", key),
+		externalUpdatedAt,
+		memberships: [
+			{
+				...stubMembership(identity, "github-pull-request", key),
+				attributes,
+				externalUpdatedAt,
+			},
+		],
+	};
+}
+
 /** A closed-pull-request fact set on a stub membership. */
 function closedMembership(over: Partial<SourceMembership> = {}): SourceMembership {
 	return {
@@ -702,19 +723,23 @@ describe("the fixing pull request", () => {
 	});
 
 	test("the newest non-draft wins, and a draft alone fixes nothing the machine acts on", () => {
-		const older = pullStubWith(withHeadBranch({}, "factory/5-persist"), {
-			externalUpdatedAt: "2026-08-30T10:00:00Z",
-		});
-		const newest = pullStubWith(withHeadBranch({ draft: "true" }, "factory/5-persist"), {
-			externalUpdatedAt: "2026-08-31T12:00:00Z",
-		});
+		const older = pullStubAs(12, withHeadBranch({}, "factory/5-persist"), "2026-08-30T10:00:00Z");
+		const newest = pullStubAs(13, withHeadBranch({}, "factory/5-persist"), "2026-08-31T12:00:00Z");
+		const draft = pullStubAs(
+			14,
+			withHeadBranch({ draft: "true" }, "factory/5-persist"),
+			"2026-09-01T09:00:00Z",
+		);
 		const issue = stubTicket(issueIdentity, "github-issue", "#5");
 		// The draft is the newest fixing pull request, and the machine acts on
-		// the newest non-draft: the older one.
-		expect(findFixingPullRequest([older, newest], issue)?.identity).toBe(pullIdentity);
+		// the newest non-draft: P_13, ahead of the older P_12 and the draft
+		// P_14.
+		expect(findFixingPullRequest([older, newest, draft], issue)?.identity).toBe(
+			"github:github.com:P_13",
+		);
 		// A draft alone: the machine acts on nothing, and the ticket is still
 		// covered - the draft's work is in flight.
-		const draftOnly = [newest];
+		const draftOnly = [draft];
 		expect(findFixingPullRequest(draftOnly, issue)).toBeNull();
 		expect(isCoveredByFixingPullRequest(draftOnly, issue)).toBe(true);
 	});
