@@ -11,21 +11,22 @@ permissions:
   id-token: write
 
 jobs:
-  publish:
+  # Every check the publish and the build share: a broken tree releases
+  # neither a package nor a binary.
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      # Node stays for the publish itself: the build, the checks, and the docs
-      # all run on Bun, but npm publish is the one step only Node does.
+      # Node stays for the publish itself and the tag check below: the build,
+      # the checks, and the docs all run on Bun, but npm publish is the one
+      # step only Node does.
       - uses: actions/setup-node@v7
         with:
           node-version: 26
       - run: bun install
-      # Every failed check stops the publish: a broken build never reaches
-      # the registry.
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
@@ -37,10 +38,143 @@ jobs:
           alias="$(node -p "require('./packages/mlsf/package.json').version")"
           test "$tag" = "$main"
           test "$tag" = "$alias"
-          echo "publishing $main"
+          echo "releasing $main"
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+      - run: bun install
       # The main package first: the alias pins an exact version of it and
       # must find it in the registry.
       - name: Publish my-little-software-factory with provenance
         run: npm publish --provenance
       - name: Publish the mlsf alias with provenance
         run: npm publish --provenance --prefix packages/mlsf
+
+  # One leg per target, each on a clean runner: the leg installs only the
+  # OpenTUI core of its target, so the binary it compiles embeds exactly the
+  # native library the target runs, and no other.
+  build:
+    needs: checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - linux-x64
+          - linux-x64-musl
+          - linux-arm64
+          - linux-arm64-musl
+          - darwin-x64
+          - darwin-arm64
+          - windows-x64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      # The optional platform cores stay out: the build adds the one the
+      # target runs, and the compile embeds what the install placed.
+      - run: bun install --omit=optional
+      - run: bun run scripts/build-binary.ts ${{ matrix.target }} --out dist
+      # The leg that builds the runner's own target runs the binary it just
+      # built: a compile that produces an unrunnable file fails here.
+      - name: The built binary answers --version on this runner
+        if: matrix.target == 'linux-x64'
+        run: |
+          asset="$(ls dist/factory-*)"
+          test "$(ls dist/factory-* | wc -l)" -eq 1
+          "$asset" --version
+      # The glibc runner cannot run the musl binary; an alpine container can.
+      - name: The musl binary answers --version in an alpine container
+        if: matrix.target == 'linux-x64-musl'
+        run: |
+          asset="$(ls dist/factory-*)"
+          docker run --rm -v "$PWD/dist:/dist" -e BINARY="$(basename "$asset")" alpine:3.20 "/dist/$BINARY" --version
+      - uses: actions/upload-artifact@v7
+        with:
+          name: factory-${{ matrix.target }}
+          path: dist/
+
+  # The macOS leg runs on the runner the binary targets. The darwin-x64
+  # binary and the arm64 linux binaries take no smoke: the record in
+  # docs/verification/release.md names them as unverified on a runner.
+  smoke-darwin:
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: factory-darwin-arm64
+          path: dist
+      - name: The darwin-arm64 binary answers --version on macOS
+        run: ./dist/factory-*-darwin-arm64 --version
+
+  smoke-windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: factory-windows-x64
+          path: dist
+      - name: The windows-x64 binary answers --version on Windows
+        run: ./dist/factory-windows-x64.exe --version
+
+  # The release carries every target and the checksums the installer
+  # verifies against. It waits on the smoke jobs: a binary that does not run
+  # on its own operating system is not uploaded. A missing target stops the
+  # upload, and the npm installer degrades to its readable "incomplete
+  # release" line until the leg is re-run.
+  release:
+    needs: [build, smoke-darwin, smoke-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: The release carries every target's binary and its checksums
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for dir in artifacts/factory-*/; do cp "$dir"factory-* dist/; done
+          for t in linux-x64 linux-x64-musl linux-arm64 linux-arm64-musl darwin-x64 darwin-arm64 windows-x64; do
+            case "$t" in
+              windows-*) ext=".exe" ;;
+              *) ext="" ;;
+            esac
+            file="dist/factory-${version}-${t}${ext}"
+            if ! test -s "$file"; then
+              echo "missing $file: the build leg for $t failed or uploaded nothing"
+              exit 1
+            fi
+          done
+          (cd dist && sha256sum factory-"${version}"-* > "factory-${version}.sha256sums")
+          cat "dist/factory-${version}.sha256sums"
+      - name: Upload the binaries and the checksums to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "v${version}" \
+            --title "v${version}" \
+            --notes "The control plane v${version}.
+
+Install with \`npx mlsf\` (or \`npx my-little-software-factory\`): the package installs the prebuilt binary for your platform from this release and verifies it against \`factory-${version}.sha256sums\`. The binary needs neither Node nor Bun.
+
+Targets: linux-x64, linux-x64-musl, linux-arm64, linux-arm64-musl, darwin-x64, darwin-arm64, windows-x64."
+          gh release upload "v${version}" dist/factory-"${version}"-* --clobber

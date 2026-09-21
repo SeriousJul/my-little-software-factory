@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parse, stringify } from "smol-toml";
 
 import {
@@ -24,6 +23,7 @@ import {
 	thinkingSettingFit,
 	tokenCountDigits,
 } from "./setting-fit.ts";
+import { readShippedDefaultConfigText, shippedDefaultConfigPath } from "./shipped-default.ts";
 
 export interface AgentTypeConfig {
 	kind: string;
@@ -365,11 +365,6 @@ export function defaultStatePath(
 	);
 }
 
-/** The Default configuration the package ships and a missing file is seeded from. */
-export function shippedDefaultConfigPath(): string {
-	return fileURLToPath(new URL("../config/default.toml", import.meta.url));
-}
-
 /** A loaded config, and whether the load seeded the file. */
 export interface LoadedConfig {
 	config: FactoryConfig;
@@ -450,7 +445,7 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 			// leaves behind, on the backup and the report as much as on the
 			// config: a 0600 file stays 0600 through the rewrite.
 			const mode = (await stat(path)).mode;
-			const shippedText = await readFile(shippedDefaultConfigPath(), "utf8");
+			const shippedText = await readShippedDefaultConfigText();
 			const migration = migrateWorkflowMachineConfig(
 				path,
 				data as Record<string, unknown>,
@@ -536,7 +531,7 @@ async function seedConfigFile(path: string): Promise<void> {
 	const source = shippedDefaultConfigPath();
 	let text: string;
 	try {
-		text = await readFile(source, "utf8");
+		text = await readShippedDefaultConfigText();
 	} catch (error) {
 		throw new ConfigError(`cannot read the Default configuration at ${source}: ${String(error)}`);
 	}

@@ -19,9 +19,13 @@ The guides on the site hold everything this screen used to hold:
 
 ## Requirements
 
-- Bun `1.3.0` or newer, and Node for `npx`
+- Node, for the `npx` that installs and runs the prebuilt binary the release
+  publishes. The binary needs neither Node nor Bun on the machine (ADR 0056).
 - `herdr` on the `PATH`, with a current [ghostty](https://ghostty.org) on the
   `PATH` (herdr runs each Agent's terminal in ghostty), and `git`
+
+Bun `1.3.0` or newer is a development requirement: it runs the control plane
+from source, runs the tests, and compiles the prebuilt binary.
 
 [The Getting started guide](./docs/getting-started/index.md) covers the rest:
 where each requirement comes from and how to get it, the config file, the

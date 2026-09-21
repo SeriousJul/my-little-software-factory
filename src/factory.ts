@@ -14,14 +14,29 @@ import { createElement, createRoot } from "@opentui/react";
 import { App } from "./components/app.ts";
 import { errorMessage } from "./runner.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
-import { installStateShutdown, runStartup } from "./startup.ts";
+import { installStateShutdown, runStartup, startupArgs } from "./startup.ts";
+import { factoryVersion } from "./version.ts";
 
 if (!isSupportedBunVersion(Bun.version)) {
 	process.stderr.write(unsupportedBunVersionMessage(Bun.version));
 	process.exit(1);
 }
 
-const startup = await runStartup(process.argv.slice(2));
+const argv = process.argv.slice(2);
+// `--version` is answered before any boot: the flag must work on a machine
+// with no state, no herdr, and no config, which is the whole point of the
+// prebuilt binary (ADR 0056).
+const decision = startupArgs(argv);
+if (decision.kind === "version") {
+	process.stdout.write(`factory ${await factoryVersion()}\n`);
+	process.exit(0);
+}
+if (decision.kind === "usage") {
+	process.stderr.write(`${decision.reason}\n`);
+	process.exit(1);
+}
+
+const startup = await runStartup(argv);
 for (const line of startup.ok ? startup.notes : startup.lines) {
 	process.stderr.write(`${line}\n`);
 }

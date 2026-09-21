@@ -38,6 +38,15 @@ import { createTicketSource } from "./ticket-source.ts";
 /** The argument list, or the one usage line the operator reads instead. */
 export type StartupArgsResult = { ok: true; configPath: string } | { ok: false; reason: string };
 
+/**
+ * The argument list as a decision: run the plane on a config path, print the
+ * plane's version, or show the usage line.
+ */
+export type StartupDecision =
+	| { kind: "run"; configPath: string }
+	| { kind: "version" }
+	| { kind: "usage"; reason: string };
+
 /** A loaded config, or the one failure line the operator reads instead. */
 export type StartupConfigResult =
 	| { ok: true; config: FactoryConfig; note?: string; warnings: string[] }
@@ -91,6 +100,9 @@ export function startupLogger(config: FactoryConfig, configPath: string): Logger
 	});
 }
 
+/** The usage line the argument handling shows for anything it does not take. */
+export const USAGE = "usage: factory [--config <path>] | factory --version";
+
 /**
  * The argument list: no argument is the shipped default path, and
  * `--config <path>` names one. Anything else is the usage line.
@@ -99,7 +111,19 @@ export function configPathFromArgs(args: readonly string[]): StartupArgsResult {
 	if (args.length === 0) return { ok: true, configPath: defaultConfigPath() };
 	if (args.length === 2 && args[0] === "--config" && args[1] !== "")
 		return { ok: true, configPath: args[1] };
-	return { ok: false, reason: "usage: factory [--config <path>]" };
+	return { ok: false, reason: USAGE };
+}
+
+/**
+ * The argument list as a decision: `--version` prints the plane's version
+ * (the entry answers it before any boot), and every other list is the config
+ * path or the usage line.
+ */
+export function startupArgs(args: readonly string[]): StartupDecision {
+	if (args.length === 1 && args[0] === "--version") return { kind: "version" };
+	const parsed = configPathFromArgs(args);
+	if (parsed.ok) return { kind: "run", configPath: parsed.configPath };
+	return { kind: "usage", reason: parsed.reason };
 }
 
 /**

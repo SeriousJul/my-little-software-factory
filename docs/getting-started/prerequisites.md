@@ -5,19 +5,27 @@ description: What the machine needs before the first start of the control plane.
 
 # Prerequisites
 
-The control plane ships through npm. You install nothing: `npx` runs the
-current published version. Before the first start, the machine needs:
+The control plane ships through npm, and the npm package installs a
+prebuilt binary for the machine (ADR 0056). You install nothing: `npx` runs
+the current published version. Before the first start, the machine needs:
 
-- Bun `1.3.0` or newer. The control plane runs on Bun. Below the floor the
-  start fails with the required version and the reason: the OpenTUI renderer
-  uses Bun's stable FFI, and the bin gates the version before it loads the
-  native core.
-- Node, for the `npx` that bootstraps the launcher. The launcher finds Bun on
-  the `PATH` and hands it the app, so both runtimes are needed for the `npx`
-  commands; a global install runs the app on Bun alone.
+- Node, for the `npx` that bootstraps the installer. The installer runs on
+  Node, downloads the prebuilt binary for the machine from the release, and
+  hands it the command. The binary itself needs neither Node nor Bun: it
+  carries its own runtime.
 - [herdr](https://github.com/seriousjul/herdr) on the `PATH`. The control
   plane drives it through its CLI and never starts an agent process itself.
 - The agent CLI of each agent type you use, with its own provider auth
   applied.
+
+Bun is a development requirement of the repository, not an operator one: it
+builds, tests, and runs the control plane from source, and it compiles the
+prebuilt binary the release publishes.
+
+On macOS and Windows, the first run of a freshly downloaded binary shows
+the operating system's first-run warning - Gatekeeper on macOS, SmartScreen
+on Windows - until the release's binaries are signed (ADR 0056). The binary
+is verified against the release's SHA-256 checksums before the installer
+keeps it.
 
 Next: [first launch](./first-launch.md).
