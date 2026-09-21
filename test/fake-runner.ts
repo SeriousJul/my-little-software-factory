@@ -135,6 +135,8 @@ export interface ListedAgent {
 	status: string;
 	/** The agent's session record path, as herdr reports it. */
 	sessionId?: string;
+	/** The name the agent runs under, as herdr reports it. */
+	name?: string;
 }
 
 /** A herdr `agent list` JSON response. */
@@ -150,6 +152,7 @@ export function agentListJson(agents: ListedAgent[]): string {
 				...(a.sessionId !== undefined && {
 					agent_session: { kind: "path", source: "herdr:test", value: a.sessionId },
 				}),
+				...(a.name !== undefined && { name: a.name }),
 			})),
 		},
 	});

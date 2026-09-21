@@ -47,6 +47,7 @@ import {
 	listFocused,
 	listHalfOf,
 	markerRowOf,
+	messageRowOf,
 	mouseClick,
 	mouseDrag,
 	mousePress,
@@ -69,6 +70,7 @@ import {
 	withApp,
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
+import { agentListJson, FakeRunner } from "./fake-runner.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 /**
@@ -96,6 +98,222 @@ describe("the control plane", () => {
 				WIDTH,
 				30,
 				{ state },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Goto refuses a running ticket whose pane holds a foreign agent", async () => {
+		// The reported symptom: herdr handed the id of the ticket's closed pane
+		// out again, and a Consultation's agent works in it now. The ticket's
+		// stored handle still names that id, so the pane reads as missing - the
+		// row wears the failure badge, and Goto focuses nothing.
+		const state = openFactoryState(":memory:");
+		const runner = new FakeRunner();
+		const source = { name: "issues", kind: "github-issues" as const };
+		const identity = "github:github.com:I_5";
+		try {
+			state.initializeSources([source]);
+			state.applyFetch(source, {
+				status: "success",
+				fetchedAt: "2026-08-31T10:01:00Z",
+				tickets: [
+					{
+						identity,
+						sourceKind: "github-issue",
+						externalKey: "#5",
+						sourceState: "open",
+						url: "https://github.com/acme/factory/issues/5",
+						title: "Persist source facts",
+						description: "Keep state independent from GitHub.",
+						labels: ["ready-for-agent"],
+						externalUpdatedAt: "2026-08-31T10:00:00Z",
+						repository: {
+							identity: "github.com/acme/factory",
+							displayName: "acme/factory",
+							cloneUrl: "https://github.com/acme/factory.git",
+						},
+						attributes: {},
+					},
+				],
+			});
+			const claim = state.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			// A legacy-style handoff: no herdr name recorded, so the identity the
+			// pane is read against is the ticket's stable name.
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.markTicketRunning(identity);
+			// The Consultation's agent works in the ticket's reused pane id.
+			runner.set("herdr", ["agent", "list"], {
+				stdout: agentListJson([
+					{
+						paneId: "pane-1",
+						tabId: "tab-1",
+						workspaceId: "ws-1",
+						agent: "factory",
+						status: "working",
+						name: "consultation-27e1542c",
+					},
+				]),
+			});
+
+			await withApp(
+				async (setup) => {
+					// The row wears the missing badge, not the [running] state badge:
+					// the agent the last poll listed in the pane is not the
+					// ticket's own.
+					const frame = await awaitFrame(
+						setup,
+						(candidate) => frameText(candidate).includes("missing"),
+						"the missing failure badge",
+					);
+					// The selected list row wears the failure badge in the state
+					// badge's place, so the row holds no [running] badge of its
+					// own (the detail pane beside it may keep the state's).
+					const listRow = listHalfOf(rowsOf(frame)[markerRowOf(frame)]);
+					expect(listRow).toContain("missing");
+					expect(listRow).not.toContain("[running]");
+					// Goto refuses: the catalogue reads the pane as not alive, the
+					// refusal stands on the Message line, and the focus never runs.
+					setup.mockInput.pressKey("g");
+					const after = await settle(setup);
+					expect(messageRowOf(after)).toContain("the Agent's pane is not alive in the last poll");
+					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
+				},
+				WIDTH,
+				30,
+				{ state, runner, pollIntervalMs: 100 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("Goto refuses an awaiting ticket whose recorded pane holds a foreign agent", async () => {
+		// The same fact one state later: the ticket settled into awaiting, and
+		// its recorded pane now holds a Consultation's agent. ADR 0033's
+		// recorded-pane standing gives way to the identity: the base key
+		// refuses, and the decision's Goto row refuses the same focus.
+		const state = openFactoryState(":memory:");
+		const runner = new FakeRunner();
+		const source = { name: "issues", kind: "github-issues" as const };
+		const identity = "github:github.com:I_5";
+		try {
+			state.initializeSources([source]);
+			state.applyFetch(source, {
+				status: "success",
+				fetchedAt: "2026-08-31T10:01:00Z",
+				tickets: [
+					{
+						identity,
+						sourceKind: "github-issue",
+						externalKey: "#5",
+						sourceState: "open",
+						url: "https://github.com/acme/factory/issues/5",
+						title: "Persist source facts",
+						description: "Keep state independent from GitHub.",
+						labels: ["ready-for-agent"],
+						externalUpdatedAt: "2026-08-31T10:00:00Z",
+						repository: {
+							identity: "github.com/acme/factory",
+							displayName: "acme/factory",
+							cloneUrl: "https://github.com/acme/factory.git",
+						},
+						attributes: {},
+					},
+				],
+			});
+			const claim = state.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.markTicketRunning(identity);
+			// The turn settles with no decided cause: the ticket rests awaiting
+			// on its pending turn, its recorded pane still pane-1.
+			state.settleTurn({
+				ticketIdentity: identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "settled the turn",
+				turnLog: [{ kind: "text", text: "settled the turn" }],
+				completedAt: "2026-08-31T12:00:00Z",
+			});
+			// The Consultation's agent works in the ticket's recorded pane id.
+			runner.set("herdr", ["agent", "list"], {
+				stdout: agentListJson([
+					{
+						paneId: "pane-1",
+						tabId: "tab-1",
+						workspaceId: "ws-1",
+						agent: "factory",
+						status: "working",
+						name: "consultation-27e1542c",
+					},
+				]),
+			});
+
+			await withApp(
+				async (setup) => {
+					await awaitFrame(
+						setup,
+						(candidate) => frameText(candidate).includes("[awaiting]"),
+						"the awaiting state badge",
+					);
+					// The base key refuses: the recorded pane holds a live agent
+					// that is not the ticket's own, so the focus never runs.
+					setup.mockInput.pressKey("g");
+					let frame = await settle(setup);
+					expect(messageRowOf(frame)).toContain("the Agent's pane is not alive in the last poll");
+					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
+					// The decision's own Goto row refuses the same focus: open the
+					// decision, walk down to the Goto row, and confirm it.
+					await press(setup, "return", "the decision to open", (candidate) =>
+						candidate.includes("Decision:"),
+					);
+					await pressArrow(setup, "down", "the Goto row to be selected", (candidate) =>
+						candidate.includes("❯ Goto"),
+					);
+					setup.mockInput.pressEnter();
+					frame = await settle(setup);
+					expect(messageRowOf(frame)).toContain(
+						"the pane the handoff recorded is no longer the agent's pane",
+					);
+					expect(runner.commands()).not.toContain("herdr agent focus pane-1");
+				},
+				WIDTH,
+				30,
+				{ state, runner, pollIntervalMs: 100 },
 			);
 		} finally {
 			state.close();
@@ -660,6 +878,7 @@ describe("the control plane", () => {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "w-1",
+				herdrName: "sample-agent",
 			},
 			handoffCount: 1,
 		};

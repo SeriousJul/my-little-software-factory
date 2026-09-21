@@ -30,7 +30,7 @@ import {
 	type TicketState,
 } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
-import { agentNameFor } from "./naming.ts";
+import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
 import {
 	compareTicketPriority,
 	effectivePullRequestPriority,
@@ -1253,7 +1253,7 @@ export class FactoryState {
 	private handoffFor(identity: string): Ticket["handoff"] {
 		const row = this.db
 			.prepare(
-				"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+				"SELECT attempt_id, choice_json, pane_id, tab_id, workspace_id, herdr_name FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
 			)
 			.get(identity) as
 			| {
@@ -1262,6 +1262,7 @@ export class FactoryState {
 					pane_id: string | null;
 					tab_id: string | null;
 					workspace_id: string | null;
+					herdr_name: string | null;
 			  }
 			| undefined;
 		if (row == null) return null;
@@ -1278,6 +1279,7 @@ export class FactoryState {
 			paneId: row.pane_id,
 			tabId: row.tab_id,
 			workspaceId: row.workspace_id,
+			herdrName: row.herdr_name,
 		};
 	}
 
@@ -1492,30 +1494,36 @@ export class FactoryState {
 	}
 
 	/**
-	 * The name the factory started the ticket's agent with: derived from
-	 * the ticket title by the same rule the handoff applies. The herdr
-	 * list does not expose it, and its own agent field holds the kind.
+	 * The name the ticket's latest handoff expects its agent to run under.
 	 *
-	 * An active membership holds the current title. When the ticket lost
-	 * every active membership (the agent closed its own source item, or the
-	 * source was removed), the stale title still names the agent, so the
-	 * lookup falls back to the ticket's remaining memberships.
+	 * The handoff records the name it started the agent under. A handoff
+	 * without a recorded name - one from before the column, or a Reclaimed
+	 * handoff recorded before the reclaim wrote the name - falls back to the
+	 * stable name the handoff asked for first. The answer is the expected
+	 * side of the live agent identity: a live agent that runs under any
+	 * other name is not the ticket's own (see identifyHandoffAgentName).
+	 *
+	 * The title comes from an active membership when the ticket holds one.
+	 * When the ticket lost every active membership (the agent closed its
+	 * own source item, or the source was removed), the stale title still
+	 * names the agent, so the lookup falls back to the remaining
+	 * memberships.
 	 */
 	agentNameForTicket(identity: string): string {
-		const started = this.db
-			.prepare(
-				"SELECT herdr_name FROM handoffs WHERE ticket_identity = ? AND herdr_name IS NOT NULL ORDER BY started_at DESC, rowid DESC LIMIT 1",
-			)
-			.get(identity) as { herdr_name: string | null } | undefined;
-		if (started?.herdr_name != null) {
-			return started.herdr_name;
-		}
 		const row = this.db
+			.prepare(
+				"SELECT herdr_name FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(identity) as { herdr_name: string | null } | null;
+		if (row !== null && row.herdr_name !== null && row.herdr_name !== "") {
+			return row.herdr_name;
+		}
+		const title = this.db
 			.prepare(
 				"SELECT m.title FROM memberships m WHERE m.ticket_identity = ? ORDER BY m.active DESC, m.source_name LIMIT 1",
 			)
 			.get(identity) as { title: string } | undefined;
-		return row == null ? "" : agentNameFor(row.title);
+		return title == null ? "" : agentNameFor(title.title);
 	}
 
 	/**
@@ -2155,13 +2163,18 @@ export class FactoryState {
 	 */
 	reclaimHandoff(
 		identity: string,
-		details: { paneId: string; tabId: string; workspaceId: string },
+		details: { paneId: string; tabId: string; workspaceId: string; agentName: string },
 	): { attemptId: string } | null {
 		return this.transaction(() => {
 			const ticket = this.db
 				.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 				.get(identity) as { state: TicketState; work_cycle: number } | undefined;
 			if (ticket == null || ticket.state !== "open") return null;
+			// The pane id of a closed pane is handed out again, so the live
+			// agent in the ticket's stale pane can run under another name. Only
+			// the ticket's own agent is reclaimed; anything else is refused.
+			if (identifyHandoffAgentName(details.agentName, this.agentNameForTicket(identity)) !== "own")
+				return null;
 			const previous = this.db
 				.prepare(
 					"SELECT choice_json FROM handoffs WHERE ticket_identity = ? ORDER BY started_at DESC, rowid DESC LIMIT 1",
@@ -2182,7 +2195,7 @@ export class FactoryState {
 				.run(attemptId, identity, ticket.work_cycle, previous.choice_json, now, now);
 			this.db
 				.prepare(
-					"INSERT INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO handoffs(attempt_id, ticket_identity, work_cycle, choice_json, started_at, pane_id, tab_id, workspace_id, herdr_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					attemptId,
@@ -2193,6 +2206,7 @@ export class FactoryState {
 					details.paneId,
 					details.tabId,
 					details.workspaceId,
+					details.agentName,
 				);
 			return { attemptId };
 		});

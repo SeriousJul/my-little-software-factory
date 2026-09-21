@@ -15,6 +15,12 @@ export interface HerdrAgent {
 	checkoutPath?: string;
 	/** Herdr's monotonic state-change sequence when available. */
 	sequence?: number;
+	/**
+	 * The name the agent started under, when this Herdr version reports it.
+	 * The name is the agent's identity: herdr refuses to start a second
+	 * agent under a name a live agent holds.
+	 */
+	name?: string;
 	/** The agent kind herdr detected in the pane. */
 	agent: string;
 	status: string;

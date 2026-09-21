@@ -96,6 +96,13 @@ export interface Handoff {
 	tabId: string | null;
 	/** The workspace the handoff ran in; null for handoffs predating handles. */
 	workspaceId: string | null;
+	/**
+	 * The name the handoff started the agent under; null for handoffs
+	 * predating the column. A live agent in the handoff's pane that runs
+	 * under any other name is not the handoff's own: herdr hands the id of a
+	 * closed pane out again.
+	 */
+	herdrName: string | null;
 }
 
 /** A stable, host-qualified repository fact supplied by a ticket source. */

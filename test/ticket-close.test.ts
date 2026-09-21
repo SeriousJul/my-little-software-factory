@@ -43,6 +43,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 						paneId: "pane-1",
 						tabId: "tab-1",
 						workspaceId: "ws-1",
+						herdrName: "persist-source-facts",
 					},
 		workCycle: 2,
 		handoffCount: 1,

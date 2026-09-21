@@ -479,6 +479,7 @@ function sampleTicket(
 						paneId: "pane-t1",
 						tabId: "tab-ws-t",
 						workspaceId: "ws-t",
+						herdrName: "fix-the-layout-math",
 					},
 		workCycle: 1,
 		handoffCount: 1,

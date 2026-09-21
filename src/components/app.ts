@@ -64,6 +64,7 @@ import {
 } from "../handoff-dispatch.ts";
 import type { HerdrAgent } from "../herdr.ts";
 import type { Logger } from "../logging.ts";
+import { agentNameFor, type HandoffAgentIdentity, identifyHandoffAgentName } from "../naming.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,
@@ -723,6 +724,18 @@ export function App({
 		config.maxHandoffsPerTicket,
 	);
 	const selectedTicket = tickets[selectedIndex];
+	/**
+	 * The identity of the live agent in the ticket's handoff pane, from the
+	 * names alone: the handoff's recorded name, or the stable name the
+	 * handoff asked for first, against the name the agent runs under. Herdr
+	 * hands the id of a closed pane out again, so a different agent in the
+	 * id is not the ticket's own.
+	 */
+	const ticketAgentIdentity = (ticket: Ticket, agent: HerdrAgent): HandoffAgentIdentity => {
+		const recorded = ticket.handoff?.herdrName ?? null;
+		const expected = recorded !== null && recorded !== "" ? recorded : agentNameFor(ticket.title);
+		return identifyHandoffAgentName(agent.name, expected);
+	};
 	// The Consultation the shared detail pane points at: the one under the
 	// unified cursor. None while the cursor is on the Ticket list, so the
 	// detail renders the ticket and no polling runs for a Consultation the
@@ -746,11 +759,28 @@ export function App({
 		agents?.some((agent) => agent.paneId === selectedConsultation.paneId) === true;
 	// The same fact for the selected Ticket's handoff pane (ADR 0033): Goto
 	// focuses that pane, so an in-flight Ticket needs it alive in the last
-	// poll. An awaiting Ticket keeps its recorded pane instead.
+	// poll. An awaiting Ticket keeps its recorded pane instead. The pane is
+	// alive for the ticket only when the ticket's own agent is alive in it:
+	// herdr hands a closed pane's id out again, so a different agent in the
+	// id leaves the pane as missing, the way an empty one does.
 	const selectedTicketPaneId = selectedTicket?.handoff?.paneId ?? null;
+	const selectedTicketPaneAgent =
+		selectedTicketPaneId === null
+			? undefined
+			: agents?.find((agent) => agent.paneId === selectedTicketPaneId);
 	const selectedTicketPaneAlive =
-		typeof selectedTicketPaneId === "string" &&
-		agents?.some((agent) => agent.paneId === selectedTicketPaneId) === true;
+		selectedTicket !== undefined &&
+		selectedTicketPaneAgent !== undefined &&
+		ticketAgentIdentity(selectedTicket, selectedTicketPaneAgent) !== "foreign";
+	// The recorded pane holds a live agent that is not the ticket's own: herdr
+	// handed the closed pane's id out again. Goto must not focus that pane for
+	// the ticket - not on an in-flight ticket, whose missing marker the fact
+	// already carries, and not on an awaiting ticket, whose recorded pane the
+	// catalogue otherwise keeps (ADR 0033).
+	const selectedTicketPaneForeign =
+		selectedTicket !== undefined &&
+		selectedTicketPaneAgent !== undefined &&
+		ticketAgentIdentity(selectedTicket, selectedTicketPaneAgent) === "foreign";
 	const consultationTurns =
 		selectedConsultation === undefined || state === undefined
 			? []
@@ -936,6 +966,10 @@ export function App({
 		if (paneId === null || agentsRef.current === null) return null;
 		const agent = agentsRef.current.find((candidate) => candidate.paneId === paneId);
 		if (agent === undefined) return "missing";
+		// A live agent that is not the ticket's own - herdr placed another
+		// agent in the ticket's reused pane id - leaves the ticket's agent
+		// missing, the way an absent one does.
+		if (ticketAgentIdentity(ticket, agent) === "foreign") return "missing";
 		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
 	};
 	/**
@@ -1182,6 +1216,7 @@ export function App({
 						paneId: outcome.agent.paneId,
 						tabId: outcome.agent.tabId,
 						workspaceId: outcome.agent.workspaceId,
+						herdrName: outcome.agent.name,
 					};
 					setTickets((all) => {
 						const next = all.map((candidate) =>
@@ -1435,6 +1470,15 @@ export function App({
 		const paneId = ticket.handoff?.paneId ?? null;
 		if (paneId === null) {
 			setWarningMessage("no agent pane is recorded for this ticket");
+			return;
+		}
+		// Herdr hands the id of a closed pane out again: when a different agent
+		// runs in the pane the handoff recorded, the focus would land on that
+		// agent, not the ticket's own. Refuse the focus, and state the fact on
+		// the Message line the way a refused key does.
+		const agentInPane = agentsRef.current?.find((candidate) => candidate.paneId === paneId);
+		if (agentInPane !== undefined && ticketAgentIdentity(ticket, agentInPane) === "foreign") {
+			setWarningMessage("the pane the handoff recorded is no longer the agent's pane");
 			return;
 		}
 		void commandRunner.run("herdr", ["agent", "focus", paneId]).then(async (result) => {
@@ -2148,6 +2192,7 @@ export function App({
 			consultationAgentStatus: selectedConsultationAgentStatus,
 			consultationPaneAlive: selectedConsultationPaneAlive,
 			ticketPaneAlive: selectedTicketPaneAlive,
+			ticketPaneForeign: selectedTicketPaneForeign,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
 		});

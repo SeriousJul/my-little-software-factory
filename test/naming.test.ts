@@ -10,6 +10,7 @@ import {
 	consultationAgentName,
 	consultationBranchName,
 	cycleAgentName,
+	identifyHandoffAgentName,
 	shortStableIdentity,
 	ticketAgentNames,
 	titleSlug,
@@ -282,5 +283,26 @@ describe("ticketAgentNames", () => {
 				}
 			}
 		}
+	});
+});
+
+describe("identifyHandoffAgentName", () => {
+	test("the same name is the ticket's own agent", () => {
+		expect(identifyHandoffAgentName("persist-source-facts", "persist-source-facts")).toBe("own");
+	});
+
+	test("any other name is a foreign agent in a reused pane id", () => {
+		expect(identifyHandoffAgentName("consultation-27e1542c", "persist-source-facts")).toBe(
+			"foreign",
+		);
+		expect(
+			identifyHandoffAgentName("add-sync-extension-cross-device", "persist-source-facts"),
+		).toBe("foreign");
+	});
+
+	test("either name unknown to the reader is unverifiable", () => {
+		expect(identifyHandoffAgentName(undefined, "persist-source-facts")).toBe("unverifiable");
+		expect(identifyHandoffAgentName("", "persist-source-facts")).toBe("unverifiable");
+		expect(identifyHandoffAgentName("persist-source-facts", "")).toBe("unverifiable");
 	});
 });

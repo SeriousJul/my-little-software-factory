@@ -128,3 +128,38 @@ export function consultationBranchName(id: string, typeName: string): string {
 export function consultationAgentName(id: string): string {
 	return `consultation-${shortStableIdentity(id)}`;
 }
+
+/**
+ * The identity of the live agent that herdr lists in a pane a ticket's
+ * handoff recorded, read from the names alone.
+ *
+ * - `own`: the live agent runs under the name the ticket's handoff expects,
+ *   so it is the ticket's own agent.
+ * - `foreign`: the live agent runs under any other name. Herdr hands the id
+ *   of a closed pane out again, so a stale pane id can name a pane a
+ *   different agent owns - a Consultation's agent among them. The live agent
+ *   is not the ticket's own.
+ * - `unverifiable`: either name is unknown to the reader. The live name is
+ *   absent on an older herdr, and the expected name is empty when the ticket
+ *   holds neither a recorded name nor a title to derive one from.
+ */
+export type HandoffAgentIdentity = "own" | "foreign" | "unverifiable";
+
+/**
+ * Whether the live agent in the pane a ticket's handoff recorded is the
+ * ticket's own agent, by the names.
+ *
+ * The handoff records the name it started the agent under, and the fallback
+ * is the stable name the handoff asked for first, so the expected name is
+ * always a name the ticket's own agent runs under. The live agent runs under
+ * the name herdr gave it at start, so the same name is its own agent, and
+ * any other name is a different agent herdr placed in a reused pane id.
+ */
+export function identifyHandoffAgentName(
+	liveName: string | undefined,
+	expectedName: string,
+): HandoffAgentIdentity {
+	if (liveName === undefined || liveName === "") return "unverifiable";
+	if (expectedName === "") return "unverifiable";
+	return liveName === expectedName ? "own" : "foreign";
+}

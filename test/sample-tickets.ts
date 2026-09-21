@@ -21,6 +21,7 @@ function handoff(
 		paneId: `pane-${taskType}`,
 		tabId: `tab-${taskType}`,
 		workspaceId: `workspace-${taskType}`,
+		herdrName: "sample-agent",
 	};
 }
 

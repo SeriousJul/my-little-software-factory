@@ -975,6 +975,7 @@ describe("the override panel", () => {
 				paneId: "pane-old-cycle",
 				tabId: "tab-old-cycle",
 				workspaceId: "ws-old-cycle",
+				herdrName: "old-cycle-agent",
 			},
 			handoffCount: 1,
 		};

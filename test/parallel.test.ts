@@ -152,6 +152,43 @@ describe("parallelSeatCount", () => {
 		}
 	});
 
+	test("releases the seat of a ticket whose pane holds a foreign agent", () => {
+		const state = freshState();
+		try {
+			handOut(state, "github:github.com:I_5", "pane-5");
+			// Herdr handed the closed pane's id out again: another agent works
+			// in the ticket's pane. The ticket's own agent is gone, so past the
+			// startup grace the ticket holds no seat for it, the way a missing
+			// agent holds none.
+			const foreign: HerdrAgent = { ...listed("pane-5"), name: "some-other-agent" };
+			// Inside the startup grace the ticket still boots, so it keeps the
+			// seat.
+			expect(parallelSeatCount({ state, agents: [foreign], now: NOW, startupGraceMs: GRACE })).toBe(
+				1,
+			);
+			expect(
+				parallelSeatCount({
+					state,
+					agents: [foreign],
+					now: NOW + GRACE + 1,
+					startupGraceMs: GRACE,
+				}),
+			).toBe(0);
+			// The ticket's own agent in the pane holds the seat.
+			const own: HerdrAgent = { ...listed("pane-5"), name: "persist-source-facts" };
+			expect(
+				parallelSeatCount({
+					state,
+					agents: [own],
+					now: NOW + GRACE + 1,
+					startupGraceMs: GRACE,
+				}),
+			).toBe(1);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("counts an in-progress handoff once, even for a counted ticket", () => {
 		const state = freshState();
 		try {

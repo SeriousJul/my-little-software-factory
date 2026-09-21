@@ -5,9 +5,11 @@
  * observation cycle (the open dispatch, the workflow route, the restart) and
  * the mode line in the app. A seat is held by:
  *
- * - an in-flight ticket (`handed-off` or `running`) whose agent the latest
- *   successful herdr poll listed, or whose started agent is still inside its
- *   Startup grace,
+ * - an in-flight ticket (`handed-off` or `running`) whose own agent the
+ *   latest successful herdr poll listed - a live agent in the ticket's pane
+ *   that runs under another name holds no seat for it, herdr having handed
+ *   the closed pane's id out again - or whose started agent is still inside
+ *   its Startup grace,
  * - every in-progress handoff (an unresolved claim), counted once even when
  *   its ticket already holds a seat above, and
  * - every Consultation in `opening` or `working` state; the other
@@ -20,6 +22,7 @@
  */
 import type { TicketState } from "./domain/ticket.ts";
 import type { HerdrAgent } from "./herdr.ts";
+import { identifyHandoffAgentName } from "./naming.ts";
 import type { ConsultationState, FactoryState } from "./state.ts";
 
 /** The Consultation states that hold a Parallel limit seat. */
@@ -41,9 +44,9 @@ export interface ParallelSeatCountInput {
 
 /** The combined Parallel limit seat count the gates and the mode line share. */
 export function parallelSeatCount(input: ParallelSeatCountInput): number {
-	const listedPanes = new Set<string>();
+	const listedAgents = new Map<string, HerdrAgent>();
 	if (input.agents !== null) {
-		for (const agent of input.agents) listedPanes.add(agent.paneId);
+		for (const agent of input.agents) listedAgents.set(agent.paneId, agent);
 	}
 	const inFlight = input.state.ticketsByState(TICKET_SEAT_STATES);
 	// One seat per ticket at most: the ticket's own in-flight seat counts
@@ -51,7 +54,18 @@ export function parallelSeatCount(input: ParallelSeatCountInput): number {
 	const counted = new Set<string>();
 	let count = 0;
 	for (const ticket of inFlight) {
-		const listed = ticket.paneId !== null && listedPanes.has(ticket.paneId);
+		const listedAgent = ticket.paneId === null ? undefined : listedAgents.get(ticket.paneId);
+		// The ticket's own agent is the one that runs under the name the
+		// ticket's handoff expects. A different agent in the same pane id -
+		// herdr handed the closed pane's id out again - holds no seat for the
+		// ticket, the way a missing agent holds none. A name the reader
+		// cannot read keeps the pane the count has always trusted.
+		const listed =
+			listedAgent !== undefined &&
+			identifyHandoffAgentName(
+				listedAgent.name,
+				input.state.agentNameForTicket(ticket.ticketIdentity),
+			) !== "foreign";
 		const booting = !listed && input.now - Date.parse(ticket.startedAt) < input.startupGraceMs;
 		if (listed || booting) {
 			count += 1;

@@ -679,6 +679,8 @@ describe("factory SQLite state", () => {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
+			// The same agent the handoff started, still under the name it runs.
+			agentName: "agent-one",
 		});
 		expect(reclaimed).not.toBeNull();
 		expect(cycleOf()).toBe(2);
@@ -1673,6 +1675,7 @@ describe("factory SQLite state", () => {
 			paneId: "pane-1",
 			tabId: "tab-1",
 			workspaceId: "ws-1",
+			agentName: "persist-source-facts",
 		});
 		expect(claimed).toEqual({ attemptId: expect.any(String) });
 		expect(state.ticketsByState(["running"])).toEqual([
@@ -1715,6 +1718,7 @@ describe("factory SQLite state", () => {
 				paneId: "pane-1",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
+				agentName: "persist-source-facts",
 			}),
 		).toBe(null);
 		const identity = "github:github.com:I_5";
@@ -1730,6 +1734,7 @@ describe("factory SQLite state", () => {
 				paneId: "pane-6",
 				tabId: "tab-1",
 				workspaceId: "ws-1",
+				agentName: "persist-source-facts",
 			}),
 		).toBe(null);
 		// An unresolved attempt blocks the reclaim, exactly as it blocks a handoff.
@@ -1737,7 +1742,12 @@ describe("factory SQLite state", () => {
 		const pending = state.claimHandoff(identity, choice, "open");
 		if (!pending.ok) throw new Error(pending.reason);
 		expect(
-			state.reclaimHandoff(identity, { paneId: "pane-1", tabId: "tab-1", workspaceId: "ws-1" }),
+			state.reclaimHandoff(identity, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				agentName: "persist-source-facts",
+			}),
 		).toBe(null);
 		expect(
 			state.visibleTickets([], "implement").find((ticket) => ticket.identity === identity),
@@ -1911,6 +1921,39 @@ describe("factory SQLite state", () => {
 		// A legacy row, and every clean handoff of a free name: the naming
 		// rule gives the same answer herdr took.
 		expect(state.agentNameForTicket(identity)).toBe("persist-source-facts");
+		state.close();
+	});
+
+	test("a reclaim refuses an agent that is not the ticket's own", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const identity = "github:github.com:I_5";
+		closedCycle(state, identity);
+		// Herdr handed the closed pane's id out again: a different agent works
+		// in it now. The reclaim refuses it, and the ticket stays open.
+		expect(
+			state.reclaimHandoff(identity, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+				agentName: "consultation-01234567",
+			}),
+		).toBe(null);
+		expect(state.ticketsByState(["open"])).toEqual([
+			expect.objectContaining({ ticketIdentity: identity }),
+		]);
+		// The ticket's own agent in the pane is still reclaimed, and the new
+		// handoff records its name.
+		const claimed = state.reclaimHandoff(identity, {
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			agentName: "persist-source-facts",
+		});
+		expect(claimed).toEqual({ attemptId: expect.any(String) });
+		const ticket = state.visibleTickets([], "implement").find((t) => t.identity === identity);
+		expect(ticket?.handoff?.herdrName).toBe("persist-source-facts");
 		state.close();
 	});
 

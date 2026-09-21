@@ -129,6 +129,7 @@ function agent(
 	status = "working",
 	sessionId = "",
 	stableSessionId?: string,
+	name?: string,
 ): HerdrAgent {
 	return {
 		paneId,
@@ -138,6 +139,7 @@ function agent(
 		status,
 		sessionId,
 		...(stableSessionId === undefined ? {} : { stableSessionId }),
+		...(name === undefined ? {} : { name }),
 	};
 }
 
@@ -1237,6 +1239,49 @@ describe("missing agents", () => {
 		await coordinator.tick();
 		expect(intents).toHaveLength(0);
 		expect(state.ticketsByState(["handed-off"])).toHaveLength(1);
+		state.close();
+	});
+
+	test("auto mode restarts a ticket whose pane holds a foreign agent", async () => {
+		const { state, intents, coordinator, advance, setAgents } = rig({
+			autoOn: true,
+			agents: [],
+		});
+		handOut(state, "github:github.com:I_5");
+		// Herdr handed the closed pane's id out again: a different agent works
+		// in the ticket's pane. The ticket's own agent is gone, so the missing
+		// path runs, not the settle.
+		setAgents([agent("pane-implement", "working", "session-1", undefined, "some-other-agent")]);
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		expect(intents).toEqual([
+			expect.objectContaining({ origin: "restart", ticketIdentity: "github:github.com:I_5" }),
+		]);
+		state.close();
+	});
+
+	test("manual mode leaves a ticket whose pane holds a foreign agent for the operator", async () => {
+		const { state, intents, coordinator, setAgents } = rig({ autoOn: false, agents: [] });
+		handOut(state, "github:github.com:I_5");
+		setAgents([agent("pane-implement", "working", "session-1", undefined, "some-other-agent")]);
+		await coordinator.tick();
+		// No automatic restart, and no state correction from the foreign agent.
+		expect(intents).toHaveLength(0);
+		expect(state.ticketsByState(["running"])).toEqual([]);
+		expect(state.ticketsByState(["handed-off"])).toHaveLength(1);
+		state.close();
+	});
+
+	test("an awaiting ticket does not resume on a foreign agent in its pane", async () => {
+		const { state, coordinator, setAgents } = rig({ agents: [] });
+		settleFor(state, "github:github.com:I_5", "implement");
+		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
+		setAgents([agent("pane-implement", "working", "session-1", undefined, "some-other-agent")]);
+		await coordinator.tick();
+		// The pending turn stays pending: the working agent is not the
+		// ticket's own.
+		expect(state.ticketsByState(["running"])).toEqual([]);
+		expect(state.ticketsByState(["awaiting"])).toHaveLength(1);
 		state.close();
 	});
 
@@ -3330,6 +3375,9 @@ describe("Consultation observation identity", () => {
 describe("an agent that outlives its work cycle", () => {
 	const identity = "github:github.com:I_5";
 	const PANE = "pane-research";
+	// The name the ticket's handoff expects: the stable name of its title,
+	// so a leftover agent under it is the ticket's own.
+	const NAME = "persist-source-facts";
 
 	/** Hand a ticket out, settle its turn, and close its cycle. */
 	function closedCycle(rig_: Pick<Rig, "state" | "advance" | "setAgents">): string {
@@ -3365,7 +3413,7 @@ describe("an agent that outlives its work cycle", () => {
 		closedCycle(r);
 		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
 		// The operator re-prompts the agent in its herdr pane.
-		setAgents([agent(PANE, "working")]);
+		setAgents([agent(PANE, "working", "", undefined, NAME)]);
 		await coordinator.tick();
 		expect(state.ticketsByState(["running"])).toEqual([
 			expect.objectContaining({
@@ -3414,9 +3462,9 @@ describe("an agent that outlives its work cycle", () => {
 		});
 		const { state, coordinator, setAgents } = r;
 		closedCycle(r);
-		setAgents([agent(PANE, "working", "session-1")]);
+		setAgents([agent(PANE, "working", "session-1", undefined, NAME)]);
 		await coordinator.tick();
-		setAgents([agent(PANE, "idle", "session-1")]);
+		setAgents([agent(PANE, "idle", "session-1", undefined, NAME)]);
 		await coordinator.tick();
 		expect(state.ticketsByState(["awaiting"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity, workCycle: 2, taskType: "research" }),
@@ -3444,7 +3492,7 @@ describe("an agent that outlives its work cycle", () => {
 		const r = rig({ agents: [] });
 		const { state, coordinator, setAgents } = r;
 		closedCycle(r);
-		setAgents([agent(PANE, "blocked")]);
+		setAgents([agent(PANE, "blocked", "", undefined, NAME)]);
 		await coordinator.tick();
 		expect(state.ticketsByState(["running"])).toEqual([
 			expect.objectContaining({ ticketIdentity: identity }),
@@ -3483,7 +3531,7 @@ describe("an agent that outlives its work cycle", () => {
 		const { state, intents, coordinator, setAgents } = r;
 		closedCycle(r);
 		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
-		setAgents([agent(PANE, "working")]);
+		setAgents([agent(PANE, "working", "", undefined, NAME)]);
 		await coordinator.tick();
 		// The reclaimed agent is live, so the one parallel slot is taken and
 		// no new handoff starts for the other ticket.
@@ -3491,6 +3539,33 @@ describe("an agent that outlives its work cycle", () => {
 			expect.objectContaining({ ticketIdentity: identity }),
 		]);
 		expect(intents).toEqual([]);
+		state.close();
+	});
+
+	test("an agent under another name in a closed cycle's pane is never reclaimed", async () => {
+		const r = rig({ agents: [] });
+		const { state, coordinator, setAgents } = r;
+		closedCycle(r);
+		// Herdr handed the closed pane's id out again: a Consultation's agent
+		// works in it now. The ticket's stale handle names that pane, but the
+		// agent is not the ticket's own, so the poll adopts nothing.
+		setAgents([agent(PANE, "working", "", undefined, "consultation-01234567")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["handed-off", "running", "awaiting"])).toEqual([]);
+		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
+		state.close();
+	});
+
+	test("an agent herdr does not name in a closed cycle's pane is never reclaimed", async () => {
+		const r = rig({ agents: [] });
+		const { state, coordinator, setAgents } = r;
+		closedCycle(r);
+		// The reader cannot verify the agent's identity, so it adopts nothing:
+		// a wrong adoption moves the ticket to running on a foreign pane.
+		setAgents([agent(PANE, "working")]);
+		await coordinator.tick();
+		expect(state.ticketsByState(["handed-off", "running", "awaiting"])).toEqual([]);
+		expect(ticketOf(state)).toEqual(expect.objectContaining({ state: "open", handoffCount: 1 }));
 		state.close();
 	});
 

@@ -73,6 +73,7 @@ import { type Completion, isHeldCompletion } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import type { HerdrAgent } from "./herdr.ts";
+import { identifyHandoffAgentName } from "./naming.ts";
 import { parallelSeatCount } from "./parallel.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
@@ -187,6 +188,7 @@ export class HerdrAgentReader implements AgentReader {
 					: typeof record.agent_session_id === "string"
 						? { stableSessionId: record.agent_session_id }
 						: {}),
+				...(typeof record.name === "string" && record.name !== "" ? { name: record.name } : {}),
 				status: typeof record.agent_status === "string" ? record.agent_status : "unknown",
 				sessionId:
 					session !== undefined && session.kind === "path" && typeof session.value === "string"
@@ -596,7 +598,16 @@ export class ObservationCoordinator {
 		for (const ticket of inFlight) {
 			if (ticket.paneId === null) continue;
 			const agent = byPane.get(ticket.paneId);
-			if (agent === undefined) {
+			// The pane id of a closed pane is handed out again: a live agent in
+			// the ticket's pane that is not the ticket's own leaves the ticket's
+			// agent missing, so the missing path runs instead of the settle.
+			const foreign =
+				agent !== undefined &&
+				identifyHandoffAgentName(
+					agent.name,
+					this.state.agentNameForTicket(ticket.ticketIdentity),
+				) === "foreign";
+			if (agent === undefined || foreign) {
 				if (autoOn) {
 					changed = (await this.handleMissing(ticket, slots)) || changed;
 					if (this.stopped) return;
@@ -629,6 +640,16 @@ export class ObservationCoordinator {
 			if (ticket.paneId === null) continue;
 			const agent = byPane.get(ticket.paneId);
 			if (agent === undefined || normalizeAgentStatus(agent.status) !== "working") continue;
+			// The same identity rule as the in-flight loop: a working agent in
+			// the ticket's reused pane id that is not the ticket's own does not
+			// resume the ticket's pending turn.
+			if (
+				identifyHandoffAgentName(
+					agent.name,
+					this.state.agentNameForTicket(ticket.ticketIdentity),
+				) === "foreign"
+			)
+				continue;
 			if (this.state.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
 				changed = true;
 				slots.count += 1;
@@ -742,6 +763,15 @@ export class ObservationCoordinator {
 	 * Only a working or blocked agent is reclaimed: an idle, done, or unknown
 	 * report says nothing about live work. A pane another ticket already
 	 * holds is left alone, and a closed cycle keeps its own decided trace.
+	 *
+	 * The agent must also be the ticket's own, by the name: herdr hands the
+	 * id of a closed pane out again, so the id a closed cycle's handoff
+	 * recorded can name a pane a different agent owns - a Consultation's
+	 * agent among them. The ticket's own agent runs under the name the
+	 * ticket's handoff expects; any other name, or no name the reader can
+	 * read, reclaims nothing. The recorded Reclaimed handoff stores the
+	 * agent's name, so the next poll verifies the same identity.
+	 *
 	 * Returns whether the factory state changed.
 	 */
 	private reclaimLiveAgents(byPane: ReadonlyMap<string, HerdrAgent>): boolean {
@@ -757,10 +787,22 @@ export class ObservationCoordinator {
 			if (agent === undefined) continue;
 			const status = normalizeAgentStatus(agent.status);
 			if (status !== "working" && status !== "blocked") continue;
+			// The pane id of a closed pane is handed out again: a Consultation
+			// or another ticket's agent can hold the id this ticket's last
+			// handoff recorded. Only the agent that runs under the ticket's
+			// own name is the ticket's own; anything else is not reclaimed.
+			const name = agent.name;
+			if (
+				name === undefined ||
+				identifyHandoffAgentName(name, this.state.agentNameForTicket(ticket.ticketIdentity)) !==
+					"own"
+			)
+				continue;
 			const claimed = this.state.reclaimHandoff(ticket.ticketIdentity, {
 				paneId: agent.paneId,
 				tabId: agent.tabId,
 				workspaceId: agent.workspaceId,
+				agentName: name,
 			});
 			if (claimed === null) continue;
 			held.add(agent.paneId);

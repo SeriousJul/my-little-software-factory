@@ -28,6 +28,7 @@ const recordedHandoff: Handoff = {
 	paneId: "pane-old-cycle",
 	tabId: "tab-old-cycle",
 	workspaceId: "ws-old-cycle",
+	herdrName: "persist-source-facts",
 };
 
 /** The choice an open ticket's profile resolves to: pi, and nothing named. */

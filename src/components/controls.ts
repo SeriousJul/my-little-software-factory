@@ -158,6 +158,14 @@ export interface ControlContext {
 	 * poll. Goto focuses that pane, so an in-flight Ticket needs it (ADR 0033).
 	 */
 	ticketPaneAlive?: boolean;
+	/**
+	 * Whether the selected Ticket's recorded pane holds a live agent that is
+	 * not the Ticket's own. Herdr hands the id of a closed pane out again, so
+	 * the recorded pane of an awaiting Ticket can name a pane a different
+	 * agent owns, and Goto must not focus it there (ADR 0033's recorded-pane
+	 * standing gives way to the agent's identity).
+	 */
+	ticketPaneForeign?: boolean;
 	handoffActive: boolean;
 	messageTruncated: boolean;
 	/** Whether the config defines any [consultation-types.<name>] block. */
@@ -581,7 +589,13 @@ const ticketGoto = (context: ControlContext): ControlAvailability => {
 	const paneId = ticket.handoff?.paneId;
 	if (paneId === null || paneId === undefined)
 		return unavailable("the Agent's pane is not alive in the last poll");
-	if (ticket.state === "awaiting") return available();
+	// The recorded pane stands for an awaiting Ticket, except when herdr has
+	// handed the closed pane's id out again: the live agent in the pane that
+	// is not the Ticket's own is not the agent the operator went to look at.
+	if (ticket.state === "awaiting")
+		return context.ticketPaneForeign === true
+			? unavailable("the Agent's pane is not alive in the last poll")
+			: available();
 	if (
 		(ticket.state === "handed-off" || ticket.state === "running") &&
 		context.ticketPaneAlive === true
