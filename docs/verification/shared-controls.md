@@ -729,6 +729,8 @@ surface stand down to the size message; the Live view renders on the same
 surface, its stream sub-mode answering to the `live-view` catalogue mode
 and its settled sub-mode to the `decision-modal` mode, with the border
 re-titling `Live:` to `Decision:` on settle in place and no second pop-in.
+The box carries no hint row of its own: the bar is the plane's only place
+for keys, and it follows the mode the box is in.
 
 What is measured automatically, on this branch:
 
@@ -742,16 +744,21 @@ What is measured automatically, on this branch:
   yields its padding before the log yields rows, keeps its border, and the
   scrollbar stays pinned to the body's last column inside the pane on full,
   short, and blank rows (`test/decision-modal.test.ts`).
-- The Live view's shared chrome: the bar and Message line under the box, the
-  hints following the mode, the re-title from `Live:` to `Decision:` on
-  settle with the pane's title moving from `Agent view` to `Turn log` in
-  the same frame, the stream's bottom pin and scroll keys, the stale note as
-  the body's last line, and the auto-close turn that keeps streaming under
-  the `Live:` border with no region rows (`test/live-view.test.ts`,
-  `test/auto-mode.test.ts`).
+- The Live view's shared chrome: the box's geometry above its Message line
+  and bar, the bar's rows, the box without a hint row of its own, the Goto
+  confirm that focuses the pane and closes the view and leaves the
+  confirmation on the Message line, the hints following the mode, the
+  re-title from `Live:` to `Decision:` on settle with the pane's title
+  moving from `Agent view` to `Turn log` in the same frame, the stream's
+  bottom pin and scroll keys, the stale note as the body's last line, and
+  the auto-close turn that keeps streaming under the `Live:` border with no
+  region rows (`test/live-view.test.ts`, `test/auto-mode.test.ts`).
 - The catalogue: the `live-view` mode's keys beside its hints, the
-  `live-goto` entry in the catalogue, and the decision mode's `Scroll body`
-  hint (`test/key-guide.test.ts`).
+  `live-goto` entry behind the Ticket Goto's pane gate, the
+  `scroll-body` rename of `scroll-turn-log` (labeled `Scroll body`) serving
+  both modal modes, and the Key guide opened from the Live view naming the
+  mode and its controls, with the pane-not-alive reason on the Goto row
+  (`test/key-guide.test.ts`, `test/live-view.test.ts`).
 - The guide's pictures: the decision modal, the Live view's stream, and the
   settled Live view recaptured at the shared fixture, and verified by eye
   for the pane's border, title, and the region's rows (`test/screenshot-drift.test.ts`).

@@ -31,6 +31,7 @@ import {
 	awaitFrame,
 	frameText,
 	HEIGHT,
+	openGuide,
 	openPanel,
 	press,
 	pressArrow,
@@ -596,7 +597,52 @@ describe("the Live view on the ticket list", () => {
 			},
 		);
 	});
+
+	test("the Key guide names the live-view mode and its controls", async () => {
+		const runner = new FakeRunner();
+		runner.set("herdr", [...READ("pane-implement")], { stdout: "the agent works\n" });
+
+		await withApp(
+			async (setup) => {
+				await press(setup, "j", "the selection to move", (f) =>
+					f.includes("Fix pan drift in split panes"),
+				);
+				await pressEnterQuiet(setup, "the Live view", (f) =>
+					f.includes("Live: Fix pan drift in split panes"),
+				);
+				// The guide names the mode of its own: the streaming sub-mode
+				// carries the body's scroll, the Goto confirm, and the leave,
+				// beside the plane's global keys.
+				await openGuide(setup, "?", "Key guide - Live view");
+				const rows = rowsOf(await settle(setup));
+				const indexOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
+				const between = (top: number, bottom: number) => rows.slice(top + 1, bottom).map(contentOf);
+				expect(between(indexOf("Current interaction mode"), indexOf("Global controls"))).toEqual([
+					"F1/? Help",
+					"F2 Message - the current Message fits on the Message line",
+					"j/k Scroll body",
+					"Esc Cancel",
+					// The fake runner lists no agent, so the Goto's pane is not
+					// alive in the last poll and the row states its reason.
+					"Enter Goto - the Agent's pane is not alive in the last poll",
+				]);
+			},
+			WIDTH,
+			HEIGHT,
+			{ config: BASE_CONFIG, runner },
+		);
+	});
 });
+
+/** Collapse the guide's padded key and label columns into single spaces. */
+const norm = (row: string): string => row.replace(/\s+/g, " ").trim();
+
+/** A row's content with the modal's box borders stripped, or "" for a blank row. */
+const contentOf = (row: string): string =>
+	row
+		.replace(/[│┌┐└┘─]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
 
 /** Escape through the real key path, then wait for its effect. */
 async function pressEscape(
