@@ -14,6 +14,7 @@ workflows = []
 [repos]
 "github.com/SeriousJul/my-little-software-factory" = "/home/seriousjul/src/my-little-software-factory"
 "github.com/seriousjul/pi-extensions" = "/home/seriousjul/src/pi-extensions"
+"github.com/SeriousJul/seriousjul.github.io" = "/home/seriousjul/src/seriousjul.github.io"
 
 [scroll]
 speed = 1
@@ -181,14 +182,14 @@ auto-close = false
 name = "factory-issues"
 kind = "github-issues"
 refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
 host = "github.com"
 
 [[sources]]
 name = "factory-pull-requests"
 kind = "github-pull-requests"
 refresh-interval-seconds = 60
-repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions"]
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
 host = "github.com"
 
 [[task-rules]]
