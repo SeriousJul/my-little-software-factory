@@ -50,3 +50,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0039: The modal's body is a pane and its decisions a bounded region](./0039-the-modal-body-is-a-pane-and-its-decisions-a-bounded-region.md)
 - [ADR 0040: Every near-fullscreen surface is shared chrome](./0040-every-near-fullscreen-surface-is-shared-chrome.md)
 - [ADR 0041: The boot settles the handoff claims the previous run left unsettled](./0041-the-boot-settles-the-handoff-claims-the-previous-run-left-unssettled.md)
+- [ADR 0042: A ticket rests behind its open fixing pull request](./0042-a-ticket-rests-behind-its-open-fixing-pull-request.md)

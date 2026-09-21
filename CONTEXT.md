@@ -144,7 +144,7 @@ _Avoid_: disabled source, dropped source
 **Ticket priority**:
 The rank that orders tickets: the ticket list within an attention group, the open auto-handoff dispatch, and the waiting workflow advances that compete for a freed parallel slot.
 It is a fact of the ticket identity: it survives every task type change and every work cycle close.
-The effective rank is, in order, the Priority override, the rank of the ticket's own label in the Priority label list, or, for a pull request, the highest effective priority of the issues it closes.
+The effective rank is, in order, the Priority override, the rank of the ticket's own label in the Priority label list, or, for a pull request, the highest effective priority of the tickets it fixes.
 A ticket with no rank sorts after every ranked ticket.
 _Avoid_: urgency, importance, ticket rank
 
@@ -169,6 +169,11 @@ The labels and fetch time the control plane reads directly for an issue no ticke
 It is a fact, not a ticket: it takes no row in the Main view and is never handed off.
 When the issue later matches a ticket source, the real snapshot beats the fact.
 _Avoid_: ghost ticket, stub ticket, shadow issue
+
+**Fixing pull request**:
+The open pull request that does a ticket's work: the pull request that closes the ticket, or the pull request whose head branch is the ticket's factory branch, which is the only kind for a security item.
+The plane derives it from source facts on every refresh and never stores it. An `open` ticket that has one leaves the ticket list while it stays open, and the pull request inherits the ticket's priority (ADR 0042).
+_Avoid_: linked issue, dependent PR, parent ticket, child PR
 
 **Work cycle**:
 One passage of a ticket from `open` through the factory to cycle close.
@@ -420,11 +425,11 @@ _Avoid_: status, phase, stage, ticket state
 
 **Transition**:
 The label facts a completed turn of a task type writes. It fires on a `completed` settle, before the Completion decision, in manual mode and in auto mode alike, and it is idempotent.
-It adds and removes labels on the ticket and on its linked pull request, and a branch chooses between alternative fact sets on a Judgment. After it runs, the label set matches its spec whatever writers ran before, and the tickets' new positions derive from the written labels.
+It adds and removes labels on the ticket and on its fixing pull request, and a branch chooses between alternative fact sets on a Judgment. After it runs, the label set matches its spec whatever writers ran before, and the tickets' new positions derive from the written labels.
 _Avoid_: handoff, label flip, workflow edge
 
 **Judgment**:
-The condition a Transition branch tests to choose its fact set: the review score against the configured threshold, and whether the linked pull request is still open.
+The condition a Transition branch tests to choose its fact set: the review score against the configured threshold, and whether the fixing pull request is still open.
 It is a fact read from the turn or the source at settle time, never a stored value.
 _Avoid_: verdict, score check, gate
 
