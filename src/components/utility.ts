@@ -14,6 +14,7 @@ import {
 import { type MessageFact, messageColor } from "./messages.ts";
 import { ModalSurface, modalFrame } from "./modal-chrome.ts";
 import { controlInk } from "./shared/presentation.ts";
+import { rangeTextOf } from "./shared/region.ts";
 import { padToWidth, truncateToWidth, widthOf, wrapToWidth } from "./text.ts";
 import { prefixForSeverity } from "./theme.ts";
 
@@ -115,7 +116,9 @@ export function KeyGuide({ context, onClose, onMessage, message, onEmergencyExit
 		emergencyExit: onEmergencyExit,
 	});
 
-	const range = rangeIndicator(scroll, visible.length, rows.length);
+	// The compact readout the bar states behind the Scroll hint: the shared
+	// range text, the one the Decision region's bar carries too.
+	const range = rangeTextOf(scroll, visible.length, rows.length);
 	const ink = controlInk();
 	return createElement(ModalSurface, {
 		frame,
@@ -183,7 +186,7 @@ export function MessageView({
 		emergencyExit: onEmergencyExit,
 	});
 
-	const range = rangeIndicator(scroll, visible.length, wrapped.length);
+	const range = rangeTextOf(scroll, visible.length, wrapped.length);
 	return createElement(ModalSurface, {
 		frame,
 		width,
@@ -207,11 +210,6 @@ export function MessageView({
 			rangeIndicator: range,
 		},
 	});
-}
-
-/** The compact visible-range indicator: first-last/total of the rows. */
-function rangeIndicator(scroll: number, visibleCount: number, total: number): string {
-	return `${total === 0 ? 0 : scroll + 1}-${Math.min(total, scroll + visibleCount)}/${total}`;
 }
 
 type GuideLine =
