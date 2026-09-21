@@ -14,6 +14,19 @@ import { useRef, useState } from "react";
 
 import type { ActionRow } from "../modal-chrome.ts";
 
+/**
+ * The compact range readout: the first row through the last row, of the
+ * total - `1-10/24`.
+ *
+ * This is the one home of the readout, behind both the Decision region's
+ * range text and the utility overlays' own scroll windows, so the shape the
+ * Action bar states cannot drift from the window that stands behind it
+ * (issue #122).
+ */
+export function rangeTextOf(top: number, visibleCount: number, total: number): string {
+	return `${total === 0 ? 0 : top + 1}-${Math.min(total, top + visibleCount)}/${total}`;
+}
+
 /** The Decision region's state at one render. */
 export interface DecisionRegion {
 	/** The row to paint as selected. */
@@ -78,8 +91,6 @@ export function useDecisionRegion(rows: readonly ActionRow[], visibleRows: numbe
 		},
 		window,
 		rangeText:
-			limit > 0 && count > limit
-				? `${windowTop + 1}-${windowTop + window.length}/${count}`
-				: undefined,
+			limit > 0 && count > limit ? rangeTextOf(windowTop, window.length, count) : undefined,
 	};
 }

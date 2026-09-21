@@ -55,6 +55,7 @@ and `bun run test`.
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | Agent interaction mode exposes its configured exit control, preserves emergency exit, and forwards unclaimed input | `test/consultation-frame.test.ts` | Passed |
 | The Consultation confirmation panel uses shared action selection and dispatch | `test/action-panel.test.ts`, `test/consultation-frame.test.ts` | Passed |
+| The library's region module owns the Decision region's selection, wrap, auto-scroll, visible window, and range text; the compact range readout has one shared home behind the region's bar and the utility overlays' own windows; the region's selection, the body's scroll gate, and the one-row refusal ride the catalogue | `test/shared-region.test.ts`, `test/shared-control-architecture.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/action-bar.test.ts`, `test/decision-modal.test.ts`, `test/live-view.test.ts` | Passed |
 | The standalone theme's text and indicator pairs clear the measured contrast (the only contrast-checked theme; an inherited herdr theme is not contrast-checked, ADR 0024) | `test/shared-presentation.test.ts` | Passed |
 | The no-color presentation strips color and keeps labels, the focus marker, and state words | `test/shared-presentation.test.ts`, `test/shared-gallery.test.ts` | Passed |
 | The spinner paints its named first frame beside its written word in the state-word tone, drives its own frames in the test renderer through the shared `useSpinnerFrame`, stands still on that hook's inactive flag, and the no-color presentation keeps its word and drops only its color | `test/shared-controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
@@ -781,6 +782,56 @@ What remains unverified:
 The record's existing open items stand: the light-herdr-theme visual walk is
 unrun, and the inherited herdr theme pairs are not contrast-checked.
 Nothing in this section claims a pass for what was not measured.
+
+## The library's region module and the shared range readout (issue #122)
+
+The earlier link of the chain (issue #125) landed the region module and the
+surfaces that consume it, and this link lands what issue #122 names that the
+chain left behind: the compact range readout, first-last of total, had two
+private computations - the region's own in `region.ts`, and one in the
+utility overlays' `utility.ts` behind the Key guide's and the Message
+view's scroll windows. It now has one home in the library's region module
+(`rangeTextOf` in `src/components/shared/region.ts`), behind both the
+region's range text and the overlays' own windows alike, and the private
+copy in `utility.ts` is retired. The standard states the shared home in the
+Body pane and Decision region section, and the architecture check refuses a
+screen that computes the readout's shape outside the module
+(`test/shared-control-architecture.test.ts`).
+
+The region module's own behavior now stands measured on its own terms,
+beside the flow tests that drive it through the surfaces:
+`test/shared-region.test.ts` renders the module's state through the test
+renderer and measures the selection's one-row-per-step move, its wrap at
+both edges, the auto-scroll that slides the window only when a step would
+leave it and holds it otherwise, the visible window, the range text behind
+the window - absent where every row fits - and the confirm that runs the
+selected row and returns the region to its first row with its window. The
+readout's own cases - the window past the total, and the empty body's
+`0-0/0` - are measured on the function itself.
+
+The other acceptance criteria stand where the earlier links left them, and
+this link re-measures them rather than re-implementing them: every surface
+that shows decision rows (the decision modal, the Live view's settled
+sub-mode, the Missing modal, and the confirmation panel) takes the region's
+state from the module; the body's scroll control carries the shared name
+(`scroll-body`, labeled `Scroll body`) and is gated on the facts, `bodyEmpty`
+and `bodyScrollable`, with a stated reason, so the bar never hints a scroll
+that cannot run; and the selection in a region that holds one row is refused
+on the catalogue's `select-action` with its reason on the Message line
+(`test/shared-control-architecture.test.ts`, `test/controls.test.ts`,
+`test/decision-modal.test.ts`, `test/live-view.test.ts`,
+`test/missing-modal.test.ts`, `test/action-panel.test.ts`).
+
+`bun run lint`, `bun run typecheck`, and `bun run test` pass in full on this
+branch (see the suite's numbers in the report of this change). The Key
+guide's and the Message view's range readout is unchanged in shape: the
+function it moved to computes the same string, and the guide's walk tests
+(`test/key-guide.test.ts`) pass unmodified against it.
+
+The terminal walks were not re-run for this change: the readout's paint is
+the string the bar already stood, and the walks recorded earlier in this
+file are not re-verified for it, not a pass. The screen-reader target
+remains unverified.
 
 ## The queued badge of the Queue wait
 

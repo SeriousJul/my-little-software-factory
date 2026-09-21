@@ -171,26 +171,40 @@ describe("the shared control library is the only control implementation", () => 
 		// ADR 0039 and ADR 0040 put the Decision region's selection, its wrap,
 		// its auto-scroll, its visible window, and its range text in the
 		// shared library's region module, and its rows are painted from that
-		// module too. A surface that paints the region's rows while keeping
-		// its own selection state is the drift the local Live view carried,
-		// and this names it by file, the way the other checks do. The shared
-		// chrome (modal-chrome.ts) consumes the module and is the one stated
-		// exemption. Until the module lands (issue #122) no surface paints
-		// the region's rows through it, so the rule holds and the check
-		// passes: there is no offender to list.
+		// module too. A surface that imports the module without taking one of
+		// its behaviors is the drift the local Live view carried, and this
+		// names it by file, the way the other checks do. The shared chrome
+		// (modal-chrome.ts) consumes the module and is the one stated
+		// exemption. A consumer may take the region's hook, its window, or its
+		// range readout alone, the way the utility overlays take only the
+		// readout (issue #122).
 		const regionModule = "src/components/shared/region.ts";
 		if (!existsSync(regionModule)) return;
 		const moduleSource = readFileSync(regionModule, "utf8");
-		const stateNames = [...moduleSource.matchAll(/export\s+function\s+(use[A-Za-z0-9_$]+)/gu)].map(
-			(match) => match[1],
-		);
+		const behaviorNames = [
+			...moduleSource.matchAll(/export\s+(?:function|const)\s+([A-Za-z0-9_$]+)/gu),
+		].map((match) => match[1]);
 		const offenders: string[] = [];
 		for (const file of screens) {
 			if (file === "src/components/modal-chrome.ts") continue;
 			const source = readFileSync(file, "utf8");
 			if (!/from "\.\/shared\/region\.ts"/u.test(source)) continue;
-			if (stateNames.some((name) => source.includes(name))) continue;
+			if (behaviorNames.some((name) => source.includes(name))) continue;
 			offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("no screen computes the range readout outside the shared region module", () => {
+		// The compact readout - first-last of total, `1-10/24` - has one home:
+		// the shared region module, behind the Decision region's range text and
+		// the utility overlays' own windows alike. A screen that computes the
+		// shape itself states a range the library does not own, and the Action
+		// bar it rides can drift from the window behind it (issue #122).
+		const offenders: string[] = [];
+		for (const file of screens) {
+			const source = readFileSync(file, "utf8");
+			if (/return\s+`\$\{[^`]*\}-\$\{[^`]*\}\/\$\{[^`]*\}`/u.test(source)) offenders.push(file);
 		}
 		expect(offenders).toEqual([]);
 	});

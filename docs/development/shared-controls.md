@@ -215,7 +215,11 @@ The region's selection, its wrap, its auto-scroll, its visible window, and
 its range text are a control behavior, so they live in the shared library's
 region module (`region.ts`, beside the field, the selector row, and the
 form), and the catalogue's `scroll-turn-log` is `scroll-body`: the body it
-scrolls may be the Agent view. The Live view is a shared-chrome surface
+scrolls may be the Agent view. The compact range readout - the first-last of
+total the bar states behind the scroll and selection hints - has one shared
+home in that module, behind the region's range text and the utility
+overlays' own scroll windows alike, so the readout cannot drift from the
+window it stands for (issue #122). The Live view is a shared-chrome surface
 ([ADR 0040](../adr/0040-every-near-fullscreen-surface-is-shared-chrome.md)):
 it renders on the modal surface with its Message line and its Action bar, its
 stream sub-mode answers to its own `live-view` catalogue mode, and its
