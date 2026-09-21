@@ -264,7 +264,7 @@ describe("source-driven frames", () => {
 		}
 	});
 
-	test("a removed source keeps its handed-off ticket, drops its open ticket, and flags itself removed", async () => {
+	test("a removed source keeps its handed-off ticket, drops its open ticket, and pins no warning", async () => {
 		const state = freshState();
 		const definition = { name: "issues", kind: "github-issues" };
 		state.initializeSources([definition]);
@@ -286,15 +286,17 @@ describe("source-driven frames", () => {
 			async (setup) => {
 				const frame = await awaitFrame(
 					setup,
-					(f) => f.includes("issues: removed - source removed from config"),
-					"the removed health line",
+					(f) => f.includes("Add a webhook retry policy"),
+					"the handed-off ticket",
 				);
 				// The handed-off ticket stays visible for observation...
 				expect(frame).toContain("Add a webhook retry policy");
 				// ...the open ticket from the removed source is gone...
 				expect(frame).not.toContain("Another open item");
-				// ...and the detail pane carries the removed membership.
+				// ...the detail pane carries the removed membership...
 				expect(detailPaneText(frame)).toContain("Source issues: removed");
+				// ...and the operator's config decision pins no warning line.
+				expect(frame).not.toContain("source removed from config");
 			},
 			WIDTH,
 			HEIGHT,

@@ -23,6 +23,12 @@ maximum-speed = 6
 [priority]
 labels = ["critical", "high", "low"]
 
+[logging]
+level = "debug"
+file = ".factory-development.log"
+max-size-mib = 10
+keep = 5
+
 [agents.pi]
 kind = "pi"
 model = "--model {value}"
@@ -247,5 +253,26 @@ host = "github.com"
 name = "factory-pull-requests"
 kind = "github-pull-requests"
 refresh-interval-seconds = 60
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+host = "github.com"
+
+[[sources]]
+name = "my-security-advisories"
+kind = "github-security-advisories"
+refresh-interval-seconds = 300
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+host = "github.com"
+
+[[sources]]
+name = "my-dependabot-alerts"
+kind = "github-dependabot-alerts"
+refresh-interval-seconds = 300
+repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
+host = "github.com"
+
+[[sources]]
+name = "my-secret-alerts"
+kind = "github-secret-scanning-alerts"
+refresh-interval-seconds = 300
 repositories = ["SeriousJul/my-little-software-factory", "SeriousJul/pi-extensions", "SeriousJul/seriousjul.github.io"]
 host = "github.com"

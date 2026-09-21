@@ -133,7 +133,13 @@ _Avoid_: source copy, duplicate ticket
 **Stale source**:
 A ticket source whose latest refresh failed.
 Its last tickets stay visible, but they cannot be handed off until the source refreshes successfully.
+The failure pins a warning on the Message line until the source refreshes successfully.
 _Avoid_: offline source
+
+**Removed source**:
+A ticket source that the operator deleted from the Config file.
+The plane stops reading it: its open tickets leave the list, its in-flight tickets stay visible and cannot be handed off, and no warning is pinned, because the removal is the operator's own decision.
+_Avoid_: disabled source, dropped source
 
 **Ticket priority**:
 The rank that orders tickets: the ticket list within an attention group, the open auto-handoff dispatch, and the waiting workflow advances that compete for a freed parallel slot.

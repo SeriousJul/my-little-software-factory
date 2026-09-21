@@ -147,7 +147,7 @@ function secretAlert(over: object = {}): object {
 }
 
 describe("the security advisory source", () => {
-	test("reads one request per working state, in order, and stops on a short page", async () => {
+	test("reads one GET request per working state, in order", async () => {
 		const runner = new SourceRunner([
 			json([advisory()]),
 			json([]),
@@ -157,7 +157,7 @@ describe("the security advisory source", () => {
 		expect(outcome).toMatchObject({ status: "success" });
 		expect(runner.calls).toHaveLength(3);
 		expect(runner.calls[0].args.join(" ")).toBe(
-			"api repos/acme/factory/security-advisories --hostname github.com -f state=triage -f per_page=100 -f page=1",
+			"api repos/acme/factory/security-advisories --hostname github.com --method GET -f state=triage -f per_page=100 --paginate",
 		);
 		expect(runner.calls[1].args.join(" ")).toContain("-f state=draft");
 		expect(runner.calls[2].args.join(" ")).toContain("-f state=published");
@@ -180,33 +180,18 @@ describe("the security advisory source", () => {
 		expect(runner.calls[3].args.join(" ")).toContain("-f state=triage");
 	});
 
-	test("paginates until a page returns fewer than 100 items", async () => {
-		const pageOne = Array.from({ length: 100 }, (_, index) =>
-			advisory({ ghsa_id: `GHSA-PAGE1-${index}` }),
-		);
-		const pageTwo = Array.from({ length: 100 }, (_, index) =>
-			advisory({ ghsa_id: `GHSA-PAGE2-${index}` }),
-		);
-		const shortPage = [
-			advisory({ ghsa_id: "GHSA-PAGE3-0" }),
-			advisory({ ghsa_id: "GHSA-PAGE3-1" }),
+	test("one call reads the whole feed, because gh --paginate merges the pages", async () => {
+		// A feed of 100 + 50 items prints as one merged array of 150.
+		const merged = [
+			...Array.from({ length: 100 }, (_, index) => advisory({ ghsa_id: `GHSA-A-${index}` })),
+			...Array.from({ length: 50 }, (_, index) => advisory({ ghsa_id: `GHSA-B-${index}` })),
 		];
-		const runner = new SourceRunner([
-			json(pageOne),
-			json(pageTwo),
-			json(shortPage),
-			json([]),
-			json([]),
-		]);
+		const runner = new SourceRunner([json(merged), json([]), json([])]);
 		const outcome = await createTicketSource(advisorySource, runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		// The triage state paginates 100 + 100 + 2; the other states stop on
-		// their first page.
-		expect(runner.calls).toHaveLength(5);
-		expect(runner.calls[1].args.join(" ")).toContain("-f page=2");
-		expect(runner.calls[2].args.join(" ")).toContain("-f page=3");
-		expect(outcome.tickets).toHaveLength(202);
+		expect(runner.calls).toHaveLength(3);
+		expect(outcome.tickets).toHaveLength(150);
 	});
 
 	test("normalizes one advisory item into its ticket facts", async () => {
@@ -306,7 +291,7 @@ describe("the security advisory source", () => {
 });
 
 describe("the Dependabot alerts source", () => {
-	test("reads one open-state request per repository and stops on a short page", async () => {
+	test("reads one open-state GET request per repository", async () => {
 		const runner = new SourceRunner([
 			json([dependabotAlert()]),
 			json([dependabotAlert()]),
@@ -316,23 +301,39 @@ describe("the Dependabot alerts source", () => {
 		expect(outcome).toMatchObject({ status: "success" });
 		expect(runner.calls).toHaveLength(1);
 		expect(runner.calls[0].args.join(" ")).toBe(
-			"api repos/acme/factory/dependabot/alerts --hostname github.com -f state=open -f per_page=100 -f page=1",
+			"api repos/acme/factory/dependabot/alerts --hostname github.com --method GET -f state=open -f per_page=100 --paginate",
 		);
 		if (outcome.status !== "success") return;
 		expect(outcome.tickets).toHaveLength(1);
 	});
 
-	test("paginates until a page returns fewer than 100 items", async () => {
-		const fullPage = Array.from({ length: 100 }, (_, index) =>
-			dependabotAlert({ number: index + 1 }),
-		);
-		const runner = new SourceRunner([json(fullPage), json([dependabotAlert({ number: 101 })])]);
+	test("one call reads the whole feed, because gh --paginate merges the pages", async () => {
+		// A feed of 100 + 1 alerts prints as one merged array of 101.
+		const merged = [
+			...Array.from({ length: 100 }, (_, index) => dependabotAlert({ number: index + 1 })),
+			dependabotAlert({ number: 101 }),
+		];
+		const runner = new SourceRunner([json(merged)]);
 		const outcome = await createTicketSource(dependabotSource, runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
 		if (outcome.status !== "success") return;
-		expect(runner.calls).toHaveLength(2);
-		expect(runner.calls[1].args.join(" ")).toContain("-f page=2");
+		expect(runner.calls).toHaveLength(1);
 		expect(outcome.tickets).toHaveLength(101);
+	});
+
+	test("an alert without a repository field uses the requested repository", async () => {
+		const item = dependabotAlert() as Record<string, unknown>;
+		delete item.repository;
+		const runner = new SourceRunner([json([item])]);
+		const outcome = await createTicketSource(dependabotSource, runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets[0].identity).toBe("github:github.com:acme/factory:dependabot:7");
+		expect(outcome.tickets[0].repository).toEqual({
+			identity: "github.com/acme/factory",
+			displayName: "acme/factory",
+			cloneUrl: "https://github.com/acme/factory.git",
+		});
 	});
 
 	test("normalizes one alert into its ticket facts", async () => {
@@ -445,13 +446,13 @@ describe("the Dependabot alerts source", () => {
 });
 
 describe("the secret scanning alerts source", () => {
-	test("reads one open-state request per repository and stops on a short page", async () => {
+	test("reads one open-state GET request per repository", async () => {
 		const runner = new SourceRunner([json([secretAlert()])]);
 		const outcome = await createTicketSource(secretSource, runner).fetch();
 		expect(outcome).toMatchObject({ status: "success" });
 		expect(runner.calls).toHaveLength(1);
 		expect(runner.calls[0].args.join(" ")).toBe(
-			"api repos/acme/factory/secret-scanning/alerts --hostname github.com -f state=open -f per_page=100 -f page=1",
+			"api repos/acme/factory/secret-scanning/alerts --hostname github.com --method GET -f state=open -f per_page=100 --paginate",
 		);
 		if (outcome.status !== "success") return;
 		expect(outcome.tickets).toHaveLength(1);
@@ -516,6 +517,86 @@ describe("the secret scanning alerts source", () => {
 });
 
 describe("the security feed shared contract", () => {
+	test("a repository with the feature off is skipped with a warning, and the rest reads", async () => {
+		const runner = new SourceRunner([
+			json([dependabotAlert()]),
+			{
+				code: 1,
+				stdout: "",
+				stderr: "gh: Dependabot alerts are disabled for this repository. (HTTP 403)\n",
+			},
+		]);
+		const outcome = await createTicketSource(
+			{ ...dependabotSource, repositories: ["acme/factory", "acme/portal"] },
+			runner,
+		).fetch();
+		expect(outcome).toMatchObject({
+			status: "success",
+			warnings: ["Dependabot alerts are disabled for acme/portal"],
+		});
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets).toHaveLength(1);
+	});
+
+	test("a repository with secret scanning off is skipped with a warning, and the rest reads", async () => {
+		const runner = new SourceRunner([
+			json([secretAlert()]),
+			{
+				code: 1,
+				stdout: "",
+				stderr: "gh: Secret scanning is disabled on this repository. (HTTP 404)\n",
+			},
+		]);
+		const outcome = await createTicketSource(
+			{ ...secretSource, repositories: ["acme/factory", "acme/portal"] },
+			runner,
+		).fetch();
+		expect(outcome).toMatchObject({
+			status: "success",
+			warnings: ["Secret scanning is disabled for acme/portal"],
+		});
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets).toHaveLength(1);
+	});
+
+	test("every repository disabled keeps the feed healthy with no tickets and the warnings", async () => {
+		const runner = new SourceRunner([
+			{
+				code: 1,
+				stdout: "",
+				stderr: "gh: Dependabot alerts are disabled for this repository. (HTTP 403)\n",
+			},
+		]);
+		const outcome = await createTicketSource(dependabotSource, runner).fetch();
+		expect(outcome).toMatchObject({
+			status: "success",
+			warnings: ["Dependabot alerts are disabled for acme/factory"],
+		});
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets).toHaveLength(0);
+	});
+
+	test("an unrelated request failure still fails the whole fetch", async () => {
+		const runner = new SourceRunner([
+			json([dependabotAlert()]),
+			{
+				code: 1,
+				stdout: "",
+				stderr: "insufficient permissions to read dependabot alerts\n",
+			},
+		]);
+		const outcome = await createTicketSource(
+			{ ...dependabotSource, repositories: ["acme/factory", "acme/portal"] },
+			runner,
+		).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				reason: "GitHub request failed: insufficient permissions to read dependabot alerts",
+			}),
+		);
+	});
+
 	test("a literal token travels in the environment, never in argv", async () => {
 		const runner = new SourceRunner([json([dependabotAlert()])]);
 		const outcome = await createTicketSource(

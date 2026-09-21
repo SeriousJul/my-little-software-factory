@@ -4,8 +4,13 @@
  * The three kinds read the repository security feeds as `gh api` REST calls,
  * one call set per configured repository. Every read goes through the
  * command runner, authentication travels through the shared GitHub
- * authenticator, and a failed request on any page or repository fails the
- * whole snapshot so the source goes stale under the existing semantics.
+ * authenticator, and a failed request on any repository fails the whole
+ * snapshot so the source goes stale under the existing semantics.
+ *
+ * Every read is an explicit GET with `--paginate`: without the method, `gh
+ * api` posts the form fields and the list endpoints answer 404, and the
+ * page-number parameter the alert and advisory endpoints reject is replaced
+ * by `gh` following GitHub's own pagination, one merged JSON array per feed.
  */
 import type { TicketSourceConfig } from "./config.ts";
 import type { FetchedTicket, RepositoryRef } from "./domain/ticket.ts";
@@ -28,7 +33,24 @@ const TICKET_SOURCE_KIND: Record<SecuritySourceKind, string> = {
 /** The advisory states the advisory feed lists: open work, not closed items. */
 const ADVISORY_WORKING_STATES = ["triage", "draft", "published"] as const;
 
-/** Page-number based pagination: stop on a page shorter than the size. */
+/**
+ * The feature-off answer GitHub gives per repository. A repository can switch
+ * the feed's feature off, and no refresh ever changes it: the read skips the
+ * repository with a warning instead of failing the snapshot, and a real
+ * failure on any repository still fails it.
+ */
+const FEATURE_DISABLED: Partial<Record<SecuritySourceKind, { marker: string; prefix: string }>> = {
+	"github-dependabot-alerts": {
+		marker: "Dependabot alerts are disabled for this repository",
+		prefix: "Dependabot alerts are disabled for",
+	},
+	"github-secret-scanning-alerts": {
+		marker: "Secret scanning is disabled on this repository",
+		prefix: "Secret scanning is disabled for",
+	},
+};
+
+/** The page size one `--paginate` call reads. */
 const PAGE_SIZE = 100;
 
 interface SecurityRequest {
@@ -62,9 +84,18 @@ export class GitHubSecurityTicketSource implements TicketSource {
 			const authentication = await this.authenticator.resolve();
 			if (!authentication.ok) return { status: "failed", reason: authentication.reason };
 			const tickets: FetchedTicket[] = [];
+			const warnings: string[] = [];
 			for (const request of this.requests()) {
-				const items = await this.fetchPages(request, authentication.options);
-				if (!items.ok) return { status: "failed", reason: items.reason };
+				const items = await this.readFeed(request, authentication.options);
+				if (!items.ok) {
+					const disabled = FEATURE_DISABLED[this.kind];
+					if (disabled !== undefined && items.reason.includes(disabled.marker)) {
+						// The repository switched the feed's feature off: skip it.
+						warnings.push(`${disabled.prefix} ${request.repository}`);
+						continue;
+					}
+					return { status: "failed", reason: items.reason };
+				}
 				for (const item of items.items) {
 					const normalized = normalizeSecurityItem(
 						this.kind,
@@ -76,7 +107,12 @@ export class GitHubSecurityTicketSource implements TicketSource {
 					tickets.push(normalized.ticket);
 				}
 			}
-			return { status: "success", fetchedAt: new Date().toISOString(), tickets };
+			return {
+				status: "success",
+				fetchedAt: new Date().toISOString(),
+				tickets,
+				...(warnings.length === 0 ? {} : { warnings }),
+			};
 		} catch (error) {
 			// A source bug must not terminate the control plane.
 			return {
@@ -114,33 +150,36 @@ export class GitHubSecurityTicketSource implements TicketSource {
 		}));
 	}
 
-	/** One endpoint read to completion: pages of 100 until a short page. */
-	private async fetchPages(
+	/**
+	 * One endpoint read to completion. `gh api --paginate` follows GitHub's
+	 * pagination for the endpoint - page-number or cursor - and prints the
+	 * pages as one JSON array, so one call returns the whole feed. The
+	 * explicit GET is load-bearing: with form fields and no method, `gh api`
+	 * posts to the endpoint, and the list endpoints answer 404.
+	 */
+	private async readFeed(
 		request: SecurityRequest,
 		options: CommandOptions,
 	): Promise<{ ok: true; items: unknown[] } | { ok: false; reason: string }> {
-		const items: unknown[] = [];
-		for (let page = 1; ; page++) {
-			const args = [
-				"api",
-				request.endpoint,
-				"--hostname",
-				this.config.host,
-				"-f",
-				`state=${request.state}`,
-				"-f",
-				`per_page=${PAGE_SIZE}`,
-				"-f",
-				`page=${page}`,
-			];
-			const result = await this.runner.run("gh", args, options);
-			if (result.code !== 0)
-				return { ok: false, reason: `GitHub request failed: ${commandFailureText(result)}` };
-			const parsed = parseSecurityPage(result.stdout);
-			if (!parsed.ok) return { ok: false, reason: parsed.reason };
-			items.push(...parsed.items);
-			if (parsed.items.length < PAGE_SIZE) return { ok: true, items };
-		}
+		const args = [
+			"api",
+			request.endpoint,
+			"--hostname",
+			this.config.host,
+			"--method",
+			"GET",
+			"-f",
+			`state=${request.state}`,
+			"-f",
+			`per_page=${PAGE_SIZE}`,
+			"--paginate",
+		];
+		const result = await this.runner.run("gh", args, options);
+		if (result.code !== 0)
+			return { ok: false, reason: `GitHub request failed: ${commandFailureText(result)}` };
+		const parsed = parseSecurityPage(result.stdout);
+		if (!parsed.ok) return { ok: false, reason: parsed.reason };
+		return { ok: true, items: parsed.items };
 	}
 }
 
@@ -266,9 +305,13 @@ function normalizeDependabotAlert(
 	const state = stringOf(record.state);
 	const url = stringOf(record.html_url);
 	const updatedAt = stringOf(record.updated_at) ?? stringOf(record.created_at);
-	// The alert names its repository; an item outside the configured list is
-	// a failed fetch, the same guard the issue and pull request sources apply.
-	const full_name = stringOf((record.repository as Record<string, unknown> | undefined)?.full_name);
+	// The list endpoint does not always name the alert's repository, and an
+	// item of one repository endpoint belongs to that repository, so the
+	// requested repository is the fallback. A declared name outside the
+	// configured list is a failed fetch, the same guard the issue and pull
+	// request sources apply.
+	const declared = stringOf((record.repository as Record<string, unknown> | undefined)?.full_name);
+	const full_name = declared ?? repository;
 	if (
 		typeof number !== "number" ||
 		state === undefined ||
@@ -277,10 +320,13 @@ function normalizeDependabotAlert(
 		full_name === undefined
 	)
 		return { ok: false, reason: "GitHub returned an unreadable Dependabot alert" };
-	if (!config.repositories.some((name) => name.toLowerCase() === full_name.toLowerCase())) {
+	if (
+		declared !== undefined &&
+		!config.repositories.some((name) => name.toLowerCase() === declared.toLowerCase())
+	) {
 		return {
 			ok: false,
-			reason: `GitHub returned a ticket outside configured repositories: ${full_name}`,
+			reason: `GitHub returned a ticket outside configured repositories: ${declared}`,
 		};
 	}
 	const advisory = (record.security_advisory ?? {}) as Record<string, unknown>;

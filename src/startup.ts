@@ -23,8 +23,10 @@ import {
 	defaultConfigPath,
 	type LoadedConfig,
 	loadConfigFile,
+	logPathFor,
 	statePathFor,
 } from "./config.ts";
+import { createLogger, type Logger, NOOP_LOGGER } from "./logging.ts";
 import { validateConfiguredModels } from "./model-settings.ts";
 import type { CommandRunner } from "./runner.ts";
 import { createChildProcessRunner } from "./runner.ts";
@@ -52,7 +54,9 @@ export type StartupStateResult =
  * A failure carries the lines to print to the operator, in the order they
  * are printed (warnings before the error they precede), and the exit status.
  * A success carries everything the entry needs to start the renderer and the
- * non-fatal lines (the missing-config note and the model warnings).
+ * non-fatal lines (the missing-config note and the model warnings). The
+ * logger is created as soon as the config can be read, so a boot that fails
+ * later still leaves its failure in the record the run writes to.
  */
 export type StartupResult =
 	| { ok: false; lines: string[]; exitCode: number }
@@ -64,9 +68,28 @@ export type StartupResult =
 			state: FactoryState;
 			runner: CommandRunner;
 			sources: TicketSource[];
+			/** The plane's file logger; the no-op logger where the config carries no [logging]. */
+			logger: Logger;
 			/** Non-fatal operator lines: the missing-config note and model warnings. */
 			notes: string[];
 	  };
+
+/**
+ * The logger the boot resolves from the loaded config: the [logging] level
+ * and rotation into the file the section names, or the no-op logger where
+ * the section is absent, the state of a config seeded before logging.
+ */
+export function startupLogger(config: FactoryConfig, configPath: string): Logger {
+	if (config.logging === undefined) return NOOP_LOGGER;
+	const file = logPathFor(config, configPath);
+	if (file === undefined) return NOOP_LOGGER;
+	return createLogger({
+		level: config.logging.level,
+		file,
+		maxSizeBytes: config.logging.maxSizeMib * 1024 * 1024,
+		keep: config.logging.keep,
+	});
+}
 
 /**
  * The argument list: no argument is the shipped default path, and
@@ -173,12 +196,22 @@ export interface ShutdownProcess {
  * signals to put the terminal back, and a run ends its listeners in the order
  * they were written, so the terminal comes back before the exit.
  */
-export function installStateShutdown(state: FactoryState, target: ShutdownProcess = process): void {
+export function installStateShutdown(
+	state: FactoryState,
+	target: ShutdownProcess = process,
+	logger?: Logger,
+): void {
 	const terminate = () => {
 		state.close();
 		target.exit(0);
 	};
-	target.on("exit", () => state.close());
+	// The exit hook is the one path every ending takes, so the run-ended line
+	// lands here once: terminate's exit(0) fires the hook, and a clean quit
+	// runs it directly.
+	target.on("exit", () => {
+		logger?.info("run ended");
+		state.close();
+	});
 	target.on("SIGTERM", terminate);
 	target.on("SIGHUP", terminate);
 }
@@ -207,6 +240,8 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 		notes.push(`warning: ${warning}`);
 	}
 
+	const statePath = statePathFor(loaded.config, parsed.configPath);
+	const logger = startupLogger(loaded.config, parsed.configPath);
 	const runner = createChildProcessRunner();
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
@@ -214,15 +249,17 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 	const models = await validateConfiguredModels(loaded.config, runner);
 	for (const warning of models.warnings) {
 		notes.push(`warning: ${warning}`);
+		logger.warn(warning);
 	}
 	if (models.errors.length > 0) {
+		for (const error of models.errors) logger.error(`startup failed: ${error}`);
 		return { ok: false, lines: [...notes, ...models.errors], exitCode: 1 };
 	}
 
-	const statePath = statePathFor(loaded.config, parsed.configPath);
 	const opened = openStartupState(statePath);
 	if (!opened.ok) {
 		// The warnings precede the failure they lead to.
+		logger.error(`startup failed: ${opened.reason}`);
 		return { ok: false, lines: [...notes, opened.reason], exitCode: 1 };
 	}
 	// The recovery note lands after the warnings: it is the last of the boot's
@@ -230,6 +267,9 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 	for (const note of opened.notes) notes.push(note);
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
+	logger.info(
+		`boot: bun ${typeof Bun !== "undefined" ? Bun.version : "unknown"}, config ${parsed.configPath}, state ${statePath}, sources ${sources.length}`,
+	);
 	return {
 		ok: true,
 		config: loaded.config,
@@ -238,6 +278,7 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 		state: opened.state,
 		runner,
 		sources,
+		logger,
 		notes,
 	};
 }

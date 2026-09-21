@@ -32,6 +32,7 @@ import {
 	defaultStatePath,
 	type FactoryConfig,
 	loadConfigFile,
+	logPathFor,
 	persistConfig,
 	type TicketSourceConfig,
 	validateConfig,
@@ -472,18 +473,31 @@ describe("validateConfig", () => {
 			// and ignored by git.
 			expect(config.stateFile).toBe(".factory-development.sqlite");
 			expect(config.scroll).toEqual({ speed: 1, acceleration: 0.8, maximumSpeed: 6 });
-			// Both adapters track this repository. A local development setup may
-			// add more repositories to the same sources, so track membership
-			// rather than the exact list.
+			// The dev feed: both adapters and the three security feeds, all
+			// tracking this repository. A local development setup may add more
+			// repositories to the same sources, so track membership rather than
+			// the exact list.
 			expect(config.sources.map(({ name, kind }) => ({ name, kind }))).toEqual([
 				{ name: "factory-issues", kind: "github-issues" },
 				{ name: "factory-pull-requests", kind: "github-pull-requests" },
+				{ name: "my-security-advisories", kind: "github-security-advisories" },
+				{ name: "my-dependabot-alerts", kind: "github-dependabot-alerts" },
+				{ name: "my-secret-alerts", kind: "github-secret-scanning-alerts" },
 			]);
 			for (const source of config.sources) {
-				expect(source.refreshIntervalSeconds).toBe(60);
+				expect(source.refreshIntervalSeconds, `${source.name} keeps its refresh interval`).toBe(
+					source.kind === "github-issues" || source.kind === "github-pull-requests" ? 60 : 300,
+				);
 				expect(source.host).toBe("github.com");
 				expect(source.repositories).toContain("SeriousJul/my-little-software-factory");
 			}
+			// The dev path records its run in a log the git tree ignores.
+			expect(config.logging).toMatchObject({
+				level: "debug",
+				file: ".factory-development.log",
+				maxSizeMib: 10,
+				keep: 5,
+			});
 			// Normal gh authentication and no explicit filters: the file reads
 			// neither an auth table nor a filter, so no token is committed.
 			for (const source of config.sources) {
@@ -1434,6 +1448,80 @@ describe("limits config keys", () => {
 		data["task-types"].implement.template = "then: {previous-message}";
 		const config = validateConfig(data);
 		expect(config.taskTypes.implement.template).toContain("{previous-message}");
+	});
+});
+
+describe("logging config keys", () => {
+	/** The minimal config every test in this block breaks in one place. */
+	const base = () => ({
+		"default-agent": "pi",
+		"default-environment": "live-worktree",
+		"default-task-type": "implement",
+		agents: { pi: { kind: "pi" } },
+		"task-types": { implement: { template: "x" } },
+	});
+
+	test("an absent table means no log", () => {
+		expect(validateConfig(base()).logging).toBeUndefined();
+	});
+
+	test("a present table takes its defaults", () => {
+		const config = validateConfig({ ...base(), logging: {} });
+		expect(config.logging).toEqual({ level: "info", maxSizeMib: 10, keep: 5 });
+	});
+
+	test("every key validates its type and range", () => {
+		expectConfigError({ ...base(), logging: "info" }, "[logging] must be a table");
+		expectConfigError({ ...base(), logging: { level: "verbose" } }, "logging.level must be one of");
+		expectConfigError(
+			{ ...base(), logging: { "max-size-mib": 0 } },
+			"logging.max-size-mib: must be a whole number greater than 0",
+		);
+		expectConfigError(
+			{ ...base(), logging: { keep: 1.5 } },
+			"logging.keep: must be a whole number greater than 0",
+		);
+		expectConfigError(
+			{ ...base(), logging: { file: 7 } },
+			"logging.file: must be a non-empty string",
+		);
+	});
+
+	test("an unknown key in the table fails startup", () => {
+		expectConfigError(
+			{ ...base(), logging: { level: "info", extra: 1 } },
+			"unknown key in [logging]: extra",
+		);
+	});
+
+	test("the table round-trips through configToToml", () => {
+		const config = validateConfig({
+			...base(),
+			logging: { level: "debug", file: "run.log", "max-size-mib": 4, keep: 2 },
+		});
+		const reparsed = validateConfig(parseToml(configToToml(config)));
+		expect(reparsed.logging).toEqual({ level: "debug", file: "run.log", maxSizeMib: 4, keep: 2 });
+	});
+
+	test("the log path resolves like the state file path", () => {
+		// No file: the log lands next to the state file it records.
+		const besideState = validateConfig({
+			...base(),
+			"state-file": "/tmp/run/state.sqlite",
+			logging: { level: "info" },
+		});
+		expect(logPathFor(besideState, "/whatever/config.toml")).toBe("/tmp/run/factory.log");
+		// A relative file: the selected config's directory, the state-file rule.
+		const named = validateConfig({ ...base(), logging: { level: "info", file: "run.log" } });
+		expect(logPathFor(named, "/cfg/config.toml")).toBe("/cfg/run.log");
+		// An absolute file stands.
+		const absolute = validateConfig({
+			...base(),
+			logging: { level: "info", file: "/var/log/factory.log" },
+		});
+		expect(logPathFor(absolute, "/cfg/config.toml")).toBe("/var/log/factory.log");
+		// No table: no log, no path.
+		expect(logPathFor(validateConfig(base()), "/cfg/config.toml")).toBeUndefined();
 	});
 });
 

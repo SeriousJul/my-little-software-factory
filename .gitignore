@@ -148,6 +148,10 @@ vite.config.ts.timestamp-*
 # Checked-in development config state
 config/.factory-development.sqlite*
 
+# The plane's log files (current + rotated)
+factory.log*
+.factory-development.log*
+
 # Mutation testing artifacts
 reports/
 .stryker-tmp/

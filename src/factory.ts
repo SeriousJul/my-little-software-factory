@@ -12,6 +12,7 @@ import { createCliRenderer } from "@opentui/core";
 import { createElement, createRoot } from "@opentui/react";
 
 import { App } from "./components/app.ts";
+import { errorMessage } from "./runner.ts";
 import { isSupportedBunVersion, unsupportedBunVersionMessage } from "./runtime.ts";
 import { installStateShutdown, runStartup } from "./startup.ts";
 
@@ -27,6 +28,16 @@ for (const line of startup.ok ? startup.notes : startup.lines) {
 if (!startup.ok) {
 	process.exit(startup.exitCode);
 }
+// The plane owns the terminal, so a crash that would print its stack there
+// lands in the file record instead: the entry is the one place the process
+// still has a console it must not touch.
+process.on("uncaughtException", (error) => {
+	startup.logger.error(`uncaught exception: ${errorMessage(error)}`);
+	process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+	startup.logger.error(`unhandled rejection: ${errorMessage(reason)}`);
+});
 
 // Ctrl+C is a documented emergency control. Keep it in the shared control
 // catalogue instead of letting OpenTUI bypass the application.
@@ -47,7 +58,7 @@ const renderer = await createCliRenderer({
 // here, once the renderer exists, so the renderer puts the terminal back
 // before the run ends. A run that dies before this line leaves a row whose pid
 // is gone, which the next boot takes over.
-installStateShutdown(startup.state);
+installStateShutdown(startup.state, process, startup.logger);
 // The native renderer diffs each frame against its model of the screen and
 // marks a model cell as written while it emits the cell's bytes. If the host
 // terminal loses bytes of a frame, the model and the screen diverge and the
@@ -65,5 +76,6 @@ createRoot(renderer).render(
 		configPath: startup.configPath,
 		state: startup.state,
 		sources: startup.sources,
+		logger: startup.logger,
 	}),
 );

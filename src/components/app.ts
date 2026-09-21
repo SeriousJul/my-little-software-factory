@@ -63,6 +63,7 @@ import {
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
 import type { HerdrAgent } from "../herdr.ts";
+import type { Logger } from "../logging.ts";
 import {
 	HerdrAgentReader,
 	matchConsultationAgent,
@@ -257,6 +258,12 @@ export interface AppProps {
 	 * it. Production relies on process exit instead.
 	 */
 	onReady?: (ready: AppTeardown) => void;
+	/**
+	 * The plane's file logger. The refresh and handoff loops leave their lines
+	 * in the record it owns. Absent in tests and the gallery, where the loops
+	 * stay silent.
+	 */
+	logger?: Logger;
 }
 
 export interface AppTeardown {
@@ -288,6 +295,7 @@ export function App({
 	initialTickets,
 	pollIntervalMs,
 	onReady,
+	logger,
 }: AppProps) {
 	const renderer = useRenderer();
 	const { width: terminalWidth, height: terminalHeight } = useTerminalDimensions();
@@ -486,8 +494,12 @@ export function App({
 	const commandRunner = runner ?? realRunner();
 	const homeDir = home ?? os.homedir();
 	const configFile = configPath ?? defaultConfigPath();
+	// A stale source is a failed refresh the operator must answer to. A
+	// removed source is the operator's own config decision: the plane stops
+	// reading it and pins no line for it, while its in-flight tickets keep
+	// showing with the removed membership.
 	const sourceHealthMessage = healths
-		.filter((health) => health.health === "stale" || health.health === "removed")
+		.filter((health) => health.health === "stale")
 		.map(
 			(health) =>
 				`${health.name}: ${health.health}${health.error === undefined ? "" : ` - ${health.error}`}`,
@@ -1043,6 +1055,7 @@ export function App({
 					});
 				},
 				persistMapping,
+				log: logger,
 			}),
 		};
 	}
@@ -2713,6 +2726,7 @@ export function App({
 					manualRefreshPending.current.delete(sourceName);
 					if (manualRefreshPending.current.size === 0) clearWorkingMessage("refresh");
 				},
+				log: logger,
 			},
 		);
 		coordinatorRef.current = coordinator;
@@ -2728,6 +2742,7 @@ export function App({
 		replaceConsultations,
 		clearWorkingMessage,
 		setWarningMessage,
+		logger,
 	]);
 	// The observation loop runs only on the real projection: a test
 	// projection has no agents to observe, and a deterministic frame test

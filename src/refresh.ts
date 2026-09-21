@@ -1,4 +1,5 @@
 /** Per-source refresh scheduling. A slow source never overlaps itself. */
+import type { Logger } from "./logging.ts";
 import type { FactoryState, SourceDefinition } from "./state.ts";
 import type { FetchOutcome, TicketSource } from "./ticket-source.ts";
 
@@ -20,19 +21,21 @@ export class RefreshCoordinator {
 	private readonly changed: (outcome?: FetchOutcome) => void;
 	private readonly clock: RefreshClock;
 	private readonly settled?: (sourceName: string) => void;
+	private readonly log?: Logger;
 
 	constructor(
 		sources: readonly TicketSource[],
 		state: FactoryState,
 		changed: (outcome?: FetchOutcome) => void,
 		clock: RefreshClock = SYSTEM_CLOCK,
-		options: { settled?: (sourceName: string) => void } = {},
+		options: { settled?: (sourceName: string) => void; log?: Logger } = {},
 	) {
 		this.sources = sources;
 		this.state = state;
 		this.changed = changed;
 		this.clock = clock;
 		this.settled = options.settled;
+		this.log = options.log;
 	}
 
 	start(): void {
@@ -110,6 +113,7 @@ export class RefreshCoordinator {
 		// The pull request source covers its Issue references against the
 		// live tickets and reads the uncovered ones directly (ADR 0023).
 		const known = this.state.liveTicketLabels();
+		const startedAt = Date.now();
 		let outcome: FetchOutcome;
 		void Promise.resolve()
 			.then(() => source.fetch(known))
@@ -117,6 +121,7 @@ export class RefreshCoordinator {
 			// stop() and the state closing must not touch either.
 			.then((result) => {
 				outcome = result;
+				this.logRefresh(source.name, result, startedAt);
 				if (this.stopped) return;
 				this.state.applyFetch(sourceDefinition(source), result);
 			})
@@ -125,6 +130,7 @@ export class RefreshCoordinator {
 					status: "failed",
 					reason: `unexpected source failure: ${error instanceof Error ? error.message : String(error)}`,
 				};
+				this.logRefresh(source.name, outcome, startedAt);
 				if (this.stopped) return;
 				this.state.applyFetch(sourceDefinition(source), outcome);
 			})
@@ -145,6 +151,28 @@ export class RefreshCoordinator {
 				const timer = this.clock.setTimeout(() => this.refresh(source), source.refreshIntervalMs);
 				this.timers.set(source.name, timer);
 			});
+	}
+
+	/**
+	 * The record line a settled fetch leaves: an info with the ticket count,
+	 * a warn with the reason. A stopped coordinator still records: the run
+	 * ended, and the fetch it started is part of the run's record.
+	 */
+	private logRefresh(
+		sourceName: string,
+		result: { status: "success"; tickets: unknown[] } | { status: "failed"; reason: string },
+		startedAt: number,
+	): void {
+		if (this.log === undefined) return;
+		const durationMs = Date.now() - startedAt;
+		if (result.status === "success") {
+			const tickets = result.tickets.length;
+			this.log.info(
+				`${sourceName}: refresh ok, ${tickets} ticket${tickets === 1 ? "" : "s"}, ${durationMs} ms`,
+			);
+			return;
+		}
+		this.log.warn(`${sourceName}: refresh failed after ${durationMs} ms: ${result.reason}`);
 	}
 
 	isFetching(sourceName: string): boolean {

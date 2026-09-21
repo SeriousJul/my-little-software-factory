@@ -2647,3 +2647,35 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 		);
 	});
 });
+
+describe("the record lines", () => {
+	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
+		const rigRef = rig([FIRST]);
+		const lines: string[] = [];
+		const logger = {
+			level: "info" as const,
+			debug: () => {},
+			info: (message: string) => lines.push(message),
+			warn: (message: string) => lines.push(message),
+			error: () => {},
+		};
+		// The gate holds every command, so the start's work pauses on its
+		// first call: only the claim runs, and the settle never meets the
+		// state this test closes behind it.
+		const hold = gatedRunner(rigRef.runner, () => true);
+		const dispatch = withRunner(rigRef, hold.runner, { log: logger });
+		rigRef.dispatch = dispatch;
+		const first = await start(rigRef, FIRST, "open");
+		expect(first).toMatchObject({ ok: true });
+		// A second start on the same ticket meets the unresolved claim.
+		const second = await start(rigRef, FIRST, "open");
+		expect(second).toMatchObject({
+			ok: false,
+			reason: "handoff recovery is required before another handoff",
+		});
+		expect(lines).toEqual([
+			`handoff started: "${FIRST.title}" (origin open)`,
+			`handoff refused: handoff recovery is required before another handoff ("${FIRST.title}")`,
+		]);
+	});
+});

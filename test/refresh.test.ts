@@ -319,4 +319,36 @@ describe("refreshAndWait", () => {
 		expect(source.calls).toBe(calls);
 		state.close();
 	});
+
+	test("leaves a record line per settled fetch: the success and the failure", async () => {
+		const state = openFactoryState(":memory:");
+		const source = new ControlledSource("issues", 60_000);
+		const clock = new FakeClock();
+		const lines: string[] = [];
+		const logger = {
+			level: "info" as const,
+			debug: () => {},
+			info: (message: string) => lines.push(`info ${message}`),
+			warn: (message: string) => lines.push(`warn ${message}`),
+			error: () => {},
+		};
+		const coordinator = new RefreshCoordinator([source], state, () => undefined, clock, {
+			log: logger,
+		});
+		coordinator.start();
+		await turns();
+		source.settle(EMPTY);
+		await turns();
+		clock.fireOldest();
+		await turns();
+		source.settle(RATE_LIMITED);
+		await turns();
+		coordinator.stop();
+		state.close();
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toMatch(/^info issues: refresh ok, 0 tickets, \d+ ms$/u);
+		expect(lines[1]).toMatch(
+			/^warn issues: refresh failed after \d+ ms: GitHub rate limit exceeded$/u,
+		);
+	});
 });

@@ -95,6 +95,21 @@ maximum-speed = 6
 [priority]
 labels = ["critical", "high", "low"]
 
+# --- Logging --------------------------------------------------------------
+
+# The plane's own file log. The TUI owns the terminal, so the run's record
+# lives in a file the operator reads later. Omitted: the run writes no log.
+[logging]
+# The level that passes the filter: off, error, warn, info, or debug.
+level = "info"
+# The log file. A relative path resolves against the directory of this
+# config file. Omitted: the log lands next to the state file.
+file = "factory.log"
+# Rotate the current file at this size, in mebibytes.
+max-size-mib = 10
+# Rotated files kept, from factory.log.1 up to factory.log.5.
+keep = 5
+
 # --- Agent types ---------------------------------------------------------
 
 # kind is the herdr agent kind. model, thinking, and context-window are
@@ -352,6 +367,7 @@ host = "github.com"
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
 | `priority` | no | none | The ordered priority labels that rank tickets. Omitted: tickets are not ranked and the list keeps its previous order. |
+| `logging` | no | none | The plane's own file log. Omitted: the run writes no log, the state of a config the plane seeded before logging. |
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |
 | `consultation-types` | no | none | The Consultation patterns. |
@@ -366,6 +382,15 @@ host = "github.com"
 | `speed` | no | `1` | Rows moved by one detail key step or one slow wheel event. A whole number of 1 or more. |
 | `acceleration` | no | `0.8` | Wheel-burst acceleration strength. A finite number of 0 or more. `0` keeps wheel movement linear. |
 | `maximum-speed` | no | `6` | Rows moved by one accelerated wheel event. A whole number of 1 or more, at least `speed`. Equal to `speed` also keeps wheel movement linear. |
+
+**`[logging]`** (optional table).
+
+| Key | Required | Default | What it does |
+| --- | --- | --- | --- |
+| `level` | no | `info` | The level that passes the filter. One of `off`, `error`, `warn`, `info`, `debug`; `off` keeps no file and no line. |
+| `file` | no | `factory.log` next to the state file | The log file. A relative path resolves against the directory of this config file. |
+| `max-size-mib` | no | `10` | The size, in mebibytes, at which the current file rotates. A whole number of 1 or more. |
+| `keep` | no | `5` | The rotated files kept, from `file.1` up to the `keep`-th file. A whole number of 1 or more. |
 
 **`[priority]`** (optional table).
 

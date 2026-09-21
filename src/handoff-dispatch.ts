@@ -21,6 +21,7 @@ import {
 	type NameCollision,
 	type OwnNameKnowledge,
 } from "./handoff.ts";
+import type { Logger } from "./logging.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type {
@@ -196,6 +197,11 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	controlPlaneWorkspaceId?: string | null;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
 	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	/**
+	 * The plane's file logger. The dispatch leaves the record's handoff lines:
+	 * a start, a queue, and a refusal with its reason.
+	 */
+	log?: Logger;
 }
 
 /**
@@ -330,6 +336,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly controlPlaneWorkspaceId: string | null | undefined;
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
+	private readonly log?: Logger;
 	/**
 	 * The pickup warnings already said for one queue item, so a pickup that
 	 * keeps failing says each reason once on the Message line, not once per
@@ -363,6 +370,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.home = options.home;
 		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId;
 		this.persistMapping = options.persistMapping;
+		this.log = options.log;
 		this.reports = {
 			working: (text) => safeReport(() => options.working(text)),
 			warning: (text) => safeReport(() => options.warning(text)),
@@ -403,9 +411,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 			return Promise.resolve(this.enqueueWork(intent));
 		}
 		const claim = this.state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
-		if (!claim.ok) return Promise.resolve({ ok: false, reason: claim.reason });
+		if (!claim.ok) {
+			this.log?.warn(
+				`handoff refused: ${claim.reason} (${this.ticketName(intent.ticketIdentity)})`,
+			);
+			return Promise.resolve({ ok: false, reason: claim.reason });
+		}
 		// The claim is in, so the ticket is in the Starting window now: its work
 		// may wait behind the seat, but the add does not wait with it.
+		this.log?.info(
+			`handoff started: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+		);
 		this.reports.starting(intent.ticketIdentity, true);
 		this.runClaimedHandoff(
 			{
@@ -448,6 +464,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 			previousMessage: intent.previousMessage,
 		});
 		if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
+		this.log?.info(
+			`handoff queued: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
+		);
 		this.reports.refresh();
 		this.reports.notice(
 			`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; it starts when a seat frees`,
@@ -686,10 +705,16 @@ class HandoffDispatchModule implements HandoffDispatch {
 			};
 		}
 		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
-		if (!claim.ok) return { ok: false, reason: claim.reason };
+		if (!claim.ok) {
+			this.log?.warn(`handoff refused: ${claim.reason} (${this.ticketName(item.ticketIdentity)})`);
+			return { ok: false, reason: claim.reason };
+		}
 		// A claim is a claim: the picked-up start enters the Starting window
 		// exactly as the direct start above does, so the two claim paths report
 		// the same fact and the row's spinner face does not wait for a seat.
+		this.log?.info(
+			`handoff started: ${this.ticketName(item.ticketIdentity)} (origin ${item.origin})`,
+		);
 		this.reports.starting(item.ticketIdentity, true);
 		const ticket = this.state
 			.visibleTickets(this.config().workflowStates, this.config().defaultTaskType)

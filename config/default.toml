@@ -44,6 +44,17 @@ maximum-speed = 6
 [priority]
 labels = ["critical", "high", "low"]
 
+# --- Logging ---------------------------------------------------------------
+# The plane's own file log. The TUI owns the terminal, so the run's record
+# lives in a file the operator reads later. Delete the table: the run writes
+# no log.
+[logging]
+level = "info"
+# file = "factory.log"   # Relative paths use this config's directory; unset
+                         # puts the log next to the state file.
+max-size-mib = 10
+keep = 5
+
 [agents.pi]
 kind = "pi"
 model = "--model {value}"

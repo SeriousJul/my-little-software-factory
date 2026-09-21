@@ -7,7 +7,6 @@
  */
 import { describe, expect, test } from "bun:test";
 import { EMPTY_TURN_LOG_NOTE } from "../src/components/decision-modal.ts";
-import type { FactoryConfig } from "../src/config.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import {
 	type AppSetup,
@@ -21,7 +20,6 @@ import {
 	sleep,
 	withApp,
 } from "./app-harness.ts";
-import { BASE_CONFIG } from "./base-config.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const WIDTH = 120;
@@ -355,24 +353,34 @@ describe("the decision modal's region and the log's floor", () => {
 		},
 	};
 
-	/** The targets the many-routes config's one edge offers, in order. */
-	const TEN_TARGETS = Array.from(
-		{ length: 10 },
-		(_, i) => `task-${String(i + 1).padStart(2, "0")}`,
-	);
-	/** The task profiles the many-routes config's targets resolve to. */
-	const manyRoutesTaskTypes: FactoryConfig["taskTypes"] = {
-		...BASE_CONFIG.taskTypes,
-		...Object.fromEntries(
-			TEN_TARGETS.map((target) => [target, { template: `Do ${target}`, autoClose: false }]),
-		),
-	};
-
-	/** The config whose one edge gives the awaiting ticket's decision a dozen rows. */
-	const manyRoutesConfig: FactoryConfig = {
-		...BASE_CONFIG,
-		taskTypes: manyRoutesTaskTypes,
-		workflows: [{ from: "review", to: TEN_TARGETS }],
+	/**
+	 * The dense turn (ADR 0027): the held cause, the transition's fact lines,
+	 * and the three decision rows claim more rows than a small box holds, so
+	 * the log keeps its floor, the action window scrolls the surplus, and the
+	 * bar's range rides it.
+	 */
+	const denseTicket: Ticket = {
+		...awaitingTicket,
+		lastCompletion: {
+			...shortLogCompletion,
+			cause: "aborted",
+			detail: "the agent's pane closed before the turn ended",
+			transition: {
+				fired: true,
+				when: null,
+				reason: "the review finished; the machine offers the position",
+				ticketFacts: ["ready-for-review"],
+				pullRequestFacts: [],
+				autoAdvance: false,
+				ticketWrite: { added: ["ready-for-review"], removed: [] },
+				pullRequestWrite: { added: ["needs-work"], removed: ["ready-for-review"] },
+				pullRequestIdentity: "github.com/acme/portal#4",
+				pullRequestKey: "#4",
+				writeFailure: "",
+				positionTaskType: "fix",
+				positionTicketIdentity: null,
+			},
+		},
 	};
 
 	/**
@@ -436,45 +444,50 @@ describe("the decision modal's region and the log's floor", () => {
 		);
 	});
 
-	test("a dozen handoff rows at a small terminal keep the log's floor, scroll the surplus, and ride the bar's range", async () => {
+	test("a dense turn at a small terminal keeps the log's floor, scrolls the surplus rows, and rides the bar's range", async () => {
 		await withApp(
 			async (setup) => {
 				const frame = await openSettled(setup);
 				const rows = rowsOf(frame);
-				// The box's content rows pay the context row, the pane's full
-				// chrome, the log's floor of three, and the region's four rows.
 				const { top, bottom } = expectPaneOf(rows);
-				expect(bottom - top).toBe(6); // the pane's outer height: two borders, two padding, three body rows
+				// The pane keeps its full chrome and the log's floor of three
+				// body rows: the dense region gets only the rows the floor leaves.
+				expect(bottom - top).toBe(6); // two borders, two padding, three body rows
 				// The log holds more rows than its floor, so the pane carries
 				// its thumb.
 				expect(frame).toContain("█");
-				// The region holds twelve rows, shows four, and the bar states
-				// the window behind the selection's hint.
-				expect(rows[bottom + 1]).toContain("❯ Close");
-				expect(rows[bottom + 2]).toContain("Goto");
-				expect(rows[bottom + 3]).toContain("Handoff: task-01");
-				expect(rows[bottom + 4]).toContain("Handoff: task-02");
-				expect(frame).not.toContain("task-03");
-				expect(rows[rows.length - 1]).toContain("1-4/12");
+				// The held cause and the transition's facts stand pinned above
+				// the action rows.
+				expect(rows[bottom + 1]).toContain(
+					"Turn ended aborted: the agent's pane closed before the turn ended",
+				);
+				expect(rows[bottom + 2]).toContain("the review finished; the machine offers the position");
+				expect(rows[bottom + 3]).toContain("ticket · added ready-for-review");
+				expect(rows[bottom + 4]).toContain(
+					"pull request #4 · added needs-work · removed ready-for-review",
+				);
+				// The region holds three action rows and shows two, and the bar
+				// states the window behind the selection's hint.
+				expect(rows[bottom + 5]).toContain("❯ Close");
+				expect(rows[bottom + 6]).toContain("Goto");
+				expect(frame).not.toContain("Handoff: fix");
+				expect(rows[rows.length - 1]).toContain("1-2/3");
 				// Down moves the selection; the window slides when the step would
 				// leave the cursor's row, and the range follows on the bar.
 				await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
 					f.includes("❯ Goto"),
 				);
-				await pressArrow(setup, "down", "the selection on task-01", (f) =>
-					f.includes("❯ Handoff: task-01"),
+				const slid = await pressArrow(
+					setup,
+					"down",
+					"the window to slide onto the handoff row",
+					(f) => rowsOf(f).slice(-1)[0].includes("2-3/3"),
 				);
-				await pressArrow(setup, "down", "the selection on task-02", (f) =>
-					f.includes("❯ Handoff: task-02"),
-				);
-				const slid = await pressArrow(setup, "down", "the window to slide onto task-03", (f) =>
-					rowsOf(f).slice(-1)[0].includes("2-5/12"),
-				);
-				expect(slid).toContain("❯ Handoff: task-03");
+				expect(slid).toContain("❯ Handoff: fix");
 			},
 			FLOOR_WIDTH,
-			19,
-			{ config: manyRoutesConfig, initialTickets: [longLogTicket] },
+			21,
+			{ initialTickets: [denseTicket] },
 		);
 	});
 

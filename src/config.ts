@@ -15,6 +15,7 @@ import { isThinkingLevel, type ThinkingLevel, thinkingLevelList } from "./domain
 import { type EnvironmentKind, HANDOFF_ENVIRONMENT_KINDS } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import { firstNonEmptyLine } from "./lines.ts";
+import type { LogLevel } from "./logging.ts";
 import {
 	contextSettingFit,
 	modelSettingFit,
@@ -304,6 +305,27 @@ export interface FactoryConfig {
 	priority?: { labels: string[] };
 	/** An optional state file. Relative paths use the selected config directory. */
 	stateFile?: string;
+	/**
+	 * The plane's own file log. Absent where the file carries no [logging]
+	 * table, which is the shipped Default's way of keeping a machine the plane
+	 * seeded before logging stayed silent.
+	 */
+	logging?: LoggingConfig;
+}
+
+/** The [logging] table: the plane's own file log. */
+export interface LoggingConfig {
+	/** "off" keeps no file; "debug" passes everything. */
+	level: LogLevel;
+	/**
+	 * The log file. Relative paths resolve against the config directory, the
+	 * same rule as state-file; absent, the log lands next to the state file.
+	 */
+	file?: string;
+	/** Rotate the current file at this size, in mebibytes. */
+	maxSizeMib: number;
+	/** Rotated files kept, from file.1 up. */
+	keep: number;
 }
 
 export class ConfigError extends Error {
@@ -369,6 +391,20 @@ export function statePathFor(config: FactoryConfig, configPath: string): string 
 	return isAbsolute(config.stateFile)
 		? config.stateFile
 		: resolve(dirname(configPath), config.stateFile);
+}
+
+/**
+ * The log file the [logging] section resolves to, or none: a relative `file`
+ * uses the selected config directory, the way state-file does, and no `file`
+ * lands the log next to the state file, where the run's other record lives.
+ */
+export function logPathFor(config: FactoryConfig, configPath: string): string | undefined {
+	if (config.logging === undefined) return undefined;
+	const file = config.logging.file;
+	if (file === undefined) {
+		return resolve(dirname(statePathFor(config, configPath)), "factory.log");
+	}
+	return isAbsolute(file) ? file : resolve(dirname(configPath), file);
 }
 
 /**
@@ -565,6 +601,7 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		"max-handoffs-per-ticket",
 		"scroll",
 		"priority",
+		"logging",
 	]);
 	// The pre-workflow-machine keys (ADR 0027) are named before any other key
 	// is judged: the load migrates a file that carries them, and a file that
@@ -642,6 +679,7 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		}
 	}
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
+	const logging = validateLogging(data.logging);
 	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
 	const agentPollIntervalSeconds = positiveNumberField(data, "agent-poll-interval-seconds", 5);
 	const completionMessageLines = positiveIntField(data, "completion-message-lines", 200);
@@ -672,8 +710,43 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		sources,
 		...(priority === undefined ? {} : { priority }),
 		...(stateFile === undefined ? {} : { stateFile }),
+		...(logging === undefined ? {} : { logging }),
 	};
 	return { config, warnings };
+}
+
+/**
+ * The [logging] table. Absent is "no log", the state of every config the
+ * plane seeded before logging existed, so a seeded machine's run stays
+ * silent until the operator adds the table.
+ */
+function validateLogging(value: unknown): FactoryConfig["logging"] {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) {
+		throw new ConfigError(`config: [logging] must be a table; got ${describeValue(value)}`);
+	}
+	const known = new Set(["level", "file", "max-size-mib", "keep"]);
+	const unknownKeys = Object.keys(value).filter((key) => !known.has(key));
+	if (unknownKeys.length > 0) {
+		throw new ConfigError(
+			`config: unknown key${unknownKeys.length > 1 ? "s" : ""} in [logging]: ${unknownKeys.join(", ")}`,
+		);
+	}
+	const rawLevel = value.level === undefined ? "info" : stringField(value, "level", "logging");
+	const levels: readonly string[] = ["off", "error", "warn", "info", "debug"];
+	if (!levels.includes(rawLevel)) {
+		throw new ConfigError(`config: logging.level must be one of: ${levels.join(", ")}`);
+	}
+	const level = rawLevel as LogLevel;
+	const file = value.file === undefined ? undefined : stringField(value, "file", "logging");
+	const maxSizeMib = positiveIntField(value, "max-size-mib", 10, "logging");
+	const keep = positiveIntField(value, "keep", 5, "logging");
+	return {
+		level,
+		...(file === undefined ? {} : { file }),
+		maxSizeMib,
+		keep,
+	};
 }
 
 function describeValue(value: unknown): string {
@@ -1560,6 +1633,16 @@ export function configToToml(config: FactoryConfig): string {
 		"completion-message-lines": config.completionMessageLines,
 		"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
 		...(config.priority === undefined ? {} : { priority: { labels: config.priority.labels } }),
+		...(config.logging === undefined
+			? {}
+			: {
+					logging: {
+						level: config.logging.level,
+						...(config.logging.file === undefined ? {} : { file: config.logging.file }),
+						"max-size-mib": config.logging.maxSizeMib,
+						keep: config.logging.keep,
+					},
+				}),
 		scroll: {
 			speed: config.scroll.speed,
 			acceleration: config.scroll.acceleration,
