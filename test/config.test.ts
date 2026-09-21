@@ -213,9 +213,16 @@ describe("the Default configuration", () => {
 			});
 		}
 		// One neutral Consultation type that passes the operator's input
-		// straight through.
+		// straight through, and the pair programming type on the high
+		// thinking level.
 		expect(config.consultationTypes).toEqual({
 			consult: { agent: "pi", environment: "worktree", template: "{input}" },
+			pair: {
+				agent: "pi",
+				environment: "worktree",
+				thinking: "xhigh",
+				template: expect.stringContaining("pair programming session"),
+			},
 		});
 		// No ticket sources, no repository mappings, and no state file entry:
 		// the file works on any machine.
