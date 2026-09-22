@@ -120,6 +120,34 @@ describe("GitHub ticket sources", () => {
 		expect(request).toContain("blockedBy(first: 100)");
 	});
 
+	test("stores the repository identity in lowercase, the owner casing left in the display name", async () => {
+		const runner = new SourceRunner([
+			page([
+				{
+					...issue(),
+					repository: {
+						name: "Factory",
+						nameWithOwner: "Acme/Factory",
+						url: "https://github.com/Acme/Factory",
+					},
+				},
+			]),
+		]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets).toEqual([
+			expect.objectContaining({
+				repository: {
+					identity: "github.com/acme/factory",
+					displayName: "Acme/Factory",
+					cloneUrl: "https://github.com/Acme/Factory.git",
+				},
+			}),
+		]);
+	});
+
 	test("an issue blocked by an unclosed issue leaves the snapshot", async () => {
 		const runner = new SourceRunner([
 			page([{ ...issue(5), blockedBy: { nodes: [{ number: 4, state: "OPEN" }] } }, issue(6)]),

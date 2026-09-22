@@ -731,7 +731,13 @@ function normalizeGitHubNode(
 			labels: labelNames,
 			externalUpdatedAt: updatedAt,
 			repository: {
-				identity: `${config.host.toLowerCase()}/${nameWithOwner}`,
+				// The canonical repository identity is lowercase (the config
+				// contract): the owner casing the API answers stays in the
+				// display name only. A stored identity that keeps the API
+				// casing breaks the case-insensitive repository equality every
+				// cross-source rule reads, the fixing pull request's branch
+				// link among them (ADR 0042).
+				identity: `${config.host.toLowerCase()}/${nameWithOwner.toLowerCase()}`,
 				displayName: nameWithOwner,
 				cloneUrl: `https://${config.host}/${nameWithOwner}.git`,
 			},

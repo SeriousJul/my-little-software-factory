@@ -403,6 +403,28 @@ describe("host-qualified repository references", () => {
 			expect(outcome.repository.path).toBe(mapped);
 		}
 	});
+
+	test("a mapping key with other casing still pins the canonical identity", async () => {
+		const home = tempHome();
+		const runner = new FakeRunner();
+		const mapped = checkout(home, "elsewhere", runner, "https://github.com/Acme/Billing.git");
+		const githubBilling = {
+			identity: "github.com/acme/billing",
+			displayName: "Acme/Billing",
+			cloneUrl: "https://github.com/Acme/Billing.git",
+		};
+		// The operator wrote the key with the API's owner casing; the identity
+		// the sources store is canonical lowercase. The mapping still pins.
+		const outcome = await resolveRepository(
+			githubBilling,
+			configWith({ "github.com/Acme/Billing": "~/src/elsewhere" }),
+			{ runner, home },
+		);
+		expect(outcome.ok).toBe(true);
+		if (outcome.ok) {
+			expect(outcome.repository.path).toBe(mapped);
+		}
+	});
 });
 
 describe("commandFailureText", () => {

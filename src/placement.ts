@@ -100,7 +100,12 @@ function nonLabelConditionsHold(membership: SourceMembership, state: WorkflowSta
 	const match = state.match;
 	if (match.sourceName !== undefined && match.sourceName !== membership.sourceName) return false;
 	if (match.sourceKind !== undefined && match.sourceKind !== membership.sourceKind) return false;
-	if (match.repository !== undefined && match.repository !== membership.repository.identity)
+	// The repository identity is canonical lowercase and the match value is
+	// the operator's string, so the condition reads case-insensitive.
+	if (
+		match.repository !== undefined &&
+		match.repository.toLowerCase() !== membership.repository.identity.toLowerCase()
+	)
 		return false;
 	return true;
 }

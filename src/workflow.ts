@@ -382,17 +382,20 @@ export function newestMembershipOf(ticket: Ticket): SourceMembership {
  */
 export function pullRequestFixesTicket(pullRequest: Ticket, ticket: Ticket): boolean {
 	if (pullRequest.sourceKind !== "github-pull-request") return false;
+	// The repository identity is case-insensitive on GitHub: the link holds
+	// across the owner casing an older plane stored, the legacy pair among
+	// them (ADR 0042).
 	const ticketNumbers = new Map<string, number>();
 	for (const membership of ticket.memberships) {
 		const number = externalKeyNumber(membership.externalKey);
-		if (number !== null) ticketNumbers.set(membership.repository.identity, number);
+		if (number !== null) ticketNumbers.set(membership.repository.identity.toLowerCase(), number);
 	}
 	for (const membership of pullRequest.memberships) {
 		for (const reference of issueReferencesOf(membership.attributes)) {
 			if (reference.identity !== null && reference.identity === ticket.identity) return true;
 			if (
 				reference.identity === null &&
-				ticketNumbers.get(membership.repository.identity) === reference.number
+				ticketNumbers.get(membership.repository.identity.toLowerCase()) === reference.number
 			)
 				return true;
 		}
@@ -400,8 +403,8 @@ export function pullRequestFixesTicket(pullRequest: Ticket, ticket: Ticket): boo
 	const headBranch = headBranchOf(newestMembershipOf(pullRequest).attributes);
 	if (headBranch === null) return false;
 	return (
-		newestMembershipOf(pullRequest).repository.identity ===
-			newestMembershipOf(ticket).repository.identity &&
+		newestMembershipOf(pullRequest).repository.identity.toLowerCase() ===
+			newestMembershipOf(ticket).repository.identity.toLowerCase() &&
 		headBranch.startsWith(ticketBranchPrefix(ticket.externalKey))
 	);
 }

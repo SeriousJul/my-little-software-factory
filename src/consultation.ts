@@ -3,7 +3,7 @@ import type { FactoryConfig } from "./config.ts";
 import type { RepositoryRef, Ticket } from "./domain/ticket.ts";
 import { fileExists } from "./fs.ts";
 import type { HerdrAgent } from "./herdr.ts";
-import { expandHome, matchesRepository, realPathOf } from "./repo.ts";
+import { expandHome, lookupRepositoryMapping, matchesRepository, realPathOf } from "./repo.ts";
 import type { CommandResult, CommandRunner } from "./runner.ts";
 import type { Consultation, ConsultationResource } from "./state.ts";
 import type { TurnEndCause } from "./turn-log.ts";
@@ -144,7 +144,9 @@ export function consultationRepositoryCatalog(
 			options.set(key, {
 				...ref,
 				identity: key,
-				path: config.repos[key] ?? config.repos[shortIdentity] ?? "",
+				// The mapping lookup is case-insensitive: the config key is the
+				// operator's string, the identity is canonical lowercase.
+				path: lookupRepositoryMapping(config.repos, [key, shortIdentity])?.path ?? "",
 			});
 		}
 	}

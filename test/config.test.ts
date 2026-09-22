@@ -511,6 +511,21 @@ describe("validateConfig", () => {
 				expect(source.auth).toBeUndefined();
 				expect(source.filter).toBeUndefined();
 			}
+			// The machine carries the shipped security half (ADR 0029, ADR 0042):
+			// one state per security source kind, and one resolve task type per
+			// kind, each auto-advancing into its review position.
+			for (const name of [
+				"resolve-security-advisory",
+				"resolve-dependabot-alert",
+				"resolve-secret-scanning-alert",
+			]) {
+				expect(config.taskTypes[name].thinking).toBe("high");
+				expect(config.taskTypes[name].transition).toEqual({
+					ticketFacts: [],
+					pullRequestFacts: ["ready-for-review"],
+					autoAdvance: true,
+				});
+			}
 			// The merge task type runs its handoffs on a low thinking level,
 			// and its transition returns a pull request that did not merge to
 			// the needs-work state.
@@ -565,6 +580,21 @@ describe("validateConfig", () => {
 					name: "ready-to-ship",
 					taskType: "merge",
 					match: { sourceKind: "github-pull-request", labelsAny: ["ready-to-ship"] },
+				},
+				{
+					name: "security-advisory",
+					taskType: "resolve-security-advisory",
+					match: { sourceKind: "github-security-advisory" },
+				},
+				{
+					name: "security-dependabot-alert",
+					taskType: "resolve-dependabot-alert",
+					match: { sourceKind: "github-dependabot-alert" },
+				},
+				{
+					name: "security-secret-alert",
+					taskType: "resolve-secret-scanning-alert",
+					match: { sourceKind: "github-secret-scanning-alert" },
 				},
 				{
 					// The park: an open pull request the plane has not labeled
