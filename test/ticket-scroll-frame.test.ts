@@ -641,7 +641,9 @@ describe("native Ticket detail viewport", () => {
 					// The source field is below this small viewport at the preserved
 					// offset. Grow the terminal only to observe that refresh, then
 					// return to the original viewport to verify the native offset.
-					setup.resize(SCROLL_WIDTH, 20);
+					// The blank that closes the interactive group stands above the
+					// source field, so the field needs one more row than before.
+					setup.resize(SCROLL_WIDTH, 21);
 					await awaitFrame(
 						setup,
 						(frame) => frame.includes("External key: #11-refresh"),

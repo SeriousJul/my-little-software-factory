@@ -136,8 +136,10 @@ export function detailContent(
 		for (const line of wrapToWidth(text, usableCols))
 			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
-	pushWrapped(ticket.title, paint("text"), true);
-	pushWrapped(ticket.repository, paint("text"));
+	// The title wears the accent role and the bold: the ticket's identity
+	// stands out of the flat fact rows, and the repository dims beneath it.
+	pushWrapped(ticket.title, paint("accent"), true);
+	pushWrapped(ticket.repository, paint("subtext0"));
 	// The Starting window (ADR 0030) takes the state line's slot in place of
 	// the badge, the same face the list row wears, so the list and the detail
 	// never disagree. The `[handed-off]` badge is never drawn: where the
@@ -189,6 +191,14 @@ export function detailContent(
 	// `Priority: critical (issue #123)`, the fixing alert by `alert #9`, the
 	// fixing advisory by its key alone (ADR 0023, ADR 0042).
 	lines.push({ text: `Priority: ${fact.text}`, fg: fact.fg });
+	// One blank closes the pane's interactive group - the Priority fact and
+	// the override's choice row, which the scroll box inserts right after
+	// the fact - and opens the read-only groups: the warnings, the turn's
+	// log, and the source facts. The detail's row budget at the sample
+	// terminal is spent here: the groups below must fit the rows the detail
+	// shows without a scroll, so they set themselves apart by their roles,
+	// not by more gaps.
+	lines.push({ text: " ", fg: paint("subtext0") });
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
 	// and says where its cleanup lives - in herdr, not in the control plane
@@ -230,19 +240,28 @@ export function detailContent(
 		// decision is `pending` until one is made on the turn.
 		const date = completion.completedAt.slice(0, 16).replace("T", " ");
 		const decision = completion.decision ?? "pending";
+		// The green label opens the turn's log: the report the agent left
+		// behind, kept apart from the static facts by its color and its
+		// indented, dimmed message, not by a row the budget does not have.
 		pushWrapped(
 			`Last completion: ${date} ${completion.taskType} by ${completion.agentName} (${completion.agentType}) ${decision}`,
-			paint("text"),
+			paint("green"),
 		);
+		// The message indents under its label: wrap first, then prefix, because
+		// the wrap drops leading spaces. It drops the indent where the columns
+		// cannot hold it.
+		const indent = usableCols >= 8 ? "  " : "";
 		for (const line of completion.message.split("\n")) {
-			for (const wrapped of wrapToWidth(line, usableCols))
-				lines.push({ text: wrapped, fg: paint("subtext0") });
+			for (const wrapped of wrapToWidth(line, Math.max(1, usableCols - indent.length)))
+				lines.push({ text: indent + wrapped, fg: paint("subtext0") });
 		}
 	}
 	pushWrapped(`Source kind: ${ticket.sourceKind}`, paint("text"));
 	pushWrapped(`External key: ${ticket.externalKey}`, paint("text"));
 	pushWrapped(`Source state: ${ticket.sourceState}`, paint("text"));
-	pushWrapped(`Source URL: ${ticket.url}`, paint("text"));
+	// The link to the ticket's GitHub page wears the blue role: the one row
+	// the operator opens in a browser, kept out of the flat fact rows.
+	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
 	pushWrapped(`Labels: ${ticket.labels.join(", ") || "none"}`, paint("text"));
 	for (const membership of ticket.memberships) {
 		pushWrapped(
@@ -251,7 +270,9 @@ export function detailContent(
 		);
 	}
 	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
-	lines.push({ text: " ", fg: paint("subtext0") });
+	// The description carries no gap of its own: the read-only groups are
+	// already closed above by the single blank, and the dim that the
+	// description wears sets it apart from the source facts in its place.
 	pushWrapped(ticket.description, paint("subtext0"));
 	const truncated = lines.map((line) => ({
 		text: truncateToWidth(line.text, usableCols),

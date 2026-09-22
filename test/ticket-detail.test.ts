@@ -208,6 +208,71 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 	});
 });
 
+describe("Ticket detail grouped layout", () => {
+	const first = SAMPLE_TICKETS[0];
+	if (first === undefined) throw new Error("missing sample ticket");
+	// A ticket with a settled turn: its completion stands as the log group.
+	const withLog = SAMPLE_TICKETS[3];
+	if (withLog === undefined) throw new Error("missing sample ticket");
+
+	test("the title wears the accent role and the bold, and the repository dims", () => {
+		const lines = detailLines(first, 100, 10);
+		expect(lines).toContainEqual({
+			text: "Retry policy for webhooks",
+			fg: roleColor("accent"),
+			bold: true,
+		});
+		expect(lines).toContainEqual({ text: "acme/billing", fg: roleColor("subtext0") });
+	});
+
+	test("the link to the ticket's GitHub page wears the blue role", () => {
+		const lines = detailLines(first, 100, 10);
+		expect(lines).toContainEqual({
+			text: "GitHub: https://github.com/acme/billing/issues/1",
+			fg: roleColor("blue"),
+		});
+	});
+
+	test("one blank closes the interactive group and opens the read-only groups", () => {
+		const lines = detailLines(withLog, 100, 10);
+		const texts = lines.map((line) => line.text);
+		const at = (text: string) => {
+			const i = texts.indexOf(text);
+			if (i === -1) throw new Error(`missing detail line: ${text}`);
+			return i;
+		};
+		// The blank stands on the Priority fact's right, where the override
+		// row renders, and no other row in the pane takes a blank.
+		expect(texts[at("Priority: none") + 1]).toBe(" ");
+		expect(texts.filter((t) => t === " ").length).toBe(1);
+		// The description follows the source facts on its dim alone.
+		expect(texts[at("Labels: none") + 1]).not.toBe(" ");
+	});
+
+	test("the turn's log stands apart in its green label and indented dim", () => {
+		const lines = detailLines(withLog, 100, 10);
+		const texts = lines.map((line) => line.text);
+		const at = (text: string) => {
+			const i = texts.indexOf(text);
+			if (i === -1) throw new Error(`missing detail line: ${text}`);
+			return i;
+		};
+		// The green label opens the log.
+		expect(
+			lines[at("Last completion: 2026-01-01 12:00 review by factory-review-I_4 (claude) pending")]
+				.fg,
+		).toBe(roleColor("green"));
+		// The message indents under its label, dim, on every wrapped line.
+		expect(texts[at("  The auth shim and its flag are removed.")]).toBe(
+			"  The auth shim and its flag are removed.",
+		);
+		expect(lines[at("  The auth shim and its flag are removed.")].fg).toBe(roleColor("subtext0"));
+		expect(texts[at("  All 142 tests pass. I left the migration note in docs/auth.md.")]).toBe(
+			"  All 142 tests pass. I left the migration note in docs/auth.md.",
+		);
+	});
+});
+
 describe("Ticket detail wheel acceleration", () => {
 	test("starts precisely, accelerates during a burst, and caps speed", () => {
 		const burst = newWheelBurst();

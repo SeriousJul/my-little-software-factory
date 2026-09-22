@@ -324,7 +324,8 @@ describe("source-driven frames", () => {
 					// No task rule matches an issue, so the open ticket's task
 					// type line carries the configured default.
 					expect(detail).toContain("Suggested task type: implement");
-					expect(detail).toContain("Source URL: https://github.com/acme/factory/issues/5");
+					// The link to the ticket's GitHub page, in the blue role.
+					expect(detail).toContain("GitHub: https://github.com/acme/factory/issues/5");
 					expect(detail).toContain("Labels: ready-for-agent");
 				},
 				WIDTH,
