@@ -357,7 +357,7 @@ It asks Herdr for the ticket's stable Agent name, and takes the name of its work
 _Avoid_: assign, dispatch, launch
 
 **Route close**:
-The act the handoff ask of the Decision screen makes on the settled turn's environment, at the ask: a direct start closes it before the handoff builds its own, and a start that waits in the Work queue closes it at the enqueue. It is non-destructive: a worktree environment loses its herdr workspace, and the checkout and the branch stay, so the handoff reopens the worktree on its branch in a fresh workspace, and a live-worktree environment loses its tab beside its shared workspace. It is the ask's act: the automatic route and the Restart keep the stored workspace and reuse it. A refused close is a line, not a failure: the handoff runs on the stored workspace it could not take down (ADR 0046).
+The act the handoff ask of the Decision screen makes on the settled turn's environment, at the ask: a direct start closes it before the handoff builds its own, and a start that waits in the Work queue closes it at the enqueue. It is non-destructive: a worktree environment loses its herdr workspace, and the checkout and the branch stay, so the handoff reopens the worktree in a fresh workspace - on its branch when a worktree holds it, or by the path it stands in, on the branch the agent left it, when no worktree holds the branch - and a live-worktree environment loses its tab beside its shared workspace. It is the ask's act: the automatic route and the Restart keep the stored workspace and reuse it. A refused close is a line, not a failure: the handoff runs on the stored workspace it could not take down (ADR 0046).
 _Avoid_: workspace cleanup, environment teardown
 
 **Handoff attempt**:

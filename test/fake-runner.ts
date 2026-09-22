@@ -252,3 +252,34 @@ export function worktreeCreateJson(workspaceId: string, pane: string): string {
 		},
 	});
 }
+
+/** One worktree of a herdr `worktree list` result. */
+export interface ListedWorktree {
+	path: string;
+	branch?: string;
+	/** A worktree git linked into the repository; the source checkout is not. */
+	linked?: boolean;
+	/** A worktree git would prune: gone from disk, or broken. */
+	prunable?: boolean;
+	/** The workspace open on the worktree, if any. */
+	openWorkspaceId?: string;
+}
+
+/** A herdr `worktree list` JSON response. */
+export function worktreeListJson(worktrees: ListedWorktree[]): string {
+	return JSON.stringify({
+		id: "cli:worktree:list",
+		result: {
+			type: "worktree_list",
+			worktrees: worktrees.map((worktree) => ({
+				...(worktree.branch !== undefined && { branch: worktree.branch }),
+				is_linked_worktree: worktree.linked ?? true,
+				is_prunable: worktree.prunable ?? false,
+				path: worktree.path,
+				...(worktree.openWorkspaceId !== undefined && {
+					open_workspace_id: worktree.openWorkspaceId,
+				}),
+			})),
+		},
+	});
+}

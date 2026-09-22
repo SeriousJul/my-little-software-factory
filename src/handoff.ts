@@ -8,10 +8,13 @@
  * works the ticket on its own branch factory/<ticket id>-<title slug>: a
  * missing branch is created from the worktree base (the fetched remote
  * default branch, or the local HEAD with a note on the fallback), an
- * existing branch is reused in the worktree that holds it (or a fresh
- * worktree when no worktree holds it). Every handoff starts a fresh agent
- * in a fresh pane and sends the rendered task type template as its prompt.
- * A running agent is never reused.
+ * existing branch is reused in the worktree that holds it, and a branch
+ * no worktree holds is checked out into a fresh worktree - the ticket's
+ * own worktree, when it still stands on disk left on another branch by
+ * the agent that last worked the ticket, is reopened by its path instead,
+ * on the branch it holds. Every handoff starts a fresh agent in a fresh
+ * pane and sends the rendered task type template as its prompt. A running
+ * agent is never reused.
  *
  * A workflow handoff or a restart starts in the workspace of the ticket's
  * previous handoff: it reuses the stored workspace when herdr still holds
@@ -21,7 +24,8 @@
  * placeholder.
  *
  * The sequence of external commands is the contract the fake runner tests
- * pin; the herdr CLI contract was verified against herdr 0.8.2.
+ * pin; the herdr CLI contract was verified against herdr 0.8.2, and the
+ * worktree list and the worktree open by its path against herdr 0.9.1.
  *
  * A handoff failure leaves no residue: a worktree handoff that fails before
  * the agent starts removes what the handoff created (the fresh worktree,
@@ -1044,10 +1048,14 @@ async function startWorktreeHandoff(
  * The reuse sequence for a branch that already exists in the checkout: the
  * ticket keeps its branch and its earlier work. `worktree open` finds the
  * worktree that holds the branch and gives it a workspace (reusing one
- * that is already open); a branch no worktree holds is checked out into a
- * fresh worktree. The agent starts in a fresh pane: a fresh tab when a
- * workspace was already open, the attached workspace's first pane when
- * herdr just opened it.
+ * that is already open). A branch no worktree holds is checked out into a
+ * fresh worktree - unless the ticket's own worktree still stands on disk,
+ * left on another branch by the agent that last worked the ticket (the
+ * work of a pull request lands on the branch the agent chose, not the
+ * plane's): that worktree is reopened by its path, on the branch it holds,
+ * and a fresh create would only collide with its directory. The agent
+ * starts in a fresh pane: a fresh tab when a workspace was already open,
+ * the attached workspace's first pane when herdr just opened it.
  *
  * Cleanup removes only what this handoff created (the fresh tab, the
  * attached workspace, the fresh worktree). It never deletes the branch:
@@ -1076,6 +1084,31 @@ async function startReusedBranchHandoff(
 	}
 	if (herdrErrorCode(opened) !== "worktree_not_found") {
 		return failedCommand(opened, ctx);
+	}
+	// No worktree holds the branch: the agent that last worked the ticket
+	// may have left its worktree on the branch the work needed, so the
+	// branch lookup finds nothing while the worktree still stands on
+	// disk. Reopen that worktree by its path before a fresh create would
+	// collide with its directory.
+	const worktreePath = await findTicketWorktreePath(checkout, branch, ctx);
+	if (worktreePath !== null) {
+		const reopened = await ctx.runner.run("herdr", [
+			"worktree",
+			"open",
+			"--cwd",
+			checkout,
+			"--path",
+			worktreePath,
+			"--no-focus",
+		]);
+		if (reopened.code === 0) {
+			return startInOpenedWorktree(reopened, agent, args, prompt, ctx, extra);
+		}
+		// The worktree went between the list and the open: the fresh create
+		// is the answer. Any other refusal stands on its own.
+		if (herdrErrorCode(reopened) !== "worktree_not_found") {
+			return failedCommand(reopened, ctx);
+		}
 	}
 	// No worktree holds the branch: check it out into a fresh worktree.
 	const created = await ctx.runner.run("herdr", [
@@ -1119,6 +1152,67 @@ async function startReusedBranchHandoff(
 		},
 		() => removeWorktreeCheckout(workspaceId, ctx),
 	);
+}
+
+/**
+ * The path the ticket's worktree stands in, when the branch lookup found
+ * nothing: herdr names a worktree checkout after the branch it was made
+ * for (the branch with its slashes for hyphens), beside the repository's
+ * other linked worktrees. The agent that last worked the ticket may have
+ * left that worktree on another branch - the work of a pull request lands
+ * on the branch the agent chose, not the plane's - so no worktree holds
+ * the branch while the worktree still stands, and a fresh create would
+ * collide with its directory.
+ *
+ * The answer comes from a herdr `worktree list`: the candidate path is
+ * taken from the parent of the repository's linked worktrees and the
+ * branch's name, and it counts only when the list holds a linked
+ * worktree at exactly that path that git no longer prunes. A list that
+ * does not read, and a worktree the list does not hold, answer null: the
+ * reuse sequence then takes the fresh create, the way it always did.
+ */
+async function findTicketWorktreePath(
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+): Promise<string | null> {
+	const listed = await ctx.runner.run("herdr", ["worktree", "list", "--cwd", checkout]);
+	if (listed.code !== 0) {
+		return null;
+	}
+	let data: unknown;
+	try {
+		data = JSON.parse(listed.stdout);
+	} catch {
+		return null;
+	}
+	const worktrees = (data as { result?: { worktrees?: unknown } }).result?.worktrees;
+	if (!Array.isArray(worktrees)) {
+		return null;
+	}
+	const entries = worktrees.filter(
+		(entry): entry is { path: string; is_linked_worktree?: unknown; is_prunable?: unknown } =>
+			typeof entry === "object" &&
+			entry !== null &&
+			typeof (entry as { path?: unknown }).path === "string",
+	);
+	// The parent of the linked worktrees is the herdr worktree directory of
+	// this repository; the candidate sits in it under the branch's name.
+	const linked = entries.find((entry) => entry.is_linked_worktree === true);
+	if (linked === undefined) {
+		return null;
+	}
+	const parent = linked.path.slice(0, linked.path.lastIndexOf("/"));
+	if (parent === "") {
+		return null;
+	}
+	const candidate = `${parent}/${branch.replaceAll("/", "-")}`;
+	return entries.some(
+		(entry) =>
+			entry.path === candidate && entry.is_linked_worktree === true && entry.is_prunable !== true,
+	)
+		? candidate
+		: null;
 }
 
 /**

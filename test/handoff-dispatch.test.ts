@@ -35,8 +35,10 @@ import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
 	tabCreateJson,
+	WORKTREE_NOT_FOUND_ERROR,
 	workspaceCreateJson,
 	workspaceListJson,
+	worktreeListJson,
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 import { gatedRunner } from "./gated-runner.ts";
@@ -3045,6 +3047,63 @@ describe("the decision screen's route close", () => {
 		expect(
 			commands.indexOf(`herdr tab create --workspace ${stored.workspaceId} --no-focus`),
 		).toBeLessThan(commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`));
+	});
+
+	test("a direct route whose worktree stands on another branch reopens it by path", async () => {
+		const rigRef = rig();
+		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		// The close took the workspace: herdr's list no longer holds it.
+		const branch = "factory/5-add-a-webhook-retry-policy";
+		// The agent that last worked the ticket left the worktree on the
+		// branch the work needed, so no worktree holds the ticket's branch
+		// while the worktree still stands at the path herdr names for it.
+		const worktreePath = join(
+			rigRef.home,
+			"worktrees",
+			"factory",
+			"factory-5-add-a-webhook-retry-policy",
+		);
+		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		rigRef.runner.set("git", ["-C", rigRef.checkout, "branch", "--list", branch], {
+			stdout: `* ${branch}\n`,
+		});
+		rigRef.runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", rigRef.checkout, "--branch", branch, "--no-focus"],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		rigRef.runner.set("herdr", ["worktree", "list", "--cwd", rigRef.checkout], {
+			stdout: worktreeListJson([
+				{ path: rigRef.checkout, linked: false },
+				{ path: worktreePath, branch: "factory/146-the-branch-the-work-needed" },
+			]),
+		});
+		rigRef.runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", rigRef.checkout, "--path", worktreePath, "--no-focus"],
+			{ stdout: worktreeOpenJson("ws-route", "pane-route", { alreadyOpen: false, worktreePath }) },
+		);
+		await expect(directRoute(rigRef, worktreeChoice)).resolves.toEqual({ ok: true, queued: false });
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		const commands = rigRef.commands();
+		// The ask closes the workspace, the branch lookup finds no worktree,
+		// and the handoff reopens the worktree the agent left by its path,
+		// on the branch it holds. The fresh create would collide with the
+		// directory, and never runs.
+		const closedAt = commands.indexOf(`herdr workspace close ${stored.workspaceId}`);
+		const branchOpenAt = commands.indexOf(
+			`herdr worktree open --cwd ${rigRef.checkout} --branch ${branch} --no-focus`,
+		);
+		const pathOpenAt = commands.indexOf(
+			`herdr worktree open --cwd ${rigRef.checkout} --path ${worktreePath} --no-focus`,
+		);
+		expect(closedAt).toBeLessThan(branchOpenAt);
+		expect(branchOpenAt).toBeLessThan(pathOpenAt);
+		expect(pathOpenAt).toBeLessThan(
+			commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`),
+		);
+		expect(commands).not.toContain(expect.stringContaining("worktree create"));
 	});
 });
 

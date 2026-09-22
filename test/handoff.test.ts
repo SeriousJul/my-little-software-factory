@@ -35,6 +35,7 @@ import {
 	workspaceCreateJson,
 	workspaceListJson,
 	worktreeCreateJson,
+	worktreeListJson,
 	worktreeOpenJson,
 } from "./fake-runner.ts";
 
@@ -1261,6 +1262,414 @@ describe("handOffTicket: the worktree sequence", () => {
 		// The agent is running in the worktree and can be prompted by hand.
 		expect(outcome.status).toBe("prompt-failed");
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
+	});
+
+	// The ticket's worktree, left on another branch by the agent that last
+	// worked the ticket: the directory herdr names for the branch still
+	// stands on disk, holding the branch the work needed.
+	const WORKTREE_PARENT = join(HOME, "worktrees", "billing");
+
+	/** The list that holds the ticket's worktree beside one other worktree. */
+	function strandedWorktreeList(): string {
+		return worktreeListJson([
+			{ path: CHECKOUT, linked: false },
+			{ path: join(WORKTREE_PARENT, "factory-9-other-branch"), branch: "factory/9-other-branch" },
+			{ path: WORKTREE_PATH, branch: "factory/146-the-branch-the-work-needed" },
+		]);
+	}
+
+	test("an existing branch no worktree holds reopens the ticket's worktree left on another branch", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: strandedWorktreeList(),
+		});
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-wt", "pane-wt", {
+					alreadyOpen: false,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The branch lookup finds no worktree, the list finds the ticket's
+		// worktree at the path herdr names for the branch, and the open by
+		// path lands the agent in the worktree the agent last left, on the
+		// branch it holds. No create: a create would collide with the
+		// directory.
+		expect(runner.commands()).toEqual([
+			`git -C ${CHECKOUT} rev-parse --git-dir`,
+			`git -C ${CHECKOUT} remote get-url origin`,
+			`git -C ${CHECKOUT} branch --list factory/7-retry-policy-for-webhooks`,
+			`herdr worktree open --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
+			`herdr worktree list --cwd ${CHECKOUT}`,
+			`herdr worktree open --cwd ${CHECKOUT} --path ${WORKTREE_PATH} --no-focus`,
+			`herdr agent start ${AGENT} --kind pi --pane pane-wt`,
+			`herdr agent prompt ${AGENT} ${PROMPT}`,
+		]);
+		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+	});
+
+	test("an existing branch no worktree holds creates fresh when the worktree is gone from disk", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		// The list holds the other worktree, and no worktree at the path the
+		// branch names: the checkout is gone, and the create takes it.
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: worktreeListJson([
+				{ path: CHECKOUT, linked: false },
+				{ path: join(WORKTREE_PARENT, "factory-9-other-branch"), branch: "factory/9-other-branch" },
+			]),
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).toContain(`herdr worktree list --cwd ${CHECKOUT}`);
+		expect(commands).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
+		);
+		expect(commands).not.toContain(expect.stringContaining("--path"));
+	});
+
+	test("an existing branch no worktree holds creates fresh when the ticket's worktree is prunable", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		// The worktree git would prune is not the worktree: the create takes
+		// the path it leaves free.
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: worktreeListJson([
+				{ path: CHECKOUT, linked: false },
+				{ path: WORKTREE_PATH, branch: "factory/146-the-branch-the-work-needed", prunable: true },
+			]),
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
+		);
+		expect(commands).not.toContain(expect.stringContaining("--path"));
+	});
+
+	test("an existing branch no worktree holds creates fresh when the worktree list does not read", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		// A list that refuses does not stop the handoff: the create runs, the
+		// way the reuse did before the list looked.
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			code: 1,
+			stderr: "the list refused",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
+		);
+		expect(commands).not.toContain(expect.stringContaining("--path"));
+	});
+
+	test("an open workspace on the ticket's worktree gets a fresh tab, not a create", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		// A workspace already stands on the worktree: the open by path reuses
+		// it, and the agent takes a fresh tab in it.
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: worktreeListJson([
+				{ path: CHECKOUT, linked: false },
+				{
+					path: WORKTREE_PATH,
+					branch: "factory/146-the-branch-the-work-needed",
+					openWorkspaceId: "ws-open",
+				},
+			]),
+		});
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-open", "pane-root", {
+					alreadyOpen: true,
+					worktreePath: WORKTREE_PATH,
+				}),
+			},
+		);
+		runner.set(
+			"herdr",
+			["tab", "create", "--workspace", "ws-open", "--cwd", WORKTREE_PATH, "--no-focus"],
+			{ stdout: tabCreateJson("pane-tab") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).toContain(
+			`herdr worktree open --cwd ${CHECKOUT} --path ${WORKTREE_PATH} --no-focus`,
+		);
+		expect(commands).toContain(
+			`herdr tab create --workspace ws-open --cwd ${WORKTREE_PATH} --no-focus`,
+		);
+		expect(commands).toContain(`herdr agent start ${AGENT} --kind pi --pane pane-tab`);
+		expect(commands).not.toContain(expect.stringContaining("worktree create"));
+	});
+
+	test("a path open that finds nothing falls through to the fresh create", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: strandedWorktreeList(),
+		});
+		// The worktree went between the list and the open: herdr says so, and
+		// the create takes the place it left.
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			{
+				code: 1,
+				stderr: WORKTREE_NOT_FOUND_ERROR,
+			},
+		);
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		const commands = runner.commands();
+		expect(commands).toContain(
+			`herdr worktree open --cwd ${CHECKOUT} --path ${WORKTREE_PATH} --no-focus`,
+		);
+		expect(commands).toContain(
+			`herdr worktree create --cwd ${CHECKOUT} --branch factory/7-retry-policy-for-webhooks --no-focus`,
+		);
+	});
+
+	test("a refused path open fails the handoff, and no create runs", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: strandedWorktreeList(),
+		});
+		// A refusal that is not "gone" stands on its own: the handoff fails
+		// with it, and the create never runs on a directory it would collide
+		// with.
+		runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", CHECKOUT, "--path", WORKTREE_PATH, "--no-focus"],
+			{
+				code: 1,
+				stderr: "the worktree will not open",
+			},
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("the worktree will not open");
+		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
 	});
 });
 

@@ -61,6 +61,20 @@ keeps its own close, the record's end. The route's close and the record's
 close are different acts on the same environment, and only the record's
 close takes the work down.
 
+**The branch recovery meets the worktree the close left.** The close takes
+the workspace and leaves the checkout, and the agent that last worked the
+ticket may have left the worktree on the branch the work needed, not the
+branch the plane derives: the work of a pull request lands on the branch
+the agent chose, and no worktree holds the branch the handoff asks for
+while the worktree still stands at the path herdr names for the branch.
+The recovery meets that worktree between the branch lookup and the fresh
+create: it lists the repository's worktrees, takes the worktree that stands
+at the path the branch names, and reopens it by its path, on the branch it
+holds, so the next turn starts on the working state the agent left. A
+worktree the list does not hold, that git prunes, or a list that does not
+read answers the case no more, and the fresh create runs, the way the reuse
+did before the close asked.
+
 **The close rides the seat, and a refusal is a line, not a failure.** The
 close is an environment change, and every environment change takes the seat
 (ADR 0012), so the close of a running start holds the seat inside the run,
@@ -123,3 +137,10 @@ The alternatives:
   reuse, the way it ran before the close asked. The environment the close
   could not take down is the fact the line names, and the leftover the
   record can carry, the way ADR 0012 carries every other leftover.
+- The worktree handoff's branch recovery gains the case the close made:
+  a branch no worktree holds, whose worktree still stands on disk on
+  another branch, reopens that worktree by its path on the branch it holds,
+  and the fresh create never runs on a directory a create would collide
+  with. The create still runs when the worktree is gone from disk, is
+  prunable, or the list does not read, and the agent starts on the branch
+  the work stands in, the work the settled turn left.

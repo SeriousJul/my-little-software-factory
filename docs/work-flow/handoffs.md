@@ -57,7 +57,11 @@ rejection stands.
 	herdr workspace at the checkout with a fresh tab, and a worktree handoff
 	lets herdr create a git worktree first.
 - A worktree handoff branches `factory/<ticket id>-<title slug>` from the
-	checkout's current `HEAD`, and an existing branch is a hard failure.
+	checkout's current `HEAD`. An existing branch is reused: the worktree
+	that holds it is reopened, and a branch no worktree holds is checked out
+	into a fresh worktree - the ticket's own worktree, when it still stands
+	on disk left on another branch by the agent that last worked the ticket,
+	is reopened by its path, on the branch it holds, instead (ADR 0046).
 	A worktree handoff that fails before the agent starts removes the
 	worktree and the branch, so a retry can run.
 - The agent starts under the title slug as its herdr name, with the settings
