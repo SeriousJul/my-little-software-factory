@@ -48,3 +48,20 @@ export function membershipMatchesState(
 	if (match.labelsNone?.some((label) => labels.has(label.toLocaleLowerCase()))) return false;
 	return true;
 }
+
+/**
+ * The newest of the ticket's source memberships: the newest external
+ * update first, the source name as the tiebreak. Undefined when the ticket
+ * lists on no source. The transition fire and the ticket placement read
+ * their write target through this one order, so the two can never disagree
+ * about which listing is newest.
+ */
+export function newestMembership(
+	memberships: readonly SourceMembership[],
+): SourceMembership | undefined {
+	return [...memberships].sort(
+		(a, b) =>
+			b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
+			a.sourceName.localeCompare(b.sourceName),
+	)[0];
+}

@@ -67,6 +67,16 @@
  * Enter confirms and hands off. Esc cancels. While the panel is open, the
  * keys of the app below are disabled.
  *
+ * The Task row also carries the placement the handoff's task type takes on
+ * the ticket the panel edits (ADR 0045): the control plane computes the
+ * evaluation for every offered task type and hands the answers to the panel,
+ * and the row wears them on its written line. A task type that places the
+ * ticket states the state it stands on after the write, and a task type the
+ * ticket cannot stand on wears the warning with the reason the confirm would
+ * refuse with. The row's options stay the full configured task type list: an
+ * infeasible choice is selectable, and the refusal stands as an explicit fact
+ * of the confirm.
+ *
  * The panel sizes itself to the terminal: the value column shrinks first,
  * then the label column, then the marker. The rows scroll within the
  * viewport when the height cannot hold them all: the selected row always
@@ -80,6 +90,7 @@ import { type ReactElement, type RefObject, useEffect, useRef, useState } from "
 import type { AgentTypeConfig } from "../config.ts";
 import type { EnvironmentKind } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
+import type { PlacementEvaluation } from "../placement.ts";
 import {
 	type FitVerdict,
 	type ResolvedAgentType,
@@ -140,10 +151,14 @@ type TextKey = "model" | "thinking" | "contextWindow";
 type DerivedKey = Exclude<RowKey, "environment" | "taskType">;
 
 /**
- * The ways a drafted value cannot reach the Agent it is set on, one per Setting
- * fit cause, so the row can wear the warning the Handoff would fail on.
+ * The fact a row wears while it carries a value the handoff cannot stand on:
+ * the Setting fit verdict of a setting row, and the placement infeasibility
+ * of the Task row (ADR 0045). The setting face keeps the verdict exact, with
+ * its cause, and the placement face names itself where the verdict's cause
+ * has no face. Both state the one sentence the start answers with, so the
+ * row never carries its meaning on the tone alone.
  */
-type UnfitSetting = UnfitVerdict;
+type RowRefusal = UnfitVerdict | { ok: false; reason: string; placement: true };
 
 interface PanelRow {
 	label: string;
@@ -160,9 +175,15 @@ interface PanelRow {
 	fallbackCause?: ModelListCause;
 	/**
 	 * Why this row's value cannot reach the selected agent, and so cannot
-	 * survive a handoff. Undefined means the agent takes the value as it is.
+	 * survive a handoff, or why the Task row's task type cannot place the
+	 * panel's ticket. Undefined means the handoff takes the value as it is.
 	 */
-	unfit?: UnfitSetting;
+	unfit?: RowRefusal;
+	/**
+	 * The note the Task row states under its value: the state the panel's
+	 * ticket stands on after the placement the task type takes (ADR 0045).
+	 */
+	placement?: string;
 	/** True when the row is a text field that takes digits and nothing else. */
 	digits?: boolean;
 }
@@ -187,6 +208,13 @@ interface OverridePanelProps {
 	initial: HandoffChoice;
 	onConfirm: (choice: HandoffChoice) => void;
 	onCancel: () => void;
+	/**
+	 * The placement each offered task type takes on the ticket the panel
+	 * edits (ADR 0045): the control plane computes them, and the panel wears
+	 * the current row's answer on the Task row. Undefined when the caller
+	 * holds no ticket to place, and the row stays plain.
+	 */
+	taskPlacements?: Record<string, PlacementEvaluation>;
 	/** The base control facts, preserved when this overlay owns input. */
 	context: ControlContext;
 	/** False while a Key guide or Message view is above this panel. */
@@ -302,6 +330,7 @@ export function OverridePanel({
 	initial,
 	onConfirm,
 	onCancel,
+	taskPlacements,
 	context,
 	inputActive = true,
 	onHelp,
@@ -344,7 +373,7 @@ export function OverridePanel({
 	const [hasSelection, setHasSelection] = useState(false);
 
 	const rowsForChoice = (value: HandoffChoice): PanelRow[] =>
-		rowsFor(value, agents, environments, taskTypes, listFor(value, modelList));
+		rowsFor(value, agents, environments, taskTypes, listFor(value, modelList), taskPlacements);
 	const allRows = rowsForChoice(choice);
 	const focus = useFormSlots(
 		allRows.map((item, index) => ({
@@ -605,7 +634,11 @@ function listFor(choice: HandoffChoice, modelList: AgentModelList): ModelListSta
 
 /** The rows one panel row paints: its value, its search, and its reason. */
 function rowCells(row: PanelRow): number {
-	return (row.kind === "type-ahead" ? 2 : 1) + (row.unfit === undefined ? 0 : 1);
+	return (
+		(row.kind === "type-ahead" ? 2 : 1) +
+		(row.unfit === undefined ? 0 : 1) +
+		(row.placement === undefined ? 0 : 1)
+	);
 }
 
 /** The rows the panel offers for the current choice, in order. */
@@ -615,6 +648,7 @@ function rowsFor(
 	environments: readonly string[],
 	taskTypes: readonly string[],
 	modelStatus: ModelListStatus,
+	taskPlacements: Record<string, PlacementEvaluation> | undefined,
 ): PanelRow[] {
 	// An Agent type the config no longer names reads as one that maps nothing:
 	// every value the choice carries then shows in its warning row, where the
@@ -633,10 +667,25 @@ function rowsFor(
 		modelStatus.status === "available"
 			? settingFit.modelInList(agent, choice.model, modelStatus.models)
 			: staticVerdicts.model;
+	// The Task row carries the placement the choice's task type takes on the
+	// panel's ticket (ADR 0045): the note names the state the ticket stands on
+	// after the write, and the infeasible answer wears the warning with the
+	// reason the confirm would refuse with. The options stay the full list.
+	const taskRow: PanelRow = {
+		label: "Task type",
+		key: "taskType",
+		kind: "list",
+		options: taskTypes,
+	};
+	const taskPlacement = taskPlacements?.[choice.taskType];
+	if (taskPlacement?.kind === "placement")
+		taskRow.placement = `places the ticket on state ${taskPlacement.state.name}`;
+	else if (taskPlacement?.kind === "infeasible")
+		taskRow.unfit = { ok: false, reason: taskPlacement.reason, placement: true };
 	const rows: PanelRow[] = [
 		{ label: "Agent", key: "agentType", kind: "list", options: Object.keys(agents) },
 		{ label: "Environment", key: "environment", kind: "list", options: environments },
-		{ label: "Task type", key: "taskType", kind: "list", options: taskTypes },
+		taskRow,
 	];
 	// A row shows when its Agent maps the setting. It also shows, wearing the
 	// warning the shared verdict gives, while it carries a value the Agent
@@ -812,6 +861,9 @@ function rowElement(
 		muted: r.kind === "pending" && value !== "",
 		warning: r.unfit !== undefined,
 		error: r.unfit?.reason ?? null,
+		// The Task row's placement note: where the ticket stands after the
+		// write, in the detail tone of a value that fits (ADR 0045).
+		hint: r.placement ?? null,
 		noteWidth: geometry.noteWidth,
 	});
 }

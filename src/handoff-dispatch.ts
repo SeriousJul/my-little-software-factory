@@ -24,6 +24,7 @@ import {
 	type OwnNameKnowledge,
 } from "./handoff.ts";
 import type { Logger } from "./logging.ts";
+import { evaluatePlacement } from "./placement.ts";
 import type { RepositoryMapping } from "./repo.ts";
 import { type CommandRunner, errorMessage } from "./runner.ts";
 import type {
@@ -34,7 +35,7 @@ import type {
 	WorkQueueHandoffItem,
 } from "./state.ts";
 import { workQueueIdentityOf } from "./state.ts";
-import { isCoveredByFixingPullRequest } from "./workflow.ts";
+import { editCommandFor, isCoveredByFixingPullRequest, writeMembershipLabels } from "./workflow.ts";
 
 /** A renderer callback must not strand a durable claim or the dispatch seat. */
 function safeReport(report: () => void): void {
@@ -455,6 +456,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				previousMessage: intent.previousMessage,
 				routeFromIdentity: intent.routeFromIdentity ?? null,
 				closePreviousEnvironment: intent.origin === "workflow" && intent.automatic !== true,
+				automatic: intent.automatic === true,
 			},
 			intent.onStarted,
 		);
@@ -844,6 +846,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// is its own answer when the environment herdr holds no more.
 				closePreviousEnvironment: item.origin === "workflow",
 				workQueuePickup: true,
+				// The Work queue holds manual starts only, so the pickup never
+				// skips the placement the start crosses.
+				automatic: false,
 			},
 			(started) => {
 				if (started.ok) {
@@ -940,6 +945,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 				// is its own answer when the environment herdr holds no more.
 				closePreviousEnvironment: item.origin === "workflow",
 				workQueuePickup: true,
+				// The force-dispatch starts a Work queue item, and the Work queue
+				// holds manual starts only, so the placement the start crosses
+				// runs here, the way its pickup runs it.
+				automatic: false,
 			},
 			(started) => {
 				if (started.ok) {
@@ -1097,6 +1106,17 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const onStage = (stage: string) => this.state.advanceHandoffAttempt(claim.attemptId, stage);
 		const names = this.nameKnowledgeFor(ticket.identity, claimed.routeFromIdentity);
 		const run = (async () => {
+			// The placement (ADR 0045): a non-automatic start whose chosen task
+			// type differs from the ticket's suggestion writes the ticket's
+			// labels before the agent starts, so the position offers the chosen
+			// task. The refusal is the failed start the Setting fit failure
+			// uses, so the ticket keeps its position and the Message line
+			// carries the reason. A refused placement closes nothing, so the
+			// previous environment stands for the operator's next ask.
+			if (claimed.automatic !== true) {
+				const refusal = await this.runPlacement(claimed);
+				if (refusal !== null) return refusal;
+			}
 			// The decision screen's route: the previous environment closes before
 			// the run lists the workspaces, so the handoff builds its own fresh
 			// environment instead of reusing the one the settled turn ran in.
@@ -1135,6 +1155,61 @@ class HandoffDispatchModule implements HandoffDispatch {
 		void run
 			.then((outcome) => this.finishHandoff(ticket.identity, claim, outcome, reportStarted))
 			.catch((error) => this.failHandoff(ticket.identity, claim, reportStarted, error));
+	}
+
+	/**
+	 * The placement the non-automatic start crosses before the agent (ADR 0045).
+	 *
+	 * The evaluation is the Placement module's answer on the start's ticket:
+	 * where the ticket's labels will stand once the chosen task runs. The
+	 * no-placement faces - the chosen task is the ticket's current suggestion,
+	 * or the default handoff of a parked ticket - take no egress, so a start
+	 * that answers them touches the source no more than it did before.
+	 *
+	 * The write runs through the shared label writer, the fire's own. A
+	 * refusal - the infeasible answer, or the failed write - comes back as the
+	 * failed start the Setting fit failure uses: the attempt settles failed,
+	 * the ticket keeps its position, and the Message line carries the reason.
+	 * A write that added or removed labels states them on the Message line: the
+	 * external effect is a fact the operator can read. A write the labels
+	 * already matched runs no command at all, so a Restart of an interrupted
+	 * handoff re-runs the rule and takes egress only when the labels still
+	 * differ.
+	 */
+	private async runPlacement(claimed: ClaimedHandoff): Promise<HandoffOutcome | null> {
+		const config = this.config();
+		const evaluation = evaluatePlacement({
+			states: config.workflowStates,
+			fallbackTaskType: config.defaultTaskType,
+			memberships: claimed.ticket.memberships,
+			chosenTaskType: claimed.choice.taskType,
+		});
+		if (evaluation.kind === "none") return null;
+		if (evaluation.kind === "infeasible") return { status: "failed", reason: evaluation.reason };
+		// The write command is the item's own: the issue edit on an issue
+		// ticket, the pull request edit on a pull request ticket.
+		const command = editCommandFor(evaluation.membership);
+		const write = await writeMembershipLabels(
+			config.sources,
+			this.runner,
+			evaluation.membership,
+			command,
+			evaluation.added,
+			evaluation.removed,
+		);
+		if (write !== null && write.failure !== undefined)
+			return { status: "failed", reason: write.failure };
+		if (write !== null) {
+			const parts = [
+				...(write.added.length > 0 ? [`added labels ${write.added.join(", ")}`] : []),
+				...(write.removed.length > 0 ? [`removed labels ${write.removed.join(", ")}`] : []),
+			];
+			if (parts.length > 0)
+				this.reports.notice(
+					`placement of ${this.ticketName(claimed.ticket.identity)}: ${parts.join("; ")}`,
+				);
+		}
+		return null;
 	}
 
 	/**
@@ -1410,6 +1485,13 @@ interface ClaimedHandoff {
 	 * itself, and its parked run is nobody's queue item.
 	 */
 	workQueuePickup?: boolean;
+	/**
+	 * True for the automatic starts (ADR 0045): the auto-handoff, the workflow
+	 * advance, the automatic restart. The run skips the placement they never
+	 * make; a Work queue item is a manual start, so its pickup and its
+	 * force-dispatch both cross it.
+	 */
+	automatic: boolean;
 }
 
 interface QueuedHandoff extends ClaimedHandoff {

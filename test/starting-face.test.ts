@@ -444,7 +444,22 @@ describe("the Starting window's timeline", () => {
 			positionTaskType: "review",
 			positionTicketIdentity: identity,
 		};
-		const app = seededApp("awaiting", {}, { cause: "failed", transition: outcome });
+		// The machine names the state the settled position stands on: the
+		// ticket's own label offers review, so the route the modal confirms
+		// matches the ticket's current suggestion and places nothing.
+		const app = seededApp(
+			"awaiting",
+			{
+				workflowStates: [
+					{
+						name: "ready-for-agent",
+						taskType: "review",
+						match: { labelsAny: ["ready-for-agent"] },
+					},
+				],
+			},
+			{ cause: "failed", transition: outcome },
+		);
 		stubCheckout(app.runner, checkoutOf(app.config));
 		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 		// The stored workspace still holds: the route reuses it in a new tab,
