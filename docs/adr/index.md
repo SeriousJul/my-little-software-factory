@@ -52,3 +52,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0041: The boot settles the handoff claims the previous run left unsettled](./0041-the-boot-settles-the-handoff-claims-the-previous-run-left-unssettled.md)
 - [ADR 0042: A ticket rests behind its open fixing pull request](./0042-a-ticket-rests-behind-its-open-fixing-pull-request.md)
 - [ADR 0043: A live agent belongs to a ticket by name, not by pane id](./0043-a-live-agent-belongs-to-a-ticket-by-name-not-by-pane-id.md)
+- [ADR 0044: The Consultation close verifies the Agent's identity before it takes anything down](./0044-the-consultation-close-verifies-the-agents-identity-before-it-takes-anything-down.md)

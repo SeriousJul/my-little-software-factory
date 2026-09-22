@@ -337,7 +337,7 @@ _Avoid_: error dialog, retry box, close panel
 **Close**:
 The operator action that ends live work, key `w` in both sections.
 On a Ticket it ends the work cycle, runs the Close cleanup, and returns the ticket to `open` with an incremented cycle number. A Close on a settled turn records the `closed` decision on its trace; a Close on an in-flight turn ends the cycle with no completion trace, because the turn never settled (ADR 0031).
-On a Consultation it stops the Agent and cleans up its resources, keeping the worktree and branch.
+On a Consultation it verifies the Agent's identity, then stops the Agent and cleans up the environment the Agent holds, keeping the worktree and branch. When no Agent is found it issues no command and retires the record, its owned resources recorded as remaining (ADR 0044).
 It asks for confirmation when it stops a live agent.
 _Avoid_: stop, kill, abort, cancel
 

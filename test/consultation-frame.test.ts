@@ -1354,7 +1354,16 @@ describe("Consultation close and cleanup through the UI", () => {
 				{ pane_id: "pane-foreign", tab_id: `tab-${c}` },
 			],
 		);
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		// The close verifies each Agent's identity before it takes anything
+		// down, so the list holds all three at their recorded panes.
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([
+				{ pane: `pane-${a}`, status: "idle" },
+				{ pane: `pane-${b}`, status: "idle" },
+				{ pane: `pane-${c}`, status: "idle" },
+			]),
+		);
 		try {
 			await withApp(
 				async (setup) => {
@@ -1452,7 +1461,12 @@ describe("Consultation close and cleanup through the UI", () => {
 			code: 1,
 			stderr: "refused\n",
 		});
-		const runner = new ConsultationRunner(inner, agentListJson([]));
+		// The close verifies the Agent's identity before it takes the workspace
+		// down, so the list holds the record's Agent at its recorded pane.
+		const runner = new ConsultationRunner(
+			inner,
+			agentListJson([{ pane: `pane-${short}`, status: "idle" }]),
+		);
 		try {
 			await withApp(
 				async (setup) => {

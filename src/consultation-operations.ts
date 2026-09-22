@@ -31,6 +31,7 @@ import {
 	renderConsultationPrompt,
 	restoreControlPlaneFocus,
 } from "./handoff.ts";
+import type { HerdrAgent } from "./herdr.ts";
 import { consultationAgentName } from "./naming.ts";
 import { HerdrAgentReader, matchConsultationAgent } from "./observation.ts";
 import {
@@ -568,20 +569,81 @@ export class ConsultationOperations {
 		if (operation.cancelled) return;
 		try {
 			const refreshed = this.state.consultation(current.id) ?? current;
+			const owned = refreshed.resources.filter((item) => item.owned && !item.confirmedClosed);
+			// The launch recorded no pane to take down: the record closes with no
+			// command at all, and herdr is left alone.
+			if (owned.find((item) => item.kind === "pane") === undefined) {
+				this.state.finishConsultationClose(current.id);
+				this.callbacks.onConsultationsChanged();
+				this.status("info", `Consultation ${current.id.slice(0, 8)} closed`);
+				return;
+			}
+			// Verify whose environment the stored handles still hold before the
+			// close may take anything down: after a herdr restart, a pane or tab
+			// id may be a reused id herdr gave another environment, and only the
+			// Agent's own name or session says the handles are still its.
+			const identity = await this.identifyCloseAgent(refreshed);
+			// The shared guard: a Force-close that arrived while the probe ran
+			// stops the cleanup here, before any resource is taken down.
+			if (operation.cancelled) return;
+			if (identity.kind === "none") {
+				// An opening may still be booting its Agent: the close cannot tell
+				// a missing Agent from a starting one, so it takes nothing down
+				// and leaves the record for a retry or a Force-close. `current`
+				// is the pre-close snapshot; the record is already `closing`.
+				if (current.state === "opening")
+					throw new Error(
+						"the Agent is not visible, so the opening is unverified and the close cannot take down its environment",
+					);
+				// The Agent is gone, so there is nothing to stop: retire the
+				// record and leave herdr untouched, the way the close of a record
+				// with no Agent promises. The owned resources stay recorded as
+				// remaining, so the operator sees what stands.
+				this.state.finishConsultationClose(
+					current.id,
+					"closed without a command; its Agent is missing and its resources remain in herdr",
+					true,
+				);
+				this.callbacks.onConsultationsChanged();
+				this.status(
+					"info",
+					`Consultation ${current.id.slice(0, 8)} closed; its Agent is missing, so herdr was left untouched`,
+				);
+				return;
+			}
+			const agent = identity.agent;
+			// Follow a matched Agent that moved: the close then addresses the
+			// pane and tab the Agent holds, never the ones it left.
+			if (
+				agent.paneId !== refreshed.paneId ||
+				(agent.tabId || null) !== refreshed.tabId ||
+				(agent.workspaceId || null) !== refreshed.workspaceId ||
+				(agent.stableSessionId !== undefined && agent.stableSessionId !== refreshed.sessionId)
+			) {
+				this.state.updateConsultationAgentHandles(current.id, {
+					paneId: agent.paneId,
+					tabId: agent.tabId || null,
+					workspaceId: agent.workspaceId || null,
+					sessionId: agent.stableSessionId ?? refreshed.sessionId,
+				});
+			}
+			const latest = this.state.consultation(current.id) ?? refreshed;
 			const output =
-				refreshed.paneId === null
+				latest.paneId === null
 					? null
 					: await new HerdrAgentReader(this.runner).readPane(
-							refreshed.paneId,
+							latest.paneId,
 							this.config().completionMessageLines,
 						);
 			if (operation.cancelled) return;
 			// The last lines the control plane can still read become a partial
 			// snapshot, so the history does not end with the opening prompt.
 			if (output !== null) this.state.captureConsultationPartial(current.id, output);
-			const latest = this.state.consultation(current.id) ?? refreshed;
-			const resources = latest.resources.filter((item) => item.owned && !item.confirmedClosed);
-			const plan = await this.planCloseCleanup(latest, resources);
+			const settled = this.state.consultation(current.id) ?? latest;
+			const plan = await this.planCloseCleanup(
+				settled,
+				settled.resources.filter((item) => item.owned && !item.confirmedClosed),
+			);
 			// The last check before the destructive call: a Force-close that ran
 			// during the topology probe stops the cleanup here, not on the next
 			// command.
@@ -623,6 +685,63 @@ export class ConsultationOperations {
 			this.callbacks.onConsultationsChanged();
 			this.status("error", `Consultation close needs recovery: ${errorMessage(error)}`);
 		}
+	}
+
+	/**
+	 * Identify the Consultation's own Agent in herdr before the close may take
+	 * anything down.
+	 *
+	 * The name the Agent runs under is the identity herdr enforces: it refuses
+	 * to start a second Agent under a name a live Agent holds, so one named
+	 * match is the Consultation's Agent. When this herdr version omits names, the
+	 * check falls back to the stored session id, and then to the stored pane -
+	 * the weak match the observation loop uses, never a bare pane or tab id:
+	 * after a herdr restart that id may belong to another environment, and a
+	 * close that took it down would take that environment with it.
+	 */
+	private async identifyCloseAgent(
+		consultation: Consultation,
+	): Promise<{ kind: "agent"; agent: HerdrAgent } | { kind: "none" }> {
+		const probe = await new HerdrAgentReader(this.runner).listAgents();
+		if (probe.kind === "error")
+			throw new Error(`cannot verify the Consultation Agent's identity: ${probe.reason}`);
+		const byName = probe.agents.filter((agent) => agent.name === consultation.agentName);
+		if (byName.length === 1) {
+			const agent = byName[0];
+			if (
+				agent.stableSessionId !== undefined &&
+				consultation.sessionId !== null &&
+				agent.stableSessionId !== consultation.sessionId
+			)
+				throw new Error("the Agent's session identity is ambiguous; the close needs recovery");
+			return { kind: "agent", agent };
+		}
+		if (byName.length > 1)
+			throw new Error("the Agent's name is held by more than one Agent; the close needs recovery");
+		if (consultation.sessionId !== null) {
+			const bySession = probe.agents.filter(
+				(agent) => agent.stableSessionId === consultation.sessionId,
+			);
+			if (bySession.length === 1) return { kind: "agent", agent: bySession[0] };
+			if (bySession.length > 1)
+				throw new Error("the Agent's session identity is ambiguous; the close needs recovery");
+		}
+		const anyNamed = probe.agents.some((agent) => agent.name !== undefined);
+		if (!anyNamed && consultation.paneId !== null) {
+			const inStoredPane = probe.agents.find((agent) => agent.paneId === consultation.paneId);
+			if (inStoredPane !== undefined) {
+				// A contradicting session says the stored pane holds a foreign
+				// Agent: the Consultation's own is not listed, so it is gone.
+				if (
+					consultation.sessionId !== null &&
+					inStoredPane.stableSessionId !== undefined &&
+					inStoredPane.stableSessionId !== consultation.sessionId
+				)
+					return { kind: "none" };
+				return { kind: "agent", agent: inStoredPane };
+			}
+		}
+		return { kind: "none" };
 	}
 
 	/**

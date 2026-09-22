@@ -406,6 +406,27 @@ function stubPaneRead(runner: FakeRunner, paneId: string, output: string): void 
 	);
 }
 
+/** Stub herdr's agent list so the close verifies the Consultation's own Agent. */
+function stubOwnAgent(
+	runner: FakeRunner,
+	id: string,
+	handles: { paneId: string; tabId: string; workspaceId: string } = LAUNCH,
+): void {
+	runner.set("herdr", ["agent", "list"], {
+		stdout: agentListJson([
+			{
+				paneId: handles.paneId,
+				tabId: handles.tabId,
+				workspaceId: handles.workspaceId,
+				agent: "pi",
+				status: "idle",
+				name: agentOf(id),
+				sessionId: `sess-${id.slice(0, 8)}`,
+			},
+		]),
+	});
+}
+
 /** Poll a condition the module settles asynchronously. */
 async function until(condition: () => boolean, what: string, deadlineMs = 4000): Promise<void> {
 	const startedAt = Date.now();
@@ -1396,6 +1417,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("5");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
 			runner.inner,
@@ -1408,6 +1430,7 @@ describe("Consultation operations: close", () => {
 		await harness.operations.close(consultation);
 
 		expect(runner.commands()).toEqual([
+			"herdr agent list",
 			`herdr agent read ${LAUNCH.paneId} --lines 200 --source recent-unwrapped --format text`,
 			`herdr tab list --workspace ${LAUNCH.workspaceId}`,
 			`herdr pane list --workspace ${LAUNCH.workspaceId}`,
@@ -1431,6 +1454,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("6");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
 			runner.inner,
@@ -1455,6 +1479,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("7");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
 			runner.inner,
@@ -1493,6 +1518,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("9");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
 			runner.inner,
@@ -1536,6 +1562,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("a");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		runner.inner.set("herdr", ["tab", "list", "--workspace", LAUNCH.workspaceId], {
 			stdout: "not json\n",
@@ -1556,6 +1583,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("b");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
 			runner.inner,
@@ -1608,6 +1636,7 @@ describe("Consultation operations: close", () => {
 		const second = uid("e");
 		const firstConsultation = seedWorking(fixture, first);
 		const secondConsultation = seedWorking(fixture, second);
+		stubOwnAgent(runner.inner, first);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: first");
 		stubTopology(
 			runner.inner,
@@ -1647,6 +1676,7 @@ describe("Consultation operations: close", () => {
 		const runner = new LifecycleRunner();
 		const id = uid("0");
 		const consultation = seedWorking(fixture, id);
+		stubOwnAgent(runner.inner, id);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
 			runner.inner,
@@ -1692,6 +1722,255 @@ describe("Consultation operations: close", () => {
 		expect(statusTexts(harness).at(-1)).toBe("Consultation cleanup has already finished");
 		expect(current(fixture.state, id).closeResult).toBeNull();
 		expect(runner.commands()).toEqual([]);
+	});
+
+	test("closes a missing record without touching a reused tab of the same ids", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("m");
+		const stale = { workspaceId: "wAR", tabId: "wAR:t29", paneId: "wAR:p29" };
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		startAgent(fixture.state, id, stale);
+		fixture.state.recordConsultationResource(id, {
+			kind: "tab",
+			resourceId: stale.tabId,
+			owned: true,
+			details: "Consultation tab",
+		});
+		fixture.state.recordConsultationResource(id, {
+			kind: "pane",
+			resourceId: stale.paneId,
+			owned: true,
+			details: "Consultation Agent pane",
+		});
+		fixture.state.recordConsultationResource(id, {
+			kind: "agent",
+			resourceId: agentOf(id),
+			owned: true,
+			details: `Agent hosted by pane ${stale.paneId}`,
+		});
+		fixture.state.setConsultationState(id, "missing", "Agent is missing");
+		// herdr restarted and restored the tab under the same ids: the pane now
+		// holds a bare terminal, so the agent list names no one for the record
+		// and the reused pane is a foreign one to the close.
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: "wAR:p2A",
+					tabId: "wAR:t2A",
+					workspaceId: "wAR",
+					agent: "bun",
+					status: "idle",
+					name: "control-plane",
+				},
+			]),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(consultation);
+
+		// The record retires on the identity check: the only command the close
+		// issued was the probe, so the topology that would have taken the
+		// reused tab down was never even asked.
+		expect(runner.commands()).toEqual(["herdr agent list"]);
+		const closed = current(fixture.state, id);
+		expect(closed.state).toBe("closed");
+		expect(closed.closeResult).toContain("Agent is missing");
+		expect(closed.resources.filter((item) => item.owned && !item.confirmedClosed).length).toBe(3);
+		expect(fixture.state.consultationRemainingResources(id).map((item) => item.resourceId)).toEqual(
+			expect.arrayContaining([stale.tabId, stale.paneId]),
+		);
+		expect(statusTexts(harness).at(-1)).toContain("herdr was left untouched");
+	});
+
+	test("retires the record when the stored pane holds a foreign Agent", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("n");
+		const stale = { workspaceId: "wAR", tabId: "wAR:t29", paneId: "wAR:p29" };
+		const consultation = seed(fixture.state, fixture, id, { environment: "live-worktree" });
+		startAgent(fixture.state, id, stale);
+		fixture.state.recordConsultationResource(id, {
+			kind: "pane",
+			resourceId: stale.paneId,
+			owned: true,
+			details: "Consultation Agent pane",
+		});
+		fixture.state.setConsultationState(id, "missing", "Agent is missing");
+		// The reused pane now hosts another Consultation's Agent: its name is
+		// the record's own, or nothing like it - never the Consultation's.
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: stale.paneId,
+					tabId: stale.tabId,
+					workspaceId: stale.workspaceId,
+					agent: "pi",
+					status: "idle",
+					name: "consultation-00000000",
+				},
+			]),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(consultation);
+
+		expect(runner.commands()).toEqual(["herdr agent list"]);
+		const closed = current(fixture.state, id);
+		expect(closed.state).toBe("closed");
+		expect(closed.resources.find((item) => item.kind === "pane")).toMatchObject({
+			owned: true,
+			confirmedClosed: false,
+		});
+	});
+
+	test("refuses to take down an unverified opening, and leaves it for recovery", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("u");
+		const consultation = seed(fixture.state, fixture, id);
+		// The launch recorded its environment before its Agent started: the
+		// tab and pane stand, and no Agent runs under the record's name.
+		fixture.state.recordConsultationResource(id, {
+			kind: "tab",
+			resourceId: LAUNCH.tabId,
+			owned: true,
+			details: "Consultation tab",
+		});
+		fixture.state.recordConsultationResource(id, {
+			kind: "pane",
+			resourceId: LAUNCH.paneId,
+			owned: true,
+			details: "Consultation Agent pane",
+		});
+		runner.inner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(consultation);
+
+		// An opening cannot tell a missing Agent from a starting one: the close
+		// takes nothing down and leaves the record where a retry can find it.
+		const stuck = current(fixture.state, id);
+		expect(stuck.state).toBe("closing");
+		expect(stuck.warning).toContain("the Agent is not visible");
+		expect(runner.commands()).toEqual(["herdr agent list"]);
+	});
+
+	test("keeps an ambiguous Agent identity as a recovery, never a blind close", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("v");
+		seedWorking(fixture, id);
+		// The name is held twice: neither match is safe to take down.
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: LAUNCH.paneId,
+					tabId: LAUNCH.tabId,
+					workspaceId: LAUNCH.workspaceId,
+					agent: "pi",
+					status: "idle",
+					name: agentOf(id),
+				},
+				{
+					paneId: "pane-other",
+					tabId: "tab-other",
+					workspaceId: LAUNCH.workspaceId,
+					agent: "pi",
+					status: "idle",
+					name: agentOf(id),
+				},
+			]),
+		});
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(current(fixture.state, id));
+
+		expect(current(fixture.state, id)).toMatchObject({
+			state: "closing",
+			warning: expect.stringContaining("held by more than one Agent"),
+		});
+		expect(runner.commands().join("\n")).not.toContain("close");
+	});
+
+	test("leaves the close as a recovery when the Agent list cannot be read", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("g");
+		seedWorking(fixture, id);
+		runner.inner.set("herdr", ["agent", "list"], { code: 1, stderr: "no herdr server\n" });
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(current(fixture.state, id));
+
+		expect(current(fixture.state, id)).toMatchObject({
+			state: "closing",
+			warning: expect.stringContaining("cannot verify the Consultation Agent's identity"),
+		});
+		expect(runner.commands()).toEqual(["herdr agent list"]);
+	});
+
+	test("follows a moved Agent to the tab it holds and closes that tab", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("w");
+		seedWorking(fixture, id);
+		const moved = { paneId: "pane-c2", tabId: "tab-c2", workspaceId: LAUNCH.workspaceId };
+		stubOwnAgent(runner.inner, id, moved);
+		stubPaneRead(runner.inner, moved.paneId, "Agent: done");
+		stubTopology(
+			runner.inner,
+			LAUNCH.workspaceId,
+			[moved.tabId, "tab-foreign"],
+			[{ pane_id: moved.paneId, tab_id: moved.tabId }],
+		);
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(current(fixture.state, id));
+
+		// The close addresses the Agent's live handles, not the ones it left.
+		expect(runner.commands()).toContain(`herdr tab close ${moved.tabId}`);
+		expect(runner.commands().join("\n")).not.toContain(`tab close ${LAUNCH.tabId}`);
+		const closed = current(fixture.state, id);
+		expect(closed.state).toBe("closed");
+		expect(closed.resources.find((item) => item.kind === "tab")).toMatchObject({
+			resourceId: moved.tabId,
+			confirmedClosed: true,
+		});
+		expect(closed.paneId).toBe(moved.paneId);
+	});
+
+	test("closes on the stored pane when this herdr names no Agent", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("x");
+		seedWorking(fixture, id);
+		// An older herdr lists the Agent without a name: the stored pane's
+		// Agent is the weak match, and the stored session cannot contradict it.
+		runner.inner.set("herdr", ["agent", "list"], {
+			stdout: agentListJson([
+				{
+					paneId: LAUNCH.paneId,
+					tabId: LAUNCH.tabId,
+					workspaceId: LAUNCH.workspaceId,
+					agent: "pi",
+					status: "idle",
+				},
+			]),
+		});
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
+		stubTopology(
+			runner.inner,
+			LAUNCH.workspaceId,
+			[LAUNCH.tabId],
+			[{ pane_id: LAUNCH.paneId, tab_id: LAUNCH.tabId }],
+		);
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.close(current(fixture.state, id));
+
+		expect(runner.commands()).toContain(`herdr workspace close ${LAUNCH.workspaceId}`);
+		expect(current(fixture.state, id).state).toBe("closed");
 	});
 });
 
@@ -1981,6 +2260,7 @@ describe("Consultation operations: Repository serialization", () => {
 		const closing = seed(fixture.state, fixture, closeId);
 		startAgent(fixture.state, closeId);
 		seedResources(fixture.state, closeId);
+		stubOwnAgent(runner.inner, closeId);
 		stubWorktreeLaunch(runner.inner, fixture.checkout, launchId);
 		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: done");
 		stubTopology(
