@@ -440,6 +440,74 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
+	test("the manual re-fire swaps its outcome onto the trace it acted on (ADR 0054)", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		const [ticket] = state.visibleTickets([], "implement");
+		const claim = state.claimHandoff(ticket.identity, choice, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		const recorded: TransitionOutcome = {
+			fired: false,
+			when: null,
+			reason: "the pull request carries no review score",
+			ticketFacts: [],
+			pullRequestFacts: ["ready-to-ship"],
+			autoAdvance: true,
+			agent: undefined,
+			environment: undefined,
+			ticketWrite: null,
+			pullRequestWrite: null,
+			pullRequestIdentity: null,
+			pullRequestKey: null,
+			writeFailure: "",
+			positionTaskType: null,
+			positionTicketIdentity: null,
+		};
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "- **Score:** 97 / 100",
+			turnLog: textLog("- **Score:** 97 / 100"),
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+			transition: recorded,
+		});
+
+		// The stored text the swap conditions on is the outcome's own bytes.
+		const recordedJson = state.recordedTransitionJson(ticket.identity);
+		expect(recordedJson).toBe(JSON.stringify(recorded));
+
+		// The re-fired outcome lands in place of the recorded one.
+		const refired: TransitionOutcome = { ...recorded, fired: true, reason: "", writeFailure: "" };
+		expect(state.recordRefiredOutcome(ticket.identity, recordedJson ?? "", refired)).toBe(true);
+		expect(state.lastCompletion(ticket.identity)?.transition).toEqual(refired);
+
+		// The swap declines once the trace stands on other text: a second
+		// re-fire on the moved record, and a trace a new settle moved.
+		expect(state.recordRefiredOutcome(ticket.identity, recordedJson ?? "", recorded)).toBe(false);
+		expect(state.lastCompletion(ticket.identity)?.transition).toEqual(refired);
+		state.settleTurn({
+			ticketIdentity: ticket.identity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "a later turn",
+			turnLog: textLog("a later turn"),
+			completedAt: "2026-08-31T12:00:00Z",
+		});
+		expect(state.recordRefiredOutcome(ticket.identity, recordedJson ?? "", refired)).toBe(false);
+
+		// A ticket whose newest trace records no outcome reads null, and no
+		// swap stands on it.
+		expect(state.recordedTransitionJson(ticket.identity)).toBeNull();
+		expect(state.recordRefiredOutcome(ticket.identity, recordedJson ?? "", refired)).toBe(false);
+		state.close();
+	});
+
 	test("records the model, thinking level, and context window of the settled handoff", () => {
 		const state = openFactoryState(":memory:");
 		state.initializeSources([sourceA]);

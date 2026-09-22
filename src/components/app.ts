@@ -1425,6 +1425,18 @@ export function App({
 					factLines.push("the position's ticket left its source; no handoff stands");
 				}
 			}
+			// The re-fire row stands on an outcome the fire did not complete
+			// (ADR 0054): no branch held, or the label write failed. The
+			// operator confirms it, and the plane reads the source as it stands
+			// now and fires the turn's transition again. A complete outcome
+			// shows no row: the machine's work is done.
+			if (outcome.fired === false || outcome.writeFailure !== "") {
+				actions.push({
+					key: "refire",
+					label: "Re-fire",
+					detail: "read the source as it stands now and fire the turn's transition again",
+				});
+			}
 		}
 		return {
 			actions,
@@ -1520,12 +1532,23 @@ export function App({
 			});
 		});
 	};
+	// The re-fire in flight (ADR 0054), by ticket identity: the Decision
+	// region confirms once, and a second confirm - the row stays visible while
+	// the fire runs - stands down. The ref holds the guard because the key
+	// handler outlives the render that made it.
+	const refireInFlightRef = useRef<string | null>(null);
+
 	// Run a decision-panel action: close (with the Close cleanup), Goto, a
-	// workflow handoff, or (from the missing modal) restart and abandon.
+	// workflow handoff, the re-fire of an incomplete transition, or (from the
+	// missing modal) restart and abandon.
 	const runDecisionAction = (ticket: Ticket, key: string) => {
 		// A routed handoff from the Live view keeps the screen open: the
-		// stream resumes for the new agent pane on its next tick.
-		if (!(panel?.kind === "live" && key === "route")) setPanel(null);
+		// stream resumes for the new agent pane on its next tick. A re-fire
+		// keeps its own screen open the same way: the operator confirms on it,
+		// and the fact lines the fire writes land on the open rows.
+		if (!(panel?.kind === "live" && key === "route") && key !== "refire") {
+			setPanel(null);
+		}
 		if (state === undefined) return;
 		if (key === "close") {
 			closeDecidedCycle(ticket);
@@ -1535,9 +1558,100 @@ export function App({
 			runGoto(ticket);
 			return;
 		}
+		if (key === "refire") {
+			void runRefire(ticket);
+			return;
+		}
 		const choice = routeChoiceOf(ticket, key);
 		if (choice === null) return;
 		runRouteHandoff(ticket, ticket.lastCompletion?.transition ?? null, choice);
+	};
+
+	/**
+	 * The manual re-fire of a settled turn's transition (ADR 0054).
+	 *
+	 * The Decision region offered the row because the recorded outcome did not
+	 * complete the machine's work: no branch held, or the label write failed.
+	 * The re-fire reads the source as it stands now - a forced refresh of the
+	 * pull request sources, the same seam the settle-time fire uses - fires
+	 * the turn's task type transition again through the command runner, and
+	 * swaps the new outcome onto the trace in place of the one the operator
+	 * acted on. The turn stays awaiting with no decision change: no cycle
+	 * ends, nothing hands off. The swap declines when the trace moved between
+	 * the read and the write; the fire's labels stand either way, because a
+	 * fire writes convergent facts.
+	 */
+	const runRefire = async (ticket: Ticket): Promise<void> => {
+		if (
+			state === undefined ||
+			ticket.lastCompletion === null ||
+			ticket.lastCompletion.transition === null
+		) {
+			return;
+		}
+		if (refireInFlightRef.current !== null) return;
+		// The turn the re-fire acts on: the completion the row was offered on.
+		const completion = ticket.lastCompletion;
+		refireInFlightRef.current = ticket.identity;
+		setWorkingMessage("re-firing the turn's transition...", "refire");
+		try {
+			// The outcome the operator acted on, as the state stores it: the
+			// swap conditions on these exact bytes.
+			const recordedJson = state.recordedTransitionJson(ticket.identity);
+			if (recordedJson === null) {
+				reportMessage({
+					severity: "warning",
+					text: "the turn records no transition outcome; no re-fire stands",
+				});
+				return;
+			}
+			// Read the source as it stands now: the fire reads the projection
+			// the refresh just landed, the way the settle-time fire does.
+			const refresh = async () => {
+				for (const source of configRef.current.sources) {
+					if (source.kind === "github-pull-requests")
+						await coordinatorRef.current?.refreshAndWait(source.name);
+				}
+			};
+			const outcome = await fireTransition({
+				config: configRef.current,
+				state,
+				runner: commandRunner,
+				ticketIdentity: ticket.identity,
+				taskType: completion.taskType,
+				refresh,
+			});
+			if (outcome === null) {
+				reportMessage({
+					severity: "warning",
+					text: "the re-fire reached no ticket; the turn's record stands",
+				});
+				return;
+			}
+			const applied = state.recordRefiredOutcome(ticket.identity, recordedJson, outcome);
+			replaceTickets();
+			if (!applied) {
+				reportMessage({
+					severity: "warning",
+					text: "the turn's record moved before the re-fire landed; the standing record stands",
+				});
+				return;
+			}
+			if (outcome.fired) {
+				reportMessage({
+					severity: "info",
+					text: "the re-fire lands; the labels stand as written",
+				});
+			} else {
+				reportMessage({
+					severity: "warning",
+					text: `no transition branch held on the re-fire: ${outcome.reason}`,
+				});
+			}
+		} finally {
+			refireInFlightRef.current = null;
+			clearWorkingMessage("refire");
+		}
 	};
 
 	/**

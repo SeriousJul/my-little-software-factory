@@ -98,6 +98,17 @@ ends the cycle and leaves the recorded decision standing (ADR 0005,
 amendment), so the routed issue's work cycle ends with key `w` and its
 environment with the Close cleanup. The automatic route decides the
 same way: its `auto-handed-off` record waits for the same start.
+Then a "Re-fire" row when the turn's transition did not complete the
+machine's work: no branch held, or the label write failed (ADR 0054). A
+complete outcome shows none. Confirming it reads the source as it stands
+now - the pull request sources refresh first - and fires the turn's
+task type transition again, the same fire the settle ran. The re-fired
+outcome takes the recorded one's place on the trace, and the rows re-render
+on it: the fact lines show what the fire wrote, the row stands down when
+the outcome completes, and a "Handoff" row appears when the re-fire derived
+a position. The turn stays `awaiting` with no decision change: no cycle
+ends and nothing hands off. The working word and the landing ride the
+Message line.
 
 ## Missing modal
 

@@ -1514,6 +1514,54 @@ export class FactoryState {
 	}
 
 	/**
+	 * The stored text of the ticket's newest completion trace's recorded
+	 * transition outcome (ADR 0054): the exact bytes the manual re-fire
+	 * conditions its swap on. Null when the newest trace records no outcome.
+	 */
+	recordedTransitionJson(ticketIdentity: string): string | null {
+		const row = this.db
+			.prepare(
+				"SELECT transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+			)
+			.get(ticketIdentity) as { transition_json: string | null } | undefined;
+		return row?.transition_json ?? null;
+	}
+
+	/**
+	 * The manual re-fire's swap (ADR 0054): the ticket's newest completion
+	 * trace takes the re-fired outcome in place of the one the operator
+	 * acted on.
+	 *
+	 * The operator read the outcome from the Decision region, and the trace
+	 * can move between that read and the swap: a reopened turn settles
+	 * again, or the skip re-fire lands. The conditional update re-checks the
+	 * stored text it replaces, so a trace that moved stands as it moved and
+	 * the swap declines. The decision the trace carries stands: the re-fire
+	 * rewrites the fire's fact, not the decision on the turn. Returns whether
+	 * the swap applied.
+	 */
+	recordRefiredOutcome(
+		ticketIdentity: string,
+		recordedJson: string,
+		outcome: TransitionOutcome,
+	): boolean {
+		return this.transaction(() => {
+			const row = this.db
+				.prepare(
+					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				)
+				.get(ticketIdentity) as { id: string; transition_json: string | null } | undefined;
+			if (row === undefined || row.transition_json !== recordedJson) return false;
+			const result = this.db
+				.prepare(
+					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
+				)
+				.run(JSON.stringify(outcome), row.id, recordedJson);
+			return Number(result.changes) > 0;
+		});
+	}
+
+	/**
 	 * Whether a current source snapshot still lists the ticket (ADR 0042):
 	 * at least one membership its newest fetch kept active. A ticket that
 	 * left every source keeps its row and its settled turns - the awaiting
