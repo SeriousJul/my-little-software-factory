@@ -116,9 +116,7 @@ function seededState(): FactoryState {
 }
 
 describe("the held turn through the real app flow", () => {
-	// Skipped: passes in isolation, fails in the full suite. Investigate and
-	// fix, then remove the skip. issue #103
-	test.skip("a failed pi turn holds, arms the pause, and shows the held surfaces", async () => {
+	test("a failed pi turn holds, arms the pause, and shows the held surfaces", async () => {
 		const runner = new FakeRunner();
 		const dir = mkdtempSync(join(tmpdir(), "factory-hold-"));
 		paths.push(dir);
@@ -287,10 +285,7 @@ describe("the held turn through the real app flow", () => {
 				const frame = setup.captureCharFrame();
 				const rows = rowsOf(frame);
 				// The combined seat count (ADR 0034): the running ticket and the
-				// held turn's own seat both stand against the cap of 3. This number
-				// carries no automated guard while the case stays skipped for issue
-				// #103; it was measured once by hand on `992b88e` and the record says
-				// so (docs/verification/shared-controls.md).
+				// held turn's own seat both stand against the cap of 3.
 				expect(rows[0]).toContain("auto: on 2/3 paused");
 				// The row is the list's own row in the left column; the detail
 				// pane's title carries the same title in the right column.

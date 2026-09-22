@@ -128,8 +128,7 @@ const sourceConfig: FactoryConfig = {
 };
 
 describe("native Ticket detail viewport", () => {
-	// Skipped: passes in isolation, fails in the full suite. issue #103
-	test.skip("renders a proportional, dim scrollbar track and a focused-color thumb", async () => {
+	test("renders a proportional, dim scrollbar track and a focused-color thumb", async () => {
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
@@ -161,8 +160,7 @@ describe("native Ticket detail viewport", () => {
 		);
 	});
 
-	// Skipped: passes in isolation, fails in the full suite. issue #103
-	test.skip("handles track clicks at both edges and the middle, then thumb drags in both directions", async () => {
+	test("handles track clicks at both edges and the middle, then thumb drags in both directions", async () => {
 		await withApp(
 			async (setup) => {
 				const initial = setup.captureCharFrame();
@@ -595,8 +593,7 @@ describe("native Ticket detail viewport", () => {
 		}
 	});
 
-	// Skipped: passes in isolation, fails in the full suite. issue #103
-	test.skip("resets a new Ticket, preserves same-Ticket refresh offsets, clamps, and survives resize", async () => {
+	test("resets a new Ticket, preserves same-Ticket refresh offsets, clamps, and survives resize", async () => {
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);
@@ -739,8 +736,7 @@ describe("native Ticket detail viewport", () => {
 		);
 	});
 
-	// Skipped: passes in isolation, fails in the full suite. issue #103
-	test.skip("restores the detail offset across a round-trip resize below the minimum size", async () => {
+	test("restores the detail offset across a round-trip resize below the minimum size", async () => {
 		await withApp(
 			async (setup) => {
 				await focusDetail(setup);

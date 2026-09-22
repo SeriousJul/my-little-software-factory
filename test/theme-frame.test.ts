@@ -13,12 +13,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { resolveTheme } from "../src/components/shared/theme.ts";
 import {
 	awaitFrame,
 	cellColors,
 	press,
 	rgb,
-	roleColor,
 	rowsOf,
 	settle,
 	spanColorAt,
@@ -35,11 +35,14 @@ function herdrConfig(content: string | null): () => void {
 	return () => rmSync(dir, { recursive: true, force: true });
 }
 
-// Skipped: passes in isolation, fails in the full suite. Investigate and
-// fix, then remove the skip. issue #103
-describe.skip("theme inheritance", () => {
+describe("theme inheritance", () => {
 	test("inside herdr, the panes paint the theme herdr's config names", async () => {
-		const cleanup = herdrConfig('[theme]\nname = "dracula"\n');
+		const config = '[theme]\nname = "dracula"\n';
+		const cleanup = herdrConfig(config);
+		// The expected colors come from the theme the config names, resolved
+		// through the pure resolver: the frame paints that theme, so the
+		// standalone theme's roles are not the palette in force here.
+		const theme = resolveTheme(config, true).theme;
 		try {
 			await withApp(async (setup) => {
 				const frame = await settle(setup);
@@ -53,14 +56,16 @@ describe.skip("theme inheritance", () => {
 				// ...and the Starting window's face wears the theme's detail
 				// tone, in place of the badge it replaced (ADR 0030).
 				const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
-				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(theme.roles.subtext0));
 				// An overlay surface paints the theme's own panel role: the Key
 				// guide owns its last two rows and paints them on dracula's
 				// panel background, not the terminal's default.
 				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
 				const guide = rowsOf(await settle(setup)).length;
-				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(roleColor("panel_bg")));
-				expect(cellColors(setup, 0, guide - 2).bg).toEqual(rgb(roleColor("panel_bg")));
+				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(theme.roles.panel_bg));
+				expect(cellColors(setup, 0, guide - 2).bg).toEqual(rgb(theme.roles.panel_bg));
+				// The panel pin also stands on dracula's own value, so a theme
+				// table that moved fails here as well.
 				expect(cellColors(setup, 0, guide - 1).bg).toEqual([0x28, 0x2a, 0x36]);
 				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
 			});
@@ -70,7 +75,11 @@ describe.skip("theme inheritance", () => {
 	});
 
 	test("inside herdr, a misnamed theme falls back and says so on the Message line", async () => {
-		const cleanup = herdrConfig('[theme]\nname = "frobnicate"\n');
+		const config = '[theme]\nname = "frobnicate"\n';
+		const cleanup = herdrConfig(config);
+		// The fallback the resolver lands on: the frame paints it, so the
+		// expected severity color comes from it.
+		const theme = resolveTheme(config, true).theme;
 		try {
 			await withApp(async (setup) => {
 				const frame = await awaitFrame(
@@ -87,7 +96,7 @@ describe.skip("theme inheritance", () => {
 				// And the Message line's severity color is the fallback theme's:
 				// a warning wears the theme's yellow, on the row above the bar.
 				const messageRow = rows.length - 2;
-				expect(spanColorAt(setup, messageRow, "Warning:")).toEqual(rgb(roleColor("yellow")));
+				expect(spanColorAt(setup, messageRow, "Warning:")).toEqual(rgb(theme.roles.yellow));
 			});
 		} finally {
 			cleanup();
@@ -95,7 +104,11 @@ describe.skip("theme inheritance", () => {
 	});
 
 	test("inside herdr, a light theme name paints the whole plane light", async () => {
-		const cleanup = herdrConfig('[theme]\nname = "one-light"\n');
+		const config = '[theme]\nname = "one-light"\n';
+		const cleanup = herdrConfig(config);
+		// The expected colors come from the light theme the config names, the
+		// same way the dracula case resolves them.
+		const theme = resolveTheme(config, true).theme;
 		try {
 			await withApp(async (setup) => {
 				const frame = await settle(setup);
@@ -112,12 +125,12 @@ describe.skip("theme inheritance", () => {
 				// the old dark palette: the half-light failure the old pin had is
 				// gone.
 				const faceRow = rows.findIndex((row) => startingFaceOf(row) !== null);
-				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(roleColor("subtext0")));
+				expect(spanColorAt(setup, faceRow, "starting")).toEqual(rgb(theme.roles.subtext0));
 				// The overlay surface is light as well: the Key guide paints on
 				// one-light's panel, not the terminal's default.
 				await press(setup, "?", "the Key guide", (f) => f.includes("Key guide"));
 				const guide = rowsOf(await settle(setup)).length;
-				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(roleColor("panel_bg")));
+				expect(cellColors(setup, 0, guide - 1).bg).toEqual(rgb(theme.roles.panel_bg));
 				expect(cellColors(setup, 0, guide - 2).bg).toEqual([0xfa, 0xfa, 0xfa]);
 				await press(setup, "escape", "the guide to close", (f) => !f.includes("Key guide"));
 			});
