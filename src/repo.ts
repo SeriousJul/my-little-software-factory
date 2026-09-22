@@ -83,10 +83,10 @@ interface ResolutionOptions {
 export function lookupRepositoryMapping(
 	repos: Record<string, string>,
 	keys: readonly string[],
-): { key: string; path: string } | undefined {
+): string | undefined {
 	for (const [key, path] of Object.entries(repos)) {
 		const lowered = key.toLowerCase();
-		if (keys.some((candidate) => candidate.toLowerCase() === lowered)) return { key, path };
+		if (keys.some((candidate) => candidate.toLowerCase() === lowered)) return path;
 	}
 	return undefined;
 }
@@ -101,11 +101,10 @@ export async function resolveRepository(
 	const name = reference.displayName.split("/").pop() ?? reference.displayName;
 	// The short legacy key is accepted for current installations. New source
 	// data writes the host-qualified identity only.
-	const matched = lookupRepositoryMapping(config.repos, [
+	const mapped = lookupRepositoryMapping(config.repos, [
 		reference.mappingKey,
 		reference.displayName,
 	]);
-	const mapped = matched?.path;
 	const path = mapped !== undefined ? expandHome(mapped, home) : join(home, "src", name);
 	const explicit = mapped !== undefined;
 

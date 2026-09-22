@@ -284,6 +284,33 @@ describe("launcher repository validation", () => {
 		).toEqual(catalog);
 	});
 
+	test("a mapping key with other casing still maps a ticket Repository", () => {
+		// The config key is the operator's string, here with the API's owner
+		// casing; the ticket's identity is canonical lowercase. The catalog's
+		// mapping lookup reads it case-insensitive.
+		const visible = {
+			repositoryRef: {
+				identity: "gitlab.com/acme/billing",
+				displayName: "acme/billing",
+				cloneUrl: "https://gitlab.com/acme/billing.git",
+			},
+		};
+		const catalog = consultationRepositoryCatalog(
+			{ ...BASE_CONFIG, repos: { "GitLab.com/Acme/Billing": "/tmp/billing" } },
+			[visible],
+		);
+		const gitlab = catalog.find((option) => option.identity === "gitlab.com/acme/billing");
+		expect(gitlab).toBeDefined();
+		if (gitlab !== undefined) expect(gitlab.path).toBe("/tmp/billing");
+		// A different repository under the same name maps nothing.
+		const unmapped = consultationRepositoryCatalog(
+			{ ...BASE_CONFIG, repos: { "GitLab.com/Acme/Billings": "/tmp/billings" } },
+			[visible],
+		);
+		const gitlabUnmapped = unmapped.find((option) => option.identity === "gitlab.com/acme/billing");
+		if (gitlabUnmapped !== undefined) expect(gitlabUnmapped.path).toBe("");
+	});
+
 	const option: ConsultationRepositoryOption = {
 		identity: "github.com/acme/factory",
 		displayName: "acme/factory",

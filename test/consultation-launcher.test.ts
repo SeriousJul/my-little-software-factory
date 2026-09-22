@@ -41,12 +41,13 @@ const BASE_CONTEXT: ControlContext = {
 
 async function launcher(
 	draft?: { typeName: string; repositoryIdentity: string; input: string } | null,
+	repositoriesOverride?: typeof repositories,
 ) {
 	const onLaunch = mock();
 	const setup = await testRender(
 		createElement(ConsultationLauncher, {
 			types,
-			repositories,
+			repositories: repositoriesOverride ?? repositories,
 			draft,
 			context: BASE_CONTEXT,
 			message: null,
@@ -84,6 +85,44 @@ async function pressLaunch(setup: Awaited<ReturnType<typeof testRender>>): Promi
 	setup.mockInput.pressEnter();
 	await setup.flush();
 }
+
+describe("Consultation launcher Repository choice", () => {
+	test("a draft Repository identity with other casing still selects its option", async () => {
+		// A record an older plane stored keeps the API's owner casing; the
+		// catalog identity is canonical lowercase. The choice still finds the
+		// option, and the launch sends it.
+		const options = [
+			{
+				identity: "github.com/acme/billing",
+				displayName: "acme/billing",
+				cloneUrl: "https://github.com/acme/billing.git",
+				path: "/tmp/billing",
+			},
+			{
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+				path: "/tmp/factory",
+			},
+		];
+		const { setup, onLaunch } = await launcher(
+			{
+				typeName: "grill",
+				repositoryIdentity: "github.com/Acme/Factory",
+				input: "review the design",
+			},
+			options,
+		);
+		try {
+			expect(frameText(setup.captureCharFrame())).toContain("Repository acme/factory");
+			await focusDraft(setup);
+			await pressLaunch(setup);
+			expect(onLaunch).toHaveBeenCalledWith("grill", options[1], "review the design");
+		} finally {
+			await setup.renderer.destroy();
+		}
+	});
+});
 
 describe("Consultation launcher input", () => {
 	test("collects a type, Repository, and initial input before it launches", async () => {

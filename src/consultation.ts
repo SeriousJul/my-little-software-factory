@@ -146,7 +146,7 @@ export function consultationRepositoryCatalog(
 				identity: key,
 				// The mapping lookup is case-insensitive: the config key is the
 				// operator's string, the identity is canonical lowercase.
-				path: lookupRepositoryMapping(config.repos, [key, shortIdentity])?.path ?? "",
+				path: lookupRepositoryMapping(config.repos, [key, shortIdentity]) ?? "",
 			});
 		}
 	}
