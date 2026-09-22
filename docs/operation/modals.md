@@ -71,10 +71,14 @@ one for a fire whose judgment never held or that found no linked pull
 request. The rows decide on those facts, so the turn log yields its rows to
 them.
 Then one "Handoff: `<task type>`" row when the fire's written labels put a
-ticket in a state that offers a task. The row's detail shows the Agent the
-arriving handoff resolves to (the fired branch's pin, else the target Task
-profile's agent, else `default-agent`), and the branch's pinned environment
-when it defines one. Choosing a row hands that ticket off - the linked pull
+ticket in a state that offers a task. The row stands only while the ticket
+the position sits on still lists in a source: a refresh that finds the
+ticket gone - a merged or closed pull request, a closed issue - withdraws
+the row, and a fact line takes its place: the position's ticket left its
+source, and no handoff stands (ADR 0048). The Close and the Goto keep.
+The row's detail shows the Agent the arriving handoff resolves to (the
+fired branch's pin, else the target Task profile's agent, else
+`default-agent`), and the branch's pinned environment when it defines one. Choosing a row hands that ticket off - the linked pull
 request when the written labels sit there, else the ticket whose turn
 settled. `e` on such a row opens the override panel on the choice the
 position resolved, so the operator can change the agent, environment, Model,

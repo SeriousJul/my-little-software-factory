@@ -1380,6 +1380,194 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	describe("the handoff row of a position that left its source", () => {
+		const pullIdentity = "github:github.com:P_12";
+		const pullSource = { name: "pulls", kind: "github-pull-requests" };
+
+		/** The fixing pull request, by the labels the source reports for it. */
+		function pullFetched(labels: string[] = ["ready-for-review"]): FetchedTicket {
+			return {
+				identity: pullIdentity,
+				sourceKind: "github-pull-request",
+				externalKey: "#12",
+				sourceState: "open",
+				url: "https://github.com/acme/factory/pulls/12",
+				title: "Persist source facts in state",
+				description: "The implementation of #5.",
+				labels,
+				externalUpdatedAt: "2026-08-31T10:30:00Z",
+				repository: {
+					identity: repoIdentity,
+					displayName: "acme/factory",
+					cloneUrl: "https://github.com/acme/factory.git",
+				},
+				attributes: withIssueReferences({ draft: "false" }, [
+					{ identity, number: 5, repository: "acme/factory" },
+				]),
+			};
+		}
+
+		/** The refresh that lists the pull request. */
+		const pullOpen: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:30:00Z",
+			tickets: [pullFetched()],
+		};
+
+		/** The refresh that finds the pull request gone: merged or closed. */
+		const pullGone: FetchOutcome = {
+			status: "success",
+			fetchedAt: "2026-08-31T10:40:00Z",
+			tickets: [],
+		};
+
+		/**
+		 * The outcome a re-fire of the skip stored (ADR 0042): the review fact
+		 * landed on the pull request, and the position sits on it.
+		 */
+		function pullPositionRoute(): TransitionOutcome {
+			return reviewRoute({
+				pullRequestFacts: ["ready-for-review"],
+				pullRequestWrite: { added: ["ready-for-review"], removed: [] },
+				pullRequestIdentity: pullIdentity,
+				pullRequestKey: "#12",
+				positionTicketIdentity: pullIdentity,
+			});
+		}
+
+		test("a position that left its source withdraws the handoff and states the fact", async () => {
+			const app = seededApp(
+				"awaiting",
+				{},
+				success,
+				"live-worktree",
+				{ transition: pullPositionRoute() },
+				pullOpen,
+			);
+			// The last refresh listed the pull request: it stands in the state
+			// active, where the outcome's position points.
+			app.state.applyFetch(pullSource, pullOpen);
+			const pull = app.pullSrc;
+			if (pull === undefined) throw new Error("the pull source is missing");
+
+			await withApp(
+				async (setup) => {
+					app.src.settle(success);
+					await awaitFrame(
+						setup,
+						(f) => ticketRow(f).includes("[awaiting]"),
+						"the awaiting ticket",
+					);
+					// The startup refresh runs while the decision is still
+					// closed: it finds the pull request gone.
+					pull.settle(pullGone);
+					await awaitFrame(
+						setup,
+						() => app.state.stillListed(pullIdentity) === false,
+						"the pull request to leave its source",
+					);
+					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+					const panel = frameText(await settle(setup));
+					// The position's ticket is in no list: the handoff row
+					// stands withdrawn, and the fact line takes its place.
+					expect(panel).not.toContain("Handoff: review");
+					expect(panel).toContain("the position's ticket left its source; no handoff stands");
+					expect(panel).toContain("Close");
+					expect(panel).toContain("Goto");
+				},
+				WIDTH,
+				HEIGHT,
+				propsOf(app),
+			);
+			app.state.close();
+		});
+
+		test("a position that still lists its ticket keeps the handoff", async () => {
+			const app = seededApp(
+				"awaiting",
+				{},
+				success,
+				"live-worktree",
+				{ transition: pullPositionRoute() },
+				pullOpen,
+			);
+			app.state.applyFetch(pullSource, pullOpen);
+			const pull = app.pullSrc;
+			if (pull === undefined) throw new Error("the pull source is missing");
+
+			await withApp(
+				async (setup) => {
+					app.src.settle(success);
+					await awaitFrame(
+						setup,
+						(f) => ticketRow(f).includes("[awaiting]"),
+						"the awaiting ticket",
+					);
+					// The refresh confirms the pull request still lists.
+					pull.settle(pullOpen);
+					await awaitFrame(
+						setup,
+						() => app.state.stillListed(pullIdentity),
+						"the pull request to list",
+					);
+					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+					const panel = frameText(await settle(setup));
+					expect(panel).toContain("Handoff: review");
+					expect(panel).not.toContain("no handoff stands");
+				},
+				WIDTH,
+				HEIGHT,
+				propsOf(app),
+			);
+			app.state.close();
+		});
+
+		test("an open decision withdraws the handoff when its refresh finds the position gone", async () => {
+			const app = seededApp(
+				"awaiting",
+				{},
+				success,
+				"live-worktree",
+				{ transition: pullPositionRoute() },
+				pullOpen,
+			);
+			app.state.applyFetch(pullSource, pullOpen);
+			const pull = app.pullSrc;
+			if (pull === undefined) throw new Error("the pull source is missing");
+
+			await withApp(
+				async (setup) => {
+					app.src.settle(success);
+					await awaitFrame(
+						setup,
+						(f) => ticketRow(f).includes("[awaiting]"),
+						"the awaiting ticket",
+					);
+					await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+					// The row stands while the pull request still lists: the
+					// refresh is in flight, and the state lists it.
+					const before = frameText(await settle(setup));
+					expect(before).toContain("Handoff: review");
+					// The in-flight refresh settles without the pull request:
+					// it left the source while the decision stood open.
+					pull.settle(pullGone);
+					await awaitFrame(
+						setup,
+						() => app.state.stillListed(pullIdentity) === false,
+						"the pull request to leave its source",
+					);
+					const after = frameText(await settle(setup));
+					expect(after).not.toContain("Handoff: review");
+					expect(after).toContain("the position's ticket left its source; no handoff stands");
+				},
+				WIDTH,
+				HEIGHT,
+				propsOf(app),
+			);
+			app.state.close();
+		});
+	});
+
 	test("a routed handoff does not record the predecessor it closed as leftover", async () => {
 		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: reviewRoute() });
 		stubCheckout(app);

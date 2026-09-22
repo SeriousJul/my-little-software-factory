@@ -1350,13 +1350,16 @@ export function App({
 
 	// The decision modal's rows: Close first, selected by default, then a
 	// Goto, then one handoff row when the settled turn's transition wrote a
-	// position the machine offers a task for (ADR 0027). The row's detail
-	// names the Agent its route resolves to, beside the pin's Environment.
-	// The fact lines state the label facts the transition wrote on the
-	// ticket and its pull request, and a failed write as its failure fact.
-	// The modal's context row names the repository, the task type, the
-	// agent, and the completion time, so the operator knows what the log is
-	// about.
+	// position the machine offers a task for (ADR 0027). The row stands only
+	// while the position's ticket is still listed in a source: a refresh
+	// that finds the ticket gone - a merged or closed pull request, a
+	// closed issue - withdraws the row, and a fact line states the reason
+	// in its place. The row's detail names the Agent its route resolves to,
+	// beside the pin's Environment. The fact lines state the label facts
+	// the transition wrote on the ticket and its pull request, and a
+	// failed write as its failure fact. The modal's context row names the
+	// repository, the task type, the agent, and the completion time, so the
+	// operator knows what the log is about.
 	const decisionFor = (
 		ticket: Ticket,
 	): {
@@ -1402,12 +1405,25 @@ export function App({
 			if (outcome.writeFailure !== "")
 				factLines.push(`label write failed: ${outcome.writeFailure}`);
 			if (outcome.positionTaskType !== null) {
-				actions.push({
-					key: "route",
-					label: `Handoff: ${outcome.positionTaskType}`,
-					detail: routeDetail(outcome, outcome.positionTaskType),
-					editable: true,
-				});
+				// The position is derived, never stored (ADR 0027): the ticket
+				// it sits on can leave its source between the fire and the
+				// decision. No list holds such a ticket, and no task can host
+				// on it, so the offer stands withdrawn: a route would start a
+				// turn on an item every source has dropped.
+				const positionListed =
+					state === undefined ||
+					outcome.positionTicketIdentity === null ||
+					state.stillListed(outcome.positionTicketIdentity);
+				if (positionListed) {
+					actions.push({
+						key: "route",
+						label: `Handoff: ${outcome.positionTaskType}`,
+						detail: routeDetail(outcome, outcome.positionTaskType),
+						editable: true,
+					});
+				} else {
+					factLines.push("the position's ticket left its source; no handoff stands");
+				}
 			}
 		}
 		return {
