@@ -4,9 +4,11 @@
  * A completed turn fires the task type's transition once: the plane writes
  * the label facts on the ticket and its fixing pull request, and the machine
  * re-derives every position from the written labels. The transition names no
- * destination. The judgments read from the pull request's review comment and
- * the pulled-source pull request, the branch that holds fires, and its facts
- * and pins take effect.
+ * destination. The judgments read from the source at the settle (ADR 0047):
+ * the review score from the pull request's comments, and the open state from
+ * the pull request's own record, with the projection's last refresh as the
+ * read's fallback. The branch that holds fires, and its facts and pins take
+ * effect.
  */
 
 import type {
@@ -177,6 +179,13 @@ function transitionReadsScore(transition: WorkflowTransition): boolean {
 	);
 }
 
+/** Whether the transition's branches test the pull request's open state. */
+function transitionReadsPullRequestState(transition: WorkflowTransition): boolean {
+	return (transition.branches ?? []).some(
+		(branch) => branch.when === "pull-request-open" || branch.when === "pull-request-closed",
+	);
+}
+
 /**
  * The review score the pull request's comments carry: the newest comment
  * that reports one in the template's fixed line. Null when no comment
@@ -232,6 +241,82 @@ async function readPullRequestScore(
 		if (score !== null) return score;
 	}
 	return null;
+}
+
+/**
+ * Whether the pull request is still open, read straight from the source: the
+ * pull's own REST record, live the moment a merge or close lands. The
+ * projection's state is the last refresh's, and the search index still lists
+ * a merged pull request as open for a while after the merge: the judgment of
+ * the turn that merged the pull request must not decide on that. Null when
+ * the key names no number, the source cannot be resolved, the read fails, or
+ * the answer carries no state the judgment reads; the fire falls back to the
+ * projection's fact for a null.
+ */
+async function readPullRequestOpen(
+	request: FireTransitionRequest,
+	pullRequest: Ticket,
+): Promise<boolean | null> {
+	const membership = newestMembershipOf(pullRequest);
+	const number = externalKeyNumber(membership.externalKey);
+	if (number === null) return null;
+	const source = request.config.sources.find((item) => item.name === membership.sourceName);
+	if (source === undefined) return null;
+	let ghOptions: CommandOptions = {};
+	if (source.auth !== undefined) {
+		const resolved = await new GhAuthenticator(
+			source.host,
+			source.auth,
+			request.runner,
+			process.env,
+		).resolve();
+		if (!resolved.ok) return null;
+		ghOptions = resolved.options;
+	}
+	const path = `repos/${membership.repository.displayName}/pulls/${number}`;
+	let result: CommandResult;
+	try {
+		result = await request.runner.run("gh", ["api", "--hostname", source.host, path], ghOptions);
+	} catch {
+		return null;
+	}
+	if (result.code !== 0) return null;
+	let record: unknown;
+	try {
+		record = JSON.parse(result.stdout);
+	} catch {
+		return null;
+	}
+	const item = record as { state?: unknown; merged?: unknown };
+	if (item.merged === true) return false;
+	if (item.state === "open") return true;
+	if (item.state === "closed") return false;
+	return null;
+}
+
+/**
+ * The pull request's open fact the judgments read: the direct read when a
+ * branch tests it, else the projection's fact alone. The direct read's null
+ * - a failed or unreadable answer - falls back to the projection's fact, the
+ * way the fire reads the fact before the read exists.
+ */
+async function readPullRequestState(
+	request: FireTransitionRequest,
+	transition: WorkflowTransition,
+	pullRequest: Ticket,
+): Promise<boolean | null> {
+	const direct = transitionReadsPullRequestState(transition)
+		? await readPullRequestOpen(request, pullRequest)
+		: null;
+	if (direct !== null) return direct;
+	switch (pullRequest.sourceState) {
+		case "open":
+			return true;
+		case "closed":
+			return false;
+		default:
+			return null;
+	}
 }
 
 /**
@@ -420,13 +505,7 @@ export async function fireTransition(
 			? await readPullRequestScore(request, pullRequest)
 			: null;
 	const pullRequestOpen =
-		pullRequest === null
-			? null
-			: pullRequest.sourceState === "open"
-				? true
-				: pullRequest.sourceState === "closed"
-					? false
-					: null;
+		pullRequest === null ? null : await readPullRequestState(request, transition, pullRequest);
 	const evaluation = evaluateTransition(transition, { score, pullRequestOpen });
 	const outcome: TransitionOutcome = {
 		fired: evaluation.fired,

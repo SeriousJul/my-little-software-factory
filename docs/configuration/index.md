@@ -516,6 +516,11 @@ either limit degrades the same way the open dispatch does. The agents never
 write workflow labels (ADR 0027): the plane writes them, and a ticket's
 position is always re-derived from the labels it carries.
 
+The `pull-request-open` and `pull-request-closed` judgments read the linked
+pull request's own record straight from the source at fire time, live the
+moment a merge lands, and they fall back to the pull request's state on the
+last refresh when the read fails (ADR 0047).
+
 The `filter` is a GitHub search string. Without one, the source lists what
 the machine needs to see: the plane owns the workflow labels, so an item
 enters the list before it carries any - a pull request the agent just opened

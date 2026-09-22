@@ -436,7 +436,7 @@ _Avoid_: handoff, label flip, workflow edge
 
 **Judgment**:
 The condition a Transition branch tests to choose its fact set: the review score against the configured threshold, and whether the fixing pull request is still open.
-It is a fact read from the turn or the source at settle time, never a stored value.
+The score is read from the pull request's comments, and the open state from the pull request's own record, straight from the source at settle time; the projection's last refresh stands as the read's fallback. It is never a stored value.
 _Avoid_: verdict, score check, gate
 
 **Auto-advance**:

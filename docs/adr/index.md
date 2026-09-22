@@ -55,3 +55,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0044: The Consultation close verifies the Agent's identity before it takes anything down](./0044-the-consultation-close-verifies-the-agents-identity-before-it-takes-anything-down.md)
 - [ADR 0045: A task type override places the ticket on the chosen task's state](./0045-a-task-type-override-places-the-ticket-on-the-chosen-state.md)
 - [ADR 0046: The Decision screen's route closes the previous handoff's environment at the ask](./0046-the-decision-routes-close-the-previous-handoffs-environment-at-the-ask.md)
+- [ADR 0047: The pull request state judgment reads the source at settle time](./0047-the-pull-request-state-judgment-reads-the-source-at-settle-time.md)

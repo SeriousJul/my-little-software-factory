@@ -289,6 +289,19 @@ function setReviewComments(
 	runner.set("gh", COMMENT_READ_ARGS, { stdout: JSON.stringify(comments) });
 }
 
+/**
+ * The exact argv of the pull request's state read: the source's host, and
+ * the pull's own REST record (#12).
+ */
+const STATE_READ_ARGS = ["api", "--hostname", "github.com", "repos/acme/factory/pulls/12"];
+/** The full command the state read issues, as the runner records it. */
+const STATE_READ_COMMAND = `gh ${STATE_READ_ARGS.join(" ")}`;
+
+/** Make the runner answer the state read with this pull request record. */
+function setPullRequestState(runner: FakeRunner, record: { state: string; merged: boolean }): void {
+	runner.set("gh", STATE_READ_ARGS, { stdout: JSON.stringify(record) });
+}
+
 describe("the transition evaluation", () => {
 	test("a fact-only transition always fires", () => {
 		const evaluation = evaluateTransition(transition({ ticketFacts: ["ready-for-review"] }), {
@@ -531,6 +544,7 @@ describe("the review score read from the pull request's comments", () => {
 	test("the comment read runs only for a score judgment, not for merge", async () => {
 		const runner = new FakeRunner();
 		const state = loadPull();
+		setPullRequestState(runner, { state: "open", merged: false });
 		const outcome = await fireTransition({
 			config: MACHINE_CONFIG,
 			state,
@@ -538,10 +552,11 @@ describe("the review score read from the pull request's comments", () => {
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 		});
-		// The merge transition tests the pull request's own state: no score
-		// judgment, and no comment read for it.
+		// The merge transition tests the pull request's own state: the state
+		// read ran, and no score judgment, so no comment read for it.
 		expect(outcome).toMatchObject({ fired: true });
-		expect(runner.commands()).not.toContain("gh api");
+		expect(runner.commands()).toContain(STATE_READ_COMMAND);
+		expect(runner.commands().some((command) => command.includes("comments"))).toBe(false);
 	});
 });
 
@@ -1002,25 +1017,31 @@ describe("the transition fire", () => {
 		expect(runner.commands()).toEqual([]);
 	});
 
-	test("a blocked merge moves the pull request to rework, and a merged one writes nothing", async () => {
-		const blocked = seededState(issueTicketData(), pullTicketData({ labels: ["ready-to-ship"] }));
-		const blockedRunner = new FakeRunner();
-		const blockedOutcome = await fireTransition({
+	test("a blocked merge moves the pull request to rework", async () => {
+		const state = seededState(issueTicketData(), pullTicketData({ labels: ["ready-to-ship"] }));
+		const runner = new FakeRunner();
+		setPullRequestState(runner, { state: "open", merged: false });
+		const outcome = await fireTransition({
 			config: MACHINE_CONFIG,
-			state: blocked,
-			runner: blockedRunner,
+			state,
+			runner,
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 		});
-		expect(blockedOutcome).toMatchObject({
+		expect(outcome).toMatchObject({
 			when: "pull-request-open",
 			positionTaskType: "rework",
 		});
-		expect(blockedRunner.commands()).toEqual([
+		expect(runner.commands()).toEqual([
+			STATE_READ_COMMAND,
 			"gh pr edit #12 --repo github.com/acme/factory --add-label needs-work --remove-label ready-to-ship",
 		]);
+	});
 
-		const merged = seededState(
+	test("a failed state read falls back to the projection's fact", async () => {
+		// The read's failure is the projection's fact: the fire decides on the
+		// last refresh, the way it does before the read exists.
+		const closed = seededState(
 			issueTicketData(),
 			pullTicketData({
 				labels: ["ready-to-ship"],
@@ -1028,19 +1049,78 @@ describe("the transition fire", () => {
 				externalUpdatedAt: "2026-08-31T12:00:00Z",
 			}),
 		);
-		const mergedRunner = new FakeRunner();
-		const mergedOutcome = await fireTransition({
+		const closedRunner = new FakeRunner();
+		closedRunner.set("gh", STATE_READ_ARGS, { code: 1, stderr: "the state read failed" });
+		const closedOutcome = await fireTransition({
 			config: MACHINE_CONFIG,
-			state: merged,
-			runner: mergedRunner,
+			state: closed,
+			runner: closedRunner,
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
 		});
-		// The merged pull request is no longer open, so no judgment holds: the
+		// The closed pull request is no longer open, so no judgment holds: the
 		// fallback fires and names no fact, and the write converges the
 		// machine's labels away from it.
-		expect(mergedOutcome).toMatchObject({ fired: true, when: null, positionTaskType: null });
-		expect(mergedOutcome?.pullRequestWrite).toEqual({ added: [], removed: ["ready-to-ship"] });
+		expect(closedOutcome).toMatchObject({ fired: true, when: null, positionTaskType: null });
+		expect(closedOutcome?.pullRequestWrite).toEqual({ added: [], removed: ["ready-to-ship"] });
+
+		const open = seededState(issueTicketData(), pullTicketData({ labels: ["ready-to-ship"] }));
+		const openRunner = new FakeRunner();
+		openRunner.set("gh", STATE_READ_ARGS, { code: 1, stderr: "the state read failed" });
+		const openOutcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state: open,
+			runner: openRunner,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
+		expect(openOutcome).toMatchObject({
+			when: "pull-request-open",
+			positionTaskType: "rework",
+		});
+	});
+
+	test("the state read runs only for a pull request state judgment, not for review", async () => {
+		const runner = new FakeRunner();
+		const state = seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
+		setReviewComments(runner, [
+			{ body: "- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		// The review transition tests the score, not the pull request's state:
+		// the comment read ran, and no state read followed.
+		expect(runner.commands()).toContain(COMMENT_READ_COMMAND);
+		expect(runner.commands().some((command) => command.includes("pulls/"))).toBe(false);
+	});
+
+	test("a merged pull request the projection still lists as open routes nowhere", async () => {
+		// The merge settles before the search index drops the pull request from
+		// the open list: the projection still reads it open, and the source,
+		// read direct, says merged. The judgment decides on the source, not on
+		// the projection's last refresh, so the fallback fires, no fact is
+		// written, and the position derives nowhere.
+		const state = seededState(issueTicketData(), pullTicketData({ labels: ["ready-to-ship"] }));
+		const runner = new FakeRunner();
+		setPullRequestState(runner, { state: "closed", merged: true });
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
+		expect(outcome).toMatchObject({ fired: true, when: null, positionTaskType: null });
+		expect(outcome?.pullRequestWrite).toEqual({ added: [], removed: ["ready-to-ship"] });
+		expect(runner.commands()).toEqual([
+			STATE_READ_COMMAND,
+			"gh pr edit #12 --repo github.com/acme/factory --remove-label ready-to-ship",
+		]);
 	});
 
 	test("a failed write stands as the failure fact and routes nothing", async () => {
