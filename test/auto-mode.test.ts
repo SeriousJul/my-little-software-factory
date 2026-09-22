@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import { type FetchedTicket, withIssueReferences } from "../src/domain/ticket.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -260,6 +260,8 @@ interface SeededApp {
 	runner: FakeRunner;
 	configPath: string;
 	src: FakeSource;
+	/** The pull request source, when the test names an outcome for it. */
+	pullSrc?: FakeSource;
 }
 
 /** A seeded state plus the app props that match it: config, runner, source. */
@@ -269,6 +271,7 @@ function seededApp(
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
 	detail: SeedDetail = {},
+	pullOutcome?: FetchOutcome,
 ): SeededApp {
 	const state = seed(shape, outcome, environment, detail);
 	// The operator's last choice of the mode is a fact of the state file, not
@@ -296,7 +299,11 @@ function seededApp(
 	};
 	const runner = new FakeRunner();
 	const src = new FakeSource("issues", "github-issues", outcome);
-	return { state, config, runner, configPath, src };
+	const pullSrc =
+		pullOutcome === undefined
+			? undefined
+			: new FakeSource("pulls", "github-pull-requests", pullOutcome);
+	return { state, config, runner, configPath, src, ...(pullSrc === undefined ? {} : { pullSrc }) };
 }
 
 function propsOf(app: SeededApp): AppProps {
@@ -305,7 +312,7 @@ function propsOf(app: SeededApp): AppProps {
 		state: app.state,
 		runner: app.runner,
 		configPath: app.configPath,
-		sources: [app.src],
+		sources: app.pullSrc === undefined ? [app.src] : [app.src, app.pullSrc],
 		pollIntervalMs: 60_000,
 	};
 }
@@ -323,8 +330,9 @@ function seededAppInAutoMode(
 	outcome: FetchOutcome = success,
 	environment: "live-worktree" | "worktree" = "live-worktree",
 	detail: SeedDetail = {},
+	pullOutcome?: FetchOutcome,
 ): SeededApp {
-	return seededApp(shape, extra, outcome, environment, { ...detail, autoMode: true });
+	return seededApp(shape, extra, outcome, environment, { ...detail, autoMode: true }, pullOutcome);
 }
 
 /**
@@ -3795,5 +3803,183 @@ describe("the handoff queue", () => {
 			},
 		);
 		state.close();
+	});
+});
+
+describe("the re-fire of a recorded skip (ADR 0042)", () => {
+	const pullIdentity = "github:github.com:P_12";
+
+	/**
+	 * The skip outcome the implement fire stored when no fixing pull request
+	 * stood: the ticket's own facts - none - were applied, the pull request's
+	 * went unwritten, and the fire derived no position.
+	 */
+	function skipTransition(): TransitionOutcome {
+		return {
+			fired: true,
+			when: null,
+			reason: "no linked pull request was found for the ticket",
+			ticketFacts: [],
+			pullRequestFacts: ["ready-for-review"],
+			autoAdvance: false,
+			ticketWrite: null,
+			pullRequestWrite: null,
+			pullRequestIdentity: null,
+			pullRequestKey: null,
+			writeFailure: "",
+			positionTaskType: null,
+			positionTicketIdentity: null,
+		};
+	}
+
+	/** The fixing pull request, by the labels the source reports for it. */
+	function pullFetched(labels: string[] = []): FetchedTicket {
+		return {
+			identity: pullIdentity,
+			sourceKind: "github-pull-request",
+			externalKey: "#12",
+			sourceState: "open",
+			url: "https://github.com/acme/factory/pulls/12",
+			title: "Persist source facts in state",
+			description: "The implementation of #5.",
+			labels,
+			externalUpdatedAt: "2026-08-31T10:30:00Z",
+			repository: {
+				identity: repoIdentity,
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+			},
+			attributes: withIssueReferences({ draft: "false" }, [
+				{ identity, number: 5, repository: "acme/factory" },
+			]),
+		};
+	}
+
+	test("a refresh that finds the fixing pull request re-fires the skip, writes the labels, and the route follows", async () => {
+		const app = seededAppInAutoMode(
+			"awaiting",
+			{
+				taskTypes: {
+					...BASE_CONFIG.taskTypes,
+					implement: {
+						...BASE_CONFIG.taskTypes.implement,
+						// The transition the skip recorded: it wanted the
+						// pull request's facts and found no pull request.
+						transition: { ticketFacts: [], pullRequestFacts: ["ready-for-review"] },
+					},
+				},
+			},
+			success,
+			"live-worktree",
+			{
+				// The skip's turn: the agent completed the work. The completed
+				// cause puts the closed cycle behind the Same-type hold, so
+				// the open dispatch does not re-run the issue in the same
+				// cycle that auto-closes it.
+				transition: skipTransition(),
+				cause: "completed",
+			},
+			{ status: "success", fetchedAt: "2026-08-31T10:01:00Z", tickets: [] },
+		);
+		const pull = app.pullSrc;
+		if (pull === undefined) throw new Error("the pull source is missing");
+		stubCheckout(app);
+		const path = Object.values(app.config.repos)[0];
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+		app.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		app.runner.set("herdr", ["workspace", "create", "--cwd", path, "--no-focus"], {
+			stdout: workspaceCreateJson("ws-1", "pane-1"),
+		});
+		app.runner.set("herdr", ["tab", "create", "--workspace", "ws-1", "--cwd", path, "--no-focus"], {
+			stdout: tabCreateJson("pane-1"),
+		});
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				// The awaiting rule reads the skip: it derives no position,
+				// so the cycle auto-closes the ticket. It rests open behind
+				// the closed cycle, and the trace records the skip.
+				await awaitFrame(
+					setup,
+					(f) => ticketRow(f).includes("[open]"),
+					"the auto-close of the skip",
+				);
+				// The refresh lands the fixing pull request. The cycle
+				// re-fires the skip: the pull request's facts were left
+				// unwritten by it, and the fire writes them now.
+				pull.settle({
+					status: "success",
+					fetchedAt: "2026-08-31T10:02:00Z",
+					tickets: [pullFetched()],
+				});
+				await awaitFrame(
+					setup,
+					(f) => f.includes("Persist source facts in state"),
+					"the pull request row",
+				);
+				// The labels have not landed in the projection yet, so the route
+				// waits for the refresh that lands them.
+				pull.settle({
+					status: "success",
+					fetchedAt: "2026-08-31T10:03:00Z",
+					tickets: [pullFetched(["ready-for-review"])],
+				});
+				// The rule routes the position's task on the pull request. The
+				// route only runs off the re-fired trace, so a frame that shows
+				// the route proves the re-fire ran and recorded first.
+				await awaitFrame(
+					setup,
+					(f) =>
+						f.includes("auto: on 1/2") &&
+						ticketRow(f, "Persist source facts in state").includes("missing"),
+					"the review route on the pull request",
+				);
+				const commands = app.runner.commands();
+				// The re-fire wrote the facts the skip left unwritten.
+				expect(
+					commands.some(
+						(command) =>
+							command.startsWith("gh pr edit #12") &&
+							command.includes("--add-label ready-for-review"),
+					),
+				).toBe(true);
+				// The re-fire ran exactly once: the trace holds the re-fired
+				// outcome, not the skip, so the sweep never fires it again.
+				expect(
+					commands.filter(
+						(command) =>
+							command.startsWith("gh pr edit #12") &&
+							command.includes("--add-label ready-for-review"),
+					),
+				).toHaveLength(1);
+				// The re-fire recorded over the skip: the trace is the re-fired
+				// outcome with its position on the pull request.
+				const transition = app.state.lastCompletion(identity)?.transition;
+				expect(transition).toEqual(
+					expect.objectContaining({
+						refired: true,
+						positionTaskType: "review",
+						positionTicketIdentity: pullIdentity,
+						reason: "",
+						writeFailure: "",
+						pullRequestWrite: {
+							added: ["ready-for-review"],
+							removed: [],
+						},
+					}),
+				);
+				// The route started the review handoff on the pull request's
+				// own environment.
+				expect(commands.some((command) => command.startsWith("herdr agent prompt"))).toBe(true);
+				expect(app.state.ticketState(pullIdentity)).toBe("handed-off");
+				// The issue stands open and covered behind the pull request.
+				expect(app.state.ticketState(identity)).toBe("open");
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
 	});
 });

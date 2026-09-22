@@ -98,7 +98,7 @@ import {
 	type TurnEndCause,
 	type TurnLogEntry,
 } from "../turn-log.ts";
-import { fireTransition } from "../workflow.ts";
+import { fireTransition, refireRecordedSkips } from "../workflow.ts";
 import { ActionBar } from "./action-bar.ts";
 import { ActionPanel } from "./action-panel.ts";
 import { renderAnsiScreen } from "./ansi-screen.ts";
@@ -2825,6 +2825,18 @@ export function App({
 					refresh,
 				});
 			},
+			// The re-fire of the recorded skips (ADR 0042): a refresh that found
+			// the fixing pull request re-fires the transition the ticket's
+			// newest completion trace recorded as the skip. The sweep reads the
+			// projection the refresh just landed, so it takes no refresh of its
+			// own, and the fire it runs writes through the command runner, the
+			// way the settle-time fire does.
+			refireRecordedSkips: () =>
+				refireRecordedSkips({
+					config: configRef.current,
+					state,
+					runner: commandRunner,
+				}),
 			// The Work queue's pickup (ADR 0034): the cycle starts the waiting
 			// manual starts before auto-dispatch, in queue order.
 			pickupWorkQueue: () => dispatch.pickupWorkQueue(),

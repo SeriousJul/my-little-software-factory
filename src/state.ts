@@ -44,7 +44,12 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-import { externalKeyNumber, fixedTickets, isCoveredByFixingPullRequest } from "./workflow.ts";
+import {
+	externalKeyNumber,
+	fixedTickets,
+	isCoveredByFixingPullRequest,
+	NO_LINKED_PULL_REQUEST_SKIP,
+} from "./workflow.ts";
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
@@ -1468,6 +1473,58 @@ export class FactoryState {
 			decision: row.decision as CompletionDecision | null,
 			transition: transitionOf(row.transition_json),
 		};
+	}
+
+	/**
+	 * The re-fire of a recorded skip (ADR 0042): the ticket's newest
+	 * completion trace takes the re-fired outcome in place of the skip it
+	 * recorded.
+	 *
+	 * The swap runs only while the newest trace still records the skip - it
+	 * fired, and it carries the skip reason - so the re-fire lands once,
+	 * whatever the sweeps that follow read, and a trace that recorded any
+	 * other fact keeps it. The conditional update re-checks the stored text
+	 * it replaces, so a trace that moved between the read and the write
+	 * stands as it moved. The decision the trace carries stands: a re-fire
+	 * rewrites the fire's fact, not the decision on the turn. Returns whether
+	 * the swap applied.
+	 */
+	recordSkipRefire(ticketIdentity: string, outcome: TransitionOutcome): boolean {
+		return this.transaction(() => {
+			const row = this.db
+				.prepare(
+					"SELECT id, transition_json FROM completion_traces WHERE ticket_identity = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1",
+				)
+				.get(ticketIdentity) as { id: string; transition_json: string | null } | undefined;
+			if (row === undefined || row.transition_json === null) return false;
+			const recorded = transitionOf(row.transition_json);
+			if (
+				recorded === null ||
+				recorded.fired !== true ||
+				recorded.reason !== NO_LINKED_PULL_REQUEST_SKIP
+			)
+				return false;
+			const result = this.db
+				.prepare(
+					"UPDATE completion_traces SET transition_json = ? WHERE id = ? AND transition_json = ?",
+				)
+				.run(JSON.stringify(outcome), row.id, row.transition_json);
+			return Number(result.changes) > 0;
+		});
+	}
+
+	/**
+	 * Whether a current source snapshot still lists the ticket (ADR 0042):
+	 * at least one membership its newest fetch kept active. A ticket that
+	 * left every source keeps its row and its settled turns - the awaiting
+	 * walk still reaches it to close it - and the re-fire of a recorded skip
+	 * refuses it.
+	 */
+	stillListed(ticketIdentity: string): boolean {
+		const row = this.db
+			.prepare("SELECT COUNT(*) AS count FROM memberships WHERE ticket_identity = ? AND active = 1")
+			.get(ticketIdentity) as { count: number };
+		return Number(row.count) > 0;
 	}
 
 	/**

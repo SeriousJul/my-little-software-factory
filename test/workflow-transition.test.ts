@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { FactoryConfig, WorkflowTransition } from "../src/config.ts";
+import type { FactoryConfig, TransitionOutcome, WorkflowTransition } from "../src/config.ts";
 import type {
 	FetchedTicket,
 	IssueReference,
@@ -24,6 +24,7 @@ import type {
 } from "../src/domain/ticket.ts";
 import { withHeadBranch, withIssueReferences } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
+import type { TurnLogEntry } from "../src/turn-log.ts";
 import {
 	evaluateTransition,
 	findFixingPullRequest,
@@ -31,7 +32,9 @@ import {
 	fixingPullRequests,
 	isCoveredByFixingPullRequest,
 	isDraft,
+	NO_LINKED_PULL_REQUEST_SKIP,
 	pullRequestFixesTicket,
+	refireRecordedSkips,
 	scoreFromMessage,
 	transitionLabelSet,
 } from "../src/workflow.ts";
@@ -1204,5 +1207,278 @@ describe("the transition fire", () => {
 			taskType: "implement",
 		});
 		expect(outcome).toMatchObject({ fired: true, positionTaskType: null });
+	});
+});
+
+/**
+ * The skip outcome the implement fire stored on the settled turn's trace
+ * when it found no fixing pull request (ADR 0027, ADR 0042): the fire
+ * wrote the ticket's facts - none here - and the pull request's facts went
+ * unwritten, so the fire derived no position.
+ */
+function skipOutcome(): TransitionOutcome {
+	return {
+		fired: true,
+		when: null,
+		reason: NO_LINKED_PULL_REQUEST_SKIP,
+		ticketFacts: [],
+		pullRequestFacts: ["ready-for-review"],
+		autoAdvance: false,
+		ticketWrite: null,
+		pullRequestWrite: null,
+		pullRequestIdentity: null,
+		pullRequestKey: null,
+		writeFailure: "",
+		positionTaskType: null,
+		positionTicketIdentity: null,
+	};
+}
+
+/** A settled turn of the given task type on the ticket, with the stored transition. */
+function settledTurn(
+	state: ReturnType<typeof seededState>,
+	identity: string,
+	taskType: string,
+	transition: TransitionOutcome | null,
+): void {
+	const claim = state.claimHandoff(
+		identity,
+		{
+			agentType: "pi",
+			environment: "worktree",
+			taskType,
+			model: "",
+			thinking: "",
+			contextWindow: "",
+		},
+		"open",
+	);
+	if (!claim.ok) throw new Error(claim.reason);
+	state.settleHandoff(claim.claim.attemptId, true, undefined, {
+		paneId: "pane-1",
+		tabId: "tab-1",
+		workspaceId: "ws-1",
+	});
+	state.settleTurn({
+		ticketIdentity: identity,
+		handoffId: claim.claim.attemptId,
+		taskType,
+		agentType: "pi",
+		message: "The turn is done.",
+		turnLog: [{ kind: "text", text: "The turn is done." }] as TurnLogEntry[],
+		completedAt: "2026-08-31T11:00:00Z",
+		...(transition === null ? {} : { transition }),
+	});
+}
+
+/**
+ * A state whose ticket's newest completion trace records the skip: the
+ * settled turn's fire found no fixing pull request and stored the skip
+ * outcome (ADR 0042).
+ */
+function skipSeededState(issue: FetchedTicket, transition: TransitionOutcome | null) {
+	const state = seededState(issue);
+	settledTurn(state, issue.identity, "implement", transition);
+	return state;
+}
+
+/** Land the pull request on the pulls source, the way a refresh would. */
+function landPullRequests(state: ReturnType<typeof seededState>, ...pulls: FetchedTicket[]): void {
+	state.applyFetch(pullSource, {
+		status: "success",
+		fetchedAt: "2026-08-31T12:01:00Z",
+		tickets: pulls,
+	});
+}
+
+describe("the recorded skip's re-fire", () => {
+	test("a refresh that found the pull request re-fires the skip, and the trace takes the re-fired outcome", async () => {
+		const state = skipSeededState(issueTicketData(), skipOutcome());
+		const runner = new FakeRunner();
+		landPullRequests(state, pullTicketData());
+		const refired = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
+		expect(refired).toEqual([
+			{
+				ticketIdentity: issueIdentity,
+				outcome: expect.objectContaining({
+					fired: true,
+					reason: "",
+					refired: true,
+					ticketWrite: null,
+					pullRequestWrite: { added: ["ready-for-review"], removed: [] },
+					pullRequestIdentity: pullIdentity,
+					pullRequestKey: "#12",
+					positionTaskType: "review",
+					positionTicketIdentity: pullIdentity,
+					writeFailure: "",
+				}),
+			},
+		]);
+		// The skip left the pull request's facts unwritten; the re-fire writes
+		// them and the ticket's own labels, which already match, stand.
+		expect(runner.commands()).toEqual([
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
+		// The trace took the re-fired outcome in place of the skip it recorded.
+		expect(state.lastCompletion(issueIdentity)?.transition).toMatchObject({
+			refired: true,
+			reason: "",
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+		});
+		state.close();
+	});
+
+	test("the re-fire lands once: a second sweep re-fires nothing", async () => {
+		const state = skipSeededState(issueTicketData(), skipOutcome());
+		const runner = new FakeRunner();
+		landPullRequests(state, pullTicketData());
+		const first = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
+		expect(first).toHaveLength(1);
+		// The trace no longer records the skip, so the sweep's only bound - the
+		// recorded fact - holds: the re-fire re-runs nothing.
+		const second = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
+		expect(second).toEqual([]);
+		expect(runner.commands()).toEqual([
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
+		state.close();
+	});
+
+	test("a re-fire writes nothing the pull request already wears, and still derives the position", async () => {
+		const state = skipSeededState(issueTicketData(), skipOutcome());
+		landPullRequests(state, pullTicketData({ labels: ["ready-for-review"] }));
+		const runner = new FakeRunner();
+		const refired = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
+		expect(refired).toHaveLength(1);
+		expect(refired[0].outcome).toMatchObject({
+			fired: true,
+			refired: true,
+			pullRequestWrite: null,
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+		});
+		expect(runner.commands()).toEqual([]);
+		state.close();
+	});
+
+	test("a ticket without an open fixing pull request re-fires nothing", async () => {
+		// A draft pull request fixes nothing for the machine: the skip stands.
+		const draft = skipSeededState(issueTicketData(), skipOutcome());
+		landPullRequests(
+			draft,
+			pullTicketData({
+				attributes: withIssueReferences({ draft: "true" }, [
+					{ identity: issueIdentity, number: 5, repository: "acme/factory" },
+				]),
+			}),
+		);
+		const draftRunner = new FakeRunner();
+		expect(
+			await refireRecordedSkips({ config: MACHINE_CONFIG, state: draft, runner: draftRunner }),
+		).toEqual([]);
+		expect(draftRunner.commands()).toEqual([]);
+		expect(draft.lastCompletion(issueIdentity)?.transition).toMatchObject({
+			reason: NO_LINKED_PULL_REQUEST_SKIP,
+		});
+		draft.close();
+
+		// A closed pull request is not an open fixing pull request either.
+		const closed = skipSeededState(issueTicketData(), skipOutcome());
+		landPullRequests(closed, pullTicketData({ sourceState: "closed" }));
+		const closedRunner = new FakeRunner();
+		expect(
+			await refireRecordedSkips({ config: MACHINE_CONFIG, state: closed, runner: closedRunner }),
+		).toEqual([]);
+		expect(closedRunner.commands()).toEqual([]);
+		closed.close();
+	});
+
+	test("a trace that recorded any other fact re-fires nothing", async () => {
+		// A routable outcome the settle-time fire recorded stands as recorded,
+		// pull request or no: the re-fire is bounded to the skip reason.
+		const routed = seededState(issueTicketData(), pullTicketData());
+		settledTurn(routed, issueIdentity, "implement", {
+			...skipOutcome(),
+			reason: "",
+			refired: false,
+			pullRequestIdentity: pullIdentity,
+			pullRequestKey: "#12",
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+		});
+		const routedRunner = new FakeRunner();
+		expect(
+			await refireRecordedSkips({ config: MACHINE_CONFIG, state: routed, runner: routedRunner }),
+		).toEqual([]);
+		expect(routedRunner.commands()).toEqual([]);
+		routed.close();
+
+		// A turn that settled without a transition carries no recorded fact.
+		const bare = skipSeededState(issueTicketData(), null);
+		landPullRequests(bare, pullTicketData());
+		const bareRunner = new FakeRunner();
+		expect(
+			await refireRecordedSkips({ config: MACHINE_CONFIG, state: bare, runner: bareRunner }),
+		).toEqual([]);
+		expect(bareRunner.commands()).toEqual([]);
+		bare.close();
+	});
+
+	test("a ticket that left the list re-fires nothing", async () => {
+		const state = skipSeededState(issueTicketData(), skipOutcome());
+		landPullRequests(state, pullTicketData());
+		// The refresh no longer lists the issue: it left every source, and the
+		// sweep reads the projection.
+		state.applyFetch(issueSource, {
+			status: "success",
+			fetchedAt: "2026-08-31T12:02:00Z",
+			tickets: [],
+		});
+		const runner = new FakeRunner();
+		expect(await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner })).toEqual([]);
+		expect(runner.commands()).toEqual([]);
+		state.close();
+	});
+
+	test("a pull request ticket's recorded skip re-fires nothing", async () => {
+		// A pull request fixes no ticket, so its own skip is not a missing
+		// fixing pull request to re-fire against.
+		const state = seededState(pullTicketData());
+		settledTurn(state, pullIdentity, "rework", skipOutcome());
+		landPullRequests(state, pullTicketData());
+		const runner = new FakeRunner();
+		expect(await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner })).toEqual([]);
+		expect(runner.commands()).toEqual([]);
+		state.close();
+	});
+
+	test("a re-fired write failure stands on the trace, and the position derives none", async () => {
+		const state = skipSeededState(issueTicketData(), skipOutcome());
+		landPullRequests(state, pullTicketData());
+		const runner = new FakeRunner();
+		runner.set(
+			"gh",
+			["pr", "edit", "#12", "--repo", "github.com/acme/factory", "--add-label", "ready-for-review"],
+			{ code: 1, stderr: "HTTP 403: Must have admin rights to Repository.\n", stdout: "" },
+		);
+		const refired = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
+		expect(refired).toHaveLength(1);
+		expect(refired[0].outcome).toMatchObject({
+			fired: true,
+			refired: true,
+			reason: "",
+			pullRequestWrite: null,
+			positionTaskType: null,
+			positionTicketIdentity: null,
+		});
+		expect(refired[0].outcome?.writeFailure).toContain("gh pr edit #12 failed: HTTP 403");
+		// The failure stands on the trace where the skip stood: the operator
+		// reads it beside the settled turn, and the sweep's bound holds it
+		// there - a second sweep re-fires nothing.
+		expect(state.lastCompletion(issueIdentity)?.transition?.writeFailure).toContain("HTTP 403");
+		const again = await refireRecordedSkips({ config: MACHINE_CONFIG, state, runner });
+		expect(again).toEqual([]);
+		state.close();
 	});
 });
