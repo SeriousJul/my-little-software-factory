@@ -30,6 +30,15 @@ import type { FactoryState } from "./state.ts";
 import { membershipMatchesState } from "./task-selection.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 
+/**
+ * The reason the fire records when no fixing pull request stands for the
+ * ticket and the transition named facts for one (ADR 0027, ADR 0042). The
+ * skip is the fire's visible fact on the settled turn's trace, and the only
+ * trace the refresh-time re-fire re-fires: a trace that recorded any other
+ * fact re-fires nothing.
+ */
+export const NO_LINKED_PULL_REQUEST_SKIP = "no linked pull request was found for the ticket";
+
 /** The inputs the transition's judgments read. */
 export interface TransitionJudgmentInput {
 	/** The review score the completed turn reported; null when there is none. */
@@ -473,7 +482,7 @@ export async function fireTransition(
 	// same transition on the next turn while the pull request is still
 	// missing.
 	const missingPullRequest = pullRequest === null && evaluation.pullRequestFacts.length > 0;
-	if (missingPullRequest) outcome.reason = "no linked pull request was found for the ticket";
+	if (missingPullRequest) outcome.reason = NO_LINKED_PULL_REQUEST_SKIP;
 	for (const target of surfaces) {
 		const write = await writeSurfaceLabels(request, target, machine);
 		const applied = applyWrite(outcome, write);
@@ -546,6 +555,87 @@ interface PullRequestSurface {
 	command: "issue" | "pr";
 	ticket: Ticket;
 	facts: readonly string[];
+}
+
+/** The request the re-fire of the recorded skips needs (ADR 0042). */
+export interface RefireRecordedSkipsRequest {
+	config: FactoryConfig;
+	state: FactoryState;
+	runner: CommandRunner;
+}
+
+/**
+ * One recorded skip the sweep re-fired: the re-fired outcome now stands on
+ * the ticket's newest completion trace in place of the skip it replaced.
+ */
+export interface RefiredSkip {
+	ticketIdentity: string;
+	outcome: TransitionOutcome;
+}
+
+/**
+ * The re-fire of the recorded skips (ADR 0042).
+ *
+ * A refresh that found a fixing pull request for a ticket re-fires the
+ * newest completion trace of that ticket that recorded the skip reason:
+ * the fire writes the facts the skip left unwritten - the pull request's -
+ * and derives the position the fire derives, and the trace takes the
+ * re-fired outcome in place of the skip. The sweep is bounded to the skip:
+ * a trace that recorded any other fact re-fires nothing, a ticket without
+ * an open fixing pull request re-fires nothing, and a ticket that left its
+ * source is not in the projection at all. The fire is idempotent, so a
+ * label set that already matches its spec writes nothing, and the swap of
+ * the outcome onto the trace is the "once": a trace that no longer records
+ * the skip re-fires nothing, whatever the sweeps that follow read.
+ *
+ * The outcome the trace records carries `refired`, so the observation loop
+ * can tell a re-fired outcome from a settle-time one, and route the
+ * auto-advance the skip's closed cycle never ran. A fire that finds no
+ * transition at all returns nothing and the sweep reads it again next cycle
+ * with no command; any outcome the fire produced, a fact it refused with
+ * included, lands on the trace once, the way a settle-time outcome does.
+ */
+export async function refireRecordedSkips(
+	request: RefireRecordedSkipsRequest,
+): Promise<RefiredSkip[]> {
+	// The sweep reads the projection before the list rule (ADR 0042): the rule
+	// withholds a covered ticket's row from the operator's list, and the
+	// re-fire must still reach the ticket it acts on.
+	const tickets = request.state.projectedTickets(
+		request.config.workflowStates,
+		request.config.defaultTaskType,
+	);
+	const refired: RefiredSkip[] = [];
+	for (const ticket of tickets) {
+		const completion = ticket.lastCompletion;
+		const skip = completion?.transition ?? null;
+		if (completion === null || skip === null) continue;
+		if (skip.fired !== true || skip.reason !== NO_LINKED_PULL_REQUEST_SKIP) continue;
+		// A pull request ticket is its own fixing pull request: its fire can
+		// never record the skip, and the re-fire reads the issue side of the
+		// link only.
+		if (ticket.sourceKind === "github-pull-request") continue;
+		// The awaiting walk keeps the row of a ticket that left every source,
+		// so the sweep checks the snapshot itself: the re-fire refuses a
+		// ticket its source no longer lists, the way the fire refuses a
+		// ticket that left the list.
+		if (!request.state.stillListed(ticket.identity)) continue;
+		// The machine acts on the newest non-draft open pull request that fixes
+		// the ticket: without one standing now, the skip stands as recorded.
+		if (findFixingPullRequest(tickets, ticket) === null) continue;
+		const outcome = await fireTransition({
+			config: request.config,
+			state: request.state,
+			runner: request.runner,
+			ticketIdentity: ticket.identity,
+			taskType: completion.taskType,
+		});
+		if (outcome === null) continue;
+		const recorded: TransitionOutcome = { ...outcome, refired: true };
+		if (request.state.recordSkipRefire(ticket.identity, recorded))
+			refired.push({ ticketIdentity: ticket.identity, outcome: recorded });
+	}
+	return refired;
 }
 
 /**

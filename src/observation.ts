@@ -88,6 +88,7 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
+import type { RefiredSkip } from "./workflow.ts";
 
 /** The normalized states the factory reasons about. */
 export type AgentStatus = "working" | "done" | "idle" | "blocked" | "unknown";
@@ -397,6 +398,15 @@ interface ObservationOptions {
 	 * settles without a transition.
 	 */
 	fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
+	/**
+	 * The re-fire of the recorded skips (ADR 0042): the app's seam re-fires,
+	 * through the command runner, the transition a refresh-time sweep found
+	 * recorded as the skip on a ticket's newest completion trace, for a
+	 * ticket that now stands an open fixing pull request. Returns the skips
+	 * whose trace took the re-fired outcome. Omitted: no recorded skip
+	 * re-fires, and the auto-advance of a closed cycle's skip never runs.
+	 */
+	refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 }
 
 export class ObservationCoordinator {
@@ -429,6 +439,7 @@ export class ObservationCoordinator {
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
 	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
+	private readonly refireRecordedSkips?: () => Promise<RefiredSkip[]>;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
 	private cycleInFlight = false;
@@ -478,6 +489,7 @@ export class ObservationCoordinator {
 		this.clock = options.clock ?? SYSTEM_CLOCK;
 		this.turnLogs = options.turnLogs ?? SESSION_TURN_LOGS;
 		this.fireCompleted = options.fireCompleted;
+		this.refireRecordedSkips = options.refireRecordedSkips;
 	}
 
 	/** Begin polling. The first cycle runs immediately. */
@@ -653,6 +665,32 @@ export class ObservationCoordinator {
 			}
 		}
 
+		// The re-fire of the recorded skips (ADR 0042): a refresh that found
+		// the fixing pull request re-fires the transition the ticket's newest
+		// completion trace recorded as the skip, and the trace takes the
+		// re-fired outcome. The sweep runs after the settles, so a skip this
+		// cycle settled re-fires in the same cycle the pull request already
+		// lists, and before the awaiting walk, so a ticket the cycle never
+		// closed routes the position's task from the re-fired outcome in this
+		// same cycle.
+		if (this.refireRecordedSkips !== undefined) {
+			const refired = await this.refireRecordedSkips();
+			if (this.stopped) return;
+			if (refired.length > 0) {
+				changed = true;
+				for (const entry of refired) {
+					if (entry.outcome.writeFailure === "") continue;
+					// The failure stands on the trace, the way a settle-time
+					// failure stands: the operator reads it beside the facts the
+					// fire did write.
+					this.onStatus(
+						"warning",
+						`the recorded skip of ticket ${entry.ticketIdentity} re-fired, and its label write failed: ${entry.outcome.writeFailure}`,
+					);
+				}
+			}
+		}
+
 		// The waiting routes read in the priority order, so one freed parallel
 		// slot goes to the highest-ranked route first (ADR 0022).
 		for (const ticket of this.state.ticketsByState(
@@ -660,6 +698,17 @@ export class ObservationCoordinator {
 			this.config().priority?.labels ?? [],
 		)) {
 			changed = (await this.handleAwaiting(ticket, slots, autoOn)) || changed;
+			if (this.stopped) return;
+		}
+
+		// The re-fired skip's route (ADR 0042): the skip closed its cycle - the
+		// position's task was never routed, because the skip derived no
+		// position - and the ticket rests open behind its closed cycle. The
+		// route starts the position's task on the pull request while the
+		// position still offers it, in auto and manual mode alike, the way the
+		// awaiting route does for a ticket the cycle never closed.
+		for (const ticket of this.state.ticketsByState(["open"])) {
+			changed = (await this.routeRefiredSkip(ticket, slots)) || changed;
 			if (this.stopped) return;
 		}
 
@@ -1242,6 +1291,116 @@ export class ObservationCoordinator {
 		slots.count += 1;
 		// The claim holds the work, so the cycle changed the record: the route's
 		// decision follows the handoff's start.
+		return true;
+	}
+
+	/**
+	 * The re-fired skip's route (ADR 0042). Returns whether the cycle changed
+	 * factory state.
+	 *
+	 * The sweep re-fired the transition, and the ticket's newest completion
+	 * trace now holds the outcome with its derived position, marked
+	 * `refired`. The skip closed its cycle - the auto-advance never ran, because
+	 * the skip derived no position - and the ticket rests open behind that
+	 * closed cycle, so no awaiting route covers it. The route starts the
+	 * position's task on the pull request the position sits on, the way the
+	 * awaiting route does: automatic, in any mode, while the parallel limit
+	 * has room, with the position's task profile and the transition's pins.
+	 *
+	 * The route runs only while the position still offers the task the outcome
+	 * names: the pull request open and actionable, wearing the labels the fire
+	 * wrote in the last refresh, and holding no handoff, no queue item, and no
+	 * unfinished attempt. Once the position's own turn settles and its
+	 * transition moves those labels - or the routed handoff runs - the position
+	 * no longer offers the task, and the route stands down. The Same-type hold
+	 * stands the guard over the refresh lag: a position whose newest closed
+	 * cycle completed the task it still suggests by stale labels holds the
+	 * route even before the moved labels land. The decision the settled turn
+	 * already carries stands: the route records none.
+	 */
+	private async routeRefiredSkip(ticket: HandoffTicket, slots: ParallelSlots): Promise<boolean> {
+		const completion = this.state.lastCompletion(ticket.ticketIdentity);
+		const outcome = completion?.transition ?? null;
+		if (
+			outcome === null ||
+			outcome.refired !== true ||
+			outcome.fired !== true ||
+			outcome.autoAdvance !== true ||
+			outcome.writeFailure !== "" ||
+			outcome.positionTaskType === null ||
+			outcome.positionTicketIdentity === null
+		)
+			return false;
+		const config = this.config();
+		// The projection before the list rule (ADR 0042): the rule withholds a
+		// covered ticket's row from the operator's list, and the route must
+		// still reach the position it starts on.
+		const position = this.state
+			.projectedTickets(config.workflowStates, config.defaultTaskType)
+			.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
+		if (position === undefined || position.state !== "open") return false;
+		// The position must still offer the task the outcome names: the labels
+		// the fire wrote stand on it in the last refresh, and no handoff, no
+		// queue item, and no unfinished attempt hold it.
+		if (position.suggestedTaskType !== outcome.positionTaskType) return false;
+		if (!position.actionable) return false;
+		if (position.handoffRecoveryRequired) return false;
+		if (this.state.hasWorkItem(position.identity)) return false;
+		// The Same-type hold over the refresh lag: a position whose newest
+		// closed cycle completed the task it still suggests by stale labels has
+		// already run this route's task, and the route waits for the moved
+		// labels to land instead of starting it twice.
+		if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) return false;
+		// The position's handoff limit bounds the route the way it bounds the
+		// awaiting route: a position that has used up its handoffs rests open.
+		if (position.handoffCount >= config.maxHandoffsPerTicket) return false;
+		// The same holds as the awaiting route: a queue item holds the seat the
+		// operator asked for, a Dispatch pause holds the automatic work, and a
+		// full parallel limit holds the route until a slot frees. The holds
+		// stand on the trace, so the next cycle re-reads them and retries.
+		if (this.state.dispatchPauseActive()) return false;
+		const limit = config.maxParallelAgents;
+		if (limit > 0 && slots.count >= limit) return false;
+		const target = outcome.positionTaskType;
+		const previousMessage = this.promptPreviousMessage(completion);
+		// The transition Handoff resolves a fresh target profile and carries the
+		// transition's pins, the way the awaiting route does.
+		const result = await this.dispatch({
+			origin: "workflow",
+			automatic: true,
+			ticketIdentity: position.identity,
+			// The route continues this ticket's closed cycle: its leftover
+			// environment is the handoff's own, so a name that leftover agent
+			// still holds falls to the cycle name instead of failing as a
+			// stranger (ADR 0027).
+			routeFromIdentity: ticket.ticketIdentity,
+			choice: resolveHandoffChoice(config, target, {
+				...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
+				...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+			}),
+			previousMessage,
+			onStarted: (started) => {
+				// The settled turn's decision already stands: the route records
+				// none, and the start only reports.
+				if (this.stopped || started.ok) return;
+				this.onStatus(
+					"warning",
+					`automatic route for ticket ${ticket.ticketIdentity} failed: ${started.reason}`,
+				);
+			},
+		});
+		if (this.stopped) return true;
+		if (!result.ok) {
+			this.onStatus(
+				"warning",
+				`automatic route for ticket ${ticket.ticketIdentity} failed: ${result.reason}`,
+			);
+			return false;
+		}
+		// The routed agent is not in this poll, so the cycle's count must hold
+		// its slot before the next dispatch of the cycle is measured.
+		slots.count += 1;
+		this.onStatus("info", `ticket ${ticket.ticketIdentity} routed to ${target}`);
 		return true;
 	}
 

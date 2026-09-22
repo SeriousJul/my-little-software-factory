@@ -202,6 +202,13 @@ export interface TransitionOutcome {
 	positionTaskType: string | null;
 	/** The ticket the new position sits on; null when the position offers no task. */
 	positionTicketIdentity: string | null;
+	/**
+	 * Whether this outcome is the re-fire of a recorded skip (ADR 0042): a
+	 * refresh found the fixing pull request, and the fire re-ran on the trace
+	 * that had recorded the skip reason in its place. A settle-time fire
+	 * records none.
+	 */
+	refired?: boolean;
 }
 
 export type GitHubSourceKind =

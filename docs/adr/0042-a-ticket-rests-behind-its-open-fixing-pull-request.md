@@ -54,7 +54,8 @@ source kind alike, and it suppresses only the `open` state: a ticket that is
 exist, because live work must stay reachable for its Live view, its Close,
 and its decision. The Work queue's pickup gate refuses a covered ticket: a
 queued start whose ticket gained an open fixing pull request is cancelled
-and the ticket keeps its state.
+and the ticket keeps its state. The force-dispatch of a covered item runs
+the same check and cancels it, skipping only the cap.
 
 **A pull request inherits the priority of the tickets it fixes.** The
 effective-rank clause of ADR 0023 generalizes from "the highest effective
@@ -69,20 +70,29 @@ source without a number in its key, the security advisory among them, is
 named by its key, not by a number the key never carried. The pull request
 sorts under the ordinary rank rule; it takes no special position.
 
-**A recorded skip re-fires when the link appears - deferred to #147.** The
-accepted design for the recorded skip is that a refresh that finds a fixing
-pull request for a ticket re-fires the newest completion trace of that
-ticket that recorded the reason `no linked pull request was found for the
-ticket`. The fire is idempotent: a label set that already matches its
-spec writes nothing, so the re-fire takes a new egress point beside the
-settle-time fire only when labels actually differ. The re-fire writes the
-facts the skip left unwritten and derives the position the fire derives, so
-an auto-advance task type advances through it. Issue #146 does not build
-it: the pickup guard that refuses a covered ticket ships in this issue, so
-#147 carries the re-fire alone. Until then the plane makes no refresh-time
-write: the skip stands as a visible fact on the ticket's newest completion
-trace, the pull request stays listed with its inherited rank and no task,
-and the pair heals on the next completed turn that fires on it.
+**A recorded skip re-fires when the link appears (issue #147).** A refresh
+that finds a fixing pull request for a ticket re-fires the newest completion
+trace of that ticket that recorded the reason `no linked pull request was
+found for the ticket`. The fire is idempotent: a label set that already
+matches its spec writes nothing, so the re-fire takes an egress point
+beside the settle-time fire only when labels actually differ. The re-fire
+writes the facts the skip left unwritten, derives the position the fire
+derives, and records the re-fired outcome on the trace in place of the
+skip. The swap is the "once": the record runs only while the newest trace
+still records the skip, so the re-fire lands once whatever the sweeps that
+follow read, and a trace that recorded any other fact re-fires nothing.
+A ticket without an open fixing pull request, and a ticket that left its
+source, never re-fire. The trace the re-fire records carries a `refired`
+marker, so the observation loop tells a re-fired outcome from a settle-time
+one. The skip closed its own cycle - the auto-advance never ran, because
+the skip derived no position - and the ticket rests open behind that closed
+cycle, so the loop routes the position's task from the re-fired outcome in
+every cycle the position still offers the task: the position open, wearing
+the labels the fire wrote in the last refresh, and holding no handoff, no
+queue item, and no unfinished attempt, with the same holds the awaiting
+route carries - the parallel limit, the handoff limit, the Dispatch pause -
+and the Same-type hold over the refresh lag, because the labels the fire
+wrote stand on the position only from the next refresh on.
 
 ## Considered options
 
@@ -115,10 +125,9 @@ and the pair heals on the next completed turn that fires on it.
 
 - The pull request fetch gains one scalar field. The possible-node budget
   note in ADR 0023 is unaffected: a scalar is not a connection.
-- In this implementation the plane's write surface to an external source
-  is the settle-time fire alone. The catch-up re-fire, deferred to #147,
-  is the only refresh-time write the design makes; when it lands it
-  widens the surface and stays bounded to a recorded skip.
+- The plane's write surface to an external source is the settle-time fire
+  and the re-fire of a recorded skip: the only refresh-time write the
+  design makes, bounded to a trace that recorded the skip reason.
 - The branch name `factory/<ticket id>-<slug>` becomes a contract: it is
   read back from the source and decides list membership and rank. Renaming
   the branch severs the link, and the severed link stands as a
@@ -131,11 +140,10 @@ and the pair heals on the next completed turn that fires on it.
   the source never learned an identity for.
 - The legacy pair heals in steps. The next refresh applies the list rule
   and the rank: the covered alert leaves the list, and the pull request
-  takes its inherited rank. The `ready-for-review` fact the skip left
-  unwritten lands on the next completed turn that fires on the pair - the
-  ticket's while it is still in flight, or the pull request's when the
-  operator starts it. When the re-fire lands with #147, the refresh writes
-  the fact instead of waiting for a turn.
+  takes its inherited rank. The refresh re-fires the skip, writes the
+  `ready-for-review` fact the skip left unwritten, and derives the
+  position on the pull request; the loop routes the position's task when
+  the labels land in the projection, at the next refresh at the latest.
 - A covered ticket leaves the auto-handoff's candidate set and the section
   header counts with it. A covered ticket's re-handoff in flight stays
   visible, and when its cycle closes the ticket is covered again and leaves

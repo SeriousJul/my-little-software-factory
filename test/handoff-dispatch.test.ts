@@ -2055,6 +2055,64 @@ describe("the Parallel limit and the Work queue", () => {
 		).toHaveLength(0);
 	});
 
+	test("a force-dispatch at a full cap refuses the covered ticket the way the pickup does", async () => {
+		const rigRef = rig([SECOND]);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: SECOND.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		// While the start waits, the ticket gains the pickup test's open
+		// fixing pull request.
+		const pulls = { name: "pulls", kind: "github-pull-requests" };
+		rigRef.state.applyFetch(pulls, {
+			status: "success",
+			fetchedAt: "2026-09-01T04:00:00Z",
+			tickets: [
+				{
+					identity: "github:github.com:P_99",
+					sourceKind: "github-pull-request",
+					externalKey: "#99",
+					sourceState: "open",
+					url: "https://github.com/acme/factory/pulls/99",
+					title: "Close the stale deploy branch",
+					description: "",
+					labels: [],
+					externalUpdatedAt: "2026-09-01T03:59:00Z",
+					repository: {
+						identity: "github.com/acme/factory",
+						displayName: "acme/factory",
+						cloneUrl: "https://github.com/acme/factory.git",
+					},
+					attributes: { headBranch: `factory/6-${SECOND.name}` },
+				},
+			],
+		});
+		// The cap is full, and the force-dispatch crosses it. The covered
+		// gate is not the cap, so it refuses the start the crossing does not
+		// lift: the item is removed, the ticket keeps its state, the line is
+		// the pickup's own words for the fact, and no agent starts.
+		const forcing = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		forcing.forceDispatchWorkQueueItem(SECOND.identity);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(SECOND.identity)).toBe("open");
+		expect(rigRef.events).toContain(
+			`notice:the queued start of "${SECOND.title}" is removed: an open fixing pull request covers the ticket`,
+		);
+		expect(rigRef.events.some((event) => event.includes("over the Parallel limit"))).toBe(false);
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(0);
+	});
+
 	test("a covered open ticket is gone from the auto-handoff candidate set", async () => {
 		// The auto-handoff's open dispatch reads the list (ADR 0042): a covered
 		// ticket is not in it, so the start it would run is refused, and the

@@ -3616,3 +3616,328 @@ describe("an agent that outlives its work cycle", () => {
 		state.close();
 	});
 });
+
+describe("the re-fired skip's route (ADR 0042)", () => {
+	const issueIdentity = "github:github.com:I_5";
+	const pullSource = { name: "pulls", kind: "github-pull-requests" as const };
+	const pullIdentity = "github:github.com:P_12";
+
+	/** The fixing pull request the agent opened, by its labels. */
+	function pullTicket(
+		labels: readonly string[] = ["ready-for-review"],
+		over: Partial<FetchedTicket> = {},
+	): FetchedTicket {
+		return {
+			identity: pullIdentity,
+			sourceKind: "github-pull-request",
+			externalKey: "#12",
+			sourceState: "open",
+			url: "https://github.com/acme/factory/pulls/12",
+			title: "Persist source facts in state",
+			description: "The implementation of #5.",
+			labels: [...labels],
+			externalUpdatedAt: "2026-08-31T11:00:00Z",
+			repository: {
+				identity: "github.com/acme/factory",
+				displayName: "acme/factory",
+				cloneUrl: "https://github.com/acme/factory.git",
+			},
+			attributes: {},
+			...over,
+		};
+	}
+
+	/** Land the pull request on the pulls source, the way a refresh would. */
+	function landPulls(state: FactoryState, ...pulls: FetchedTicket[]): void {
+		state.applyFetch(pullSource, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:01:00Z",
+			tickets: pulls,
+		});
+	}
+
+	/**
+	 * The re-fired skip outcome the trace carries: the fire found the pull
+	 * request, wrote its facts, and derived the review position on it.
+	 */
+	function refiredOutcome(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
+		return outcome({
+			positionTaskType: "review",
+			positionTicketIdentity: pullIdentity,
+			refired: true,
+			...over,
+		});
+	}
+
+	/**
+	 * The skip's closed cycle on the issue: a settled implement turn that
+	 * recorded the transition, then the close that left the ticket open
+	 * behind it. The route reads the trace on the open ticket. The turn
+	 * settles `completed`, the way a skip turn does: the work is done, and
+	 * the Same-type hold keeps the open dispatch from re-running the issue
+	 * while the pull request carries the work.
+	 */
+	function refiredCycle(state: FactoryState, transition: TransitionOutcome): void {
+		const attempt = settleForCause(state, issueIdentity, "implement", "completed", "", transition);
+		state.applyCompletionDecision({
+			ticketIdentity: issueIdentity,
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:00:30Z",
+		});
+	}
+
+	test("an open ticket whose trace re-fired the skip routes the position's task", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		// The route starts on the pull request, continues the issue's cycle,
+		// and carries the position's task profile and the settled message.
+		expect(intents).toEqual([
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: issueIdentity,
+				previousMessage: "settled the turn",
+				choice: expect.objectContaining({
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "review",
+				}),
+			}),
+		]);
+		// The route records no decision on the issue: its cycle is closed, and
+		// the route's decision belongs to the pull request's own turn.
+		expect(state.lastCompletion(issueIdentity)?.decision).toBe("closed");
+		state.close();
+	});
+
+	test("the route runs in auto mode too", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [], dispatchClaims: true });
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		// The route's claim takes the pull request off the open list, so the
+		// auto dispatch of the same cycle finds no second start for it, and
+		// the issue's closed cycle sits behind its Same-type hold.
+		expect(intents).toHaveLength(1);
+		expect(intents[0].ticketIdentity).toBe(pullIdentity);
+		state.close();
+	});
+
+	test("a full parallel limit holds the route", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [
+				agent("pane-github:github.com:I_6", "working"),
+				agent("pane-github:github.com:I_7", "working"),
+			],
+		});
+		state.applyFetch(
+			source,
+			success([fetched("github:github.com:I_6"), fetched("github:github.com:I_7"), fetched()]),
+		);
+		for (const identity of ["github:github.com:I_6", "github:github.com:I_7"]) {
+			const claim = state.claimHandoff(identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: `pane-${identity}`,
+				tabId: "tab-2",
+				workspaceId: "ws-2",
+			});
+		}
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		// The hold stands on the trace: the next cycle re-reads it and retries
+		// when a slot frees.
+		state.close();
+	});
+
+	test("a Dispatch pause holds the route", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome());
+		// A held failed turn that settled after the completed one pauses
+		// automatic dispatch: a completed trace after it would end the pause.
+		settleForCause(state, "github:github.com:I_6", "implement", "failed", "the build broke");
+		expect(state.dispatchPauseActive()).toBe(true);
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a pull request that no longer offers the task holds the route", async () => {
+		for (const labels of [[], ["needs-work"]]) {
+			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+			// No ready-for-review label: the position offers the default task,
+			// not the review the outcome names, and the route waits for the
+			// labels to stand.
+			landPulls(state, pullTicket(labels));
+			refiredCycle(state, refiredOutcome());
+			await coordinator.tick();
+			expect(intents).toHaveLength(0);
+			state.close();
+		}
+	});
+
+	test("a pull request that is not open holds the route", async () => {
+		for (const stateShape of ["running", "awaiting"] as const) {
+			const { state, intents, setAgents, coordinator } = rig({ autoOn: false, agents: [] });
+			landPulls(state, pullTicket());
+			// The pull request's own work: in flight, or resting awaiting its
+			// own settled turn. Either way it is not open, and the route
+			// starts nothing on it.
+			const claim = state.claimHandoff(pullIdentity, { ...choice, taskType: "review" }, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-pull",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			if (stateShape === "running") {
+				setAgents([agent("pane-pull", "working")]);
+			} else {
+				state.settleTurn({
+					ticketIdentity: pullIdentity,
+					handoffId: claim.claim.attemptId,
+					taskType: "review",
+					agentType: "pi",
+					message: "settled the pull's turn",
+					turnLog: [{ kind: "text", text: "settled the pull's turn" }],
+					completedAt: "2026-08-31T11:00:00Z",
+				});
+			}
+			refiredCycle(state, refiredOutcome());
+			await coordinator.tick();
+			expect(intents).toHaveLength(0);
+			state.close();
+		}
+	});
+
+	test("the Same-type hold over the refresh lag holds the route", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		// The pull request ran a review cycle that completed, and its moved
+		// labels have not landed: it still wears the labels by which it
+		// suggests review. The hold the lag needs is the completed turn of
+		// the task it still suggests.
+		const attempt = state.claimHandoff(pullIdentity, { ...choice, taskType: "review" }, "open");
+		if (!attempt.ok) throw new Error(attempt.reason);
+		state.settleHandoff(attempt.claim.attemptId, true, undefined, {
+			paneId: "pane-pull",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		state.settleTurn({
+			ticketIdentity: pullIdentity,
+			handoffId: attempt.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "the review is done",
+			turnLog: [{ kind: "text", text: "the review is done" }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "completed",
+		});
+		state.applyCompletionDecision({
+			ticketIdentity: pullIdentity,
+			handoffId: attempt.claim.attemptId,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:00:30Z",
+		});
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a pull request at its handoff limit holds the route", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		// Two closed cycles put the pull request at the rig's limit of two.
+		for (let cycle = 0; cycle < 2; cycle += 1) {
+			const attempt = state.claimHandoff(pullIdentity, { ...choice, taskType: "review" }, "open");
+			if (!attempt.ok) throw new Error(attempt.reason);
+			state.settleHandoff(attempt.claim.attemptId, true, undefined, {
+				paneId: "pane-pull",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			state.settleTurn({
+				ticketIdentity: pullIdentity,
+				handoffId: attempt.claim.attemptId,
+				taskType: "review",
+				agentType: "pi",
+				message: "a done review",
+				turnLog: [{ kind: "text", text: "a done review" }],
+				completedAt: "2026-08-31T11:00:00Z",
+				cause: "aborted",
+			});
+			state.applyCompletionDecision({
+				ticketIdentity: pullIdentity,
+				handoffId: attempt.claim.attemptId,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:00:30Z",
+			});
+		}
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a re-fired outcome that auto-advances nothing routes nothing", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome({ autoAdvance: false }));
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a re-fired outcome with a failed write routes nothing", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		refiredCycle(
+			state,
+			refiredOutcome({ writeFailure: "gh pr edit #12 failed: HTTP 403", reason: "" }),
+		);
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a settle-time outcome routes nothing, re-fired or not", async () => {
+		// The marker is the guard: a routable settle-time outcome on an open
+		// ticket is not a re-fired skip, and the operator's close of it stands
+		// without a second route.
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		refiredCycle(
+			state,
+			outcome({ positionTaskType: "review", positionTicketIdentity: pullIdentity }),
+		);
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+
+	test("a trace that records no transition routes nothing", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		landPulls(state, pullTicket());
+		const attempt = settleFor(state, issueIdentity, "implement", null);
+		state.applyCompletionDecision({
+			ticketIdentity: issueIdentity,
+			handoffId: attempt,
+			decision: "closed",
+			decidedAt: "2026-08-31T11:00:30Z",
+		});
+		await coordinator.tick();
+		expect(intents).toHaveLength(0);
+		state.close();
+	});
+});
