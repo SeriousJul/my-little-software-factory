@@ -43,6 +43,6 @@ Every check below runs in `bun run test`.
 
 ## Notes
 
-- The 13 skipped tests are the frame and theme tests (the held turn through the real app flow, the ticket scroll frames, the shared presentation ink, and the theme inheritance frames). They are skipped on purpose in commit a1af1e0, under issues #103 and #104. None of them touches the priority chain, so the skips leave no gap in this record.
+- The 12 skipped tests are the frame and theme tests (the held turn through the real app flow, the ticket scroll frames, the shared presentation ink, and the theme inheritance frames). They are skipped on purpose in commit a1af1e0, under issues #103 and #104. None of them touches the priority chain, so the skips leave no gap in this record.
 - The suite asserts the source's query text and the GraphQL response shapes, and it never sends a request. That is why the live link is the one link of the chain no test measures.
-- Measured on 2026-09-22 on Bun 1.4.2, no concurrent `bun test` on the machine: `bun run lint` passed, `bun run typecheck` passed, `bun test` ran 1780 tests across 75 files with 1767 pass, 13 skip, and 0 fail. The skip set is the recorded one above; no skip is new or different.
+- Measured on 2026-09-22 on Bun 1.4.2, no concurrent `bun test` on the machine: `bun run lint` passed, `bun run typecheck` passed, `bun test` ran 1802 tests across 75 files with 1790 pass, 12 skip, and 0 fail. The skip set is the recorded one above; no skip is new or different. The count includes the tests main added beside this branch's (the review score's comment read and the Key guide's reason walk).

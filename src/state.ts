@@ -44,11 +44,7 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-import {
-	externalKeyNumber,
-	isCoveredByFixingPullRequest,
-	pullRequestFixesTicket,
-} from "./workflow.ts";
+import { externalKeyNumber, fixedTickets, isCoveredByFixingPullRequest } from "./workflow.ts";
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
@@ -1276,11 +1272,8 @@ export class FactoryState {
 		// nothing.
 		for (const ticket of tickets) {
 			if (ticket.sourceKind !== "github-pull-request") continue;
-			const fixing = tickets.filter(
-				(candidate) =>
-					candidate.identity !== ticket.identity &&
-					live.has(candidate.identity) &&
-					pullRequestFixesTicket(ticket, candidate),
+			const fixing = fixedTickets(tickets, ticket).filter((candidate) =>
+				live.has(candidate.identity),
 			);
 			if (fixing.length === 0) continue;
 			ticket.priority = effectivePullRequestPriority(

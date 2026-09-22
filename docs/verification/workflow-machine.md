@@ -21,7 +21,7 @@ Agent.
 | --- | --- | --- |
 | A ticket's position is the first matching state, a parking state suggests nothing, and no match takes the default task type | `test/task-selection.test.ts`, `test/observation.test.ts`, `test/app.test.ts` | Passed |
 | The transition's judgments pick the branch, its facts and pins come from that branch, and a judgment that cannot be read fires nothing and says why | `test/workflow-transition.test.ts` | Passed |
-| The review score is read from the settled turn's last message, and the threshold is the transition's own number | `test/workflow-transition.test.ts`, `test/config.test.ts` | Passed |
+| The review score is read from the pull request's comments - the newest comment that carries the template's fixed line - and the threshold is the transition's own number | `test/workflow-transition.test.ts`, `test/config.test.ts` | Passed |
 | A completed settle fires the transition through the command runner before the completion decision, in manual mode and in auto mode, and stores its outcome on the trace | `test/observation.test.ts`, `test/live-view.test.ts`, `test/state.test.ts` | Passed |
 | The write converges each surface to the transition's facts, leaves a label outside the machine alone, is idempotent, and records a failed write as a fact that routes nothing | `test/workflow-transition.test.ts` | Passed |
 | The fixing pull request is derived from source facts - the pull request that closes the ticket, or, in the same repository, the one whose head branch carries the ticket's factory branch prefix - the newest non-draft is what the machine acts on, and no pull request found is a visible fact with no retry | `test/workflow-transition.test.ts`, `test/auto-mode.test.ts` | Passed |
@@ -42,6 +42,6 @@ Agent.
 | Requirement | How it would be measured | Result |
 | --- | --- | --- |
 | A real `gh issue edit` and `gh pr edit` land the labels on GitHub, with the account and scope the operator's `gh` holds | Run the plane against one real repository through one implement and one review cycle, and read the labels and the migration report afterwards | Incomplete |
-| The score line the shipped review template asks for is what a real review agent's settled turn carries | Read the completion trace of a real review turn and confirm the score parses, and that a missing score parks the decision on the modal | Incomplete |
+| The score line the shipped review template asks for is what a real review agent posts as a comment on the pull request | Run one real review cycle and confirm the posted line parses, and that a missing score parks the decision on the modal | Incomplete |
 | A fresh pull request is in the list by the time the implement settle fires, on a real host with a real refresh | Time one real implement cycle: the fire's forced refresh must return the pull request the agent opened | Incomplete |
 | The migrated config behaves on the operator's own machine, with their comments and custom task types gone through the report | Start an existing install after the upgrade and read the report and the start note | Incomplete |

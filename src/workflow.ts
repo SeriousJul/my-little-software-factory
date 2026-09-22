@@ -180,7 +180,7 @@ async function readPullRequestScore(
 	pullRequest: Ticket,
 ): Promise<number | null> {
 	const membership = newestMembershipOf(pullRequest);
-	const number = numberFromExternalKey(membership.externalKey);
+	const number = externalKeyNumber(membership.externalKey);
 	if (number === null) return null;
 	const source = request.config.sources.find((item) => item.name === membership.sourceName);
 	if (source === undefined) return null;
