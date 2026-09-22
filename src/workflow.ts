@@ -533,7 +533,6 @@ export async function fireTransition(
 	const tickets = request.state.projectedTickets(
 		request.config.workflowStates,
 		request.config.defaultTaskType,
-		[],
 	);
 	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
 	if (ticket === undefined) return null;

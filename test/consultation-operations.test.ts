@@ -30,7 +30,7 @@ import {
 	type ConsultationStatus,
 	createConsultationOperations,
 } from "../src/consultation-operations.ts";
-import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import { consultationBranchName } from "../src/naming.ts";
 import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
@@ -890,7 +890,6 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			actionable: true,
 			handoffRecoveryRequired: false,
 			leftover: null,
-			priority: UNRANKED_PRIORITY,
 		};
 	}
 

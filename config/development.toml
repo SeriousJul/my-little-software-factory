@@ -20,9 +20,6 @@ speed = 1
 acceleration = 0.8
 maximum-speed = 6
 
-[priority]
-labels = ["critical", "high", "low"]
-
 [logging]
 level = "debug"
 file = ".factory-development.log"

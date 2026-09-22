@@ -360,14 +360,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 	private readonly log?: Logger;
-	/**
-	 * The pickup warnings already said for one queue item, so a pickup that
-	 * keeps failing says each reason once on the Message line, not once per
-	 * cycle. The set holds the reasons, not just the last one: a check that
-	 * comes back after another reason is still the reason the operator has
-	 * read, and a repeat of it would only push a newer line off the bar.
-	 */
-	private readonly warnedPickups = new Map<string, Set<string>>();
 
 	/** True while external handoff work holds the seat. */
 	private inFlight = false;
@@ -383,6 +375,14 @@ class HandoffDispatchModule implements HandoffDispatch {
 	private cleanupQueued = false;
 	private cleanupQueue: QueuedCleanup[] = [];
 	private handoffQueue: QueuedHandoff[] = [];
+	/**
+	 * The start report the operator's ask asked for (the intent's `onStarted`),
+	 * held per ticket until the item it enqueued answers: the pickup that starts
+	 * it, the drop that refuses it, or the cancel that removes it. A queued item
+	 * answers its ask from wherever it leaves the queue (ADR 0049), so the ask's
+	 * route decision and the test's await both resolve when the start lands.
+	 */
+	private intentOnStarted = new Map<string, (started: DispatchResult) => void>();
 
 	constructor(options: HandoffDispatchOptions) {
 		this.state = options.state;
@@ -413,54 +413,52 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.stopped = true;
 	}
 
+	/**
+	 * Answer the ask's start report once, when its item leaves the queue. The
+	 * callback is held per ticket and deleted on the first answer, so a pickup
+	 * and a force-dispatch that race the same row answer the ask a single time.
+	 */
+	private settleIntentOnStarted(ticketIdentity: string, started: DispatchResult): void {
+		const answer = this.intentOnStarted.get(ticketIdentity);
+		if (answer === undefined) return;
+		this.intentOnStarted.delete(ticketIdentity);
+		safeReport(() => answer(started));
+	}
+
 	dispatch(intent: HandoffIntent): Promise<DispatchResult> {
 		if (this.stopped)
 			return Promise.resolve({ ok: false, reason: "the dispatch has been stopped" });
-		const config = this.config();
-		const ticket = this.state
-			.visibleTickets(config.workflowStates, config.defaultTaskType)
-			.find((candidate) => candidate.identity === intent.ticketIdentity);
-		if (ticket === undefined)
-			return Promise.resolve({ ok: false, reason: "the ticket no longer exists" });
-
-		// The Parallel limit gates every start (ADR 0034): a manual start that
-		// cannot take a seat enters the Work queue instead of starting, and the
-		// ticket keeps the state it wears while it waits. An automatic start
-		// never enters the queue: it is refused, and its own cycle retries it.
-		const limit = config.maxParallelAgents;
-		if (limit > 0 && this.seatCount() >= limit) {
-			if (intent.automatic === true)
-				return Promise.resolve({ ok: false, reason: "the Parallel limit is full" });
-			return Promise.resolve(this.enqueueWork(intent));
-		}
-		const claim = this.state.claimHandoff(intent.ticketIdentity, intent.choice, intent.origin);
-		if (!claim.ok) {
+		// The Work queue is the single start channel (ADR 0049): every start,
+		// manual or automatic, enters the queue first, and the immediate pickup
+		// pass takes it when a seat is free. The claim's hard gates run before
+		// the ask, the way the claim runs them: a gate the ask fails is a
+		// refusal, not a queued item.
+		const check = this.state.handoffClaimCheck(intent.ticketIdentity, intent.origin);
+		if (!check.ok) {
 			this.log?.warn(
-				`handoff refused: ${claim.reason} (${this.ticketName(intent.ticketIdentity)})`,
+				`handoff refused: ${check.reason} (${this.ticketName(intent.ticketIdentity)})`,
 			);
-			return Promise.resolve({ ok: false, reason: claim.reason });
+			return Promise.resolve({ ok: false, reason: check.reason });
 		}
-		// The claim is in, so the ticket is in the Starting window now: its work
-		// may wait behind the seat, but the add does not wait with it.
-		this.log?.info(
-			`handoff started: ${this.ticketName(intent.ticketIdentity)} (origin ${intent.origin})`,
-		);
-		this.reports.starting(intent.ticketIdentity, true);
-		this.runClaimedHandoff(
-			{
-				ticket,
-				choice: intent.choice,
-				origin: intent.origin,
-				claim: claim.claim,
-				claimedState: ticket.state,
-				previousMessage: intent.previousMessage,
-				routeFromIdentity: intent.routeFromIdentity ?? null,
-				closePreviousEnvironment: intent.origin === "workflow" && intent.automatic !== true,
-				automatic: intent.automatic === true,
-			},
-			intent.onStarted,
-		);
-		return Promise.resolve({ ok: true, queued: false });
+		const enqueued = this.enqueueWork(intent);
+		if (!enqueued.ok) return Promise.resolve(enqueued);
+		// The ask's start report answers from the item's pickup, drop, or cancel
+		// (ADR 0049): hold it here until the item leaves the queue.
+		if (intent.onStarted !== undefined)
+			this.intentOnStarted.set(intent.ticketIdentity, intent.onStarted);
+		// The queue pause (ADR 0052): the ask sits in the queue until the
+		// resume, and the resume starts the pickup that takes it.
+		if (this.state.queuePaused()) {
+			this.reports.notice(
+				`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; the queue is paused`,
+			);
+			return Promise.resolve({ ok: true, queued: true });
+		}
+		// An immediate pickup pass follows every enqueue (ADR 0049): the ask
+		// takes a free seat now, or waits in the queue for one. The pass runs on
+		// behind the answer, the way every other pickup does.
+		void this.pickupWorkQueue();
+		return Promise.resolve({ ok: true, queued: true });
 	}
 
 	/**
@@ -489,6 +487,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			origin: intent.origin,
 			choice: intent.choice,
 			previousMessage: intent.previousMessage,
+			automatic: intent.automatic === true,
 		});
 		if (!enqueued.ok) return { ok: false, reason: enqueued.reason };
 		this.log?.info(
@@ -517,22 +516,28 @@ class HandoffDispatchModule implements HandoffDispatch {
 	}
 
 	/**
-	 * Start the queue's items for the free seats, in queue order (ADR 0034).
+	 * Start the queue's items for the free seats, in queue order (ADR 0034,
+	 * ADR 0049).
 	 *
 	 * A pickup is a manual start: the claim runs every hard check - the
 	 * ticket still holds the state the origin requires, the source is healthy
 	 * and re-read since the last cycle, the attempt ledger is clear - and the
 	 * Setting fit runs inside the handoff itself. The automatic gates, the
-	 * Dispatch pause and the Same-type hold, do not hold a pickup. A pickup
-	 * that fails a check leaves its item in the queue with a Message line
-	 * warning, and the ticket keeps its state; a pickup that starts removes
-	 * its item and names the start on the Message line.
+	 * Dispatch pause and the Same-type hold, do not hold a pickup, and the
+	 * queue pause does not hold an item that already claimed its seat. Every
+	 * pickup ends in start or drop (ADR 0049): a pickup that fails a check
+	 * drops its item with a Message line warning, and the ticket keeps its
+	 * state, so the queue never sits stuck on a row no seat would take.
 	 *
 	 * An unlimited cap holds a free seat for every waiting start, so it picks
 	 * up the whole queue: an operator who lifts the cap while items wait frees
 	 * them all in the same cycle.
 	 */
 	async pickupWorkQueue(): Promise<number> {
+		// The queue pause (ADR 0052): the brake holds the drain. The items keep
+		// their places, the force-dispatch passes it, and the resume starts the
+		// pickup that takes them.
+		if (this.state.queuePaused()) return 0;
 		const limit = this.config().maxParallelAgents;
 		const items = this.state.workQueue();
 		if (items.length === 0) return 0;
@@ -546,8 +551,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// poll still lists) claims no new seat, and the free-seat figure counts it
 		// against the same ceiling the mode line shows.
 		let claimed = 0;
-		for (const item of items.slice(0, freeSeats)) {
+		for (const item of items) {
 			if (this.stopped) break;
+			// In-flight items skip without taking a free seat, so the walk reaches
+			// the starts that wait behind them; the cap still bounds how many the
+			// pickup starts, not how many it reads.
+			if (claimed >= freeSeats) break;
 			if (item.kind === "consultation") {
 				// The shared order is one across kinds (ADR 0034, issue #90): a
 				// Consultation item takes its place in the same walk, and a pickup
@@ -579,14 +588,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 	removeQueueItem(ticketIdentity: string): boolean {
 		const removed = this.state.removeWorkItem(ticketIdentity);
 		this.cancelParkedPickup(ticketIdentity);
-		this.warnedPickups.delete(ticketIdentity);
 		return removed;
 	}
 
 	removeConsultationQueueItem(consultationId: string): boolean {
-		const removed = this.state.removeConsultationWorkItem(consultationId);
-		this.warnedPickups.delete(consultationId);
-		return removed;
+		return this.state.removeConsultationWorkItem(consultationId);
 	}
 
 	/**
@@ -627,6 +633,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 				continue;
 			this.handoffQueue.splice(index, 1);
 			this.state.settleHandoff(parked.claim.attemptId, false, "the waiting start was cancelled");
+			this.settleIntentOnStarted(ticketIdentity, {
+				ok: false,
+				reason: "the waiting start was cancelled",
+			});
 			this.reports.starting(ticketIdentity, false);
 			this.reports.refresh();
 			// The report still answers once, so no caller is left waiting; the
@@ -661,7 +671,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		// queue on every answer (ADR 0034, issue #90): the record keeps the ask,
 		// and the queue holds the pointer only while the record waits.
 		this.state.removeConsultationWorkItem(item.consultationId);
-		this.warnedPickups.delete(item.consultationId);
 		this.reports.refresh();
 		if (outcome.kind === "started") {
 			// The record holds its seat in `opening` now, and the opening runs on
@@ -722,6 +731,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 						? `${this.ticketName(item.ticketIdentity)} restarted while its restart waited in the Work queue; the queue item is removed`
 						: `${this.ticketName(item.ticketIdentity)} routed while its route waited in the Work queue; the queue item is removed`,
 				);
+				this.settleIntentOnStarted(item.ticketIdentity, {
+					ok: false,
+					reason: "the queue item was removed",
+				});
 				return { ok: "cancelled" };
 			}
 		}
@@ -775,6 +788,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 				this.reports.notice(
 					`the queued start of ${this.ticketName(item.ticketIdentity)} is removed: an open fixing pull request covers the ticket`,
 				);
+				this.settleIntentOnStarted(item.ticketIdentity, {
+					ok: false,
+					reason: "the queue item was removed",
+				});
 				return { ok: "cancelled" };
 			}
 		}
@@ -802,7 +819,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 			this.reports.refresh();
 			return { ok: false, reason: "the ticket is no longer visible" };
 		}
-		this.warnedPickups.delete(item.ticketIdentity);
 		// The decision lands on the settled turn: for a route that crosses to
 		// the position's own ticket, that is the settled ticket's latest
 		// handoff, not the position's. A crossed route whose settled ticket
@@ -823,14 +839,18 @@ class HandoffDispatchModule implements HandoffDispatch {
 
 	/**
 	 * Claim and run one queue item. Returns whether the item claimed a seat
-	 * this call: a refused claim keeps the item in the queue and says why on
-	 * the Message line, once per reason.
+	 * this call: every pickup ends in start or drop (ADR 0049), so a refused
+	 * claim drops the item with its warning, and a failed start does the same.
 	 */
 	private pickupItem(item: WorkQueueHandoffItem): boolean {
+		// A run already in flight for this ticket settles its own item when it
+		// ends; the pickup skips it so a concurrent pass cannot re-claim and
+		// drop the start the run holds (ADR 0049).
+		if (this.state.handoffInFlight(item.ticketIdentity)) return false;
 		const claimed = this.claimQueueItem(item);
 		if (claimed.ok === "cancelled") return false;
 		if (claimed.ok === false) {
-			this.reportPickupFailure(item, claimed.reason);
+			this.dropPickup(item, claimed.reason);
 			return false;
 		}
 		this.runClaimedHandoff(
@@ -844,13 +864,12 @@ class HandoffDispatchModule implements HandoffDispatch {
 				routeFromIdentity: item.routeFromIdentity,
 				// The route's ask: the close ran at the enqueue, and this close
 				// is its own answer when the environment herdr holds no more.
-				closePreviousEnvironment: item.origin === "workflow",
+				closePreviousEnvironment: item.origin === "workflow" && item.automatic !== true,
 				workQueuePickup: true,
-				// The Work queue holds manual starts only, so the pickup never
-				// skips the placement the start crosses.
-				automatic: false,
+				automatic: item.automatic === true,
 			},
 			(started) => {
+				this.settleIntentOnStarted(item.ticketIdentity, started);
 				if (started.ok) {
 					// Whether the row still stands when the start answers is the
 					// operator's cancel seen from the module: a run already inside herdr
@@ -858,16 +877,22 @@ class HandoffDispatchModule implements HandoffDispatch {
 					// "started from the Work queue" line for a start the operator ended.
 					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueItem(item.ticketIdentity);
-					// The route the item carries is the operator's decision on the turn
-					// it routes from: it lands on the settled turn's trace, like the
-					// direct route's start, once the pickup's handoff is live. Both paths
-					// call `recordRoutedDecision`, so one copy of the fact and one clock
-					// serve a route that starts in its seat and a route that waited.
+					// The route the item carries lands on the settled turn's trace
+					// once the pickup's handoff is live. The operator's route records
+					// its decision; the top-up's route (ADR 0051) lands it the
+					// automatic way the direct starts did.
 					if (item.origin === "workflow") {
-						this.recordRoutedDecision(
-							claimed.routeFromIdentity ?? item.ticketIdentity,
-							claimed.previousHandoffId,
-						);
+						if (item.automatic === true) {
+							this.recordAutoRouteDecision(
+								claimed.routeFromIdentity ?? item.ticketIdentity,
+								claimed.previousHandoffId,
+							);
+						} else {
+							this.recordRoutedDecision(
+								claimed.routeFromIdentity ?? item.ticketIdentity,
+								claimed.previousHandoffId,
+							);
+						}
 					}
 					this.reports.refresh();
 					if (rowStands) {
@@ -876,15 +901,45 @@ class HandoffDispatchModule implements HandoffDispatch {
 						);
 					}
 				} else if (this.state.hasWorkItem(item.ticketIdentity)) {
-					// The item keeps its place: the attempt record holds the failure,
-					// the ticket keeps its state, and the next free seat retries. A
-					// row the operator already removed says its own goodbye on the
-					// line, so the cancel needs no second line here (ADR 0034).
-					this.reportPickupFailure(item, started.reason);
+					// The start never went live, so the item drops with the warning
+					// and the ticket keeps its state (ADR 0049). A row the operator
+					// already removed says its own goodbye on the line, so the
+					// cancel needs no second line here (ADR 0034).
+					this.dropPickup(item, started.reason);
 				}
 			},
 		);
 		return true;
+	}
+
+	/**
+	 * The pickup's drop (ADR 0049): the item leaves the queue with the warning
+	 * that names the operation and the reason, and the ticket keeps the state
+	 * it wore while it waited.
+	 */
+	private dropPickup(item: WorkQueueHandoffItem, reason: string): void {
+		this.removeQueueItem(item.ticketIdentity);
+		this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason });
+		this.reports.refresh();
+		this.reports.warning(
+			`queued handoff for ${this.ticketName(item.ticketIdentity)} was not run: ${reason}`,
+		);
+	}
+
+	/**
+	 * The decision the top-up's route lands on the settled turn it routes from
+	 * (ADR 0051): `auto-handed-off`, the way the automatic starts the factory
+	 * retired recorded it. One copy of the fact and one clock serve a route
+	 * that starts in its seat and one that waited in the queue.
+	 */
+	private recordAutoRouteDecision(ticketIdentity: string, previousHandoffId: string): void {
+		if (previousHandoffId === "") return;
+		this.state.applyCompletionDecision({
+			ticketIdentity,
+			handoffId: previousHandoffId,
+			decision: "auto-handed-off",
+			decidedAt: new Date(this.state.now()).toISOString(),
+		});
 	}
 
 	/**
@@ -927,6 +982,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 			// leaves, the pickup's own words for the fact, and the ticket keeps
 			// its state.
 			this.removeQueueItem(item.ticketIdentity);
+			this.settleIntentOnStarted(item.ticketIdentity, { ok: false, reason: claimed.reason });
 			this.reports.warning(
 				`force-dispatch of ${this.ticketName(item.ticketIdentity)} failed: ${claimed.reason}`,
 			);
@@ -943,25 +999,31 @@ class HandoffDispatchModule implements HandoffDispatch {
 				routeFromIdentity: item.routeFromIdentity,
 				// The route's ask: the close ran at the enqueue, and this close
 				// is its own answer when the environment herdr holds no more.
-				closePreviousEnvironment: item.origin === "workflow",
+				closePreviousEnvironment: item.origin === "workflow" && item.automatic !== true,
 				workQueuePickup: true,
-				// The force-dispatch starts a Work queue item, and the Work queue
-				// holds manual starts only, so the placement the start crosses
-				// runs here, the way its pickup runs it.
-				automatic: false,
+				automatic: item.automatic === true,
 			},
 			(started) => {
+				this.settleIntentOnStarted(item.ticketIdentity, started);
 				if (started.ok) {
 					// The ask is answered, either way: the item leaves the queue when
 					// the start settles. A row the operator already removed leaves no
 					// second line: the run it ended earns no start line of its own.
 					const rowStands = this.state.hasWorkItem(item.ticketIdentity);
 					if (rowStands) this.removeQueueItem(item.ticketIdentity);
-					if (item.origin === "workflow")
-						this.recordRoutedDecision(
-							claimed.routeFromIdentity ?? item.ticketIdentity,
-							claimed.previousHandoffId,
-						);
+					if (item.origin === "workflow") {
+						if (item.automatic === true) {
+							this.recordAutoRouteDecision(
+								claimed.routeFromIdentity ?? item.ticketIdentity,
+								claimed.previousHandoffId,
+							);
+						} else {
+							this.recordRoutedDecision(
+								claimed.routeFromIdentity ?? item.ticketIdentity,
+								claimed.previousHandoffId,
+							);
+						}
+					}
 					this.reports.refresh();
 					if (rowStands)
 						this.reports.notice(
@@ -991,25 +1053,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
-	}
-
-	/** The pickup warning, once per reason per item. */
-	private reportPickupFailure(item: WorkQueueHandoffItem, reason: string): void {
-		const warned = this.warnedReasons(item.ticketIdentity);
-		if (warned.has(reason)) return;
-		warned.add(reason);
-		this.reports.warning(
-			`queued handoff for ${this.ticketName(item.ticketIdentity)} was not run: ${reason}`,
-		);
-	}
-
-	/** The reasons this item's pickup has already said, empty until the first. */
-	private warnedReasons(ticketIdentity: string): Set<string> {
-		const existing = this.warnedPickups.get(ticketIdentity);
-		if (existing !== undefined) return existing;
-		const created = new Set<string>();
-		this.warnedPickups.set(ticketIdentity, created);
-		return created;
 	}
 
 	closeCleanup(
@@ -1294,6 +1337,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 		);
 		this.inFlight = false;
 		this.drainCleanupQueue();
+		// A settled run frees the seat: the pickup re-runs so the items the last
+		// pass left behind the free-seat slice still get their turn (ADR 0049).
+		void this.pickupWorkQueue();
 	}
 
 	/** Start the next queued cleanup only when the handoff seat is free. */
@@ -1379,10 +1425,11 @@ class HandoffDispatchModule implements HandoffDispatch {
 				this.reports.starting(next.ticket.identity, false);
 				this.reports.refresh();
 				if (next.workQueuePickup === true) {
-					// The parked pickup owns its own line: the item keeps its place, and
-					// the pickup's once-per-reason warning says this fact once with the
-					// reason the drain found. A second line here would only overwrite the
-					// fuller one with a shorter copy of the same fact.
+					// A pickup the seat parked, and the ticket moved on before its turn:
+					// the start-or-drop contract ends in a drop (ADR 0049). The item
+					// leaves the queue, and the warning says the reason the drain found.
+					this.state.removeWorkItem(next.ticket.identity);
+					this.reports.warning(`queued handoff for "${next.ticket.title}" was not run: ${movedOn}`);
 					next.onStarted({ ok: false, reason: movedOn });
 				} else {
 					this.reports.warning(`queued handoff for "${next.ticket.title}" was not run: ${movedOn}`);

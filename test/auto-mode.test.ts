@@ -102,7 +102,11 @@ function reviewRoute(over: Partial<TransitionOutcome> = {}): TransitionOutcome {
  */
 const WIDE_STATUS = 240;
 /** A fetched ticket of the issues source; the index is the issue number. */
-function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
+function fetched(
+	index = 5,
+	title = "Persist source facts",
+	labels: readonly string[] = ["ready-for-agent"],
+): FetchedTicket {
 	return {
 		identity: `github:github.com:I_${index}`,
 		sourceKind: "github-issue",
@@ -111,7 +115,7 @@ function fetched(index = 5, title = "Persist source facts"): FetchedTicket {
 		url: `https://github.com/acme/factory/issues/${index}`,
 		title,
 		description: "Keep state independent from GitHub.",
-		labels: ["ready-for-agent"],
+		labels: [...labels],
 		externalUpdatedAt: "2026-08-31T10:00:00Z",
 		repository: {
 			identity: repoIdentity,

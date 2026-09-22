@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
-import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -131,7 +131,6 @@ const selectedTicket: Ticket = {
 	actionable: true,
 	handoffRecoveryRequired: false,
 	leftover: null,
-	priority: UNRANKED_PRIORITY,
 };
 
 function configFor(): FactoryConfig {

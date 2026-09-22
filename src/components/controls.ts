@@ -84,6 +84,7 @@ type ControlKey =
 	| "f"
 	| "g"
 	| "s"
+	| "p"
 	| "x"
 	| "u"
 	| "d"
@@ -140,6 +141,18 @@ export interface ControlContext {
 	 */
 	selectedWorkQueueItem?: WorkQueueItem | null;
 	workQueueDepth?: number;
+	/**
+	 * The queue pause for the Work queue's section (ADR 0052): the `p` key's
+	 * hint reads its own state, and the other sections refuse it in the
+	 * catalogue's words.
+	 */
+	queuePaused?: boolean;
+	/**
+	 * The Work queue item the row under the cursor waits with, in the Ticket
+	 * and Consultation list panes (ADR 0049): Enter on such a row jumps to
+	 * the item instead of starting or deciding.
+	 */
+	queueItemForSelectedRow?: WorkQueueItem | null;
 	listCanMove: boolean;
 	detailCanScroll: boolean;
 	sourceCount: number;
@@ -290,6 +303,17 @@ export interface ControlDefinition {
 	 * it.
 	 */
 	consultationSectionOnly?: true;
+	/**
+	 * The control belongs to the Work queue section alone (ADR 0049, ADR
+	 * 0052).
+	 *
+	 * The mirror of `consultationSectionOnly`: the key still resolves in the
+	 * other base sections and states the owning section's refusal, but those
+	 * sections' guides and bars name the control nowhere. The marker is the
+	 * single place the ownership is written, so the dispatch, the guide, and
+	 * the bar read the same words.
+	 */
+	queueSectionOnly?: true;
 	/** Larger values survive narrow Action bar packing first. */
 	priority: number;
 	modes: readonly InteractionMode[];
@@ -416,6 +440,12 @@ const otherSectionMode = (mode: InteractionMode): boolean =>
 /** The Ticket section's refusal words, mirrored by ticketOnly. */
 const TICKET_ONLY = "this control is available only in the Ticket section";
 /**
+ * The Work queue section's refusal words (ADR 0049, ADR 0052), the mirror of
+ * the two that stand above: a key one section owns states the owning
+ * section's refusal in the sections that do not own it.
+ */
+const QUEUE_ONLY = "this control is available only in the Work queue section";
+/**
  * The Consultation section's refusal words, the mirror of TICKET_ONLY.
  *
  * availabilityFor states them for every Consultation-section control in the
@@ -455,7 +485,16 @@ const detailScroll = (context: ControlContext): ControlAvailability =>
 						? "the Work queue detail has nowhere to scroll"
 						: "the Ticket detail has nowhere to scroll",
 			);
-const queueMove =
+/**
+ * Why the queue's order keys answer nothing (ADR 0049).
+ *
+ * `+` promotes the item under the cursor, `-` demotes it, the keys the
+ * operator already knew for raising and lowering a rank. The queue order is
+ * the order of work, so a move that would place the item where it already
+ * stands refuses with the position's own fact, and an empty queue refuses
+ * like the queue's other row keys.
+ */
+const queueOrderMove =
 	(direction: "up" | "down") =>
 	(context: ControlContext): ControlAvailability => {
 		const item = context.selectedWorkQueueItem;
@@ -690,19 +729,6 @@ const message = (context: ControlContext): ControlAvailability =>
 const bodyScroll = (context: ControlContext): ControlAvailability => {
 	if (context.bodyEmpty === true) return unavailable("the body carries no rows");
 	if (context.bodyScrollable === false) return unavailable("the body fills its pane");
-	return available();
-};
-
-/**
- * Why the Priority bump and clear answer nothing (ADR 0022).
- *
- * The rank belongs to a Ticket, so the Consultation section gets the shared
- * section reason, and an empty Ticket list gets the selection reason: both
- * are reasons the operator can act on, not silent keys.
- */
-const priorityEligibility = (context: ControlContext): ControlAvailability => {
-	if (!ticketBaseMode(context.mode)) return unavailable(TICKET_ONLY);
-	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
 	return available();
 };
 
@@ -943,6 +969,27 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	},
 
 	{
+		// Enter on a waiting row jumps to its queue item (ADR 0049): the row
+		// under the cursor in the Ticket or Consultation list holds a waiting
+		// start, and the cursor moves to the item in the Work queue, where the
+		// queue's keys act on it. It resolves ahead of the other Enter meanings
+		// while the row waits, so the start the operator is about to make is
+		// the one the cursor lands on. The detail panes keep their own keys.
+		id: "queue-jump",
+		label: "Queue item",
+		keys: () => ["return"],
+		keyLabel: "Enter",
+		scope: "control-plane",
+		actionBar: true,
+		priority: 71,
+		modes: ["ticket-list", "consultation-list"],
+		availability: (context) =>
+			context.queueItemForSelectedRow !== null && context.queueItemForSelectedRow !== undefined
+				? available()
+				: unavailable("the selected row has no waiting queue item"),
+		guideNote: "jumps to the row's waiting item in the Work queue",
+	},
+	{
 		id: "handoff",
 		label: "Hand off",
 		keys: () => ["return"],
@@ -1034,30 +1081,54 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		guideNote: SECTION_TOGGLE_NOTE,
 	},
 	{
-		// The queue's own keys (ADR 0034): `u` and `d` move the item under the
-		// cursor in the queue, and Delete cancels the item's waiting start.
-		// Reordering never changes an item's captured choice, and cancelling
-		// leaves the ticket in the state it keeps while it waits.
-		id: "queue-up",
-		label: "Queue up",
-		keys: () => ["u"],
-		keyLabel: "u",
+		// The queue's order keys (ADR 0049): `+` (or `=`, its unshifted form)
+		// promotes the item under the cursor, `-` demotes it, the keys the
+		// operator already knew for raising and lowering a rank. `u` and `d`
+		// are gone, so the queue has one key system. Reordering never changes
+		// an item's captured choice.
+		id: "queue-promote",
+		label: "Promote",
+		keys: () => ["=", "+"],
+		keyLabel: "+",
 		scope: "work-queue-list",
 		actionBar: true,
 		priority: 60,
-		modes: ["work-queue-list"],
-		availability: queueMove("up"),
+		modes: [...baseModes],
+		queueSectionOnly: true,
+		availability: queueOrderMove("up"),
+		guideNote: "moves the item toward the front of the queue",
 	},
 	{
-		id: "queue-down",
-		label: "Queue down",
-		keys: () => ["d"],
-		keyLabel: "d",
+		id: "queue-demote",
+		label: "Demote",
+		keys: () => ["-"],
+		keyLabel: "-",
 		scope: "work-queue-list",
 		actionBar: true,
-		priority: 60,
-		modes: ["work-queue-list"],
-		availability: queueMove("down"),
+		priority: 59,
+		modes: [...baseModes],
+		queueSectionOnly: true,
+		availability: queueOrderMove("down"),
+		guideNote: "moves the item toward the back of the queue",
+	},
+	{
+		// `p` pauses the Work queue's drain (ADR 0052): the pickup takes no
+		// item and the top-up adds none while it stands, and the force-dispatch
+		// passes it the way it passes the cap. The key takes no other meaning
+		// in the plane, so the queue section claims it outright, and the other
+		// sections refuse it in the catalogue's words.
+		id: "queue-pause",
+		label: "Pause queue",
+		barLabel: (context) => (context.queuePaused === true ? "Resume queue" : undefined),
+		keys: () => ["p"],
+		keyLabel: "p",
+		scope: "work-queue-list",
+		actionBar: true,
+		priority: 58,
+		modes: [...baseModes],
+		queueSectionOnly: true,
+		availability: available,
+		guideNote: "pauses the queue's drain; the force-dispatch passes it",
 	},
 	{
 		id: "queue-remove",
@@ -1286,58 +1357,6 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		priority: 60,
 		modes: [...baseModes],
 		availability: refresh,
-	},
-	{
-		id: "bump-priority",
-		label: "Bump priority",
-		// One bump, two directions: `+` (or `=`, its unshifted form) raises the
-		// rank and `-` lowers it. From unranked, `-` goes nowhere and `+` takes
-		// the lowest rank; from the lowest rank, `-` takes off; off and unranked
-		// share the floor (ADR 0022). The Detail pane's Priority fact line is
-		// the value it moves.
-		keys: () => ["=", "+", "-"],
-		keyLabel: "+/-",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 34,
-		modes: [...baseModes],
-		availability: priorityEligibility,
-		guideNote: "raises or lowers the rank",
-	},
-	{
-		id: "clear-priority",
-		label: "Clear priority",
-		// Backspace gives the priority its default back: the ticket ranks by
-		// its own labels again, and the Detail pane's Priority fact line says
-		// so (ADR 0022).
-		keys: () => ["backspace"],
-		keyLabel: "⌫",
-		scope: "control-plane",
-		actionBar: true,
-		priority: 33,
-		modes: [...baseModes],
-		availability: priorityEligibility,
-		guideNote: "removes the set rank",
-	},
-	{
-		id: "select-priority",
-		label: "Select priority",
-		// The priority is a real selector on the standard choice control:
-		// `→`/`l` steps it to the next value - the ranks in order, off, then
-		// default - and the step writes the value it shows: a rank or off
-		// stores the override, default clears it (ADR 0022). `←` stays the
-		// return to the Ticket list, so the selector takes the one free
-		// direction, and the wrap reaches every value from any of them. In the
-		// detail pane the Priority fact line shows the value, in the list pane
-		// the badge and the Message line do.
-		keys: (mode) => (mode === "ticket-detail" ? ["right", "l"] : []),
-		keyLabel: "→/l",
-		scope: "ticket-detail",
-		actionBar: true,
-		priority: 32,
-		modes: ["ticket-detail"],
-		availability: priorityEligibility,
-		guideNote: "sets the Override: the ranks in order, off, and default",
 	},
 	{
 		// The Agent terminal forwards every key to the Agent. Only the
@@ -1764,6 +1783,7 @@ const KEY_NAMES: Record<string, string> = {
 	m: "m",
 	c: "c",
 	s: "s",
+	p: "p",
 	f1: "F1",
 	f2: "F2",
 	f3: "F3",
@@ -1844,9 +1864,12 @@ export function availabilityFor(
 	// section's modes: the Ticket section and the Work queue both answer the key
 	// with the owning section's words. The marker is the single place the
 	// ownership is written, so the dispatch, the guide, and the bar all read the
-	// same words.
+	// same words. The Work queue's own keys state their refusal in the same
+	// way (ADR 0049, ADR 0052).
 	if (control.consultationSectionOnly === true && otherSectionMode(context.mode))
 		return unavailable(CONSULTATION_ONLY);
+	if (control.queueSectionOnly === true && !workQueueMode(context.mode))
+		return unavailable(QUEUE_ONLY);
 	return control.availability(context);
 }
 
@@ -1883,7 +1906,10 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
  * other section (ADR 0034 widened the base modes with the Work queue's two).
  */
 function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
-	return otherSectionMode(mode) && control.consultationSectionOnly === true;
+	return (
+		otherSectionMode(mode) &&
+		(control.consultationSectionOnly === true || control.queueSectionOnly === true)
+	);
 }
 
 /**

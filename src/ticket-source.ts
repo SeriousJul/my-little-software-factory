@@ -15,59 +15,22 @@ import {
 import { type CommandOptions, type CommandRunner, commandFailureText } from "./runner.ts";
 import { GitHubSecurityTicketSource } from "./security-source.ts";
 
-/**
- * One Referenced issue fact (ADR 0023): the labels and fetch time the control
- * plane stores for an issue a reference covers, keyed by the issue's
- * identity. A fact is not a ticket: it takes no row in the Main view and is
- * never handed off.
- */
-export interface ReferencedIssueFact {
-	identity: string;
-	labels: string[];
-	fetchedAt: string;
-}
-
 export type FetchOutcome =
 	| {
 			status: "success";
 			fetchedAt: string;
 			tickets: FetchedTicket[];
-			/**
-			 * The Referenced issue facts covered by this refresh (ADR 0023), for
-			 * every reference in the current snapshot or resolved by the direct
-			 * read. Absent when the source holds no references, and when the
-			 * direct read failed: the state then keeps the facts it already
-			 * holds.
-			 */
-			referencedIssueFacts?: ReferencedIssueFact[];
 			/** The peripheral failures the refresh absorbed without failing. */
 			warnings?: string[];
 	  }
 	| { status: "failed"; reason: string };
 
-/**
- * One live ticket as the refresh covers references against it (ADR 0023):
- * its identity and the labels of its newest membership.
- */
-export interface LiveTicket {
-	readonly identity: string;
-	readonly labels: string[];
-}
-
 export interface TicketSource {
 	readonly name: string;
 	readonly kind: string;
 	readonly refreshIntervalMs: number;
-	/**
-	 * Read one full, settled snapshot.
-	 *
-	 * @param knownLiveTickets The live tickets of the current snapshot with
-	 * their newest membership labels (ADR 0023). The pull request source
-	 * covers its Issue references against them: a covered reference's fact
-	 * refreshes from its ticket's labels, and the uncovered ones are read
-	 * directly, in chunks of at most 250 references per request.
-	 */
-	fetch(knownLiveTickets?: readonly LiveTicket[]): Promise<FetchOutcome>;
+	/** Read one full, settled snapshot. */
+	fetch(): Promise<FetchOutcome>;
 }
 
 /** Construct one configured built-in source. Config validation has run first. */
@@ -155,14 +118,6 @@ function secretToken(token: string): {
 	return { ok: true, options: { env: { GH_TOKEN: token }, secretEnv: ["GH_TOKEN"] } };
 }
 
-/**
- * The chunk of the batched reference read: one request per 250 references.
- * 250 references times their 100 labels is 25,000 possible nodes, a fifth
- * of GitHub's 500,000 possible-node cap, so the count of references can
- * grow without re-tripping the limit (issue #65).
- */
-const REFERENCE_READ_CHUNK = 250;
-
 const SEARCH_QUERY = `query FactorySearch($searchQuery: String!, $after: String) {
   search(query: $searchQuery, type: ISSUE, first: 100, after: $after) {
     issueCount
@@ -209,75 +164,18 @@ class GitHubTicketSource implements TicketSource {
 		this.refreshIntervalMs = config.refreshIntervalSeconds * 1000;
 	}
 
-	async fetch(knownLiveTickets: readonly LiveTicket[] = []): Promise<FetchOutcome> {
+	async fetch(): Promise<FetchOutcome> {
 		try {
 			const authentication = await this.authentication();
 			if (!authentication.ok) return { status: "failed", reason: authentication.reason };
 			const byIdentity = new Map<string, FetchedTicket>();
-			const references: SearchReference[] = [];
 			for (const searchQuery of this.searchQueries()) {
 				const query = await this.fetchQuery(searchQuery, authentication.options);
 				if (query.status === "failed") return query;
 				for (const ticket of query.tickets) byIdentity.set(ticket.identity, ticket);
-				references.push(...query.references);
 			}
 			const tickets = [...byIdentity.values()];
-			const fetchedAt = new Date().toISOString();
-			const deduped = dedupeReferences(references);
-			if (deduped.length === 0) return { status: "success", fetchedAt, tickets };
-			// A reference is covered when the issue is a live ticket of the
-			// current snapshot: its ticket's stored labels supply the rank,
-			// and they refresh the reference's fact. One rule covers the
-			// never-seen issue and the issue that left the source: the
-			// uncovered ones are read directly (ADR 0023).
-			const coveredLabels = new Map(
-				knownLiveTickets.map((ticket) => [ticket.identity, ticket.labels]),
-			);
-			const uncovered = deduped.filter(
-				(reference) => reference.identity === null || !coveredLabels.has(reference.identity),
-			);
-			if (uncovered.length === 0)
-				return {
-					status: "success",
-					fetchedAt,
-					tickets,
-					referencedIssueFacts: deduped.map((reference) => ({
-						identity: reference.identity as string,
-						labels: coveredLabels.get(reference.identity as string) ?? [],
-						fetchedAt,
-					})),
-				};
-			const read = await this.readUncoveredReferences(authentication, uncovered);
-			if (!read.ok)
-				return {
-					status: "success",
-					fetchedAt,
-					tickets,
-					// A failed direct read never fails the source (ADR 0023): the
-					// previous facts stay in place, the rest of the refresh
-					// applies, and the outcome carries the one warning line.
-					warnings: [`referenced issue read failed: ${read.reason}`],
-				};
-			// The read's answers line up with the uncovered references: a null
-			// answer means the reference did not resolve, and it keeps its
-			// previous fact: the outcome simply carries no fact for it.
-			const answerByKey = new Map<string, { identity: string; labels: string[] }>();
-			uncovered.forEach((reference, index) => {
-				const answer = read.resolved[index];
-				if (answer !== null) answerByKey.set(referenceKey(reference), answer);
-			});
-			const facts: ReferencedIssueFact[] = [];
-			for (const reference of deduped) {
-				const identity = reference.identity;
-				if (identity !== null && coveredLabels.has(identity)) {
-					facts.push({ identity, labels: coveredLabels.get(identity) ?? [], fetchedAt });
-					continue;
-				}
-				const answer = answerByKey.get(referenceKey(reference));
-				if (answer !== undefined)
-					facts.push({ identity: answer.identity, labels: answer.labels, fetchedAt });
-			}
-			return { status: "success", fetchedAt, tickets, referencedIssueFacts: facts };
+			return { status: "success", fetchedAt: new Date().toISOString(), tickets };
 		} catch (error) {
 			// A source bug must not terminate the control plane. Do not print
 			// auth values: the string is only the error message, never argv/env.
@@ -288,113 +186,10 @@ class GitHubTicketSource implements TicketSource {
 		}
 	}
 
-	/**
-	 * The batched direct read (ADR 0023): GraphQL requests that resolve every
-	 * uncovered Issue reference, at most REFERENCE_READ_CHUNK per request, so
-	 * the read stays under GitHub's possible-node budget no matter how many
-	 * references a snapshot carries (issue #65). It resolves each reference by
-	 * its identity when the identity is known, else by its repository and
-	 * number. A failure returns the reason: the refresh still succeeds, with
-	 * one warning line and the previous facts in place.
-	 */
-	private async readUncoveredReferences(
-		authentication: { ok: true; options: GhOptions },
-		references: readonly SearchReference[],
-	): Promise<
-		| {
-				ok: true;
-				resolved: Array<{ identity: string; number: number; labels: string[] } | null>;
-		  }
-		| { ok: false; reason: string }
-	> {
-		const resolved: Array<{ identity: string; number: number; labels: string[] } | null> =
-			Array.from({ length: references.length }, () => null);
-		for (let start = 0; start < references.length; start += REFERENCE_READ_CHUNK) {
-			const chunk = references.slice(start, start + REFERENCE_READ_CHUNK);
-			const read = await this.readReferenceChunk(authentication, chunk);
-			if (!read.ok) return { ok: false, reason: read.reason };
-			read.resolved.forEach((answer, index) => {
-				resolved[start + index] = answer;
-			});
-		}
-		return { ok: true, resolved };
-	}
-
-	/**
-	 * One request of the batched direct read (ADR 0023): at most
-	 * REFERENCE_READ_CHUNK references, so the request stays under GitHub's
-	 * possible-node budget no matter how many references a snapshot carries
-	 * (issue #65).
-	 */
-	private async readReferenceChunk(
-		authentication: { ok: true; options: GhOptions },
-		references: readonly SearchReference[],
-	): Promise<
-		| { ok: true; resolved: Array<{ identity: string; number: number; labels: string[] } | null> }
-		| { ok: false; reason: string }
-	> {
-		const declarations: string[] = [];
-		const fields: string[] = [];
-		const assignments: string[] = [];
-		references.forEach((reference, index) => {
-			if (reference.nodeId !== null) {
-				declarations.push(`$ref${index}Id: ID!`);
-				fields.push(
-					`reference${index}: node(id: $ref${index}Id) { ... on Issue { id number labels(first: 100) { nodes { name } } } }`,
-				);
-				assignments.push(`ref${index}Id=${reference.nodeId}`);
-				return;
-			}
-			const separator = reference.repository.indexOf("/");
-			const owner =
-				separator === -1 ? reference.repository : reference.repository.slice(0, separator);
-			const name = separator === -1 ? "" : reference.repository.slice(separator + 1);
-			declarations.push(
-				`$ref${index}Owner: String!`,
-				`$ref${index}Name: String!`,
-				`$ref${index}Number: Int!`,
-			);
-			fields.push(
-				`reference${index}: repository(owner: $ref${index}Owner, name: $ref${index}Name) { issue(number: $ref${index}Number) { id number labels(first: 100) { nodes { name } } } }`,
-			);
-			assignments.push(
-				`ref${index}Owner=${owner}`,
-				`ref${index}Name=${name}`,
-				`ref${index}Number=${reference.number}`,
-			);
-		});
-		const args = [
-			"api",
-			"graphql",
-			"--hostname",
-			this.config.host,
-			"-f",
-			`query=query FactoryReferenceRead(${declarations.join(", ")}) { ${fields.join(" ")} }`,
-		];
-		for (const assignment of assignments) args.push("-f", assignment);
-		const result = await this.runner.run("gh", args, authentication.options);
-		if (result.code !== 0)
-			return { ok: false, reason: `GitHub request failed: ${commandFailureText(result)}` };
-		const parsed = parseReferenceResponse(result.stdout, references.length);
-		if (!parsed.ok) return { ok: false, reason: parsed.reason };
-		// Aligned with the references read: index i answers reference i.
-		const resolved: Array<{ identity: string; number: number; labels: string[] } | null> =
-			parsed.issues.map((issue) =>
-				issue === null
-					? null
-					: {
-							identity: `github:${this.config.host.toLowerCase()}:${issue.nodeId}`,
-							number: issue.number,
-							labels: issue.labels,
-						},
-			);
-		return { ok: true, resolved };
-	}
-
 	/** Read one search query to completion. A failure means the snapshot is incomplete. */
 	private async fetchQuery(searchQuery: string, options: GhOptions): Promise<QueryResult> {
 		const tickets: FetchedTicket[] = [];
-		const references: SearchReference[] = [];
+		const references: IssueReference[] = [];
 		let cursor: string | undefined;
 		let issueCount: number | undefined;
 		for (;;) {
@@ -537,34 +332,8 @@ function parseSearchPage(text: string): Page {
 
 /** One search page's tickets and the references the pull requests closed. */
 type QueryResult =
-	| { status: "success"; tickets: FetchedTicket[]; references: SearchReference[] }
+	| { status: "success"; tickets: FetchedTicket[]; references: IssueReference[] }
 	| { status: "failed"; reason: string };
-
-/**
- * One referenced issue as the search response resolves it (ADR 0023). The
- * search carries no labels on the reference: a nested label list would push
- * the query past GitHub's possible-node budget (issue #65). The labels ride
- * the ticket's snapshot or the direct read.
- */
-type SearchReference = IssueReference & { nodeId: string | null };
-
-/** The map key of one reference: the identity, else the number. */
-function referenceKey(reference: { identity: string | null; number: number }): string {
-	return reference.identity ?? `number:${reference.number}`;
-}
-
-/** The references of every fetched ticket, deduped by their key. */
-function dedupeReferences(references: readonly SearchReference[]): SearchReference[] {
-	const seen = new Set<string>();
-	const deduped: SearchReference[] = [];
-	for (const reference of references) {
-		const key = referenceKey(reference);
-		if (seen.has(key)) continue;
-		seen.add(key);
-		deduped.push(reference);
-	}
-	return deduped;
-}
 
 /** The labels of one node's label connection, or undefined when unreadable. */
 function labelNamesOf(raw: unknown): string[] | undefined {
@@ -584,12 +353,12 @@ function labelNamesOf(raw: unknown): string[] | undefined {
  *
  * The references are secondary facts: a reference without a readable
  * number is skipped, and a reference the response leaves without a node
- * identity keeps an empty value, so the refresh can still read it directly.
+ * identity keeps an empty value.
  */
-function parseClosingReferences(raw: unknown, host: string): SearchReference[] {
+function parseClosingReferences(raw: unknown, host: string): IssueReference[] {
 	const nodes = (raw as { nodes?: unknown } | undefined)?.nodes;
 	if (!Array.isArray(nodes)) return [];
-	const references: SearchReference[] = [];
+	const references: IssueReference[] = [];
 	for (const node of nodes) {
 		const item = node as Record<string, unknown>;
 		const number = item.number;
@@ -599,7 +368,6 @@ function parseClosingReferences(raw: unknown, host: string): SearchReference[] {
 			stringOf((item.repository as Record<string, unknown> | undefined)?.nameWithOwner) ?? "";
 		references.push({
 			identity: nodeId === null ? null : `github:${host.toLowerCase()}:${nodeId}`,
-			nodeId,
 			number,
 			repository,
 		});
@@ -607,55 +375,11 @@ function parseClosingReferences(raw: unknown, host: string): SearchReference[] {
 	return references;
 }
 
-/** The direct read's answer: one issue per reference, null when unresolved. */
-type ReferenceResponse =
-	| {
-			ok: true;
-			issues: Array<null | { nodeId: string; number: number; labels: string[] }>;
-	  }
-	| { ok: false; reason: string };
-function parseReferenceResponse(text: string, count: number): ReferenceResponse {
-	let raw: unknown;
-	const json = text.slice(text.indexOf("{"));
-	try {
-		raw = JSON.parse(json);
-	} catch {
-		return { ok: false, reason: "GitHub returned invalid JSON" };
-	}
-	const data = raw as {
-		data?: Record<string, unknown>;
-		errors?: Array<{ message?: unknown }>;
-	};
-	if (Array.isArray(data.errors) && data.errors.length > 0)
-		return {
-			ok: false,
-			reason: `GitHub API error: ${String(data.errors[0].message ?? "unknown error")}`,
-		};
-	if (data.data === undefined)
-		return { ok: false, reason: "GitHub returned an unreadable reference response" };
-	const issues: Array<null | { nodeId: string; number: number; labels: string[] }> = [];
-	for (let index = 0; index < count; index++) {
-		let value = data.data[`reference${index}`] as Record<string, unknown> | null | undefined;
-		// The repository-and-number shape wraps the issue one level deeper.
-		if (value !== null && value !== undefined && "issue" in value)
-			value = (value as { issue?: Record<string, unknown> | null }).issue ?? null;
-		const nodeId = stringOf(value?.id);
-		const number = value?.number;
-		if (nodeId === undefined || typeof number !== "number") {
-			issues.push(null);
-			continue;
-		}
-		const labels = labelNamesOf(value?.labels);
-		issues.push(labels === undefined ? null : { nodeId, number, labels });
-	}
-	return { ok: true, issues };
-}
-
 function normalizeGitHubNode(
 	node: unknown,
 	config: TicketSourceConfig,
 ):
-	| { ok: true; ticket: FetchedTicket; references: SearchReference[]; blocked: boolean }
+	| { ok: true; ticket: FetchedTicket; references: IssueReference[]; blocked: boolean }
 	| { ok: false; reason: string } {
 	const item = node as Record<string, unknown>;
 	const expectedTypename = config.kind === "github-issues" ? "Issue" : "PullRequest";

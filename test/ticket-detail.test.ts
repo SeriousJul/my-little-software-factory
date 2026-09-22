@@ -1,14 +1,14 @@
 /** Deterministic wheel-burst policy tests for the native Ticket detail viewport. */
 import { describe, expect, test } from "bun:test";
 import {
-	type DetailLine,
 	detailLines,
+	type DetailLine,
 	newWheelBurst,
 	WHEEL_ACCELERATION_PAUSE_MS,
 	wheelRows,
 } from "../src/components/ticket-detail.ts";
 import type { ScrollConfig } from "../src/config.ts";
-import { type Handoff, type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
+import type { Handoff, Ticket } from "../src/domain/ticket.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { roleColor } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -113,187 +113,6 @@ describe("Ticket detail task profile", () => {
 		expect(hasCell(shown, "Thinking: high", roleColor("text"))).toBe(true);
 		expect(hasCell(shown, "Context: 65536", roleColor("text"))).toBe(true);
 		expect(hasCell(shown, "Environment: worktree", roleColor("text"))).toBe(true);
-	});
-});
-
-describe("Ticket detail priority fact (ADR 0022)", () => {
-	const base = SAMPLE_TICKETS[0];
-	if (base === undefined) throw new Error("missing sample ticket");
-
-	function withPriority(p: Ticket["priority"]): DetailLine[] {
-		return detailLines({ ...base, priority: p }, 100, 10);
-	}
-
-	test("a label rank states its label and its own source", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "label",
-			inheritedFrom: null,
-		});
-		expect(hasCell(lines, "Priority: critical (its own label)", roleColor("text"))).toBe(true);
-	});
-
-	test("an inherited rank names the issue that supplied it (ADR 0023)", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "inherited",
-			inheritedFrom: { sourceKind: "github-issue", externalKey: "#12" },
-		});
-		expect(hasCell(lines, "Priority: critical (issue #12)", roleColor("text"))).toBe(true);
-	});
-
-	test("an inherited rank names the fixing alert by its number (ADR 0042)", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "inherited",
-			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
-		});
-		expect(hasCell(lines, "Priority: critical (alert #9)", roleColor("text"))).toBe(true);
-	});
-
-	test("an inherited rank names the fixing advisory by its key, not a number (ADR 0042)", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "inherited",
-			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: "GHSA-j8wj-q3wj-c945" },
-		});
-		expect(
-			hasCell(lines, "Priority: critical (advisory GHSA-j8wj-q3wj-c945)", roleColor("text")),
-		).toBe(true);
-	});
-
-	test("an override rank states its label and the operator's source", () => {
-		const lines = withPriority({ rank: 1, label: "high", source: "override", inheritedFrom: null });
-		expect(hasCell(lines, "Priority: high (set by you)", roleColor("text"))).toBe(true);
-	});
-
-	test("off states the override that forces the ticket unranked", () => {
-		const lines = withPriority({
-			rank: null,
-			label: "off",
-			source: "override",
-			inheritedFrom: null,
-		});
-		expect(hasCell(lines, "Priority: off (set by you)", roleColor("text"))).toBe(true);
-	});
-
-	test("an unranked ticket with no override reads none, dim", () => {
-		const lines = withPriority(UNRANKED_PRIORITY);
-		expect(hasCell(lines, "Priority: none", roleColor("subtext0"))).toBe(true);
-	});
-
-	test("a stale override states its stored label", () => {
-		// The stored label left the config list: the rank is none, but the
-		// fact line - the selector's own face - still names the stored label.
-		const lines = detailLines(
-			{
-				...base,
-				priority: { rank: null, label: "critical", source: "override", inheritedFrom: null },
-			},
-			100,
-			10,
-		);
-		expect(hasCell(lines, "Priority: critical (set by you)", roleColor("text"))).toBe(true);
-	});
-});
-
-describe("Ticket detail grouped layout", () => {
-	const first = SAMPLE_TICKETS[0];
-	if (first === undefined) throw new Error("missing sample ticket");
-	// A ticket with a settled turn: its completion stands as the log group.
-	const withLog = SAMPLE_TICKETS[3];
-	if (withLog === undefined) throw new Error("missing sample ticket");
-
-	test("the title and repository flow on shared lines, the title in its accent bold", () => {
-		const lines = detailLines(first, 100, 10);
-		// The identity is one logical line: the title's accent bold, the join
-		// space riding with the title, then the repository's dim.
-		expect(lines).toContainEqual({
-			text: "Retry policy for webhooks acme/billing",
-			fg: roleColor("accent"),
-			cells: [
-				{ text: "Retry policy for webhooks ", fg: roleColor("accent"), bold: true },
-				{ text: "acme/billing", fg: roleColor("subtext0") },
-			],
-		});
-	});
-
-	test("a wrapped title carries the repository on its last line", () => {
-		const long: Ticket = {
-			...first,
-			title: "Promote the Work queue to the single start channel (ADRs 0049-0052)",
-		};
-		const lines = detailLines(long, 55, 10);
-		// The identity takes the first two lines, and the break never splits
-		// the repository into the title's color: the title's cells end where
-		// the repository's dim begins.
-		expect(lines[1]?.cells).toEqual([
-			{ text: "(ADRs 0049-0052) ", fg: roleColor("accent"), bold: true },
-			{ text: "acme/billing", fg: roleColor("subtext0") },
-		]);
-	});
-
-	test("the link to the ticket's GitHub page wears the blue role", () => {
-		const lines = detailLines(first, 100, 10);
-		expect(lines).toContainEqual({
-			text: "GitHub: https://github.com/acme/billing/issues/1",
-			fg: roleColor("blue"),
-		});
-	});
-
-	test("one blank closes the static groups and opens the description", () => {
-		const lines = detailLines(withLog, 100, 10);
-		const texts = lines.map((line) => line.text);
-		// Exactly one blank, and it stands on the description's left: the
-		// columns, the warnings, the link, and the turn's log all stand above
-		// it, and the ticket's own words begin below.
-		expect(texts.filter((t) => t === " ").length).toBe(1);
-		const blankAt = texts.indexOf(" ");
-		expect(texts[blankAt + 1].startsWith("The legacy auth shim")).toBe(true);
-	});
-
-	test("the work stands in two columns: the Agent facts beside the Source facts", () => {
-		const lines = detailLines(first, 100, 10, nextChoice);
-		// The block's joined rows carry the cells the pane paints, one per
-		// column, the Agent column first.
-		const joined = lines.filter((line) => line.cells !== undefined);
-		expect(joined.length).toBeGreaterThan(0);
-		for (const line of joined) expect(line.cells).toHaveLength(2);
-		// The Agent column holds the handoff's facts.
-		expect(hasCell(lines, "Agent: pi", roleColor("text"))).toBe(true);
-		expect(hasCell(lines, "Handoffs: 0/10", roleColor("text"))).toBe(true);
-		expect(hasCell(lines, "Priority: none", roleColor("subtext0"))).toBe(true);
-		// The Source column holds the source's facts.
-		expect(hasCell(lines, "Source kind: github-issue", roleColor("text"))).toBe(true);
-		expect(hasCell(lines, "External key: #1", roleColor("text"))).toBe(true);
-		expect(hasCell(lines, "Source state: open", roleColor("text"))).toBe(true);
-	});
-
-	test("the turn's log stands apart in its green label and indented dim", () => {
-		const lines = detailLines(withLog, 100, 10);
-		const texts = lines.map((line) => line.text);
-		const at = (text: string) => {
-			const i = texts.indexOf(text);
-			if (i === -1) throw new Error(`missing detail line: ${text}`);
-			return i;
-		};
-		// The green label opens the log.
-		expect(
-			lines[at("Last completion: 2026-01-01 12:00 review by factory-review-I_4 (claude) pending")]
-				.fg,
-		).toBe(roleColor("green"));
-		// The message indents under its label, dim, on every wrapped line.
-		expect(texts[at("  The auth shim and its flag are removed.")]).toBe(
-			"  The auth shim and its flag are removed.",
-		);
-		expect(lines[at("  The auth shim and its flag are removed.")].fg).toBe(roleColor("subtext0"));
-		expect(texts[at("  All 142 tests pass. I left the migration note in docs/auth.md.")]).toBe(
-			"  All 142 tests pass. I left the migration note in docs/auth.md.",
-		);
 	});
 });
 

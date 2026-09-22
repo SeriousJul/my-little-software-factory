@@ -15,7 +15,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-import { type Ticket, UNRANKED_PRIORITY } from "../../domain/ticket.ts";
+import type { Ticket } from "../../domain/ticket.ts";
 import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
@@ -37,6 +37,7 @@ import {
 	paneElement,
 	TURN_LOG_PANE,
 } from "../modal-chrome.ts";
+import { SectionHeader } from "../section-header.ts";
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
@@ -124,7 +125,7 @@ const FOCUSED_CONTROL: Record<string, string> = {
 	states: "launch",
 	search: "type-ahead",
 	notes: "reason",
-	priority: "rank",
+	queueOrder: "promote",
 	narrow: "draft",
 	"no-color": "no-color-repository",
 	"theme-light": "light-model",
@@ -515,7 +516,6 @@ function sampleTicket(
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,
-		priority: UNRANKED_PRIORITY,
 	};
 }
 
@@ -724,75 +724,118 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 		],
 	},
 	{
-		id: "priority",
+		// The queue order's own controls (ADR 0049, ADR 0052): + and - move the
+		// selected item, p pauses the queue and the header wears the word, and
+		// the Message lines carry the pause and the resume.
+		id: "queue-order",
 		state:
-			"the ticket priority: the rank badge, the fact line in each state, and the Consultation reason",
+			"the queue order: + and - move the selected item, p pauses the queue, and the header wears the word",
 		render: (columns, _holds, _inputActive, _wiring) => {
 			const ink = controlInk();
-			// One ticket row per state of the rank badge: the one-cell digit, 1
-			// highest, and an unranked ticket that shows no digit at all.
-			const badge = (key: string, digit: string | null, title: string) =>
-				createElement(
-					"box",
-					{ key, style: { flexDirection: "row", height: 1 } },
-					createElement(
-						"text",
-						{ fg: digit === null ? undefined : (ink.detail.fg ?? undefined) },
-						digit === null ? "   " : `${digit}  `.slice(0, 4),
-					),
-					createElement("text", { fg: ink.text.fg ?? undefined }, title),
-				);
-			// The detail pane's Priority fact line, one row per state the
-			// selector steps to: a rank the operator set, the off that forces
-			// the ticket unranked, and the cleared override, where an unranked
-			// ticket reads none, dim. The keys step the line to the next state,
-			// and the step writes what it shows, so one press stores a rank,
-			// off, or the clear.
-			const fact = (key: string, text: string, fg?: string) =>
-				createElement(
-					"text",
-					{ key, style: { width: "100%", height: 1 }, fg: fg ?? undefined },
-					truncateToWidth(text, columns.contentWidth),
-				);
+			const item: WorkQueueItem = {
+				kind: "handoff",
+				position: 1,
+				ticketIdentity: "github:github.com:SeriousJul/my-little-software-factory#43",
+				routeFromIdentity: null,
+				origin: "restart",
+				choice: {
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				previousMessage: "",
+				enqueuedAt: "2026-02-17T10:03:00.000Z",
+				automatic: false,
+			};
 			return [
-				badge("rank-1", "1", "critical fix"),
-				badge("rank-3", "3", "routine backlog"),
-				badge("rank-none", null, "unranked ticket shows no digit"),
-				fact("rank", "Priority: critical (set by you)"),
-				fact("off", "Priority: off (set by you)"),
-				fact("default", "Priority: none", ink.detail.fg ?? undefined),
-				// The written guide line: the select's keys, and what a step does.
-				fact(
-					"keys",
-					"→/l steps the line to the next state: a rank, off, then default, and the step writes it",
-					ink.detail.fg ?? undefined,
+				// The Work section's header in its two queue states: the depth
+				// count, and the depth count with the pause word beside it.
+				createElement(SectionHeader, {
+					key: "work-header",
+					section: "work",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					waiting: 1,
+					onToggle: () => undefined,
+				}),
+				createElement(SectionHeader, {
+					key: "work-header-paused",
+					section: "work",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					waiting: 1,
+					paused: true,
+					onToggle: () => undefined,
+				}),
+				// The bar the queue's own keys come from: the order-move keys and
+				// the pause stand on it in the queue modes alone, and the pause
+				// key reads its own state.
+				createElement(ActionBar, {
+					key: "queue-bar",
+					mode: "work-queue-list",
+					context: contextFor("work-queue-list", {
+						listCanMove: true,
+						detailCanScroll: false,
+						selectedWorkQueueItem: item,
+						workQueueDepth: 1,
+						queuePaused: false,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				}),
+				createElement(ActionBar, {
+					key: "queue-bar-paused",
+					mode: "work-queue-list",
+					context: contextFor("work-queue-list", {
+						listCanMove: true,
+						detailCanScroll: false,
+						selectedWorkQueueItem: item,
+						workQueueDepth: 1,
+						queuePaused: true,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				}),
+				// The Message lines the pause and the resume leave, in the words
+				// the plane says them.
+				messageRowElement(
+					{
+						severity: "warning",
+						text: "Work queue paused: the pickup and the automatic top-up wait for the resume",
+					},
+					columns.contentWidth,
 				),
-				// A Consultation selected: the bump is unavailable, and its
-				// reason stands on the Message line.
-				fact(
-					"consultation",
-					"a Consultation has no priority: the bump applies to tickets only",
-					ink.detail.fg ?? undefined,
+				messageRowElement(
+					{
+						severity: "info",
+						text: "Work queue resumed: the pickup takes the free seats now",
+					},
+					columns.contentWidth,
 				),
-				// The bump messages the Message line carries, top and floor no-ops
-				// included, so a reviewer reads the whole outcome set.
 				createElement(
 					"text",
 					{
-						key: "bump-moved",
+						key: "queue-order-note",
 						style: { width: "100%", height: 1 },
 						fg: ink.detail.fg ?? undefined,
 					},
 					truncateToWidth(
-						"bump: + raised to high   - lowered to routine   from the lowest: set to off",
-						columns.contentWidth,
-					),
-				),
-				createElement(
-					"text",
-					{ key: "bump-noop", style: { width: "100%", height: 1 }, fg: ink.detail.fg ?? undefined },
-					truncateToWidth(
-						"no-op: already at the highest priority   already unranked",
+						"+ promotes the selected item, - demotes it, and the top item is next in line for a seat",
 						columns.contentWidth,
 					),
 				),
@@ -1230,6 +1273,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					},
 					previousMessage: "",
 					enqueuedAt: "2026-02-17T10:00:00.000Z",
+					automatic: false,
 				},
 				{
 					kind: "handoff",
@@ -1247,6 +1291,10 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					},
 					previousMessage: "the workflow named the next task",
 					enqueuedAt: "2026-02-17T10:01:00.000Z",
+					// The automatic flag marks the top-up's adds (ADR 0051): this
+					// route is one the auto top-up asked for, and its start lands the
+					// route's decision the automatic way.
+					automatic: true,
 				},
 				// The `queued` Consultation's item (issue #90): the pointer stands
 				// in the same order, under its kind word and the record's
@@ -1334,6 +1382,7 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				},
 				previousMessage: "",
 				enqueuedAt: "2026-02-17T10:00:00.000Z",
+				automatic: false,
 			};
 			// The Consultation item's row (issue #90): its force-dispatch runs its
 			// own pickup seam and never parks on the herdr seat, so the bar stands
