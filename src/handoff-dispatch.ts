@@ -34,6 +34,7 @@ import type {
 	WorkQueueHandoffItem,
 } from "./state.ts";
 import { workQueueIdentityOf } from "./state.ts";
+import { isCoveredByFixingPullRequest } from "./workflow.ts";
 
 /** A renderer callback must not strand a durable claim or the dispatch seat. */
 function safeReport(report: () => void): void {
@@ -753,6 +754,28 @@ class HandoffDispatchModule implements HandoffDispatch {
 							: `the ticket is now ${currentState}`,
 			};
 		}
+		// The covered gate (ADR 0042): a queued start whose open ticket gained
+		// an open fixing pull request while it waited is cancelled, and the
+		// ticket keeps the state it wears while it waited: the list rule
+		// withholds the ticket's task, and the start would hand the work to a
+		// second agent. The ticket is read from the projection before the list
+		// rule, because the rule withholds exactly the ticket this gate
+		// refuses.
+		if (item.origin === "open") {
+			const projection = this.state.projectedTickets(
+				this.config().workflowStates,
+				this.config().defaultTaskType,
+			);
+			const waiting = projection.find((candidate) => candidate.identity === item.ticketIdentity);
+			if (waiting !== undefined && isCoveredByFixingPullRequest(projection, waiting)) {
+				this.removeQueueItem(item.ticketIdentity);
+				this.reports.refresh();
+				this.reports.notice(
+					`the queued start of ${this.ticketName(item.ticketIdentity)} is removed: an open fixing pull request covers the ticket`,
+				);
+				return { ok: "cancelled" };
+			}
+		}
 		const claim = this.state.claimHandoff(item.ticketIdentity, item.choice, item.origin);
 		if (!claim.ok) {
 			this.log?.warn(`handoff refused: ${claim.reason} (${this.ticketName(item.ticketIdentity)})`);
@@ -953,8 +976,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 	/** The name the operator reads on a line: the ticket's title while the
 	 * ticket is still in the projection, its identity once it is gone. */
 	private ticketName(identity: string): string {
+		// The projection, not the visible list: a covered ticket is hidden
+		// from the list while its queued start is still naming it (ADR 0042).
 		const title = this.state
-			.visibleTickets(this.config().workflowStates, this.config().defaultTaskType)
+			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === identity)?.title;
 		return title === undefined ? `ticket ${identity}` : `"${title}"`;
 	}
