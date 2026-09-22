@@ -126,10 +126,36 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 12,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#12" },
 		});
 		expect(lines).toContainEqual({
 			text: "Priority: critical (issue #12)",
+			fg: roleColor("text"),
+		});
+	});
+
+	test("an inherited rank names the fixing alert by its number (ADR 0042)", () => {
+		const lines = withPriority({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
+		});
+		expect(lines).toContainEqual({
+			text: "Priority: critical (alert #9)",
+			fg: roleColor("text"),
+		});
+	});
+
+	test("an inherited rank names the fixing advisory by its key, not a number (ADR 0042)", () => {
+		const lines = withPriority({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: "GHSA-j8wj-q3wj-c945" },
+		});
+		expect(lines).toContainEqual({
+			text: "Priority: critical (advisory GHSA-j8wj-q3wj-c945)",
 			fg: roleColor("text"),
 		});
 	});

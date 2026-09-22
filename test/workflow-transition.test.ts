@@ -22,13 +22,16 @@ import type {
 	SourceMembership,
 	Ticket,
 } from "../src/domain/ticket.ts";
-import { withIssueReferences } from "../src/domain/ticket.ts";
+import { withHeadBranch, withIssueReferences } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import {
 	evaluateTransition,
-	findLinkedPullRequest,
+	findFixingPullRequest,
 	fireTransition,
+	fixingPullRequests,
+	isCoveredByFixingPullRequest,
 	isDraft,
+	pullRequestFixesTicket,
 	scoreFromMessage,
 	transitionLabelSet,
 } from "../src/workflow.ts";
@@ -37,8 +40,11 @@ import { FakeRunner } from "./fake-runner.ts";
 
 const issueSource = { name: "issues", kind: "github-issues" as const };
 const pullSource = { name: "pulls", kind: "github-pull-requests" as const };
+const securitySource = { name: "security", kind: "github-dependabot-alert" as const };
 const issueIdentity = "github:github.com:I_5";
 const pullIdentity = "github:github.com:P_12";
+const securityIdentity = "github:github.com:SEC_9";
+const securityPullIdentity = "github:github.com:P_97";
 const repository = {
 	identity: "github.com/acme/factory",
 	displayName: "acme/factory",
@@ -171,6 +177,65 @@ function pullTicketData(
 		attributes: withIssueReferences({ draft: "false" }, references),
 		...over,
 	};
+}
+
+/** A security item the agent works, with no issue identity of its own. */
+function securityTicketData(over: Partial<FetchedTicket> = {}): FetchedTicket {
+	return {
+		identity: securityIdentity,
+		sourceKind: "github-dependabot-alert",
+		externalKey: "#9",
+		sourceState: "open",
+		url: "https://github.com/acme/factory/security/dependabot/9",
+		title: "Patch the vulnerable dependency",
+		description: "The Dependabot alert.",
+		labels: ["high"],
+		externalUpdatedAt: "2026-08-31T10:30:00Z",
+		repository,
+		attributes: {},
+		...over,
+	};
+}
+
+/**
+ * The pull request the agent opened for the security item: in the item's
+ * repository, its head branch carries the item's factory-branch prefix, and
+ * it closes nothing - the link is the branch, not a body reference.
+ */
+function securityPullTicketData(over: Partial<FetchedTicket> = {}): FetchedTicket {
+	return {
+		identity: securityPullIdentity,
+		sourceKind: "github-pull-request",
+		externalKey: "#97",
+		sourceState: "open",
+		url: "https://github.com/acme/factory/pulls/97",
+		title: "Patch the vulnerable dependency",
+		description: "Bumps the vulnerable dependency.",
+		labels: [],
+		externalUpdatedAt: "2026-08-31T11:00:00Z",
+		repository,
+		attributes: withHeadBranch({ draft: "false" }, "factory/9-patch-the-vulnerable-dependency"),
+		...over,
+	};
+}
+
+/** A state holding the security item and, when given, its pull request. */
+function securitySeededState(...tickets: FetchedTicket[]) {
+	const dir = mkdtempSync(join(tmpdir(), "factory-workflow-state-"));
+	paths.push(dir);
+	const state = openFactoryState(join(dir, "state.sqlite"));
+	state.initializeSources([securitySource, pullSource]);
+	state.applyFetch(securitySource, {
+		status: "success",
+		fetchedAt: "2026-08-31T11:01:00Z",
+		tickets: tickets.filter((ticket) => ticket.sourceKind === "github-dependabot-alert"),
+	});
+	state.applyFetch(pullSource, {
+		status: "success",
+		fetchedAt: "2026-08-31T11:01:00Z",
+		tickets: tickets.filter((ticket) => ticket.sourceKind === "github-pull-request"),
+	});
+	return state;
 }
 
 /** A state holding the issue and, when given, its pull request. */
@@ -541,67 +606,150 @@ describe("the machine's written label set", () => {
 	});
 });
 
-describe("the linked pull request", () => {
-	test("the pull request that references the issue is found by its identity", async () => {
-		const state = seededState(issueTicketData(), pullTicketData());
-		const tickets = state.visibleTickets(
-			MACHINE_CONFIG.workflowStates,
-			MACHINE_CONFIG.defaultTaskType,
-		);
-		const issue = ticketAt(state, issueIdentity);
-		expect(findLinkedPullRequest(tickets, issue)?.identity).toBe(pullIdentity);
-	});
+/** A stub pull request with the membership facts one test gives it. */
+function pullStub(over: Partial<Ticket> = {}): Ticket {
+	return stubTicket(pullIdentity, "github-pull-request", "#12", over);
+}
 
-	test("a reference the source only knows by number still links", () => {
-		const tickets: Ticket[] = [
+/** The membership facts of one stub pull request's newest membership. */
+function pullStubWith(attributes: Record<string, string>, over: Partial<SourceMembership> = {}) {
+	return pullStub({
+		memberships: [
+			{ ...stubMembership(pullIdentity, "github-pull-request", "#12"), ...over, attributes },
+		],
+	});
+}
+
+/** A stub pull request with its own identity and number, for the ordering. */
+function pullStubAs(
+	number: number,
+	attributes: Record<string, string>,
+	externalUpdatedAt: string,
+): Ticket {
+	const identity = `github:github.com:P_${number}`;
+	const key = `#${number}`;
+	return {
+		...stubTicket(identity, "github-pull-request", key),
+		externalUpdatedAt,
+		memberships: [
 			{
-				...stubTicket(pullIdentity, "github-pull-request", "#12"),
-				memberships: [
-					{
-						...stubMembership(pullIdentity, "github-pull-request", "#12"),
-						attributes: withIssueReferences({}, [
-							{ identity: null, number: 5, repository: "acme/factory" },
-						]),
-					},
-				],
+				...stubMembership(identity, "github-pull-request", key),
+				attributes,
+				externalUpdatedAt,
 			},
+		],
+	};
+}
+
+/** A closed-pull-request fact set on a stub membership. */
+function closedMembership(over: Partial<SourceMembership> = {}): SourceMembership {
+	return {
+		...stubMembership(pullIdentity, "github-pull-request", "#12"),
+		sourceState: "closed",
+		...over,
+	};
+}
+
+describe("the fixing pull request", () => {
+	test("the pull request that closes the ticket is found by its identity", () => {
+		const tickets: Ticket[] = [
+			pullStubWith(
+				withIssueReferences({}, [
+					{ identity: issueIdentity, number: 5, repository: "acme/factory" },
+				]),
+			),
 		];
 		const issue = stubTicket(issueIdentity, "github-issue", "#5");
-		expect(findLinkedPullRequest(tickets, issue)?.identity).toBe(pullIdentity);
+		expect(findFixingPullRequest(tickets, issue)?.identity).toBe(pullIdentity);
 	});
 
-	test("the newest non-draft wins, and a draft alone links nothing", () => {
-		const older = pullTicketData({ externalUpdatedAt: "2026-08-30T10:00:00Z" });
-		const newest = pullTicketData({
-			identity: "github:github.com:P_13",
-			externalKey: "#13",
-			externalUpdatedAt: "2026-08-31T12:00:00Z",
+	test("a reference the source only knows by number still fixes", () => {
+		const tickets: Ticket[] = [
+			pullStubWith(
+				withIssueReferences({}, [{ identity: null, number: 5, repository: "acme/factory" }]),
+			),
+		];
+		const issue = stubTicket(issueIdentity, "github-issue", "#5");
+		expect(findFixingPullRequest(tickets, issue)?.identity).toBe(pullIdentity);
+	});
+
+	test("the head branch that carries the ticket's factory prefix fixes the ticket", () => {
+		const tickets: Ticket[] = [
+			// The branch slug names a title the ticket no longer carries: the
+			// match is on the ticket id alone, so the changed title cannot sever
+			// the link (ADR 0042).
+			pullStubWith(withHeadBranch({}, "factory/5-persist-source-facts")),
+		];
+		const issue = stubTicket(issueIdentity, "github-issue", "#5", { title: "A changed title" });
+		expect(findFixingPullRequest(tickets, issue)?.identity).toBe(pullIdentity);
+	});
+
+	test("a pull request in another repository does not fix the ticket", () => {
+		const tickets: Ticket[] = [
+			pullStubWith(withHeadBranch({}, "factory/5-persist-source-facts"), {
+				repository: {
+					identity: "github.com/acme/other",
+					displayName: "acme/other",
+					cloneUrl: "https://github.com/acme/other.git",
+				},
+			}),
+		];
+		const issue = stubTicket(issueIdentity, "github-issue", "#5");
+		expect(fixingPullRequests(tickets, issue)).toHaveLength(0);
+	});
+
+	test("a branch that carries another ticket's prefix does not fix the ticket", () => {
+		const tickets: Ticket[] = [pullStubWith(withHeadBranch({}, "factory/6-persist-source-facts"))];
+		const issue = stubTicket(issueIdentity, "github-issue", "#5");
+		expect(fixingPullRequests(tickets, issue)).toHaveLength(0);
+	});
+
+	test("an unrelated pull request fixes nothing", () => {
+		const tickets: Ticket[] = [pullStubWith({})];
+		const issue = stubTicket(issueIdentity, "github-issue", "#5");
+		expect(fixingPullRequests(tickets, issue)).toHaveLength(0);
+	});
+
+	test("a closed pull request still fixes the ticket, but no longer covers it", () => {
+		const closed = pullStub({
+			sourceState: "closed",
+			memberships: [closedMembership({ attributes: withHeadBranch({}, "factory/5-persist") })],
 		});
-		const state = seededState(issueTicketData(), older, newest);
-		const tickets = state.visibleTickets(
-			MACHINE_CONFIG.workflowStates,
-			MACHINE_CONFIG.defaultTaskType,
+		const tickets: Ticket[] = [closed];
+		const issue = stubTicket(issueIdentity, "github-issue", "#5");
+		expect(pullRequestFixesTicket(closed, issue)).toBe(true);
+		expect(fixingPullRequests(tickets, issue)).toHaveLength(0);
+		expect(findFixingPullRequest(tickets, issue)).toBeNull();
+	});
+
+	test("the newest non-draft wins, and a draft alone fixes nothing the machine acts on", () => {
+		const older = pullStubAs(12, withHeadBranch({}, "factory/5-persist"), "2026-08-30T10:00:00Z");
+		const newest = pullStubAs(13, withHeadBranch({}, "factory/5-persist"), "2026-08-31T12:00:00Z");
+		const draft = pullStubAs(
+			14,
+			withHeadBranch({ draft: "true" }, "factory/5-persist"),
+			"2026-09-01T09:00:00Z",
 		);
-		expect(findLinkedPullRequest(tickets, ticketAt(state, issueIdentity))?.identity).toBe(
+		const issue = stubTicket(issueIdentity, "github-issue", "#5");
+		// The draft is the newest fixing pull request, and the machine acts on
+		// the newest non-draft: P_13, ahead of the older P_12 and the draft
+		// P_14.
+		expect(findFixingPullRequest([older, newest, draft], issue)?.identity).toBe(
 			"github:github.com:P_13",
 		);
-
-		const drafted = pullTicketData({ attributes: { draft: "true" } });
-		const draftState = seededState(issueTicketData(), drafted);
-		const draftTickets = draftState.visibleTickets(
-			MACHINE_CONFIG.workflowStates,
-			MACHINE_CONFIG.defaultTaskType,
-		);
-		expect(findLinkedPullRequest(draftTickets, ticketAt(draftState, issueIdentity))).toBeNull();
+		// A draft alone: the machine acts on nothing, and the ticket is still
+		// covered - the draft's work is in flight.
+		const draftOnly = [draft];
+		expect(findFixingPullRequest(draftOnly, issue)).toBeNull();
+		expect(isCoveredByFixingPullRequest(draftOnly, issue)).toBe(true);
 	});
 
-	test("an unrelated pull request is not the link", () => {
-		const state = seededState(issueTicketData(), pullTicketData({}, []));
-		const tickets = state.visibleTickets(
-			MACHINE_CONFIG.workflowStates,
-			MACHINE_CONFIG.defaultTaskType,
-		);
-		expect(findLinkedPullRequest(tickets, ticketAt(state, issueIdentity))).toBeNull();
+	test("an in-flight ticket is never covered, whatever pull requests exist", () => {
+		const awaiting = stubTicket(issueIdentity, "github-issue", "#5", { state: "awaiting" });
+		const tickets: Ticket[] = [pullStubWith(withHeadBranch({}, "factory/5-persist")), awaiting];
+		expect(isCoveredByFixingPullRequest(tickets, awaiting)).toBe(false);
+		const running = stubTicket(issueIdentity, "github-issue", "#5", { state: "running" });
+		expect(isCoveredByFixingPullRequest(tickets, running)).toBe(false);
 	});
 
 	test("the draft fact is the membership's newest word", () => {
@@ -708,6 +856,33 @@ describe("the transition fire", () => {
 		});
 		expect(runner.commands()).toEqual([
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-for-review",
+		]);
+	});
+
+	test("a completed turn on a security item writes the facts on the pull request its branch names, and derives the position", async () => {
+		const state = securitySeededState(securityTicketData(), securityPullTicketData());
+		const runner = new FakeRunner();
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: securityIdentity,
+			taskType: "implement",
+		});
+		expect(outcome).toMatchObject({
+			fired: true,
+			pullRequestFacts: ["ready-for-review"],
+			pullRequestIdentity: securityPullIdentity,
+			pullRequestKey: "#97",
+			positionTaskType: "review",
+			positionTicketIdentity: securityPullIdentity,
+		});
+		// The item's own surface writes no fact: the transition names none for
+		// it, and the written fact lands on the pull request the branch names.
+		expect(outcome?.ticketWrite).toBeNull();
+		expect(outcome?.pullRequestWrite).toEqual({ added: ["ready-for-review"], removed: [] });
+		expect(runner.commands()).toEqual([
+			"gh pr edit #97 --repo github.com/acme/factory --add-label ready-for-review",
 		]);
 	});
 

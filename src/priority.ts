@@ -8,9 +8,9 @@
  * first occurrence, and a missing or empty list ranks no ticket.
  *
  * A pull request that ranks nothing on its own inherits the best effective
- * rank of the issues it closes (ADR 0023): after its own override and own
- * label, the inheritance step reads each referenced issue by that issue's
- * own chain.
+ * rank of the issues it closes and the tickets it fixes (ADR 0023, ADR
+ * 0042): after its own override and own label, the inheritance step reads
+ * each rank source by that source's own chain.
  *
  * This module owns the rank function and the one comparator that orders
  * tickets wherever priority matters. The state stores the override, and the
@@ -37,10 +37,12 @@ export interface TicketPriority {
 	/** Where the effective rank comes from. */
 	source: PrioritySource;
 	/**
-	 * The issue number that supplied the rank, when it is inherited through
-	 * the pull request's Issue references (ADR 0023). Null otherwise.
+	 * The source of the inherited rank: the source kind and external key of
+	 * the ticket that supplied it - the issue the pull request closes, or
+	 * the fixing ticket the branch link names (ADR 0023, ADR 0042). Null
+	 * when the rank is not inherited.
 	 */
-	inheritedFrom: number | null;
+	inheritedFrom: { sourceKind: string; externalKey: string } | null;
 }
 
 /**
@@ -76,30 +78,48 @@ export function effectivePriority(
 	return { rank: null, label: null, source: "none", inheritedFrom: null };
 }
 
-/** The facts of one Issue reference as the inheritance step reads them (ADR 0023). */
-export interface ReferencedIssueRank {
-	/** The issue's number in its repository; what the detail pane names. */
+/** The facts of one rank source as the inheritance step reads them (ADR 0023, ADR 0042). */
+export interface RankSource {
+	/**
+	 * The source's number in its repository: the tie-break the inheritance
+	 * step uses. A source that names no number (the security advisory) takes
+	 * the caller's sentinel, so it loses every tie.
+	 */
 	number: number;
-	/** The issue's labels, from its snapshot or its Referenced issue fact. */
+	/** The source's labels, from its snapshot or its Referenced issue fact. */
 	labels: readonly string[];
-	/** The issue's Priority override when it is a ticket, else null. */
+	/** The source's Priority override when it is a ticket, else null. */
 	override: string | null;
+	/**
+	 * The source kind of the ticket that stands behind the source; what the
+	 * detail pane names beside the inherited rank.
+	 */
+	sourceKind: string;
+	/** The external key of that ticket, beside its source kind. */
+	externalKey: string;
 }
 
 /**
- * The inheritance step of the effective rank (ADR 0023).
+ * The inheritance step of the effective rank (ADR 0023, ADR 0042).
  *
- * The best effective rank among a pull request's Issue references, each
- * resolved by the issue's own chain: its Priority override when it is a
- * ticket, then its labels, then unranked. When two references tie at the
- * best rank, the lowest issue number supplies it, so the detail pane names
- * one issue. When no reference is ranked, the step ranks nothing.
+ * The best effective rank among a pull request's rank sources - its Issue
+ * references and the tickets it fixes - each resolved by the source's own
+ * chain: its Priority override when it is a ticket, then its labels, then
+ * unranked. When two sources tie at the best rank, the lowest number
+ * supplies it, so the detail pane names one source. When no source is
+ * ranked, the step ranks nothing.
  */
 export function inheritedPriority(
 	labels: readonly string[],
-	references: readonly ReferencedIssueRank[],
+	references: readonly RankSource[],
 ): TicketPriority {
-	let best: { rank: number; label: string; number: number } | null = null;
+	let best: {
+		rank: number;
+		label: string;
+		number: number;
+		sourceKind: string;
+		externalKey: string;
+	} | null = null;
 	for (const reference of references) {
 		const priority = effectivePriority(labels, reference.override, reference.labels);
 		if (priority.rank === null) continue;
@@ -108,32 +128,38 @@ export function inheritedPriority(
 			priority.rank < best.rank ||
 			(priority.rank === best.rank && reference.number < best.number)
 		)
-			best = { rank: priority.rank, label: priority.label ?? "", number: reference.number };
+			best = {
+				rank: priority.rank,
+				label: priority.label ?? "",
+				number: reference.number,
+				sourceKind: reference.sourceKind,
+				externalKey: reference.externalKey,
+			};
 	}
 	if (best === null) return { rank: null, label: null, source: "none", inheritedFrom: null };
 	return {
 		rank: best.rank,
 		label: best.label,
 		source: "inherited",
-		inheritedFrom: best.number,
+		inheritedFrom: { sourceKind: best.sourceKind, externalKey: best.externalKey },
 	};
 }
 
 /**
- * The effective rank of a pull request (ADR 0023).
+ * The effective rank of a pull request (ADR 0023, ADR 0042).
  *
  * The pull request's own chain - its Priority override, then its own label -
  * beats the inheritance step. Only an unranked pull request inherits: the
- * best effective rank among its Issue references takes the third slot of
- * the chain, so the pull request's own facts never lose to the issues it
- * closes. An issue ticket, which carries no references, reads exactly its
- * own chain.
+ * best effective rank among its rank sources - the issues it closes and the
+ * tickets it fixes - takes the third slot of the chain, so the pull
+ * request's own facts never lose to them. An issue ticket, which carries no
+ * rank sources, reads exactly its own chain.
  */
 export function effectivePullRequestPriority(
 	labels: readonly string[],
 	override: string | null,
 	ownLabels: readonly string[],
-	references: readonly ReferencedIssueRank[],
+	references: readonly RankSource[],
 ): TicketPriority {
 	const own = effectivePriority(labels, override, ownLabels);
 	if (own.rank !== null) return own;
@@ -235,13 +261,37 @@ export function bumpPriority(
 }
 
 /**
+ * The singular word the detail pane states for the kind of an inherited
+ * rank's source (ADR 0042): issue and advisory each name their own word, and
+ * both alert kinds name the shared `alert`. A kind without a word states no
+ * word, and the pane shows the label alone.
+ */
+function inheritedSourceWord(sourceKind: string): string | null {
+	switch (sourceKind) {
+		case "github-issue":
+			return "issue";
+		case "github-security-advisory":
+			return "advisory";
+		case "github-dependabot-alert":
+		case "github-secret-scanning-alert":
+			return "alert";
+		default:
+			return null;
+	}
+}
+
+/**
  * The word the detail pane and the gallery use for the source of a rank.
- * The override is the operator's own setting, and the label is the ticket's.
+ * The override is the operator's own setting, the label is the ticket's, and
+ * the inherited rank names its source by kind and key - `issue #5`,
+ * `alert #9`, `advisory GHSA-...` (ADR 0023, ADR 0042).
  */
 export function prioritySourceWord(priority: TicketPriority): string | null {
 	if (priority.source === "override") return "set by you";
 	if (priority.source === "label") return "its own label";
-	if (priority.source === "inherited")
-		return priority.inheritedFrom === null ? null : `issue #${priority.inheritedFrom}`;
+	if (priority.source === "inherited" && priority.inheritedFrom !== null) {
+		const word = inheritedSourceWord(priority.inheritedFrom.sourceKind);
+		return word === null ? null : `${word} ${priority.inheritedFrom.externalKey}`;
+	}
 	return null;
 }

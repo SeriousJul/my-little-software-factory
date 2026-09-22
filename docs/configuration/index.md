@@ -481,7 +481,7 @@ carries the command that creates them.
 | Key | Required | Default | What it does |
 | --- | --- | --- | --- |
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
-| `pull-request-facts` | no | none | The labels the transition writes on the ticket's linked pull request, the same convergence. No linked pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own linked pull request: one surface takes both fact lists in one write. |
+| `pull-request-facts` | no | none | The labels the transition writes on the ticket's fixing pull request, the same convergence. No fixing pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own fixing pull request: one surface takes both fact lists in one write. |
 | `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the review's score against. The review posts its score as a comment on the pull request in the template's fixed line, and the branch reads the newest comment that carries one. A whole number from 0 to 100. A score branch requires it. |
 | `auto-advance` | no | `false` | The factory decides the completed turn without the operator: the position it derives hands off at any time, and a transition with no position closes the cycle even in manual mode. |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
@@ -494,7 +494,7 @@ carries the command that creates them.
 | --- | --- | --- | --- |
 | `when` | no | fallback | The judgment: `score-above-threshold`, `score-below-threshold`, `pull-request-open`, or `pull-request-closed`. Omitted: the fallback branch, which fires when no judgment branch did. |
 | `ticket-facts` | no | the transition's | The labels this branch writes on the ticket, overriding the transition's when the branch fires. |
-| `pull-request-facts` | no | the transition's | The labels this branch writes on the linked pull request, overriding the transition's when the branch fires. |
+| `pull-request-facts` | no | the transition's | The labels this branch writes on the fixing pull request, overriding the transition's when the branch fires. |
 | `auto-advance` | no | the transition's | This branch's auto-advance, overriding the transition's when the branch fires. |
 | `agent` | no | the transition's | This branch's agent pin, overriding the transition's when the branch fires. |
 | `environment` | no | the transition's | This branch's environment pin, overriding the transition's when the branch fires. |
@@ -507,8 +507,8 @@ its own `auto-advance` to decide one judgment's completion and leave the
 others to the transition's. The plane fires the transition on every completed
 turn: it writes the label facts, and the
 machine re-derives the position from the written labels on the ticket and
-its linked pull request. One ticket that is both the settled ticket and the
-linked pull request - a pull request ticket - is one surface: the plane
+its fixing pull request. One ticket that is both the settled ticket and the
+fixing pull request - a pull request ticket - is one surface: the plane
 converges it to the two fact lists at once, in one write. A derived position
 hands off while the parallel limit and the per-ticket handoff limit have
 room; a transition that derives no position closes the cycle, and a route at

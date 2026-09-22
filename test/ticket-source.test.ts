@@ -209,6 +209,7 @@ describe("GitHub ticket source contract", () => {
 			state: "OPEN",
 			updatedAt: "2026-08-31T11:00:00Z",
 			isDraft: false,
+			headRefName: "main",
 			labels: { nodes: [{ name: "ready-for-review" }] },
 			repository: {
 				name: "factory",
@@ -316,7 +317,7 @@ describe("GitHub ticket source contract", () => {
 				identity: "github:github.com:P_7",
 				sourceKind: "github-pull-request",
 				externalKey: "#7",
-				attributes: { draft: "true" },
+				attributes: { draft: "true", headBranch: "main" },
 			}),
 		);
 	});
@@ -324,6 +325,49 @@ describe("GitHub ticket source contract", () => {
 	test("a pull request without a draft fact is an unreadable failure", async () => {
 		const node = pullRequest() as Record<string, unknown>;
 		delete node.isDraft;
+		const runner = new SourceRunner([page([node])]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				reason: expect.stringContaining("unreadable pull request"),
+			}),
+		);
+	});
+
+	test("the pull request's head branch is a source fact on its membership (ADR 0042)", async () => {
+		const runner = new SourceRunner([
+			page([pullRequest(9, { headRefName: "factory/5-add-a-webhook-retry" })]),
+			page([]),
+			page([]),
+		]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets[0]).toEqual(
+			expect.objectContaining({
+				identity: "github:github.com:P_9",
+				sourceKind: "github-pull-request",
+				attributes: { draft: "false", headBranch: "factory/5-add-a-webhook-retry" },
+			}),
+		);
+	});
+
+	test("the pull request search reads the head branch name", async () => {
+		const runner = new SourceRunner([page([]), page([]), page([])]);
+		await createTicketSource(source("github-pull-requests"), runner).fetch();
+		// The GraphQL document, not the search terms: the head branch is read
+		// as a field on the pull request node.
+		const call = runner.calls[0];
+		const query = (call.args.find((arg) => arg.startsWith("query=")) ?? "")
+			.replace("query=", "")
+			.replace(/\s+/g, " ");
+		expect(query).toContain("isDraft headRefName");
+	});
+
+	test("a pull request without a head branch is an unreadable failure", async () => {
+		const node = pullRequest() as Record<string, unknown>;
+		delete node.headRefName;
 		const runner = new SourceRunner([page([node])]);
 		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
 		expect(outcome).toEqual(
@@ -518,6 +562,7 @@ describe("pull request reference reads (ADR 0023)", () => {
 			state: "OPEN",
 			updatedAt: "2026-08-31T11:00:00Z",
 			isDraft: false,
+			headRefName: "main",
 			labels: { nodes: [{ name: "ready-for-review" }] },
 			repository: {
 				name: "factory",
@@ -575,6 +620,7 @@ describe("pull request reference reads (ADR 0023)", () => {
 				identity: "github:github.com:P_7",
 				attributes: {
 					draft: "false",
+					headBranch: "main",
 					closes: JSON.stringify([
 						{
 							identity: "github:github.com:I_5",
@@ -696,6 +742,7 @@ describe("pull request reference reads (ADR 0023)", () => {
 			expect.objectContaining({
 				attributes: {
 					draft: "false",
+					headBranch: "main",
 					closes: JSON.stringify([{ identity: null, number: 6, repository: "acme/factory" }]),
 				},
 			}),
