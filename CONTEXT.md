@@ -19,7 +19,7 @@ The always-present base surface of the control plane. It holds three list sectio
 _Avoid_: dashboard, home, screen, primary view
 
 **Section**:
-An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows.
+An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows. No section is ever hidden: the Work section keeps its header row while it is empty (ADR 0049).
 _Avoid_: tab, pane, view, accordion
 
 **Section header**:
@@ -141,38 +141,19 @@ A ticket source that the operator deleted from the Config file.
 The plane stops reading it: its open tickets leave the list, its in-flight tickets stay visible and cannot be handed off, and no warning is pinned, because the removal is the operator's own decision.
 _Avoid_: disabled source, dropped source
 
-**Ticket priority**:
-The rank that orders tickets: the ticket list within an attention group, the open auto-handoff dispatch, and the waiting workflow advances that compete for a freed parallel slot.
-It is a fact of the ticket identity: it survives every task type change and every work cycle close.
-The effective rank is, in order, the Priority override, the rank of the ticket's own label in the Priority label list, or, for a pull request, the highest effective priority of the tickets it fixes.
-A ticket with no rank sorts after every ranked ticket.
-_Avoid_: urgency, importance, ticket rank
-
-**Priority label list**:
-The ordered list of labels that defines the priority ranks; the first entry is the highest rank.
-A label that is not in the list gives no rank, and a missing list ranks no ticket.
-_Avoid_: priority scale, rank table
-
-**Priority override**:
-The operator-set value of a ticket's priority.
-It takes a rank from the Priority label list, or off, which forces the ticket unranked.
-It is factory state on the ticket identity, not a source fact: it survives every work cycle close, it beats every source fact of its ticket, and the control plane never writes it to the external source.
-_Avoid_: pin, manual priority, label edit
+**Attention group**:
+The ticket list's first sort: awaiting tickets first, then the in-flight states, running before handed-off, then open actionable tickets, then open tickets that are not actionable.
+Within its group the list sorts by newest external update, then ticket identity (ADR 0050).
+_Avoid_: list bucket, triage group
 
 **Issue reference**:
 The fact that a pull request closes one or more issues, read from the source.
 The control plane stores the identities of the referenced issues on the pull request's membership, and a refresh can change the references.
 _Avoid_: link, related issue, cross-reference
 
-**Referenced issue fact**:
-The labels and fetch time the control plane reads directly for an issue no ticket source lists, so an Issue reference can carry a priority.
-It is a fact, not a ticket: it takes no row in the Main view and is never handed off.
-When the issue later matches a ticket source, the real snapshot beats the fact.
-_Avoid_: ghost ticket, stub ticket, shadow issue
-
 **Fixing pull request**:
 The open pull request that does a ticket's work: the pull request that closes the ticket, or the pull request whose head branch is the ticket's factory branch, which is the only kind for a security item.
-The plane derives it from source facts on every refresh and never stores it. An `open` ticket that has one leaves the ticket list while it stays open, and the pull request inherits the ticket's priority (ADR 0042).
+The plane derives it from source facts on every refresh and never stores it. An `open` ticket that has one leaves the ticket list while it stays open (ADR 0042).
 _Avoid_: linked issue, dependent PR, parent ticket, child PR
 
 **Work cycle**:
@@ -238,7 +219,7 @@ The Agent waits when it has settled its turn, or when it shows an approval or qu
 _Avoid_: blocked, idle, done
 
 **Queued**:
-The Consultation state where the Consultation waits in the Work queue for a free Parallel limit seat. It holds no environment and no Agent until the queue's pickup starts it.
+The Consultation state where the Consultation waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands. It holds no environment and no Agent until the pickup starts it (ADR 0049, ADR 0052).
 _Avoid_: pending, waiting to start
 
 **Unscheduled**:
@@ -301,7 +282,9 @@ The ticket's row and detail wear the spinner face in place of their state badge 
 _Avoid_: boot, launch, pending, startup
 
 **Queue wait**:
-The window in which a ticket's manual start waits in the Work queue for a free Parallel limit seat. The ticket keeps its `open` state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket `open`.
+The window in which a ticket's start waits in the Work queue for its pickup: a free Parallel limit seat, or the queue's resume while the queue pause stands.
+Every start takes the wait before the pickup starts it, and a free seat starts it in the same tick (ADR 0049).
+The ticket keeps its state, and its row and detail wear the `queued` badge in place of their state badge, the way the Starting window wears the spinner face. The badge is not a ticket state: the section counts, the pickup gate, and the state file all keep the ticket's state.
 _Avoid_: queued state, pending, on hold
 
 **Startup grace**:
@@ -366,25 +349,47 @@ An unresolved attempt prevents another handoff of the same ticket after a crash.
 _Avoid_: pending ticket, handoff state
 
 **Auto-handoff mode**:
-The mode of the factory in which the control plane hands off eligible open tickets by itself and decides their settled turns without the operator, within the configured limits.
+The mode of the factory in which the control plane tops up the Work queue by itself and decides its settled turns without the operator, within the configured limits: a continuation first, then a restart, then an eligible open ticket, one item at a time into an empty queue (ADR 0051).
 The mode is factory state on the state file: it survives a restart and a dev reload, and a fresh state file starts with the mode off. The operator changes it with the `a` key in the Ticket section.
 _Avoid_: auto dispatch, dispatch mode
 
 **Parallel limit**:
 The maximum number of works in flight, counting a ticket Handoff and a Consultation alike. A seat is held by an in-flight ticket whose agent the latest poll listed, by every in-progress handoff, by a started agent still inside its Startup grace (ADR 0021), and by a Consultation in `opening` or `working`.
-It gates every start: a manual start that cannot take a seat enters the Work queue instead of starting, and an automatic start waits for a seat.
+It gates every start: a start that cannot take a seat waits in the Work queue for its pickup (ADR 0049).
 _Avoid_: concurrency cap, max agents
 
 **Work queue**:
-The ordered, durable list of starts that wait for a free Parallel limit seat: a manual Handoff the operator asked for, and a Consultation in `queued` state. The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
-When a seat frees, the queue takes it before auto-dispatch does, and the pickup runs every hard start check. A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator can force-dispatch an item over the cap, reorder the items, or remove an item from the queue: a Handoff item is cancelled and its ticket keeps its state, and a Consultation item is unscheduled and keeps its record. A removal ends the whole waiting start, including a claim the pickup already made and parked.
+The ordered, durable list through which every start passes: a manual Handoff the operator asked for, a Consultation in `queued` state, and the automatic adds the auto top-up makes (ADR 0049, ADR 0051). The queue holds at most one item per ticket: a second add of a ticket that already waits is refused, and the first item keeps its place.
+The pickup is the only starter of a queued start, and a pickup attempt ends in start or drop, never in stay: a dropped item leaves the queue with its warning, and the queue never holds a failing item, so it cannot jam (ADR 0049). A pickup is a claim like any other: it puts the ticket in the Starting window, and it holds its seat even while the herdr seat keeps the work parked. The operator promotes and demotes an item with `+` and `-`, force-dispatches it over the cap, removes it, or pauses the queue itself: a removed Handoff item is cancelled and its ticket keeps its state, a removed Consultation item is unscheduled and keeps its record, and the queue pause holds the drain while it stands (ADR 0052). A removal ends the whole waiting start, including a claim the pickup already made and parked.
 _Avoid_: dispatch queue, pending list, execution queue
+
+**Pickup**:
+The pass that starts the Work queue's items for the free seats, in queue order.
+It is the only starter of a queued start, and it runs every observation cycle in both modes, with an immediate pass after every enqueue (ADR 0049).
+A pickup runs every hard start check the direct start runs, and an attempt ends in start or drop, never in stay (ADR 0049).
+_Avoid_: dequeue, scheduler, drain
 
 **Force-dispatch**:
 The Work queue control that starts the selected item immediately, even when the Parallel limit is full.
-It re-runs every start check the normal pickup runs and skips only the cap.
-A force-dispatch that fails leaves the item out of the queue, where a Handoff pickup failure keeps it: a Consultation's start that fails is a terminal record, and its item leaves with it.
+It re-runs every start check the pickup runs and skips only the cap, and it still starts while the queue pause stands: the brake holds the automatic pickup, not the operator's explicit ask (ADR 0052).
+A force-dispatch that fails leaves the item out of the queue, as a pickup failure now does (ADR 0049): a Consultation's start that fails is a terminal record, and its item leaves with it.
 _Avoid_: manual override, bypass
+
+**Continuation**:
+The next step of a ticket's finished work: an awaiting ticket whose newest settled turn's Transition fired, wrote its label facts, and whose new position offers a task.
+The auto top-up adds a continuation before a restart or a new open ticket (ADR 0051).
+_Avoid_: workflow advance, follow-up, next task
+
+**Top-up**:
+The one automatic add the observation cycle makes to the Work queue: while Auto-handoff mode is on and the queue is empty, a continuation, else a restart, else an eligible open ticket, else nothing (ADR 0051).
+It adds one item per cycle, and only into an empty queue, so the queue never piles.
+_Avoid_: refill, auto dispatch, queue feed
+
+**Queue pause**:
+The operator's brake on the Work queue itself: while it stands, the pickup takes no item, the auto top-up adds none, and a manual enqueue that lands waits without starting. A force-dispatch passes it, the way it passes the cap (ADR 0052).
+It is factory state on the state file, toggled with the `p` key in the Work queue section.
+It is distinct from the Dispatch pause, which is automatic and holds the top-up's adds.
+_Avoid_: dispatch pause, queue stop, brake
 
 **Handoff limit**:
 The per-ticket cap on started handoffs that stops the close-and-rehandoff loop.
@@ -393,12 +398,13 @@ _Avoid_: turn counter, dispatch budget
 
 **Dispatch pause**:
 The condition in which Auto-handoff mode starts no agent by itself, because the newest Held turn settled `failed` and no turn has settled `completed` since it.
-It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff, and it holds only the automatic origins: the open handoff, the workflow advance, and the restart. The advance block applies in manual mode too, because auto-advance transitions route there, exactly like the Parallel limit.
+It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends at the next `completed` settle, or when the operator decides the Held turn that started it. It never blocks a manual Handoff or a route the operator confirms, and it holds only the automatic adds of the auto top-up: the continuation, the restart, and the open ticket (ADR 0051).
+It is distinct from the queue pause, the operator's brake on the queue itself (ADR 0052).
 _Avoid_: circuit breaker, cooldown, backoff
 
 **Same-type hold**:
 The condition in which the open Auto-handoff withholds a ticket whose newest closed cycle settled a `completed` turn of exactly the task type the ticket now suggests.
-A completed work needs no repeat, and progress needs a new signal. It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends when the suggested task type changes, or the ticket leaves the source list. It gates auto-handoff only; a manual handoff always passes it (ADR 0026).
+A completed work needs no repeat, and progress needs a new signal. It is derived from the completion traces on every cycle, never stored, so it survives a restart and cannot drift from the fact it describes. It ends when the suggested task type changes, or the ticket leaves the source list. It gates the auto top-up's open-ticket add only; a manual handoff always passes it (ADR 0026, ADR 0051).
 _Avoid_: dispatch block, retry gate, backoff
 
 **Task type**:
@@ -440,8 +446,9 @@ The score is read from the pull request's comments, and the open state from the 
 _Avoid_: verdict, score check, gate
 
 **Auto-advance**:
-A property of a Transition. When it is set, the control plane hands off the suggested task of the ticket's new position without the operator, even in manual mode: a free parallel slot starts the handoff, a full slot leaves the ticket awaiting, and an advance at the ticket's handoff limit degrades to close.
-A transition whose new position offers no task on this ticket closes the cycle in auto mode.
+A property of a Transition. When it is set and Auto-handoff mode is on, the control plane tops up the Work queue with the suggested task of the ticket's new position without the operator: the route enters the queue like every start (ADR 0051). In manual mode the turn rests in awaiting, and the operator's Decision screen routes it.
+An advance at the ticket's handoff limit degrades to close.
+A transition whose new position offers no task on this ticket closes the cycle: the parking position is the machine's destination, and the cycle ends where the machine put the ticket.
 _Avoid_: auto complete, auto done, auto close
 
 **Completion decision**:
@@ -508,7 +515,7 @@ It runs on the ticket being handed off, never on its fixing pull request, after 
 _Avoid_: label flip, position edit, entry write
 
 **Placement label**:
-A label named in a Workflow state's all or any match set. The Placement write owns this set: it adds and removes placement labels, and it never touches a label no state names, such as a priority or severity label. A state's none set names exclusion, not ownership.
+A label named in a Workflow state's all or any match set. The Placement write owns this set: it adds and removes placement labels, and it never touches a label no state names, such as a severity label. A state's none set names exclusion, not ownership.
 _Avoid_: entry label, position label, workflow label
 
 **Override**:
@@ -521,7 +528,7 @@ A Task type the ticket's position does not offer runs the Placement: the ticket 
 _Avoid_: custom setting, tweak
 
 **Config file**:
-The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the limits, the priority label list, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
+The TOML file at `~/.config/my-little-software-factory/config.toml` that carries the handoff defaults (agent, environment, task type, model), the limits, ticket sources, the Workflow and its states, agent types, task types and their Transitions, state file, and repository mappings.
 A missing file is seeded from the Default configuration on first run. An invalid file stops the control plane with a readable error before the UI starts.
 _Avoid_: settings file, preferences
 

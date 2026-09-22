@@ -57,3 +57,7 @@ body states the context, the decision, and the consequences.
 - [ADR 0046: The Decision screen's route closes the previous handoff's environment at the ask](./0046-the-decision-routes-close-the-previous-handoffs-environment-at-the-ask.md)
 - [ADR 0047: The pull request state judgment reads the source at settle time](./0047-the-pull-request-state-judgment-reads-the-source-at-settle-time.md)
 - [ADR 0048: The Decision screen withdraws the handoff of a position that left its source](./0048-the-decision-withdraws-the-handoff-of-a-position-that-left-its-source.md)
+- [ADR 0049: The Work queue is the single start channel](./0049-the-work-queue-is-the-single-start-channel.md)
+- [ADR 0050: Ticket priority is retired in favor of the queue order](./0050-ticket-priority-is-retired-in-favor-of-the-queue-order.md)
+- [ADR 0051: Auto-handoff tops up the Work queue one item at a time](./0051-auto-handoff-tops-up-the-work-queue-one-item-at-a-time.md)
+- [ADR 0052: The queue pause is factory state](./0052-the-queue-pause-is-factory-state.md)

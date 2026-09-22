@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-02
+Superseded in part by ADR 0051: the Dispatch pause's hold of the automatic route in manual mode no longer stands, because manual mode no longer routes by itself. Its held turn gate and its hold of the top-up's adds stand.
 
 ## Context
 

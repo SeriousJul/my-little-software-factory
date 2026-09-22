@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-16
+Superseded in part by ADR 0050: the Priority label list that ordered the synthesized severities no longer exists. The severities stay source-fact labels the Workflow states may match on.
 
 ## Context
 

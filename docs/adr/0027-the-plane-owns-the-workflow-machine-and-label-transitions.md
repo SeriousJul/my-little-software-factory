@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-15
+Superseded in part by ADR 0051: a fired transition that auto-advances no longer routes while the parallel limit has room, a full limit waiting in awaiting: the route enters the queue through the top-up, and a failed label write parks the ticket for the operator instead of closing. Its machine, fire, and label rules stand.
 
 ## Context
 

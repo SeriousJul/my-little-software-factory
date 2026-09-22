@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-18
+Superseded in part by ADR 0049: every start now enters the queue, a pickup attempt ends in start or drop instead of leaving the item standing, and the Work section is always visible. Its other decisions stand.
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-15
+Superseded in part by ADR 0051: the hold gates the auto top-up's adds instead of the direct open dispatch. Its rule is unchanged.
 
 ## Context
 

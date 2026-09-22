@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-14
+Superseded by ADR 0050: ticket priority is retired in favor of the queue order; the rank, the override, and the priority's order over the list and the dispatch no longer hold.
 
 ## Context
 

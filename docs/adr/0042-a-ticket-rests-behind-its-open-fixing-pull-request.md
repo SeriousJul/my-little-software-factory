@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-21
+Superseded in part by ADR 0050: the priority a pull request inherited through the tickets it fixes no longer holds. The list rule, an open ticket rests behind its open fixing pull request, stands.
 
 ## Context
 

@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-14
+Superseded in part by ADR 0050: the rank a pull request inherited through the issues it closes, and the labels fetched for the referenced issues, no longer hold. The closing references stay the source fact ADR 0042's fixing pull request rule and the Transition's linked pull request lookup read.
 
 ## Context
 
