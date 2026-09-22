@@ -37,6 +37,69 @@ Agent.
 | After the migration the loader is strict: a pre-machine key is one readable config error that points at the backup | `test/config-migration.test.ts`, `test/config.test.ts` | Passed |
 | The shipped Default configuration and the development config carry the machine, its transitions, and templates that name no workflow label | `test/config.test.ts`, `test/configuration-docs.test.ts` | Passed |
 
+## The live development run walk (issue #148)
+
+Tested version: commit `209af20` ("The live development config carries
+the security machine, and the repository identity reads
+case-insensitive"), run on the development machine through
+`bun --watch src/factory.ts --config config/development.toml`, state file
+`config/.factory-development.sqlite`, against the real GitHub host.
+The process was restarted at 2026-09-22T14:12:50Z so that it ran this
+commit: the previous process's file watcher no longer re-ran the process
+on file changes, so the restart was manual (a SIGINT to the process,
+then the same command in the plane's own pane). No test in this walk
+reached a fake runner: every fact below was read from the live state
+file or from GitHub.
+
+The legacy pair: Dependabot alert #5 and pull request #97 in
+SeriousJul/pi-extensions. The alert's completion trace recorded the skip
+("no linked pull request was found for the ticket", decided
+2026-09-21T18:42:08Z) before the fixing pull request derivation existed,
+and pull request #97's head branch carries the alert's factory branch
+prefix.
+
+Observed, in order:
+
+- The development config carries the three security states and the three
+  `resolve-*` task types, and the plane started on it without a config
+  error. The security items in the list offered their resolve task
+  types: the walk read three `resolve-dependabot-alert` rows for the
+  other pi-extensions alerts.
+- On the first refresh after the restart, alert #5 left the ticket
+  list: the open pull request #97 whose head branch carries the
+  alert's factory branch prefix covered it (ADR 0042). The alert's
+  membership stayed active and open in the state, withheld by the list
+  rule only.
+- The re-fire of the recorded skip wrote `ready-for-review` on pull
+  request #97 through the pull request source's transition write,
+  verified on GitHub (`gh pr view 97 --repo SeriousJul/pi-extensions
+  --json labels`). The trace recorded the re-fired outcome in place of
+  the skip: fired with no reason, the write added `ready-for-review`
+  and removed nothing, the position derived as the pull request's own
+  review position, and `refired` set.
+- Pull request #97 ranked by inheritance from the alert through the
+  branch link: the rank source read `inherited` from the alert. The
+  rank it stood at was `low`, not `high`: the alert carries an operator
+  priority override `low` set in the live state, which beats its
+  `high` severity label and travels the link (ADR 0042). The criterion's
+  `high` assumes the alert ranked by its severity label. With the
+  override in force, the pull request stood in the `low` band, behind
+  the ranked tickets, not first in the ticket list, and offered
+  `review` from its derived position.
+- After the refresh re-read the sources, the stored repository
+  identities read canonical lowercase, the API's owner casing left in
+  the display name: the issue and pull request sources write the
+  canonical form, and the branch link holds across the casing an older
+  plane stored, which was the fault that kept the legacy pair unlinked.
+
+Could not run:
+
+- The criterion's rank `high` and "stands first in the ticket list" as
+  written: the operator's `low` override on the alert stands in the
+  live state, and clearing it is an operator action in the ticket
+  detail. This walk did not take it; the rank inheritance mechanism
+  itself was measured as above.
+
 ## What is not verified
 
 | Requirement | How it would be measured | Result |
