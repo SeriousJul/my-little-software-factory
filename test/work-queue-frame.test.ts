@@ -211,11 +211,13 @@ const booted = (
 const workHeaderRow = (frame: string): number =>
 	rowsOf(frame).findIndex((row) => /\bWork\b/.test(row));
 
-/** Click the Work header, the same toggle x takes for the cursor. */
 type AppSetup = Parameters<Parameters<typeof withApp>[0]>[0];
 
+// ADR 0049: the Work section is always visible and starts expanded, so the
+// old click-the-header-to-expand helper now lands the cursor on the first
+// queue row instead, where the queue's keys and the detail act on it.
 async function clickWorkHeader(setup: AppSetup): Promise<void> {
-	const row = workHeaderRow(setup.captureCharFrame());
+	const row = queueRowIndex(setup.captureCharFrame(), /\[(open|workflow|restart)\]\s+/);
 	expect(row).toBeGreaterThanOrEqual(0);
 	await mouseClick(setup, 2, row);
 }
@@ -243,7 +245,7 @@ const openRowLead = /\[open\]\s+Add a webhook retry policy/;
 const workflowRowLead = /\[workflow\]\s+Close the stale deploy branch/;
 
 describe("the Work queue section", () => {
-	test("an idle factory keeps the two-section frame", async () => {
+	test("an idle factory keeps the three-section frame", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, runner } = queuedFixture(state);
 		try {
@@ -255,10 +257,11 @@ describe("the Work queue section", () => {
 						(f) => f.includes("▾ Tickets"),
 						"the Tickets section",
 					);
-					expect(workHeaderRow(frame)).toBe(-1);
-					// `awaiting` holds the word `waiting` inside it, so the
-					// count form is what the Work header would add.
-					expect(frameText(frame)).not.toMatch(/\bwaiting/);
+						// The Work section is always visible (ADR 0049): the empty
+						// queue keeps its header row with its count, the way the
+						// Ticket and Consultation sections do.
+						expect(workHeaderRow(frame)).toBeGreaterThanOrEqual(0);
+						expect(frameText(frame)).toContain("waiting: 0");
 				},
 				state,
 				source,
@@ -283,17 +286,17 @@ describe("the Work queue section", () => {
 						(f) => f.includes("Work") && f.includes("waiting: 2"),
 						"the Work header",
 					);
-					// Collapsed by default: the header carries the count, the
-					// rows wait behind it.
-					expect(frame).toContain("▸ Work");
-					// The click expands, and the cursor lands on the first row.
-					await clickWorkHeader(setup);
-					const expanded = await awaitFrame(
-						setup,
-						(f) => f.includes("▾ Work"),
-						"the expanded Work section",
-					);
-					expect(expanded).toContain("❯ Work queue");
+						// Expanded by default (ADR 0049): the header carries the
+						// count, and the rows stand under it.
+						expect(frame).toContain("▾ Work");
+						// The click lands the cursor on the first queue row.
+						await clickWorkHeader(setup);
+						const expanded = await awaitFrame(
+							setup,
+							(f) => f.includes("▾ Work") && f.includes("[open]"),
+							"the Work queue item row",
+						);
+						expect(queueRowIndex(expanded, openRowLead)).toBeGreaterThanOrEqual(0);
 					// Queue order: the earlier enqueue leads, and each row
 					// carries the origin its start came in with.
 					expect(queueRowIndex(expanded, openRowLead)).toBeLessThanOrEqual(
@@ -382,7 +385,7 @@ describe("the Work queue section", () => {
 		}
 	});
 
-	test("u and d reorder the waiting starts, and the captured choice stays put", async () => {
+	test("+ and - reorder the waiting starts, and the captured choice stays put", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
@@ -398,22 +401,22 @@ describe("the Work queue section", () => {
 					);
 					await clickWorkHeader(setup);
 					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
-					// d takes the first item to the back: the workflow route
-					// leads the queue now, and the cursor follows its item.
-					const swapped = await press(
-						setup,
-						"d",
-						"the first item to move to the back",
+						// - takes the first item to the back: the workflow route
+						// leads the queue now, and the cursor follows its item.
+						const swapped = await press(
+							setup,
+							"-",
+							"the first item to move to the back",
 						(f) => queueRowIndex(f, workflowRowLead) < queueRowIndex(f, openRowLead),
 					);
 					expect(detailPaneText(swapped)).toContain("Origin: open");
 					expect(detailPaneText(swapped)).toContain("place 2 of 2");
-					// u brings it back, and the queue order leads with the
-					// workflow route again.
-					const restored = await press(
-						setup,
-						"u",
-						"the item to move back to the front",
+						// + brings it back, and the queue order leads with the
+						// workflow route again.
+						const restored = await press(
+							setup,
+							"+",
+							"the item to move back to the front",
 						(f) => queueRowIndex(f, openRowLead) < queueRowIndex(f, workflowRowLead),
 					);
 					expect(detailPaneText(restored)).toContain("place 1 of 2");
@@ -710,7 +713,7 @@ describe("the Work queue section", () => {
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
-					(f) => f.includes("❯ Work queue"),
+					(f) => f.includes("place 1 of 1"),
 					"the queue's row under the cursor",
 				);
 				// The cap is full from the boot: the held seat stands on the line.
@@ -759,7 +762,7 @@ describe("the Work queue section", () => {
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
-					(f) => f.includes("❯ Work queue"),
+					(f) => f.includes("place 1 of 1"),
 					"the queue's row under the cursor",
 				);
 				const frame = await press(setup, "return", "the start's failure on the Message line", (f) =>
@@ -794,7 +797,7 @@ describe("the Work queue section", () => {
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
-					(f) => f.includes("❯ Work queue"),
+					(f) => f.includes("place 1 of 1"),
 					"the queue's row under the cursor",
 				);
 				const frame = await press(setup, "return", "the claim's refusal on the Message line", (f) =>
@@ -839,18 +842,17 @@ describe("the Work queue section", () => {
 					const across = await press(setup, "j", "the cursor to cross into the Work queue", (f) =>
 						detailPaneText(f).includes("Origin: open"),
 					);
-					expect(across).toContain("❯ Work queue");
-					// Cancel both items: the queue empties, and the section
-					// hides with it.
+					expect(across).toContain("[open]");
+					// Cancel both items: the queue empties, and the section keeps its
+					// header with its count (ADR 0049), the way the other sections do.
 					await press(setup, "delete", "the first item to cancel", (f) => f.includes("waiting: 1"));
 					await press(setup, "delete", "the last item to cancel", (f) => f.includes("waiting: 0"));
-					await clickWorkHeader(setup);
 					const empty = await awaitFrame(
 						setup,
-						(f) => !f.includes("Work"),
-						"the Work section to hide",
+						(f) => f.includes("Work") && f.includes("waiting: 0"),
+						"the emptied Work section",
 					);
-					expect(workHeaderRow(empty)).toBe(-1);
+					expect(workHeaderRow(empty)).toBeGreaterThanOrEqual(0);
 				},
 				state,
 				source,
