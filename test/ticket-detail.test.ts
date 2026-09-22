@@ -2,7 +2,6 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type DetailLine,
-	detailContent,
 	detailLines,
 	newWheelBurst,
 	WHEEL_ACCELERATION_PAUSE_MS,
@@ -15,6 +14,23 @@ import { roleColor } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 
 const settings: ScrollConfig = { speed: 1, acceleration: 0.8, maximumSpeed: 6 };
+
+/** The cells one line paints: a plain line is one cell of its own text. */
+const cellsOf = (line: DetailLine) => line.cells ?? [{ text: line.text, fg: line.fg }];
+
+/** Whether the content states the fact in one of its cells, in the given color. */
+const hasCell = (lines: DetailLine[], text: string, fg?: string) =>
+	lines.some((line) =>
+		cellsOf(line).some(
+			(cell) => cell.text.trimEnd() === text && (fg === undefined || cell.fg === fg),
+		),
+	);
+
+/** The Agent column's fact lines, in screen order. */
+const leftOrder = (lines: DetailLine[]): string[] =>
+	lines
+		.map((line) => line.cells?.[0]?.text.trimEnd())
+		.filter((text): text is string => text !== undefined && text !== "");
 
 /** The choices one closed work cycle left behind on its ticket. */
 const recordedHandoff: Handoff = {
@@ -53,16 +69,16 @@ describe("Ticket detail task profile", () => {
 			thinking: "",
 			contextWindow: "272000",
 		});
-		expect(lines).toContainEqual({ text: "Agent: codex", fg: roleColor("text") });
-		expect(lines).toContainEqual({ text: "Model: task-model", fg: roleColor("text") });
-		expect(lines).toContainEqual({ text: "Thinking: left to agent", fg: roleColor("subtext0") });
+		expect(hasCell(lines, "Agent: codex", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "Model: task-model", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "Thinking: left to agent", roleColor("subtext0"))).toBe(true);
 		// A count the profile names reads like any other value; the digits are
 		// the value, so the detail never reformats them.
-		expect(lines).toContainEqual({ text: "Context: 272000", fg: roleColor("text") });
-		expect(lines).toContainEqual({ text: "Environment: live-worktree", fg: roleColor("text") });
+		expect(hasCell(lines, "Context: 272000", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "Environment: live-worktree", roleColor("text"))).toBe(true);
 		// The rows read in the order the override panel offers them: where a
 		// Handoff runs, then what it runs with.
-		const order = lines.map((line) => line.text);
+		const order = leftOrder(lines);
 		expect(order.indexOf("Environment: live-worktree")).toBeGreaterThan(
 			order.indexOf("Agent: codex"),
 		);
@@ -83,20 +99,20 @@ describe("Ticket detail task profile", () => {
 			handoffCount: 1,
 		};
 		const next = detailLines(secondCycle, 100, 10, nextChoice);
-		expect(next).toContainEqual({ text: "Agent: pi", fg: roleColor("text") });
-		expect(next).toContainEqual({ text: "Model: left to agent", fg: roleColor("subtext0") });
-		expect(next).toContainEqual({ text: "Environment: live-worktree", fg: roleColor("text") });
+		expect(hasCell(next, "Agent: pi", roleColor("text"))).toBe(true);
+		expect(hasCell(next, "Model: left to agent", roleColor("subtext0"))).toBe(true);
+		expect(hasCell(next, "Environment: live-worktree", roleColor("text"))).toBe(true);
 		expect(next.some((line) => line.text.includes("old-cycle-model"))).toBe(false);
 
 		// A ticket inside a cycle shows that cycle's own Handoff, because those
 		// are the settings its running agent started with.
 		const running: Ticket = { ...secondCycle, state: "running" };
 		const shown = detailLines(running, 100, 10, nextChoice);
-		expect(shown).toContainEqual({ text: "Agent: codex", fg: roleColor("text") });
-		expect(shown).toContainEqual({ text: "Model: old-cycle-model", fg: roleColor("text") });
-		expect(shown).toContainEqual({ text: "Thinking: high", fg: roleColor("text") });
-		expect(shown).toContainEqual({ text: "Context: 65536", fg: roleColor("text") });
-		expect(shown).toContainEqual({ text: "Environment: worktree", fg: roleColor("text") });
+		expect(hasCell(shown, "Agent: codex", roleColor("text"))).toBe(true);
+		expect(hasCell(shown, "Model: old-cycle-model", roleColor("text"))).toBe(true);
+		expect(hasCell(shown, "Thinking: high", roleColor("text"))).toBe(true);
+		expect(hasCell(shown, "Context: 65536", roleColor("text"))).toBe(true);
+		expect(hasCell(shown, "Environment: worktree", roleColor("text"))).toBe(true);
 	});
 });
 
@@ -104,8 +120,8 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 	const base = SAMPLE_TICKETS[0];
 	if (base === undefined) throw new Error("missing sample ticket");
 
-	function withPriority(p: Ticket["priority"], override: string | null = null): DetailLine[] {
-		return detailLines({ ...base, priority: p }, 100, 10, undefined, override);
+	function withPriority(p: Ticket["priority"]): DetailLine[] {
+		return detailLines({ ...base, priority: p }, 100, 10);
 	}
 
 	test("a label rank states its label and its own source", () => {
@@ -115,10 +131,7 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 			source: "label",
 			inheritedFrom: null,
 		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (its own label)",
-			fg: roleColor("text"),
-		});
+		expect(hasCell(lines, "Priority: critical (its own label)", roleColor("text"))).toBe(true);
 	});
 
 	test("an inherited rank names the issue that supplied it (ADR 0023)", () => {
@@ -128,10 +141,7 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 			source: "inherited",
 			inheritedFrom: { sourceKind: "github-issue", externalKey: "#12" },
 		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (issue #12)",
-			fg: roleColor("text"),
-		});
+		expect(hasCell(lines, "Priority: critical (issue #12)", roleColor("text"))).toBe(true);
 	});
 
 	test("an inherited rank names the fixing alert by its number (ADR 0042)", () => {
@@ -141,10 +151,7 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 			source: "inherited",
 			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
 		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (alert #9)",
-			fg: roleColor("text"),
-		});
+		expect(hasCell(lines, "Priority: critical (alert #9)", roleColor("text"))).toBe(true);
 	});
 
 	test("an inherited rank names the fixing advisory by its key, not a number (ADR 0042)", () => {
@@ -154,57 +161,43 @@ describe("Ticket detail priority fact (ADR 0022)", () => {
 			source: "inherited",
 			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: "GHSA-j8wj-q3wj-c945" },
 		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (advisory GHSA-j8wj-q3wj-c945)",
-			fg: roleColor("text"),
-		});
+		expect(
+			hasCell(lines, "Priority: critical (advisory GHSA-j8wj-q3wj-c945)", roleColor("text")),
+		).toBe(true);
 	});
 
 	test("an override rank states its label and the operator's source", () => {
-		const lines = withPriority(
-			{ rank: 1, label: "high", source: "override", inheritedFrom: null },
-			"high",
-		);
-		expect(lines).toContainEqual({ text: "Priority: high (set by you)", fg: roleColor("text") });
+		const lines = withPriority({ rank: 1, label: "high", source: "override", inheritedFrom: null });
+		expect(hasCell(lines, "Priority: high (set by you)", roleColor("text"))).toBe(true);
 	});
 
 	test("off states the override that forces the ticket unranked", () => {
-		const lines = withPriority(
-			{ rank: null, label: "off", source: "override", inheritedFrom: null },
-			"off",
-		);
-		expect(lines).toContainEqual({ text: "Priority: off (set by you)", fg: roleColor("text") });
+		const lines = withPriority({
+			rank: null,
+			label: "off",
+			source: "override",
+			inheritedFrom: null,
+		});
+		expect(hasCell(lines, "Priority: off (set by you)", roleColor("text"))).toBe(true);
 	});
 
 	test("an unranked ticket with no override reads none, dim", () => {
-		const lines = withPriority(UNRANKED_PRIORITY, null);
-		expect(lines).toContainEqual({ text: "Priority: none", fg: roleColor("subtext0") });
+		const lines = withPriority(UNRANKED_PRIORITY);
+		expect(hasCell(lines, "Priority: none", roleColor("subtext0"))).toBe(true);
 	});
 
-	test("a stale override states its stored label, agreeing with the override row", () => {
+	test("a stale override states its stored label", () => {
 		// The stored label left the config list: the rank is none, but the
-		// fact line and the row's choiceValue name the same stored label.
-		const content = detailContent(
+		// fact line - the selector's own face - still names the stored label.
+		const lines = detailLines(
 			{
 				...base,
 				priority: { rank: null, label: "critical", source: "override", inheritedFrom: null },
 			},
 			100,
 			10,
-			undefined,
-			"critical",
 		);
-		expect(content.lines).toContainEqual({
-			text: "Priority: critical (set by you)",
-			fg: roleColor("text"),
-		});
-		expect(content.choiceValue).toBe("critical");
-	});
-
-	test("the override row states the stored value, or default", () => {
-		expect(detailContent(base, 100, 10, undefined, null).choiceValue).toBe("default");
-		expect(detailContent(base, 100, 10, undefined, "high").choiceValue).toBe("high");
-		expect(detailContent(base, 100, 10, undefined, "off").choiceValue).toBe("off");
+		expect(hasCell(lines, "Priority: critical (set by you)", roleColor("text"))).toBe(true);
 	});
 });
 
@@ -215,14 +208,33 @@ describe("Ticket detail grouped layout", () => {
 	const withLog = SAMPLE_TICKETS[3];
 	if (withLog === undefined) throw new Error("missing sample ticket");
 
-	test("the title wears the accent role and the bold, and the repository dims", () => {
+	test("the title and repository flow on shared lines, the title in its accent bold", () => {
 		const lines = detailLines(first, 100, 10);
+		// The identity is one logical line: the title's accent bold, the join
+		// space riding with the title, then the repository's dim.
 		expect(lines).toContainEqual({
-			text: "Retry policy for webhooks",
+			text: "Retry policy for webhooks acme/billing",
 			fg: roleColor("accent"),
-			bold: true,
+			cells: [
+				{ text: "Retry policy for webhooks ", fg: roleColor("accent"), bold: true },
+				{ text: "acme/billing", fg: roleColor("subtext0") },
+			],
 		});
-		expect(lines).toContainEqual({ text: "acme/billing", fg: roleColor("subtext0") });
+	});
+
+	test("a wrapped title carries the repository on its last line", () => {
+		const long: Ticket = {
+			...first,
+			title: "Promote the Work queue to the single start channel (ADRs 0049-0052)",
+		};
+		const lines = detailLines(long, 55, 10);
+		// The identity takes the first two lines, and the break never splits
+		// the repository into the title's color: the title's cells end where
+		// the repository's dim begins.
+		expect(lines[1]?.cells).toEqual([
+			{ text: "(ADRs 0049-0052) ", fg: roleColor("accent"), bold: true },
+			{ text: "acme/billing", fg: roleColor("subtext0") },
+		]);
 	});
 
 	test("the link to the ticket's GitHub page wears the blue role", () => {
@@ -233,20 +245,32 @@ describe("Ticket detail grouped layout", () => {
 		});
 	});
 
-	test("one blank closes the interactive group and opens the read-only groups", () => {
+	test("one blank closes the static groups and opens the description", () => {
 		const lines = detailLines(withLog, 100, 10);
 		const texts = lines.map((line) => line.text);
-		const at = (text: string) => {
-			const i = texts.indexOf(text);
-			if (i === -1) throw new Error(`missing detail line: ${text}`);
-			return i;
-		};
-		// The blank stands on the Priority fact's right, where the override
-		// row renders, and no other row in the pane takes a blank.
-		expect(texts[at("Priority: none") + 1]).toBe(" ");
+		// Exactly one blank, and it stands on the description's left: the
+		// columns, the warnings, the link, and the turn's log all stand above
+		// it, and the ticket's own words begin below.
 		expect(texts.filter((t) => t === " ").length).toBe(1);
-		// The description follows the source facts on its dim alone.
-		expect(texts[at("Labels: none") + 1]).not.toBe(" ");
+		const blankAt = texts.indexOf(" ");
+		expect(texts[blankAt + 1].startsWith("The legacy auth shim")).toBe(true);
+	});
+
+	test("the work stands in two columns: the Agent facts beside the Source facts", () => {
+		const lines = detailLines(first, 100, 10, nextChoice);
+		// The block's joined rows carry the cells the pane paints, one per
+		// column, the Agent column first.
+		const joined = lines.filter((line) => line.cells !== undefined);
+		expect(joined.length).toBeGreaterThan(0);
+		for (const line of joined) expect(line.cells).toHaveLength(2);
+		// The Agent column holds the handoff's facts.
+		expect(hasCell(lines, "Agent: pi", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "Handoffs: 0/10", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "Priority: none", roleColor("subtext0"))).toBe(true);
+		// The Source column holds the source's facts.
+		expect(hasCell(lines, "Source kind: github-issue", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "External key: #1", roleColor("text"))).toBe(true);
+		expect(hasCell(lines, "Source state: open", roleColor("text"))).toBe(true);
 	});
 
 	test("the turn's log stands apart in its green label and indented dim", () => {

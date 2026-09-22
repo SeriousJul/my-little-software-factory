@@ -697,9 +697,12 @@ describe("the no-color presentation", () => {
 				expect(faceRow).toBeGreaterThanOrEqual(0);
 				await press(setup, "j", "the handed-off ticket", (f) => faceCount(f) === 2);
 				const frame = await settle(setup);
+				// The row and the detail face both wear the written word. The
+				// identity is one line now, so the two faces can stand on the
+				// same screen row: count the faces, not the rows they share.
+				expect(faceCount(frame)).toBe(2);
 				const faceRows = rowsOf(frame).filter((row) => startingFaceOf(row) !== null);
-				// The row and the detail header both wear the word...
-				expect(faceRows.length).toBe(2);
+				expect(faceRows.length).toBeGreaterThan(0);
 				for (const row of faceRows) {
 					// ...and neither wears a color: the presentation is the
 					// terminal's own default.

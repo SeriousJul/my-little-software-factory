@@ -2,7 +2,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { createElement, useRenderer } from "@opentui/react";
 import {
-	Fragment,
 	forwardRef,
 	type RefObject,
 	useCallback,
@@ -22,10 +21,9 @@ import type { HandoffChoice } from "../handoff.ts";
 import { prioritySourceWord } from "../priority.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
-import { ChoiceRow } from "./shared/choices.ts";
-import { MARKER_WIDTH, turnEndCauseLine } from "./shared/presentation.ts";
+import { turnEndCauseLine } from "./shared/presentation.ts";
 import { Spinner } from "./shared/spinner.ts";
-import { truncateToWidth, wrapToWidth } from "./text.ts";
+import { padToWidth, truncateToWidth, wrapToWidth } from "./text.ts";
 import {
 	BADGE_WIDTH,
 	failureBadge,
@@ -35,7 +33,6 @@ import {
 	STARTING_WORD,
 	stateBadge,
 	stateColor,
-	taskTypeColor,
 	ticketTaskType,
 } from "./theme.ts";
 
@@ -51,23 +48,23 @@ export interface DetailLine {
 	 * the text the line carries is unused.
 	 */
 	spinner?: boolean;
+	/**
+	 * The cells a joined row paints, in screen order. The pane renders one
+	 * span per cell, because a joined row wears more than one color and `fg`
+	 * cannot say so.
+	 */
+	cells?: { text: string; fg: string | undefined; bold?: boolean }[];
 }
 
 /**
- * The detail pane's content: the text lines, and the row the shared choice
- * row of the Priority override takes among them (ADR 0022).
+ * The detail pane's content: the text lines, and the rows they take.
  *
- * The choice row is a renderable, not a line of text: the scroll box lays it
- * out like the lines, and `rows` is what the Scroll control asks for, so the
- * control never promises a scroll the real ScrollBox does not have.
+ * `rows` is what the Scroll control asks for, so the control never promises
+ * a scroll the real ScrollBox does not have.
  */
 export interface DetailContent {
 	lines: DetailLine[];
-	/** The line index the Priority override row is inserted after, or -1. */
-	choiceIndex: number;
-	/** The value the override row states, `default` for an unset override. */
-	choiceValue: string;
-	/** The rows the content takes, the choice row counted in. */
+	/** The rows the content takes. */
 	rows: number;
 }
 
@@ -95,10 +92,11 @@ function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailCh
 /**
  * The fact row of the ticket's effective priority (ADR 0022): the rank's
  * label and where it comes from - the operator's override, or the ticket's
- * own label. An override that names no rank - `off`, or a label the config
- * list dropped - states its stored label in the Override row's own words,
- * so the fact line and the selector row agree on the stored fact. An
- * unranked ticket without one reads `none`.
+ * own label. The row is the priority selector's own face: the Select
+ * priority control and the bump keys step the stored override, and the line
+ * states what each step wrote. An override that names no rank - `off`, or a
+ * label the config list dropped - states its stored label. An unranked
+ * ticket without one reads `none`.
  */
 function priorityFact(ticket: Ticket): { text: string; fg: string | undefined } {
 	if (ticket.priority.rank !== null) {
@@ -111,12 +109,42 @@ function priorityFact(ticket: Ticket): { text: string; fg: string | undefined } 
 	return { text: "none", fg: paint("subtext0") };
 }
 
+/**
+ * The ticket's identity on shared lines: the title in its accent bold and
+ * the repository dimmed, the two flowing together the way one logical line
+ * would, until the width breaks them. A line that holds both wears the title
+ * up to its last word, then the repository's dim: the break never splits the
+ * repository's name into the title's color.
+ */
+function identityLines(title: string, repository: string, width: number): DetailLine[] {
+	const combined = `${title} ${repository}`;
+	// Where the repository starts in `combined`; the join space rides with
+	// the title's cell, the way the words' spaces do.
+	const repoAt = title.length + 1;
+	const lines: DetailLine[] = [];
+	// The wrap is a partition of `combined`'s words: a line starts one cell
+	// past the previous line's end, except where a hard break split a word
+	// without a space between the lines.
+	let offset = 0;
+	const wrapped = wrapToWidth(combined, width);
+	for (let i = 0; i < wrapped.length; i += 1) {
+		const line = wrapped[i];
+		const split = Math.min(Math.max(repoAt - offset, 0), line.length);
+		const cells: { text: string; fg: string | undefined; bold?: boolean }[] = [];
+		if (split > 0) cells.push({ text: line.slice(0, split), fg: paint("accent"), bold: true });
+		if (split < line.length) cells.push({ text: line.slice(split), fg: paint("subtext0") });
+		lines.push({ text: line, fg: paint("accent"), cells });
+		if (i + 1 < wrapped.length)
+			offset += line.length + (combined[offset + line.length] === " " ? 1 : 0);
+	}
+	return lines;
+}
+
 export function detailContent(
 	ticket: Ticket | undefined,
 	usableCols: number,
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
-	priorityOverride: string | null = null,
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
 	queueWait: boolean = false,
@@ -124,22 +152,17 @@ export function detailContent(
 	if (ticket === undefined)
 		return {
 			lines: [{ text: "no ticket selected", fg: paint("subtext0") }],
-			choiceIndex: -1,
-			choiceValue: "default",
 			rows: 1,
 		};
 	const lines: DetailLine[] = [];
-	// The index of the Priority fact row: the override's choice row is
-	// inserted right after it.
-	let choiceIndex = -1;
 	const pushWrapped = (text: string, fg: string | undefined, bold?: boolean) => {
 		for (const line of wrapToWidth(text, usableCols))
 			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
 	};
 	// The title wears the accent role and the bold: the ticket's identity
-	// stands out of the flat fact rows, and the repository dims beneath it.
-	pushWrapped(ticket.title, paint("accent"), true);
-	pushWrapped(ticket.repository, paint("subtext0"));
+	// stands out of the flat fact rows. The repository flows on the same
+	// lines in its dim, so the identity reads as one place, not two.
+	lines.push(...identityLines(ticket.title, ticket.repository, usableCols));
 	// The Starting window (ADR 0030) takes the state line's slot in place of
 	// the badge, the same face the list row wears, so the list and the detail
 	// never disagree. The `[handed-off]` badge is never drawn: where the
@@ -155,15 +178,36 @@ export function detailContent(
 		// open state while its start waits for a seat.
 		lines.push({ text: queuedBadge(), fg: stateColor("open") });
 	else lines.push({ text: stateBadge(ticket.state), fg: stateColor(ticket.state) });
+	// The work columns: what runs the ticket beside where the ticket comes
+	// from. The two stand side by side where the width holds both, and one
+	// above the other where it does not: the Agent column must hold its
+	// longest fact line, `Suggested task type: <task>` at 30 cells, without
+	// a break, so it takes that minimum out of the width first, and the
+	// Source column grows with what the width leaves.
+	const GAP = "  ";
+	const TWO_COLUMN_MIN = 55; // 30 + 2 + 23
+	const twoCol = usableCols >= TWO_COLUMN_MIN;
+	const leftCols = twoCol ? Math.min(usableCols - 2 - 23, Math.ceil((usableCols - 2) / 2) + 3) : 0;
+	const rightCols = twoCol ? usableCols - 2 - leftCols : 0;
+	const leftFacts: { text: string; fg: string | undefined }[] = [];
+	const addLeft = (text: string, fg: string | undefined) => {
+		for (const wrapped of wrapToWidth(text, twoCol ? leftCols : usableCols))
+			leftFacts.push({ text: wrapped, fg });
+	};
+	const rightFacts: { text: string; fg: string | undefined }[] = [];
+	const addRight = (text: string, fg: string | undefined) => {
+		for (const wrapped of wrapToWidth(text, twoCol ? rightCols : usableCols))
+			rightFacts.push({ text: wrapped, fg });
+	};
 	const choice = detailChoice(ticket, suggestedChoice);
-	pushWrapped(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
+	addLeft(`Agent: ${choice?.agentType ?? "unassigned"}`, paint("text"));
 	if (choice !== undefined) {
 		// The Environment rides beside the Agent, the way the override panel
 		// orders its rows: where a Handoff runs, then what it runs with. The
 		// same choice carries it, so an open Ticket shows the Environment Enter
 		// starts in rather than the one a closed cycle happened to use.
-		pushWrapped(`Environment: ${choice.environment}`, paint("text"));
-		const left = (value: string) => (value === "" ? "left to agent" : value);
+		addLeft(`Environment: ${choice.environment}`, paint("text"));
+		const leftToAgent = (value: string) => (value === "" ? "left to agent" : value);
 		// The three settings a Task profile carries, each dim when the
 		// resolved choice leaves it to the Agent.
 		for (const [label, value] of [
@@ -171,34 +215,69 @@ export function detailContent(
 			["Thinking", choice.thinking],
 			["Context", choice.contextWindow],
 		] as const) {
-			pushWrapped(`${label}: ${left(value)}`, value === "" ? paint("subtext0") : paint("text"));
+			addLeft(`${label}: ${leftToAgent(value)}`, value === "" ? paint("subtext0") : paint("text"));
 		}
 	}
 	// One explicit task type line for every ticket: the open ticket's
 	// suggestion, or the recorded handoff's task type. The label says which
 	// fact it is, so routing never reads as history.
 	const presentation = ticketTaskType(ticket);
-	pushWrapped(
+	// The task type line wears the mauve role: the work's kind, kept out of
+	// the flat fact rows the way the GitHub link keeps its blue. The list
+	// badge keeps its own neutral face, so the role here says the detail's
+	// work, not the list's.
+	addLeft(
 		`${ticket.state === "open" ? "Suggested" : "Handoff"} task type: ${presentation.value}`,
-		taskTypeColor(presentation),
+		presentation.unknown ? paint("yellow") : paint("mauve"),
 	);
-	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
+	addLeft(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
 	// The effective rank and where it comes from, beside the task type the
 	// rank orders: the operator reads what the bump will move from (ADR 0022).
-	const fact = priorityFact(ticket);
-	choiceIndex = lines.length;
 	// When the rank is inherited, the fact names the source that supplied it:
 	// `Priority: critical (issue #123)`, the fixing alert by `alert #9`, the
 	// fixing advisory by its key alone (ADR 0023, ADR 0042).
-	lines.push({ text: `Priority: ${fact.text}`, fg: fact.fg });
-	// One blank closes the pane's interactive group - the Priority fact and
-	// the override's choice row, which the scroll box inserts right after
-	// the fact - and opens the read-only groups: the warnings, the turn's
-	// log, and the source facts. The detail's row budget at the sample
-	// terminal is spent here: the groups below must fit the rows the detail
-	// shows without a scroll, so they set themselves apart by their roles,
-	// not by more gaps.
-	lines.push({ text: " ", fg: paint("subtext0") });
+	const fact = priorityFact(ticket);
+	addLeft(`Priority: ${fact.text}`, fact.fg);
+	// The Source column: where the ticket comes from, the way the operator
+	// reads the source facts in one column.
+	addRight(`Source kind: ${ticket.sourceKind}`, paint("text"));
+	addRight(`External key: ${ticket.externalKey}`, paint("text"));
+	addRight(`Source state: ${ticket.sourceState}`, paint("text"));
+	// The labels wear the blue role with the GitHub link: both are the
+	// source's words. A ticket the source gives no labels to reads none, dim.
+	addRight(
+		`Labels: ${ticket.labels.join(", ") || "none"}`,
+		ticket.labels.length === 0 ? paint("subtext0") : paint("blue"),
+	);
+	for (const membership of ticket.memberships) {
+		addRight(
+			`Source ${membership.sourceName}: ${membership.health}`,
+			membership.health === "stale" ? paint("yellow") : paint("subtext0"),
+		);
+	}
+	if (twoCol) {
+		// The joined row wears one span per column: the Agent column padded to
+		// its width plus the gap, then the Source column. A side the other
+		// column has outgrown pads with blanks, the way every row pads its tail.
+		const blockRows = Math.max(leftFacts.length, rightFacts.length);
+		for (let i = 0; i < blockRows; i += 1) {
+			const l = leftFacts[i];
+			const r = rightFacts[i];
+			const leftText = l === undefined ? " ".repeat(leftCols) : padToWidth(l.text, leftCols);
+			const rightText = r === undefined ? " ".repeat(rightCols) : padToWidth(r.text, rightCols);
+			lines.push({
+				text: leftText + GAP + rightText,
+				fg: (l ?? r).fg,
+				cells: [
+					{ text: leftText + GAP, fg: l?.fg },
+					{ text: rightText, fg: r?.fg },
+				],
+			});
+		}
+	} else {
+		for (const cell of leftFacts) lines.push({ text: cell.text, fg: cell.fg });
+		for (const cell of rightFacts) lines.push({ text: cell.text, fg: cell.fg });
+	}
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
 	// and says where its cleanup lives - in herdr, not in the control plane
@@ -256,35 +335,27 @@ export function detailContent(
 				lines.push({ text: indent + wrapped, fg: paint("subtext0") });
 		}
 	}
-	pushWrapped(`Source kind: ${ticket.sourceKind}`, paint("text"));
-	pushWrapped(`External key: ${ticket.externalKey}`, paint("text"));
-	pushWrapped(`Source state: ${ticket.sourceState}`, paint("text"));
-	// The link to the ticket's GitHub page wears the blue role: the one row
-	// the operator opens in a browser, kept out of the flat fact rows.
-	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
-	pushWrapped(`Labels: ${ticket.labels.join(", ") || "none"}`, paint("text"));
-	for (const membership of ticket.memberships) {
-		pushWrapped(
-			`Source ${membership.sourceName}: ${membership.health}`,
-			membership.health === "stale" ? paint("yellow") : paint("subtext0"),
-		);
-	}
 	if (ticket.handoffRecoveryRequired) pushWrapped("Handoff: recovery required", paint("yellow"));
-	// The description carries no gap of its own: the read-only groups are
-	// already closed above by the single blank, and the dim that the
-	// description wears sets it apart from the source facts in its place.
+	// The link to the ticket's GitHub page wears the blue role: the one row
+	// the operator opens in a browser, kept out of the flat fact rows. It
+	// keeps the full text width, because the link is what the operator opens
+	// in a browser and a column break would cut it.
+	pushWrapped(`GitHub: ${ticket.url}`, paint("blue"));
+	// One blank closes the static groups above - the columns, the warnings,
+	// and the turn's log - and opens the description: the ticket's own words,
+	// set apart from everything the plane and the source know about it.
+	lines.push({ text: " ", fg: paint("subtext0") });
 	pushWrapped(ticket.description, paint("subtext0"));
 	const truncated = lines.map((line) => ({
 		text: truncateToWidth(line.text, usableCols),
 		fg: line.fg,
 		bold: line.bold,
 		...(line.spinner === true ? { spinner: true } : {}),
+		...(line.cells !== undefined ? { cells: line.cells } : {}),
 	}));
 	return {
 		lines: truncated,
-		choiceIndex,
-		choiceValue: priorityOverride === null ? "default" : priorityOverride,
-		rows: truncated.length + 1,
+		rows: truncated.length,
 	};
 }
 
@@ -293,7 +364,6 @@ export function detailLines(
 	usableCols: number,
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
-	priorityOverride: string | null = null,
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
 	queueWait: boolean = false,
@@ -303,7 +373,6 @@ export function detailLines(
 		usableCols,
 		handoffLimit,
 		suggestedChoice,
-		priorityOverride,
 		starting,
 		marker,
 		queueWait,
@@ -445,11 +514,6 @@ interface TicketDetailProps {
 	active: boolean;
 	reservedRows: number;
 	handoffLimit: number;
-	/**
-	 * The ticket's stored Priority override (ADR 0022): a rank label name, or
-	 * `off`, or null for the default. The override row states it.
-	 */
-	priorityOverride: string | null;
 	/** The resolved choice for an open Ticket's suggested Task type. */
 	suggestedChoice?: HandoffChoice;
 	/**
@@ -493,7 +557,6 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		active,
 		reservedRows,
 		handoffLimit,
-		priorityOverride,
 		suggestedChoice,
 		starting,
 		marker,
@@ -516,32 +579,12 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		textCols,
 		handoffLimit,
 		suggestedChoice,
-		priorityOverride,
 		starting,
 		marker,
 		queueWait,
 	);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;
-	// The detail pane's Priority selector on the standard choice row (ADR
-	// 0022): its value is the stored override, default when the ticket holds
-	// none. The Select priority control steps it - the ranks in order, off,
-	// and default - and each step writes the value it shows; the bump and
-	// clear keys move the same value. It wears the pane's focus, because in
-	// the detail pane it is the row the keys act on.
-	const choiceRow =
-		content.choiceIndex === -1
-			? null
-			: createElement(ChoiceRow, {
-					label: "Override",
-					value: content.choiceValue,
-					focused: focused,
-					labelWidth: Math.min(10, Math.max(1, textCols - MARKER_WIDTH - 1)),
-					width: Math.max(
-						1,
-						textCols - MARKER_WIDTH - Math.min(10, Math.max(1, textCols - MARKER_WIDTH - 1)),
-					),
-				});
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);
 	// Always the identity the pane currently shows; the unmount cleanup reads
@@ -754,14 +797,25 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 						word: STARTING_WORD,
 						width: BADGE_WIDTH,
 					})
-				: createElement(
-						"text",
-						{ key: `detail-${index}`, fg: line.fg },
-						line.bold ? createElement("b", undefined, line.text) : line.text,
-					),
-			...(index === content.choiceIndex && choiceRow !== null
-				? [createElement(Fragment, { key: "priority-override" }, choiceRow)]
-				: []),
+				: line.cells !== undefined
+					? createElement(
+							"text",
+							{ key: `detail-${index}`, fg: line.fg },
+							// One span per cell: the joined row wears each column's
+							// own color, and the pane never holds its own palette.
+							...line.cells.map((cell, i) =>
+								createElement(
+									"span",
+									{ key: i, fg: cell.fg ?? undefined },
+									cell.bold ? createElement("b", undefined, cell.text) : cell.text,
+								),
+							),
+						)
+					: createElement(
+							"text",
+							{ key: `detail-${index}`, fg: line.fg },
+							line.bold ? createElement("b", undefined, line.text) : line.text,
+						),
 		]),
 	);
 });

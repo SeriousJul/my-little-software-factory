@@ -1293,8 +1293,8 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// One bump, two directions: `+` (or `=`, its unshifted form) raises the
 		// rank and `-` lowers it. From unranked, `-` goes nowhere and `+` takes
 		// the lowest rank; from the lowest rank, `-` takes off; off and unranked
-		// share the floor (ADR 0022). The Detail pane's Override row is the value
-		// it moves.
+		// share the floor (ADR 0022). The Detail pane's Priority fact line is
+		// the value it moves.
 		keys: () => ["=", "+", "-"],
 		keyLabel: "+/-",
 		scope: "control-plane",
@@ -1307,8 +1307,9 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "clear-priority",
 		label: "Clear priority",
-		// Backspace gives the Override row its default back: the ticket ranks
-		// by its own labels again (ADR 0022).
+		// Backspace gives the priority its default back: the ticket ranks by
+		// its own labels again, and the Detail pane's Priority fact line says
+		// so (ADR 0022).
 		keys: () => ["backspace"],
 		keyLabel: "⌫",
 		scope: "control-plane",
@@ -1321,14 +1322,14 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 	{
 		id: "select-priority",
 		label: "Select priority",
-		// The detail pane's Override row is a real selector on the standard
-		// choice control: `→`/`l` steps it to the next value - the ranks in
-		// order, off, then default - and the step writes the value it shows:
-		// a rank or off stores the override, default clears it (ADR 0022).
-		// `←` stays the return to the Ticket list, so the selector takes the
-		// one free direction, and the wrap reaches every value from any of
-		// them. In the detail pane the row shows it, in the list pane the
-		// badge and the Message line do.
+		// The priority is a real selector on the standard choice control:
+		// `→`/`l` steps it to the next value - the ranks in order, off, then
+		// default - and the step writes the value it shows: a rank or off
+		// stores the override, default clears it (ADR 0022). `←` stays the
+		// return to the Ticket list, so the selector takes the one free
+		// direction, and the wrap reaches every value from any of them. In the
+		// detail pane the Priority fact line shows the value, in the list pane
+		// the badge and the Message line do.
 		keys: (mode) => (mode === "ticket-detail" ? ["right", "l"] : []),
 		keyLabel: "→/l",
 		scope: "ticket-detail",

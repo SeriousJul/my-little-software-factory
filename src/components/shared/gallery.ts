@@ -726,8 +726,8 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		id: "priority",
 		state:
-			"the ticket priority: the rank badge, the selector in each state, and the Consultation reason",
-		render: (columns, holds, _inputActive, _wiring) => {
+			"the ticket priority: the rank badge, the fact line in each state, and the Consultation reason",
+		render: (columns, _holds, _inputActive, _wiring) => {
 			const ink = controlInk();
 			// One ticket row per state of the rank badge: the one-cell digit, 1
 			// highest, and an unranked ticket that shows no digit at all.
@@ -742,51 +742,38 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					),
 					createElement("text", { fg: ink.text.fg ?? undefined }, title),
 				);
+			// The detail pane's Priority fact line, one row per state the
+			// selector steps to: a rank the operator set, the off that forces
+			// the ticket unranked, and the cleared override, where an unranked
+			// ticket reads none, dim. The keys step the line to the next state,
+			// and the step writes what it shows, so one press stores a rank,
+			// off, or the clear.
+			const fact = (key: string, text: string, fg?: string) =>
+				createElement(
+					"text",
+					{ key, style: { width: "100%", height: 1 }, fg: fg ?? undefined },
+					truncateToWidth(text, columns.contentWidth),
+				);
 			return [
 				badge("rank-1", "1", "critical fix"),
 				badge("rank-3", "3", "routine backlog"),
 				badge("rank-none", null, "unranked ticket shows no digit"),
-				// The detail pane's selector on the standard choice row: a rank,
-				// off, and default (clears the override back to the source). The
-				// keys step the row to the next value, and the step writes what
-				// it shows, so one press stores a rank, off, or the clear.
-				createElement(ChoiceRow, {
-					key: "rank",
-					label: "Override",
-					value: "critical",
-					focused: holds === "rank",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-					hint: "→/l steps the value and writes it: a rank, off, or default",
-				}),
-				createElement(ChoiceRow, {
-					key: "off",
-					label: "Override",
-					value: "off",
-					focused: holds === "off",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-				}),
-				createElement(ChoiceRow, {
-					key: "default",
-					label: "Override",
-					value: "",
-					focused: holds === "default",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-					placeholder: "default",
-				}),
-				// A Consultation selected: the bump is unavailable with its reason.
-				createElement(ChoiceRow, {
-					key: "consultation",
-					label: "Override",
-					value: "",
-					focused: holds === "consultation",
-					width: columns.valueWidth,
-					labelWidth: columns.labelWidth,
-					placeholder: STATE_WORDS.unavailable,
-					error: "a Consultation has no priority: the bump applies to tickets only",
-				}),
+				fact("rank", "Priority: critical (set by you)"),
+				fact("off", "Priority: off (set by you)"),
+				fact("default", "Priority: none", ink.detail.fg ?? undefined),
+				// The written guide line: the select's keys, and what a step does.
+				fact(
+					"keys",
+					"→/l steps the line to the next state: a rank, off, then default, and the step writes it",
+					ink.detail.fg ?? undefined,
+				),
+				// A Consultation selected: the bump is unavailable, and its
+				// reason stands on the Message line.
+				fact(
+					"consultation",
+					"a Consultation has no priority: the bump applies to tickets only",
+					ink.detail.fg ?? undefined,
+				),
 				// The bump messages the Message line carries, top and floor no-ops
 				// included, so a reviewer reads the whole outcome set.
 				createElement(

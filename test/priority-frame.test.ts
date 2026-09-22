@@ -208,7 +208,7 @@ describe("the Priority controls (ADR 0022)", () => {
 					await awaitFrame(setup, (f) => f.includes("loading tickets..."), "the loading state");
 					source.settle(success([ticket()]));
 					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					// The selector lives on the detail pane's Override row.
+					// The selector steps the detail pane's Priority fact line.
 					await press(setup, "l", "the detail to take focus", (f) => f.includes("❯ Detail"));
 
 					// `→` from default steps to the first rank and writes it.
@@ -217,7 +217,6 @@ describe("the Priority controls (ADR 0022)", () => {
 					);
 					expect(state.priorityOverride("github:github.com:I_5")).toBe("critical");
 					expect(detailPaneText(frame)).toContain("Priority: critical (set by you)");
-					expect(detailPaneText(frame)).toContain("Override critical");
 					expect(frameText(frame)).toContain("[open] 1");
 
 					// `l` takes the next ranks, and the walk continues to off.
@@ -241,7 +240,6 @@ describe("the Priority controls (ADR 0022)", () => {
 					);
 					expect(state.priorityOverride("github:github.com:I_5")).toBeNull();
 					expect(detailPaneText(frame)).toContain("Priority: none");
-					expect(detailPaneText(frame)).toContain("Override default");
 				},
 				WIDTH,
 				HEIGHT,

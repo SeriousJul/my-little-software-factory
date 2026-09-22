@@ -318,7 +318,10 @@ describe("source-driven frames", () => {
 						"the source detail",
 					);
 					const detail = detailPaneText(frame);
-					expect(detail).toContain("Source kind: github-issue");
+					// The source kind wraps in its Source column, so the fact's
+					// two parts stand on the column's own rows.
+					expect(detail).toContain("Source kind:");
+					expect(detail).toContain("github-issue");
 					expect(detail).toContain("External key: #5");
 					expect(detail).toContain("Source state: open");
 					// No task rule matches an issue, so the open ticket's task

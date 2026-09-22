@@ -30,8 +30,8 @@ export interface TicketPriority {
 	/**
 	 * The label of the rank, or the override's stored label when it names no
 	 * rank: off, or a label the config list dropped. The ticket is unranked
-	 * either way, and the detail's fact line and Override row state this same
-	 * label, so the two rows agree on the stored fact.
+	 * either way, and the detail's Priority fact line states this same
+	 * label, so the line shows the stored fact.
 	 */
 	label: string | null;
 	/** Where the effective rank comes from. */
@@ -53,7 +53,7 @@ export interface TicketPriority {
  * labels in the list, (3) unranked. An override value that is no longer in
  * the list names no rank, so it ranks nothing: the list owns the scale. The
  * stored label stays stated for off and for a dropped label alike, so the
- * detail's fact line and Override row show the same stored fact.
+ * detail's Priority fact line shows the stored fact.
  */
 export function effectivePriority(
 	labels: readonly string[],

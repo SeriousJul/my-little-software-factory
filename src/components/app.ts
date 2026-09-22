@@ -2677,11 +2677,11 @@ export function App({
 	};
 	/**
 	 * One step of the detail pane's Priority selector (ADR 0022): the
-	 * Override row moves to the next value on the standard choice control -
-	 * the ranks in order, off, then default - and the step writes the value
-	 * it shows: a rank or off stores the override, default clears it back to
-	 * the ticket's own labels. A stored value the config list dropped starts
-	 * the walk from the top.
+	 * value moves to the next on the standard choice control - the ranks in
+	 * order, off, then default - and the step writes the value it shows: a
+	 * rank or off stores the override, default clears it back to the ticket's
+	 * own labels. The detail pane's Priority fact line wears the value.
+	 * A stored value the config list dropped starts the walk from the top.
 	 */
 	const selectTicketPriority = (ticket: Ticket) => {
 		if (state === undefined) return;
@@ -3673,10 +3673,6 @@ export function App({
 										active: mainSurfaceActive,
 										reservedRows: detailReservedRows,
 										handoffLimit: config.maxHandoffsPerTicket,
-										priorityOverride:
-											state !== undefined && selectedTicket !== undefined
-												? state.priorityOverride(selectedTicket.identity)
-												: null,
 										suggestedChoice:
 											selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
 										starting:

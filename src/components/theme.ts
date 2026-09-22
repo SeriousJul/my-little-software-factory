@@ -170,9 +170,10 @@ export function taskTypeBadge(value: string): string {
 }
 
 /**
- * The one foreground of every configured task type badge and of its
- * detail line: the text role, or the warning color when the presented
- * value is the missing `unknown`.
+ * The one foreground of every configured task type badge: the text role,
+ * or the warning color when the presented value is the missing `unknown`.
+ * The detail pane's task type line carries its own mauve face, so the list
+ * badge and the detail line read as two surfaces of one fact.
  */
 export function taskTypeColor(presentation: TaskTypePresentation): string | undefined {
 	return paint(presentation.unknown ? "yellow" : "text");
