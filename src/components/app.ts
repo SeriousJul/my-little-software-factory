@@ -73,6 +73,7 @@ import {
 	STARTUP_GRACE_MS,
 } from "../observation.ts";
 import { parallelSeatCount } from "../parallel.ts";
+import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
 import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
@@ -1684,6 +1685,42 @@ export function App({
 			.then((result) => {
 				if (!result.ok) setWarningMessage(result.reason);
 			});
+	};
+
+	/**
+	 * The placement each offered task type takes on the ticket the override
+	 * panel edits (ADR 0045). The panel wears the answers on its Task row,
+	 * and the dispatch re-runs the same rule when the confirmed start claims.
+	 * A route places the position's own ticket, not the settled one: the
+	 * handoff starts where the facts sit, the way its dispatch answers.
+	 */
+	const taskPlacementsFor = (pending: PendingOverride): Record<string, PlacementEvaluation> => {
+		const activeConfig = configRef.current;
+		const settled = ticketsRef.current.find(
+			(candidate) => candidate.identity === pending.ticketIdentity,
+		);
+		if (settled === undefined) return {};
+		// A route dispatches on the position's own ticket (ADR 0027), so the
+		// placement is read on that ticket, not the settled one.
+		const identity =
+			pending.origin === "workflow"
+				? (settled.lastCompletion?.transition?.positionTicketIdentity ?? settled.identity)
+				: settled.identity;
+		const ticket =
+			identity === settled.identity
+				? settled
+				: ticketsRef.current.find((candidate) => candidate.identity === identity);
+		if (ticket === undefined) return {};
+		const evaluations: Record<string, PlacementEvaluation> = {};
+		for (const taskType of Object.keys(activeConfig.taskTypes)) {
+			evaluations[taskType] = evaluatePlacement({
+				states: activeConfig.workflowStates,
+				fallbackTaskType: activeConfig.defaultTaskType,
+				memberships: ticket.memberships,
+				chosenTaskType: taskType,
+			});
+		}
+		return evaluations;
 	};
 
 	/**
@@ -3722,6 +3759,7 @@ export function App({
 				environments: HANDOFF_ENVIRONMENT_KINDS,
 				taskTypes: Object.keys(config.taskTypes),
 				profiles,
+				taskPlacements: taskPlacementsFor(override),
 				onCopy: reportMessage,
 				modelList,
 				onAgentChange: requestModelList,

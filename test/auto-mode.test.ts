@@ -1650,6 +1650,16 @@ describe("the decision modal", () => {
 		const app = seededApp(
 			"awaiting",
 			{
+				// The machine places both task types the test moves between: the
+				// confirm of the route writes the labels of the state it moves to.
+				workflowStates: [
+					{
+						name: "ready-for-review",
+						taskType: "review",
+						match: { labelsAny: ["ready-for-review"] },
+					},
+					{ name: "ready-for-fix", taskType: "fix", match: { labelsAny: ["ready-for-fix"] } },
+				],
 				taskTypes: {
 					...BASE_CONFIG.taskTypes,
 					implement: {

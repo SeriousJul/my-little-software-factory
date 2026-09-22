@@ -11,6 +11,7 @@
 
 import type {
 	FactoryConfig,
+	TicketSourceConfig,
 	TransitionBranch,
 	TransitionJudgment,
 	TransitionOutcome,
@@ -27,7 +28,7 @@ import { firstNonEmptyLine } from "./lines.ts";
 import { ticketBranchPrefix } from "./naming.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "./runner.ts";
 import type { FactoryState } from "./state.ts";
-import { membershipMatchesState } from "./task-selection.ts";
+import { membershipMatchesState, newestMembership } from "./task-selection.ts";
 import { GhAuthenticator } from "./ticket-source.ts";
 
 /**
@@ -278,11 +279,9 @@ export function isDraft(ticket: Ticket): boolean {
 
 /** The ticket's newest membership by external update time. */
 export function newestMembershipOf(ticket: Ticket): SourceMembership {
-	return [...ticket.memberships].sort(
-		(a, b) =>
-			b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
-			a.sourceName.localeCompare(b.sourceName),
-	)[0];
+	const newest = newestMembership(ticket.memberships);
+	if (newest === undefined) throw new Error(`the ticket ${ticket.identity} lists on no source`);
+	return newest;
 }
 
 /**
@@ -456,19 +455,24 @@ export async function fireTransition(
 			? [
 					{
 						kind: "pull-request",
-						command: "pr",
+						command: editCommandFor(ticket),
 						ticket,
 						facts: [...new Set([...evaluation.ticketFacts, ...evaluation.pullRequestFacts])],
 					},
 				]
 			: [
-					{ kind: "ticket", command: "issue", ticket, facts: evaluation.ticketFacts },
+					{
+						kind: "ticket",
+						command: editCommandFor(ticket),
+						ticket,
+						facts: evaluation.ticketFacts,
+					},
 					...(pullRequest === null
 						? []
 						: [
 								{
 									kind: "pull-request" as const,
-									command: "pr" as const,
+									command: editCommandFor(pullRequest),
 									ticket: pullRequest,
 									facts: evaluation.pullRequestFacts,
 								},
@@ -656,34 +660,70 @@ async function writeSurfaceLabels(
 	const removed = item.labels.filter(
 		(label) => machine.has(label.toLocaleLowerCase()) && !factSet.has(label.toLocaleLowerCase()),
 	);
+	return writeMembershipLabels(
+		request.config.sources,
+		request.runner,
+		newestMembershipOf(item),
+		kind,
+		added,
+		removed,
+	);
+}
+
+/**
+ * The `gh` subcommand that edits the item (ADR 0027, ADR 0045): the pull
+ * request edit on a pull request item, the issue edit on an issue item. The
+ * transition fire and the ticket placement name their writes through this
+ * one mapping, so the two paths cannot drift.
+ */
+export function editCommandFor(item: { readonly sourceKind: string }): "issue" | "pr" {
+	return item.sourceKind === "github-pull-request" ? "pr" : "issue";
+}
+
+/**
+ * One label write on one source membership through the command runner
+ * (ADR 0027, ADR 0045): add the labels given, remove the labels given, on
+ * the source the membership lists. The transition fire and the ticket
+ * placement share it: one write, one failure format, one auth resolution.
+ *
+ * Returns the write that ran, null when nothing had to change, and the
+ * failure as a fact when the command failed.
+ */
+export async function writeMembershipLabels(
+	sources: readonly TicketSourceConfig[],
+	runner: CommandRunner,
+	membership: SourceMembership,
+	command: "issue" | "pr",
+	added: readonly string[],
+	removed: readonly string[],
+): Promise<{ added: string[]; removed: string[]; failure?: string } | null> {
 	if (added.length === 0 && removed.length === 0) return null;
-	const membership = newestMembershipOf(item);
 	// The write runs as the source the item lists on: the source's auth
 	// table resolves to a token the command carries in its environment, so
 	// the labels the plane writes and the items it reads come from the same
 	// account. A source with no auth table runs on gh's current
 	// authentication, as the reads do.
-	const source = request.config.sources.find((item2) => item2.name === membership.sourceName);
+	const source = sources.find((item) => item.name === membership.sourceName);
 	let ghOptions: CommandOptions = {};
 	if (source?.auth !== undefined) {
 		const resolved = await new GhAuthenticator(
 			source.host,
 			source.auth,
-			request.runner,
+			runner,
 			process.env,
 		).resolve();
 		if (!resolved.ok)
 			return {
-				added,
-				removed,
-				failure: `gh ${kind} edit ${membership.externalKey} failed: ${resolved.reason}`,
+				added: [...added],
+				removed: [...removed],
+				failure: `gh ${command} edit ${membership.externalKey} failed: ${resolved.reason}`,
 			};
 		ghOptions = resolved.options;
 	}
 	// The repository identity carries the host (`<host>/<owner>/<name>`), which
 	// is the form `gh --repo` takes: `gh <kind> edit` maps no `--hostname`.
 	const args: string[] = [
-		kind,
+		command,
 		"edit",
 		membership.externalKey,
 		"--repo",
@@ -693,21 +733,21 @@ async function writeSurfaceLabels(
 	if (removed.length > 0) args.push("--remove-label", removed.join(","));
 	let result: CommandResult;
 	try {
-		result = await request.runner.run("gh", args, ghOptions);
+		result = await runner.run("gh", args, ghOptions);
 	} catch (error) {
 		return {
-			added,
-			removed,
-			failure: `gh ${kind} edit ${membership.externalKey} failed: ${String(error)}`,
+			added: [...added],
+			removed: [...removed],
+			failure: `gh ${command} edit ${membership.externalKey} failed: ${String(error)}`,
 		};
 	}
 	if (result.code !== 0) {
 		const detail = firstNonEmptyLine(result.stderr) ?? `exit ${result.code}`;
 		return {
-			added,
-			removed,
-			failure: `gh ${kind} edit ${membership.externalKey} failed: ${detail}`,
+			added: [...added],
+			removed: [...removed],
+			failure: `gh ${command} edit ${membership.externalKey} failed: ${detail}`,
 		};
 	}
-	return { added, removed };
+	return { added: [...added], removed: [...removed] };
 }

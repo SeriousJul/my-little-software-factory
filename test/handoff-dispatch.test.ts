@@ -149,7 +149,14 @@ function routeDispatch(
 	});
 }
 
-/** The Agent, environment, and Task profile every handoff in this file starts. */
+/**
+ * The Agent, environment, and Task profile every handoff in this file starts.
+ *
+ * The task type is the default, the one the machine places on every parked
+ * ticket in this file's fixture: the placement the start crosses (ADR 0045)
+ * refuses a task type no matching state offers, and these tests test the
+ * dispatch's claims, settles, and queues, not the refusal.
+ */
 const liveChoice: HandoffChoice = baseChoice("pi", "live-worktree", "implement");
 const worktreeChoice: HandoffChoice = baseChoice("pi", "worktree", "implement");
 
@@ -643,10 +650,7 @@ describe("the queue drain", () => {
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, "open");
 		await expect(
-			start(rigRef, SECOND, "workflow", (r) => secondStarted.push(r), {
-				...liveChoice,
-				taskType: "review",
-			}),
+			start(rigRef, SECOND, "workflow", (r) => secondStarted.push(r), liveChoice),
 		).resolves.toEqual({ ok: true, queued: false });
 		await expect(start(rigRef, THIRD, "open", (r) => thirdStarted.push(r))).resolves.toEqual({
 			ok: true,
@@ -696,7 +700,7 @@ describe("the queue drain", () => {
 		settleTurn(rigRef, SECOND, second.handoffId);
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "workflow", undefined, { ...liveChoice, taskType: "review" });
+		await start(rigRef, SECOND, "workflow", undefined, liveChoice);
 		await releaseHeld(rigRef, 1);
 		await releaseHeld(rigRef, 2);
 		await rigRef.waitForStarted(SECOND.identity);
@@ -806,7 +810,7 @@ describe("the starting report", () => {
 		settleTurn(rigRef, SECOND, second.handoffId);
 		rigRef.hold("herdr agent start");
 		await start(rigRef, FIRST, "open");
-		await start(rigRef, SECOND, "workflow", undefined, { ...liveChoice, taskType: "review" });
+		await start(rigRef, SECOND, "workflow", undefined, liveChoice);
 		// The queued ticket's cycle closes while it waits: the drain settles its
 		// claim as failed without running it.
 		closeCycle(rigRef, SECOND, second.handoffId);
@@ -924,10 +928,7 @@ describe("the claim, the settle, and every origin", () => {
 		});
 		const started: DispatchResult[] = [];
 		await expect(
-			start(rigRef, FIRST, "workflow", (r) => started.push(r), {
-				...liveChoice,
-				taskType: "review",
-			}),
+			start(rigRef, FIRST, "workflow", (r) => started.push(r), liveChoice),
 		).resolves.toEqual({ ok: true, queued: false });
 		await rigRef.waitForStarted(FIRST.identity);
 		expect(started).toEqual([{ ok: true, queued: false }]);
@@ -946,10 +947,7 @@ describe("the claim, the settle, and every origin", () => {
 		rigRef.runner.set("herdr", ["workspace", "list"], { code: 1, stderr: "herdr is gone" });
 		const started: DispatchResult[] = [];
 		await expect(
-			start(rigRef, FIRST, "workflow", (r) => started.push(r), {
-				...liveChoice,
-				taskType: "review",
-			}),
+			start(rigRef, FIRST, "workflow", (r) => started.push(r), liveChoice),
 		).resolves.toEqual({ ok: true, queued: false });
 		expect(await rigRef.waitForStarted(FIRST.identity)).toEqual({
 			ok: false,
@@ -2301,7 +2299,7 @@ describe("the Parallel limit and the Work queue", () => {
 			mod.dispatch({
 				origin: "workflow",
 				ticketIdentity: FIRST.identity,
-				choice: { ...liveChoice, taskType: "review" },
+				choice: liveChoice,
 				previousMessage: "the turn is done",
 			}),
 		).resolves.toEqual({ ok: true, queued: true });
@@ -2409,7 +2407,7 @@ describe("the Parallel limit and the Work queue", () => {
 			mod.dispatch({
 				origin: "workflow",
 				ticketIdentity: FIRST.identity,
-				choice: { ...liveChoice, taskType: "review" },
+				choice: liveChoice,
 				previousMessage: "the turn is done",
 			}),
 		).resolves.toEqual({ ok: true, queued: true });
