@@ -1694,6 +1694,50 @@ export async function closeHandoffEnvironment(
 }
 
 /**
+ * The close the decision screen's route asks for: the previous handoff's
+ * environment goes, and the handoff that follows builds its own beside it.
+ *
+ * It reaches the stored handles, the way the Close cleanup does, but never
+ * removes the worktree checkout or touches a branch: the worktree
+ * environment loses its herdr workspace, and the checkout and branch stay
+ * on disk, so the handoff that follows reopens the worktree on its branch
+ * in a fresh workspace. The live-worktree environment loses its tab, and
+ * the shared workspace and the tabs beside it stay. The work continues
+ * where it stood; only the herdr view of it is new.
+ *
+ * Best effort, the way the handoff's own close of the predecessor tab is:
+ * an environment herdr no longer holds is already gone, and that answers
+ * the close. A refusal herdr makes stands as the reason, and the caller's
+ * handoff still runs: the stored workspace the close could not take down
+ * is the one the run reuses, the way it always did, and the predecessor
+ * tab the run closes after the agent starts is the residue the close left.
+ *
+ * A workspace close moves herdr's focus, the way the Close cleanup's does,
+ * so a successful one returns it to the control plane's workspace, beside
+ * which the operator works the route.
+ */
+export async function closeStoredEnvironment(
+	handoff: { environment: EnvironmentKind; tabId: string | null; workspaceId: string | null },
+	runner: CommandRunner,
+	options: CloseCleanupOptions = {},
+): Promise<string | undefined> {
+	if (handoff.environment === "worktree" && handoff.workspaceId !== null) {
+		const closed = await runner.run("herdr", ["workspace", "close", handoff.workspaceId]);
+		if (closed.code === 0 || herdrErrorCode(closed) === "workspace_not_found") {
+			await restoreControlPlaneFocus(runner, options.controlPlaneWorkspaceId);
+			return undefined;
+		}
+		return herdrFailureText(closed);
+	}
+	if (handoff.environment === "live-worktree" && handoff.tabId !== null) {
+		const closed = await runner.run("herdr", ["tab", "close", handoff.tabId]);
+		if (closed.code === 0 || herdrErrorCode(closed) === "tab_not_found") return undefined;
+		return herdrFailureText(closed);
+	}
+	return undefined;
+}
+
+/**
  * Return herdr's workspace focus to the workspace the control plane runs in.
  *
  * herdr moves its focus when a workspace disappears: a removed linked

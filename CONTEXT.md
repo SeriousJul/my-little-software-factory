@@ -356,6 +356,10 @@ Assigning a ticket to an agent type and an environment with a task type, and sta
 It asks Herdr for the ticket's stable Agent name, and takes the name of its work cycle when the ticket's own Leftover environment still holds the stable one.
 _Avoid_: assign, dispatch, launch
 
+**Route close**:
+The act the handoff ask of the Decision screen makes on the settled turn's environment, at the ask: a direct start closes it before the handoff builds its own, and a start that waits in the Work queue closes it at the enqueue. It is non-destructive: a worktree environment loses its herdr workspace, and the checkout and the branch stay, so the handoff reopens the worktree on its branch in a fresh workspace, and a live-worktree environment loses its tab beside its shared workspace. It is the ask's act: the automatic route and the Restart keep the stored workspace and reuse it. A refused close is a line, not a failure: the handoff runs on the stored workspace it could not take down (ADR 0046).
+_Avoid_: workspace cleanup, environment teardown
+
 **Handoff attempt**:
 The durable record created before a handoff makes its first external change.
 An unresolved attempt prevents another handoff of the same ticket after a crash.

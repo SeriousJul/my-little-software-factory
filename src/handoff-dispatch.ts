@@ -1,8 +1,9 @@
 /**
  * The Handoff dispatch module: one seat for handoffs and environment changes.
  *
- * The module owns the durable claim and settle, the handoff queue, Close
- * cleanup, and the name knowledge needed by handoff work.
+ * The module owns the durable claim and settle, the handoff queue, the Close
+ * cleanup, the decision screen's route close of the previous handoff's
+ * environment, and the name knowledge needed by handoff work.
  * It has no React dependency. The App crosses this interface for operator
  * actions and the observation loop crosses the same interface for automatic
  * work.
@@ -14,6 +15,7 @@ import {
 	type CloseCleanupOptions,
 	closeCleanupReach,
 	closeHandoffEnvironment,
+	closeStoredEnvironment,
 	type HandoffChoice,
 	type HandoffOutcome,
 	handOffStoredWorkspace,
@@ -221,7 +223,16 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
  * intent report answers later whether an agent actually started.
  */
 export interface HandoffDispatch {
-	/** Every Handoff origin: open, workflow, restart, observation loop. */
+	/**
+	 * Every Handoff origin: open, workflow, restart, observation loop.
+	 *
+	 * The route a decision screen asks for - the manual workflow start - also
+	 * closes the settled ticket's previous handoff environment at the ask
+	 * (ADR 0046): a start that takes its seat now closes it before it builds
+	 * its own, and a start that waits in the Work queue closes it at the
+	 * enqueue. The automatic route and the restart keep the stored workspace
+	 * and reuse it.
+	 */
 	dispatch(intent: HandoffIntent): Promise<DispatchResult>;
 	/**
 	 * The Work queue's pickup (ADR 0034): the items the free seats take, in
@@ -442,6 +453,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 				claimedState: ticket.state,
 				previousMessage: intent.previousMessage,
 				routeFromIdentity: intent.routeFromIdentity ?? null,
+				closePreviousEnvironment: intent.origin === "workflow" && intent.automatic !== true,
 			},
 			intent.onStarted,
 		);
@@ -483,6 +495,21 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.notice(
 			`handoff of ${this.ticketName(intent.ticketIdentity)} is in the Work queue; it starts when a seat frees`,
 		);
+		if (intent.origin === "workflow" && intent.automatic !== true) {
+			// The decision screen's route: the previous environment goes at the
+			// ask, not at the start. The close takes the seat, the way every
+			// environment change does, so it runs the moment the seat is free
+			// and never under a handoff run. The item's pickup closes it again
+			// when it starts, and the close is its own answer when herdr holds
+			// the environment no more.
+			const closeIdentity = intent.routeFromIdentity ?? intent.ticketIdentity;
+			void this.queueCleanup(async () => {
+				const failure = await this.closePreviousHandoffEnvironment(closeIdentity);
+				if (failure !== undefined)
+					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
+				this.reports.refresh();
+			});
+		}
 		return { ok: true, queued: true };
 	}
 
@@ -790,6 +817,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 				claimedState: claimed.ticket.state,
 				previousMessage: item.previousMessage,
 				routeFromIdentity: item.routeFromIdentity,
+				// The route's ask: the close ran at the enqueue, and this close
+				// is its own answer when the environment herdr holds no more.
+				closePreviousEnvironment: item.origin === "workflow",
 				workQueuePickup: true,
 			},
 			(started) => {
@@ -883,6 +913,9 @@ class HandoffDispatchModule implements HandoffDispatch {
 				claimedState: claimed.ticket.state,
 				previousMessage: item.previousMessage,
 				routeFromIdentity: item.routeFromIdentity,
+				// The route's ask: the close ran at the enqueue, and this close
+				// is its own answer when the environment herdr holds no more.
+				closePreviousEnvironment: item.origin === "workflow",
 				workQueuePickup: true,
 			},
 			(started) => {
@@ -1038,8 +1071,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.reports.working(`handing off "${ticket.title}"...`);
 		const onStage = (stage: string) => this.state.advanceHandoffAttempt(claim.attemptId, stage);
 		const names = this.nameKnowledgeFor(ticket.identity, claimed.routeFromIdentity);
-		const run =
-			origin === "open"
+		const run = (async () => {
+			// The decision screen's route: the previous environment closes before
+			// the run lists the workspaces, so the handoff builds its own fresh
+			// environment instead of reusing the one the settled turn ran in.
+			// A refused close keeps the stored workspace standing, and the run
+			// reuses it, the way it did before the close asked.
+			if (claimed.closePreviousEnvironment === true) {
+				const failure = await this.closePreviousHandoffEnvironment(
+					claimed.routeFromIdentity ?? ticket.identity,
+				);
+				if (failure !== undefined)
+					this.reports.warning(`the previous handoff's environment did not close: ${failure}`);
+			}
+			return origin === "open"
 				? handOffTicket(ticket, choice, {
 						config: this.config(),
 						runner: this.runner,
@@ -1060,10 +1105,41 @@ class HandoffDispatchModule implements HandoffDispatch {
 						onStage,
 						names,
 					});
+		})();
 
 		void run
 			.then((outcome) => this.finishHandoff(ticket.identity, claim, outcome, reportStarted))
 			.catch((error) => this.failHandoff(ticket.identity, claim, reportStarted, error));
+	}
+
+	/**
+	 * The close of the previous handoff's environment that the decision
+	 * screen's route asks for. The settled ticket's newest handoff is the
+	 * environment the settled turn ran in, and a ticket that recorded no
+	 * handle answers the close with nothing to close.
+	 *
+	 * Best effort all the way down: the answer is herdr's refusal, when
+	 * herdr made one, and a close that never ran is its own reason. A null
+	 * answer is the close, and the environment already gone: herdr's
+	 * `workspace_not_found` and `tab_not_found` both stand for it, the way
+	 * the Close cleanup reads them.
+	 */
+	private async closePreviousHandoffEnvironment(identity: string): Promise<string | undefined> {
+		const stored = this.state.latestHandoff(identity);
+		if (stored === null) return undefined;
+		try {
+			return await closeStoredEnvironment(
+				{
+					environment: stored.environment,
+					tabId: stored.tabId,
+					workspaceId: stored.workspaceId,
+				},
+				this.runner,
+				{ controlPlaneWorkspaceId: this.controlPlaneWorkspaceId },
+			);
+		} catch (error) {
+			return `the close did not run: ${errorMessage(error)}`;
+		}
 	}
 
 	private failHandoff(
@@ -1293,6 +1369,15 @@ interface ClaimedHandoff {
 	 * that is no route, or a route that stays on its own ticket.
 	 */
 	routeFromIdentity: string | null;
+	/**
+	 * True for the route a decision screen asked for: the manual workflow
+	 * start, direct or from a Work queue item. The run closes the settled
+	 * ticket's previous handoff environment before it builds the handoff's
+	 * own, so the workspace the settled turn ran in is gone the moment the
+	 * operator asked for the handoff, in a fresh environment. The automatic
+	 * workflow route and the restart keep the stored workspace and reuse it.
+	 */
+	closePreviousEnvironment: boolean;
 	/**
 	 * True for the claim a Work queue pickup or force-dispatch made (ADR 0034):
 	 * the durable row and this claim are one waiting start, so removing the row

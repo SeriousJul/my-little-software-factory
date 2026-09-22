@@ -2837,6 +2837,217 @@ describe("the force-dispatch of a Consultation queue item (issue #89, #90, ADR 0
 	});
 });
 
+describe("the decision screen's route close", () => {
+	/**
+	 * The route a decision screen asks for: the manual workflow start, the
+	 * direct claim the seat takes at once.
+	 */
+	async function directRoute(rigRef: Rig, choice: HandoffChoice): Promise<DispatchResult> {
+		const started: DispatchResult[] = [];
+		const answer = await start(rigRef, FIRST, "workflow", (result) => started.push(result), choice);
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(started).toEqual([{ ok: true, queued: false }]);
+		return answer;
+	}
+
+	test("a direct route closes the settled workspace, and the handoff reopens the worktree beside it", async () => {
+		const rigRef = rig();
+		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		// The close took the workspace: herdr's list no longer holds it, and
+		// the ticket's branch is what the handoff takes instead.
+		const branch = "factory/5-add-a-webhook-retry-policy";
+		const worktreePath = join(rigRef.checkout, "wt");
+		rigRef.runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		rigRef.runner.set("git", ["-C", rigRef.checkout, "branch", "--list", branch], {
+			stdout: `* ${branch}\n`,
+		});
+		rigRef.runner.set(
+			"herdr",
+			["worktree", "open", "--cwd", rigRef.checkout, "--branch", branch, "--no-focus"],
+			{
+				stdout: worktreeOpenJson("ws-route", "pane-route", {
+					alreadyOpen: false,
+					worktreePath,
+				}),
+			},
+		);
+		await expect(directRoute(rigRef, worktreeChoice)).resolves.toEqual({
+			ok: true,
+			queued: false,
+		});
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		const commands = rigRef.commands();
+		// The ask closes the workspace the settled turn ran in, and only then
+		// does the handoff list the workspaces and reopen the worktree on its
+		// branch, in a fresh workspace.
+		expect(commands).toContain(`herdr workspace close ${stored.workspaceId}`);
+		expect(commands.indexOf(`herdr workspace close ${stored.workspaceId}`)).toBeLessThan(
+			commands.indexOf("herdr workspace list"),
+		);
+		expect(commands.indexOf("herdr workspace list")).toBeLessThan(
+			commands.indexOf(
+				`herdr worktree open --cwd ${rigRef.checkout} --branch ${branch} --no-focus`,
+			),
+		);
+		expect(commands).toContain(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`);
+	});
+
+	test("a direct route of a live cycle closes the previous tab, and starts a fresh tab in the workspace", async () => {
+		const rigRef = rig();
+		const stored = await handOff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		// The shared workspace stands: only the settled turn's tab goes.
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: FIRST.workspaceId, checkoutPath: rigRef.checkout }]),
+		});
+		rigRef.runner.set("herdr", ["tab", "create", "--workspace", FIRST.workspaceId, "--no-focus"], {
+			stdout: tabCreateJson("pane-route", "tab-route"),
+		});
+		await expect(directRoute(rigRef, liveChoice)).resolves.toEqual({ ok: true, queued: false });
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		const commands = rigRef.commands();
+		// The ask closes the tab the settled turn ran in; the new agent starts
+		// in a fresh tab of the workspace that stands beside it.
+		expect(commands.indexOf(`herdr tab close ${stored.tabId}`)).toBeLessThan(
+			commands.indexOf(`herdr tab create --workspace ${stored.workspaceId} --no-focus`),
+		);
+		expect(
+			commands.indexOf(`herdr tab create --workspace ${stored.workspaceId} --no-focus`),
+		).toBeLessThan(commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`));
+	});
+
+	test("a route that waits in the Work queue closes the previous environment at the ask", async () => {
+		const rigRef = rig();
+		const stored = seedHandoff(rigRef, FIRST, worktreeChoice);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		// Every seat is held: the route waits in the Work queue.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: FIRST.identity,
+				routeFromIdentity: FIRST.identity,
+				choice: worktreeChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		await seatReleased();
+		// The close ran at the ask, not at the start: the item waits in the
+		// queue while herdr already lost the workspace the settled turn ran
+		// in, and nothing has started.
+		expect(rigRef.commands()).toContain(`herdr workspace close ${stored.workspaceId}`);
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(0);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("awaiting");
+		// A clean close says nothing on the line: the queue's notice stands.
+		expect(rigRef.events.filter((event) => event.startsWith("warning:"))).toHaveLength(0);
+	});
+
+	test("a queued route that crosses closes the settled ticket's environment, not the position's", async () => {
+		const rigRef = rig([ROUTE_SETTLED, ROUTE_TARGET]);
+		const settled = settleRoutePair(rigRef);
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "workflow",
+				ticketIdentity: ROUTE_TARGET.identity,
+				routeFromIdentity: ROUTE_SETTLED.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		await seatReleased();
+		// The settled ticket's environment is the one the route ends: its tab
+		// goes at the ask. The position ticket holds no handoff, so nothing
+		// of it closes, and nothing has started.
+		expect(rigRef.commands()).toContain(`herdr tab close ${settled.tabId}`);
+		expect(
+			rigRef.commands().filter((command) => command.startsWith("herdr agent start")),
+		).toHaveLength(0);
+	});
+
+	test("the automatic route keeps the stored workspace, and closes nothing at the ask", async () => {
+		const rigRef = rig();
+		const stored = await handOff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: FIRST.workspaceId, checkoutPath: rigRef.checkout }]),
+		});
+		rigRef.runner.set("herdr", ["tab", "create", "--workspace", FIRST.workspaceId, "--no-focus"], {
+			stdout: tabCreateJson("pane-auto", "tab-auto"),
+		});
+		const started: DispatchResult[] = [];
+		await expect(
+			rigRef.dispatch.dispatch({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "the turn is done",
+				onStarted: (result) => {
+					rigRef.reportStarted(FIRST.identity, result);
+					started.push(result);
+				},
+			}),
+		).resolves.toEqual({ ok: true, queued: false });
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		const commands = rigRef.commands();
+		// The machine's own route reuses the workspace the turn ran in: the
+		// predecessor tab closes only after the new agent starts, the way the
+		// reuse always did, and no workspace of the ticket closes at the ask.
+		expect(
+			commands.indexOf(`herdr tab create --workspace ${stored.workspaceId} --no-focus`),
+		).toBeLessThan(commands.indexOf(`herdr tab close ${stored.tabId}`));
+		expect(commands.filter((command) => command.startsWith("herdr workspace close"))).toHaveLength(
+			0,
+		);
+	});
+
+	test("a refused close keeps the handoff running on the stored workspace", async () => {
+		const rigRef = rig();
+		const stored = await handOff(rigRef, FIRST);
+		settleTurn(rigRef, FIRST, stored.handoffId);
+		// The handoff the rig started holds its own tab and workspace: the
+		// tab it asks herdr to close is the one the rig's handoff created.
+		rigRef.runner.set("herdr", ["tab", "close", "tab-agent"], {
+			code: 1,
+			stderr:
+				'{"error":{"code":"tab_close_failed","message":"the tab is busy"},"id":"cli:tab:close"}\n',
+		});
+		// The close could not take the tab down: the stored workspace still
+		// holds, and the run reuses it, the way it did before the close asked.
+		rigRef.runner.set("herdr", ["workspace", "list"], {
+			stdout: workspaceListJson([{ id: FIRST.workspaceId, checkoutPath: rigRef.checkout }]),
+		});
+		rigRef.runner.set("herdr", ["tab", "create", "--workspace", FIRST.workspaceId, "--no-focus"], {
+			stdout: tabCreateJson("pane-route", "tab-route"),
+		});
+		const started: DispatchResult[] = [];
+		await expect(start(rigRef, FIRST, "workflow", (r) => started.push(r))).resolves.toEqual({
+			ok: true,
+			queued: false,
+		});
+		await rigRef.waitForStarted(FIRST.identity);
+		expect(started).toEqual([{ ok: true, queued: false }]);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.events).toContain(
+			"warning:the previous handoff's environment did not close: the tab is busy (tab_close_failed)",
+		);
+		const commands = rigRef.commands();
+		expect(
+			commands.indexOf(`herdr tab create --workspace ${stored.workspaceId} --no-focus`),
+		).toBeLessThan(commands.indexOf(`herdr agent start ${FIRST.name} --kind pi --pane pane-route`));
+	});
+});
+
 describe("the record lines", () => {
 	test("a claimed start leaves one line, and a refused claim leaves its reason", async () => {
 		const rigRef = rig([FIRST]);
