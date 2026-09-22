@@ -5,9 +5,9 @@
  * the label facts on the ticket and its fixing pull request, and the machine
  * re-derives every position from the written labels. The transition names no
  * destination. The judgments read from the source at the settle (ADR 0047):
- * the review score from the pull request's comments, and the open state from
- * the pull request's own record, with the projection's last refresh as the
- * read's fallback. The branch that holds fires, and its facts and pins take
+ * the review score from the pull request's comments and its reviews (ADR
+ * 0053), and the open state from the pull request's own record, with the
+ * projection's last refresh as the read's fallback. The branch that holds fires, and its facts and pins take
  * effect.
  */
 
@@ -187,12 +187,16 @@ function transitionReadsPullRequestState(transition: WorkflowTransition): boolea
 }
 
 /**
- * The review score the pull request's comments carry: the newest comment
- * that reports one in the template's fixed line. Null when no comment
- * reports a score, when the comment read fails, or when the source cannot be
- * resolved. The comments are read straight from the source, not from the
- * projection: the review posts its verdict to the pull request, and that
- * comment is the durable record the judgment reads.
+ * The review score the pull request's verdicts carry: the newest record
+ * that reports one in the template's fixed line. The verdicts are the pull
+ * request's comments and its reviews, read as one list (ADR 0053): a review
+ * turn posts its verdict as a comment or through its review, and the
+ * judgment decides on what the agent posted, not on the posting path it
+ * chose. Null when no record reports a score, when a read fails on every
+ * timeline it answers, or when the source cannot be resolved. The records
+ * are read straight from the source, not from the projection: the review
+ * posts its verdict to the pull request, and that post is the durable record
+ * the judgment reads.
  */
 async function readPullRequestScore(
 	request: FireTransitionRequest,
@@ -214,7 +218,49 @@ async function readPullRequestScore(
 		if (!resolved.ok) return null;
 		ghOptions = resolved.options;
 	}
-	const path = `repos/${membership.repository.displayName}/issues/${number}/comments?per_page=100`;
+	const repository = membership.repository.displayName;
+	// The two timelines the verdict can post to, read together: a read that
+	// fails on one timeline contributes nothing, and the records that stand
+	// decide.
+	const [comments, reviews] = await Promise.all([
+		readVerdictList(
+			request,
+			source,
+			ghOptions,
+			`repos/${repository}/issues/${number}/comments?per_page=100`,
+			"created_at",
+		),
+		readVerdictList(
+			request,
+			source,
+			ghOptions,
+			`repos/${repository}/pulls/${number}/reviews?per_page=100`,
+			"submitted_at",
+		),
+	]);
+	const records = [...(comments ?? []), ...(reviews ?? [])];
+	// Newest first across both timelines: the latest verdict is the one the
+	// judgment reads.
+	records.sort((a, b) => b.at.localeCompare(a.at));
+	for (const record of records) {
+		const score = scoreFromMessage(record.body);
+		if (score !== null) return score;
+	}
+	return null;
+}
+
+/**
+ * One verdict list the score read collects: the pull request's comments or
+ * its reviews, each record as its body and its time. Null when the read
+ * fails or the answer is not a list; the other timeline's records stand.
+ */
+async function readVerdictList(
+	request: FireTransitionRequest,
+	source: TicketSourceConfig,
+	ghOptions: CommandOptions,
+	path: string,
+	timeField: "created_at" | "submitted_at",
+): Promise<{ body: string; at: string }[] | null> {
 	let result: CommandResult;
 	try {
 		result = await request.runner.run("gh", ["api", "--hostname", source.host, path], ghOptions);
@@ -222,25 +268,19 @@ async function readPullRequestScore(
 		return null;
 	}
 	if (result.code !== 0) return null;
-	let comments: unknown;
+	let list: unknown;
 	try {
-		comments = JSON.parse(result.stdout);
+		list = JSON.parse(result.stdout);
 	} catch {
 		return null;
 	}
-	if (!Array.isArray(comments)) return null;
-	// Newest first: the latest review verdict is the one the judgment reads.
-	const bodies = (comments as Array<{ body?: unknown; created_at?: unknown }>)
+	if (!Array.isArray(list)) return null;
+	return (list as Array<{ body?: unknown; created_at?: unknown; submitted_at?: unknown }>)
 		.filter(
-			(comment): comment is { body: string; created_at?: string } =>
-				typeof comment.body === "string",
+			(record): record is { body: string; created_at?: unknown; submitted_at?: unknown } =>
+				typeof record.body === "string",
 		)
-		.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
-	for (const comment of bodies) {
-		const score = scoreFromMessage(comment.body);
-		if (score !== null) return score;
-	}
-	return null;
+		.map((record) => ({ body: record.body, at: String(record[timeField] ?? "") }));
 }
 
 /**
@@ -499,10 +539,10 @@ export async function fireTransition(
 	if (ticket === undefined) return null;
 	const pullRequest =
 		ticket.sourceKind === "github-pull-request" ? ticket : findFixingPullRequest(tickets, ticket);
-	// The review verdict is the pull request's own comment, the place the
-	// review template names for the score. It is read only when this
-	// transition tests a score judgment and only for a pull request that is
-	// there to read.
+	// The review verdict is the pull request's own post, the place the review
+	// template names for the score: a comment or a review body. It is read
+	// only when this transition tests a score judgment and only for a pull
+	// request that is there to read.
 	const score =
 		transitionReadsScore(transition) && pullRequest !== null
 			? await readPullRequestScore(request, pullRequest)

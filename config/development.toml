@@ -231,7 +231,7 @@ Review pull request {external-key}: {title}.
 - **Required Changes:** [Bullet points]
 
 ### Outcome
-- Post the output as a comment on the pull request.
+- Post the output on the pull request, as a comment or a review.
 
 Repository: {repository}
 Pull request: {source-url}

@@ -290,6 +290,27 @@ function setReviewComments(
 }
 
 /**
+ * The exact argv of the pull request's review read: the source's host, and
+ * the review list of the pull the score tests fire on (#12).
+ */
+const REVIEW_READ_ARGS = [
+	"api",
+	"--hostname",
+	"github.com",
+	"repos/acme/factory/pulls/12/reviews?per_page=100",
+];
+/** The full command the review read issues, as the runner records it. */
+const REVIEW_READ_COMMAND = `gh ${REVIEW_READ_ARGS.join(" ")}`;
+
+/** Make the runner answer the review read with these pull request reviews. */
+function setReviewBodies(
+	runner: FakeRunner,
+	reviews: readonly { body: string; submitted_at?: string }[],
+): void {
+	runner.set("gh", REVIEW_READ_ARGS, { stdout: JSON.stringify(reviews) });
+}
+
+/**
  * The exact argv of the pull request's state read: the source's host, and
  * the pull's own REST record (#12).
  */
@@ -462,10 +483,10 @@ describe("the review score", () => {
 	});
 });
 
-describe("the review score read from the pull request's comments", () => {
+describe("the review score read from the pull request's comments and reviews", () => {
 	// Each test seeds the open pull and fires the review transition; the
-	// verdict is the pull request's own comment, read through the command
-	// runner, not the agent's last message.
+	// verdict is the pull request's own post - a comment or a review body -
+	// read through the command runner, not the agent's last message.
 	function loadPull(): ReturnType<typeof seededState> {
 		return seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
 	}
@@ -523,6 +544,90 @@ describe("the review score read from the pull request's comments", () => {
 		});
 	});
 
+	test("a review body that reports a score is the verdict", async () => {
+		// The review turn posts its verdict through its review, not as a
+		// comment: the read takes the review body, and the judgment decides.
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, []);
+		setReviewBodies(runner, [
+			{ body: "- **Score:** 97 / 100", submitted_at: "2026-08-31T12:00:00Z" },
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ when: "score-above-threshold" });
+	});
+
+	test("a later review over an earlier comment is the verdict", async () => {
+		// The newest record across both timelines is the one the judgment
+		// reads, whatever the timeline it posted to.
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 95 / 100", created_at: "2026-08-31T11:00:00Z" },
+		]);
+		setReviewBodies(runner, [
+			{ body: "On re-check, lower: - **Score:** 40 / 100", submitted_at: "2026-08-31T12:00:00Z" },
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ when: "score-below-threshold" });
+	});
+
+	test("a later comment over an earlier review is the verdict", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "On re-check, lower: - **Score:** 40 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		setReviewBodies(runner, [
+			{ body: "- **Score:** 95 / 100", submitted_at: "2026-08-31T11:00:00Z" },
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ when: "score-below-threshold" });
+	});
+
+	test("a failed review read falls back to the standing comments", async () => {
+		// A read that fails on one timeline contributes nothing; the records
+		// that stand decide, so the comment's score still fires the branch.
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		runner.set("gh", REVIEW_READ_ARGS, { code: 1, stderr: "the review read failed" });
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ when: "score-above-threshold" });
+		// Both reads ran, and the standing comment's score wrote the fact.
+		expect(runner.commands()).toEqual([
+			COMMENT_READ_COMMAND,
+			REVIEW_READ_COMMAND,
+			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-to-ship --remove-label ready-for-review",
+		]);
+	});
+
 	test("a failed comment read carries no score and fires no branch", async () => {
 		const runner = new FakeRunner();
 		const state = loadPull();
@@ -538,10 +643,30 @@ describe("the review score read from the pull request's comments", () => {
 			fired: false,
 			reason: "the pull request carries no review score",
 		});
-		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND]);
+		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND, REVIEW_READ_COMMAND]);
 	});
 
-	test("the comment read runs only for a score judgment, not for merge", async () => {
+	test("an empty review body carries no score", async () => {
+		// A review the agent submitted without a body - the approval vote
+		// alone - reports nothing, and no score stands for it.
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, []);
+		setReviewBodies(runner, [{ body: "", submitted_at: "2026-08-31T12:00:00Z" }]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({
+			fired: false,
+			reason: "the pull request carries no review score",
+		});
+	});
+
+	test("the comment and review reads run only for a score judgment, not for merge", async () => {
 		const runner = new FakeRunner();
 		const state = loadPull();
 		setPullRequestState(runner, { state: "open", merged: false });
@@ -553,10 +678,12 @@ describe("the review score read from the pull request's comments", () => {
 			taskType: "merge",
 		});
 		// The merge transition tests the pull request's own state: the state
-		// read ran, and no score judgment, so no comment read for it.
+		// read ran, and no score judgment, so no read of either verdict
+		// timeline for it.
 		expect(outcome).toMatchObject({ fired: true });
 		expect(runner.commands()).toContain(STATE_READ_COMMAND);
 		expect(runner.commands().some((command) => command.includes("comments"))).toBe(false);
+		expect(runner.commands().some((command) => command.includes("reviews"))).toBe(false);
 	});
 });
 
@@ -947,10 +1074,12 @@ describe("the transition fire", () => {
 			added: ["ready-to-ship"],
 			removed: ["ready-for-review"],
 		});
-		// The verdict is read from the pull request's comment before the label
-		// write: the comment read, then the write it decided.
+		// The verdict is read from the pull request's comment and its review
+		// before the label write: the two verdict reads, then the write they
+		// decided.
 		expect(runner.commands()).toEqual([
-			"gh api --hostname github.com repos/acme/factory/issues/12/comments?per_page=100",
+			COMMENT_READ_COMMAND,
+			REVIEW_READ_COMMAND,
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-to-ship --remove-label ready-for-review",
 		]);
 	});
@@ -992,8 +1121,9 @@ describe("the transition fire", () => {
 			reason: "the pull request carries no review score",
 			positionTaskType: null,
 		});
-		// The comment read ran and found no verdict: no label write follows.
-		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND]);
+		// The comment and review reads ran and found no verdict: no label
+		// write follows.
+		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND, REVIEW_READ_COMMAND]);
 	});
 
 	test("no pull request found is a visible fact, and the ticket's own facts still stand", async () => {
@@ -1094,9 +1224,10 @@ describe("the transition fire", () => {
 			taskType: "review",
 		});
 		// The review transition tests the score, not the pull request's state:
-		// the comment read ran, and no state read followed.
+		// the comment and review reads ran, and no state read followed.
 		expect(runner.commands()).toContain(COMMENT_READ_COMMAND);
-		expect(runner.commands().some((command) => command.includes("pulls/"))).toBe(false);
+		expect(runner.commands()).toContain(REVIEW_READ_COMMAND);
+		expect(runner.commands()).not.toContain(STATE_READ_COMMAND);
 	});
 
 	test("a merged pull request the projection still lists as open routes nowhere", async () => {

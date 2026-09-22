@@ -61,3 +61,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0050: Ticket priority is retired in favor of the queue order](./0050-ticket-priority-is-retired-in-favor-of-the-queue-order.md)
 - [ADR 0051: Auto-handoff tops up the Work queue one item at a time](./0051-auto-handoff-tops-up-the-work-queue-one-item-at-a-time.md)
 - [ADR 0052: The queue pause is factory state](./0052-the-queue-pause-is-factory-state.md)
+- [ADR 0053: The review score read takes the pull request's comments and its reviews](./0053-the-review-score-read-takes-the-pull-requests-comments-and-its-reviews.md)
