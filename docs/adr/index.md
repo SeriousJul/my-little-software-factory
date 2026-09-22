@@ -53,3 +53,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0042: A ticket rests behind its open fixing pull request](./0042-a-ticket-rests-behind-its-open-fixing-pull-request.md)
 - [ADR 0043: A live agent belongs to a ticket by name, not by pane id](./0043-a-live-agent-belongs-to-a-ticket-by-name-not-by-pane-id.md)
 - [ADR 0044: The Consultation close verifies the Agent's identity before it takes anything down](./0044-the-consultation-close-verifies-the-agents-identity-before-it-takes-anything-down.md)
+- [ADR 0045: A task type override places the ticket on the chosen task's state](./0045-a-task-type-override-places-the-ticket-on-the-chosen-state.md)

@@ -421,11 +421,13 @@ _Avoid_: pipeline, state machine, task rules
 **Workflow state**:
 A named position in the Workflow. It matches on a source kind, and optionally on a source name, a repository, and label sets (all, any, none). It offers at most one task type.
 The states are ordered and the first match wins, so the config author encodes label priority by order. A state that offers no task is a parking state: the control plane does nothing on it, and an external label write is the only engine that moves the ticket.
+Its match spec is also the ticket's entry to it: the all and any labels are the state's placement labels, and the Placement derives the write from them (ADR 0045).
 _Avoid_: status, phase, stage, ticket state
 
 **Transition**:
 The label facts a completed turn of a task type writes. It fires on a `completed` settle, before the Completion decision, in manual mode and in auto mode alike, and it is idempotent.
 It adds and removes labels on the ticket and on its fixing pull request, and a branch chooses between alternative fact sets on a Judgment. After it runs, the label set matches its spec whatever writers ran before, and the tickets' new positions derive from the written labels.
+It is the settle-time write; the handoff-time write is the Placement (ADR 0045).
 _Avoid_: handoff, label flip, workflow edge
 
 **Judgment**:
@@ -495,12 +497,23 @@ It is a durable fact on the ticket, visible in its row and in its detail, and it
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
 
+**Placement**:
+The label write the control plane makes when a manual Handoff's final task type differs from the task the ticket's position suggests: it places the ticket on the state that offers the chosen task type (ADR 0045).
+The target is the first state, in machine order, that offers the task and whose non-label conditions hold for the ticket. The write adds the target state's all and any labels and removes the placement labels the state does not name, so the ticket's new position offers the chosen task. It is idempotent: a label set that already matches the spec writes nothing.
+It runs on the ticket being handed off, never on its fixing pull request, after the Handoff's claim and before the agent starts. An infeasible placement, or a failed write, refuses the Handoff start with a readable reason and leaves the ticket's position as it was.
+_Avoid_: label flip, position edit, entry write
+
+**Placement label**:
+A label named in a Workflow state's all or any match set. The Placement write owns this set: it adds and removes placement labels, and it never touches a label no state names, such as a priority or severity label. A state's none set names exclusion, not ownership.
+_Avoid_: entry label, position label, workflow label
+
 **Override**:
 A one-shot change to the settings of a single Handoff, made in the override panel before the Handoff starts.
 The panel edits an open Ticket's next Handoff and a handoff the Workflow position suggests alike: `e` on a decision row opens the panel on the settings that row resolved.
 It applies to that Handoff only and never becomes a new default; a later handoff the Workflow position suggests resolves its own profile instead of inheriting one.
 A Restart repeats the interrupted Handoff's choices as recovery.
 The settings are: Agent type, Environment kind, Task type, Model, Thinking level, and Context window.
+A Task type the ticket's position does not offer runs the Placement: the ticket is placed on the chosen task's state before the Handoff starts (ADR 0045).
 _Avoid_: custom setting, tweak
 
 **Config file**:

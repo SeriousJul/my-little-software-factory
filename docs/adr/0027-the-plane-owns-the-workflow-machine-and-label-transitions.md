@@ -118,9 +118,10 @@ The alternatives considered in the discussion (issue #70):
 
 ## Consequences
 
-- The plane writes to the external source, through one path: the
-  transitions, through the command runner, at settle time.
-  `docs/labels.md` is rewritten to state it.
+- The plane writes to the external source, through the command runner. The
+  transitions write at settle time and own the transition-written label set.
+  The Placement (ADR 0045) writes at handoff time and owns the placement
+  label set. `docs/labels.md` is rewritten to state it.
 - The label workflow runs in auto mode without pre-labeling: the default
   task type hands off the implement, the transition puts the pull request
   into the machine, and the auto-handoff picks up the review on the pull
