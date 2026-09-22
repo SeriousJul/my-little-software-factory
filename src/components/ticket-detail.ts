@@ -185,8 +185,9 @@ export function detailContent(
 	// rank orders: the operator reads what the bump will move from (ADR 0022).
 	const fact = priorityFact(ticket);
 	choiceIndex = lines.length;
-	// When the rank is inherited, the fact names the issue that supplied it:
-	// `Priority: critical (issue #123)` (ADR 0023).
+	// When the rank is inherited, the fact names the source that supplied it:
+	// `Priority: critical (issue #123)`, the fixing alert by `alert #9`, the
+	// fixing advisory by its key alone (ADR 0023, ADR 0042).
 	lines.push({ text: `Priority: ${fact.text}`, fg: fact.fg });
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,

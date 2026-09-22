@@ -34,7 +34,7 @@ import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
 import {
 	compareTicketPriority,
 	effectivePullRequestPriority,
-	type ReferencedIssueRank,
+	type RankSource,
 } from "./priority.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
@@ -1084,11 +1084,13 @@ export class FactoryState {
 	 * Each reference resolves by the issue's own chain: its Priority
 	 * override, then its labels. The labels come from the issue's snapshot -
 	 * a live or last known ticket - when it is one, else from its Referenced
-	 * issue fact. A snapshot always beats a fact.
+	 * issue fact. A snapshot always beats a fact. A closing reference always
+	 * names an issue, so every rank source it resolves carries the issue
+	 * kind beside its key, the pane's word for the inherited rank.
 	 */
 	issueReferenceRanks(
 		memberships: readonly { attributes: Record<string, string> }[],
-	): ReferencedIssueRank[] {
+	): RankSource[] {
 		const references: IssueReference[] = [];
 		const seen = new Set<string>();
 		for (const membership of memberships) {
@@ -1099,10 +1101,16 @@ export class FactoryState {
 				references.push(reference);
 			}
 		}
-		const ranks: ReferencedIssueRank[] = [];
+		const ranks: RankSource[] = [];
 		for (const reference of references) {
 			if (reference.identity === null) {
-				ranks.push({ number: reference.number, labels: [], override: null });
+				ranks.push({
+					number: reference.number,
+					labels: [],
+					override: null,
+					sourceKind: "github-issue",
+					externalKey: `#${reference.number}`,
+				});
 				continue;
 			}
 			const ticket = this.db
@@ -1111,13 +1119,17 @@ export class FactoryState {
 			if (ticket != null) {
 				const fact = this.db
 					.prepare(
-						"SELECT labels_json FROM memberships WHERE ticket_identity = ? ORDER BY external_updated_at DESC, source_name LIMIT 1",
+						"SELECT labels_json, source_kind, external_key FROM memberships WHERE ticket_identity = ? ORDER BY external_updated_at DESC, source_name LIMIT 1",
 					)
-					.get(reference.identity) as { labels_json: string } | undefined;
+					.get(reference.identity) as
+					| { labels_json: string; source_kind: string; external_key: string }
+					| undefined;
 				ranks.push({
 					number: reference.number,
 					labels: jsonStringArray(fact?.labels_json ?? "[]"),
 					override: ticket.priority_override,
+					sourceKind: fact?.source_kind ?? "github-issue",
+					externalKey: fact?.external_key ?? `#${reference.number}`,
 				});
 				continue;
 			}
@@ -1128,6 +1140,8 @@ export class FactoryState {
 				number: reference.number,
 				labels: jsonStringArray(stored?.labels_json ?? "[]"),
 				override: null,
+				sourceKind: "github-issue",
+				externalKey: `#${reference.number}`,
 			});
 		}
 		return ranks;
@@ -1276,9 +1290,13 @@ export class FactoryState {
 				[
 					...this.issueReferenceRanks(ticket.memberships),
 					...fixing.map((candidate) => ({
+						// A key that names no number (the advisory) takes the
+						// sentinel, so it loses every tie to a numbered source.
 						number: externalKeyNumber(candidate.externalKey) ?? Number.MAX_SAFE_INTEGER,
 						labels: candidate.labels,
 						override: overrides.get(candidate.identity) ?? null,
+						sourceKind: candidate.sourceKind,
+						externalKey: candidate.externalKey,
 					})),
 				],
 			);

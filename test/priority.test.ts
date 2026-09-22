@@ -111,43 +111,101 @@ describe("the rank function", () => {
 
 describe("the inherited rank (ADR 0023)", () => {
 	const refs = {
-		low: { number: 3, labels: ["low"], override: null },
-		critical: { number: 1, labels: ["critical"], override: null },
-		high: { number: 2, labels: ["high"], override: null },
-		urgent: { number: 4, labels: ["urgent"], override: null },
+		low: {
+			number: 3,
+			labels: ["low"],
+			override: null,
+			sourceKind: "github-issue",
+			externalKey: "#3",
+		},
+		critical: {
+			number: 1,
+			labels: ["critical"],
+			override: null,
+			sourceKind: "github-issue",
+			externalKey: "#1",
+		},
+		high: {
+			number: 2,
+			labels: ["high"],
+			override: null,
+			sourceKind: "github-issue",
+			externalKey: "#2",
+		},
+		urgent: {
+			number: 4,
+			labels: ["urgent"],
+			override: null,
+			sourceKind: "github-issue",
+			externalKey: "#4",
+		},
 	};
 
-	test("the highest ranked reference wins, named by its number", () => {
+	test("the highest ranked reference wins, named by its kind and key", () => {
 		expect(inheritedPriority(RANKS, [refs.low, refs.critical])).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 1,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#1" },
 		});
 	});
 
 	test("a reference's own override beats its labels", () => {
-		expect(inheritedPriority(RANKS, [{ number: 2, labels: ["low"], override: "high" }])).toEqual({
+		expect(
+			inheritedPriority(RANKS, [
+				{
+					number: 2,
+					labels: ["low"],
+					override: "high",
+					sourceKind: "github-issue",
+					externalKey: "#2",
+				},
+			]),
+		).toEqual({
 			rank: 1,
 			label: "high",
 			source: "inherited",
-			inheritedFrom: 2,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#2" },
 		});
 	});
 
 	test("an override set on the referenced ticket travels through inheritance", () => {
 		expect(
-			inheritedPriority(RANKS, [{ number: 7, labels: ["low"], override: "critical" }]),
-		).toEqual({ rank: 0, label: "critical", source: "inherited", inheritedFrom: 7 });
+			inheritedPriority(RANKS, [
+				{
+					number: 7,
+					labels: ["low"],
+					override: "critical",
+					sourceKind: "github-issue",
+					externalKey: "#7",
+				},
+			]),
+		).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#7" },
+		});
 	});
 
 	test("a reference whose override is off is unranked, and the next wins", () => {
 		expect(
 			inheritedPriority(RANKS, [
-				{ number: 1, labels: ["critical"], override: PRIORITY_OFF },
+				{
+					number: 1,
+					labels: ["critical"],
+					override: PRIORITY_OFF,
+					sourceKind: "github-issue",
+					externalKey: "#1",
+				},
 				refs.high,
 			]),
-		).toEqual({ rank: 1, label: "high", source: "inherited", inheritedFrom: 2 });
+		).toEqual({
+			rank: 1,
+			label: "high",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#2" },
+		});
 	});
 
 	test("a reference with no ranked label and no override carries no rank", () => {
@@ -168,17 +226,77 @@ describe("the inherited rank (ADR 0023)", () => {
 		});
 	});
 
-	test("a tie at the best rank names the lowest issue number", () => {
+	test("a tie at the best rank names the lowest number", () => {
 		expect(
 			inheritedPriority(RANKS, [
-				{ number: 9, labels: ["critical"], override: null },
-				{ number: 5, labels: ["critical"], override: null },
+				{
+					number: 9,
+					labels: ["critical"],
+					override: null,
+					sourceKind: "github-issue",
+					externalKey: "#9",
+				},
+				{
+					number: 5,
+					labels: ["critical"],
+					override: null,
+					sourceKind: "github-issue",
+					externalKey: "#5",
+				},
 			]),
 		).toEqual({
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 5,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#5" },
+		});
+	});
+
+	test("a rank source without a number in its key is named by its kind and key", () => {
+		// The advisory's key names no number: the sentinel keeps it last in
+		// every tie, and the pane names it by its key, not by a number.
+		expect(
+			inheritedPriority(RANKS, [
+				{
+					number: Number.MAX_SAFE_INTEGER,
+					labels: ["critical"],
+					override: null,
+					sourceKind: "github-security-advisory",
+					externalKey: "GHSA-j8wj-q3wj-c945",
+				},
+				refs.high,
+			]),
+		).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: "GHSA-j8wj-q3wj-c945" },
+		});
+	});
+
+	test("a rank source without a number loses a tie to the lowest number", () => {
+		expect(
+			inheritedPriority(RANKS, [
+				{
+					number: Number.MAX_SAFE_INTEGER,
+					labels: ["critical"],
+					override: null,
+					sourceKind: "github-security-advisory",
+					externalKey: "GHSA-j8wj-q3wj-c945",
+				},
+				{
+					number: 5,
+					labels: ["critical"],
+					override: null,
+					sourceKind: "github-issue",
+					externalKey: "#5",
+				},
+			]),
+		).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#5" },
 		});
 	});
 
@@ -223,7 +341,7 @@ describe("the inherited rank (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 1,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#1" },
 		});
 	});
 
@@ -232,7 +350,7 @@ describe("the inherited rank (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 1,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#1" },
 		});
 	});
 
@@ -569,7 +687,7 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 7,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#7" },
 		});
 		state.close();
 	});
@@ -597,7 +715,7 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 5,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#5" },
 		});
 		state.close();
 	});
@@ -618,7 +736,7 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 5,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#5" },
 		});
 		state.close();
 	});
@@ -654,7 +772,7 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 			rank: 2,
 			label: "low",
 			source: "inherited",
-			inheritedFrom: 6,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#6" },
 		});
 		state.close();
 	});
@@ -698,7 +816,7 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 7,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#7" },
 		});
 		state.close();
 	});
@@ -725,7 +843,7 @@ describe("inherited priority through closed issues (ADR 0023)", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 5,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#5" },
 		});
 		state.close();
 	});

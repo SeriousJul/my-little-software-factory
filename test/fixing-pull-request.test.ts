@@ -37,6 +37,7 @@ function statePath(): string {
 const issues = { name: "issues", kind: "github-issues" } as const;
 const pulls = { name: "pulls", kind: "github-pull-requests" } as const;
 const security = { name: "security", kind: "github-dependabot-alert" } as const;
+const advisories = { name: "advisories", kind: "github-security-advisories" } as const;
 
 const RANKS = ["critical", "high", "low"];
 
@@ -44,6 +45,9 @@ const issueIdentity = "github:github.com:I_5";
 const pullIdentity = "github:github.com:P_7";
 const securityIdentity = "github:github.com:SEC_9";
 const securityPullIdentity = "github:github.com:P_97";
+const advisoryIdentity = "github:github.com:GHSA-j8wj-q3wj-c945";
+const advisoryKey = "GHSA-j8wj-q3wj-c945";
+const advisoryPullIdentity = "github:github.com:P_98";
 
 const repository = {
 	identity: "github.com/acme/factory",
@@ -105,6 +109,36 @@ const securityBranch = "factory/9-patch-the-vulnerable-dependency";
 function securityPullTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
 	return pullTicket(securityPullIdentity, 97, withHeadBranch({ draft: "false" }, securityBranch), {
 		title: "Patch the vulnerable dependency",
+		externalUpdatedAt: "2026-08-31T10:30:00Z",
+		...over,
+	});
+}
+
+/** One security advisory ticket on the shared sample repository. */
+function advisoryTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
+	return {
+		identity: advisoryIdentity,
+		sourceKind: "github-security-advisory",
+		externalKey: advisoryKey,
+		sourceState: "open",
+		url: `https://github.com/advisories/${advisoryKey}`,
+		title: "The vulnerable component",
+		description: "The security advisory.",
+		labels: ["high"],
+		externalUpdatedAt: "2026-08-31T10:00:00Z",
+		repository,
+		attributes: {},
+		...over,
+	};
+}
+
+/** The branch a worktree handoff of the advisory would create. */
+const advisoryBranch = `factory/${advisoryKey}-the-vulnerable-component`;
+
+/** A pull request that fixes its advisory by the factory branch alone. */
+function advisoryPullTicket(over: Partial<FetchedTicket> = {}): FetchedTicket {
+	return pullTicket(advisoryPullIdentity, 98, withHeadBranch({ draft: "false" }, advisoryBranch), {
+		title: "Patch the vulnerable component",
 		externalUpdatedAt: "2026-08-31T10:30:00Z",
 		...over,
 	});
@@ -273,7 +307,7 @@ describe("the rank through the fixing ticket", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 9,
+			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
 		});
 		state.close();
 	});
@@ -306,7 +340,7 @@ describe("the rank through the fixing ticket", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 9,
+			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
 		});
 		state.close();
 	});
@@ -336,7 +370,7 @@ describe("the rank through the fixing ticket", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 5,
+			inheritedFrom: { sourceKind: "github-issue", externalKey: "#5" },
 		});
 		state.close();
 	});
@@ -374,7 +408,28 @@ describe("the rank through the fixing ticket", () => {
 			rank: 0,
 			label: "critical",
 			source: "inherited",
-			inheritedFrom: 9,
+			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
+		});
+		state.close();
+	});
+
+	test("an advisory with no number in its key still supplies the rank, named by its key", () => {
+		const state = openFactoryState(statePath());
+		state.initializeSources([advisories, pulls]);
+		state.applyFetch(advisories, success([advisoryTicket({ labels: ["critical"] })]));
+		state.applyFetch(pulls, success([advisoryPullTicket()]));
+		// The advisory's key names no number: the rank still travels the
+		// branch link, and the pane names the source by its kind and key, not
+		// by a number the key never carried.
+		const [pull] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((ticket) => ticket.identity === advisoryPullIdentity);
+		if (pull === undefined) throw new Error("missing pull request ticket");
+		expect(pull.priority).toEqual({
+			rank: 0,
+			label: "critical",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: advisoryKey },
 		});
 		state.close();
 	});

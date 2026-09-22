@@ -63,8 +63,11 @@ tickets it fixes": the closing references and the fixing pull request's own
 ticket feed one rule. The mechanism is unchanged: a live ticket's newest
 membership labels supply the rank, a Priority override set on the ticket
 travels the link, and a ticket that left its source leaves the pull request
-unranked. The pull request sorts under the ordinary rank rule; it takes no
-special position.
+unranked. The detail pane names the source of the inherited rank by its
+kind and key - `issue #5`, `alert #9`, `advisory GHSA-...` - so a rank
+source without a number in its key, the security advisory among them, is
+named by its key, not by a number the key never carried. The pull request
+sorts under the ordinary rank rule; it takes no special position.
 
 **A recorded skip re-fires when the link appears - deferred to #147.** The
 accepted design for the recorded skip is that a refresh that finds a fixing
@@ -75,11 +78,11 @@ spec writes nothing, so the re-fire takes a new egress point beside the
 settle-time fire only when labels actually differ. The re-fire writes the
 facts the skip left unwritten and derives the position the fire derives, so
 an auto-advance task type advances through it. Issue #146 does not build
-it; it lands with #147, the follow-up that carries the pickup guard beside
-it. Until then the plane makes no refresh-time write: the skip stands as a
-visible fact on the ticket's newest completion trace, the pull request
-stays listed with its inherited rank and no task, and the pair heals on
-the next completed turn that fires on it.
+it: the pickup guard that refuses a covered ticket ships in this issue, so
+#147 carries the re-fire alone. Until then the plane makes no refresh-time
+write: the skip stands as a visible fact on the ticket's newest completion
+trace, the pull request stays listed with its inherited rank and no task,
+and the pair heals on the next completed turn that fires on it.
 
 ## Considered options
 
