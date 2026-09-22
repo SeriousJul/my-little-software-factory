@@ -557,10 +557,7 @@ describe("the in-app Key guide", () => {
 		[80, 30],
 		[44, 24],
 	] as const) {
-		// Skipped at 44 columns: the walk times out at the 5000 ms budget, in
-		// isolation and in the full suite. Investigate and fix, then remove
-		// the skipIf. issue #104
-		test.skipIf(width === 44)(`keeps every reason in full at ${width} columns`, async () => {
+		test(`keeps every reason in full at ${width} columns`, async () => {
 			const runner = new FakeRunner();
 			await withApp(
 				async (setup) => {
@@ -574,41 +571,63 @@ describe("the in-app Key guide", () => {
 					];
 					// The guide's own range indicator, so the walk runs to the
 					// real bottom instead of a fixed step count.
-					const rangeOf = (frame: string): { top: number; total: number } | undefined => {
-						const bar = actionBarRowOf(frame);
-						const match = bar.match(/(\d+)-(\d+)\/(\d+)/);
-						return match === null ? undefined : { top: Number(match[1]), total: Number(match[3]) };
+					const rangeOf = (
+						frame: string,
+					): { top: number; end: number; total: number } | undefined => {
+						const match = actionBarRowOf(frame).match(/(\d+)-(\d+)\/(\d+)/);
+						return match === null
+							? undefined
+							: { top: Number(match[1]), end: Number(match[2]), total: Number(match[3]) };
 					};
-					for (const reason of reasons) {
-						// Walk the whole list: a reason can sit below the fold.
-						// Return to the top first, so every reason is searched
-						// from a known place no matter where the last search ended.
-						let frame = await settle(setup);
-						for (let step = 0; step < 200; step += 1) {
-							const range = rangeOf(frame);
-							if (range === undefined || range.top <= 1) break;
-							setup.mockInput.pressKey("k");
-							frame = await settle(setup);
-						}
-						let found = false;
-						for (let step = 0; step < 300 && !found; step += 1) {
-							// Compare the cells, not the lines: a narrow guide
-							// breaks a long word across rows, and every cell of
-							// the reason must still be there.
-							const joined = rowsOf(frame)
+					// One step down, waited on the range advance itself. The guide
+					// scrolls one row per key, so the bar's new range is the step's
+					// effect, and the wait ends the moment it stands. A full settle
+					// after every step overran the test's budget at the narrowest
+					// size, where the flowed reasons run the guide past a hundred
+					// rows (issue #104).
+					const stepDown = async (from: { top: number; total: number }): Promise<string> => {
+						setup.mockInput.pressKey("j");
+						return await awaitFrame(
+							setup,
+							(f) => {
+								const range = rangeOf(f);
+								return (
+									range !== undefined && range.top === from.top + 1 && range.total === from.total
+								);
+							},
+							`the guide range to advance to ${from.top + 1}`,
+						);
+					};
+					// Walk the whole list once from the top, the place the guide
+					// opens at: a reason can sit below the fold, so every window
+					// the walk shows is read. The cells of each window, not its
+					// lines, are compared: a narrow guide breaks a long word
+					// across rows, and every cell of a reason must still be there.
+					let frame = await settle(setup);
+					const windows: string[] = [];
+					for (;;) {
+						windows.push(
+							rowsOf(frame)
 								.map((row) => contentOf(row).replace(/\s+/g, ""))
-								.join("");
-							found = joined.includes(reason.replace(/\s+/g, ""));
-							if (found) break;
-							// One step down; at the bottom the range holds, so the
-							// walk ends instead of spinning on the last row.
-							const before = rangeOf(frame);
-							setup.mockInput.pressKey("j");
-							frame = await settle(setup);
-							const after = rangeOf(frame);
-							if (before === undefined || after === undefined || after.top <= before.top) break;
-						}
-						expect(found, `the reason "${reason}" is cut at ${width} columns`).toBe(true);
+								.join(""),
+						);
+						const range = rangeOf(frame);
+						if (range === undefined)
+							throw new Error(`the guide's bar holds no range at ${width} columns`);
+						// One step down; the bottom window holds the last rows,
+						// so the range holds on the next step and the walk ends
+						// instead of spinning on the last row.
+						if (range.top > range.total - (range.end - range.top + 1)) break;
+						frame = await stepDown(range);
+					}
+					// The windows meet at their rows, so a reason that stands in
+					// no single window can never read as whole: the "|" keeps the
+					// windows apart in the joined text.
+					const collected = windows.join("|");
+					for (const reason of reasons) {
+						expect(collected, `the reason "${reason}" is cut at ${width} columns`).toContain(
+							reason.replace(/\s+/g, ""),
+						);
 					}
 					// No row of the guide is wider than the terminal.
 					for (const row of rowsOf(await settle(setup))) expect(widthOf(row)).toBe(width);
