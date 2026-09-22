@@ -7,15 +7,17 @@ import { type MessageFact, type MessageFacts, selectMessage } from "./messages.t
  * Which operation owns a progress line.
  *
  * The owner is the operation's own identity, never its kind. Only one refresh
- * and one Handoff run at a time, so their names are enough for them, but any
- * number of Consultation operations run at once - one per Repository - so each
- * carries the Consultation it works on. Each owner clears the progress it
- * wrote when it settles: a Handoff's completion must not erase a refresh the
- * operator started while it ran, a settled refresh must not erase the Handoff
- * it covers, and the settle of one Consultation operation must not erase the
- * progress of the one still running beside it.
+ * and one Handoff runs at a time, so their names are enough for them. A
+ * transition re-fire (ADR 0054) also runs single-flight, behind its own
+ * guard, so its name stands alone. Any number of Consultation operations run
+ * at once - one per Repository - so each carries the Consultation it works
+ * on. Each owner clears the progress it wrote when it settles: a Handoff's
+ * completion must not erase a refresh the operator started while it ran, a
+ * settled refresh must not erase the Handoff it covers, and the settle of one
+ * Consultation operation must not erase the progress of the one still running
+ * beside it.
  */
-export type WorkingOwner = "refresh" | "handoff" | `consultation:${string}`;
+export type WorkingOwner = "refresh" | "handoff" | "refire" | `consultation:${string}`;
 
 /** The progress owner of one Consultation operation. */
 export const consultationProgressOwner = (consultationId: string): WorkingOwner =>

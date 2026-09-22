@@ -1297,6 +1297,8 @@ describe("the decision modal", () => {
 				expect(panel).toContain("Handoff: review");
 				expect(panel).toContain("Goto");
 				expect(panel).toContain("Close");
+				// The outcome completed the machine's work: no Re-fire row.
+				expect(panel).not.toContain("Re-fire");
 				// The transition's fact lines stand above the rows that decide
 				// on them (ADR 0027): what the plane wrote, on which surface.
 				expect(panel).toContain("ticket · added ready-for-review · removed ready-for-agent");
@@ -1357,6 +1359,84 @@ describe("the decision modal", () => {
 		app.state.close();
 	});
 
+	test("the Re-fire row fires the turn's transition again and swaps the record (ADR 0054)", async () => {
+		// The recorded outcome did not complete: no branch held, the way the
+		// score read found no verdict before the review comment landed. The
+		// Re-fire row stands on it; the confirm re-fires the turn's transition
+		// on the source as it stands now and swaps the new outcome onto the
+		// trace. The turn stays awaiting with no decision change.
+		const noFire = reviewRoute({
+			fired: false,
+			when: null,
+			reason: "the pull request carries no review score",
+			autoAdvance: false,
+			ticketWrite: null,
+			positionTaskType: null,
+			positionTicketIdentity: null,
+		});
+		const app = seededApp("awaiting", {}, success, "live-worktree", { transition: noFire });
+		stubCheckout(app);
+		app.runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
+
+		await withApp(
+			async (setup) => {
+				app.src.settle(success);
+				await awaitFrame(setup, (f) => ticketRow(f).includes("[awaiting]"), "the awaiting ticket");
+				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
+				const panel = frameText(await settle(setup));
+				expect(panel).toContain(
+					"no transition branch held: the pull request carries no review score",
+				);
+				expect(panel).toContain("Re-fire");
+				expect(panel).not.toContain("Handoff: review");
+
+				// Close is the default, Goto the second row, Re-fire the third.
+				await pressArrow(setup, "down", "the goto row", (f) => frameText(f).includes("❯ Goto"));
+				await pressArrow(setup, "down", "the re-fire row", (f) =>
+					frameText(f).includes("❯ Re-fire"),
+				);
+				await pressReturn(setup, "the re-fire lands", (f) =>
+					frameText(f).includes("Handoff: review"),
+				);
+				const after = frameText(await settle(setup));
+				// The fact lines stand on the re-fired outcome, the Re-fire row
+				// stands down, and the Message line reports the landing. The fact
+				// line truncates at this width; the added label is the fact that
+				// must stand.
+				expect(after).toContain("ticket · added ready-for-review");
+				expect(after).not.toContain("Re-fire");
+				expect(after).toContain("the re-fire lands; the labels stand as written");
+
+				// The write ran on the ticket's source membership, and the
+				// trace stands on the re-fired outcome, not the recorded one.
+				const commands = app.runner.commands();
+				expect(commands).toContain(
+					"gh issue edit #5 --repo github.com/acme/factory --add-label ready-for-review",
+				);
+				expect(app.state.lastCompletion(identity)?.transition).toEqual({
+					fired: true,
+					when: null,
+					reason: "",
+					ticketFacts: ["ready-for-review"],
+					pullRequestFacts: [],
+					autoAdvance: false,
+					ticketWrite: { added: ["ready-for-review"], removed: [] },
+					pullRequestWrite: null,
+					pullRequestIdentity: null,
+					pullRequestKey: null,
+					writeFailure: "",
+					positionTaskType: "review",
+					positionTicketIdentity: identity,
+				});
+				expect(app.state.lastCompletion(identity)?.decision).toBeNull();
+			},
+			WIDTH,
+			HEIGHT,
+			propsOf(app),
+		);
+		app.state.close();
+	});
+
 	test("the modal states a label write that failed", async () => {
 		const app = seededApp("awaiting", {}, success, "live-worktree", {
 			transition: reviewRoute({
@@ -1372,6 +1452,8 @@ describe("the decision modal", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				const panel = frameText(await settle(setup));
 				expect(panel).toContain("label write failed: gh pr edit #12 failed");
+				// The write did not complete: the Re-fire row stands on it too.
+				expect(panel).toContain("Re-fire");
 			},
 			WIDE_STATUS,
 			HEIGHT,
