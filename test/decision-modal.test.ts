@@ -491,6 +491,60 @@ describe("the decision modal's region and the log's floor", () => {
 		);
 	});
 
+	test("a transition that did not complete stands the Re-fire row on the region (ADR 0054)", async () => {
+		const noFireTicket: Ticket = {
+			...awaitingTicket,
+			lastCompletion: {
+				...shortLogCompletion,
+				transition: {
+					fired: false,
+					when: null,
+					reason: "the pull request carries no review score",
+					ticketFacts: [],
+					pullRequestFacts: ["ready-to-ship"],
+					autoAdvance: false,
+					ticketWrite: null,
+					pullRequestWrite: null,
+					pullRequestIdentity: null,
+					pullRequestKey: null,
+					writeFailure: "",
+					positionTaskType: null,
+					positionTicketIdentity: null,
+				},
+			},
+		};
+		await withApp(
+			async (setup) => {
+				const frame = await openSettled(setup);
+				// The no-fire's reason stands as the region's fact line. The
+				// region shows two of its three rows, Close first, and the bar
+				// states the window. No position: no handoff row stands.
+				expect(frame).toContain(
+					"no transition branch held: the pull request carries no review score",
+				);
+				expect(frame).toContain("❯ Close");
+				expect(frame).toContain("1-1/3");
+				expect(frame).not.toContain("Handoff:");
+
+				// Down walks the rows; the window slides when the step would
+				// leave it, and the Re-fire row is the region's last row.
+				await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
+					f.includes("❯ Goto"),
+				);
+				const atRefire = await pressArrow(
+					setup,
+					"down",
+					"the window to slide onto the re-fire row",
+					(f) => f.includes("❯ Re-fire"),
+				);
+				expect(atRefire).toContain("3-3/3");
+			},
+			WIDTH,
+			HEIGHT,
+			{ initialTickets: [noFireTicket] },
+		);
+	});
+
 	/**
 	 * The pane yields its chrome before the log yields rows: the padding goes
 	 * first, the border stays, the log keeps its floor, and only a box that
