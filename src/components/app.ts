@@ -74,7 +74,7 @@ import {
 } from "../observation.ts";
 import { parallelSeatCount } from "../parallel.ts";
 import { evaluatePlacement, type PlacementEvaluation } from "../placement.ts";
-import { bumpPriority, PRIORITY_OFF } from "../priority.ts";
+
 import { RefreshCoordinator } from "../refresh.ts";
 import type { RepositoryMapping } from "../repo.ts";
 import {
@@ -136,7 +136,6 @@ import { type ActionRow, belowMinimum, TOO_SMALL_TEXT } from "./modal-chrome.ts"
 import { type AgentModelList, type ModelListStatus, OverridePanel } from "./override-panel.ts";
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
-import { cycleChoice } from "./shared/choices.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { inStartingWindow, paint } from "./theme.ts";
@@ -316,8 +315,13 @@ export function App({
 	const consultationsExpandedRef = useRef(true);
 	// The Work queue's section (ADR 0034): it stays hidden while it is empty
 	// and collapsed, so an idle factory keeps the two-section frame it had.
-	const [workExpanded, setWorkExpanded] = useState(false);
-	const workExpandedRef = useRef(false);
+	// The Work section starts expanded (ADR 0049): its list is the answer
+	// to "what starts next", and the section is always on the Main view.
+	const [workExpanded, setWorkExpanded] = useState(true);
+	const workExpandedRef = useRef(true);
+	// The queue pause (ADR 0052): factory state on the state file, shown on
+	// the Work section's header beside the depth it holds.
+	const [queuePaused, setQueuePaused] = useState(false);
 	const [selection, setSelection] = useState<"ticket" | "consultation" | "queue">("ticket");
 	const selectionRef = useRef<"ticket" | "consultation" | "queue">("ticket");
 	// The queue row under the unified cursor, kept like the Consultation's:
@@ -652,18 +656,19 @@ export function App({
 	const detailGeometry = usePaneGeometry("detail", detailReservedRows);
 	// The rows a section's box spends on chrome: two borders and two padding
 	// rows. Each section's minimum is three content rows, so its minimum box
-	// is seven rows: both sections at their minimum cost sixteen body rows,
-	// and the minimum terminal holds exactly that (user story 29).
+	// is seven rows: the three sections at their minimum cost twenty-one box
+	// rows beside their three header rows, and the minimum terminal holds
+	// exactly that (ADR 0049).
 	const SECTION_BOX_CHROME = 4;
 	const MIN_SECTION_BOX_ROWS = 3 + SECTION_BOX_CHROME;
-	// The Work section shows its header row only while it holds a row or the
-	// operator expanded it; a hidden Work section costs no row, so an idle
-	// factory keeps the two-section frame the minimum terminal holds.
-	const workVisible = workExpanded || workQueue.length > 0;
+	// The Work section is always visible (ADR 0049): it keeps its header row
+	// while it is empty, the way the Ticket and Consultation sections do, so
+	// the frame floor holds three sections now.
+	const workVisible = true;
 	const sectionOpen: Record<"tickets" | "consultations" | "work", boolean> = {
 		tickets: ticketsExpanded,
 		consultations: consultationsExpanded,
-		work: workVisible && workExpanded,
+		work: workExpanded,
 	};
 	let ticketsBoxRows = 0;
 	let consultationsBoxRows = 0;
@@ -713,8 +718,7 @@ export function App({
 	const consultationsContentRows = consultationsExpanded
 		? Math.max(1, consultationsBoxRows - SECTION_BOX_CHROME)
 		: 0;
-	const workContentRows =
-		workVisible && workExpanded ? Math.max(1, workBoxRows - SECTION_BOX_CHROME) : 0;
+	const workContentRows = workExpanded ? Math.max(1, workBoxRows - SECTION_BOX_CHROME) : 0;
 	// The Scroll control's availability must agree with the native detail's
 	// own overflow, so it asks the pane for the measurement rather than
 	// repeating the pane's gutter rule here.
@@ -859,13 +863,9 @@ export function App({
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
 		const currentConfig = configRef.current;
-		// The list orders by the config's Priority label list, so a bump that
-		// re-ranks the operator's ticket reorders the rows in the same pass.
-		const next = state.visibleTickets(
-			currentConfig.workflowStates,
-			currentConfig.defaultTaskType,
-			currentConfig.priority?.labels ?? [],
-		);
+		// The list orders the open state by the ticket's own task type, then
+		// the newest external update (ADR 0050).
+		const next = state.visibleTickets(currentConfig.workflowStates, currentConfig.defaultTaskType);
 		const currentIndex = selectedIndexRef.current;
 		const selectedId = ticketsRef.current[currentIndex]?.identity;
 		const preserved =
@@ -1765,10 +1765,6 @@ export function App({
 		});
 	};
 
-	const beginConsultationLaunch = (consultation: Consultation) => {
-		void consultationOperations?.launch(consultation);
-	};
-
 	const startConsultation = (
 		typeName: string,
 		repository: ConsultationRepositoryOption,
@@ -1778,15 +1774,11 @@ export function App({
 			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
 			return;
 		}
-		// The Parallel limit is full: the submit creates the durable record in
-		// `queued` state instead of starting (ADR 0034, issue #90). No
-		// environment and no agent until the Work queue's pickup starts the
-		// record when a seat frees, before the automatic starts do. The seat
-		// count is the same shared source the mode line and the handoff's
-		// queue gate read, so the launcher's submit and the mode line cannot
-		// disagree about the cap.
-		const cap = configRef.current.maxParallelAgents;
-		const queued = cap > 0 && currentSeatCount() >= cap;
+		// The Consultation submit goes through the Work queue (ADR 0049):
+		// the durable record and its queue item commit in one write in
+		// `queued` state, and the immediate pickup pass that follows every
+		// enqueue starts the record in the same tick when a seat is free.
+		// The queue pause holds the pickup, not the ask (ADR 0052).
 		const replaced =
 			replacementConsultationId === null
 				? undefined
@@ -1798,13 +1790,13 @@ export function App({
 						repository,
 						initialInput: input,
 						replacementOf: replacementConsultationId,
-						queued,
+						queued: true,
 					})
 				: consultationOperations.replace(replaced, {
 						typeName,
 						repository,
 						initialInput: input,
-						queued,
+						queued: true,
 					});
 		if (consultation === undefined) return;
 		setLauncher(false);
@@ -1814,20 +1806,16 @@ export function App({
 		// Stay on the record the replacement points back at, or on the
 		// launched Consultation when it replaces nothing.
 		selectConsultationById(consultation.replacementOf ?? consultation.id);
-		if (queued) {
-			// The record and its item committed in one write: the queue re-reads
-			// it through the same refresh a handoff enqueue runs, and the Message
-			// line says the wait stands.
-			replaceTickets();
-			setNoticeMessage(
-				`consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
-			);
-			return;
-		}
-		// A Replacement opens like a new Consultation: the module builds the
-		// linked record with its bounded recovery context, then the same launch
-		// route starts it.
-		beginConsultationLaunch(consultation);
+		// The record and its item committed in one write: the queue re-reads
+		// it through the same refresh a handoff enqueue runs, and the
+		// immediate pickup pass takes the seat when one is free.
+		replaceTickets();
+		setNoticeMessage(
+			state.queuePaused()
+				? `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue; the queue is paused`
+				: `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+		);
+		void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
 	};
 	const recoverConsultationOpening = (consultation: Consultation) => {
 		if (consultation.state !== "opening") return;
@@ -2203,7 +2191,7 @@ export function App({
 				const w = workQueueRef.current.length;
 				const tOpen = ticketsExpandedRef.current;
 				const cOpen = consultationsExpandedRef.current;
-				const wOpen = workVisible && workExpandedRef.current;
+				const wOpen = workExpandedRef.current;
 				// A cross reaches an empty section too, so the step into it is
 				// always possible while the other section is expanded. The Work
 				// queue's header row stays visible while it holds a row, so the
@@ -2240,6 +2228,26 @@ export function App({
 					? (workQueueRef.current[workQueueIndexRef.current] ?? null)
 					: undefined,
 			workQueueDepth: workQueueRef.current.length,
+			// The row under the cursor in the Ticket or Consultation list, in the
+			// Work queue (ADR 0049): Enter on it jumps to the item.
+			queueItemForSelectedRow: (() => {
+				const queue = workQueueRef.current;
+				if (queue.length === 0) return null;
+				if (selectionRef.current === "ticket") {
+					const identity = ticketsRef.current[selectedIndexRef.current]?.identity;
+					return (
+						queue.find((item) => item.kind === "handoff" && item.ticketIdentity === identity) ??
+						null
+					);
+				}
+				if (selectionRef.current === "consultation") {
+					const id = consultationsRef.current[consultationIndexRef.current]?.id;
+					return (
+						queue.find((item) => item.kind === "consultation" && item.consultationId === id) ?? null
+					);
+				}
+				return null;
+			})(),
 			sourceCount: sources.length,
 			refreshingSourceCount: sources.filter(
 				(source) => coordinatorRef.current?.isFetching(source.name) === true,
@@ -2427,8 +2435,12 @@ export function App({
 				"consultation-list": () => focusPane("list"),
 				tickets: () => focusPane("list"),
 				"queue-list": () => focusPane("list"),
-				"queue-up": () => moveQueueItem("up"),
-				"queue-down": () => moveQueueItem("down"),
+				// `+` (or `=`, its unshifted form) promotes the item under the
+				// cursor, `-` demotes it (ADR 0049): the keys the operator already
+				// knew for raising and lowering a rank, with the queue's own
+				// refusal when the item already stands where the move would put it.
+				"queue-promote": () => moveQueueItem("up"),
+				"queue-demote": () => moveQueueItem("down"),
 				"queue-remove": () => removeQueueItem(),
 				// Enter on a queue row force-dispatches the item under the cursor over a
 				// full Parallel limit (issue #89). The catalogue gated the availability,
@@ -2575,27 +2587,39 @@ export function App({
 						replaceConsultations();
 					refreshNow();
 				},
-				// `+` (or `=`, its unshifted form) raises the rank and `-` lowers
-				// it (ADR 0022). The catalogue gated the key, so this runs the
-				// movement and reports the outcome on the Message line, accepted
-				// and no-op alike.
-				"bump-priority": ({ context, key }) => {
-					const ticket = context.selectedTicket;
-					if (ticket === undefined) return;
-					bumpTicketPriority(ticket, key.name === "+" || key.name === "=" ? "up" : "down");
+				// `p` pauses or resumes the Work queue's drain (ADR 0052): the
+				// pickup takes no item and the top-up adds none while the pause
+				// stands, and the force-dispatch passes it. The state's one write
+				// owns the fact; resuming asks the pickup for one more item, so
+				// the seat the pause gave back frees in the same frame the key
+				// landed.
+				"queue-pause": () => {
+					if (state === undefined) return;
+					const next = !state.queuePaused();
+					state.setQueuePaused(next);
+					setQueuePaused(next);
+					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
+					if (!next) handoffDispatch?.pickupWorkQueue();
 				},
-				"clear-priority": ({ context }) => {
-					const ticket = context.selectedTicket;
-					if (ticket === undefined) return;
-					clearTicketPriority(ticket);
-				},
-				// `→`/`l` steps the detail pane's Override selector to its next
-				// value, and the step writes what it shows: a rank or off
-				// stores the override, default clears it (ADR 0022).
-				"select-priority": ({ context }) => {
-					const ticket = context.selectedTicket;
-					if (ticket === undefined) return;
-					selectTicketPriority(ticket);
+				// Enter on a Ticket or Consultation row that waits in the Work
+				// queue (ADR 0049): the cursor jumps to the item's row, where the
+				// queue's keys act on it. The catalogue resolved it ahead of the
+				// other Enter meanings, so this only moves the cursor and never
+				// starts or decides.
+				"queue-jump": ({ context }) => {
+					const item = context.queueItemForSelectedRow;
+					if (item === null || item === undefined) return;
+					const index = workQueueRef.current.findIndex(
+						(candidate) => workQueueIdentityOf(candidate) === workQueueIdentityOf(item),
+					);
+					if (index < 0) return;
+					selectionRef.current = "queue";
+					setSelection("queue");
+					workQueueIndexRef.current = index;
+					setWorkQueueIndex(index);
+					setWorkExpanded(true);
+					workExpandedRef.current = true;
+					focusPane("list");
 				},
 				// `a` answers for the switch itself in the Ticket section, where
 				// the catalog binds it: reaching the state must never depend on
@@ -2649,57 +2673,15 @@ export function App({
 		}
 		setPanel({ kind: "decision", identity: ticket.identity });
 	};
-	/**
-	 * One step of the Priority bump (ADR 0022): the movement the config's
-	 * label list allows, stored as the ticket's override, and the outcome on
-	 * the Message line. An accepted bump re-reads the list, so the badge and
-	 * the order move in the same frame the operator pressed the key; a no-op
-	 * states its reason and changes nothing.
-	 */
-	const bumpTicketPriority = (ticket: Ticket, direction: "up" | "down") => {
-		if (state === undefined) return;
-		const bump = bumpPriority(
-			direction,
-			configRef.current.priority?.labels ?? [],
-			ticket.priority.rank,
-		);
-		setNoticeMessage(`ticket ${ticket.externalKey}: ${bump.message}`);
-		if (bump.kind === "noop") return;
-		state.setPriorityOverride(ticket.identity, bump.value);
-		replaceTickets();
-	};
-	/** Backspace gives the ticket's override its default back (ADR 0022). */
-	const clearTicketPriority = (ticket: Ticket) => {
-		if (state === undefined) return;
-		state.setPriorityOverride(ticket.identity, null);
-		replaceTickets();
-		setNoticeMessage(`ticket ${ticket.externalKey}: priority cleared to default`);
-	};
-	/**
-	 * One step of the detail pane's Priority selector (ADR 0022): the
-	 * Override row moves to the next value on the standard choice control -
-	 * the ranks in order, off, then default - and the step writes the value
-	 * it shows: a rank or off stores the override, default clears it back to
-	 * the ticket's own labels. A stored value the config list dropped starts
-	 * the walk from the top.
-	 */
-	const selectTicketPriority = (ticket: Ticket) => {
-		if (state === undefined) return;
-		const values = [...(configRef.current.priority?.labels ?? []), PRIORITY_OFF, "default"];
-		const next = cycleChoice(values, state.priorityOverride(ticket.identity) ?? "default", 1);
-		if (next === undefined) return;
-		state.setPriorityOverride(ticket.identity, next === "default" ? null : next);
-		replaceTickets();
-		setNoticeMessage(
-			`ticket ${ticket.externalKey}: priority ${next === "default" ? "cleared to default" : `set to ${next}`}`,
-		);
-	};
 	// A state may already hold tickets when the app boots: read them once at
 	// mount, before any refresh or observation cycle runs.
 	useEffect(() => {
 		if (state === undefined) return;
 		replaceTickets();
 		replaceConsultations();
+		// The queue pause is factory state (ADR 0052): a restart finds the
+		// brake where the operator left it.
+		setQueuePaused(state.queuePaused());
 	}, [state, replaceTickets, replaceConsultations]);
 	// Repository choices are validated before the launcher presents them. A
 	// stale mapping stays hidden instead of letting an operator start in an
@@ -3628,6 +3610,7 @@ export function App({
 									terminalWidth,
 									width: leftCols,
 									waiting: workQueue.length,
+									paused: queuePaused,
 									active: mainSurfaceActive,
 									onToggle: () => clickSection("work"),
 								}),
@@ -3673,10 +3656,6 @@ export function App({
 										active: mainSurfaceActive,
 										reservedRows: detailReservedRows,
 										handoffLimit: config.maxHandoffsPerTicket,
-										priorityOverride:
-											state !== undefined && selectedTicket !== undefined
-												? state.priorityOverride(selectedTicket.identity)
-												: null,
 										suggestedChoice:
 											selectedTicket?.state === "open" ? choiceFor(selectedTicket) : undefined,
 										starting:

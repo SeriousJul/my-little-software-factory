@@ -37,16 +37,6 @@ speed = 1
 acceleration = 0.8
 maximum-speed = 6
 
-# --- Priority -------------------------------------------------------------
-# An ordered list of labels that ranks tickets: the first entry is the
-# highest rank. A ticket that carries one of these labels ranks by it. The
-# operator bumps a rank from the ticket detail, and a bump beats the label.
-# An "off" bump sets the ticket unranked. Delete the table: tickets are not
-# ranked and the list keeps its previous order.
-
-[priority]
-labels = ["critical", "high", "low"]
-
 # --- Logging ---------------------------------------------------------------
 # The plane's own file log. The TUI owns the terminal, so the run's record
 # lives in a file the operator reads later. Delete the table: the run writes

@@ -1,7 +1,6 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
 import type { TransitionOutcome } from "../config.ts";
-import type { TicketPriority } from "../priority.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 
 /**
@@ -295,17 +294,7 @@ export interface Ticket {
 	 * null when nothing of its closed handoffs is still alive in herdr.
 	 */
 	leftover: LeftoverEnvironment | null;
-	/** The ticket's effective priority (ADR 0022), against the config's label list. */
-	priority: TicketPriority;
 }
-
-/** The unranked priority: no rank, no label, no source, no reference. */
-export const UNRANKED_PRIORITY: TicketPriority = {
-	rank: null,
-	label: null,
-	source: "none",
-	inheritedFrom: null,
-};
 
 /** The marker an observation poll sets on an in-flight ticket. */
 export type TicketMarker = "blocked" | "missing";

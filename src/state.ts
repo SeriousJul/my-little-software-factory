@@ -18,24 +18,17 @@ import {
 	STALE_AGENT_OUTPUT_WARNING,
 	turnEndWarning,
 } from "./consultation.ts";
-import {
-	type Completion,
-	type CompletionDecision,
-	type EnvironmentKind,
-	type IssueReference,
-	issueReferencesOf,
-	type LeftoverEnvironment,
-	type SourceMembership,
-	type Ticket,
-	type TicketState,
+import type {
+	Completion,
+	CompletionDecision,
+	EnvironmentKind,
+	LeftoverEnvironment,
+	SourceMembership,
+	Ticket,
+	TicketState,
 } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
-import {
-	compareTicketPriority,
-	effectivePullRequestPriority,
-	type RankSource,
-} from "./priority.ts";
 import { selectTaskType } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import {
@@ -44,16 +37,11 @@ import {
 	type TurnLogEntry,
 	turnLogFromCapture,
 } from "./turn-log.ts";
-import {
-	externalKeyNumber,
-	fixedTickets,
-	isCoveredByFixingPullRequest,
-	NO_LINKED_PULL_REQUEST_SKIP,
-} from "./workflow.ts";
+import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./workflow.ts";
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 20;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -73,8 +61,8 @@ export interface HandoffClaim {
 }
 
 /**
- * One item of the Work queue (ADR 0034): a manual start that waited for a
- * Parallel limit seat. The choice is the one the operator captured when the
+ * One item of the Work queue (ADR 0049): the start waiting for a Parallel
+ * limit seat, manual or automatic. The choice is the one captured when the
  * start was asked, and the origin says what the pickup re-checks when a seat
  * frees.
  */
@@ -82,6 +70,13 @@ export interface WorkQueueHandoffItem {
 	kind: "handoff";
 	position: number;
 	ticketIdentity: string;
+	/**
+	 * True for the automatic adds the top-up makes (ADR 0051): the route the
+	 * settled turn offers, the restart, the new open ticket. The pickup of an
+	 * automatic item skips the placement a manual start crosses and lands the
+	 * route's decision the automatic way, the way the direct starts did.
+	 */
+	automatic: boolean;
 	/**
 	 * The ticket the route's handoff continues (ADR 0027): its settled turn
 	 * awaits the decision this item is the handoff of. Null for a start that is
@@ -706,6 +701,44 @@ const MIGRATION_V16_TO_V17 = "ALTER TABLE completion_traces ADD COLUMN transitio
 const MIGRATION_V17_TO_V18 = "ALTER TABLE work_queue ADD COLUMN route_from_identity TEXT;";
 
 /**
+ * The v19 step: the automatic adds in the Work queue (ADR 0049, ADR 0051).
+ *
+ * Every start enters the queue now, and the top-up's adds beside the
+ * operator's staging are one kind of item with one fact: the flag says the
+ * start the factory asked for, so the pickup skips the placement it never
+ * makes and lands the route's decision the automatic way. A row the flag
+ * predates is a manual start: the column's default stands.
+ */
+const MIGRATION_V18_TO_V19 =
+	"ALTER TABLE work_queue ADD COLUMN is_automatic INTEGER NOT NULL DEFAULT 0;";
+
+/**
+ * The queue pause (ADR 0052): the operator's brake on the Work queue's
+ * drain, on the state file the way the Auto-handoff mode is (ADR 0036).
+ *
+ * One seeded row, like the mode: a fresh state file starts resumed, and a
+ * restart finds the brake where the operator left it. The pause is never
+ * derived: it is the operator's own fact, and it survives a restart and a
+ * dev reload.
+ */
+const MIGRATION_QUEUE_PAUSE = `
+	CREATE TABLE queue_pause (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		paused INTEGER NOT NULL
+	);
+	INSERT INTO queue_pause(id, paused) VALUES (1, 0);
+`;
+
+/**
+ * The v20 step: the retirement of the ticket priority (ADR 0050).
+ *
+ * The config's label list owns the rank's scale and the override the ticket
+ * wore, and both go with the feature: the queue order is the order of work
+ * now. The override's values drop in this one-time step, and the Referenced
+ * issue fact the rank inherited through goes with it: the labels the control
+ * plane fetched for an issue no source lists served the rank alone.
+ */
+/**
  * The v16 columns: the Work queue grows the `queued` Consultation's item
  * (ADR 0034, issue #90) beside the handoff item, in the one shared order.
  *
@@ -915,6 +948,17 @@ export class FactoryState {
 			// column missing is the file's own confession. A sound file keeps
 			// the column, so the step stays a no-op for it.
 			if (!this.hasColumn("work_queue", "route_from_identity")) this.db.exec(MIGRATION_V17_TO_V18);
+			// Ask the file, not the stamp: the same build-early risk the route
+			// column carries, and a sound file keeps the column, so the step
+			// stays a no-op for it.
+			if (!this.hasColumn("work_queue", "is_automatic")) this.db.exec(MIGRATION_V18_TO_V19);
+			if (!this.hasTable("queue_pause")) this.db.exec(MIGRATION_QUEUE_PAUSE);
+			// Ask the file, not the stamp: a re-labeled newer file already lacks
+			// the retired column and the referenced-issues table, so each drop
+			// runs only when the fact is still present.
+			if (this.hasColumn("tickets", "priority_override"))
+				this.db.exec("ALTER TABLE tickets DROP COLUMN priority_override");
+			if (this.hasTable("referenced_issues")) this.db.exec("DROP TABLE referenced_issues");
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1024,128 +1068,12 @@ export class FactoryState {
 						)
 						.run(source.name, row.ticket_identity);
 			}
-			// The Referenced issue facts covered by the refresh (ADR 0023): each
-			// overwrites the fact it keys, and an orphaned fact - a reference
-			// the refresh no longer carries - is kept and never cleaned up.
-			if (outcome.referencedIssueFacts != null) {
-				for (const fact of outcome.referencedIssueFacts) {
-					this.db
-						.prepare(`
-							INSERT INTO referenced_issues(identity, labels_json, fetched_at)
-							VALUES (?, ?, ?)
-							ON CONFLICT(identity) DO UPDATE SET
-								labels_json = excluded.labels_json,
-								fetched_at = excluded.fetched_at
-						`)
-						.run(fact.identity, JSON.stringify(fact.labels), fact.fetchedAt);
-				}
-			}
 			this.db
 				.prepare(
 					"UPDATE source_health SET health = 'healthy', error = NULL, last_success = ? WHERE source_name = ?",
 				)
 				.run(outcome.fetchedAt, source.name);
 		});
-	}
-
-	/**
-	 * The live tickets and the labels of their newest membership (ADR 0023):
-	 * the facts a pull request source covers its Issue references against.
-	 * A ticket is live when a current source snapshot still lists it; a
-	 * ticket that left every source keeps its row but is no longer live, so
-	 * a pull request's reference to it is read directly. The newest
-	 * membership rule matches the rank read, so a kept reference's fact
-	 * refreshes to the labels the rank reads on its ticket.
-	 */
-	liveTicketLabels(): Array<{ identity: string; labels: string[] }> {
-		const rows = this.db
-			.prepare(
-				`SELECT m.ticket_identity AS identity, m.labels_json AS labels_json
-				FROM memberships m
-				WHERE EXISTS (
-					SELECT 1
-					FROM memberships live JOIN source_health h ON h.source_name = live.source_name
-					WHERE live.ticket_identity = m.ticket_identity
-						AND live.active = 1 AND h.health != 'removed'
-				)
-				ORDER BY m.external_updated_at DESC, m.source_name ASC`,
-			)
-			.all() as Array<{ identity: string; labels_json: string }>;
-		const newestFirst = new Map<string, string[]>();
-		for (const row of rows) {
-			if (newestFirst.has(row.identity)) continue;
-			newestFirst.set(row.identity, jsonStringArray(row.labels_json));
-		}
-		return [...newestFirst].map(([identity, labels]) => ({ identity, labels }));
-	}
-
-	/**
-	 * The rank the ticket's Issue references carry (ADR 0023).
-	 *
-	 * Each reference resolves by the issue's own chain: its Priority
-	 * override, then its labels. The labels come from the issue's snapshot -
-	 * a live or last known ticket - when it is one, else from its Referenced
-	 * issue fact. A snapshot always beats a fact. A closing reference always
-	 * names an issue, so every rank source it resolves carries the issue
-	 * kind beside its key, the pane's word for the inherited rank.
-	 */
-	issueReferenceRanks(
-		memberships: readonly { attributes: Record<string, string> }[],
-	): RankSource[] {
-		const references: IssueReference[] = [];
-		const seen = new Set<string>();
-		for (const membership of memberships) {
-			for (const reference of issueReferencesOf(membership.attributes)) {
-				const key = reference.identity ?? `number:${reference.number}`;
-				if (seen.has(key)) continue;
-				seen.add(key);
-				references.push(reference);
-			}
-		}
-		const ranks: RankSource[] = [];
-		for (const reference of references) {
-			if (reference.identity === null) {
-				ranks.push({
-					number: reference.number,
-					labels: [],
-					override: null,
-					sourceKind: "github-issue",
-					externalKey: `#${reference.number}`,
-				});
-				continue;
-			}
-			const ticket = this.db
-				.prepare("SELECT priority_override FROM tickets WHERE identity = ?")
-				.get(reference.identity) as { priority_override: string | null } | undefined;
-			if (ticket != null) {
-				const fact = this.db
-					.prepare(
-						"SELECT labels_json, source_kind, external_key FROM memberships WHERE ticket_identity = ? ORDER BY external_updated_at DESC, source_name LIMIT 1",
-					)
-					.get(reference.identity) as
-					| { labels_json: string; source_kind: string; external_key: string }
-					| undefined;
-				ranks.push({
-					number: reference.number,
-					labels: jsonStringArray(fact?.labels_json ?? "[]"),
-					override: ticket.priority_override,
-					sourceKind: fact?.source_kind ?? "github-issue",
-					externalKey: fact?.external_key ?? `#${reference.number}`,
-				});
-				continue;
-			}
-			const stored = this.db
-				.prepare("SELECT labels_json FROM referenced_issues WHERE identity = ?")
-				.get(reference.identity) as { labels_json: string } | undefined;
-			ranks.push({
-				number: reference.number,
-				labels: jsonStringArray(stored?.labels_json ?? "[]"),
-				override: null,
-				sourceKind: "github-issue",
-				externalKey: `#${reference.number}`,
-			});
-		}
-		return ranks;
 	}
 
 	private ensureSource(source: SourceDefinition): void {
@@ -1174,37 +1102,24 @@ export class FactoryState {
 
 	/**
 	 * The ticket projection before the list rule (ADR 0042): every ticket a
-	 * current snapshot still lists, ranked, with a covered open ticket among
-	 * them.
+	 * current snapshot still lists, with a covered open ticket among them.
 	 *
 	 * The machine's transition fire reads the fixing-pull-request association
-	 * from this projection, and the rank inheritance reads a covered ticket's
-	 * labels from it: the rule that withholds a covered ticket's row applies
-	 * to the operator's list alone.
+	 * from this projection: the rule that withholds a covered ticket's row
+	 * applies to the operator's list alone.
 	 *
 	 * Tickets that hold in-flight work or a pending decision (handed-off,
 	 * running, awaiting) keep their memberships even when every source has
 	 * gone inactive: an agent can close or change its source item while it
 	 * works, and the ticket must stay visible for the decision.
 	 */
-	projectedTickets(
-		states: readonly WorkflowState[],
-		fallbackTaskType: string,
-		priorityLabels: readonly string[] = [],
-	): Ticket[] {
-		const rows = this.db
-			.prepare("SELECT identity, state, work_cycle, priority_override FROM tickets")
-			.all() as Array<{
+	projectedTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
+		const rows = this.db.prepare("SELECT identity, state, work_cycle FROM tickets").all() as Array<{
 			identity: string;
 			state: TicketState;
 			work_cycle: number;
-			priority_override: string | null;
 		}>;
 		const tickets: Ticket[] = [];
-		// The tickets a current snapshot still lists, and each row's stored
-		// Priority override: the rank inheritance below reads them.
-		const live = new Set<string>();
-		const overrides = new Map<string, string | null>();
 		for (const row of rows) {
 			const storedMemberships = this.membershipsFor(row.identity, row.state);
 			const active = storedMemberships.filter(
@@ -1229,17 +1144,6 @@ export class FactoryState {
 			)[0];
 			if (facts == null) continue;
 			const handoff = this.handoffFor(row.identity);
-			if (active.length > 0) live.add(row.identity);
-			overrides.set(row.identity, row.priority_override);
-			// The pull request's own facts beat the rank its Issue references
-			// carry; an issue ticket, which closes nothing, reads its own chain
-			// (ADR 0023).
-			const priority = effectivePullRequestPriority(
-				priorityLabels,
-				row.priority_override,
-				facts.labels,
-				this.issueReferenceRanks(storedMemberships),
-			);
 			tickets.push({
 				identity: row.identity,
 				title: facts.title,
@@ -1266,38 +1170,7 @@ export class FactoryState {
 				actionable,
 				handoffRecoveryRequired: pending,
 				leftover: this.leftoverEnvironment(row.identity),
-				priority,
 			});
-		}
-		// The tickets a pull request fixes feed its inheritance rule beside
-		// its closing references (ADR 0042): one rule over both links. The
-		// rank source is a live ticket - one a current snapshot still lists -
-		// so a ticket covered by the pull request, hidden from the list, still
-		// supplies its rank, and a ticket that left the source supplies
-		// nothing.
-		for (const ticket of tickets) {
-			if (ticket.sourceKind !== "github-pull-request") continue;
-			const fixing = fixedTickets(tickets, ticket).filter((candidate) =>
-				live.has(candidate.identity),
-			);
-			if (fixing.length === 0) continue;
-			ticket.priority = effectivePullRequestPriority(
-				priorityLabels,
-				overrides.get(ticket.identity) ?? null,
-				ticket.labels,
-				[
-					...this.issueReferenceRanks(ticket.memberships),
-					...fixing.map((candidate) => ({
-						// A key that names no number (the advisory) takes the
-						// sentinel, so it loses every tie to a numbered source.
-						number: externalKeyNumber(candidate.externalKey) ?? Number.MAX_SAFE_INTEGER,
-						labels: candidate.labels,
-						override: overrides.get(candidate.identity) ?? null,
-						sourceKind: candidate.sourceKind,
-						externalKey: candidate.externalKey,
-					})),
-				],
-			);
 		}
 		return tickets;
 	}
@@ -1308,22 +1181,22 @@ export class FactoryState {
 	 * A covered open ticket - one an open fixing pull request fixes (ADR
 	 * 0042) - leaves the list; the in-flight states are never covered, so
 	 * live work stays listed whatever pull requests exist. Within its
-	 * attention group, a ticket's rank orders it: ranked before unranked,
-	 * better rank first, then the newest external update (ADR 0022). The
-	 * group stays ahead, so an awaiting decision never waits behind ranked
+	 * attention group, the list orders by attention, not by rank (ADR 0050):
+	 * the newest external update first, then the ticket identity, the order
+	 * that stood before the rank. The queue order the operator steers is the
+	 * order of work; the list shows where the operator's attention goes.
+	 * The group stays ahead, so an awaiting decision never waits behind open
 	 * work.
 	 */
-	visibleTickets(
-		states: readonly WorkflowState[],
-		fallbackTaskType: string,
-		priorityLabels: readonly string[] = [],
-	): Ticket[] {
-		const tickets = this.projectedTickets(states, fallbackTaskType, priorityLabels);
+	visibleTickets(states: readonly WorkflowState[], fallbackTaskType: string): Ticket[] {
+		const tickets = this.projectedTickets(states, fallbackTaskType);
 		return tickets
 			.filter((ticket) => !isCoveredByFixingPullRequest(tickets, ticket))
 			.sort(
 				(left, right) =>
-					attentionGroup(left) - attentionGroup(right) || compareTicketPriority(left, right),
+					attentionGroup(left) - attentionGroup(right) ||
+					right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
+					left.identity.localeCompare(right.identity),
 			);
 	}
 
@@ -1370,6 +1243,16 @@ export class FactoryState {
 		);
 	}
 
+	/**
+	 * Whether a handoff run is in flight for the ticket: an attempt claimed and
+	 * not yet settled. The pickup skips such a ticket's waiting item instead of
+	 * re-claiming it (ADR 0049): the run that holds the seat settles the item
+	 * when it ends, and a second pickup that dropped it would lose the start.
+	 */
+	handoffInFlight(ticketIdentity: string): boolean {
+		return this.hasUnresolvedAttempt(ticketIdentity);
+	}
+
 	private handoffFor(identity: string): Ticket["handoff"] {
 		const row = this.db
 			.prepare(
@@ -1401,29 +1284,6 @@ export class FactoryState {
 			workspaceId: row.workspace_id,
 			herdrName: row.herdr_name,
 		};
-	}
-
-	/**
-	 * The ticket's Priority override: a rank label name, `off`, or null for
-	 * the default (ADR 0022).
-	 */
-	priorityOverride(identity: string): string | null {
-		const row = this.db
-			.prepare("SELECT priority_override FROM tickets WHERE identity = ?")
-			.get(identity) as { priority_override: string | null } | undefined;
-		return row?.priority_override ?? null;
-	}
-
-	/**
-	 * Store the ticket's Priority override, or clear it to the default with
-	 * null. The value is the operator's fact on the ticket: the config's
-	 * list owns the scale, and a value that names no rank ranks nothing.
-	 */
-	setPriorityOverride(identity: string, value: string | null): boolean {
-		const result = this.db
-			.prepare("UPDATE tickets SET priority_override = ? WHERE identity = ?")
-			.run(value, identity);
-		return result.changes > 0;
 	}
 
 	/** The total handoffs ever recorded for a ticket, across work cycles. */
@@ -1557,6 +1417,42 @@ export class FactoryState {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new StateError(`cannot store the Auto-handoff mode at ${this.path}: ${message}`);
+		}
+	}
+
+	/**
+	 * The queue pause (ADR 0052): the operator's brake on the Work queue's
+	 * drain, on the state file the way the Auto-handoff mode is (ADR 0036).
+	 *
+	 * It is stored, not derived: a fresh state file starts resumed, the `p`
+	 * key in the Work queue section writes the new value at once, and a
+	 * restart finds the brake where the operator left it. It holds the drain
+	 * and the top-up's adds, and the force-dispatch passes it the way it
+	 * passes the cap. It is never the Dispatch pause's fact: that one is
+	 * derived from the traces (ADR 0016), and the two can stand at once.
+	 */
+	queuePaused(): boolean {
+		const row = this.db.prepare("SELECT paused FROM queue_pause WHERE id = 1").get() as
+			| { paused: number }
+			| undefined;
+		return row?.paused === 1;
+	}
+
+	/**
+	 * Store the queue pause (ADR 0052). The write is the fact the next startup
+	 * and the next dev reload read back, so it is durable the moment it
+	 * returns. A write that fails throws a StateError naming the state file.
+	 */
+	setQueuePaused(paused: boolean): void {
+		try {
+			this.db
+				.prepare(
+					"INSERT INTO queue_pause(id, paused) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET paused = excluded.paused",
+				)
+				.run(paused ? 1 : 0);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the queue pause at ${this.path}: ${message}`);
 		}
 	}
 
@@ -1921,7 +1817,7 @@ export class FactoryState {
 	workQueue(): WorkQueueItem[] {
 		const rows = this.db
 			.prepare(
-				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity FROM work_queue ORDER BY position ASC",
+				"SELECT position, ticket_identity, consultation_id, origin, choice_json, previous_message, enqueued_at, route_from_identity, is_automatic FROM work_queue ORDER BY position ASC",
 			)
 			.all() as Array<{
 			position: number;
@@ -1932,6 +1828,7 @@ export class FactoryState {
 			previous_message: string;
 			enqueued_at: string;
 			route_from_identity: string | null;
+			is_automatic: number;
 		}>;
 		const items: WorkQueueItem[] = [];
 		for (const row of rows) {
@@ -1947,6 +1844,7 @@ export class FactoryState {
 					position: row.position,
 					ticketIdentity: row.ticket_identity,
 					routeFromIdentity: row.route_from_identity,
+					automatic: row.is_automatic === 1,
 					origin,
 					choice,
 					previousMessage: row.previous_message,
@@ -1980,9 +1878,11 @@ export class FactoryState {
 	}
 
 	/**
-	 * Add the start to the end of the queue. The queue holds at most one item
-	 * per ticket: a second add for a ticket that already waits is refused, and
-	 * the first item keeps its place.
+	 * Add the start to the end of the queue (ADR 0049). The queue holds at
+	 * most one item per ticket: a second add for a ticket that already waits
+	 * is refused, and the first item keeps its place. `automatic` marks the
+	 * top-up's adds (ADR 0051): the pickup skips their placement and lands
+	 * their route's decision the automatic way.
 	 */
 	enqueueWork(entry: {
 		ticketIdentity: string;
@@ -1991,6 +1891,8 @@ export class FactoryState {
 		origin: HandoffOrigin;
 		choice: HandoffChoice;
 		previousMessage: string;
+		/** True for the automatic add the top-up makes (ADR 0051). */
+		automatic?: boolean;
 	}): { ok: true } | { ok: false; reason: string } {
 		try {
 			return this.transaction(() => {
@@ -2004,7 +1906,7 @@ export class FactoryState {
 					};
 				this.db
 					.prepare(
-						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?, ?)",
+						"INSERT INTO work_queue(position, ticket_identity, route_from_identity, origin, choice_json, previous_message, enqueued_at, is_automatic) VALUES (COALESCE((SELECT MAX(position) FROM work_queue), -1) + 1, ?, ?, ?, ?, ?, ?, ?)",
 					)
 					.run(
 						entry.ticketIdentity,
@@ -2013,6 +1915,7 @@ export class FactoryState {
 						JSON.stringify(entry.choice),
 						entry.previousMessage,
 						new Date(this.now()).toISOString(),
+						entry.automatic === true ? 1 : 0,
 					);
 				return { ok: true };
 			});
@@ -2193,17 +2096,12 @@ export class FactoryState {
 	}
 
 	/**
-	 * The tickets in the given states, with their latest handoff.
-	 *
-	 * When a Priority label list is given, the tickets come back in the
-	 * priority order (ADR 0022): ranked before unranked, better rank first,
-	 * then the newest external update. That order is what lets one freed
-	 * parallel slot go to the highest-ranked waiting route.
+	 * The tickets in the given states, with their latest handoff, in the
+	 * stored order: the ticket identity. The queue order the operator steers
+	 * is the order of work now (ADR 0050); this walk serves the poll, and the
+	 * poll's own order is identity, the way the stored order reads.
 	 */
-	ticketsByState(
-		states: readonly TicketState[],
-		priorityLabels: readonly string[] = [],
-	): HandoffTicket[] {
+	ticketsByState(states: readonly TicketState[]): HandoffTicket[] {
 		const clauses = states.map(() => "?").join(", ");
 		const rows = this.db
 			.prepare(
@@ -2225,15 +2123,6 @@ export class FactoryState {
 			workspace_id: string | null;
 		}>;
 		const out: HandoffTicket[] = [];
-		// The rank pass is a query per ticket, and a missing list is the common
-		// case: with no Priority labels the order is the stored one, so the
-		// observation tick skips the pass instead of paying it per ticket.
-		const ranked = priorityLabels.length > 0;
-		const rankOf: Array<{
-			priority: ReturnType<typeof effectivePullRequestPriority>;
-			externalUpdatedAt: string;
-			identity: string;
-		}> = [];
 		for (const row of rows) {
 			const choice = jsonChoice(row.choice_json);
 			if (choice == null) continue;
@@ -2253,31 +2142,8 @@ export class FactoryState {
 				handoffAttemptId: row.attempt_id,
 				startedAt: row.started_at,
 			});
-			if (!ranked) continue;
-			const memberships = this.membershipsFor(row.ticket_identity, row.state);
-			const facts = [...memberships].sort(
-				(a, b) =>
-					b.externalUpdatedAt.localeCompare(a.externalUpdatedAt) ||
-					a.sourceName.localeCompare(b.sourceName),
-			)[0];
-			rankOf.push({
-				// The pull request's own facts beat the rank its Issue
-				// references carry (ADR 0023).
-				priority: effectivePullRequestPriority(
-					priorityLabels,
-					this.priorityOverride(row.ticket_identity),
-					facts?.labels ?? [],
-					this.issueReferenceRanks(memberships),
-				),
-				externalUpdatedAt: facts?.externalUpdatedAt ?? "",
-				identity: row.ticket_identity,
-			});
 		}
-		if (!ranked) return out;
-		return out
-			.map((ticket, index) => ({ ticket, order: rankOf[index] }))
-			.sort((left, right) => compareTicketPriority(left.order, right.order))
-			.map((entry) => entry.ticket);
+		return out;
 	}
 
 	/**
@@ -2623,6 +2489,59 @@ export class FactoryState {
 		return { decidedAt: row.decided_at, taskType: row.task_type, cause: row.cause };
 	}
 
+	/**
+	 * The hard start check at the ask (ADR 0049): the same gates the claim
+	 * runs - the ticket still holds the state the item's origin requires, the
+	 * source is healthy and re-read, the attempt ledger is clear - without
+	 * taking a claim. A start that already fails refuses to enter the Work
+	 * queue, and the warning stands on the Message line at the ask.
+	 */
+	handoffClaimCheck(
+		ticketIdentity: string,
+		origin: HandoffOrigin,
+	): { ok: true } | { ok: false; reason: string } {
+		const ticket = this.db
+			.prepare("SELECT state FROM tickets WHERE identity = ?")
+			.get(ticketIdentity) as { state: TicketState } | undefined;
+		if (ticket == null) return { ok: false, reason: "ticket no longer exists" };
+		if (origin === "open") {
+			if (ticket.state !== "open")
+				return {
+					ok: false,
+					reason: `only open tickets can be handed off (this one is ${ticket.state})`,
+				};
+			const eligible = this.db
+				.prepare(
+					`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = ? AND m.active = 1 AND h.health = 'healthy' LIMIT 1`,
+				)
+				.get(ticketIdentity);
+			if (eligible == null)
+				return {
+					ok: false,
+					reason: "Ticket is not actionable because source data is stale, removed, or absent",
+				};
+			if (!this.sourceReverifiedSinceCycleEnd(ticketIdentity))
+				return {
+					ok: false,
+					reason:
+						"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
+				};
+		}
+		if (origin === "workflow" && ticket.state !== "awaiting" && ticket.state !== "open")
+			return {
+				ok: false,
+				reason: `only open or awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
+			};
+		if (origin === "restart" && ticket.state !== "handed-off" && ticket.state !== "running")
+			return {
+				ok: false,
+				reason: `only in-flight tickets can be restarted (this one is ${ticket.state})`,
+			};
+		if (this.hasUnresolvedAttempt(ticketIdentity))
+			return { ok: false, reason: "handoff recovery is required before another handoff" };
+		return { ok: true };
+	}
+
 	/** Claim before the first external command. It rechecks all eligibility atomically. */
 	claimHandoff(ticketIdentity: string, choice: HandoffChoice, origin: HandoffOrigin): ClaimOutcome {
 		try {
@@ -2645,8 +2564,7 @@ export class FactoryState {
 					if (eligible == null)
 						return {
 							ok: false,
-							reason:
-								"ticket is not actionable because all source memberships are stale, removed, or absent",
+							reason: "Ticket is not actionable because source data is stale, removed, or absent",
 						};
 					// The cycle the ticket just ended may have changed its source
 					// item (the agent merged the pull request, or closed the

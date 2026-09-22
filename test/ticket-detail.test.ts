@@ -1,15 +1,13 @@
 /** Deterministic wheel-burst policy tests for the native Ticket detail viewport. */
 import { describe, expect, test } from "bun:test";
 import {
-	type DetailLine,
-	detailContent,
 	detailLines,
 	newWheelBurst,
 	WHEEL_ACCELERATION_PAUSE_MS,
 	wheelRows,
 } from "../src/components/ticket-detail.ts";
 import type { ScrollConfig } from "../src/config.ts";
-import { type Handoff, type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
+import type { Handoff, Ticket } from "../src/domain/ticket.ts";
 import type { HandoffChoice } from "../src/handoff.ts";
 import { roleColor } from "./app-harness.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
@@ -97,114 +95,6 @@ describe("Ticket detail task profile", () => {
 		expect(shown).toContainEqual({ text: "Thinking: high", fg: roleColor("text") });
 		expect(shown).toContainEqual({ text: "Context: 65536", fg: roleColor("text") });
 		expect(shown).toContainEqual({ text: "Environment: worktree", fg: roleColor("text") });
-	});
-});
-
-describe("Ticket detail priority fact (ADR 0022)", () => {
-	const base = SAMPLE_TICKETS[0];
-	if (base === undefined) throw new Error("missing sample ticket");
-
-	function withPriority(p: Ticket["priority"], override: string | null = null): DetailLine[] {
-		return detailLines({ ...base, priority: p }, 100, 10, undefined, override);
-	}
-
-	test("a label rank states its label and its own source", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "label",
-			inheritedFrom: null,
-		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (its own label)",
-			fg: roleColor("text"),
-		});
-	});
-
-	test("an inherited rank names the issue that supplied it (ADR 0023)", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "inherited",
-			inheritedFrom: { sourceKind: "github-issue", externalKey: "#12" },
-		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (issue #12)",
-			fg: roleColor("text"),
-		});
-	});
-
-	test("an inherited rank names the fixing alert by its number (ADR 0042)", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "inherited",
-			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
-		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (alert #9)",
-			fg: roleColor("text"),
-		});
-	});
-
-	test("an inherited rank names the fixing advisory by its key, not a number (ADR 0042)", () => {
-		const lines = withPriority({
-			rank: 0,
-			label: "critical",
-			source: "inherited",
-			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: "GHSA-j8wj-q3wj-c945" },
-		});
-		expect(lines).toContainEqual({
-			text: "Priority: critical (advisory GHSA-j8wj-q3wj-c945)",
-			fg: roleColor("text"),
-		});
-	});
-
-	test("an override rank states its label and the operator's source", () => {
-		const lines = withPriority(
-			{ rank: 1, label: "high", source: "override", inheritedFrom: null },
-			"high",
-		);
-		expect(lines).toContainEqual({ text: "Priority: high (set by you)", fg: roleColor("text") });
-	});
-
-	test("off states the override that forces the ticket unranked", () => {
-		const lines = withPriority(
-			{ rank: null, label: "off", source: "override", inheritedFrom: null },
-			"off",
-		);
-		expect(lines).toContainEqual({ text: "Priority: off (set by you)", fg: roleColor("text") });
-	});
-
-	test("an unranked ticket with no override reads none, dim", () => {
-		const lines = withPriority(UNRANKED_PRIORITY, null);
-		expect(lines).toContainEqual({ text: "Priority: none", fg: roleColor("subtext0") });
-	});
-
-	test("a stale override states its stored label, agreeing with the override row", () => {
-		// The stored label left the config list: the rank is none, but the
-		// fact line and the row's choiceValue name the same stored label.
-		const content = detailContent(
-			{
-				...base,
-				priority: { rank: null, label: "critical", source: "override", inheritedFrom: null },
-			},
-			100,
-			10,
-			undefined,
-			"critical",
-		);
-		expect(content.lines).toContainEqual({
-			text: "Priority: critical (set by you)",
-			fg: roleColor("text"),
-		});
-		expect(content.choiceValue).toBe("critical");
-	});
-
-	test("the override row states the stored value, or default", () => {
-		expect(detailContent(base, 100, 10, undefined, null).choiceValue).toBe("default");
-		expect(detailContent(base, 100, 10, undefined, "high").choiceValue).toBe("high");
-		expect(detailContent(base, 100, 10, undefined, "off").choiceValue).toBe("off");
 	});
 });
 

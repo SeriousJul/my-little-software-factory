@@ -834,7 +834,6 @@ function stubTicket(
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,
-		priority: { rank: null, label: null, source: "none", inheritedFrom: null },
 		...over,
 	};
 }

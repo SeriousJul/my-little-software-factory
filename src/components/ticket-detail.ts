@@ -2,7 +2,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { createElement, useRenderer } from "@opentui/react";
 import {
-	Fragment,
 	forwardRef,
 	type RefObject,
 	useCallback,
@@ -19,11 +18,10 @@ import {
 	type TicketMarker,
 } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { prioritySourceWord } from "../priority.ts";
+
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
-import { ChoiceRow } from "./shared/choices.ts";
-import { MARKER_WIDTH, turnEndCauseLine } from "./shared/presentation.ts";
+import { turnEndCauseLine } from "./shared/presentation.ts";
 import { Spinner } from "./shared/spinner.ts";
 import { truncateToWidth, wrapToWidth } from "./text.ts";
 import {
@@ -54,20 +52,12 @@ export interface DetailLine {
 }
 
 /**
- * The detail pane's content: the text lines, and the row the shared choice
- * row of the Priority override takes among them (ADR 0022).
- *
- * The choice row is a renderable, not a line of text: the scroll box lays it
- * out like the lines, and `rows` is what the Scroll control asks for, so the
- * control never promises a scroll the real ScrollBox does not have.
+ * The detail pane's content: the text lines, and the rows the content takes,
+ * what the Scroll control asks for, so the control never promises a scroll
+ * the real ScrollBox does not have.
  */
 export interface DetailContent {
 	lines: DetailLine[];
-	/** The line index the Priority override row is inserted after, or -1. */
-	choiceIndex: number;
-	/** The value the override row states, `default` for an unset override. */
-	choiceValue: string;
-	/** The rows the content takes, the choice row counted in. */
 	rows: number;
 }
 
@@ -92,31 +82,11 @@ function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailCh
 	return ticket.state === "open" ? suggestedChoice : (ticket.handoff ?? undefined);
 }
 
-/**
- * The fact row of the ticket's effective priority (ADR 0022): the rank's
- * label and where it comes from - the operator's override, or the ticket's
- * own label. An override that names no rank - `off`, or a label the config
- * list dropped - states its stored label in the Override row's own words,
- * so the fact line and the selector row agree on the stored fact. An
- * unranked ticket without one reads `none`.
- */
-function priorityFact(ticket: Ticket): { text: string; fg: string | undefined } {
-	if (ticket.priority.rank !== null) {
-		const word = prioritySourceWord(ticket.priority);
-		const label = ticket.priority.label ?? "none";
-		return { text: word === null ? label : `${label} (${word})`, fg: paint("text") };
-	}
-	if (ticket.priority.label !== null)
-		return { text: `${ticket.priority.label} (set by you)`, fg: paint("text") };
-	return { text: "none", fg: paint("subtext0") };
-}
-
 export function detailContent(
 	ticket: Ticket | undefined,
 	usableCols: number,
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
-	priorityOverride: string | null = null,
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
 	queueWait: boolean = false,
@@ -124,14 +94,9 @@ export function detailContent(
 	if (ticket === undefined)
 		return {
 			lines: [{ text: "no ticket selected", fg: paint("subtext0") }],
-			choiceIndex: -1,
-			choiceValue: "default",
 			rows: 1,
 		};
 	const lines: DetailLine[] = [];
-	// The index of the Priority fact row: the override's choice row is
-	// inserted right after it.
-	let choiceIndex = -1;
 	const pushWrapped = (text: string, fg: string | undefined, bold?: boolean) => {
 		for (const line of wrapToWidth(text, usableCols))
 			lines.push({ text: line, fg, ...(bold ? { bold: true } : {}) });
@@ -181,14 +146,6 @@ export function detailContent(
 		taskTypeColor(presentation),
 	);
 	pushWrapped(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
-	// The effective rank and where it comes from, beside the task type the
-	// rank orders: the operator reads what the bump will move from (ADR 0022).
-	const fact = priorityFact(ticket);
-	choiceIndex = lines.length;
-	// When the rank is inherited, the fact names the source that supplied it:
-	// `Priority: critical (issue #123)`, the fixing alert by `alert #9`, the
-	// fixing advisory by its key alone (ADR 0023, ADR 0042).
-	lines.push({ text: `Priority: ${fact.text}`, fg: fact.fg });
 	// A leftover environment is what a closed cycle still has running in
 	// herdr. The detail names it, says when the control plane learned of it,
 	// and says where its cleanup lives - in herdr, not in the control plane
@@ -261,9 +218,7 @@ export function detailContent(
 	}));
 	return {
 		lines: truncated,
-		choiceIndex,
-		choiceValue: priorityOverride === null ? "default" : priorityOverride,
-		rows: truncated.length + 1,
+		rows: truncated.length,
 	};
 }
 
@@ -272,7 +227,6 @@ export function detailLines(
 	usableCols: number,
 	handoffLimit: number,
 	suggestedChoice?: HandoffChoice,
-	priorityOverride: string | null = null,
 	starting: boolean = false,
 	marker: TicketMarker | null = null,
 	queueWait: boolean = false,
@@ -282,7 +236,6 @@ export function detailLines(
 		usableCols,
 		handoffLimit,
 		suggestedChoice,
-		priorityOverride,
 		starting,
 		marker,
 		queueWait,
@@ -424,11 +377,6 @@ interface TicketDetailProps {
 	active: boolean;
 	reservedRows: number;
 	handoffLimit: number;
-	/**
-	 * The ticket's stored Priority override (ADR 0022): a rank label name, or
-	 * `off`, or null for the default. The override row states it.
-	 */
-	priorityOverride: string | null;
 	/** The resolved choice for an open Ticket's suggested Task type. */
 	suggestedChoice?: HandoffChoice;
 	/**
@@ -472,7 +420,6 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		active,
 		reservedRows,
 		handoffLimit,
-		priorityOverride,
 		suggestedChoice,
 		starting,
 		marker,
@@ -495,32 +442,12 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 		textCols,
 		handoffLimit,
 		suggestedChoice,
-		priorityOverride,
 		starting,
 		marker,
 		queueWait,
 	);
 	const lines = content.lines;
 	const hasOverflow = content.rows > geometry.visibleRows;
-	// The detail pane's Priority selector on the standard choice row (ADR
-	// 0022): its value is the stored override, default when the ticket holds
-	// none. The Select priority control steps it - the ranks in order, off,
-	// and default - and each step writes the value it shows; the bump and
-	// clear keys move the same value. It wears the pane's focus, because in
-	// the detail pane it is the row the keys act on.
-	const choiceRow =
-		content.choiceIndex === -1
-			? null
-			: createElement(ChoiceRow, {
-					label: "Override",
-					value: content.choiceValue,
-					focused: focused,
-					labelWidth: Math.min(10, Math.max(1, textCols - MARKER_WIDTH - 1)),
-					width: Math.max(
-						1,
-						textCols - MARKER_WIDTH - Math.min(10, Math.max(1, textCols - MARKER_WIDTH - 1)),
-					),
-				});
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 	const previousIdentity = useRef(ticket?.identity);
 	// Always the identity the pane currently shows; the unmount cleanup reads
@@ -726,7 +653,7 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 			// scrollbar are siblings. The content inside the wrapper is a column.
 			style: { flexGrow: 1, flexShrink: 1, overflow: "hidden" },
 		},
-		...lines.flatMap((line, index) => [
+		...lines.map((line, index) =>
 			line.spinner === true
 				? createElement(Spinner, {
 						key: `detail-${index}`,
@@ -738,9 +665,6 @@ export const TicketDetail = forwardRef<TicketDetailHandle, TicketDetailProps>(fu
 						{ key: `detail-${index}`, fg: line.fg },
 						line.bold ? createElement("b", undefined, line.text) : line.text,
 					),
-			...(index === content.choiceIndex && choiceRow !== null
-				? [createElement(Fragment, { key: "priority-override" }, choiceRow)]
-				: []),
-		]),
+		),
 	);
 });

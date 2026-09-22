@@ -110,13 +110,10 @@ export class RefreshCoordinator {
 		// Every fetch owns a waiter set, so a `refreshAndWait` that joins an
 		// in-flight fetch always has somewhere to register.
 		this.settling.set(source.name, new Set());
-		// The pull request source covers its Issue references against the
-		// live tickets and reads the uncovered ones directly (ADR 0023).
-		const known = this.state.liveTicketLabels();
 		const startedAt = Date.now();
 		let outcome: FetchOutcome;
 		void Promise.resolve()
-			.then(() => source.fetch(known))
+			.then(() => source.fetch())
 			// A fetch can outlive the coordinator: the shutdown window between
 			// stop() and the state closing must not touch either.
 			.then((result) => {

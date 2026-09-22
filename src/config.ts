@@ -305,11 +305,6 @@ export interface FactoryConfig {
 	repos: Record<string, string>;
 	/** No shipped source points at the maintainer repository. */
 	sources: TicketSourceConfig[];
-	/**
-	 * The Priority label list (ADR 0022): the ordered labels that define the
-	 * priority ranks, first entry highest. Missing or empty ranks no ticket.
-	 */
-	priority?: { labels: string[] };
 	/** An optional state file. Relative paths use the selected config directory. */
 	stateFile?: string;
 	/**
@@ -461,7 +456,7 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 			// unchanged and the reason named.
 			validateConfigWithWarnings(parse(migration.configText));
 			await writeMigrationFiles(path, text, migration, mode);
-			note = `the config at ${path} was migrated to the workflow machine; the pre-migration file is at ${migration.backupFileName} and the report at ${migration.reportFileName}`;
+			note = migration.noteText;
 			text = migration.configText;
 		} catch (error) {
 			if (error instanceof ConfigError || error instanceof ConfigMigrationError) {
@@ -607,18 +602,22 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		"completion-message-lines",
 		"max-handoffs-per-ticket",
 		"scroll",
-		"priority",
 		"logging",
 	]);
-	// The pre-workflow-machine keys (ADR 0027) are named before any other key
-	// is judged: the load migrates a file that carries them, and a file that
-	// still does after the migration, or a config validated without going
-	// through the load, is a config error that points at the backup the
-	// migration left, whatever other key the file also holds.
+	// The retired keys (ADR 0027, ADR 0050) are named before any other key is
+	// judged: the load migrates a file that carries them, and a file that still
+	// does after the migration, or a config validated without going through the
+	// load, is a config error that points at the backup the migration left,
+	// whatever other key the file also holds.
 	for (const key of Object.keys(data)) {
 		if (key === "task-rules" || key === "workflows") {
 			throw new ConfigError(
 				`config: "${key}" is a pre-workflow-machine key; the config migrates to "states" and task-type transitions at load (see the .bak backup and the migration report)`,
+			);
+		}
+		if (key === "priority") {
+			throw new ConfigError(
+				`config: "priority" is a retired key (ADR 0050); the config migrates it away at load (see the .bak backup and the migration report)`,
 			);
 		}
 	}
@@ -653,38 +652,7 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 	const repos = validateRepos(data.repos);
 	const sources = validateSources(data.sources ?? data["ticket-sources"]);
 	const workflowStates = validateWorkflowStates(data.states, taskTypes);
-	// The Priority section reports its own errors instead of throwing: the
-	// factory must start with no ranking, not refuse to boot, when it is
-	// misconfigured (ADR 0022).
 	const warnings: string[] = [];
-	let priority: FactoryConfig["priority"];
-	const rawPriority = data.priority;
-	if (rawPriority !== undefined) {
-		if (!isRecord(rawPriority)) {
-			warnings.push(
-				`config: [priority] must be a table with a labels list; got ${describeValue(rawPriority)}. The factory starts with no priority ranking`,
-			);
-		} else {
-			const unknownPriorityKeys = Object.keys(rawPriority).filter((key) => key !== "labels");
-			if (unknownPriorityKeys.length > 0) {
-				warnings.push(
-					`config: unknown key${unknownPriorityKeys.length > 1 ? "s" : ""} in [priority]: ${unknownPriorityKeys.join(", ")}. The factory starts with no priority ranking`,
-				);
-			} else if (!Array.isArray(rawPriority.labels)) {
-				warnings.push(
-					`config: [priority] labels must be a list of labels; got ${describeValue(rawPriority.labels)}. The factory starts with no priority ranking`,
-				);
-			} else if (
-				rawPriority.labels.some((label) => typeof label !== "string" || label.trim() === "")
-			) {
-				warnings.push(
-					"config: [priority] labels must all be non-empty strings. The factory starts with no priority ranking",
-				);
-			} else {
-				priority = { labels: rawPriority.labels as string[] };
-			}
-		}
-	}
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
 	const logging = validateLogging(data.logging);
 	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
@@ -715,7 +683,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		workflowStates,
 		repos,
 		sources,
-		...(priority === undefined ? {} : { priority }),
 		...(stateFile === undefined ? {} : { stateFile }),
 		...(logging === undefined ? {} : { logging }),
 	};
@@ -1639,7 +1606,6 @@ export function configToToml(config: FactoryConfig): string {
 		"agent-poll-interval-seconds": config.agentPollIntervalSeconds,
 		"completion-message-lines": config.completionMessageLines,
 		"max-handoffs-per-ticket": config.maxHandoffsPerTicket,
-		...(config.priority === undefined ? {} : { priority: { labels: config.priority.labels } }),
 		...(config.logging === undefined
 			? {}
 			: {
