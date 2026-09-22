@@ -88,7 +88,7 @@ export function evaluateTransition(
 		input.score === null &&
 		(tested.has("score-above-threshold") || tested.has("score-below-threshold"))
 	) {
-		return { ...base, reason: "the completion message carries no score" };
+		return { ...base, reason: "the pull request carries no review score" };
 	}
 	if (
 		input.pullRequestOpen === null &&
@@ -156,6 +156,70 @@ export function scoreFromMessage(message: string): number | null {
 	if (matches.length === 0) return null;
 	const value = Number(matches[matches.length - 1][1]);
 	return Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
+}
+
+/** Whether the transition's branches test a score judgment. */
+function transitionReadsScore(transition: WorkflowTransition): boolean {
+	return (transition.branches ?? []).some(
+		(branch) => branch.when === "score-above-threshold" || branch.when === "score-below-threshold",
+	);
+}
+
+/**
+ * The review score the pull request's comments carry: the newest comment
+ * that reports one in the template's fixed line. Null when no comment
+ * reports a score, when the comment read fails, or when the source cannot be
+ * resolved. The comments are read straight from the source, not from the
+ * projection: the review posts its verdict to the pull request, and that
+ * comment is the durable record the judgment reads.
+ */
+async function readPullRequestScore(
+	request: FireTransitionRequest,
+	pullRequest: Ticket,
+): Promise<number | null> {
+	const membership = newestMembershipOf(pullRequest);
+	const number = numberFromExternalKey(membership.externalKey);
+	if (number === null) return null;
+	const source = request.config.sources.find((item) => item.name === membership.sourceName);
+	if (source === undefined) return null;
+	let ghOptions: CommandOptions = {};
+	if (source.auth !== undefined) {
+		const resolved = await new GhAuthenticator(
+			source.host,
+			source.auth,
+			request.runner,
+			process.env,
+		).resolve();
+		if (!resolved.ok) return null;
+		ghOptions = resolved.options;
+	}
+	const path = `repos/${membership.repository.displayName}/issues/${number}/comments?per_page=100`;
+	let result: CommandResult;
+	try {
+		result = await request.runner.run("gh", ["api", "--hostname", source.host, path], ghOptions);
+	} catch {
+		return null;
+	}
+	if (result.code !== 0) return null;
+	let comments: unknown;
+	try {
+		comments = JSON.parse(result.stdout);
+	} catch {
+		return null;
+	}
+	if (!Array.isArray(comments)) return null;
+	// Newest first: the latest review verdict is the one the judgment reads.
+	const bodies = (comments as Array<{ body?: unknown; created_at?: unknown }>)
+		.filter(
+			(comment): comment is { body: string; created_at?: string } =>
+				typeof comment.body === "string",
+		)
+		.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+	for (const comment of bodies) {
+		const score = scoreFromMessage(comment.body);
+		if (score !== null) return score;
+	}
+	return null;
 }
 
 /**
@@ -246,8 +310,6 @@ export interface FireTransitionRequest {
 	runner: CommandRunner;
 	ticketIdentity: string;
 	taskType: string;
-	/** The settled turn's last message: the score judgment reads it. */
-	message: string;
 	/** The forced refresh of the pull request sources; omitted in tests. */
 	refresh?: () => Promise<void>;
 }
@@ -274,7 +336,14 @@ export async function fireTransition(
 	if (ticket === undefined) return null;
 	const pullRequest =
 		ticket.sourceKind === "github-pull-request" ? ticket : findLinkedPullRequest(tickets, ticket);
-	const score = scoreFromMessage(request.message);
+	// The review verdict is the pull request's own comment, the place the
+	// review template names for the score. It is read only when this
+	// transition tests a score judgment and only for a pull request that is
+	// there to read.
+	const score =
+		transitionReadsScore(transition) && pullRequest !== null
+			? await readPullRequestScore(request, pullRequest)
+			: null;
 	const pullRequestOpen =
 		pullRequest === null
 			? null

@@ -482,7 +482,7 @@ carries the command that creates them.
 | --- | --- | --- | --- |
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
 | `pull-request-facts` | no | none | The labels the transition writes on the ticket's linked pull request, the same convergence. No linked pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own linked pull request: one surface takes both fact lists in one write. |
-| `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the completion's score against. A whole number from 0 to 100. A score branch requires it. |
+| `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the review's score against. The review posts its score as a comment on the pull request in the template's fixed line, and the branch reads the newest comment that carries one. A whole number from 0 to 100. A score branch requires it. |
 | `auto-advance` | no | `false` | The factory decides the completed turn without the operator: the position it derives hands off at any time, and a transition with no position closes the cycle even in manual mode. |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
 | `environment` | no | - | The environment the route the transition derives runs in. One of `live-worktree` or `worktree`. |

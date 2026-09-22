@@ -396,7 +396,7 @@ interface ObservationOptions {
 	 * returns the outcome the completion decision reads. Omitted: the turn
 	 * settles without a transition.
 	 */
-	fireCompleted?: (ticket: HandoffTicket, message: string) => Promise<TransitionOutcome | null>;
+	fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
 }
 
 export class ObservationCoordinator {
@@ -428,10 +428,7 @@ export class ObservationCoordinator {
 	) => void;
 	private readonly clock: RefreshClock;
 	private readonly turnLogs: TurnLogSource;
-	private readonly fireCompleted?: (
-		ticket: HandoffTicket,
-		message: string,
-	) => Promise<TransitionOutcome | null>;
+	private readonly fireCompleted?: (ticket: HandoffTicket) => Promise<TransitionOutcome | null>;
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private stopped = false;
 	private cycleInFlight = false;
@@ -1014,7 +1011,7 @@ export class ObservationCoordinator {
 		// plane wrote, not a re-read of the source.
 		let transition: TransitionOutcome | null;
 		if (cause === "completed" && this.fireCompleted !== undefined) {
-			transition = (await this.fireCompleted(ticket, message)) ?? null;
+			transition = (await this.fireCompleted(ticket)) ?? null;
 			if (this.stopped) return true;
 		} else {
 			transition = null;

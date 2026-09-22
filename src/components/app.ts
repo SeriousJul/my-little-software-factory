@@ -2809,7 +2809,7 @@ export function App({
 			// pull request sources fresh - the agent's new pull request must
 			// be in the list before the machine can find it - and fire the
 			// task type's transition through the command runner.
-			fireCompleted: async (ticket, message) => {
+			fireCompleted: async (ticket) => {
 				const refresh = async () => {
 					for (const source of configRef.current.sources) {
 						if (source.kind === "github-pull-requests")
@@ -2822,7 +2822,6 @@ export function App({
 					runner: commandRunner,
 					ticketIdentity: ticket.ticketIdentity,
 					taskType: ticket.taskType,
-					message,
 					refresh,
 				});
 			},

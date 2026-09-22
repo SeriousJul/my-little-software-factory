@@ -199,15 +199,12 @@ function rig(options: {
 	 * test holds its own seam to watch when the loop fires a completed turn
 	 * and what it stores on the trace.
 	 */
-	fireCompleted?: (
-		ticket: {
-			ticketIdentity: string;
-			handoffAttemptId: string;
-			taskType: string;
-			agentType: string;
-		},
-		message: string,
-	) => Promise<TransitionOutcome | null>;
+	fireCompleted?: (ticket: {
+		ticketIdentity: string;
+		handoffAttemptId: string;
+		taskType: string;
+		agentType: string;
+	}) => Promise<TransitionOutcome | null>;
 }): Rig {
 	let nowMs = Date.parse("2026-08-31T11:00:00Z");
 	let agents = [...(options.agents ?? [])];
@@ -1051,7 +1048,7 @@ describe("the observation cycle", () => {
 
 describe("the transition fire of a completed settle", () => {
 	test("the loop fires the task type's transition and stores its outcome on the trace", async () => {
-		const fires: Array<{ identity: string; taskType: string; message: string }> = [];
+		const fires: Array<{ identity: string; taskType: string }> = [];
 		const written = outcome({ ticketWrite: { added: ["ready-for-review"], removed: [] } });
 		const { state, coordinator, advance } = rig({
 			// A session record gives the settle its `completed` cause: the fire
@@ -1065,20 +1062,19 @@ describe("the transition fire of a completed settle", () => {
 					detail: "",
 				},
 			}),
-			fireCompleted: async (ticket, message) => {
-				fires.push({ identity: ticket.ticketIdentity, taskType: ticket.taskType, message });
+			fireCompleted: async (ticket) => {
+				fires.push({ identity: ticket.ticketIdentity, taskType: ticket.taskType });
 				return written;
 			},
 		});
 		handOut(state, "github:github.com:I_5");
 		advance(30_001);
 		await coordinator.tick();
-		// One fire, on the settled turn's own message.
+		// One fire, on the settled completed turn.
 		expect(fires).toEqual([
 			{
 				identity: "github:github.com:I_5",
 				taskType: "implement",
-				message: "Done. The pull request is open.",
 			},
 		]);
 		expect(state.lastCompletion("github:github.com:I_5")?.transition).toEqual(written);

@@ -200,6 +200,27 @@ function ticketAt(state: ReturnType<typeof seededState>, identity: string): Tick
 	return ticket;
 }
 
+/**
+ * The exact argv of the pull request's comment read: the source's host, and
+ * the issue-style comment list of the pull the score tests fire on (#12).
+ */
+const COMMENT_READ_ARGS = [
+	"api",
+	"--hostname",
+	"github.com",
+	"repos/acme/factory/issues/12/comments?per_page=100",
+];
+/** The full command the score read issues, as the runner records it. */
+const COMMENT_READ_COMMAND = `gh ${COMMENT_READ_ARGS.join(" ")}`;
+
+/** Make the runner answer the comment read with these GitHub issue comments. */
+function setReviewComments(
+	runner: FakeRunner,
+	comments: readonly { body: string; created_at?: string }[],
+): void {
+	runner.set("gh", COMMENT_READ_ARGS, { stdout: JSON.stringify(comments) });
+}
+
 describe("the transition evaluation", () => {
 	test("a fact-only transition always fires", () => {
 		const evaluation = evaluateTransition(transition({ ticketFacts: ["ready-for-review"] }), {
@@ -294,7 +315,7 @@ describe("the transition evaluation", () => {
 		);
 		expect(noScore).toMatchObject({
 			fired: false,
-			reason: "the completion message carries no score",
+			reason: "the pull request carries no review score",
 		});
 
 		const noPull = evaluateTransition(
@@ -360,6 +381,102 @@ describe("the review score", () => {
 	});
 });
 
+describe("the review score read from the pull request's comments", () => {
+	// Each test seeds the open pull and fires the review transition; the
+	// verdict is the pull request's own comment, read through the command
+	// runner, not the agent's last message.
+	function loadPull(): ReturnType<typeof seededState> {
+		return seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
+	}
+
+	test("the newest comment that reports a score is the verdict", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 40 / 100", created_at: "2026-08-31T11:00:00Z" },
+			{ body: "Re-reviewed.\n- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ when: "score-above-threshold" });
+	});
+
+	test("a later comment's lower score is the verdict over an earlier higher one", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+			{ body: "On re-check, lower: - **Score:** 40 / 100", created_at: "2026-08-31T13:00:00Z" },
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ when: "score-below-threshold" });
+	});
+
+	test("a comment without the fixed line is not a score", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, [
+			{ body: "The total score is 61.", created_at: "2026-08-31T12:00:00Z" },
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({
+			fired: false,
+			reason: "the pull request carries no review score",
+		});
+	});
+
+	test("a failed comment read carries no score and fires no branch", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		runner.set("gh", COMMENT_READ_ARGS, { code: 1, stderr: "the comment read failed" });
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({
+			fired: false,
+			reason: "the pull request carries no review score",
+		});
+		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND]);
+	});
+
+	test("the comment read runs only for a score judgment, not for merge", async () => {
+		const runner = new FakeRunner();
+		const state = loadPull();
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "merge",
+		});
+		// The merge transition tests the pull request's own state: no score
+		// judgment, and no comment read for it.
+		expect(outcome).toMatchObject({ fired: true });
+		expect(runner.commands()).not.toContain("gh api");
+	});
+});
+
 describe("the machine's written label set", () => {
 	test("it holds the labels the transitions write, and not the states' scoping labels", () => {
 		const config: FactoryConfig = {
@@ -412,7 +529,6 @@ describe("the machine's written label set", () => {
 			runner,
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 		});
 		// The scoping label outlives the fire on both surfaces: the issue's
 		// write adds nothing and removes nothing, and the pull request's adds
@@ -567,7 +683,6 @@ describe("the transition fire", () => {
 			runner,
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 		});
 		expect(outcome).toMatchObject({
 			fired: true,
@@ -608,7 +723,6 @@ describe("the transition fire", () => {
 			runner,
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 		});
 		expect(outcome).toMatchObject({ fired: true, ticketWrite: null, pullRequestWrite: null });
 		expect(runner.commands()).toEqual([]);
@@ -617,13 +731,15 @@ describe("the transition fire", () => {
 	test("the review score picks the branch, and the written label is the new position", async () => {
 		const state = seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
 		const runner = new FakeRunner();
+		setReviewComments(runner, [
+			{ body: "The review passes.\n- **Score:** 95 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
 		const shipped = await fireTransition({
 			config: MACHINE_CONFIG,
 			state,
 			runner,
 			ticketIdentity: pullIdentity,
 			taskType: "review",
-			message: "- **Score:** 95 / 100",
 		});
 		expect(shipped).toMatchObject({
 			fired: true,
@@ -638,20 +754,26 @@ describe("the transition fire", () => {
 			added: ["ready-to-ship"],
 			removed: ["ready-for-review"],
 		});
+		// The verdict is read from the pull request's comment before the label
+		// write: the comment read, then the write it decided.
 		expect(runner.commands()).toEqual([
+			"gh api --hostname github.com repos/acme/factory/issues/12/comments?per_page=100",
 			"gh pr edit #12 --repo github.com/acme/factory --add-label ready-to-ship --remove-label ready-for-review",
 		]);
 	});
 
 	test("a review score below the threshold moves the pull request to rework", async () => {
 		const state = seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
+		const runner = new FakeRunner();
+		setReviewComments(runner, [
+			{ body: "- **Score:** 40 / 100", created_at: "2026-08-31T12:00:00Z" },
+		]);
 		const outcome = await fireTransition({
 			config: MACHINE_CONFIG,
 			state,
-			runner: new FakeRunner(),
+			runner,
 			ticketIdentity: pullIdentity,
 			taskType: "review",
-			message: "- **Score:** 40 / 100",
 		});
 		expect(outcome).toMatchObject({
 			when: "score-below-threshold",
@@ -662,20 +784,23 @@ describe("the transition fire", () => {
 	test("a settled review with no score fires no branch and writes no label", async () => {
 		const state = seededState(issueTicketData(), pullTicketData({ labels: ["ready-for-review"] }));
 		const runner = new FakeRunner();
+		setReviewComments(runner, [
+			{ body: "I could not finish the review.", created_at: "2026-08-31T12:00:00Z" },
+		]);
 		const outcome = await fireTransition({
 			config: MACHINE_CONFIG,
 			state,
 			runner,
 			ticketIdentity: pullIdentity,
 			taskType: "review",
-			message: "I could not finish the review.",
 		});
 		expect(outcome).toMatchObject({
 			fired: false,
-			reason: "the completion message carries no score",
+			reason: "the pull request carries no review score",
 			positionTaskType: null,
 		});
-		expect(runner.commands()).toEqual([]);
+		// The comment read ran and found no verdict: no label write follows.
+		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND]);
 	});
 
 	test("no pull request found is a visible fact, and the ticket's own facts still stand", async () => {
@@ -687,7 +812,6 @@ describe("the transition fire", () => {
 			runner,
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "The work is done on a local branch.",
 		});
 		expect(outcome).toMatchObject({
 			fired: true,
@@ -709,7 +833,6 @@ describe("the transition fire", () => {
 			runner: blockedRunner,
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
-			message: "The merge is blocked by a failing check.",
 		});
 		expect(blockedOutcome).toMatchObject({
 			when: "pull-request-open",
@@ -734,7 +857,6 @@ describe("the transition fire", () => {
 			runner: mergedRunner,
 			ticketIdentity: pullIdentity,
 			taskType: "merge",
-			message: "Merged.",
 		});
 		// The merged pull request is no longer open, so no judgment holds: the
 		// fallback fires and names no fact, and the write converges the
@@ -761,7 +883,6 @@ describe("the transition fire", () => {
 			runner,
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 		});
 		expect(outcome?.writeFailure).toContain("gh pr edit #12 failed: HTTP 403");
 		// The plane does not re-derive a position from labels it did not write.
@@ -778,7 +899,6 @@ describe("the transition fire", () => {
 			runner,
 			ticketIdentity: issueIdentity,
 			taskType: "chat",
-			message: "done",
 		});
 		expect(outcome).toBeNull();
 		expect(runner.commands()).toEqual([]);
@@ -792,7 +912,6 @@ describe("the transition fire", () => {
 			runner: new FakeRunner(),
 			ticketIdentity: "github:github.com:I_404",
 			taskType: "implement",
-			message: "done",
 		});
 		expect(outcome).toBeNull();
 	});
@@ -821,7 +940,6 @@ describe("the transition fire", () => {
 			runner: new FakeRunner(),
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 			refresh: async () => {
 				refreshed += 1;
 				// The refresh lands the pull request the agent just opened.
@@ -877,7 +995,6 @@ describe("the transition fire", () => {
 			runner,
 			ticketIdentity: "github:ghe.example.com:P_12",
 			taskType: "rework",
-			message: "Reworked.",
 		});
 		expect(runner.commands()).toEqual([
 			"gh pr edit #12 --repo ghe.example.com/acme/factory --add-label ready-for-review",
@@ -894,7 +1011,6 @@ describe("the transition fire", () => {
 			runner: new FakeRunner(),
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 		});
 		expect(outcome).toMatchObject({ fired: true, positionTaskType: null });
 	});
@@ -911,7 +1027,6 @@ describe("the transition fire", () => {
 			runner: new FakeRunner(),
 			ticketIdentity: issueIdentity,
 			taskType: "implement",
-			message: "Opened the pull request.",
 		});
 		expect(outcome).toMatchObject({ fired: true, positionTaskType: null });
 	});
