@@ -134,7 +134,11 @@ export function ConsultationLauncher({
 	const typeChoice = useChoice(names, draft?.typeName);
 	const repositoryChoice = useChoice(
 		repositories,
-		repositories.find((item) => item.identity === draft?.repositoryIdentity),
+		// Case-insensitive: a record an older plane stored keeps the API's
+		// owner casing, and the catalog identity is canonical lowercase.
+		repositories.find(
+			(item) => item.identity.toLowerCase() === (draft?.repositoryIdentity ?? "").toLowerCase(),
+		),
 	);
 	const inputRef = useRef(draft?.input ?? "");
 	const selectionRef = useRef(false);

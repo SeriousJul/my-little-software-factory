@@ -337,6 +337,55 @@ describe("the write the start runs", () => {
 		expect(evaluation.removed).toEqual(["Needs-Work"]);
 		expect(evaluation.postLabels).toEqual(["ready-for-review"]);
 	});
+
+	test("a repository condition reads the stored identity case-insensitive", () => {
+		// The match value is the operator's string; the membership's identity
+		// is canonical lowercase. The condition still holds on the target
+		// walk, and the placement stands.
+		const states: WorkflowState[] = [
+			{
+				name: "ready-for-review",
+				taskType: "review",
+				match: {
+					sourceKind: "github-pull-request",
+					repository: "github.com/Acme/Factory",
+					labelsAny: ["ready-for-review"],
+				},
+			},
+		];
+		const evaluation = evaluate(
+			states,
+			[
+				pull({
+					repository: {
+						identity: "github.com/acme/factory",
+						displayName: "acme/factory",
+						cloneUrl: "https://github.com/acme/factory.git",
+					},
+				}),
+			],
+			"review",
+		);
+		expect(evaluation.kind).toBe("placement");
+		if (evaluation.kind !== "placement") return;
+		expect(evaluation.added).toEqual(["ready-for-review"]);
+		// A different repository still refuses the condition, whatever the
+		// casing either side wears.
+		const other = evaluate(
+			states,
+			[
+				pull({
+					repository: {
+						identity: "github.com/acme/billing",
+						displayName: "acme/billing",
+						cloneUrl: "https://github.com/acme/billing.git",
+					},
+				}),
+			],
+			"review",
+		);
+		expect(other.kind).toBe("infeasible");
+	});
 });
 
 describe("the idempotent rule", () => {

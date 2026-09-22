@@ -122,6 +122,46 @@ describe("state selection", () => {
 		).toBe("review");
 	});
 
+	test("a repository condition reads the stored identity case-insensitive", () => {
+		// The match value is the operator's string; an older state file holds
+		// the identity with the API's owner casing. The condition still holds.
+		const states: WorkflowState[] = [
+			{ name: "review", taskType: "review", match: { repository: "github.com/Acme/Billing" } },
+		];
+		expect(
+			selectTaskType(
+				[
+					membership({
+						repository: {
+							identity: "github.com/acme/billing",
+							displayName: "acme/billing",
+							cloneUrl: "https://github.com/acme/billing.git",
+						},
+					}),
+				],
+				states,
+				"implement",
+			),
+		).toBe("review");
+		// A different repository with the same name still refuses, whatever the
+		// casing either side wears.
+		expect(
+			selectTaskType(
+				[
+					membership({
+						repository: {
+							identity: "gitlab.com/acme/billing",
+							displayName: "acme/billing",
+							cloneUrl: "https://gitlab.com/acme/billing.git",
+						},
+					}),
+				],
+				states,
+				"implement",
+			),
+		).toBe("implement");
+	});
+
 	test("labels-all requires every label and labels-none excludes", () => {
 		const all: WorkflowState[] = [
 			{ name: "review", taskType: "review", match: { labelsAll: ["needs-work", "draft"] } },

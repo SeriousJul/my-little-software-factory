@@ -75,6 +75,22 @@ interface ResolutionOptions {
 	home: string;
 }
 
+/**
+ * The explicit mapping for one repository reference, case-insensitive: the
+ * config key is a string the operator wrote, and the repository identity is
+ * canonical lowercase, so the same repository can sit under either casing.
+ */
+export function lookupRepositoryMapping(
+	repos: Record<string, string>,
+	keys: readonly string[],
+): string | undefined {
+	for (const [key, path] of Object.entries(repos)) {
+		const lowered = key.toLowerCase();
+		if (keys.some((candidate) => candidate.toLowerCase() === lowered)) return path;
+	}
+	return undefined;
+}
+
 /** Resolve the checkout for one repository, cloning when it is missing. */
 export async function resolveRepository(
 	repository: string | RepositoryRef,
@@ -85,7 +101,10 @@ export async function resolveRepository(
 	const name = reference.displayName.split("/").pop() ?? reference.displayName;
 	// The short legacy key is accepted for current installations. New source
 	// data writes the host-qualified identity only.
-	const mapped = config.repos[reference.mappingKey] ?? config.repos[reference.displayName];
+	const mapped = lookupRepositoryMapping(config.repos, [
+		reference.mappingKey,
+		reference.displayName,
+	]);
 	const path = mapped !== undefined ? expandHome(mapped, home) : join(home, "src", name);
 	const explicit = mapped !== undefined;
 

@@ -272,6 +272,31 @@ describe("the list rule", () => {
 		state.close();
 	});
 
+	test("the branch link holds across the repository identity casing an older plane stored", () => {
+		const state = openFactoryState(statePath());
+		state.initializeSources([security, pulls]);
+		state.applyFetch(security, success([securityTicket()]));
+		// A plane that predates the canonical lowercase identity stored the
+		// pull request's repository with the API's owner casing. The link is
+		// on the same repository, and the repository identity is
+		// case-insensitive on GitHub, so the link still holds (ADR 0042).
+		state.applyFetch(
+			pulls,
+			success([
+				securityPullTicket({
+					repository: {
+						identity: "github.com/Acme/Factory",
+						displayName: "Acme/Factory",
+						cloneUrl: "https://github.com/Acme/Factory.git",
+					},
+				}),
+			]),
+		);
+		const visible = state.visibleTickets([], "implement");
+		expect(visible.map((ticket) => ticket.identity)).toEqual([securityPullIdentity]);
+		state.close();
+	});
+
 	test("a pull request that fixes nothing covers nothing", () => {
 		const state = openFactoryState(statePath());
 		state.initializeSources([issues, pulls]);
@@ -430,6 +455,35 @@ describe("the rank through the fixing ticket", () => {
 			label: "critical",
 			source: "inherited",
 			inheritedFrom: { sourceKind: "github-security-advisory", externalKey: advisoryKey },
+		});
+		state.close();
+	});
+
+	test("the rank travels the branch link across the stored identity casing", () => {
+		const state = openFactoryState(statePath());
+		state.initializeSources([security, pulls]);
+		state.applyFetch(security, success([securityTicket({ labels: ["high"] })]));
+		state.applyFetch(
+			pulls,
+			success([
+				securityPullTicket({
+					repository: {
+						identity: "github.com/Acme/Factory",
+						displayName: "Acme/Factory",
+						cloneUrl: "https://github.com/Acme/Factory.git",
+					},
+				}),
+			]),
+		);
+		const [pull] = state
+			.visibleTickets([], "implement", RANKS)
+			.filter((ticket) => ticket.identity === securityPullIdentity);
+		if (pull === undefined) throw new Error("missing pull request ticket");
+		expect(pull.priority).toEqual({
+			rank: 1,
+			label: "high",
+			source: "inherited",
+			inheritedFrom: { sourceKind: "github-dependabot-alert", externalKey: "#9" },
 		});
 		state.close();
 	});
