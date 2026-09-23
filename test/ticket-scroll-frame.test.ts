@@ -4,7 +4,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { CliRenderEvents } from "@opentui/core";
 
 import type { FactoryConfig } from "../src/config.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { FetchedTicket, Ticket } from "../src/domain/ticket.ts";
 import { openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import {
@@ -36,7 +36,7 @@ import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 const SCROLL_WIDTH = 60;
 // The minimum terminal that holds the dual-list frame (ADR 0019): the scroll
 // tests boot the smallest frame the detail viewport can take.
-const SCROLL_HEIGHT = 19;
+const SCROLL_HEIGHT = 27;
 const GUTTER_X = SCROLL_WIDTH - 2;
 /**
  * The detail pane's terminal row, from its inner-area row i.
@@ -114,6 +114,25 @@ const sourceSuccess = (tickets: FetchedTicket[]): FetchOutcome => ({
 	tickets,
 });
 
+/**
+ * The sample tickets with a description long enough to overflow the detail
+ * pane at the test sizes: the native viewport is the behavior under test,
+ * and a detail that fits has nothing to scroll.
+ */
+const OVERFLOW_TICKETS: readonly Ticket[] = [
+	{
+		...SAMPLE_TICKETS[0],
+		description:
+			`${SAMPLE_TICKETS[0].description}\n` +
+			Array.from(
+				{ length: 12 },
+				(_, index) =>
+					`A longer note ${index + 1} about the payloads the dead-letter queue holds and why each one waited.`,
+			).join("\n"),
+	},
+	...SAMPLE_TICKETS.slice(1),
+];
+
 const sourceConfig: FactoryConfig = {
 	...BASE_CONFIG,
 	sources: [
@@ -133,7 +152,10 @@ describe("native Ticket detail viewport", () => {
 			async (setup) => {
 				const initial = setup.captureCharFrame();
 				const thumb = thumbRows(initial);
-				expect(thumb).toEqual([detailRow(0)]);
+				// The thumb is proportional to the hidden content: it starts on
+				// the first inner row and spans as many rows as the overflow
+				// earns it at this size.
+				expect(thumb.at(0)).toBe(detailRow(0));
 				expect(cellColors(setup, GUTTER_X, thumb[0])).toEqual({
 					fg: rgb(roleColor("accent")),
 					bg: rgb(roleColor("subtext0")),
@@ -305,10 +327,10 @@ describe("native Ticket detail viewport", () => {
 				await pressArrow(setup, "up", "Up to select the first Ticket", (frame) =>
 					selectedRow(frame).includes("[open]"),
 				);
-				// The list window holds four rows at this size, so a page from
-				// the first ticket lands on the fifth.
+				// The list window holds six rows at this size, so a page from
+				// the first ticket lands on the seventh.
 				await press(setup, "pagedown", "PageDown to select one list page", (frame) =>
-					selectedRow(frame).includes("Observe"),
+					selectedRow(frame).includes("Run the con"),
 				);
 				await press(setup, "pageup", "PageUp to return one list page", (frame) =>
 					selectedRow(frame).includes("Retry polic"),
@@ -566,15 +588,16 @@ describe("native Ticket detail viewport", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					setup.resize(73, 19);
+					setup.resize(73, 27);
 					const frame = await awaitFrame(
 						setup,
 						(candidate) => {
 							const rows = rowsOf(candidate);
-							// One frame: the mode line, the body with both sections,
-							// then the reserved Message line and the Action bar.
+							// One frame: the mode line, the body with its three
+							// sections, then the reserved Message line and the
+							// Action bar.
 							return (
-								rows.length === 19 &&
+								rows.length === 27 &&
 								rows.every((row) => row.length === 73) &&
 								rows[0]?.startsWith("auto: off 0/2") === true &&
 								rows.at(-3)?.includes("└") === true
@@ -585,7 +608,7 @@ describe("native Ticket detail viewport", () => {
 					expect(rowsOf(frame).at(-2)).not.toContain("auto:");
 				},
 				73,
-				19,
+				27,
 				{ state, sources: [] },
 			);
 		} finally {
@@ -641,7 +664,7 @@ describe("native Ticket detail viewport", () => {
 					// The source field is below this small viewport at the preserved
 					// offset. Grow the terminal only to observe that refresh, then
 					// return to the original viewport to verify the native offset.
-					setup.resize(SCROLL_WIDTH, 20);
+					setup.resize(SCROLL_WIDTH, SCROLL_HEIGHT + 3);
 					await awaitFrame(
 						setup,
 						(frame) => frame.includes("External key: #11-refresh"),
@@ -705,7 +728,7 @@ describe("native Ticket detail viewport", () => {
 				expect(narrowMiddle).not.toBe(middle);
 
 				await press(setup, "end", "the narrow detail to reach its end", (frame) =>
-					frame.includes("retries."),
+					frame.includes("waited."),
 				);
 				setup.resize(8, 8);
 				const tinyEnd = await awaitFrame(
@@ -726,13 +749,14 @@ describe("native Ticket detail viewport", () => {
 					setup,
 					(frame) =>
 						rowsOf(frame).every((row) => row.length === 80) &&
-						frame.includes("their retries.") &&
+						frame.includes("waited.") &&
 						frame.match(/[▀▄█]/) !== null,
 					"the normal width with the restored detail offset",
 				);
 			},
 			80,
 			SCROLL_HEIGHT,
+			{ initialTickets: OVERFLOW_TICKETS },
 		);
 	});
 
@@ -778,6 +802,7 @@ describe("native Ticket detail viewport", () => {
 			},
 			80,
 			SCROLL_HEIGHT,
+			{ initialTickets: OVERFLOW_TICKETS },
 		);
 	});
 });

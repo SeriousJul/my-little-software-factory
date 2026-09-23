@@ -550,7 +550,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(back)).toBe(3);
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -588,7 +588,7 @@ describe("the control plane", () => {
 				expect(markerRowOf(atBottom)).toBe(3);
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -607,12 +607,12 @@ describe("the control plane", () => {
 	test("the list pane window slides when the tickets overflow the pane", async () => {
 		await withApp(
 			async (setup) => {
-				// The pane shows four rows at this height: the first four
-				// tickets only. The rows carry their state and task type
-				// badges as their identity, so a slide is visible in the
-				// badges even where a title wraps or truncates. The
-				// handed-off ticket wears its Starting window's spinner face
-				// in place of the badge it replaced (ADR 0030).
+				// The pane shows six rows at this height: the first six
+				// tickets only, the two trailing ones off the window. The rows
+				// carry their state and task type badges as their identity, so
+				// a slide is visible in the badges even where a title wraps or
+				// truncates. The handed-off ticket wears its Starting window's
+				// spinner face in place of the badge it replaced (ADR 0030).
 				let frame = frameText(setup.captureCharFrame());
 				expect(startingFaceOf(frame)).not.toBeNull();
 				expect(frame).toContain("[awaiting]");
@@ -620,7 +620,7 @@ describe("the control plane", () => {
 
 				// Moving the selection slides the window: enough slides bring
 				// the later tickets in and drop the oldest rows out.
-				for (let i = 0; i < 5; i += 1) {
+				for (let i = 0; i < 6; i += 1) {
 					setup.mockInput.pressKey("j");
 					frame = frameText(await settle(setup));
 				}
@@ -632,10 +632,10 @@ describe("the control plane", () => {
 					(rowsOf(f).find((row) => row.startsWith("│ ❯")) ?? "").includes("Ticket id"),
 				);
 				expect(frame).toContain("Observe the agent");
-				expect(frame).not.toContain("Drop the legacy");
+				expect(frame).not.toContain("Retry polic");
 			},
 			WIDTH,
-			19,
+			27,
 		);
 	});
 
@@ -657,20 +657,30 @@ describe("the control plane", () => {
 			// geometry itself: in the 60-wide layout the [implement] badge
 			// and the repository have dropped from the list rows, and the
 			// short [fix] badge still rides.
-			setup.resize(60, 19);
+			setup.resize(60, 27);
 			const small = await awaitFrame(
 				setup,
 				(f) => {
 					const rows = rowsOf(f);
-					return (
-						rows.length === 19 &&
-						rows.every((row) => row.length === 60) &&
-						f.includes("Tickets") &&
-						f.includes("Detail") &&
-						f.includes("[fix] Migrat") &&
-						rows.every((row) => !listHalfOf(row).includes("[implement]")) &&
-						rows.every((row) => !listHalfOf(row).includes("acme/"))
-					);
+					if (
+						rows.length !== 27 ||
+						!rows.every((row) => row.length === 60) ||
+						!f.includes("Tickets") ||
+						!f.includes("Detail") ||
+						!f.includes("[fix] Migrat")
+					)
+						return false;
+					// The ticket list's own rows only: the box between its top
+					// border and its bottom border. The section headers below
+					// carry no pane-divider, so a whole-row check would read
+					// the detail pane's text into the list.
+					const top = rows.findIndex((row) => row.includes("❯ Tickets"));
+					const bottom = rows.slice(top).findIndex((row) => row.startsWith("└"));
+					const listRows = rows.slice(top, top + bottom);
+					return listRows.every((row) => {
+						const half = listHalfOf(row);
+						return !half.includes("[implement]") && !half.includes("acme/");
+					});
 				},
 				"the frame to take the new size",
 			);
@@ -724,7 +734,7 @@ describe("the control plane", () => {
 
 	test("the layout adapts to the terminal size", async () => {
 		for (const [width, height] of [
-			[80, 24],
+			[80, 27],
 			[160, 40],
 		]) {
 			await withApp(
@@ -750,15 +760,16 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const rows = rowsOf(setup.captureCharFrame());
-				expect(rows).toHaveLength(25);
+				expect(rows).toHaveLength(27);
 				for (const row of rows) {
 					expect(row.length).toBe(75);
-				} // Row 0 carries the section header and the detail's top border, and
-				// the Ticket box runs from row 1 to row 14. The split puts the
-				// list box on columns 0-36 and the detail box on 37-74. At an
-				// odd width a "50%" list would take 38 columns, and the shared
+				} // The test runs without factory state, so no mode line stands:
+				// row 0 carries the section header and the detail's top border,
+				// and the Ticket box runs from row 1 to row 10. The split puts
+				// the list box on columns 0-36 and the detail box on 37-74. At
+				// an odd width a "50%" list would take 38 columns, and the shared
 				// geometry would then lay text one cell off the rendered box.
-				for (const row of rows.slice(2, 14)) {
+				for (const row of rows.slice(2, 10)) {
 					expect(row[0]).toBe("│");
 					expect(row[36]).toBe("│");
 					expect(row[37]).toBe("│");
@@ -776,7 +787,7 @@ describe("the control plane", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("Source state: open");
 			},
 			75,
-			25,
+			27,
 		);
 	});
 
@@ -784,7 +795,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const rows = rowsOf(setup.captureCharFrame());
-				expect(rows).toHaveLength(19);
+				expect(rows).toHaveLength(27);
 				// Every terminal row is exactly as wide as the terminal:
 				// nothing wrapped or overflowed.
 				for (const row of rows) {
@@ -807,7 +818,7 @@ describe("the control plane", () => {
 				expect(frameText(setup.captureCharFrame())).toContain("acme/billing");
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -815,7 +826,7 @@ describe("the control plane", () => {
 		await withApp(
 			async (setup) => {
 				const rows = rowsOf(setup.captureCharFrame());
-				expect(rows).toHaveLength(19);
+				expect(rows).toHaveLength(27);
 				// Every terminal row is exactly as wide as the terminal:
 				// nothing wrapped or overflowed.
 				for (const row of rows) {
@@ -834,7 +845,7 @@ describe("the control plane", () => {
 				expect(listHalf).not.toContain("acme/");
 			},
 			40,
-			19,
+			27,
 		);
 	});
 
@@ -1007,13 +1018,13 @@ describe("the control plane", () => {
 		);
 		// 80: the badge keeps its place; the repository drops before the
 		// title does.
-		expect(await selectedRowAt(80, 24)).toBe("│ ❯ [open]      [implement] Retry poli │");
+		expect(await selectedRowAt(80, 27)).toBe("│ ❯ [open]      [implement] Retry poli │");
 		// 60: the badge no longer fits beside the title minimum, so it
 		// drops complete. A short type on another row still fits.
-		const narrow = await selectedRowAt(60, 19);
+		const narrow = await selectedRowAt(60, 27);
 		expect(narrow).toBe("│ ❯ [open]       Retry polic │");
 		// 40: nothing but the marker and the state badge fits.
-		expect(await selectedRowAt(40, 19)).toBe("│ ❯ [open]       R │");
+		expect(await selectedRowAt(40, 27)).toBe("│ ❯ [open]       R │");
 	});
 
 	test("the badge drops when its complete text cannot fit, and the detail keeps the value", async () => {
@@ -1046,7 +1057,7 @@ describe("the control plane", () => {
 				expect(detailPaneText(detail, 60)).toContain("Handoff task type: implement");
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -1108,7 +1119,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			19,
+			27,
 			props,
 		);
 	});
@@ -1154,7 +1165,7 @@ describe("the control plane", () => {
 				expect(stillFrame(top)).not.toBe(stillFrame(page));
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -1163,10 +1174,10 @@ describe("the control plane", () => {
 			async (setup) => {
 				const selectedState = (frame: string) =>
 					rowsOf(frame).find((row) => row.startsWith("│ ❯")) ?? "";
-				// One page is four visible rows at this height: the page lands
-				// on the fifth ticket.
+				// One page is six visible rows at this height: the page lands
+				// on the seventh ticket.
 				await press(setup, "pagedown", "the list to move one visible page", (frame) =>
-					selectedState(frame).includes("Observe th"),
+					selectedState(frame).includes("Run the con"),
 				);
 				await press(setup, "end", "the list to select its last ticket", (frame) =>
 					selectedState(frame).includes("Ticket id i"),
@@ -1176,7 +1187,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -1220,7 +1231,7 @@ describe("the control plane", () => {
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(stable));
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -1259,7 +1270,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -1280,7 +1291,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			19,
+			27,
 			{ config },
 		);
 	});
@@ -1301,7 +1312,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			19,
+			27,
 			{ config },
 		);
 	});
@@ -1332,7 +1343,7 @@ describe("the control plane", () => {
 				);
 			},
 			60,
-			19,
+			27,
 		);
 	});
 
@@ -1357,7 +1368,7 @@ describe("the control plane", () => {
 				expect(frames.length).toBeGreaterThan(0);
 				for (const frame of frames) {
 					const rows = rowsOf(frame);
-					expect(rows).toHaveLength(19);
+					expect(rows).toHaveLength(27);
 					expect(rows.every((row) => row.length === 60)).toBe(true);
 					expect(rows[paneRow(0)]).toContain("┌");
 					// The panes sit above the Message line and Action bar.
@@ -1366,7 +1377,7 @@ describe("the control plane", () => {
 				}
 			},
 			60,
-			19,
+			27,
 			{ config },
 		);
 	});
@@ -1381,7 +1392,7 @@ describe("the control plane", () => {
 				expect(stillFrame(await settle(setup))).toBe(stillFrame(before));
 			},
 			60,
-			19,
+			27,
 		);
 	});
 

@@ -1535,6 +1535,47 @@ describe("factory SQLite state", () => {
 		reopened.close();
 	});
 
+	test("a v19 file migrates to v20: the queue pause lands and the retired facts drop", () => {
+		// The queue pause's fact stands before the v19 file: the v19 code held
+		// no priority or referenced-issues facts of its own, so the file a
+		// re-labeled v19 build left behind still carries the retired column and
+		// table. The open asks the file, not the stamp.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.close();
+
+		const db = new Database(path);
+		db.exec(
+			"ALTER TABLE tickets ADD COLUMN priority_override TEXT; CREATE TABLE referenced_issues (id INTEGER PRIMARY KEY);",
+		);
+		db.prepare("UPDATE schema_version SET version = 19").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The pause lands unpaused on the existing file, and the retired
+		// facts are gone from the file.
+		expect(reopened.queuePaused()).toBe(false);
+		const check = new Database(path, { readonly: true });
+		const tables = check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+			name: string;
+		}[];
+		const tableNames = tables.map((row) => row.name);
+		expect(tableNames).toContain("queue_pause");
+		expect(tableNames).not.toContain("referenced_issues");
+		const columns = (check.prepare("PRAGMA table_info(tickets)").all() as { name: string }[]).map(
+			(row) => row.name,
+		);
+		expect(columns).not.toContain("priority_override");
+		// The stamp stands at the target on the healed file.
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+		reopened.close();
+	});
+
 	test("a v17 file migrates to v18: the queue row gains the route's settled ticket", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
@@ -1633,6 +1674,28 @@ describe("factory SQLite state", () => {
 			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
 		).toBe(SCHEMA_VERSION);
 		check.close();
+	});
+
+	describe("the queue pause (ADR 0052)", () => {
+		test("the write is durable: a fresh open of the same file reads it back", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			expect(state.queuePaused()).toBe(false);
+			state.setQueuePaused(true);
+			expect(state.queuePaused()).toBe(true);
+			state.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.queuePaused()).toBe(true);
+			// The pause is the file's own fact: the toggle writes it back off,
+			// and a third open reads the off.
+			reopened.setQueuePaused(false);
+			expect(reopened.queuePaused()).toBe(false);
+			reopened.close();
+			const third = openFactoryState(path);
+			expect(third.queuePaused()).toBe(false);
+			third.close();
+		});
 	});
 
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {

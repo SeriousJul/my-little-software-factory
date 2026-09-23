@@ -3134,6 +3134,9 @@ describe("the leftover environment", () => {
 				await pressReturn(setup, "the decision modal", (f) => f.includes("Decision:"));
 				await pressReturn(setup, "the close", (f) => ticketRow(f).includes("[open]"));
 				await settleReverify(app.src, success);
+				// The drop warning prefixes the reason, and the line truncates at
+				// the terminal width, so the test renders wide enough to hold
+				// the whole of it.
 				await pressReturn(setup, "the handoff stopped by the stranger", (f) =>
 					f.includes("pane pane-stranger"),
 				);
@@ -3144,7 +3147,7 @@ describe("the leftover environment", () => {
 				);
 				expect(ticketRow(setup.captureCharFrame())).toContain("leftover");
 			},
-			WIDTH,
+			WIDE_STATUS,
 			HEIGHT,
 			{ ...propsOf(app), runner: collisionRunner },
 		);
@@ -3313,7 +3316,7 @@ describe("the auto dispatch", () => {
 		app.state.close();
 	});
 
-	test("two open tickets dispatch in one cycle, and the queue drains when the seat frees", async () => {
+	test("two open tickets dispatch one per top-up cycle, in list order", async () => {
 		const app = seededAppInAutoMode("open", {}, pairSuccess);
 		stubCheckout(app);
 		const path = Object.values(app.config.repos)[0];
@@ -3329,9 +3332,9 @@ describe("the auto dispatch", () => {
 		await withApp(
 			async (setup) => {
 				app.src.settle(pairSuccess);
-				// The first cycle dispatches both tickets: the first handoff
-				// runs, the second queues behind it. When the first settles,
-				// the seat frees, and the drain starts the second.
+				// The top-up adds one item per cycle into an empty queue (ADR
+				// 0051): the first cycle starts the first ticket in list order,
+				// and the second cycle, the queue drained, starts the second.
 				// Both started agents are inside their startup grace, so the
 				// mode line holds both booting seats against the cap.
 				await awaitFrame(
@@ -3363,7 +3366,9 @@ describe("the auto dispatch", () => {
 			},
 			WIDTH,
 			HEIGHT,
-			propsOf(app),
+			// A short interval lets the second top-up cycle run while the test
+			// waits: the poll the default config asks for is a minute long.
+			{ ...propsOf(app), pollIntervalMs: 25 },
 		);
 		app.state.close();
 	});
@@ -3445,7 +3450,7 @@ describe("the auto dispatch", () => {
 				app.src.settle(success);
 				const failed = await awaitFrame(
 					setup,
-					(f) => frameText(f).includes("auto-handoff for ticket"),
+					(f) => frameText(f).includes("queued handoff for"),
 					"the failed automatic handoff",
 				);
 				expect(frameText(failed)).toContain("no model setting");
@@ -3528,7 +3533,14 @@ describe("the auto decision", () => {
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				// The refresh after the fire carries the labels the fire wrote:
+				// the position offers the review task, and the top-up's
+				// continuation takes it (ADR 0051).
+				app.src.settle({
+					status: "success",
+					fetchedAt: "2026-08-31T10:02:00Z",
+					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+				});
 				// No operator key: the loop routed the settled turn, and the
 				// trace carries the automatic decision.
 				const frame = await awaitFrame(
@@ -3598,7 +3610,14 @@ describe("the auto decision", () => {
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
+				// The refresh after the fire carries the labels the fire wrote:
+				// the position offers the review task, and the top-up's
+				// continuation takes it (ADR 0051).
+				app.src.settle({
+					status: "success",
+					fetchedAt: "2026-08-31T10:02:00Z",
+					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+				});
 				await awaitFrame(setup, (f) => f.includes("auto-handed-off"), "the automatic route");
 				const start = app.runner
 					.commands()
@@ -3639,12 +3658,19 @@ describe("the auto decision", () => {
 
 		await withApp(
 			async (setup) => {
-				app.src.settle(success);
-				// The loud reason reaches the status line, and it names the ticket
-				// the route was for.
+				// The refresh after the fire carries the labels the fire wrote:
+				// the position offers the review task, and the top-up's
+				// continuation takes it (ADR 0051).
+				app.src.settle({
+					status: "success",
+					fetchedAt: "2026-08-31T10:02:00Z",
+					tickets: [fetched(5, "Persist source facts", ["ready-for-review"])],
+				});
+				// The loud reason reaches the status line as the drop warning, and
+				// it names the ticket the route was for.
 				const failed = await awaitFrame(
 					setup,
-					(f) => frameText(f).includes("automatic route for ticket"),
+					(f) => frameText(f).includes("queued handoff for"),
 					"the failed automatic route",
 				);
 				expect(frameText(failed)).toContain("no model setting");
@@ -3911,12 +3937,35 @@ describe("the handoff queue", () => {
 				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressReturnQuietFor("the restart to queue", (f) => !f.includes("Missing:"));
 				// And while the restart is queued, the ticket moves on:
-				// abandon it.
-				await pressReturnQuietFor("the missing modal again", (f) => f.includes("Missing:"));
+				// abandon it. Enter on the row jumps to the queued item
+				// (ADR 0049), and the operator removes it there; the queue
+				// emptying sends the selection home to the Ticket list.
+				await pressReturnQuietFor("the jump to the queued restart", (f) =>
+					rowsOf(f).some((line) => line.includes("❯") && line.includes("[restart]")),
+				);
+				// The Working line outranks the removal notice, so the effect is
+				// read on the queue's own row: the handoff's item keeps the queue
+				// holding one row, and the selection clamps onto it.
+				await pressQuietFor("delete", "the item removed", (f) =>
+					rowsOf(f).some((line) => line.includes("❯") && line.includes("[open]")),
+				);
+				// Back to the Ticket list: up crosses the empty Consultation
+				// section to the last Ticket, and one more step lands the
+				// missing row, where the modal opens again and Abandon ends the
+				// work cycle.
+				await pressQuietFor(
+					"k",
+					"the Consultation section",
+					// The empty Consultation list shows no marker on its message
+					// row, so the cross is read on the detail pane's empty line.
+					(f) => f.includes("no Consultation selected"),
+				);
+				await pressQuietFor("k", "the last Ticket", (f) => markerRowOf(f) === 5);
+				await pressQuietFor("k", "the missing row", (f) => markerRowOf(f) === 4);
+				await pressReturnQuietFor("the missing modal", (f) => f.includes("Missing:"));
 				await pressArrow(setup, "down", "select abandon", (f) =>
 					frameText(f).includes("❯ Abandon"),
 				);
-				await sleep(150);
 				// The abandonment closes the modal, and the row reads open at
 				// once: the waiting restart never claimed a seat - the cap held
 				// it in the Work queue - so no Starting window covers the badge
@@ -3924,28 +3973,31 @@ describe("the handoff queue", () => {
 				await pressReturnQuietFor("the abandonment", (f) =>
 					ticketRow(f, "Watch agent turns").includes("[open]"),
 				);
-				// Release the gate: the handoff in flight settles and gives its
-				// seat back. The abandonment re-reads the ticket's sources: let
-				// that fetch land, so the observation loop ticks and the pickup
-				// meets the item. The ticket is open now, so the restart's
-				// pickup refuses and the item keeps its place.
+				// Release the gate: the handoff in flight settles and its row
+				// stands in the in-flight group's front. The abandonment
+				// re-reads the ticket's sources: let that fetch land, so the
+				// row is actionable for the re-handoff.
 				gate.release();
 				src.settle({
 					status: "success",
 					fetchedAt: new Date(Date.now() + 60_000).toISOString(),
 					tickets: pairMoved.tickets,
 				});
-				await awaitFrame(setup, (f) => f.includes("was not run"), "the pickup warning", 5000);
-				expect(frameText(setup.captureCharFrame())).toContain(
-					'queued handoff for "Watch agent turns" was not run: the ticket is now open',
+				// The settled handoff's row stands in the in-flight group's front,
+				// on its missing badge (the agent list carries no pane for it).
+				await awaitFrame(
+					setup,
+					(f) => rowsOf(f).some((line) => line.includes("missing") && line.includes("Persist")),
+					"the settled handoff's row",
+					5000,
 				);
 
 				// The open ticket's handoff started once; no agent started for
-				// the ticket that moved on, and its item still waits in the
-				// Work queue with its captured restart choice.
+				// the ticket that moved on, and the operator's removal left
+				// the Work queue empty.
 				const starts = inner.commands().filter((c) => c.startsWith("herdr agent start"));
 				expect(starts).toEqual(["herdr agent start persist-source-facts --kind pi --pane pane-1"]);
-				expect(state.hasWorkItem(secondIdentity)).toBe(true);
+				expect(state.hasWorkItem(secondIdentity)).toBe(false);
 				// The abandonment ran the Close cleanup on the stored
 				// environment.
 				expect(inner.commands()).toContain("herdr tab close tab-2");
@@ -3959,12 +4011,11 @@ describe("the handoff queue", () => {
 				expect(inFlight?.handoffRecoveryRequired).toBe(false);
 
 				// The claim settled, so the ticket is not dead: it hands off
-				// again on demand. It is the second row (row five: the mode
-				// line, the Ticket header, the border, and the padding row
-				// sit above the list), and the abandonment left the
-				// selection on it, so the selection is probed instead of
-				// stepped: a move down from the last row would cross into
-				// the Consultation section.
+				// again on demand. The settled handoff stands in the in-flight
+				// group's front (row four), and the abandonment left the
+				// selection on its own row below it (row five: the mode line,
+				// the Ticket header, the border, and the padding row sit above
+				// the list), so the re-handoff takes no step at all.
 				const held = await settle(setup);
 				expect(markerRowOf(held)).toBe(5);
 				await settleReverify(src, pairMoved);

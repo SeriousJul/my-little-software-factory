@@ -1,6 +1,6 @@
 ---
 title: Main view
-description: The Main view's two sections, its counts, its controls, and the layout the terminal shows.
+description: The Main view's three sections, its counts, its controls, and the layout the terminal shows.
 ---
 
 # Main view
@@ -15,42 +15,56 @@ of the item the cursor holds. One control catalogue, one Action bar, and
 one Message line answer for all of them. The Ticket and Consultation
 sections start expanded; `x` or a click on a section header collapses the
 section under the cursor to its header row, and the same toggle restores
-it. The Work section holds the manual starts that wait for a Parallel
-limit seat (ADR 0034): its header carries the depth, and it stays hidden
-while it is empty and collapsed, so an idle factory keeps its two-Section
-frame. A queued Handoff start carries the ticket's title, the start's
-origin, and its place in the queue; the detail pane shows the choice the
-start carried. A queued Consultation start (issue #90) carries the kind
-word and the record's identity prefix, and the detail pane reads the record
-the item names - the ask, the type, the state - with the record gone saying
-so in its place. `u` and `d` move the item under the cursor one place toward
-the front or the back, `Delete` removes it - the ticket keeps the state it
-wore while it waited, and a Consultation item unschedules the record (issue
-#91): the record keeps its ask in `unscheduled` state, listed in the
-Consultation section - and Enter force-dispatches the item under the cursor
-(issue #89, ADR 0034): it starts now, even when the Parallel limit is full,
-and re-runs every start check the queue's pickup runs except the cap, so the
-seat count can stand over the limit until the work settles. A force-dispatch
-that fails leaves the item out of the queue with the failure on the Message
-line, and the ticket keeps its state. A Consultation item runs the same
-force-dispatch over the cap (ADR 0034, issue #90): its record takes its seat
-in the atomic move to `opening`, the line names the cap when the seat count
-stood over it, and the item leaves the queue on the answer. A Handoff in
-flight refuses the key on a Handoff item only: a Consultation start never
-parks on the herdr seat a Handoff holds, the way a launcher submit does not. The removal cancels the start
-everywhere the factory
-holds it: a claim its pickup already made and the herdr seat parked ends with
-the row, and it never starts an Agent the operator removed. The one exception
-is a start whose work had already reached herdr: that Agent runs, and the
-removed row adds no second line about it. The line the cancel writes states
-only what the module measured: a removal when a row stood under the cursor,
-and the queue holding no such row when its pickup had already taken it. Up and down move
-the cursor through the visible rows and cross the section boundary when the
-sections are adjacent. `d` and `f` belong to the Consultation section: in the
-Work queue they state that section's refusal, and the queue's guide and Action
-bar name neither key (issue #85, ADR 0034). The mode the bar and the
-guide state derives from the section that holds the cursor and its focused
-pane.
+it. The Work section holds every start the factory makes: the manual starts
+that wait for a Parallel limit seat (ADR 0034), the automatic adds the
+auto-handoff top-up makes (ADR 0051), and the Consultation starts (issue
+#90). Its header carries the depth, and the section is always visible
+(ADR 0049): it starts expanded and keeps a minimum of three content rows,
+so an idle factory keeps its three-Section frame with an empty queue that
+says `no waiting starts`. A queued Handoff start carries the ticket's
+title, the start's origin, and its place in the queue; the detail pane
+shows the choice the start carried. A queued Consultation start carries
+the kind word and the record's identity prefix, and the detail pane reads
+the record the item names - the ask, the type, the state - with the record
+gone saying so in its place. `+` and `-` move the item under the cursor
+one place toward the front or the back (ADR 0049): the queue's order is
+the order of work, and the ticket list orders by attention (ADR 0050).
+`p` pauses or resumes the queue's drain (ADR 0052): the pickup takes no
+item and the top-up adds none while the pause stands, and the fact is
+factory state, so a restart finds it where the operator left it; the
+header carries the `paused` word while the pause stands, and the key's
+hint flips between `Pause queue` and `Resume queue`. `Delete` removes the
+item - the ticket keeps the state it wore while it waited, and a
+Consultation item unschedules the record (issue #91): the record keeps
+its ask in `unscheduled` state, listed in the Consultation section - and
+Enter force-dispatches the item under the cursor (issue #89, ADR 0034):
+it starts now, even when the Parallel limit is full and even when the
+queue's pause stands, and it re-runs every start check the queue's
+pickup runs except the cap, so the seat count can stand over the limit
+until the work settles. A force-dispatch that fails leaves the item out
+of the queue with the failure on the Message line, and the ticket keeps
+its state. A Consultation item runs the same force-dispatch over the cap
+(ADR 0034, issue #90): its record takes its seat in the atomic move to
+`opening`, the line names the cap when the seat count stood over it, and
+the item leaves the queue on the answer. A Handoff in flight refuses the
+key on a Handoff item only: a Consultation start never parks on the herdr
+seat a Handoff holds, the way a launcher submit does not. Enter on a
+Ticket or Consultation row that waits in the queue jumps to the item's
+row (ADR 0049): the cursor lands where the queue's keys act, and the
+start the operator is about to make is the one the cursor holds. The
+removal cancels the start everywhere the factory holds it: a claim its
+pickup already made and the herdr seat parked ends with the row, and it
+never starts an Agent the operator removed. The one exception is a start
+whose work had already reached herdr: that Agent runs, and the removed
+row adds no second line about it. The line the cancel writes states only
+what the module measured: a removal when a row stood under the cursor,
+and the queue holding no such row when its pickup had already taken it.
+Up and down move the cursor through the visible rows and cross the
+section boundary when the sections are adjacent. `d` and `f` belong to
+the Consultation section: in the Work queue they state that section's
+refusal, and the queue's guide and Action bar name neither key (issue
+#85, ADR 0034). The mode the bar and the guide state derives from the
+section that holds the cursor and its focused pane.
 
 The Ticket header always shows the pipeline counts - open, running, and
 awaiting - with the held count appended only when it is non-zero. The
@@ -81,22 +95,27 @@ The Ticket list and detail move with the row, page and jump keys, focus the
 detail with `l` or `Right` and the list with `h` or `Left`, hand an open
 ticket off with `Enter`, open the decision modal on an awaiting one, the
 missing modal on a ticket whose agent is gone, and the override panel with
-`e`. `=`, `+`, and `-` bump a ticket's priority up and down through the
-configured rank, and Backspace clears it to the label rank or unranked. `a` toggles
+`e`. `a` toggles
 auto-handoff, `r` refreshes, `g` goes to the agent's pane, `w` closes the work
 cycle of the selected ticket behind a confirmation (ADR 0031), and `q` quits.
+The ticket list no longer carries a rank: the ticket priority is retired in
+favor of the queue's order (ADR 0050), and the detail pane holds no priority
+row and the list no key that raises, lowers, or clears a rank. `+` and `-`
+are the Work queue's keys for the item under the cursor (ADR 0049), and the
+Ticket section names them nowhere.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
 the Action bar reserve the two bottom rows at every terminal size, and each
 list section reserves its header row plus a minimum of three content rows:
-below the smallest useful frame (40 columns by 19 rows) the panes give way
+below the smallest useful frame (40 columns by 27 rows) the panes give way
 to a size message and a compact Help control, a section that cannot hold its
 minimum collapses rather than vanishing so the section headers keep their
 counts, and a surface that cannot draw its own rows says so instead of
-painting them over its border. The Work section burns no such row while it
-is empty and collapsed, so an idle factory keeps its two-Section frame at
-the smallest terminal. One hint holds the row's end cells: Help on a
+painting them over its border. The Work section keeps its header and its
+minimum of three content rows at every size, so an idle factory keeps its
+three-Section frame even at the smallest terminal. One hint holds the row's
+end cells: Help on a
 bar that can open the Key guide, and the overlay's own Close on a utility
 overlay. A frame too narrow for that hint states one of its whole keys, so the
 way out of a screen is named at any width and never cut in half.
@@ -113,8 +132,9 @@ ADR 0034 for the Work section). The Ticket and Consultation sections start
 expanded, and the detail pane shows the detail of whichever item the
 cursor holds: the ticket detail on a ticket, the Consultation detail on a
 Consultation, and the queued start's captured choice on a Work row. The
-Work section hides itself while it is empty and collapsed, so an idle
-factory draws its two-Section frame. `x` or a click on a header
+Work section is always visible (ADR 0049): it keeps its header row and a
+minimum of three content rows, so an idle factory draws its three-Section
+frame with an empty queue. `x` or a click on a header
 toggles the section under the cursor: it shrinks to its header row and its
 rows leave the navigation flow, and the same toggle restores it. A collapsed
 section keeps its list selection, and the selection and detail of a collapsed
@@ -133,9 +153,12 @@ awaiting-response and recovery counts, the bell marker while the bell rings,
 and "new output" while that fact holds, so a Consultation that needs
 the operator is visible whether the section is expanded or collapsed and no
 free-standing attention line exists. The Work header carries its queue
-depth. A section that cannot hold its minimum collapses rather than
-vanishing, so the section headers keep their counts; below the smallest
-useful frame the compact frame drops the panes with a size message.
+depth and the `paused` word while the queue's pause stands (ADR 0052). A
+section that cannot hold its minimum collapses rather than
+vanishing, so the section headers keep their counts; the Work section is
+the exception (ADR 0049): it keeps its header and its minimum of three
+content rows at every size, and below the smallest useful frame the
+compact frame drops the panes with a size message.
 
 Two panes side by side, flex-sized to the terminal.
 The list pane on the left shows the tickets of the Ticket section with their

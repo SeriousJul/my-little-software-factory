@@ -317,16 +317,31 @@ describe("the in-app Key guide", () => {
 				async (setup) => {
 					source.settle(success(tickets));
 					// The Work header stands with its count; it starts expanded (ADR 0049).
+					// Wait for the source's title to reach the queue row as well: the
+					// row holds the raw ticket identity until the first source poll.
 					const header = await awaitFrame(
 						setup,
-						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						(f) =>
+							f.includes("▾ Work") &&
+							f.includes("waiting: 1") &&
+							f.includes("Add a webhook retry policy"),
 						"the Work header",
 					);
 					expect(header).toContain("▾ Work");
-					// The section is already expanded; the click lands the cursor on the item row.
-					const workRow = rowsOf(header).findIndex(
-						(row) => row.includes("[open]") && row.includes("Add a webhook retry policy"),
-					);
+					// The section is already expanded; the click lands the cursor on
+					// the item row. The Ticket section shows the same title with the
+					// same badge, so the queue row is the first match below the Work
+					// header, not the first match in the frame.
+					const headerRows = rowsOf(header);
+					const workHeaderRow = headerRows.findIndex((row) => row.startsWith("▾ Work"));
+					const workRow =
+						headerRows
+							.slice(workHeaderRow + 1)
+							.findIndex(
+								(row) => row.includes("[open]") && row.includes("Add a webhook retry policy"),
+							) +
+						workHeaderRow +
+						1;
 					await mouseClick(setup, 2, workRow);
 					const list = await awaitFrame(
 						setup,
@@ -932,18 +947,20 @@ describe("the in-app Key guide", () => {
 				let frame = await settle(setup);
 				expect(stillFrame(rowsOf(frame)[markerRowOf(frame)])).toBe(stillFrame(selectedBefore));
 
-				// The detail focus and scroll, on a short terminal where the
-				// detail pane overflows. The list keeps the focus through the
-				// resize, and the probe reads the pane's raw column, so a scroll
-				// that only swaps a blank padding row still shows.
+				// The detail focus and scroll, at the new three-section floor
+				// (ADR 0049 raised it to 27) on a narrow terminal where the detail
+				// pane overflows: the narrow width wraps the description past the
+				// pane's rows. The list keeps the focus through the resize, and the
+				// probe reads the pane's raw column, so a scroll that only swaps a
+				// blank padding row still shows.
 				await focusDetail(setup);
-				setup.resize(WIDTH, 20);
+				setup.resize(60, 27);
 				await settle(setup);
 				setup.mockInput.pressKey("l");
 				await settle(setup);
 				const detailCol = (f: string): string =>
 					rowsOf(f)
-						.map((row) => row.slice(WIDTH / 2 + 2, WIDTH - 2))
+						.map((row) => row.slice(32, 58))
 						.join("\n");
 				const detailTop = detailCol(setup.captureCharFrame());
 				await press(

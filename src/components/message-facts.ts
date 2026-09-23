@@ -99,11 +99,13 @@ export function useMessageFacts(
 	 * A notice is not progress: it holds its own slot, below the facts an
 	 * operation writes, and the next fact of any kind, or the end of the
 	 * progress line it waits behind, takes the line back. It can never pin
-	 * the Message line.
+	 * the Message line. It never outranks a fact an operation wrote, so it
+	 * keeps the operation fact it lands beside: the outcome warning the start
+	 * it answers leaves on the line stands over the notice, and the next
+	 * operation's own fact takes the line from both.
 	 */
 	const notice = useCallback(
-		(text: string) =>
-			setFacts((current) => ({ ...current, operation: undefined, news: undefined, notice: text })),
+		(text: string) => setFacts((current) => ({ ...current, news: undefined, notice: text })),
 		[],
 	);
 

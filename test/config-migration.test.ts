@@ -283,6 +283,56 @@ describe("the pure rewrite", () => {
 	});
 });
 
+describe("the priority retirement (ADR 0050)", () => {
+	/** The shipped Default config with the retired table standing on it. */
+	const prioritySeed = () =>
+		`${SHIPPED_TEXT}\n\n[priority]\ndefault = 50\nlabels = ["critical", "high"]\n`;
+
+	test("a retired table alone names the file old, and the loader refuses it", () => {
+		const data = parseToml(prioritySeed());
+		expect(hasOldWorkflowMachineKeys(data)).toBe(true);
+		expect(hasOldWorkflowMachineKeys(parseToml(SHIPPED_TEXT))).toBe(false);
+		expect(() => validateConfig(data)).toThrow(ConfigError);
+		try {
+			validateConfig(data);
+		} catch (error) {
+			expect(String(error)).toContain('"priority" is a retired key');
+			expect(String(error)).toContain("ADR 0050");
+		}
+	});
+
+	test("the rewrite drops the table and the report says what its place is", () => {
+		const result = migrate(prioritySeed());
+		// The rewrite validates and carries no retired key.
+		const rewritten = parseToml(result.configText);
+		validateConfig(rewritten);
+		expect(rewritten).not.toHaveProperty("priority");
+		// Only the retired table marked the file, so the report is a
+		// retirement, not a machine migration.
+		expect(result.configText).toContain("# The retired [priority] table was removed on 2026-09-17");
+		expect(result.reportText).toContain("# Priority retirement");
+		expect(result.reportText).toContain("The `[priority]` table: dropped (ADR 0050)");
+		expect(result.reportText).toContain("`+` and `-`");
+	});
+
+	test("the load migrates the priority-only file, backs it up, and notes it", async () => {
+		const path = tempFile();
+		writeFileSync(path, prioritySeed());
+		const { config, note } = await loadConfigFile(path);
+		expect(note).toContain("migrated off the retired priority table");
+		expect(note).toContain("config.toml.bak");
+		// The rewritten file stands: the table is gone from the data, and a
+		// second load cannot migrate again.
+		expect(parseToml(readFileSync(path, "utf8"))).not.toHaveProperty("priority");
+		expect(readFileSync(`${path}.bak`, "utf8")).toContain("[priority]");
+		const report = readFileSync(`${path}.migration-report.md`, "utf8");
+		expect(report).toContain("# Priority retirement");
+		const again = await loadConfigFile(path);
+		expect(again.note).toBeUndefined();
+		expect(again.config).toEqual(config);
+	});
+});
+
 describe("the load that migrates", () => {
 	test("the config is rewritten, backed up, reported, and loaded", async () => {
 		const path = tempFile();

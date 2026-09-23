@@ -295,8 +295,13 @@ describe("the held turn through the real app flow", () => {
 				expect(rowA).not.toContain("[awaiting]");
 				const text = frameText(frame);
 				expect(text).toContain("held: 1");
+				// The queued start's drop stands on the line over the pause it
+				// lands over: the pickup is a start the Dispatch pause does not
+				// hold (ADR 0049), so it runs while the pause arms, fails the
+				// stubbed tab create, and leaves its warning where the pause
+				// wrote its own. The pause stands on the mode line.
 				expect(text).toContain(
-					"Warning: Dispatch pause: a held failed turn is blocking automatic dispatch",
+					'Warning: queued handoff for "Fourth open ticket" was not run: herdr tab create returned no pane id',
 				);
 
 				// The detail pane: the warning stands above the
@@ -338,7 +343,7 @@ describe("the held turn through the real app flow", () => {
 				// with the held count is whole on the header's own full-width
 				// row. The held count is the steady fact the row carries; the
 				// bell that rang when it rose is a 250 ms flash and has rested.
-				setup.resize(59, 24);
+				setup.resize(59, 27);
 				const narrowRow = rowsOf(await settle(setup)).find((row) => row.startsWith("▾ Tickets"));
 				expect(narrowRow?.trim()).toBe("▾ Tickets  open 1  running 2  awaiting 1  held 1");
 			},

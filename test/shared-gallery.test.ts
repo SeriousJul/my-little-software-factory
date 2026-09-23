@@ -86,7 +86,7 @@ describe("the shared control gallery", () => {
 			"search",
 			"notes",
 			"spinner",
-			"priority",
+			"queue-order",
 			"session-view",
 			"agent-view-fallback",
 			"captured-history-fallback",
@@ -679,29 +679,27 @@ describe("the shared control gallery", () => {
 		expect(hexOf(cellColors(setup, waiting.x, waiting.y).fg)).toBe(ink.detail.fg ?? "");
 	});
 
-	test("the priority example shows the rank badge, each selector state, and the Consultation reason", async () => {
-		const setup = await gallery("priority", 120, 24);
+	test("the queue order example shows the pause header word, the queue keys, and the pause lines", async () => {
+		const setup = await gallery("queue-order", 120, 24);
 		const raw = setup.captureCharFrame();
 		const text = frameText(raw);
-		expect(text).toContain(stateLine("priority"));
-		// The rank badge: the one-cell digit for a ranked row, none for the
-		// unranked one. The raw frame keeps the digit's spacing.
-		expect(raw).toContain("1  critical fix");
-		expect(raw).toContain("3  routine backlog");
-		expect(raw).toContain("   unranked ticket shows no digit");
-		// The selector on the standard choice row, in each of its states.
-		expect(text).toContain("Override critical");
-		expect(text).toContain("Override off");
-		expect(text).toContain("Override default");
-		// The written guide line under the row: its keys, and what a step does.
-		expect(text).toContain("→/l steps the value and writes it: a rank, off, or default");
-		// A Consultation selected leaves the bump unavailable with its reason.
+		expect(text).toContain(stateLine("queue-order"));
+		// The Work header in its two states: the depth count, and the depth
+		// count with the pause word beside it. The raw frame keeps the word's
+		// spacing.
+		expect(raw).toContain("waiting: 1");
+		expect(raw).toContain("waiting: 1  paused");
+		// The queue's own keys on the bar: the order-move keys and the pause,
+		// the pause reading its own state.
 		expect(text).toContain(
-			"Error: Override: a Consultation has no priority: the bump applies to tickets only",
+			"+ promotes the selected item, - demotes it, and the top item is next in line for a seat",
 		);
-		// The bump messages the Message line carries, no-ops included.
-		expect(text).toContain("already at the highest priority");
-		expect(text).toContain("already unranked");
+		// The Message lines the pause and the resume leave, in the words the
+		// plane says them.
+		expect(text).toContain(
+			"Work queue paused: the pickup and the automatic top-up wait for the resume",
+		);
+		expect(text).toContain("Work queue resumed: the pickup takes the free seats now");
 	});
 
 	test("the narrow example holds its columns without painting through them", async () => {

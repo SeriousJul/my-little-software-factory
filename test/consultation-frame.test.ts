@@ -3204,18 +3204,12 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					const id8 = queued.id.slice(0, 8);
 					// The cap is full from the boot: the seed's seat stands on the
-					// line, and the cursor crosses into the Work queue's row.
+					// line. The frame holds no room for the Work section's rows,
+					// so it rests collapsed, and Enter on the queued row jumps to
+					// its item and expands the section with it (ADR 0049).
 					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
-					const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
-						/\bWork\b/.test(row),
-					);
-					expect(headerRow).toBeGreaterThanOrEqual(0);
-					await mouseClick(setup, 2, headerRow);
-					await settle(setup, 300);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("❯ Work queue"),
-						"the cursor in the Work queue",
+					await press(setup, "return", "the cursor in the Work queue", (f) =>
+						f.includes("┌─❯ Work queue"),
 					);
 					// Enter force-dispatches the item over the full cap: the line
 					// names the cap, the seat count stands over the limit, the item
@@ -3285,10 +3279,12 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		);
 		const queued = state.consultations("all").find((c) => c.state === "queued");
 		if (queued === undefined) throw new Error("the queued Consultation is not recorded");
-		const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) => /\bWork\b/.test(row));
-		expect(headerRow).toBeGreaterThanOrEqual(0);
-		await mouseClick(setup, 2, headerRow);
-		await awaitFrame(setup, (f) => f.includes("❯ Work queue"), "the cursor in the Work queue");
+		// The frame holds no room for the Work section's rows, so it rests
+		// collapsed, and Enter on the queued row jumps to its item and
+		// expands the section with it (ADR 0049).
+		await press(setup, "return", "the cursor in the Work queue", (f) =>
+			f.includes("┌─❯ Work queue"),
+		);
 		// The item's row stands under the kind word, with the record's identity.
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("consultation");

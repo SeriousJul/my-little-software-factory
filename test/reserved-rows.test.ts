@@ -160,7 +160,7 @@ describe("the reserved bottom rows at every size", () => {
 				// and keeps the Help control on the last row.
 				setup.resize(120, 4);
 				frame = await expectReservedRows(setup, 120, 4);
-				expect(frame).toContain("Terminal too small: minimum 40 columns by 19 rows");
+				expect(frame).toContain("Terminal too small: minimum 40 columns by 27 rows");
 				expect(actionBarRowOf(frame).trim()).toBe("? Help");
 			},
 			WIDTH,

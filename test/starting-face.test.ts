@@ -390,7 +390,12 @@ describe("the Starting window's timeline", () => {
 					(f) => badgeRow(f).includes("[open]") && face(f) === null,
 					"the row to return",
 				);
-				expect(messageRowOf(failed)).toContain("Error:");
+				// The failed start drops through the queue's drop (ADR 0049):
+				// the line warns the queued start was not run, with the herdr
+				// reason behind it.
+				expect(messageRowOf(failed)).toContain(
+					'Warning: queued handoff for "Persist source facts" was not run: error: the workspace is not creatable',
+				);
 			},
 			WIDTH,
 			HEIGHT,
@@ -508,7 +513,11 @@ describe("the Starting window's timeline", () => {
 					(f) => badgeRow(f).includes("held") && face(f) === null,
 					"the held face to return",
 				);
-				expect(messageRowOf(back)).toContain("Error:");
+				// The route's failed start drops through the queue's drop
+				// (ADR 0049), with the herdr reason behind it.
+				expect(messageRowOf(back)).toContain(
+					'Warning: queued handoff for "Persist source facts" was not run: error: the pane is gone',
+				);
 			},
 			WIDTH,
 			HEIGHT,
