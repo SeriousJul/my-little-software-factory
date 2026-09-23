@@ -38,7 +38,7 @@ hero:
   </a>
   <a class="guide-card" href="/development/commands.html">
     <h3>Development</h3>
-    <p>The repository's commands, the shared control standard, and the ticket labels the control plane reads.</p>
+    <p>The repository's commands, mutation testing, the shared control standard, and the ticket labels the control plane reads.</p>
   </a>
   <a class="guide-card" href="/adr/index.html">
     <h3>Architecture decisions</h3>

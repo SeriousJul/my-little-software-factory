@@ -794,17 +794,24 @@ describe("factory SQLite state", () => {
 		// `work_cycle` would silently point both gates at the wrong row, and no
 		// other check reads this file's SQL. The check is on the statements, so a
 		// new move must be a cycle end or must answer here first.
-		const statements = readFileSync("src/state.ts", "utf8")
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => /"UPDATE tickets SET[^"]*work_cycle[^"]*"/u.test(line));
+		//
+		// The read takes each statement's own quoted text, never the whole line
+		// that holds it. A tool that rewrites the source around a literal - the
+		// mutation runner's instrumentation wraps an expression in a call, and
+		// the suite runs under that instrumented copy - must not change what the
+		// file states.
+		const statements = [
+			...readFileSync("src/state.ts", "utf8").matchAll(
+				/"UPDATE tickets SET[^"]*work_cycle[^"]*"/gu,
+			),
+		].map((match) => match[0]);
 		// The ends: the decided close of a settled turn, the in-flight Close
 		// that writes no trace, and the close of a turn the route decided -
 		// the last runs only from awaiting, so it too moves the number on an
 		// end, exactly once.
 		expect([...new Set(statements)].sort()).toEqual([
-			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'\",",
-			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\",",
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ? AND state = 'awaiting'\"",
+			"\"UPDATE tickets SET state = 'open', work_cycle = work_cycle + 1 WHERE identity = ?\"",
 		]);
 		expect(statements.length).toBe(3);
 		// A cycle's moves that end nothing hold the number: the handoff that starts
