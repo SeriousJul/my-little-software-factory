@@ -373,12 +373,6 @@ export interface LoadedConfig {
 	/** The file was missing: the seam seeded it from the Default configuration. */
 	seeded?: boolean;
 	/**
-	 * The non-blocking config issues the operator must read. The Priority
-	 * section reports its problems here, and the factory starts with no
-	 * ranking when it names that section.
-	 */
-	warnings: string[];
-	/**
 	 * The one-line load note the operator must see: a seeded file, or a
 	 * config the load migrated to the workflow machine (ADR 0027).
 	 */
@@ -454,7 +448,7 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 			// The migrated text must validate before the migration writes
 			// anything: a broken migration stops the plane with the file
 			// unchanged and the reason named.
-			validateConfigWithWarnings(parse(migration.configText));
+			validateConfig(parse(migration.configText));
 			await writeMigrationFiles(path, text, migration, mode);
 			note = migration.noteText;
 			text = migration.configText;
@@ -468,10 +462,9 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
 		}
 	}
 	try {
-		const { config, warnings } = validateConfigWithWarnings(parse(text));
+		const config = validateConfig(parse(text));
 		return {
 			config,
-			warnings,
 			fromFile: true,
 			...(seeded ? { seeded: true } : {}),
 			...(note === undefined ? {} : { note }),
@@ -556,29 +549,16 @@ function readableParseError(error: unknown): string {
 /**
  * The one structural validation for every source of config: the CLI path
  * and the editor both call this, so the two cannot disagree about what is
- * valid.
- *
- * A misconfigured Priority section does not throw: the factory must start
- * with no ranking and report the section, while every other structural
- * failure here blocks startup with the reason.
+ * valid. Every structural failure here blocks startup with the reason: the
+ * retired Priority section is not a warning channel, it is a refusal (ADR
+ * 0050) - a file that still names it is migrated out, and a fresh config
+ * that names it fails to load.
  */
 export function validateConfig(data: unknown): FactoryConfig {
-	return validateConfigWithWarnings(data).config;
-}
-
-/**
- * The validation with its warnings: the config, plus the non-blocking
- * issues the operator must read, one line each. The CLI startup prints
- * these, and the factory starts with the section they name missing.
- */
-export function validateConfigWithWarnings(data: unknown): {
-	config: FactoryConfig;
-	warnings: string[];
-} {
 	return parseConfig(data);
 }
 
-function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[] } {
+function parseConfig(data: unknown): FactoryConfig {
 	if (!isRecord(data)) {
 		throw new ConfigError("config: the top level must be a table of key = value pairs");
 	}
@@ -652,7 +632,6 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 	const repos = validateRepos(data.repos);
 	const sources = validateSources(data.sources ?? data["ticket-sources"]);
 	const workflowStates = validateWorkflowStates(data.states, taskTypes);
-	const warnings: string[] = [];
 	const stateFile = data["state-file"] === undefined ? undefined : stringField(data, "state-file");
 	const logging = validateLogging(data.logging);
 	const maxParallelAgents = nonNegativeIntField(data, "max-parallel-agents", 2);
@@ -686,7 +665,7 @@ function parseConfig(data: unknown): { config: FactoryConfig; warnings: string[]
 		...(stateFile === undefined ? {} : { stateFile }),
 		...(logging === undefined ? {} : { logging }),
 	};
-	return { config, warnings };
+	return config;
 }
 
 /**

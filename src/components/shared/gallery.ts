@@ -812,18 +812,18 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 					width: columns.contentWidth,
 				}),
 				// The Message lines the pause and the resume leave, in the words
-				// the plane says them.
+				// the plane says them (app.ts: the toggle's own notice).
 				messageRowElement(
 					{
-						severity: "warning",
-						text: "Work queue paused: the pickup and the automatic top-up wait for the resume",
+						severity: "info",
+						text: "Work queue paused",
 					},
 					columns.contentWidth,
 				),
 				messageRowElement(
 					{
 						severity: "info",
-						text: "Work queue resumed: the pickup takes the free seats now",
+						text: "Work queue resumed",
 					},
 					columns.contentWidth,
 				),

@@ -1214,36 +1214,34 @@ export class ObservationCoordinator {
 			if (position === null) continue;
 			const completion = this.state.lastCompletion(ticket.identity);
 			const outcome = completion?.transition ?? null;
-			const result = await this.dispatch({
-				origin: "workflow",
-				automatic: true,
-				ticketIdentity: position.identity,
-				// The route continues this ticket's settled turn: its leftover
-				// environment is the handoff's own, so a name that leftover
-				// agent still holds falls to the cycle name instead of failing
-				// as a stranger (ADR 0027).
-				routeFromIdentity: ticket.identity,
-				choice: resolveHandoffChoice(config, position.suggestedTaskType ?? config.defaultTaskType, {
-					...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
-					...(outcome === null || outcome.environment === undefined
-						? {}
-						: { environment: outcome.environment }),
-				}),
-				previousMessage: this.promptPreviousMessage(completion),
-			});
-			if (this.stopped) return true;
-			if (!result.ok) {
-				this.onStatus(
-					"warning",
-					`work queue top-up could not route ticket ${ticket.identity}: ${result.reason}`,
-				);
-				continue;
-			}
-			this.onStatus(
-				"info",
+			const added = await this.topUpAsk(
+				{
+					origin: "workflow",
+					automatic: true,
+					ticketIdentity: position.identity,
+					// The route continues this ticket's settled turn: its leftover
+					// environment is the handoff's own, so a name that leftover
+					// agent still holds falls to the cycle name instead of failing
+					// as a stranger (ADR 0027).
+					routeFromIdentity: ticket.identity,
+					choice: resolveHandoffChoice(
+						config,
+						position.suggestedTaskType ?? config.defaultTaskType,
+						{
+							...(outcome === null || outcome.agent === undefined ? {} : { agent: outcome.agent }),
+							...(outcome === null || outcome.environment === undefined
+								? {}
+								: { environment: outcome.environment }),
+						},
+					),
+					previousMessage: this.promptPreviousMessage(completion),
+				},
 				`work queue top-up: routing ticket ${ticket.identity} to ${position.suggestedTaskType}`,
+				`work queue top-up could not route ticket ${ticket.identity}`,
 			);
-			return true;
+			// One add per cycle: the walk stops at the first item the queue took,
+			// and a refused ask moves on to the next candidate.
+			if (added !== "refused") return true;
 		}
 		// 2. The re-fired skip's route (ADR 0042) is a continuation: the skip
 		// closed its cycle and the ticket rests open behind it, so the awaiting
@@ -1281,35 +1279,29 @@ export class ObservationCoordinator {
 			// labels to land instead of starting it twice.
 			if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) continue;
 			if (position.handoffCount >= config.maxHandoffsPerTicket) continue;
-			const result = await this.dispatch({
-				origin: "workflow",
-				automatic: true,
-				ticketIdentity: position.identity,
-				routeFromIdentity: ticket.identity,
-				choice: resolveHandoffChoice(config, outcome.positionTaskType, {
-					...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
-					...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
-				}),
-				previousMessage: this.promptPreviousMessage(completion),
-			});
-			if (this.stopped) return true;
-			if (!result.ok) {
-				this.onStatus(
-					"warning",
-					`work queue top-up could not route ticket ${ticket.identity}: ${result.reason}`,
-				);
-				continue;
-			}
-			this.onStatus(
-				"info",
+			const added = await this.topUpAsk(
+				{
+					origin: "workflow",
+					automatic: true,
+					ticketIdentity: position.identity,
+					routeFromIdentity: ticket.identity,
+					choice: resolveHandoffChoice(config, outcome.positionTaskType, {
+						...(outcome.agent === undefined ? {} : { agent: outcome.agent }),
+						...(outcome.environment === undefined ? {} : { environment: outcome.environment }),
+					}),
+					previousMessage: this.promptPreviousMessage(completion),
+				},
 				`work queue top-up: routing ticket ${ticket.identity} to ${outcome.positionTaskType}`,
+				`work queue top-up could not route ticket ${ticket.identity}`,
 			);
-			return true;
+			if (added !== "refused") return true;
 		}
 		// 3. Restart: the in-flight ticket whose agent is missing past the
 		// grace and whose handoffs stand below the limit - the abandon at the
 		// limit landed in the in-flight walk already, above. One restart per
-		// episode: the mark stands until the ticket leaves in-flight.
+		// episode: the mark stands while the asked-for start holds its place in
+		// the queue or runs, and a refused ask clears it again, so the next
+		// empty-queue cycle reconsiders the restart the way ADR 0051 states.
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of agents) byPane.set(agent.paneId, agent);
 		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
@@ -1328,32 +1320,33 @@ export class ObservationCoordinator {
 			if (this.restarted.has(ticket.ticketIdentity)) continue;
 			this.restarted.add(ticket.ticketIdentity);
 			const previous = this.state.lastCompletion(ticket.ticketIdentity);
-			const result = await this.dispatch({
-				origin: "restart",
-				automatic: true,
-				ticketIdentity: ticket.ticketIdentity,
-				// The same choices the previous handoff ran with: the
-				// operator's restart keeps the model, thinking level, and
-				// context window, and the auto one matches it.
-				choice: baseChoice(
-					ticket.agentType,
-					ticket.environment,
-					ticket.taskType,
-					ticket.model,
-					ticket.thinking,
-					ticket.contextWindow,
-				),
-				previousMessage: this.promptPreviousMessage(previous),
-			});
-			if (this.stopped) return true;
-			if (!result.ok) {
-				this.onStatus(
-					"warning",
-					`work queue top-up could not restart ticket ${ticket.ticketIdentity}: ${result.reason}`,
-				);
-				return false;
+			const added = await this.topUpAsk(
+				{
+					origin: "restart",
+					automatic: true,
+					ticketIdentity: ticket.ticketIdentity,
+					// The same choices the previous handoff ran with: the
+					// operator's restart keeps the model, thinking level, and
+					// context window, and the auto one matches it.
+					choice: baseChoice(
+						ticket.agentType,
+						ticket.environment,
+						ticket.taskType,
+						ticket.model,
+						ticket.thinking,
+						ticket.contextWindow,
+					),
+					previousMessage: this.promptPreviousMessage(previous),
+				},
+				`work queue top-up: restarting ticket ${ticket.ticketIdentity}`,
+				`work queue top-up could not restart ticket ${ticket.ticketIdentity}`,
+			);
+			if (added === "refused") {
+				// The ask never took a queue row, so the episode mark leaves with
+				// it: the ticket stays in-flight, and the next cycle asks again.
+				this.restarted.delete(ticket.ticketIdentity);
+				continue;
 			}
-			this.onStatus("info", `work queue top-up: restarting ticket ${ticket.ticketIdentity}`);
 			return true;
 		}
 		// 4. A new open ticket: the first open ticket in the list's order that
@@ -1384,25 +1377,43 @@ export class ObservationCoordinator {
 			// unattended handoff starts with the same resolution chain a manual
 			// one sees in the panel, and the fit check guards what it starts with.
 			const choice = resolveHandoffChoice(config, ticket.suggestedTaskType);
-			const result = await this.dispatch({
-				origin: "open",
-				automatic: true,
-				ticketIdentity: ticket.identity,
-				choice,
-				previousMessage: "",
-			});
-			if (this.stopped) return true;
-			if (!result.ok) {
-				this.onStatus(
-					"warning",
-					`work queue top-up could not hand off ticket ${ticket.identity}: ${result.reason}`,
-				);
-				continue;
-			}
-			this.onStatus("info", `work queue top-up: handing off ticket ${ticket.identity}`);
-			return true;
+			const added = await this.topUpAsk(
+				{
+					origin: "open",
+					automatic: true,
+					ticketIdentity: ticket.identity,
+					choice,
+					previousMessage: "",
+				},
+				`work queue top-up: handing off ticket ${ticket.identity}`,
+				`work queue top-up could not hand off ticket ${ticket.identity}`,
+			);
+			if (added !== "refused") return true;
 		}
 		return false;
+	}
+
+	/**
+	 * The top-up's one ask-and-report step (ADR 0051), shared by all four
+	 * walks: the enqueue through the dispatch seam, the refusal warning on a
+	 * rejected ask, and the add line on the Message when the item took its
+	 * place. The answer says what the cycle does next: "added" ends it with
+	 * its one item, "refused" lets the walk move to the next candidate, and
+	 * "stopped" ends the run.
+	 */
+	private async topUpAsk(
+		intent: HandoffIntent,
+		addedLine: string,
+		refusedPrefix: string,
+	): Promise<"added" | "refused" | "stopped"> {
+		const result = await this.dispatch(intent);
+		if (this.stopped) return "stopped";
+		if (!result.ok) {
+			this.onStatus("warning", `${refusedPrefix}: ${result.reason}`);
+			return "refused";
+		}
+		this.onStatus("info", addedLine);
+		return "added";
 	}
 
 	/**

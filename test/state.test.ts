@@ -2636,7 +2636,7 @@ describe("the work queue (ADR 0034)", () => {
 		]);
 	});
 
-	test("u and d move one place, and an item at an edge moves nowhere", () => {
+	test("+ and - move one place, and an item at an edge moves nowhere", () => {
 		const state = openFactoryState(":memory:");
 		enqueue(state, "t1");
 		enqueue(state, "t2");
@@ -2644,7 +2644,7 @@ describe("the work queue (ADR 0034)", () => {
 		// The front item cannot move up, the back item cannot move down.
 		expect(state.moveWorkItem("t1", "up")).toBe(false);
 		expect(state.moveWorkItem("t3", "down")).toBe(false);
-		// d takes the front item behind the middle one; the swap is atomic
+		// `-` takes the front item behind the middle one; the swap is atomic
 		// on the queue's primary key, so no step of it shares a position.
 		expect(state.moveWorkItem("t1", "down")).toBe(true);
 		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2", "t1", "t3"]);

@@ -379,8 +379,8 @@ describe("the in-app Key guide", () => {
 					// The Consultation section's `d Delete` and `f History` run on
 					// the shared base modes, so they reach a queue mode as a key the
 					// queue can never dispatch. Each section's guide names only the
-					// keys it owns (issue #85, ADR 0034): the queue's `d Queue down`
-					// stands, and the other section's two rows stay out.
+					// keys it owns (issue #85, ADR 0034): the queue's own keys stand,
+					// and the other section's two rows stay out.
 					expect(listCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
 					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");

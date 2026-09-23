@@ -86,7 +86,6 @@ type ControlKey =
 	| "s"
 	| "p"
 	| "x"
-	| "u"
 	| "d"
 	| "w"
 	| "delete"

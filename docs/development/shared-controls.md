@@ -65,13 +65,12 @@ rule, not drift:
   and History (`f`) (issue #85): the Ticket section does not ask the
   operator to learn those keys, and the Ticket bar follows its guide, so it
   hints neither.
-- The Work queue section omits the same two controls (ADR 0034). Its two
-  modes join the shared base modes, so the Consultation section's keys
-  reach them as a key the queue can never dispatch: `d` is the queue's own
-  Queue down in its list and answers nothing in its detail, and `f` belongs
-  to no queue control at all. Each section's guide names the keys that
-  section dispatches, so a queue cursor shows neither row, and its bar
-  hints neither.
+- The Work queue section omits the same two controls (ADR 0034, ADR 0049).
+  Its two modes join the shared base modes, so the Consultation section's keys
+  reach them as a key the queue can never dispatch: `d` and `f` belong to no
+  queue control at all now that ADR 0049 retired the queue's `u` and `d`
+  reorder keys. Each section's guide names the keys that section dispatches,
+  so a queue cursor shows neither row, and its bar hints neither.
 
 The catalogue states the section ownership once per control
 (`consultationSectionOnly`), and the refusal, the guide, and the bar read

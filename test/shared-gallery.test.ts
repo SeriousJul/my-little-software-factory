@@ -695,11 +695,9 @@ describe("the shared control gallery", () => {
 			"+ promotes the selected item, - demotes it, and the top item is next in line for a seat",
 		);
 		// The Message lines the pause and the resume leave, in the words the
-		// plane says them.
-		expect(text).toContain(
-			"Work queue paused: the pickup and the automatic top-up wait for the resume",
-		);
-		expect(text).toContain("Work queue resumed: the pickup takes the free seats now");
+		// plane says them: the toggle's own notice, one short line each.
+		expect(text).toContain("Work queue paused");
+		expect(text).toContain("Work queue resumed");
 	});
 
 	test("the narrow example holds its columns without painting through them", async () => {

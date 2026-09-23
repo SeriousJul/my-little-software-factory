@@ -313,10 +313,10 @@ export function App({
 	const ticketsExpandedRef = useRef(true);
 	const [consultationsExpanded, setConsultationsExpanded] = useState(true);
 	const consultationsExpandedRef = useRef(true);
-	// The Work queue's section (ADR 0034): it stays hidden while it is empty
-	// and collapsed, so an idle factory keeps the two-section frame it had.
-	// The Work section starts expanded (ADR 0049): its list is the answer
-	// to "what starts next", and the section is always on the Main view.
+	// The Work section is always visible (ADR 0049): it keeps its header row
+	// while it is empty, the way the Ticket and Consultation sections do. The
+	// section starts expanded: its list is the answer to "what starts next",
+	// and the section is always on the Main view.
 	const [workExpanded, setWorkExpanded] = useState(true);
 	const workExpandedRef = useRef(true);
 	// The queue pause (ADR 0052): factory state on the state file, shown on
@@ -666,7 +666,6 @@ export function App({
 	// The Work section is always visible (ADR 0049): it keeps its header row
 	// while it is empty, the way the Ticket and Consultation sections do, so
 	// the frame floor holds three sections now.
-	const workVisible = true;
 	const sectionOpen: Record<"tickets" | "consultations" | "work", boolean> = {
 		tickets: ticketsExpanded,
 		consultations: consultationsExpanded,
@@ -685,7 +684,8 @@ export function App({
 			// every open section holds its minimum. A collapsed section keeps
 			// its header as the row it expands from, so the headers count
 			// against the body's rows before the boxes split them.
-			const total = Math.max(0, bodyRows - (2 + (workVisible ? 1 : 0)));
+			// The three sections each hold a header row at the floor (ADR 0049).
+			const total = Math.max(0, bodyRows - 3);
 			const cursorKey =
 				selection === "ticket"
 					? "tickets"
@@ -2233,9 +2233,10 @@ export function App({
 			replaceConsultations();
 			return;
 		}
-		// Route the removal through the module so the waiting start and its
-		// once-per-reason pickup warning leave together (ADR 0034): a bare
-		// state delete would strand the warning and mute a later re-enqueue.
+		// Route the removal through the module so the waiting start leaves with
+		// everything held for it: the row, a parked claim, and the ask's held
+		// start report (ADR 0049). A bare state delete would strand the intent
+		// and let it answer a later start of the same ticket.
 		const removed = handoffDispatch.removeQueueItem(item.ticketIdentity);
 		// The name the operator reads on the line: the title while the ticket
 		// is still in the projection, its identity once it is gone.
@@ -2623,10 +2624,14 @@ export function App({
 					// The operations own the Message line and the Consultation rows,
 					// but the queue rows re-read only here: the item lands at the
 					// queue's tail in the same write the section's Delete path
-					// refreshes, so the schedule path does the same.
+					// refreshes, so the schedule path does the same. An immediate
+					// pickup pass follows every enqueue (ADR 0049), so the scheduled
+					// record takes a free seat in this tick instead of waiting for the
+					// next poll; the pause and the cap are the pickup's own checks.
 					const scheduled = consultationOperations.schedule(selected);
 					if (scheduled) {
 						replaceTickets();
+						void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
 					}
 				},
 				// Enter starts the unscheduled record now (issue #91): the pickup
@@ -3178,7 +3183,7 @@ export function App({
 				setWorkQueueDetailScroll((current) => clamp(current + delta, 0, workQueueDetailMaxScroll));
 				return;
 			}
-			if (workVisible && workExpandedRef.current) {
+			if (workExpandedRef.current) {
 				if (delta < 0 && workQueueIndexRef.current === 0) {
 					// The cross reaches even an empty Consultation list: its
 					// empty message is the row the cursor takes, and it crosses
@@ -3234,7 +3239,6 @@ export function App({
 				if (
 					delta > 0 &&
 					consultationIndexRef.current >= consultationsRef.current.length - 1 &&
-					workVisible &&
 					workExpandedRef.current
 				) {
 					// The Work queue is the last section of the visible flow,
@@ -3270,7 +3274,7 @@ export function App({
 					selectionRef.current = "consultation";
 					setSelection("consultation");
 					selectConsultation(0);
-				} else if (workVisible && workExpandedRef.current) {
+				} else if (workExpandedRef.current) {
 					selectionRef.current = "queue";
 					setSelection("queue");
 					selectWorkQueue(0);
@@ -3314,7 +3318,7 @@ export function App({
 		if (selectionRef.current === "queue") {
 			if (focusedPaneRef.current === "detail")
 				setWorkQueueDetailScroll(edge === "start" ? 0 : workQueueDetailMaxScroll);
-			else if (workVisible && workExpandedRef.current)
+			else if (workExpandedRef.current)
 				selectWorkQueue(edge === "start" ? 0 : workQueueRef.current.length - 1);
 			return;
 		}
@@ -3722,19 +3726,17 @@ export function App({
 													? "no Consultations"
 													: "no open Consultations",
 								}),
-							workVisible &&
-								createElement(SectionHeader, {
-									section: "work",
-									expanded: workExpanded,
-									terminalWidth,
-									width: leftCols,
-									waiting: workQueue.length,
-									paused: queuePaused,
-									active: mainSurfaceActive,
-									onToggle: () => clickSection("work"),
-								}),
-							workVisible &&
-								workExpanded &&
+							createElement(SectionHeader, {
+								section: "work",
+								expanded: workExpanded,
+								terminalWidth,
+								width: leftCols,
+								waiting: workQueue.length,
+								paused: queuePaused,
+								active: mainSurfaceActive,
+								onToggle: () => clickSection("work"),
+							}),
+							workExpanded &&
 								createElement(WorkQueueList, {
 									rows: workQueueRows,
 									selectedIndex: workQueueIndex,

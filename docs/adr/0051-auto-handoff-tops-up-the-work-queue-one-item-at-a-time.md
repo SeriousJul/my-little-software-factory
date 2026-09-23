@@ -65,6 +65,13 @@ restart, or open ticket the pickup drops (ADR 0049) rests in its state
 with its warning. The top-up reconsiders it every cycle the queue is
 empty, and a gate that still holds it parks it again. Nothing is
 retried by re-enqueueing the same item; the top-up simply asks again.
+The restart carries one exception: the top-up marks the ticket
+restarted for the episode when it asks, and an ask the dispatch refuses
+clears the mark again, so the next cycle asks. A restart item that
+reached the queue and the pickup then dropped keeps its mark until the
+ticket leaves in-flight: the plane does not re-ask a start the seat
+already refused, and the operator's Missing-modal restart is the free
+path for a ticket that needs one.
 
 ## Consequences
 

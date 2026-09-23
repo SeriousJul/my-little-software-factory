@@ -182,6 +182,12 @@ function rig(options: {
 	 */
 	dispatchClaims?: boolean;
 	/**
+	 * Refuse every ask with this reason, the way the dispatch seam's hard
+	 * checks do at the enqueue: the top-up hears the refusal, reports it, and
+	 * no item enters the queue.
+	 */
+	refuseDispatch?: string;
+	/**
 	 * The Work queue's pickup (ADR 0034): the number of waiting starts this
 	 * cycle's free seats take. The coordinator calls it before auto-dispatch
 	 * and holds each picked claim's seat against the later dispatches of the
@@ -239,6 +245,8 @@ function rig(options: {
 		dispatch: async (intent) => {
 			order?.push(`dispatch:${intent.origin}`);
 			intents.push(intent);
+			if (options.refuseDispatch !== undefined)
+				return { ok: false, reason: options.refuseDispatch };
 			const enqueued = state.enqueueWork({
 				ticketIdentity: intent.ticketIdentity,
 				routeFromIdentity: intent.routeFromIdentity ?? null,
@@ -253,7 +261,7 @@ function rig(options: {
 				if (claim.ok) claims.push(claim.claim.attemptId);
 			}
 			if (intent.onStarted !== undefined) pending.push(intent.onStarted);
-			return { ok: true, queued: true };
+			return { ok: true };
 		},
 		pickupWorkQueue:
 			pickup === undefined
@@ -284,7 +292,7 @@ function rig(options: {
 		state,
 		intents,
 		claims,
-		reportStart: (started: DispatchResult = { ok: true, queued: false }) => {
+		reportStart: (started: DispatchResult = { ok: true }) => {
 			const next = pending.shift();
 			if (next === undefined) throw new Error("no dispatch is waiting to report a start");
 			next(started);
@@ -1034,7 +1042,7 @@ describe("the observation cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: mock().mockResolvedValue({ ok: true, queued: false }),
+			dispatch: mock().mockResolvedValue({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => true,
@@ -1931,6 +1939,94 @@ describe("the open dispatch", () => {
 		state.close();
 	});
 
+	/**
+	 * Story 47 (ADR 0051): the top-up's own Message lines. The operator
+	 * reads what the factory added and what the channel refused, in the
+	 * words the plane writes: the add names the ticket and the walk, and
+	 * the refusal names the walk and the dispatch's reason.
+	 */
+	test("the top-up's open add line names the ticket on the Message", async () => {
+		const { state, coordinator, statuses } = rig({ autoOn: true, agents: [] });
+		await coordinator.tick();
+		expect(statuses).toContainEqual({
+			kind: "info",
+			text: "work queue top-up: handing off ticket github:github.com:I_5",
+		});
+		state.close();
+	});
+
+	test("the top-up's continuation add line names the route and the task", async () => {
+		const { state, coordinator, statuses } = rig({ autoOn: true, agents: [] });
+		state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+		settleFor(state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+		expect(coordinator.decideAwaiting(0, routeOutcome("github:github.com:I_6"))).toBe("route");
+		await coordinator.tick();
+		expect(statuses).toContainEqual({
+			kind: "info",
+			text: "work queue top-up: routing ticket github:github.com:I_5 to implement",
+		});
+		state.close();
+	});
+
+	test("the top-up's restart add line names the ticket", async () => {
+		const { state, coordinator, statuses, advance } = rig({ autoOn: true, agents: [] });
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		expect(statuses).toContainEqual({
+			kind: "info",
+			text: "work queue top-up: restarting ticket github:github.com:I_5",
+		});
+		state.close();
+	});
+
+	test("the top-up's refusal line names the walk and the dispatch's reason", async () => {
+		const { state, coordinator, statuses } = rig({
+			autoOn: true,
+			agents: [],
+			refuseDispatch: "the ticket is now running",
+		});
+		state.applyFetch(source, success([fetched()]));
+		await coordinator.tick();
+		expect(statuses).toContainEqual({
+			kind: "warning",
+			text: "work queue top-up could not hand off ticket github:github.com:I_5: the ticket is now running",
+		});
+		state.close();
+	});
+
+	/**
+	 * Story 24 (ADR 0051): the restart's episode mark. An ask the dispatch
+	 * refuses never took a queue row, so the mark leaves with it and the next
+	 * empty-queue cycle asks again. An ask the queue accepted keeps the mark:
+	 * the plane does not re-ask a start the seat already refused while the
+	 * ticket stays in-flight.
+	 */
+	test("a refused top-up restart is asked again, an accepted one is not", async () => {
+		const refused = rig({ autoOn: true, agents: [], refuseDispatch: "the ledger is unclear" });
+		handOut(refused.state, "github:github.com:I_5");
+		refused.advance(STARTUP_GRACE_MS + 1);
+		await refused.coordinator.tick();
+		await refused.coordinator.tick();
+		// The refusal cleared the mark: the second cycle asked again.
+		expect(refused.intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
+		refused.state.close();
+
+		const accepted = rig({ autoOn: true, agents: [] });
+		handOut(accepted.state, "github:github.com:I_5");
+		accepted.advance(STARTUP_GRACE_MS + 1);
+		await accepted.coordinator.tick();
+		expect(accepted.intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		// The item leaves the queue the way a pickup drop leaves it: the next
+		// empty-queue cycle does NOT re-ask. ADR 0051's exception: a restart
+		// the seat already refused keeps its episode mark, and the operator's
+		// Missing-modal restart is the free path.
+		accepted.state.removeWorkItem("github:github.com:I_5");
+		await accepted.coordinator.tick();
+		expect(accepted.intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		accepted.state.close();
+	});
+
 	test("a started handoff leaves the open walk's candidates", async () => {
 		const { state, intents, claims, coordinator } = rig({
 			autoOn: true,
@@ -2752,7 +2848,7 @@ describe("the injectable clock", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true, queued: false }),
+			dispatch: async () => ({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:00:00Z"),
 			mode: () => false,
@@ -3503,7 +3599,7 @@ describe("an agent that outlives its work cycle", () => {
 				readPane: async () => null,
 			},
 			config: () => config,
-			dispatch: async () => ({ ok: true, queued: false }),
+			dispatch: async () => ({ ok: true }),
 			cleanup: async () => undefined,
 			now: () => Date.parse("2026-08-31T11:05:00Z"),
 			mode: () => false,

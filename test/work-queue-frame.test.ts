@@ -1,8 +1,8 @@
 /**
- * The Work queue's frame tests (ADR 0034): the section appears the moment a
- * manual start waits for a Parallel limit seat, its rows carry the origin
- * and the ticket's title, u and d reorder the waiting starts, Delete cancels
- * the start under the cursor, and the section goes away again with its queue.
+ * The Work queue's frame tests (ADR 0049): the section stands on the Main
+ * view whatever the queue holds, its rows carry the origin and the ticket's
+ * title, + and - move the selected item, Delete cancels the start under the
+ * cursor, and the emptied section keeps its header with its count.
  *
  * The tests boot the real app against a temporary state with a FakeSource,
  * and they seed the queue straight into the state the way a refused manual
@@ -261,6 +261,10 @@ const stripAnsi = (text: string): string =>
 const queueRowIndex = (frame: string, lead: RegExp): number =>
 	rowsOf(stripAnsi(frame)).findIndex((row) => lead.test(row));
 
+/** The queue's own rows, by origin lead, for the before-and-after compares. */
+const queueRowsOf = (frame: string): string[] =>
+	rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]\s+/.test(row));
+
 /** The queue rows lead with their origin, padded to a fixed width. */
 const openRowLead = /\[open\]\s+Add a webhook retry policy/;
 const workflowRowLead = /\[workflow\]\s+Close the stale deploy branch/;
@@ -309,6 +313,84 @@ describe("the Work queue section", () => {
 					// The pause was the file's own fact while it stood, and the
 					// resume wrote the off back: the store reads it either way.
 					expect(state.queuePaused()).toBe(false);
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * Story 10 (ADR 0049): the Work section starts expanded and collapses
+	 * with `x` like the other two. The collapsed header keeps its count: the
+	 * section is always on the Main view, and only its list leaves.
+	 */
+	test("x collapses the Work section, and the header keeps its count", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					// The cursor is on the queue row, and the list stands.
+					await clickWorkHeader(setup);
+					await awaitFrame(setup, (f) => f.includes("┌─❯ Work queue"), "the queue cursor");
+					// `x` collapses the section: the header's arrow turns, the list
+					// leaves, and the header keeps its count on the frame.
+					const collapsed = await press(setup, "x", "the Work section to collapse", (f) =>
+						f.includes("▸ Work"),
+					);
+					expect(collapsed).toContain("waiting: 1");
+					expect(queueRowIndex(collapsed, openRowLead)).toBe(-1);
+					// The cursor left with the list: the cross now walks the two
+					// standing sections, and `x` again brings the queue back.
+					const expanded = await press(
+						setup,
+						"x",
+						"the Work section to expand",
+						(f) => queueRowIndex(f, openRowLead) >= 0,
+					);
+					expect(expanded).toContain("▾ Work");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * Story 12 (ADR 0050): the retired priority keys answer nothing. `u` is
+	 * no longer a ControlKey at all, so a stray press is silent in every
+	 * mode: no dispatch, no Message line, no queue movement.
+	 */
+	test("a stray u press is silent in the queue and in the Ticket list", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					const before = await settle(setup);
+					// In the queue list: the press leaves the rows, the order, and
+					// the Message line as they stood.
+					const pressed = await press(setup, "u", "the retired key to do nothing", (f) =>
+						f.includes("waiting: 2"),
+					);
+					expect(pressed).toContain("waiting: 2");
+					expect(queueRowsOf(pressed)).toEqual(queueRowsOf(before));
+					expect(messageRowOf(pressed)).toBe(messageRowOf(before));
 				},
 				state,
 				source,
@@ -578,9 +660,8 @@ describe("the Work queue section", () => {
 						rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]/.test(row));
 					const before = await settle(setup);
 					// In the list `f` is the Consultation's History key, and the
-					// queue refuses it. `d` is the queue's own Queue down, so it
-					// must NOT carry the refusal: this press moves the item, and the
-					// line stays clear of the other section's words.
+					// queue refuses it in the owning section's words: the refusal
+					// moves nothing, and the queue keeps its rows and its depth.
 					let refusal = await press(setup, "f", "the history refusal in the queue list", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
@@ -588,9 +669,9 @@ describe("the Work queue section", () => {
 					expect(queueRows(refusal)).toEqual(queueRows(before));
 					expect(markerRowOf(refusal)).toBe(markerRowOf(list));
 					expect(detailPaneText(refusal)).toContain("place 1 of 2");
-					// The detail pane: `d` belongs to no queue control here, so the
-					// Consultation's Delete resolves and refuses, and the detail
-					// keeps the item under its cursor.
+					// The detail pane: ADR 0049 retired the queue's own `d` reorder
+					// key, so the Consultation's Delete resolves and refuses, and the
+					// detail keeps the item under its cursor.
 					setup.mockInput.pressKey("l");
 					const detail = await awaitFrame(
 						setup,
@@ -891,7 +972,7 @@ describe("the Work queue section", () => {
 		}
 	});
 
-	test("the section goes away with its queue, and down crosses into it while it stands", async () => {
+	test("the emptied section keeps its header with its count, and down crosses into it while it stands", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);

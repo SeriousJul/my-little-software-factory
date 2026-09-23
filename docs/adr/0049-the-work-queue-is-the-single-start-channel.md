@@ -37,9 +37,12 @@ and it is the pickup scheduler's check, not the pickup's.
 **The queue cannot jam, because every item reaches an exit.** The hard
 checks, the ticket still holds the state the item's origin requires, the
 source is healthy and re-read, the attempt ledger is clear, and the
-Consultation's type still exists and its settings fit, run at the
-enqueue: a start that already fails refuses to enter, and the warning
-stands on the Message line at the ask. While an item waits for a seat, no
+Consultation's type still exists, run at the enqueue: a start that
+already fails refuses to enter, and the warning stands on the Message
+line at the ask. The Consultation's settings fit is the one check that
+runs at the start, not at the ask: it asks the agent runtime for its
+Model list, and a waiting item must answer to the config it starts
+under, not the one it entered behind. While an item waits for a seat, no
 failure state can hold it: a pickup attempt ends in start or drop, never
 in stay. A dropped item leaves the queue with its warning, the ticket
 keeps its state and its own failure surface, and a Consultation's failed

@@ -713,15 +713,16 @@ const MIGRATION_V18_TO_V19 =
 	"ALTER TABLE work_queue ADD COLUMN is_automatic INTEGER NOT NULL DEFAULT 0;";
 
 /**
- * The queue pause (ADR 0052): the operator's brake on the Work queue's
- * drain, on the state file the way the Auto-handoff mode is (ADR 0036).
+ * The v20 step, first half: the queue pause (ADR 0052), the operator's brake
+ * on the Work queue's drain, on the state file the way the Auto-handoff mode
+ * is (ADR 0036).
  *
  * One seeded row, like the mode: a fresh state file starts resumed, and a
  * restart finds the brake where the operator left it. The pause is never
  * derived: it is the operator's own fact, and it survives a restart and a
  * dev reload.
  */
-const MIGRATION_QUEUE_PAUSE = `
+const MIGRATION_V19_TO_V20_QUEUE_PAUSE = `
 	CREATE TABLE queue_pause (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		paused INTEGER NOT NULL
@@ -730,14 +731,19 @@ const MIGRATION_QUEUE_PAUSE = `
 `;
 
 /**
- * The v20 step: the retirement of the ticket priority (ADR 0050).
+ * The v20 step, second half: the retirement of the ticket priority (ADR 0050).
  *
  * The config's label list owns the rank's scale and the override the ticket
  * wore, and both go with the feature: the queue order is the order of work
  * now. The override's values drop in this one-time step, and the Referenced
  * issue fact the rank inherited through goes with it: the labels the control
- * plane fetched for an issue no source lists served the rank alone.
+ * plane fetched for an issue no source lists served the rank alone. Each drop
+ * asks the file first, so a re-labeled newer file that already lacks the fact
+ * stays a no-op.
  */
+const MIGRATION_V19_TO_V20_DROP_PRIORITY = "ALTER TABLE tickets DROP COLUMN priority_override;";
+const MIGRATION_V19_TO_V20_DROP_REFERENCED = "DROP TABLE referenced_issues;";
+
 /**
  * The v16 columns: the Work queue grows the `queued` Consultation's item
  * (ADR 0034, issue #90) beside the handoff item, in the one shared order.
@@ -952,13 +958,13 @@ export class FactoryState {
 			// column carries, and a sound file keeps the column, so the step
 			// stays a no-op for it.
 			if (!this.hasColumn("work_queue", "is_automatic")) this.db.exec(MIGRATION_V18_TO_V19);
-			if (!this.hasTable("queue_pause")) this.db.exec(MIGRATION_QUEUE_PAUSE);
+			if (!this.hasTable("queue_pause")) this.db.exec(MIGRATION_V19_TO_V20_QUEUE_PAUSE);
 			// Ask the file, not the stamp: a re-labeled newer file already lacks
 			// the retired column and the referenced-issues table, so each drop
 			// runs only when the fact is still present.
 			if (this.hasColumn("tickets", "priority_override"))
-				this.db.exec("ALTER TABLE tickets DROP COLUMN priority_override");
-			if (this.hasTable("referenced_issues")) this.db.exec("DROP TABLE referenced_issues");
+				this.db.exec(MIGRATION_V19_TO_V20_DROP_PRIORITY);
+			if (this.hasTable("referenced_issues")) this.db.exec(MIGRATION_V19_TO_V20_DROP_REFERENCED);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
