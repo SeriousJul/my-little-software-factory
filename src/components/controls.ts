@@ -1119,7 +1119,7 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		// sections refuse it in the catalogue's words.
 		id: "queue-pause",
 		label: "Pause queue",
-		barLabel: (context) => (context.queuePaused === true ? "Resume queue" : undefined),
+		barLabel: (context) => (context.queuePaused === true ? "Resume queue" : "Pause queue"),
 		keys: () => ["p"],
 		keyLabel: "p",
 		scope: "work-queue-list",
@@ -1852,8 +1852,14 @@ export function controlForKey(
 	const candidates = candidatesForKey(context, name as ControlKey);
 	// Enter has a state-specific completion action as well as Hand off. An
 	// available meaning wins. If none is available, the first definition owns
-	// the key and supplies its stable unavailable reason.
-	return candidates.find((control) => availabilityFor(control, context).available) ?? candidates[0];
+	// the key and supplies its stable unavailable reason - the queue jump
+	// excepted: a row that holds no waiting item has no jump to refuse, so it
+	// never masks the mode's own Enter reason.
+	return (
+		candidates.find((control) => availabilityFor(control, context).available) ??
+		candidates.find((control) => control.id !== "queue-jump") ??
+		candidates[0]
+	);
 }
 
 export function availabilityFor(
@@ -1894,21 +1900,23 @@ function omitFromGuide(mode: InteractionMode, control: ControlDefinition): boole
 }
 
 /**
- * Whether a section other than the Consultation's omits a Consultation-section
- * control from its guide and its bar.
+ * Whether a section other than a control's own omits it from its guide and
+ * its bar.
  *
  * Delete and History keep their catalog place in the Consultation section
- * alone (issue #85): the key still resolves in the Ticket section and in the
- * Work queue and refuses there, in the catalogue's words, but the section that
- * does not own the control names it nowhere, and the bar hints no key its
- * guide omits. The rule reads the control's own section marker, so a future
- * Consultation-only key is omitted from the same two places at once, in every
- * other section (ADR 0034 widened the base modes with the Work queue's two).
+ * alone (issue #85), and the queue's order and pause keys keep theirs in the
+ * Work queue section alone (ADR 0049, ADR 0052): a key still resolves in the
+ * sections that do not own the control and refuses there, in the catalogue's
+ * words, but those sections name the control nowhere, and the bar hints no
+ * key its guide omits. The rule reads each section marker against the modes
+ * that do not own it, so a future section-only key is omitted from the same
+ * two places at once (ADR 0034 widened the base modes with the Work queue's
+ * two).
  */
 function omitFromOtherSection(mode: InteractionMode, control: ControlDefinition): boolean {
 	return (
-		otherSectionMode(mode) &&
-		(control.consultationSectionOnly === true || control.queueSectionOnly === true)
+		(otherSectionMode(mode) && control.consultationSectionOnly === true) ||
+		(!workQueueMode(mode) && control.queueSectionOnly === true)
 	);
 }
 

@@ -2578,6 +2578,39 @@ describe("the Parallel limit and the Work queue", () => {
 		expect(rigRef.events.some((event) => event.includes("over the Parallel limit"))).toBe(false);
 	});
 
+	test("a force-dispatch passes the queue pause, and the pause holds the drain", async () => {
+		const rigRef = rig([FIRST]);
+		// Every seat is held, and the pause stands: the pickup takes nothing
+		// while it stands, so the item the start left is still waiting when the
+		// force-dispatch keys it.
+		const capped = withRunner(rigRef, rigRef.runner, {
+			seatCount: () => rigRef.config.maxParallelAgents,
+		});
+		await expect(
+			capped.dispatch({
+				origin: "open",
+				ticketIdentity: FIRST.identity,
+				choice: liveChoice,
+				previousMessage: "",
+			}),
+		).resolves.toEqual({ ok: true, queued: true });
+		rigRef.state.setQueuePaused(true);
+		expect(rigRef.state.workQueue()).toHaveLength(1);
+		// The force-dispatch skips the pause the way it skips the cap: the item
+		// leaves, the ticket starts, and the line names the start over the cap.
+		capped.forceDispatchWorkQueueItem(FIRST.identity);
+		await untilQueueDrains(rigRef);
+		expect(rigRef.state.workQueue()).toHaveLength(0);
+		expect(rigRef.state.ticketState(FIRST.identity)).toBe("handed-off");
+		expect(rigRef.commands()).toContain(agentStart(FIRST.name));
+		expect(rigRef.events).toContain(
+			`notice:force-dispatched "${FIRST.title}" over the Parallel limit`,
+		);
+		// The pause is a fact the force-dispatch passes, not a fact it clears:
+		// it still stands for the next drain.
+		expect(rigRef.state.queuePaused()).toBe(true);
+	});
+
 	test("a force-dispatch the claim refuses leaves the queue with the warning", async () => {
 		const rigRef = rig([FIRST]);
 		const capped = withRunner(rigRef, rigRef.runner, {

@@ -85,16 +85,6 @@ acceleration = 0.8
 # Rows moved by one accelerated wheel event. At least speed.
 maximum-speed = 6
 
-# --- Priority -------------------------------------------------------------
-
-# An ordered list of labels that ranks tickets: the first entry is the
-# highest rank. A ticket that carries one of these labels ranks by it. The
-# operator bumps a rank from the ticket detail, and a bump beats the label.
-# An "off" bump sets the ticket unranked. Omitted: tickets are not ranked
-# and the list keeps its previous order.
-[priority]
-labels = ["critical", "high", "low"]
-
 # --- Logging --------------------------------------------------------------
 
 # The plane's own file log. The TUI owns the terminal, so the run's record
@@ -366,7 +356,6 @@ host = "github.com"
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
-| `priority` | no | none | The ordered priority labels that rank tickets. Omitted: tickets are not ranked and the list keeps its previous order. |
 | `logging` | no | none | The plane's own file log. Omitted: the run writes no log, the state of a config the plane seeded before logging. |
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |
@@ -391,12 +380,6 @@ host = "github.com"
 | `file` | no | `factory.log` next to the state file | The log file. A relative path resolves against the directory of this config file. |
 | `max-size-mib` | no | `10` | The size, in mebibytes, at which the current file rotates. A whole number of 1 or more. |
 | `keep` | no | `5` | The rotated files kept, from `file.1` up to the `keep`-th file. A whole number of 1 or more. |
-
-**`[priority]`** (optional table).
-
-| Key | Required | Default | What it does |
-| --- | --- | --- | --- |
-| `labels` | yes, when the table is set | - | The ordered priority labels. The first entry is the highest rank. A ticket carrying one ranks by it; an operator bump beats the label, and an `off` bump sets the ticket unranked. |
 
 **`[agents.<name>]`** (one table per agent type).
 
@@ -537,9 +520,8 @@ key is rejected at startup instead of misread as applied.
 
 The three security kinds read the repository security tab, one call set per
 configured repository, and each item appears in the ticket list as one
-ticket. The item's severity becomes its single ticket label, so the Priority
-label list ranks security tickets; an open secret scanning alert always
-carries the label `critical` (ADR 0029).
+ticket. The item's severity becomes its single ticket label; an open secret
+scanning alert always carries the label `critical` (ADR 0029).
 
 - `github-security-advisories` lists the repository's security advisories in
   `triage`, `draft`, and `published` state; `closed` and `withdrawn`
@@ -591,8 +573,7 @@ the `needs-work`, `ready-for-review`, and `ready-to-ship` pull requests to
 at its task type, and one parking state for a pull request that carries none
 of them - with the transitions that move a ticket between them. They also
 define one `consult` Consultation type that passes your input straight
-through. They carry the three priority labels `critical`, `high`, and `low`.
-They have no ticket sources and no repository mappings: uncommenting one
+through. They have no ticket sources and no repository mappings: uncommenting one
 security source block is the only setup a fresh install needs. The security
 task types carry `thinking = "high"` and a transition that writes
 `ready-for-review` on the opened pull request with `auto-advance = true`: the

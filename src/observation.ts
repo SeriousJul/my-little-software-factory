@@ -1434,7 +1434,11 @@ export class ObservationCoordinator {
 		if (position === undefined) return null;
 		if (position.state !== "open" && position.state !== "awaiting") return null;
 		if (position.suggestedTaskType !== outcome.positionTaskType) return null;
-		if (!position.actionable) return null;
+		// The actionable fact is the open position's: an awaiting position is
+		// the ticket whose turn just settled, and the claim check owns its
+		// standing, so the top-up does not demand the open ticket's health of
+		// it.
+		if (position.state === "open" && !position.actionable) return null;
 		if (position.handoffRecoveryRequired) return null;
 		if (this.state.hasWorkItem(position.identity)) return null;
 		if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) return null;

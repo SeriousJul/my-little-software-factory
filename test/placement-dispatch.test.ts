@@ -282,7 +282,7 @@ describe("the write the start runs", () => {
 	test("a start whose task the ticket does not offer yet writes the labels before the agent starts", async () => {
 		const rigRef = rig([{ source: pullsSource, ticket: pullTicket(PULL, ["needs-work"]) }]);
 		const { enqueued, started } = start(rigRef, PULL, reviewChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: true, queued: false });
 		// One write, the source's own edit, the labels the placement adds and
 		// removes, and it lands before the agent the start asks for.
@@ -311,7 +311,7 @@ describe("the write the start runs", () => {
 		];
 		const rigRef = rig([{ source: issuesSource, ticket: issueTicket(ISSUE, ["held"]) }], machine);
 		const { enqueued, started } = start(rigRef, ISSUE, reviewChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: true, queued: false });
 		// The write strips the parking label and adds the state's, and it
 		// lands before the agent the start asks for.
@@ -359,7 +359,7 @@ describe("the write the start runs", () => {
 			machine,
 		);
 		const { enqueued, started } = start(rigRef, ISSUE, reviewChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: true, queued: false });
 		const commands = rigRef.commands();
 		expect(
@@ -375,7 +375,7 @@ describe("the no-placement faces", () => {
 	test("a start whose task is the ticket's suggestion takes no egress", async () => {
 		const rigRef = rig([{ source: pullsSource, ticket: pullTicket(PULL, ["ready-for-review"]) }]);
 		const { enqueued, started } = start(rigRef, PULL, reviewChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: true, queued: false });
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 		expect(rigRef.state.ticketState(PULL.identity)).toBe("handed-off");
@@ -386,7 +386,7 @@ describe("the no-placement faces", () => {
 		// rests on the default, and the default handoff never differs from it.
 		const rigRef = rig([{ source: issuesSource, ticket: issueTicket(ISSUE, ["ready-for-agent"]) }]);
 		const { enqueued, started } = start(rigRef, ISSUE, implementChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: true, queued: false });
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 	});
@@ -394,7 +394,7 @@ describe("the no-placement faces", () => {
 	test("an automatic start never places", async () => {
 		const rigRef = rig([{ source: pullsSource, ticket: pullTicket(PULL, ["needs-work"]) }]);
 		const { enqueued, started } = start(rigRef, PULL, reviewChoice, { automatic: true });
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: true, queued: false });
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 	});
@@ -406,7 +406,7 @@ describe("the refusal", () => {
 		const { enqueued, started } = start(rigRef, ISSUE, reviewChoice);
 		// The claim is in and the start is refused where the agent would
 		// stand: the dispatch says the claim, the start says the refusal.
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({
 			ok: false,
 			reason: "task type review is not offered by any state that matches a github-issue ticket",
@@ -440,7 +440,7 @@ describe("the refusal", () => {
 			},
 		);
 		const { enqueued, started } = start(rigRef, PULL, reviewChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({
 			ok: false,
 			reason: "gh pr edit #5 failed: gh is unavailable",
@@ -460,7 +460,7 @@ describe("the refusal", () => {
 			{ code: 1, stderr: "the pane is gone\n" },
 		);
 		const { enqueued, started } = start(rigRef, PULL, reviewChoice);
-		await expect(enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(started).resolves.toEqual({ ok: false, reason: "the pane is gone" });
 		// The write landed before the start failed: the external effect
 		// stands, the ticket keeps its state, and the position now offers
@@ -479,7 +479,7 @@ describe("the idempotent rule", () => {
 			{ code: 1, stderr: "the pane is gone\n" },
 		);
 		const first = start(rigRef, PULL, reviewChoice);
-		await expect(first.enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(first.enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(first.started).resolves.toEqual({ ok: false, reason: "the pane is gone" });
 		// The source re-lists the ticket with the labels the write put on
 		// it, and the start the operator re-asks crosses the rule again.
@@ -490,7 +490,7 @@ describe("the idempotent rule", () => {
 			{ code: 0 },
 		);
 		const second = start(rigRef, PULL, reviewChoice);
-		await expect(second.enqueued).resolves.toEqual({ ok: true, queued: false });
+		await expect(second.enqueued).resolves.toEqual({ ok: true, queued: true });
 		await expect(second.started).resolves.toEqual({ ok: true, queued: false });
 		// The labels already match the spec: the re-run takes no egress.
 		const edits = rigRef.commands().filter((command) => command.startsWith("gh "));
@@ -540,7 +540,7 @@ describe("the queue", () => {
 		expect(rigRef.state.ticketState(PULL.identity)).toBe("handed-off");
 	});
 
-	test("a queued override whose labels move while it waits is refused at its pickup, and the force-dispatch refuses the same way", async () => {
+	test("a queued override whose labels move while it waits is dropped at its pickup, and the force-dispatch refuses the same way", async () => {
 		const machine: WorkflowState[] = [
 			{
 				name: "needs-work",
@@ -582,13 +582,23 @@ describe("the queue", () => {
 				`warning:queued handoff for "${PULL.title}" was not run: state ready-for-review excludes label wip, and the ticket carries it`,
 			"the pickup's refusal",
 		);
-		// The item keeps its place, the ticket keeps its state, and the
-		// source stands untouched.
-		expect(rigRef.state.workQueue()).toHaveLength(1);
+		// The pickup's drop (ADR 0049): a pickup that fails a check leaves the
+		// item out of the queue with the warning, the ticket keeps its state,
+		// and the source stands untouched.
+		expect(rigRef.state.workQueue()).toHaveLength(0);
 		expect(rigRef.state.ticketState(PULL.identity)).toBe("open");
 		expect(rigRef.commands().some((command) => command.startsWith("gh "))).toBe(false);
 		// The force-dispatch re-runs the same check and refuses the same way:
-		// the item leaves with the warning, and the write never runs.
+		// the item leaves with the warning, and the write never runs. The item
+		// enters the queue directly, because a dispatch's own pickup would
+		// drop it before the force-dispatch could meet it.
+		const enqueued = rigRef.state.enqueueWork({
+			ticketIdentity: PULL.identity,
+			origin: "open",
+			choice: reviewChoice,
+			previousMessage: "",
+		});
+		if (enqueued.ok !== true) throw new Error(enqueued.reason);
 		freeing.forceDispatchWorkQueueItem(PULL.identity);
 		await awaitEvent(
 			rigRef,

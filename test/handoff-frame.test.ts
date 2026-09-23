@@ -214,10 +214,12 @@ interface PanelSize {
  * The sizes a list row is pinned at.
  *
  * 120x30 is the terminal the panel is designed for, where a value gets the
- * whole 30-cell column it wants. 46x20 is the narrow panel that still holds
- * its guide row: the value column shrinks to 28 cells, so a real model name
+ * whole 30-cell column it wants. 46x27 is the narrow panel that still holds
+ * its guide row: the value column shrinks, so a real model name
  * reaches the clip boundary and the guide that carries the loading marker is
- * still on screen. Below that the guide drops out of the panel, so a hint is
+ * still on screen. The height is the terminal's own floor - the three Main
+ * sections at their minimum - so the panel cannot boot below it.
+ * Below the width the guide drops out of the panel, so a hint is
  * pinned at its own tiny size instead.
  *
  * The value column comes from `panelValueCells`, so a geometry change moves the
@@ -225,7 +227,7 @@ interface PanelSize {
  */
 const PANEL_SIZES: readonly PanelSize[] = [
 	{ width: WIDTH, height: HEIGHT, valueCells: panelValueCells(WIDTH, HEIGHT) },
-	{ width: 46, height: 20, valueCells: panelValueCells(46, 20) },
+	{ width: 46, height: 27, valueCells: panelValueCells(46, 27) },
 ];
 
 /** The panel row that shows one label, for a check that runs on one row alone. */

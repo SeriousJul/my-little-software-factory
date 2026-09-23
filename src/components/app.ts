@@ -322,6 +322,8 @@ export function App({
 	// The queue pause (ADR 0052): factory state on the state file, shown on
 	// the Work section's header beside the depth it holds.
 	const [queuePaused, setQueuePaused] = useState(false);
+	const queuePausedRef = useRef(false);
+	queuePausedRef.current = queuePaused;
 	const [selection, setSelection] = useState<"ticket" | "consultation" | "queue">("ticket");
 	const selectionRef = useRef<"ticket" | "consultation" | "queue">("ticket");
 	// The queue row under the unified cursor, kept like the Consultation's:
@@ -2375,6 +2377,9 @@ export function App({
 			ticketPaneForeign: selectedTicketPaneForeign,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
+			// The queue pause's own fact (ADR 0052): the `p` hint reads it, so
+			// the bar names the resume while the pause stands.
+			queuePaused: queuePausedRef.current,
 		});
 	const openGuide = (mode: InteractionMode = currentBaseMode()) => {
 		setUtility({ kind: "guide", mode });

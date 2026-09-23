@@ -1190,7 +1190,9 @@ describe("the Live view against a running factory", () => {
 	test("the cycle ending while the view is open closes the screen", async () => {
 		// A task type the factory closes by itself: the transition
 		// auto-advances but writes no position, so the turn can only end the
-		// cycle, never hand off.
+		// cycle, never hand off. The machine decides an auto-advancing
+		// settled turn only in Auto mode (ADR 0051), so the mode stands on
+		// when the view opens.
 		const app = seededApp({
 			taskTypes: {
 				...BASE_CONFIG.taskTypes,
@@ -1200,6 +1202,7 @@ describe("the Live view against a running factory", () => {
 				},
 			},
 		});
+		app.state.setAutoHandoffMode(true);
 		app.runner.set("herdr", ["agent", "list"], {
 			stdout: agentListJson([
 				{
