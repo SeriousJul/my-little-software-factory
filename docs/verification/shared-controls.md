@@ -740,12 +740,14 @@ What is measured automatically, on this branch:
   pane and only there, and no modal surface states a border color - the
   architecture check holds all three and names the offender by file
   (`test/shared-control-architecture.test.ts`).
-- The nested border at the plane's declared minimum (40 by 19): the box's
+- The nested border at the plane's declared minimum (40 by 27, the floor
+  ADR 0049 raised with the Work queue's third permanent section): the box's
   border one cell in on every side, the pane's border and its padding inside
   the box's padding, the log's floor of three rows held inside the pane,
   the region's rows standing below the pane's bottom border with the
   selection on Close, and the keys dispatching in both regions - the region
-  selection moving to Goto and the body scrolling one row (`test/decision-modal.test.ts`).
+  selection moving to Goto and the body jumping to the log's head
+  (`test/decision-modal.test.ts`).
 - The nested border with the pane's chrome yielded: at a low box the pane
   yields its padding before the log yields rows, keeps its border, and the
   scrollbar stays pinned to the body's last column inside the pane on full,
@@ -794,10 +796,10 @@ nested border above:
   cause above its rows, the short log's pinned floor, and the empty log's
   reason in its pane (`test/shared-gallery.test.ts`).
 
-On first paint, the declared minimum (40 by 19) cannot reach the
-stand-down: the box holds twelve body rows, and the context row, the pane's
-chrome, the log's floor, and the region's minimum of one row fit within
-them. The operator reaches it by resizing the terminal over the open
+On first paint, the declared minimum (40 by 27) cannot reach the
+stand-down: the box holds the rows the context row, the pane's
+chrome, the log's floor, and the region's minimum of one row need, with room
+over. The operator reaches it by resizing the terminal over the open
 modal, which the yield steps above walk in the harness's frames. Nothing is
 claimed for a walk that was not run.
 

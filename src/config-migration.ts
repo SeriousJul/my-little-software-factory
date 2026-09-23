@@ -286,6 +286,65 @@ export function migrateWorkflowMachineConfig(
 		stringify(newData),
 	].join("\n");
 
+	// The report says what the rewrite did. A machine migration rewrote the
+	// whole workflow: its sections name the states, the transitions, and the
+	// templates. A priority-only rewrite touched one table: its sections name
+	// that table and nothing else, so the file never claims a change it did
+	// not make (ADR 0050).
+	const machineSections = machineMigrated
+		? [
+				"## States",
+				"",
+				"Rules became states: one state per rule, named for the rule's task type,",
+				"with the rule's match carried over.",
+				"",
+				...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
+				...(installedParks.length > 0
+					? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
+					: []),
+				"",
+				"## Transitions",
+				"",
+				"Expressible edges became transitions: the transition writes the state",
+				"label facts of the edge's single target, on the surface the state",
+				"names, and carries the edge's agent and environment pins.",
+				"",
+				...(transitions.size > 0
+					? [...transitions.values()].map((entry) => `- ${entry.line}`)
+					: ["No edges were expressible as transitions."]),
+				...(installedTransitions.length > 0
+					? [
+							"",
+							"Transitions installed from the shipped seed with the clean template:",
+							"",
+							...installedTransitions.map((line) => `- ${line}`),
+						]
+					: []),
+				...(droppedEdges.length > 0
+					? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
+					: []),
+				"",
+				"## Templates",
+				"",
+				"The four seed templates are replaced on exact match; a customized",
+				"template is left untouched.",
+				"",
+				...(templateLines.length > 0
+					? templateLines
+					: ["No seed task types: no template actions."]),
+				"",
+				"## Dropped keys",
+				"",
+				...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
+			]
+		: [
+				"## Dropped keys",
+				"",
+				"The rewrite removed one table and changed no other value: the states,",
+				"the transitions, and the templates in the file are the ones the file",
+				"already carried.",
+			];
+
 	const reportText = [
 		`# ${migrationTitle}`,
 		"",
@@ -295,47 +354,7 @@ export function migrateWorkflowMachineConfig(
 		`control plane rewrote it at load on ${date} (${machineMigrated ? "ADR 0027" : "ADR 0050"}). The pre-migration`,
 		`file is at \`${backupFileName}\`, next to the config, and this report at \`${reportFileName}\`.`,
 		"",
-		"## States",
-		"",
-		"Rules became states: one state per rule, named for the rule's task type,",
-		"with the rule's match carried over.",
-		"",
-		...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
-		...(installedParks.length > 0
-			? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
-			: []),
-		"",
-		"## Transitions",
-		"",
-		"Expressible edges became transitions: the transition writes the state",
-		"label facts of the edge's single target, on the surface the state",
-		"names, and carries the edge's agent and environment pins.",
-		"",
-		...(transitions.size > 0
-			? [...transitions.values()].map((entry) => `- ${entry.line}`)
-			: ["No edges were expressible as transitions."]),
-		...(installedTransitions.length > 0
-			? [
-					"",
-					"Transitions installed from the shipped seed with the clean template:",
-					"",
-					...installedTransitions.map((line) => `- ${line}`),
-				]
-			: []),
-		...(droppedEdges.length > 0
-			? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
-			: []),
-		"",
-		"## Templates",
-		"",
-		"The four seed templates are replaced on exact match; a customized",
-		"template is left untouched.",
-		"",
-		...(templateLines.length > 0 ? templateLines : ["No seed task types: no template actions."]),
-		"",
-		"## Dropped keys",
-		"",
-		...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
+		...machineSections,
 		...(autoHandoffLine === null ? [] : ["", autoHandoffLine]),
 		...(priorityLine === null ? [] : ["", priorityLine]),
 		"",

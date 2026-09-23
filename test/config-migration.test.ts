@@ -315,6 +315,34 @@ describe("the priority retirement (ADR 0050)", () => {
 		expect(result.reportText).toContain("`+` and `-`");
 	});
 
+	/**
+	 * ADR 0050 promises the change "is named in a readable report", and the
+	 * report can only name what the rewrite did. A priority-only file already
+	 * stood on the machine: its states, transitions, and templates left the
+	 * rewrite untouched, so the retirement's report carries no section that
+	 * claims otherwise.
+	 */
+	test("the retirement's report names only the table the rewrite removed", () => {
+		const result = migrate(prioritySeed());
+		const report = result.reportText;
+		// The machine migration's three sections are absent: the rewrite ran
+		// none of them on this file.
+		expect(report).not.toContain("## States");
+		expect(report).not.toContain("## Transitions");
+		expect(report).not.toContain("## Templates");
+		expect(report).not.toContain("Parking states appended");
+		expect(report).not.toContain("is the only writer of the labels");
+		// The machine's own note about a wider default source list is a
+		// consequence of the machine migration, not of this rewrite.
+		expect(report).not.toContain("The default source list is wider");
+		// The data the rewrite left alone is the data the file had: the
+		// shipped states and task types round-trip through it.
+		const rewritten = parseToml(result.configText) as Record<string, unknown>;
+		const shipped = parseToml(SHIPPED_TEXT) as Record<string, unknown>;
+		expect(rewritten.states).toEqual(shipped.states);
+		expect(rewritten["task-types"]).toEqual(shipped["task-types"]);
+	});
+
 	test("the load migrates the priority-only file, backs it up, and notes it", async () => {
 		const path = tempFile();
 		writeFileSync(path, prioritySeed());

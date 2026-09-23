@@ -257,7 +257,14 @@ describe("the permanent Message line", () => {
 		}
 	});
 
-	test("surfaces a failed referenced issue read as one warning on the line (ADR 0023)", async () => {
+	/**
+	 * The source warnings' channel: a refresh that absorbs a peripheral
+	 * failure says so once, and the line carries the sentence. ADR 0050
+	 * retired the referenced-issue read that first used it; the security
+	 * sources still write it, when a repository has the feed's feature off
+	 * (the reason the live case below carries).
+	 */
+	test("surfaces a source refresh's absorbed failure as one warning on the line", async () => {
 		const state = freshState();
 		const source = new FakeSource("pulls", "github-pull-requests", success([issueTicket()]));
 		try {
@@ -266,24 +273,23 @@ describe("the permanent Message line", () => {
 					// The first refresh settles cleanly.
 					source.settle(success([issueTicket()]));
 					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					// The next refresh fails its direct read: the source still
+					// The next refresh absorbs one feed's failure: the source still
 					// succeeds, and its one warning line surfaces on the line.
 					setup.mockInput.pressKey("r");
 					await callsReached(source, 2);
+					const disabled = "Dependabot alerts are disabled for acme/factory";
 					source.settle({
 						status: "success",
 						fetchedAt: "2026-08-31T10:02:00Z",
 						tickets: [issueTicket()],
-						warnings: ["referenced issue read failed: GitHub rate limit exceeded"],
+						warnings: [disabled],
 					});
 					const frame = await awaitFrame(
 						setup,
-						(f) => messageRowOf(f).includes("referenced issue read failed"),
+						(f) => messageRowOf(f).includes("Dependabot alerts are disabled for"),
 						"the warning",
 					);
-					expect(messageRowOf(frame).trim()).toBe(
-						"Warning: referenced issue read failed: GitHub rate limit exceeded",
-					);
+					expect(messageRowOf(frame).trim()).toBe(`Warning: ${disabled}`);
 					source.settle(success([issueTicket()]));
 				},
 				WIDTH,

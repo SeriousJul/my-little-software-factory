@@ -324,6 +324,61 @@ describe("the Work queue section", () => {
 	});
 
 	/**
+	 * The notice's rank, decided (ADR 0052).
+	 *
+	 * `p` answers with a notice, not a warning: a control that ran has nothing
+	 * to warn about. A notice holds its own slot below the fact an operation
+	 * wrote, so a `p` press that lands while a refusal still stands on the
+	 * line leaves that refusal readable, and the pause is still readable on
+	 * the header. This is the walk that makes the ranking a decided fact and
+	 * not an accident of the slot order.
+	 */
+	test("p behind a standing warning keeps the warning on the line and the pause on the header", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Work queue"),
+						"the cursor on the queue row",
+					);
+					// An operation writes its refusal on the line, and it stands:
+					// this config ships no Consultation type, so the launch key
+					// refuses and says why.
+					await press(setup, "c", "the refusal on the line", (f) =>
+						messageRowOf(f).startsWith("Warning:"),
+					);
+					const beforePause = setup.captureCharFrame();
+					expect(messageRowOf(beforePause)).toContain("no Consultation types configured");
+					// The pause's notice lands behind it, so the line keeps the
+					// refusal, and the header carries the pause the line cannot show.
+					setup.mockInput.pressKey("p");
+					await awaitFrame(
+						setup,
+						(f) => f.includes("waiting: 1  paused"),
+						"the pause on the header",
+					);
+					const paused = setup.captureCharFrame();
+					expect(messageRowOf(paused)).toBe(messageRowOf(beforePause));
+					expect(messageRowOf(paused)).not.toContain("Work queue paused");
+					expect(state.queuePaused()).toBe(true);
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
 	 * Story 10 (ADR 0049): the Work section starts expanded and collapses
 	 * with `x` like the other two. The collapsed header keeps its count: the
 	 * section is always on the Main view, and only its list leaves.

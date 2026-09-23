@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { TicketSourceConfig } from "../src/config.ts";
+import { issueReferencesOf, withIssueReferences } from "../src/domain/ticket.ts";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -71,7 +72,7 @@ function searchQueryOf(call: SafeCall): string {
 	return call.args[index].slice("searchQuery=".length);
 }
 
-function issue(number = 5): object {
+function issue(number = 5, over: object = {}): object {
 	return {
 		__typename: "Issue",
 		id: `I_${number}`,
@@ -87,6 +88,7 @@ function issue(number = 5): object {
 			nameWithOwner: "acme/factory",
 			url: "https://github.com/acme/factory",
 		},
+		...over,
 	};
 }
 
@@ -418,6 +420,194 @@ describe("GitHub ticket source contract", () => {
 				reason: "GitHub request failed: HTTP 502: bad gateway",
 			}),
 		);
+	});
+
+	test("the pull request's closing references are stored as the `closes` source fact (ADR 0050)", async () => {
+		// ADR 0050 retired the priority a closing reference used to carry, and
+		// kept the reference itself: the fixing-pull-request rule (ADR 0042) and
+		// the Transition's linked-pull-request lookup (ADR 0027) both read it off
+		// the membership. This is the one test on that kept fact, so it pins the
+		// whole shape the two rules depend on: the attribute's key, its JSON
+		// array, and each reference's identity, number, and repository.
+		const runner = new SourceRunner([
+			page([
+				pullRequest(7, {
+					closingIssuesReferences: {
+						nodes: [
+							{
+								__typename: "Issue",
+								id: "I_5",
+								number: 5,
+								repository: { name: "factory", nameWithOwner: "acme/factory" },
+							},
+							{
+								__typename: "Issue",
+								id: "I_6",
+								number: 6,
+								repository: { name: "factory", nameWithOwner: "acme/factory" },
+							},
+						],
+					},
+				}),
+			]),
+			page([]),
+			page([]),
+		]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets[0]).toEqual(
+			expect.objectContaining({
+				identity: "github:github.com:P_7",
+				attributes: {
+					draft: "false",
+					headBranch: "main",
+					closes: JSON.stringify([
+						{ identity: "github:github.com:I_5", number: 5, repository: "acme/factory" },
+						{ identity: "github:github.com:I_6", number: 6, repository: "acme/factory" },
+					]),
+				},
+			}),
+		);
+	});
+
+	test("a reference the answer leaves unreadable is no reference, and the pull request still lists", async () => {
+		// The references are a secondary fact: a node without a number cannot
+		// name an issue, so it leaves the list instead of failing the refresh,
+		// and a node the answer leaves without an identity keeps a null identity
+		// the lookup reads as "match this one by repository and number".
+		const runner = new SourceRunner([
+			page([
+				pullRequest(7, {
+					closingIssuesReferences: {
+						nodes: [
+							// No number: no issue to name, so the node leaves the list.
+							{ id: "I_5", repository: { nameWithOwner: "acme/factory" } },
+							{
+								__typename: "Issue",
+								id: "I_6",
+								number: 6,
+								repository: { nameWithOwner: "acme/factory" },
+							},
+						],
+					},
+				}),
+			]),
+			page([]),
+		]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets[0]).toEqual(
+			expect.objectContaining({
+				attributes: {
+					draft: "false",
+					headBranch: "main",
+					closes: JSON.stringify([
+						{ identity: "github:github.com:I_6", number: 6, repository: "acme/factory" },
+					]),
+				},
+			}),
+		);
+	});
+
+	test("a pull request that closes nothing carries no `closes` fact", async () => {
+		const runner = new SourceRunner([page([pullRequest(7)]), page([]), page([])]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		// The absent fact reads as no references, not as an empty attribute: a
+		// refresh that changes what a pull request closes changes only this key.
+		expect(outcome.tickets[0]?.attributes).toEqual({ draft: "false", headBranch: "main" });
+	});
+
+	test("the search query reads the closing references, and no separate reference read runs", async () => {
+		// ADR 0050 retired the batched referenced-issue read with the rank it
+		// fed: the reference arrives inside the search page it belongs to, so
+		// the fetch is the search and nothing else.
+		const runner = new SourceRunner([
+			page([
+				pullRequest(7, {
+					closingIssuesReferences: {
+						nodes: [
+							{
+								__typename: "Issue",
+								id: "I_5",
+								number: 5,
+								repository: { nameWithOwner: "acme/factory" },
+							},
+						],
+					},
+				}),
+			]),
+			page([]),
+			page([]),
+		]);
+		const outcome = await createTicketSource(source("github-pull-requests"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		const query = (runner.calls[0]?.args.find((arg) => arg.startsWith("query=")) ?? "")
+			.replace("query=", "")
+			.replace(/\s+/g, " ");
+		expect(query).toContain(
+			"closingIssuesReferences(first: 100) { nodes { id number repository { name nameWithOwner } } }",
+		);
+		// Two search queries, one per policy branch: no second request shape.
+		expect(runner.calls).toHaveLength(2);
+		for (const call of runner.calls) expect(call.args.join(" ")).toContain("query FactorySearch");
+	});
+
+	test("an issue source reads no closing references", async () => {
+		// The field lives on the pull request node alone: an issue source's
+		// normalization never builds the fact, whatever the answer carries.
+		const runner = new SourceRunner([
+			page([
+				issue(5, {
+					closingIssuesReferences: {
+						nodes: [
+							{
+								__typename: "Issue",
+								id: "I_6",
+								number: 6,
+								repository: { nameWithOwner: "acme/factory" },
+							},
+						],
+					},
+				}),
+			]),
+		]);
+		const outcome = await createTicketSource(source("github-issues"), runner).fetch();
+		expect(outcome).toMatchObject({ status: "success" });
+		if (outcome.status !== "success") return;
+		expect(outcome.tickets[0]?.attributes).toEqual({});
+	});
+
+	describe("the stored fact the link rules read", () => {
+		/**
+		 * The fixing-pull-request rule (ADR 0042) and the Transition's
+		 * linked-pull-request lookup (ADR 0027) both read the reference through
+		 * `issueReferencesOf`. The source stores the fact; the read is the half
+		 * ADR 0050 kept, so it stands here beside the write.
+		 */
+		test("the reference round-trips through the membership's attributes", () => {
+			const references = [
+				{ identity: "github:github.com:I_5", number: 5, repository: "acme/factory" },
+				{ identity: null, number: 6, repository: "acme/portal" },
+			];
+			expect(issueReferencesOf(withIssueReferences({}, references))).toEqual(references);
+		});
+
+		test("a malformed fact reads as no references, the way an absent one does", () => {
+			// A refresh can leave the fact unreadable; neither link rule may
+			// fail the read over it.
+			expect(issueReferencesOf({ closes: "not json" })).toEqual([]);
+			expect(issueReferencesOf({ closes: "{}" })).toEqual([]);
+			expect(issueReferencesOf({ closes: JSON.stringify([{ number: 5 }]) })).toEqual([]);
+			expect(issueReferencesOf({})).toEqual([]);
+		});
+
+		test("a pull request that closes nothing stores no attribute", () => {
+			expect(withIssueReferences({ draft: "false" }, [])).toEqual({ draft: "false" });
+		});
 	});
 
 	test("a rate limit is a readable source failure", async () => {

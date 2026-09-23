@@ -14,6 +14,7 @@ import {
 	cellColors,
 	press,
 	pressArrow,
+	pressScrollKey,
 	rgb,
 	roleColor,
 	rowsOf,
@@ -252,13 +253,14 @@ describe("the decision modal's scrollbar", () => {
  * The nested border at the plane's declared minimum: the smallest terminal
  * the base app draws is the smallest terminal the modal can open on, so the
  * pane's border inside the box's border is the boundary the payment order
- * must hold. At 40 by 19 the box holds the context row, the pane with its
+ * must hold. At 40 by 27, the floor ADR 0049 raised with the Work queue's
+ * third permanent section, the box holds the context row, the pane with its
  * full chrome and its floor, and the region's two rows, and the keys still
  * dispatch in both regions.
  */
 describe("the decision modal's nested border at the declared minimum", () => {
 	const MIN_WIDTH = 40;
-	const MIN_HEIGHT = 19;
+	const MIN_HEIGHT = 27;
 
 	/** Open the modal at the minimum and wait for the pop-in to settle. */
 	async function openAtMinimum(setup: AppSetup): Promise<string> {
@@ -311,21 +313,28 @@ describe("the decision modal's nested border at the declared minimum", () => {
 		await withApp(
 			async (setup) => {
 				await openAtMinimum(setup);
-				// Down moves the region's selection to the Goto row.
+				// The pane opens pinned to the log's tail, as it does at every
+				// size, and the long turn's head stands above the window: a 27-row
+				// box shows some of it, never all of it.
+				const tail = setup.captureCharFrame();
+				expect(tail).toContain("and 352 tests pass.");
+				expect(tail).not.toContain("First I read the ticket");
+				// Down moves the region's selection to the Goto row: the region's
+				// own keys, one cell inside the pane's border.
 				const moved = await pressArrow(setup, "down", "the selection on the Goto row", (f) =>
 					rowsOf(f).some((row) => row.includes("❯ Goto")),
 				);
 				expect(moved).not.toContain("❯ Close");
-				// k scrolls the body one row up, inside the nested pane: the
-				// log's second line comes into view where it was not.
-				expect(setup.captureCharFrame()).not.toContain("The fix keeps the repository");
-				await press(setup, "k", "the body to scroll", (f) =>
-					f.includes("The fix keeps the repository"),
+				// And the body still scrolls inside the nested pane: the jump key
+				// brings the head, which no window row held, into view. Both
+				// regions take their keys at the plane's floor.
+				await pressScrollKey(setup, "home", "the body to reach the log's head", (f) =>
+					f.includes("First I read the ticket"),
 				);
 			},
 			MIN_WIDTH,
 			MIN_HEIGHT,
-			{ initialTickets: [awaitingTicket] },
+			{ initialTickets: [longLogTicket] },
 		);
 	});
 });

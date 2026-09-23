@@ -1453,15 +1453,20 @@ class HandoffDispatchModule implements HandoffDispatch {
 				this.state.settleHandoff(next.claim.attemptId, false, movedOn);
 				this.reports.starting(next.ticket.identity, false);
 				this.reports.refresh();
+				// One line for both exits, read through the one name helper every
+				// other drain line reads: the live projection's title, so the
+				// warning names the ticket the operator sees, not the snapshot the
+				// claim took.
+				this.reports.warning(
+					`queued handoff for ${this.ticketName(next.ticket.identity)} was not run: ${movedOn}`,
+				);
 				if (next.workQueuePickup === true) {
 					// A pickup the seat parked, and the ticket moved on before its turn:
 					// the start-or-drop contract ends in a drop (ADR 0049). The item
 					// leaves the queue, and the warning says the reason the drain found.
 					this.state.removeWorkItem(next.ticket.identity);
-					this.reports.warning(`queued handoff for "${next.ticket.title}" was not run: ${movedOn}`);
 					next.onStarted({ ok: false, reason: movedOn });
 				} else {
-					this.reports.warning(`queued handoff for "${next.ticket.title}" was not run: ${movedOn}`);
 					// The route the claim was for never started: its caller decides
 					// nothing on the turn it came from.
 					next.onStarted({ ok: false, reason: "the queued handoff was not run" });

@@ -2544,19 +2544,24 @@ export class FactoryState {
 	}
 
 	/**
-	 * The hard start check at the ask (ADR 0049): the same gates the claim
-	 * runs - the ticket still holds the state the item's origin requires, the
-	 * source is healthy and re-read, the attempt ledger is clear - without
-	 * taking a claim. A start that already fails refuses to enter the Work
-	 * queue, and the warning stands on the Message line at the ask.
+	 * The hard start gates, read at the ask and again at the claim (ADR 0049).
+	 *
+	 * One block serves both moments: the ticket still holds the state the
+	 * origin requires, an active membership stands on a healthy source, that
+	 * source re-read since the last cycle ended, and the attempt ledger is
+	 * clear. `handoffClaimCheck` runs it without taking a claim, so a start
+	 * that already fails never enters the Work queue; `claimHandoff` runs it
+	 * again inside its own transaction before it writes the attempt. A rule
+	 * that stands at one moment cannot disagree with the other.
+	 *
+	 * The caller reads the ticket row in its own moment and passes it in, so
+	 * the two moments ask the same question of one row.
 	 */
-	handoffClaimCheck(
+	private handoffGates(
+		ticket: { state: TicketState; work_cycle: number } | undefined,
 		ticketIdentity: string,
 		origin: HandoffOrigin,
-	): { ok: true } | { ok: false; reason: string } {
-		const ticket = this.db
-			.prepare("SELECT state FROM tickets WHERE identity = ?")
-			.get(ticketIdentity) as { state: TicketState } | undefined;
+	): { ok: true; workCycle: number } | { ok: false; reason: string } {
 		if (ticket == null) return { ok: false, reason: "ticket no longer exists" };
 		if (origin === "open") {
 			if (ticket.state !== "open")
@@ -2574,6 +2579,10 @@ export class FactoryState {
 					ok: false,
 					reason: "Ticket is not actionable because source data is stale, removed, or absent",
 				};
+			// The cycle the ticket just ended may have changed its source item
+			// (the agent merged the pull request, or closed the issue). The start
+			// waits for the sources to re-read it, so a handoff never starts on
+			// facts the agent made stale.
 			if (!this.sourceReverifiedSinceCycleEnd(ticketIdentity))
 				return {
 					ok: false,
@@ -2593,7 +2602,23 @@ export class FactoryState {
 			};
 		if (this.hasUnresolvedAttempt(ticketIdentity))
 			return { ok: false, reason: "handoff recovery is required before another handoff" };
-		return { ok: true };
+		return { ok: true, workCycle: ticket.work_cycle };
+	}
+
+	/**
+	 * The hard start check at the ask (ADR 0049): the claim's gates without the
+	 * claim. A start that already fails refuses to enter the Work queue, and
+	 * the warning stands on the Message line at the ask.
+	 */
+	handoffClaimCheck(
+		ticketIdentity: string,
+		origin: HandoffOrigin,
+	): { ok: true } | { ok: false; reason: string } {
+		const ticket = this.db
+			.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
+			.get(ticketIdentity) as { state: TicketState; work_cycle: number } | undefined;
+		const gates = this.handoffGates(ticket, ticketIdentity, origin);
+		return gates.ok ? { ok: true } : gates;
 	}
 
 	/** Claim before the first external command. It rechecks all eligibility atomically. */
@@ -2603,46 +2628,8 @@ export class FactoryState {
 				const ticket = this.db
 					.prepare("SELECT state, work_cycle FROM tickets WHERE identity = ?")
 					.get(ticketIdentity) as { state: TicketState; work_cycle: number } | undefined;
-				if (ticket == null) return { ok: false, reason: "ticket no longer exists" };
-				if (origin === "open") {
-					if (ticket.state !== "open")
-						return {
-							ok: false,
-							reason: `only open tickets can be handed off (this one is ${ticket.state})`,
-						};
-					const eligible = this.db
-						.prepare(
-							`SELECT 1 FROM memberships m JOIN source_health h ON h.source_name = m.source_name WHERE m.ticket_identity = ? AND m.active = 1 AND h.health = 'healthy' LIMIT 1`,
-						)
-						.get(ticketIdentity);
-					if (eligible == null)
-						return {
-							ok: false,
-							reason: "Ticket is not actionable because source data is stale, removed, or absent",
-						};
-					// The cycle the ticket just ended may have changed its source
-					// item (the agent merged the pull request, or closed the
-					// issue). The claim waits for the sources to re-read it, so
-					// the handoff never starts on facts the agent made stale.
-					if (!this.sourceReverifiedSinceCycleEnd(ticketIdentity))
-						return {
-							ok: false,
-							reason:
-								"the ticket's source has not been re-read since its last cycle ended; wait for the source refresh",
-						};
-				}
-				if (origin === "workflow" && ticket.state !== "awaiting" && ticket.state !== "open")
-					return {
-						ok: false,
-						reason: `only open or awaiting tickets can be handed off along a workflow (this one is ${ticket.state})`,
-					};
-				if (origin === "restart" && ticket.state !== "handed-off" && ticket.state !== "running")
-					return {
-						ok: false,
-						reason: `only in-flight tickets can be restarted (this one is ${ticket.state})`,
-					};
-				if (this.hasUnresolvedAttempt(ticketIdentity))
-					return { ok: false, reason: "handoff recovery is required before another handoff" };
+				const gates = this.handoffGates(ticket, ticketIdentity, origin);
+				if (!gates.ok) return gates;
 				const attemptId = randomUUID();
 				this.db
 					.prepare(
@@ -2651,7 +2638,7 @@ export class FactoryState {
 					.run(
 						attemptId,
 						ticketIdentity,
-						ticket.work_cycle,
+						gates.workCycle,
 						JSON.stringify(choice),
 						new Date(this.now()).toISOString(),
 					);

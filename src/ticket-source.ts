@@ -189,7 +189,6 @@ class GitHubTicketSource implements TicketSource {
 	/** Read one search query to completion. A failure means the snapshot is incomplete. */
 	private async fetchQuery(searchQuery: string, options: GhOptions): Promise<QueryResult> {
 		const tickets: FetchedTicket[] = [];
-		const references: IssueReference[] = [];
 		let cursor: string | undefined;
 		let issueCount: number | undefined;
 		for (;;) {
@@ -225,9 +224,8 @@ class GitHubTicketSource implements TicketSource {
 				// never sees it at all.
 				if (normalized.blocked) continue;
 				tickets.push(normalized.ticket);
-				references.push(...normalized.references);
 			}
-			if (!page.hasNextPage) return { status: "success", tickets, references };
+			if (!page.hasNextPage) return { status: "success", tickets };
 			if (page.endCursor === undefined)
 				return { status: "failed", reason: "GitHub returned a next page without a cursor" };
 			cursor = page.endCursor;
@@ -330,9 +328,10 @@ function parseSearchPage(text: string): Page {
 	};
 }
 
-/** One search page's tickets and the references the pull requests closed. */
+/** One search page's tickets. The pull request's closing references ride on
+ * each ticket's own attributes (ADR 0050): the page carries no separate list. */
 type QueryResult =
-	| { status: "success"; tickets: FetchedTicket[]; references: IssueReference[] }
+	| { status: "success"; tickets: FetchedTicket[] }
 	| { status: "failed"; reason: string };
 
 /** The labels of one node's label connection, or undefined when unreadable. */
@@ -349,7 +348,11 @@ function labelNamesOf(raw: unknown): string[] | undefined {
 }
 
 /**
- * The pull request's closing-issue references from a search node (ADR 0023).
+ * The pull request's closing-issue references from a search node (ADR 0042).
+ *
+ * ADR 0050 retired the rank these references used to carry and kept the
+ * link: the fixing pull request rule and the linked-pull-request lookup
+ * read it.
  *
  * The references are secondary facts: a reference without a readable
  * number is skipped, and a reference the response leaves without a node
@@ -378,9 +381,7 @@ function parseClosingReferences(raw: unknown, host: string): IssueReference[] {
 function normalizeGitHubNode(
 	node: unknown,
 	config: TicketSourceConfig,
-):
-	| { ok: true; ticket: FetchedTicket; references: IssueReference[]; blocked: boolean }
-	| { ok: false; reason: string } {
+): { ok: true; ticket: FetchedTicket; blocked: boolean } | { ok: false; reason: string } {
 	const item = node as Record<string, unknown>;
 	const expectedTypename = config.kind === "github-issues" ? "Issue" : "PullRequest";
 	// The search query and this result check both enforce the configured kind.
@@ -431,7 +432,7 @@ function normalizeGitHubNode(
 	)
 		return { ok: false, reason: "GitHub returned an unreadable pull request" };
 	// The pull request's closing-issue references, stored as source facts on
-	// its membership (ADR 0023). A refresh can change them.
+	// its membership (ADR 0042). A refresh can change them.
 	const references =
 		config.kind === "github-pull-requests"
 			? parseClosingReferences(item.closingIssuesReferences, config.host)
@@ -470,7 +471,6 @@ function normalizeGitHubNode(
 					? withHeadBranch(withIssueReferences({ draft: String(isDraft) }, references), headRefName)
 					: {},
 		},
-		references,
 		blocked,
 	};
 }

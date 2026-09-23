@@ -128,7 +128,7 @@ The keys the override panel answers with live on the
 The Main view is one surface with three list sections, the Ticket section
 on top, the Consultation section below it, and the Work section below
 that, and one context-dependent detail pane on the right (ADR 0019, and
-ADR 0034 for the Work section). The Ticket and Consultation sections start
+ADR 0034 for the Work section). All three sections start
 expanded, and the detail pane shows the detail of whichever item the
 cursor holds: the ticket detail on a ticket, the Consultation detail on a
 Consultation, and the queued start's captured choice on a Work row. The
@@ -140,11 +140,14 @@ rows leave the navigation flow, and the same toggle restores it. A collapsed
 section keeps its list selection, and the selection and detail of a collapsed
 section survive the collapse, so a re-expand shows the same place. The rows
 run: the mode line (while the control plane has state to observe), the
-Ticket header across the full terminal width, the two sections' list panes
-stacked on the left with the Consultation header between them, the detail
+Ticket header across the full terminal width, the three sections' list panes
+stacked on the left with each section's own header between its pane and the
+next, the detail
 pane on the right, the Message line, and the Action bar. The focused
-section takes the remaining rows after the other section claims its minimum
-of three content rows, so the list the operator works in gets the room. The
+section takes the remaining rows after the other two sections claim their
+minimum of three content rows, so the list the operator works in gets the
+room. The floor this sets is 27 rows (ADR 0049): the shortest terminal the
+control plane draws its three sections at. The
 Ticket header always shows the pipeline counts - open, running, and awaiting,
 in the labelled form on a terminal of at least 60 columns and the short form
 below - and appends the held count with its bell marker only when it is

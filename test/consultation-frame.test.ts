@@ -3036,6 +3036,69 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		}
 	});
 
+	/**
+	 * ADR 0052: the queue pause holds the drain, a Consultation's item and a
+	 * Handoff's alike. The seat stands free here on purpose - the pause, not
+	 * the cap, is what holds the pickup - and the submit's own line says so
+	 * instead of promising a seat that will not come.
+	 */
+	test("the queue pause holds a Consultation's item with a free seat, and the submit says why", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// No seeded Consultation: nothing holds the one seat.
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		state.setQueuePaused(true);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					const frame = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					// The line names the pause as the reason the item waits, not the
+					// cap: the seat is free, and the pickup is what stands down.
+					expect(messageRowOf(frame)).toContain(
+						`consultation queued: ${queued.id.slice(0, 8)} waits in the Work queue; the queue is paused`,
+					);
+					expect(messageRowOf(frame)).not.toContain("Parallel limit seat");
+					// The Work section carries the item and the pause on its header.
+					expect(frame).toContain("waiting: 1");
+					expect(frameText(frame)).toContain("paused");
+					// And the pause held it: the record is still `queued`, its item
+					// still stands, and the enqueue ran no external step.
+					expect(state.workQueue()).toEqual([
+						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
+					]);
+					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("key w abandons a queued Consultation and takes its item out of the queue", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);

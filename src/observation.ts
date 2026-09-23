@@ -1111,6 +1111,11 @@ export class ObservationCoordinator {
 		// until then.
 		if (isHeldCompletion(completion)) return false;
 		const decision = this.decideAwaiting(this.state.handoffCount(ticket.ticketIdentity), outcome);
+		// The one route rule, read at both walks (ADR 0051): this walk closes
+		// what the machine resolves, and `continuationPosition` asks the same
+		// answer for what it enqueues. A `route` rests for the top-up and a
+		// `park` rests for the operator; neither closes here, and neither
+		// re-derives the condition.
 		if (decision !== "close") return false;
 		const decidedAt = new Date(this.now()).toISOString();
 		const applied = this.state.applyCompletionDecision({
@@ -1418,11 +1423,15 @@ export class ObservationCoordinator {
 
 	/**
 	 * The position a settled awaiting ticket's latest turn routes to, or null
-	 * when no continuation stands: the turn fired a transition that
-	 * auto-advances, its label write landed, and the position still offers
-	 * the task the outcome names - open or awaiting, actionable, wearing the
-	 * labels, holding no handoff, no queue item, and no unfinished attempt,
-	 * under its handoff limit, and past the Same-type hold.
+	 * when no continuation stands: the automatic rule answers `route` for the
+	 * turn (ADR 0051), the position the outcome names still offers the task it
+	 * names - open or awaiting, actionable, wearing the labels, holding no
+	 * handoff, no queue item, and no unfinished attempt, under its handoff
+	 * limit, and past the Same-type hold.
+	 *
+	 * The route itself is never re-derived here. `decideAwaiting` is the one
+	 * rule both walks read: the awaiting walk that closes what the machine
+	 * resolves, and this walk that enqueues what it does not.
 	 */
 	private continuationPosition(ticket: Ticket): Ticket | null {
 		const config = this.config();
@@ -1430,15 +1439,11 @@ export class ObservationCoordinator {
 		if (completion === null || completion.decision !== null) return null;
 		if (isHeldCompletion(completion)) return null;
 		const outcome = completion.transition ?? null;
-		if (
-			outcome === null ||
-			outcome.fired !== true ||
-			outcome.autoAdvance !== true ||
-			outcome.writeFailure !== "" ||
-			outcome.positionTaskType === null ||
-			outcome.positionTicketIdentity === null
-		)
+		if (this.decideAwaiting(this.state.handoffCount(ticket.identity), outcome) !== "route")
 			return null;
+		// The rule says a position exists; only this walk needs its identity to
+		// read the row, so the check stays here.
+		if (outcome === null || outcome.positionTicketIdentity === null) return null;
 		const position = this.state
 			.projectedTickets(config.workflowStates, config.defaultTaskType)
 			.find((candidate) => candidate.identity === outcome.positionTicketIdentity);

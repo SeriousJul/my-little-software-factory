@@ -2723,7 +2723,7 @@ export function App({
 					state.setQueuePaused(next);
 					setQueuePaused(next);
 					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
-					if (!next) handoffDispatch?.pickupWorkQueue();
+					if (!next) void handoffDispatch?.pickupWorkQueue();
 				},
 				// Enter on a Ticket or Consultation row that waits in the Work
 				// queue (ADR 0049): the cursor jumps to the item's row, where the
