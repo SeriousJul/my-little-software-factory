@@ -31,41 +31,78 @@ export default {
 		// imports the whole control library, so they reach the frame tests.
 		"!src/components/shared/gallery.ts",
 	],
-	// The shared control architecture test reads production source as text and
-	// counts the shapes it finds. Instrumentation rewrites exactly those
-	// shapes, so under mutation the test fails on a text change rather than on
-	// a behavior change: it would kill every mutant in every file it reads and
-	// inflate the score it reports. It stays in `bun run test`, which reads the
-	// uninstrumented tree.
-	ignorePatterns: [".codegraph", ".pi", "test/shared-control-architecture.test.ts"],
-	reporters: ["clear-text", "progress", "html"],
+	ignorePatterns: [
+		// This checkout's code-index directory - 38 MB in the main worktree, and
+		// rewritten while a campaign runs. The suite never reads it.
+		".codegraph",
+		// The Agent session data a worktree carries. Also not a test input.
+		".pi",
+		// The shared control architecture test reads production source as text and
+		// counts the shapes it finds. Instrumentation rewrites exactly those
+		// shapes, so under mutation the test fails on a text change rather than on
+		// a behavior change: it would kill every mutant in every file it reads and
+		// inflate the score it reports. It stays in `bun run test`, which reads the
+		// uninstrumented tree.
+		"test/shared-control-architecture.test.ts",
+	],
+	// "json" is the machine-readable report: a future `break` gate and any
+	// campaign-to-campaign diff read `reports/mutation/mutation.json`, so it is
+	// written beside the HTML one rather than reconstructed from the terminal.
+	reporters: ["clear-text", "progress", "html", "json"],
+	// The base of the campaign's working tree. `scripts/mutate.sh` hands Stryker a
+	// `--tempDirName` under it for each run, so a campaign cleans its own dir and
+	// not a sibling campaign's; this value is what a direct `stryker run` uses.
 	tempDirName: ".stryker-tmp",
+	// "always": the sandbox goes even when a mutant run ends the campaign badly.
+	// The entry point's own removal covers the case this cannot: a child that dies
+	// on a native crash never reaches Stryker's JavaScript cleanup.
 	cleanTempDir: "always",
-	// One `bun test` child holds about 250 MB resident and runs its tests one at
-	// a time, so a campaign peaks near this number times 250 MB. Measured on 32
-	// cores: 8 workers ran 814 mutants of session-record and domain logic (10
-	// tests per mutant on average) in 11 minutes, and 16 workers ran 913 mutants
-	// of the shared control library (47 tests per mutant on average) in 22
-	// minutes. The campaign is CPU-bound before it is memory-bound, so raise
-	// this on a machine that is doing nothing else, not because the children
-	// need room.
-	concurrency: 8,
-	// A mutant run may take no longer than the time its own covering tests
-	// took in the initial run plus this slack. The slack bounds how long a
-	// mutant that hangs a test - a loop whose end test was removed, a promise
-	// that is never awaited - costs the campaign before it is reported as a
-	// timeout.
+	// A quarter of the machine's logical cores, floored at one: Stryker turns the
+	// percentage into `max(1, round(cores * 25 %))` (concurrency-token-provider.js),
+	// which is the measured 8 on the 32-core machine these numbers come from and
+	// holds a smaller machine at its own scale. One `bun test` child holds about
+	// 250 MB resident and runs its tests one at a time, so a campaign peaks near
+	// this number times 250 MB. Measured on 32 cores: 8 workers ran 814 mutants of
+	// session-record and domain logic (10 tests per mutant on average) in 11
+	// minutes, and 16 workers ran 913 mutants of the shared control library (47
+	// tests per mutant on average) in 22 minutes. The campaign is CPU-bound before
+	// it is memory-bound, so raise the share on a machine that is doing nothing
+	// else, not because the children need room.
+	concurrency: "25%",
+	// The initial run is the whole suite in one instrumented serial process, and
+	// core bounds it: Stryker wraps every test runner in its TimeoutDecorator and
+	// races this number against the dry run (3-dry-run-executor.js, then
+	// timeout-decorator.js). 10 minutes, not the 5-minute default, because the
+	// measured run is 3 minutes 31 seconds: the default would leave about 85
+	// seconds of headroom on a machine this record calls busy. Measured here:
+	// `--dryRunTimeoutMinutes=0.5` cut the initial run at 30 seconds with
+	// `bun.timeout` still at 300_000. The initial run's real bound is the tighter
+	// of this number and the plugin's child bound below, so with 10 minutes here
+	// it is the plugin's 330 seconds that governs.
+	dryRunTimeoutMinutes: 10,
+	// The fixed part of a mutant run's bound: core plans it as
+	// `timeoutFactor * netTime + timeoutMS + overhead` (mutant-test-planner.js),
+	// where `netTime` is what that mutant's own covering tests took in the initial
+	// run and `timeoutFactor` is core's own 1.5. So this is a flat slack on top of
+	// that, and it bounds how long a mutant that hangs a test - a loop whose end
+	// test was removed, a promise that is never awaited - costs the campaign
+	// before the run is reported as a timeout. The plugin's child kill below
+	// bounds the same run from the other side.
 	timeoutMS: 60_000,
 	bun: {
-		// The plugin's kill bound for one `bun test` child, and the bound that
-		// governs the initial run: the plugin adds a fixed 30 seconds for its
-		// inspector drain and holds this one number for the initial run and for
-		// every mutant run, and it does not use core's own `dryRunTimeoutMinutes`
-		// for the initial run. So it has to clear the initial run, which measures
-		// 3 minutes 31 seconds here (see the ADR), while Stryker's `timeoutMS`
-		// above is what cuts off a mutant run that hangs. The plugin also answers
-		// a child that outlives its parent and signals the whole process group on
-		// a kill, so a timed-out mutant leaves no `bun test` behind.
+		// The plugin's kill bound for one `bun test` child. It holds this one number
+		// for a mutant run, and the initial run gets it plus a fixed 30 seconds the
+		// plugin allows itself for the inspector drain (dist/index.js: `timeout:
+		// this.timeout + DRAIN_ACK_ABSOLUTE_CEILING_MS`), so 300_000 here is a 330
+		// second bound on the initial run and a 300 second one on each mutant run.
+		// `dryRunTimeoutMinutes` above is core's own second bound on the initial
+		// run, and the tighter of the two governs. Measured directly: an initial run
+		// with `bun.timeout` at 30 seconds died at 61 seconds, and one with
+		// `--dryRunTimeoutMinutes=0.5` died at 30 seconds with this value at
+		// 300_000. Underneath both, Stryker's plan above is what cuts a mutant run
+		// that hangs. The plugin also answers a child that outlives its parent and
+		// signals the whole process group on a kill, so a timed-out mutant leaves no
+		// `bun test` behind.
 		timeout: 300_000,
 	},
 	thresholds: {

@@ -20,19 +20,91 @@
 # native crash kills the runner before its JavaScript runs. The trap covers the
 # path the script's last line cannot: a cancelled campaign dies on a signal
 # before it reaches that line, and the EXIT trap still runs. An operator who
-# passes Stryker's own `--cleanTempDir` option wants the sandbox kept to look
-# inside it, so the trap stands down for a `--cleanTempDir=false` call.
+# asks Stryker to keep the temp dir wants the sandbox to look inside it, so the
+# trap stands down for the values that ask it: `false` and `0`, which is exactly
+# what Stryker's own option parser reads as "never delete" (parseCleanDirOption),
+# plus `never`, which that parser does not define and which this stand-down
+# therefore honors on its own. `true` and `always` ask Stryker to delete the tree,
+# and the trap stays armed for them.
+#
+# Each campaign takes a temp dir of its own, named for this process, because
+# Stryker's temp dir is one tree that a cleanup deletes whole: two campaigns in
+# one checkout destroy each other's sandbox. Measured on this branch, a campaign
+# that ran beside another in the same worktree reported 3 of its 9 mutants as
+# errors. The per-campaign dir also means the removal below can never name a tree
+# this campaign did not create.
 
 set -u
 
-cd "$(dirname "$0")/.."
+# Every path this script touches hangs off the repository root above it, and the
+# removal below is the one destructive thing it does, so the root is taken once,
+# absolutely, and the removal is anchored to it.
+repo_root="$(cd "$(dirname "$0")/.." && pwd)" || {
+	echo "mutate: cannot enter the repository root above scripts/." >&2
+	exit 1
+}
+cd "$repo_root" || {
+	echo "mutate: cannot change into $repo_root." >&2
+	exit 1
+}
 
+# The campaign's own temp dir, and the two requests read out of the caller's
+# arguments that decide what happens to it: Stryker's `--cleanTempDir`, and a
+# `--tempDirName` that names a tree of the caller's instead.
+temp_dir=".stryker-tmp/campaign-$$"
 keep_temp=0
-for arg in "$@"; do
-	case "$arg" in --cleanTempDir=*) keep_temp=1 ;; esac
+temp_dir_from_caller=0
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+	value=""
+	case "${args[i]}" in
+		--cleanTempDir=*) value="${args[i]#--cleanTempDir=}" ;;
+		# Commander takes a value option in the separated form too, so
+		# `--cleanTempDir false` is the same request as `--cleanTempDir=false`.
+		--cleanTempDir)
+			i=$((i + 1))
+			value="${args[i]:-}"
+			;;
+		--tempDirName=*)
+			temp_dir_from_caller=1
+			temp_dir="${args[i]#--tempDirName=}"
+			continue
+			;;
+		--tempDirName)
+			temp_dir_from_caller=1
+			i=$((i + 1))
+			temp_dir="${args[i]:-}"
+			continue
+			;;
+	esac
+	# Stryker lowercases the value before it reads it, so the match does too.
+	case "${value,,}" in false | 0 | never) keep_temp=1 ;; esac
 done
-if [ "$keep_temp" -eq 0 ]; then
-	trap 'rm -rf .stryker-tmp' EXIT
+
+if [ "$temp_dir_from_caller" -eq 0 ]; then
+	args+=("--tempDirName=$temp_dir")
+fi
+
+# The tree the removal may name: this campaign's own, under `.stryker-tmp`, and
+# nothing a caller located outside it. An absolute or oddly-located
+# `--tempDirName` is a tree this script did not choose and will not delete.
+remove_target=""
+case "$temp_dir" in
+	.stryker-tmp/*)
+		if [ "$keep_temp" -eq 0 ]; then
+			remove_target="$repo_root/$temp_dir"
+		fi
+		;;
+	*)
+		if [ "$keep_temp" -eq 0 ]; then
+			echo "mutate: --tempDirName=$temp_dir names a tree outside .stryker-tmp, so this entry point leaves its cleanup to Stryker." >&2
+		fi
+		;;
+esac
+if [ -n "$remove_target" ]; then
+	# The campaign's dir first, then the parent, and only while it holds nothing
+	# else: `rmdir` fails on a tree another campaign is still using.
+	trap 'rm -rf "$remove_target"; rmdir "$repo_root/.stryker-tmp" 2>/dev/null || true' EXIT
 fi
 
 # The Bun test-runner plugin correlates a test run to its mutants through the
@@ -71,12 +143,17 @@ if ! version_ge "$have_bun" "$REQUIRED_BUN"; then
 	exit 1
 fi
 
-STRYKER_BIN=node_modules/@stryker-mutator/core/bin/stryker.js
+# The installed Stryker entry point, overridable so a test can aim this script at
+# its own stub instead of at a third party package's internal layout.
+STRYKER_BIN="${STRYKER_BIN:-node_modules/@stryker-mutator/core/bin/stryker.js}"
 if [ ! -f "$STRYKER_BIN" ]; then
 	echo "mutate: ${STRYKER_BIN} is missing. Run 'bun install' first." >&2
 	exit 1
 fi
 
-bash scripts/crash-guard.sh bun "$STRYKER_BIN" run "$@"
+bash "$repo_root/scripts/crash-guard.sh" bun "$STRYKER_BIN" run "${args[@]}"
 status=$?
+if [ "$keep_temp" -eq 1 ]; then
+	echo "mutate: the campaign's sandbox is kept under $temp_dir for inspection." >&2
+fi
 exit "$status"

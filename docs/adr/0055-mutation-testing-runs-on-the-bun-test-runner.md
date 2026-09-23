@@ -49,23 +49,40 @@ to any descendant of the command.
 **Mutation testing returns on StrykerJS 10 with the Bun test-runner plugin, and
 `bun run mutate` is its only entry.** `stryker.config.mjs` holds the campaign's
 shape and `scripts/mutate.sh` runs it under the crash guard and always removes
-the sandbox afterwards. The command refuses to start a campaign on a Bun older
-than `1.3.7`, the release the plugin's inspector correlation needs; the control
-plane's own `1.3.0` floor from ADR 0035 stands unchanged, because the higher
-floor belongs to the harness, not to the app.
+the sandbox its own campaign left. It stands down from that removal only for a
+request to keep the temp dir: `false` and `0`, the two values Stryker's own
+parser reads as "never delete", plus `never` spelled out, in the
+`--cleanTempDir=x` form and the separated `--cleanTempDir x` one. Each campaign
+gets a temp dir of its own under `.stryker-tmp`, named for its process, and the
+removal is anchored to that one directory: Stryker's cleanup deletes the whole
+temp dir it is handed, so a shared one is two campaigns in one checkout
+destroying each other's work. Measured on this branch before that change, a
+campaign that ran beside another in the same worktree reported 3 of its 9 mutants
+as errors. The command refuses to start a campaign on a Bun older than `1.3.7`,
+the release the plugin's inspector correlation needs; the control plane's own
+`1.3.0` floor from ADR 0035 stands unchanged, because the higher floor belongs to
+the harness, not to the app.
 
 **Both the runner's host process and every test child run on Bun.** Stryker's
 own process pool starts under `bun` and the plugin spawns `bun test` children,
 so a campaign needs no Node install and ADR 0035's two Node exceptions stay
 two: the `npm publish` of a release and the `npx` bootstrap. The runtime under
 test is the runtime the control plane ships on, which is the whole point of
-running a campaign at all.
+running a campaign at all. This is off the plugin's documented path, which
+states that Stryker runs on Node: it works because Bun answers `process.version`
+as a Node version (`v26.3.0` on the Bun 1.4.2 this records), and core's CLI
+begins by checking that number against its own `engines.node` floor
+(`guardMinimalNodeVersion()` in `@stryker-mutator/core/dist/src/stryker-cli.js`).
+That is the one seam this setup leans on: a Bun release that changes the Node
+version it reports stops `bun run mutate` at the first line of the CLI, with a
+message that names the Node version rather than the runtime it was started on.
 
 **The campaign keeps per-test coverage, and the plugin's inspector correlation
 is what pays for it.** Each mutant run executes only the tests that covered that
 mutant, and bails at the first failure. Measured, a mutant run averaged 10 tests
 for session-record and domain logic and 47 tests for the shared control library,
-against the 1,897 a coverage-blind runner would run for each one.
+against the whole suite's 1,897 a coverage-blind runner would run behind each one
+at that commit.
 
 **The campaign is an on-demand tool, not a push gate, and no scheduled job
 replaces the workstation.** CI stays `lint`, `typecheck`, and `test`. A full
@@ -102,11 +119,14 @@ survives the rewrite.
 ## Consequences
 
 - The setup is verified against this suite, not against a sample project. Four
-  campaigns and three dry runs measured on Bun 1.4.2: 1,765 mutants ran with
-  zero runner errors, and the whole-`src` dry run passed once the two adjustments
-  above landed. A campaign runs the real terminal tests and the real `bun:sqlite`
-  state tests, and the recorded scores and the incomplete checks stand in
-  [the verification record](../verification/mutation-testing.md).
+  campaigns and three dry runs measured on Bun 1.4.2: 1,765 mutants ran with zero
+  runner errors, and the whole-`src` dry run passed once the two adjustments above
+  landed. The rework of this branch's review re-ran campaigns over `src/fs.ts`,
+  `src/lines.ts`, and `src/herdr.ts` after each change, ending with two side by
+  side in one checkout, and cancelled one dry run on purpose to measure the
+  initial run's bound. A campaign runs the real terminal tests and the real
+  `bun:sqlite` state tests, and the recorded scores and the incomplete checks
+  stand in [the verification record](../verification/mutation-testing.md).
 - The budget, measured: 8 workers ran 814 mutants in 11 minutes of mutant time
   (about 4,400 mutants per hour) and 16 workers ran 913 mutants in 22 minutes
   (about 2,500 per hour) for a library whose mutants reach more tests. `src`
@@ -118,19 +138,34 @@ survives the rewrite.
 - Those hours are an extrapolation from two slices. The whole campaign has not
   been run end to end, so this ADR records no whole-`src` mutation score and no
   baseline to gate on. The two measured slices scored 79.48 % (session-record
-  parsing and the domain modules, 645 of 814 killed, 23 with no coverage) and
-  63.20 % (the shared control library, 573 of 913 killed, 49 with no coverage),
-  which says where the first gaps stand, not what the plane's score is.
+  parsing and the domain modules: of 814 mutants, 645 killed, 2 timed out, 144
+  survived, 23 with no coverage) and 63.20 % (the shared control library: of 913
+  mutants, 573 killed, 4 timed out, 287 survived, 49 with no coverage). Stryker's
+  score puts the timeouts in the numerator, so the two read as 647 of 814 and
+  577 of 913. That says where the first gaps stand, not what the plane's score
+  is.
 - The initial run is the whole suite in one process with no `--parallel`, so it
-  costs 3 minutes 31 seconds against the 38 seconds `bun run test` takes. The
-  plugin holds one child-kill bound for the initial run and for every mutant run
-  (`bun.timeout`, plus a fixed 30 seconds it allows itself for the inspector
-  drain), and it ignores core's own `dryRunTimeoutMinutes` for the initial run:
-  the value reaches the plugin's `dryRun` and goes unused. So `bun.timeout` is
-  what has to clear the initial run, and Stryker's `timeoutMS` is what cuts a
-  mutant run that hangs underneath it. Measured directly: an initial run with
-  `bun.timeout` at 30 seconds died at 61 seconds, not at core's 5-minute
-  `dryRunTimeoutMinutes`.
+  costs 3 minutes 25 seconds to 3 minutes 31 seconds against the 38 seconds
+  `bun run test` takes. Two bounds stand over it and the tighter one governs.
+  Core computes `dryRunTimeoutMinutes * 60 000`, hands it to the test runner as
+  the dry run's `timeout`, and races that number itself: the runner core calls is
+  wrapped in `TimeoutDecorator` (`3-dry-run-executor.js`, then
+  `timeout-decorator.js`), which returns `DryRunStatus.Timeout` when it expires.
+  Underneath it, the plugin kills its own child at `bun.timeout` plus a fixed 30
+  seconds it allows itself for the inspector drain, and holds `bun.timeout` alone
+  for every mutant run. So on `bun.timeout: 300_000` and core's 5-minute default
+  the initial run's real bound was 300 seconds against a measured 205 to 211
+  second run: about 85 to 95 seconds of headroom on a machine the verification
+  record describes as busy, and a bound the config never set. It now sets
+  `dryRunTimeoutMinutes: 10`, which puts the plugin's 330 seconds in front and
+  leaves the campaign's own hours untouched. Measured directly, both ways: an
+  initial run with `bun.timeout` at 30 seconds died at 61 seconds, and one with
+  `--dryRunTimeoutMinutes=0.5` died at 30 seconds with `bun.timeout` still at
+  300_000. A mutant run is bounded the same two ways: core plans
+  `timeoutFactor * netTime + timeoutMS + overhead` for the tests that covered that
+  mutant (`mutant-test-planner.js`, `timeoutFactor` at core's own 1.5) and the
+  plugin's `bun.timeout` holds over the child. `timeoutMS: 60_000` is the flat
+  slack inside core's plan, not a bound on its own.
 - A third-party package with one maintainer and a short history now owns the
   plane's mutation testing, at roughly 98,000 monthly downloads and Apache-2.0. A
   Stryker major bump is a plugin compatibility check before it is a dependency
@@ -145,7 +180,13 @@ survives the rewrite.
   constant the plane's frames read, and dropping 4 % of the mutants to save time
   is the trade this ADR already declined once, in the same direction, for the
   gallery.
-- `bun run mutate` writes reports under `reports/` and its sandbox under
-  `.stryker-tmp`; both patterns were already ignored from the removed setup, and
-  the script removes the sandbox even when the runner dies before its own
-  cleanup.
+- `bun run mutate` writes its reports under `reports/mutation` (`mutation.html`
+  for a person, `mutation.json` for a program) and its sandbox under
+  `.stryker-tmp/campaign-<pid>`. Both patterns were already ignored from the
+  removed setup, and the script removes its own campaign's directory even when
+  the runner dies before its own cleanup. Nothing outside the tree the command was
+  started in is written to: it resolves its own repository root, and the suite's
+  harness test runs a copy of the script in a directory of its own so a campaign
+  that is live in a worktree keeps its sandbox. Two campaigns in one checkout run
+  side by side without touching each other, and the reports are the one thing they
+  still share: the last run to finish owns `reports/mutation`.
