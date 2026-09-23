@@ -11,6 +11,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | `bun run test`        | Run the full test suite                                |
 | `bun run test:changed`| Run only the test files the current changes affect     |
 | `bun run gallery`     | Run the shared control gallery, using the real modules |
+| `bun run mutate`      | Run a Stryker mutation campaign over `src`             |
 | `bun run lint`        | Lint and check formatting with Biome                   |
 | `bun run fmt`         | Lint, format, and fix with Biome                       |
 | `bun run typecheck`   | Typecheck with TypeScript                              |
@@ -37,6 +38,17 @@ test:changed`. The run covers committed changes against the base, uncommitted
 edits, and untracked test files, and it works on a detached head, so a herdr
 worktree gets the same tool. A clean, up-to-date worktree matches nothing, and
 the run says so.
+
+## Mutation testing
+
+`bun run mutate` rewrites one expression at a time in `src` and runs the suite
+against the rewritten copy, to answer the question a passing suite cannot: would
+the tests notice a wrong program. A full campaign takes hours, so it is not part
+of the push gate, and a run usually picks its own scope:
+`bun run mutate -- "--mutate=src/domain/**"`. See
+[mutation testing](./mutation-testing.md) for what a campaign measures and what
+it costs, and [ADR 0055](../adr/0055-mutation-testing-runs-on-the-bun-test-runner.md)
+for the setup and the measured budget.
 
 ## Shared control gallery
 

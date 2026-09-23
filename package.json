@@ -23,6 +23,7 @@
 		"font": "bun scripts/generate-screen-font.ts && biome check --write scripts/screen-font.ts",
 		"screenshots": "bun scripts/generate-screenshots.ts",
 		"hero": "bun scripts/generate-herdr-hero.ts",
+		"mutate": "bash scripts/mutate.sh",
 		"lint": "biome check .",
 		"fmt": "biome check --write .",
 		"typecheck": "tsc"
@@ -39,6 +40,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.11",
+		"@hughescr/stryker-bun-runner": "^1",
+		"@stryker-mutator/core": "^10",
 		"@types/bun": "^1.3.4",
 		"@types/react": "^19.2.0",
 		"fontkit": "^2.0.4",

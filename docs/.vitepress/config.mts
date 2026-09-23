@@ -115,7 +115,7 @@ const PAGE_ORDER: Record<string, string[]> = {
 	"getting-started": ["prerequisites.md", "first-launch.md", "minimal-config.md"],
 	operation: ["main-view.md", "consultation.md", "modals.md", "live-view.md"],
 	"work-flow": ["handoffs.md", "completion.md"],
-	development: ["commands.md", "shared-controls.md", "labels.md"],
+	development: ["commands.md", "mutation-testing.md", "shared-controls.md", "labels.md"],
 };
 
 function orderPages(folder: string, files: string[]): string[] {
