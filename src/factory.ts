@@ -35,8 +35,9 @@ if (decision.kind === "usage") {
 	process.stderr.write(`${decision.reason}\n`);
 	process.exit(1);
 }
-
-const startup = await runStartup(argv);
+// The boot loads the path this decision settled: the argument list is parsed
+// once, here.
+const startup = await runStartup(decision.configPath);
 for (const line of startup.ok ? startup.notes : startup.lines) {
 	process.stderr.write(`${line}\n`);
 }

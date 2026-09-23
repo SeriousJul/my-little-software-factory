@@ -1,5 +1,5 @@
 /**
- * The decisions and steps that install the prebuilt binary.
+ * The decisions and steps that install and run the prebuilt binary.
  *
  * The prebuilt binary is the executable the operator's machine runs
  * (ADR 0056): the release build compiles it per target, and the npm package
@@ -12,11 +12,24 @@
  * Plain JavaScript on purpose: the published package runs on Node, where a
  * .ts module is not a file the runtime reads. The unit tests pin the
  * decisions from here, the way they pin the runtime support from
- * src/runtime-support.mjs; the network and the exec live in the bin's run
- * section.
+ * src/runtime-support.mjs: the whole run, `runInstaller` included, reads the
+ * machine's facts and takes the network and the child process as injected
+ * values, so the bin is the entry plus the entry guard and the process exits.
  */
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 /** The repository the release workflow publishes from. */
@@ -24,6 +37,9 @@ export const RELEASE_REPO = "SeriousJul/my-little-software-factory";
 
 /** The directory the installed binary lives in, under the data home. */
 export const DATA_DIR = "my-little-software-factory";
+
+/** The subdirectory of the data directory the installed binaries live under. */
+export const BIN_SUBDIR = "bin";
 
 /** Every target the release publishes, in the order the checksums list them. */
 export const TARGETS = [
@@ -35,6 +51,13 @@ export const TARGETS = [
 	"darwin-arm64",
 	"windows-x64",
 ];
+
+/**
+ * How long one download may take before the installer gives up on it. The
+ * release's binary is a whole Bun runtime plus the app, so the bound is
+ * generous; it exists so a stalled network cannot hang the run forever.
+ */
+export const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /**
  * The target the machine runs, or null where the release carries none.
@@ -99,14 +122,24 @@ export function checksumMatches(checksumText, fileName, digestHex) {
 	return false;
 }
 
-/** The directory the installed binary lives in, under the machine's data home. */
-export function installDirFor(facts) {
+/**
+ * The directory one target's installed binary lives in, under the machine's
+ * data home.
+ *
+ * The target id is part of the path: two machines of different architecture
+ * that share one home - an NFS home, a moved profile - must not read each
+ * other's note and exec a binary their kernel cannot run.
+ */
+export function installDirFor(facts, targetId) {
+	if (targetId === undefined || targetId === "") {
+		throw new Error("the install directory needs the machine's target id");
+	}
 	if (facts.platform === "win32") {
 		const local = facts.localAppData ?? join(facts.homedir, "AppData", "Local");
-		return join(local, DATA_DIR);
+		return join(local, DATA_DIR, BIN_SUBDIR, targetId);
 	}
 	const base = facts.xdgDataHome ?? join(facts.homedir, ".local", "share");
-	return join(base, DATA_DIR);
+	return join(base, DATA_DIR, BIN_SUBDIR, targetId);
 }
 
 /** The installed binary's file name, per target. */
@@ -114,25 +147,109 @@ export function binaryNameFor(targetId) {
 	return targetId.startsWith("windows") ? "factory.exe" : "factory";
 }
 
-/** The version note beside the installed binary. */
-export function sidecarPathFor(binaryPath) {
-	return `${binaryPath}.version`;
+/** The install note beside the installed binary. */
+export function notePathFor(binaryPath) {
+	return `${binaryPath}.install`;
 }
 
 /**
- * Whether a run takes the download step: the binary is absent, or its
- * version note names a version other than the one the package carries.
- * The sidecar's absence is a re-download: a binary without its note is a
- * binary the launcher cannot trust to be the one it wants.
+ * The install note's text: the version, the target, and the binary's
+ * SHA-256, one `key=value` per line. The digest is what lets a later run
+ * check the cached bytes without the network.
  */
-export function needsInstall(facts) {
-	if (!facts.binaryExists) return true;
-	return facts.sidecarVersion !== facts.wantedVersion;
+export function formatInstallNote(record) {
+	return `version=${record.version}\ntarget=${record.targetId}\ndigest=${record.digest}\n`;
+}
+
+/**
+ * The install note as a value, or undefined where it cannot be trusted.
+ *
+ * A note the parser cannot read - missing, empty, a field absent, a digest
+ * that is not 64 hex digits - is no note: the run re-downloads rather than
+ * exec a binary it cannot account for.
+ */
+export function parseInstallNote(text) {
+	if (typeof text !== "string" || text === "") return undefined;
+	const fields = new Map();
+	for (const line of text.split(/\r?\n/)) {
+		if (line === "") continue;
+		const separator = line.indexOf("=");
+		if (separator < 0) return undefined;
+		fields.set(line.slice(0, separator), line.slice(separator + 1));
+	}
+	const version = fields.get("version");
+	const targetId = fields.get("target");
+	const digest = fields.get("digest");
+	if (typeof version !== "string" || version === "") return undefined;
+	if (typeof targetId !== "string" || targetId === "") return undefined;
+	if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest)) return undefined;
+	return { version, targetId, digest };
+}
+
+/** The note read from disk, or undefined where it is missing or unreadable. */
+export function readInstallNote(notePath) {
+	try {
+		return parseInstallNote(readFileSync(notePath, "utf8").trim());
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Whether the cached binary may run as it stands: the note names this
+ * version and this target, and the digest the note carries is the digest of
+ * the bytes on disk.
+ *
+ * A false answer is a re-download, never a failure: a note from another
+ * machine's target, a binary that was overwritten, and a damaged file all
+ * heal the same way.
+ */
+export function cacheIsCurrent(check) {
+	const { note, wantedVersion, wantedTargetId, cachedDigest } = check;
+	if (note === undefined) return false;
+	if (note.version !== wantedVersion) return false;
+	if (note.targetId !== wantedTargetId) return false;
+	if (cachedDigest === undefined) return false;
+	return cachedDigest.toLowerCase() === note.digest.toLowerCase();
 }
 
 /** The SHA-256 of a buffer, in the hex the checksum file carries. */
 export function sha256Hex(data) {
 	return createHash("sha256").update(data).digest("hex");
+}
+
+/**
+ * The SHA-256 of a file, read in chunks, or undefined where the file cannot
+ * be read. A release binary is a whole runtime, so the read never lands the
+ * whole file in memory.
+ */
+export function sha256HexOfFile(path) {
+	let handle;
+	try {
+		handle = openSync(path, "r");
+	} catch {
+		return undefined;
+	}
+	try {
+		const hash = createHash("sha256");
+		const chunk = Buffer.allocUnsafe(1024 * 1024);
+		let position = 0;
+		for (;;) {
+			const read = readSync(handle, chunk, 0, chunk.length, position);
+			if (read === 0) break;
+			hash.update(chunk.subarray(0, read));
+			position += read;
+		}
+		return hash.digest("hex");
+	} catch {
+		return undefined;
+	} finally {
+		try {
+			closeSync(handle);
+		} catch {
+			// The hash is already taken or already failed; the handle is not the run's problem.
+		}
+	}
 }
 
 /**
@@ -145,27 +262,48 @@ export function sha256Hex(data) {
  * tests pass a fake that serves from memory.
  */
 export async function installVerified(options) {
-	const { version, targetId, dir, platform, fetchImpl } = options;
+	const { version, targetId, dir, platform, fetchImpl, timeoutMs = DOWNLOAD_TIMEOUT_MS } = options;
 	const fetcher = fetchImpl ?? fetch;
 	const binaryName = binaryNameFor(targetId);
 	const binaryPath = join(dir, binaryName);
-	const sidecarPath = sidecarPathFor(binaryPath);
+	const notePath = notePathFor(binaryPath);
 	const assetName = assetFileName(version, targetId);
 
-	const checksumText = await downloadText(checksumUrl(version), fetcher, "checksum file");
-	const asset = await downloadBuffer(assetUrl(version, targetId), fetcher, `asset ${assetName}`);
-	if (!checksumMatches(checksumText, assetName, sha256Hex(asset))) {
+	const checksumText = await downloadText(
+		checksumUrl(version),
+		fetcher,
+		"checksum file",
+		timeoutMs,
+	);
+	const asset = await downloadBuffer(
+		assetUrl(version, targetId),
+		fetcher,
+		`asset ${assetName}`,
+		timeoutMs,
+	);
+	const digest = sha256Hex(asset);
+	if (!checksumMatches(checksumText, assetName, digest)) {
 		throw new Error(
 			`the downloaded ${assetName} does not match the release's SHA-256 checksum; nothing was installed`,
 		);
 	}
 
-	mkdirSync(dir, { recursive: true });
+	// The private mode keeps a shared home from letting another user plant a
+	// binary the next run would trust.
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const tempPath = `${binaryPath}.tmp-${process.pid}-${Date.now()}`;
 	try {
 		writeFileSync(tempPath, asset);
 		if (platform !== "win32") chmodSync(tempPath, 0o755);
-		renameSync(tempPath, binaryPath);
+		try {
+			renameSync(tempPath, binaryPath);
+		} catch (error) {
+			// On Windows the rename of a .exe another instance still runs is the
+			// busy case, and its raw code says nothing the operator can act on.
+			const line = renameFailureLine({ platform, binaryName, code: error?.code });
+			if (line !== undefined) throw new Error(line);
+			throw error;
+		}
 	} finally {
 		// A failed write leaves no temp file behind for the next run. A
 		// finished install has already renamed the temp away, so the name is
@@ -176,23 +314,140 @@ export async function installVerified(options) {
 			// The install failed already; a left-behind temp name is cosmetic.
 		}
 	}
-	writeFileSync(sidecarPath, `${version}\n`, "utf8");
+	writeFileSync(notePath, formatInstallNote({ version, targetId, digest }), {
+		encoding: "utf8",
+		mode: 0o600,
+	});
 	return binaryPath;
 }
 
+/**
+ * The whole run of the installer: resolve the target, reuse or install the
+ * cached binary, and hand it the operator's arguments.
+ *
+ * Everything it touches from the outside is a value: `facts` are the
+ * machine's, `argv` the operator's arguments, `fetchImpl` the network, and
+ * `exec` the child process.
+ * The function returns what the entry does - a line to show and a failure, an
+ * exit code, or a signal to re-raise - and never touches `process.exit`
+ * itself, so a unit test drives the path the shipped command takes.
+ *
+ * @param {object} options
+ * @param {{platform: string, arch: string, glibc: boolean, homedir: string, xdgDataHome?: string, localAppData?: string}} options.facts
+ * @param {string} options.version
+ * @param {string[]} [options.argv]
+ * @param {(url: string, init: {signal: AbortSignal}) => Promise<object>} [options.fetchImpl]
+ * @param {number} [options.timeoutMs]
+ * @param {(binaryPath: string, argv: string[]) => {status: number | null, signal: string | null, error: Error | undefined}} [options.exec]
+ * @param {(path: string) => string | undefined} [options.readDigest]
+ */
+export async function runInstaller({
+	facts,
+	version,
+	argv = [],
+	fetchImpl,
+	timeoutMs = DOWNLOAD_TIMEOUT_MS,
+	exec = defaultExec,
+	readDigest = sha256HexOfFile,
+}) {
+	const targetId = targetIdFor(facts);
+	if (targetId === null) {
+		return {
+			kind: "fail",
+			line:
+				`the control plane has no binary for ${facts.platform}-${facts.arch}; ` +
+				`supported targets: ${TARGETS.join(", ")}`,
+		};
+	}
+	const dir = installDirFor(facts, targetId);
+	const binaryPath = join(dir, binaryNameFor(targetId));
+	const note = readInstallNote(notePathFor(binaryPath));
+
+	if (
+		!cacheIsCurrent({
+			note,
+			wantedVersion: version,
+			wantedTargetId: targetId,
+			cachedDigest: existsSync(binaryPath) ? readDigest(binaryPath) : undefined,
+		})
+	) {
+		try {
+			await installVerified({
+				version,
+				targetId,
+				dir,
+				platform: facts.platform,
+				fetchImpl,
+				timeoutMs,
+			});
+		} catch (error) {
+			return { kind: "fail", line: errorMessage(error) };
+		}
+	}
+
+	const child = exec(binaryPath, argv);
+	if (child.error !== null && child.error !== undefined) {
+		return {
+			kind: "fail",
+			line: `cannot run the control plane binary at ${binaryPath}: ${errorMessage(child.error)}`,
+		};
+	}
+	// The child took the operator's signal: the entry ends this process the
+	// same way, the shape the old alias process forwarded.
+	if (child.signal !== null && child.signal !== undefined) {
+		return { kind: "signal", signal: child.signal };
+	}
+	return { kind: "exit", code: child.status ?? 1 };
+}
+
+/** The message of an error, without the `Error:` prefix the value carries. */
+export function errorMessage(error) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The readable line for a rename the operating system refused because the
+ * binary is in use, or undefined where the code is not the busy one.
+ *
+ * Windows reports a rename over a running `.exe` as `EBUSY`, `EPERM`, or
+ * `EACCES` depending on what holds the file; on any platform the rest of the
+ * codes stay the raw failure they are, because nothing the operator can do
+ * fixes them.
+ */
+export function renameFailureLine(refused) {
+	if (refused.platform !== "win32") return undefined;
+	if (!["EBUSY", "EPERM", "EACCES"].includes(refused.code)) return undefined;
+	return `cannot replace the running ${refused.binaryName}: close the control plane that is already running, then run the command again`;
+}
+
+/**
+ * Run the installed binary in the operator's terminal and report how it ended,
+ * as the three facts the run reads: the exit code, the signal that took it, and
+ * the error that stopped it from starting.
+ */
+function defaultExec(binaryPath, argv) {
+	const child = spawnSync(binaryPath, argv, { stdio: "inherit" });
+	return {
+		status: typeof child.status === "number" ? child.status : null,
+		signal: typeof child.signal === "string" ? child.signal : null,
+		error: child.error,
+	};
+}
+
 /** Fetch one file's text, with a readable line where the release is missing or unreachable. */
-async function downloadText(url, fetcher, what) {
-	const buffer = await downloadBuffer(url, fetcher, what);
+async function downloadText(url, fetcher, what, timeoutMs) {
+	const buffer = await downloadBuffer(url, fetcher, what, timeoutMs);
 	return Buffer.from(buffer).toString("utf8");
 }
 
 /** Fetch one file's bytes, with a readable line where the release is missing or unreachable. */
-async function downloadBuffer(url, fetcher, what) {
+async function downloadBuffer(url, fetcher, what, timeoutMs) {
+	const signal = AbortSignal.timeout(timeoutMs);
 	let response;
 	try {
-		response = await fetcher(url);
+		response = await fetcher(url, { signal });
 	} catch (error) {
-		throw new Error(`cannot reach the GitHub release (fetching the ${what}): ${String(error)}`);
+		throw fetchFailure(what, error, signal);
 	}
 	if (response.status === 404) {
 		throw new Error(
@@ -204,6 +459,22 @@ async function downloadBuffer(url, fetcher, what) {
 			`the download of the ${what} failed (HTTP ${String(response.status)}); nothing was installed`,
 		);
 	}
-	const bytes = await response.arrayBuffer();
-	return new Uint8Array(bytes);
+	try {
+		const bytes = await response.arrayBuffer();
+		return new Uint8Array(bytes);
+	} catch (error) {
+		// The body arrives after the response, so a stall or a half-sent file
+		// is caught here rather than at the fetch.
+		throw fetchFailure(what, error, signal);
+	}
+}
+
+/** One readable line for a download that never finished, named for its cause. */
+function fetchFailure(what, error, signal) {
+	if (signal.aborted) {
+		return new Error(
+			`the download of the ${what} stopped: the GitHub release did not answer within the timeout; nothing was installed`,
+		);
+	}
+	return new Error(`cannot reach the GitHub release (fetching the ${what}): ${String(error)}`);
 }

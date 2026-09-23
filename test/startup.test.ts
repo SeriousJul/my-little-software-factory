@@ -333,17 +333,12 @@ describe("the state shutdown", () => {
 });
 
 describe("the whole startup", () => {
-	test("a bad argument list is the usage line and a nonzero exit", async () => {
-		const result = await runStartup(["--unknown"]);
-		expect(result).toEqual({ ok: false, lines: [USAGE], exitCode: 1 });
-	});
-
 	test("an invalid config stops before the state opens", async () => {
 		const stateHome = inTempDir("run-config")("state-home");
 		stubEnv("XDG_STATE_HOME", stateHome);
 		const at = inTempDir("run-config")("invalid.toml");
 		writeFileSync(at, "default-agent = 42\n", "utf8");
-		const result = await runStartup(["--config", at]);
+		const result = await runStartup(at);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
@@ -357,7 +352,7 @@ describe("the whole startup", () => {
 		mkdirSync(blocked, { recursive: true });
 		const configPath = inTempDir("run-state")("config.toml");
 		writeFileSync(configPath, configBody(blocked), "utf8");
-		const result = await runStartup(["--config", configPath]);
+		const result = await runStartup(configPath);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
@@ -381,7 +376,7 @@ describe("the whole startup", () => {
 		const emptyBin = inTempDir("run-state-warn")("empty-bin");
 		mkdirSync(emptyBin, { recursive: true });
 		stubEnv("PATH", emptyBin);
-		const result = await runStartup(["--config", configPath]);
+		const result = await runStartup(configPath);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
@@ -398,7 +393,7 @@ describe("the whole startup", () => {
 		const statePath = inTempDir("run-ready")("state.sqlite");
 		const configPath = inTempDir("run-ready")("config.toml");
 		writeFileSync(configPath, configBody(statePath, true), "utf8");
-		const result = await runStartup(["--config", configPath]);
+		const result = await runStartup(configPath);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.configPath).toBe(configPath);
@@ -414,7 +409,7 @@ describe("the whole startup", () => {
 		const stateHome = inTempDir("run-defaults")("state-home");
 		stubEnv("XDG_STATE_HOME", stateHome);
 		const missing = inTempDir("run-defaults")("does-not-exist.toml");
-		const result = await runStartup(["--config", missing]);
+		const result = await runStartup(missing);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.config).toEqual(

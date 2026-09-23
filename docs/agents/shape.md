@@ -5,17 +5,28 @@ description: The module map of the source tree, for agents working in this repos
 
 # Shape
 
-- `src/factory.ts`: the entry module. Wires the startup: checks the node
-	version, runs the startup decisions, prints the lines the result carries,
-	and either exits or boots the renderer and mounts the app. Once the renderer
-	exists it wires the shutdown the startup module decides.
+- `src/factory.ts`: the entry module. Wires the startup: checks the Bun
+	version, answers `--version` before anything boots, runs the startup
+	decisions, prints the lines the result carries, and either exits or boots
+	the renderer and mounts the app. Once the renderer exists it wires the
+	shutdown the startup module decides.
+- `src/version.ts`: the version the plane reports. A compiled binary carries
+	the value the release build stamped with `--define`; a source run reads
+	the repository's package.json (ADR 0056).
+- `src/shipped-default.ts`: the one read of the shipped Default configuration.
+	It imports the file, so a compiled binary reads the copy the build
+	embedded and a source run reads the repository file, and the seed stays
+	verbatim either way (ADR 0056).
 - `src/startup.ts`: the startup decisions. Parses the arguments, loads and
-	validates the config, checks the config's model values against what the
-	agent runtimes report, and opens the state. A startup failure is a value
+	validates the config at the path that decision settled, checks the
+	config's model values against what the agent runtimes report, and opens
+	the state. A startup failure is a value
 	(the operator-facing lines and the exit status), so a test reads it
 	without a process. It also owns the shutdown install: which process endings
 	close the state and give the lease back.
-- `src/runtime.ts`: the node version gate.
+- `src/runtime.ts`: the Bun version gate, re-exported from
+	`src/runtime-support.mjs`, the plain-JS helper the bin wrapper can load on
+	the runtimes it refuses.
 - `src/config.ts`: config types, strict startup validation, state path
 	resolution, and atomic TOML write-back.
 - `src/ticket-source.ts`: the ticket-source seam and built-in GitHub Issues
@@ -68,6 +79,22 @@ description: The module map of the source tree, for agents working in this repos
 	inject a fake that records the calls. The runner also answers the Model list
 	query (ADR 0010): it maps an agent kind to the command that prints its list
 	and the reader of the table that command prints, and it never throws.
+- `src/binary-install.mjs`: the prebuilt binary's installer, in plain
+	JavaScript because the published package runs it on Node (ADR 0056). The
+	target the machine resolves to, the asset and checksum names, the
+	target-keyed cache path under the data home, the install note beside the
+	binary, the download and its SHA-256 check, and the whole run
+	(`runInstaller`) live here, with the machine's facts, the fetch, and the
+	child process taken as injected values. `test/installer.test.ts` pins them.
+- `bin/factory-bin.mjs`: the published bin and nothing else - the machine's
+	real facts, the entry guard that recognizes the path npm's bin shim was
+	started through (both sides realpath'ed), and the process exits the run
+	outcome asks for.
+- `scripts/build-binary.ts`: the release build. `bun run build <target> --out
+	<dir>` compiles one prebuilt binary with `bun build --compile`, installs
+	only that target's OpenTUI native core first, stamps the package version
+	into the binary, and names the asset through the shared `assetFileName` the
+	installer reads.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
 	pane, the native ticket detail viewport, the override panel, the decision

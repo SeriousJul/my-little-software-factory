@@ -35,18 +35,26 @@ the native library it runs. The build stamps the package's version into the
 binary, where the new `factory --version` flag reads it; a source run reads
 the version from the repository's package.json instead.
 
-**The binary complements the npm package; the package becomes its
-installer.** The npm package no longer carries the app's source. It carries
+**The npm package complements the binary; the package is the installer.** The
+npm package no longer carries the app's source. It carries
 the installer bin, which runs on Node - the runtime `npx` already provides -
 resolves the machine's target, downloads this version's binary from the
 GitHub Release of the same tag, verifies its SHA-256 against the release's
 checksums file, and caches it under the data home
 (`~/.local/share/my-little-software-factory`, or `%LOCALAPPDATA%` on
-Windows) beside a version note. A second run finds the cached binary and
-skips the network. `npx mlsf` and `npx my-little-software-factory` stay the
+Windows) in a directory per target, beside an install note that names the
+version, the target, and the digest it was verified against. A second run
+finds the cached binary, checks its bytes against that note, and skips the
+network. `npx mlsf` and `npx my-little-software-factory` stay the
 one command the operator types; a machine with no Bun and no Node of its
 own runs the control plane once the binary is installed, and a machine that
 keeps the binary cached needs neither.
+
+**The installed binary is the package's only runtime content.** The app's
+libraries - the OpenTUI core and React, the TOML reader, the width reader -
+are development dependencies of the repository: the build embeds them in the
+binary, and an operator who installs the package installs the installer alone
+and nothing else.
 
 **The checksums are verified on every install; the binaries are not signed
 yet.** The checksums file is fetched before the asset and a mismatch
@@ -73,9 +81,11 @@ installer degrades to its readable incomplete-release line.
   leaves the tarball; the repository and the docs remain the source of
   truth for the app.
 - Every update re-downloads the binary for the new version, because the
-  version note beside the cached binary names the version it came with. The
-  download is the size of the binary for the machine's target, once per
-  version.
+  install note beside the cached binary names the version it came with. The
+  note also names the target and the digest, so a cache that cannot account
+  for itself - another machine's note in a shared home, a file written over -
+  re-downloads instead of failing every later run. The download is the size
+  of the binary for the machine's target, once per version.
 - The shipped Default configuration is embedded in the binary and is seeded
   verbatim, as before: the read that seeds a missing config file is the file
   import's read, which reaches the embedded copy in a compiled binary and
@@ -83,14 +93,18 @@ installer degrades to its readable incomplete-release line.
 - The installer resolves the Linux target by the runtime's glibc fact: a
   machine without it takes the musl binary. A machine the release does not
   build for - riscv64 Linux, arm Windows - gets the readable no-binary
-  line naming the supported targets.
+  line naming the supported targets. The musl binary links the GNU C++
+  runtime, which an Alpine machine does not carry by default, so the
+  prerequisites name `libstdc++` as a requirement of that machine.
 - The first-run warnings of macOS Gatekeeper and Windows SmartScreen are
   real until signing lands. The follow-up is signing and notarization of
   the release artifacts, which the checksums verification is built to sit
   beside.
 - A release whose leg fails after the npm publish still leaves a usable
   npm package: the installer names the missing asset and installs nothing.
-  Re-running the leg and the release job completes the release.
+  Re-running the leg and the release job completes the release, because the
+  release job creates the release only where it is missing and uploads with
+  `--clobber` either way.
 - The `linux-arm64` and `darwin-x64` binaries are built by the same leg
   that is smoke-tested for their siblings; a runner runs them in the
   verification record's first-publish pass, until the record gains a runner

@@ -11,26 +11,20 @@
  * it against the release's checksum file, caches it under the data home,
  * and hands it the operator's arguments.
  *
- * A second run finds the cached binary and the version note beside it, and
- * skips the network. The pure decisions live in src/binary-install.mjs,
- * where the unit tests pin them; this file is the run section only.
+ * A second run finds the cached binary and the install note beside it, and
+ * skips the network. Every decision - the target, the cache reuse, the
+ * download, the verification, the exec, and what the run ends with - lives in
+ * src/binary-install.mjs, where the unit tests pin it with a fake network and
+ * a fake child process. This file is the machine's facts, the entry guard, and
+ * the process exits only.
  */
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-	binaryNameFor,
-	installDirFor,
-	installVerified,
-	needsInstall,
-	sidecarPathFor,
-	TARGETS,
-	targetIdFor,
-} from "../src/binary-install.mjs";
+import { runInstaller } from "../src/binary-install.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -47,77 +41,49 @@ function processFacts() {
 	};
 }
 
-/** The message of an error, without the `Error:` prefix the value carries. */
-function errorMessage(error) {
-	return error instanceof Error ? error.message : String(error);
-}
-
-/** The version note beside the binary, or undefined where it is missing or empty. */
-function sidecarVersion(sidecarPath) {
-	try {
-		const text = readFileSync(sidecarPath, "utf8").trim();
-		return text === "" ? undefined : text;
-	} catch {
-		return undefined;
-	}
-}
-
 /**
- * The run section: it runs only when this file is the process's entry, so a
- * test can import the module's decisions without starting an install.
+ * Whether this file is the process's entry.
+ *
+ * Node names its entry in `process.argv[1]` by the path it was asked to run,
+ * which for a package bin is the symlink npm wrote in `node_modules/.bin`,
+ * while the module URL of this file is realpath'ed. Both sides are resolved
+ * to their real paths here: an unmatched guard skips the run section, and the
+ * `factory` command ends silently having installed nothing and printed
+ * nothing - the shape the npm bin shim takes, not the shape `npx` hands over
+ * an absolute real path.
  */
-async function run(argv) {
-	const facts = processFacts();
-	const targetId = targetIdFor(facts);
-	if (targetId === null) {
-		process.stderr.write(
-			`mlsf: the control plane has no binary for ${facts.platform}-${facts.arch}; ` +
-				`supported targets: ${TARGETS.join(", ")}\n`,
-		);
-		process.exit(1);
+function isProcessEntry() {
+	const entry = process.argv[1];
+	if (entry === undefined) return false;
+	try {
+		return resolve(realpathSync(fileURLToPath(import.meta.url))) === resolve(realpathSync(entry));
+	} catch {
+		// An entry path this process cannot stat is not this file.
+		return false;
 	}
-	const version = require("../package.json").version;
-	const dir = installDirFor(facts);
-	const binaryPath = join(dir, binaryNameFor(targetId));
-	const sidecarPath = sidecarPathFor(binaryPath);
+}
 
-	const install = needsInstall({
-		binaryExists: existsSync(binaryPath),
-		sidecarVersion: sidecarVersion(sidecarPath),
-		wantedVersion: version,
+async function main() {
+	const outcome = await runInstaller({
+		facts: processFacts(),
+		version: require("../package.json").version,
+		argv: process.argv.slice(2),
 	});
-	if (install) {
-		try {
-			await installVerified({ version, targetId, dir, platform: facts.platform });
-		} catch (error) {
-			process.stderr.write(`mlsf: ${errorMessage(error)}\n`);
-			process.exit(1);
-		}
-	}
-
-	const child = spawnSync(binaryPath, argv, { stdio: "inherit" });
-	if (child.error !== null && child.error !== undefined) {
-		process.stderr.write(
-			`mlsf: cannot run the control plane binary at ${binaryPath}: ${errorMessage(child.error)}\n`,
-		);
+	if (outcome.kind === "fail") {
+		process.stderr.write(`mlsf: ${outcome.line}\n`);
 		process.exit(1);
 	}
-	// The child took the operator's signal: end this process the same way,
-	// the shape the old alias process forwarded.
-	if (child.signal !== null && child.signal !== undefined) {
+	if (outcome.kind === "signal") {
 		try {
-			process.kill(process.pid, child.signal);
+			process.kill(process.pid, outcome.signal);
 		} catch {
 			process.exit(1);
 		}
 		return;
 	}
-	process.exit(child.status ?? 1);
+	process.exit(outcome.code);
 }
 
-// The entry test: Node names its entry in process.argv[1], and an imported
-// module does not, so the run section stays off while a test imports here.
-const entry = process.argv[1];
-if (entry !== undefined && resolve(fileURLToPath(import.meta.url)) === resolve(entry)) {
-	await run(process.argv.slice(2));
+if (isProcessEntry()) {
+	await main();
 }

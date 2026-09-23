@@ -1,16 +1,35 @@
+/** The slice of Node's diagnostic report the glibc fact comes from. */
+interface ProcessReportHeader {
+	header: { glibcVersionRuntime?: string };
+}
+
 /**
  * Tests for the install decisions and steps of the prebuilt binary.
  *
  * The launcher runs on Node, so the decisions live in plain JavaScript
- * (src/binary-install.mjs) and these tests pin them from here: the target
- * the machine resolves to, the asset names the producer and the consumer
- * must agree on, the checksum file the release carries, the cache path the
- * install lands in, and the install step itself, with the network faked and
- * the filesystem pointed at a temp dir.
+ * (src/binary-install.mjs) and these tests pin them from here: the target the
+ * machine resolves to, the asset names the producer, the installer, and the
+ * release workflow must agree on, the checksum file the release carries, the
+ * cache path the install lands in, the install step itself with the network
+ * faked, and the whole run with the network and the child process faked. The
+ * last group is what the shipped command does on the operator's machine; the
+ * section that ends it starts the real bin under Node through the shim shape
+ * an npm install writes, with a cache in place so no request is made.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,15 +37,21 @@ import {
 	assetFileName,
 	assetUrl,
 	binaryNameFor,
+	cacheIsCurrent,
 	checksumFileName,
 	checksumMatches,
 	checksumUrl,
+	DATA_DIR,
+	formatInstallNote,
 	installDirFor,
 	installVerified,
-	needsInstall,
+	notePathFor,
+	parseInstallNote,
 	RELEASE_REPO,
+	renameFailureLine,
+	runInstaller,
 	sha256Hex,
-	sidecarPathFor,
+	sha256HexOfFile,
 	TARGETS,
 	targetIdFor,
 } from "../src/binary-install.mjs";
@@ -45,6 +70,28 @@ function inTempDir(prefix: string): string {
 	return dir;
 }
 
+/** The version the published package carries, the one the run installs. */
+function packageJsonVersion(): string {
+	return JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")).version;
+}
+
+/** Machine facts that point every path decision at one temp home. */
+function tempFacts(home: string, overrides: Record<string, unknown> = {}) {
+	return {
+		platform: "linux",
+		arch: "x64",
+		glibc: true,
+		homedir: home,
+		xdgDataHome: join(home, "data-home"),
+		...overrides,
+	};
+}
+
+/** The installed binary's path for one facts set and target. */
+function cachedBinaryPath(facts: Record<string, unknown>, targetId: string): string {
+	return join(installDirFor(facts, targetId), binaryNameFor(targetId));
+}
+
 /** A fetch that serves one named file from memory, and records the asks. */
 function fakeFetch(files: Map<string, Uint8Array>) {
 	const asked: string[] = [];
@@ -56,6 +103,50 @@ function fakeFetch(files: Map<string, Uint8Array>) {
 			if (file === undefined) return { status: 404, ok: false };
 			const buffer = new Uint8Array(file);
 			return { status: 200, ok: true, arrayBuffer: async () => buffer.buffer };
+		},
+	};
+}
+
+/** The one release the installer reads: its checksums file and one asset. */
+function fakeRelease(version: string, targetId: string, assetText: string) {
+	const assetName = assetFileName(version, targetId);
+	const checksumName = checksumFileName(version);
+	const base = `https://github.com/${RELEASE_REPO}/releases/download/v${version}/`;
+	const assetBytes = new TextEncoder().encode(assetText);
+	const fake = fakeFetch(
+		new Map([
+			[
+				`${base}${checksumName}`,
+				new TextEncoder().encode(`${sha256Hex(assetBytes)}  ${assetName}\n`),
+			],
+			[`${base}${assetName}`, assetBytes],
+		]),
+	);
+	return { ...fake, base, assetName, checksumName, assetBytes };
+}
+
+/** What the faked child reports about how it ended. */
+interface ChildResult {
+	status: number | null;
+	signal: NodeJS.Signals | null;
+	error: Error | undefined;
+}
+
+/** An exec recorder: it answers how the child ended and keeps what it ran. */
+function fakeExec(result: Partial<ChildResult> = {}) {
+	const calls: { binaryPath: string; argv: string[] }[] = [];
+	// A field the case names is the answer the child gives, null included; a
+	// field it leaves out is the clean end.
+	const child: ChildResult = {
+		status: result.status === undefined ? 0 : result.status,
+		signal: result.signal === undefined ? null : result.signal,
+		error: result.error,
+	};
+	return {
+		calls,
+		exec: (binaryPath: string, argv: string[]) => {
+			calls.push({ binaryPath, argv });
+			return child;
 		},
 	};
 }
@@ -100,7 +191,7 @@ describe("the target the machine resolves to", () => {
 	});
 });
 
-describe("the asset names the producer and the consumer agree on", () => {
+describe("the asset names the producer, the installer, and the release agree on", () => {
 	test.each([
 		["linux-x64", "factory-0.2.0-linux-x64"],
 		["linux-x64-musl", "factory-0.2.0-linux-x64-musl"],
@@ -152,151 +243,240 @@ describe("the checksum file the release carries", () => {
 });
 
 describe("the cache path the install lands in", () => {
-	test("the data home wins on a unix machine", () => {
-		expect(installDirFor({ platform: "linux", homedir: "/home/op", xdgDataHome: "/data" })).toBe(
-			join("/data", "my-little-software-factory"),
-		);
+	test("the data home wins on a unix machine, and the target keys the path", () => {
+		expect(
+			installDirFor({ platform: "linux", homedir: "/home/op", xdgDataHome: "/data" }, "linux-x64"),
+		).toBe(join("/data", DATA_DIR, "bin", "linux-x64"));
+	});
+
+	test("two targets of one shared home never share one cache", () => {
+		const facts = { platform: "linux", homedir: "/home/op", xdgDataHome: "/data" };
+		expect(installDirFor(facts, "linux-x64")).not.toBe(installDirFor(facts, "linux-arm64"));
 	});
 
 	test("without the data home the install sits under the home", () => {
-		expect(installDirFor({ platform: "linux", homedir: "/home/op" })).toBe(
-			join("/home/op", ".local", "share", "my-little-software-factory"),
+		expect(installDirFor({ platform: "linux", homedir: "/home/op" }, "linux-x64")).toBe(
+			join("/home/op", ".local", "share", DATA_DIR, "bin", "linux-x64"),
 		);
 	});
 
 	test("the install sits under the local app data on Windows", () => {
 		expect(
-			installDirFor({
-				platform: "win32",
-				homedir: "C:\\Users\\op",
-				localAppData: "C:\\Users\\op\\AppData\\Local",
-			}),
-		).toBe(join("C:\\Users\\op\\AppData\\Local", "my-little-software-factory"));
+			installDirFor(
+				{
+					platform: "win32",
+					homedir: "C:\\Users\\op",
+					localAppData: "C:\\Users\\op\\AppData\\Local",
+				},
+				"windows-x64",
+			),
+		).toBe(join("C:\\Users\\op\\AppData\\Local", DATA_DIR, "bin", "windows-x64"));
 	});
 
-	test("the binary and its version note share one place", () => {
+	test("the install directory needs the target it is for", () => {
+		expect(() => installDirFor({ platform: "linux", homedir: "/home/op" }, "")).toThrow(
+			"needs the machine's target id",
+		);
+	});
+
+	test("the binary and its install note share one place", () => {
 		expect(binaryNameFor("linux-x64")).toBe("factory");
 		expect(binaryNameFor("windows-x64")).toBe("factory.exe");
-		const binaryPath = join("/data", "my-little-software-factory", "factory");
-		expect(sidecarPathFor(binaryPath)).toBe(`${binaryPath}.version`);
+		const binaryPath = join("/data", DATA_DIR, "bin", "linux-x64", "factory");
+		expect(notePathFor(binaryPath)).toBe(`${binaryPath}.install`);
 	});
 });
 
-describe("the decision to download", () => {
-	test("a missing binary downloads", () => {
+describe("the install note beside the cached binary", () => {
+	const digest = "a".repeat(64);
+
+	test("the note names the version, the target, and the digest, and reads back", () => {
+		const text = formatInstallNote({ version: "0.2.0", targetId: "linux-x64", digest });
+		expect(parseInstallNote(text)).toEqual({ version: "0.2.0", targetId: "linux-x64", digest });
+	});
+
+	test.each([
+		["no text at all", ""],
+		["no digest", "version=0.2.0\ntarget=linux-x64\n"],
+		["a short digest", "version=0.2.0\ntarget=linux-x64\ndigest=abc\n"],
+		["no target", `version=0.2.0\ndigest=${digest}\n`],
+		["no version", `target=linux-x64\ndigest=${digest}\n`],
+		["a line that is not a field", `garbage\ndigest=${digest}\n`],
+	])("a note that cannot be trusted is no note: %s", (_name, text) => {
+		expect(parseInstallNote(text)).toBeUndefined();
+	});
+
+	test("a note read from a path that is not there is no note", () => {
+		const missing = join(inTempDir("note-absent"), "factory.install");
+		expect(parseInstallNote(readFileSyncOrNull(missing))).toBeUndefined();
+	});
+
+	test("the digest of a file is the digest of its bytes, read in chunks", () => {
+		const path = join(inTempDir("note-digest"), "factory");
+		const bytes = new Uint8Array(3 * 1024 * 1024 + 7).fill(7);
+		writeFileSync(path, bytes);
+		expect(sha256HexOfFile(path)).toBe(sha256Hex(bytes));
+	});
+
+	test("the digest of a file that is not there is undefined", () => {
+		expect(sha256HexOfFile(join(inTempDir("note-absent-file"), "factory"))).toBeUndefined();
+	});
+});
+
+/** A file's text, or the empty string where it cannot be read. */
+function readFileSyncOrNull(path: string): string {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return "";
+	}
+}
+
+describe("the decision to reuse the cached binary", () => {
+	const digest = sha256Hex(new TextEncoder().encode("the prebuilt binary"));
+	const note = { version: "0.2.0", targetId: "linux-x64", digest };
+
+	test("the note names this version and target, and the bytes match the note", () => {
 		expect(
-			needsInstall({ binaryExists: false, sidecarVersion: "0.1.0", wantedVersion: "0.1.0" }),
+			cacheIsCurrent({
+				note,
+				wantedVersion: "0.2.0",
+				wantedTargetId: "linux-x64",
+				cachedDigest: digest,
+			}),
 		).toBe(true);
 	});
 
-	test("a present binary with the wanted version does not", () => {
+	test("the digest is read case-insensitively", () => {
 		expect(
-			needsInstall({ binaryExists: true, sidecarVersion: "0.1.0", wantedVersion: "0.1.0" }),
+			cacheIsCurrent({
+				note: { ...note, digest: digest.toUpperCase() },
+				wantedVersion: "0.2.0",
+				wantedTargetId: "linux-x64",
+				cachedDigest: digest,
+			}),
+		).toBe(true);
+	});
+
+	test.each([
+		["no note at all", undefined, digest],
+		["a binary that is not there", note, undefined],
+		["a binary whose bytes changed", note, sha256Hex(new TextEncoder().encode("tampered"))],
+	])("a cache that cannot be accounted for re-downloads: %s", (_name, cached, onDisk) => {
+		expect(
+			cacheIsCurrent({
+				note: cached,
+				wantedVersion: "0.2.0",
+				wantedTargetId: "linux-x64",
+				cachedDigest: onDisk,
+			}),
 		).toBe(false);
 	});
 
 	test.each([
-		["an older version", "0.0.9"],
-		["a newer version", "0.2.0"],
-		["no version note", undefined],
-	])("a binary that is not the wanted version downloads: %s", (_name, sidecarVersion) => {
-		expect(needsInstall({ binaryExists: true, sidecarVersion, wantedVersion: "0.1.0" })).toBe(true);
+		["an older version cached", { wantedVersion: "0.3.0" }],
+		["another target on a shared home", { wantedTargetId: "linux-arm64" }],
+	])("the cache heals for %s", (_name, override) => {
+		expect(
+			cacheIsCurrent({
+				note,
+				wantedVersion: "0.2.0",
+				wantedTargetId: "linux-x64",
+				cachedDigest: digest,
+				...override,
+			}),
+		).toBe(false);
 	});
 });
 
 describe("the install step, with the network faked", () => {
 	const version = "0.2.0";
 	const targetId = "linux-x64";
-	const assetName = assetFileName(version, targetId);
-	const checksumName = checksumFileName(version);
-	const assetBytes = new TextEncoder().encode("the prebuilt binary");
-	const checksumText = `${sha256Hex(assetBytes)}  ${assetName}\n`;
-	const base = `https://github.com/${RELEASE_REPO}/releases/download/v${version}/`;
 
-	test("a verified asset lands at its path with its version note", async () => {
+	test("a verified asset lands at its path with its install note", async () => {
 		const dir = inTempDir("install-ok");
-		const fake = fakeFetch(
-			new Map([
-				[`${base}${checksumName}`, new TextEncoder().encode(checksumText)],
-				[`${base}${assetName}`, assetBytes],
-			]),
-		);
+		const release = fakeRelease(version, targetId, "the prebuilt binary");
 		const binaryPath = await installVerified({
 			version,
 			targetId,
 			dir,
 			platform: "linux",
-			fetchImpl: fake.fetchImpl,
+			fetchImpl: release.fetchImpl,
 		});
 		expect(binaryPath).toBe(join(dir, "factory"));
-		expect(Buffer.compare(readFileSync(binaryPath), Buffer.from(assetBytes))).toBe(0);
-		expect(readFileSync(sidecarPathFor(binaryPath), "utf8")).toBe(`${version}\n`);
+		expect(Buffer.compare(readFileSync(binaryPath), Buffer.from(release.assetBytes))).toBe(0);
+		expect(parseInstallNote(readFileSync(notePathFor(binaryPath), "utf8"))).toEqual({
+			version,
+			targetId,
+			digest: sha256Hex(release.assetBytes),
+		});
 		// The checksum file was read before the asset: an unverifiable asset
 		// is never kept.
-		expect(fake.asked[0]).toBe(`${base}${checksumName}`);
-		expect(fake.asked[1]).toBe(`${base}${assetName}`);
+		expect(release.asked[0]).toBe(`${release.base}${release.checksumName}`);
+		expect(release.asked[1]).toBe(`${release.base}${release.assetName}`);
 		// The executable bit is set on a unix install.
-		const { statSync } = await import("node:fs");
-		expect(statSync(binaryPath).mode & 0o100).toBe(0o100);
+		if (process.platform !== "win32") {
+			expect(statSync(binaryPath).mode & 0o100).toBe(0o100);
+		}
+	});
+
+	test("the install directory and its note are private to their owner", async () => {
+		const home = inTempDir("install-mode");
+		const dir = installDirFor(tempFacts(home), targetId);
+		const binaryPath = await installVerified({
+			version,
+			targetId,
+			dir,
+			platform: "linux",
+			fetchImpl: fakeRelease(version, targetId, "bytes").fetchImpl,
+		});
+		// No group and no other bits: a shared home cannot hold a binary or a
+		// note this run would later trust.
+		if (process.platform !== "win32") {
+			expect(statSync(dir).mode & 0o077).toBe(0);
+			expect(statSync(notePathFor(binaryPath)).mode & 0o077).toBe(0);
+		}
 	});
 
 	test("an asset that fails the checksum is not installed", async () => {
 		const dir = inTempDir("install-mismatch");
+		const good = new TextEncoder().encode("the real bytes");
 		const fake = fakeFetch(
 			new Map([
-				[`${base}${checksumName}`, new TextEncoder().encode(checksumText)],
-				[`${base}${assetName}`, new TextEncoder().encode("tampered bytes")],
+				[
+					checksumUrl(version),
+					new TextEncoder().encode(`${sha256Hex(good)}  ${assetFileName(version, targetId)}\n`),
+				],
+				[assetUrl(version, targetId), new TextEncoder().encode("tampered bytes")],
 			]),
 		);
 		await expect(
-			installVerified({
-				version,
-				targetId,
-				dir,
-				platform: "linux",
-				fetchImpl: fake.fetchImpl,
-			}),
+			installVerified({ version, targetId, dir, platform: "linux", fetchImpl: fake.fetchImpl }),
 		).rejects.toThrow("does not match the release's SHA-256 checksum");
-		const { existsSync } = await import("node:fs");
 		expect(existsSync(join(dir, "factory"))).toBe(false);
-		expect(existsSync(sidecarPathFor(join(dir, "factory")))).toBe(false);
+		expect(existsSync(notePathFor(join(dir, "factory")))).toBe(false);
 	});
 
 	test("a 404 release is a readable line and installs nothing", async () => {
 		const dir = inTempDir("install-404");
 		const fake = fakeFetch(new Map());
 		await expect(
-			installVerified({
-				version,
-				targetId,
-				dir,
-				platform: "linux",
-				fetchImpl: fake.fetchImpl,
-			}),
+			installVerified({ version, targetId, dir, platform: "linux", fetchImpl: fake.fetchImpl }),
 		).rejects.toThrow("the GitHub release does not carry the checksum file");
-		const { existsSync } = await import("node:fs");
 		expect(existsSync(join(dir, "factory"))).toBe(false);
 	});
 
 	test("a failed asset download is a readable line and installs nothing", async () => {
 		const dir = inTempDir("install-500");
-		const fake = fakeFetch(
-			new Map([[`${base}${checksumName}`, new TextEncoder().encode(checksumText)]]),
-		);
+		const release = fakeRelease(version, targetId, "the real bytes");
+		const assetName = assetFileName(version, targetId);
 		const fetchImpl = async (url: string) => {
 			if (url.endsWith(assetName)) return { status: 500, ok: false };
-			return fake.fetchImpl(url);
+			return release.fetchImpl(url);
 		};
 		await expect(
-			installVerified({
-				version,
-				targetId,
-				dir,
-				platform: "linux",
-				fetchImpl,
-			}),
-		).rejects.toThrow("the download of the asset factory-0.2.0-linux-x64 failed (HTTP 500)");
-		const { existsSync } = await import("node:fs");
+			installVerified({ version, targetId, dir, platform: "linux", fetchImpl }),
+		).rejects.toThrow(`the download of the asset ${assetName} failed (HTTP 500)`);
 		expect(existsSync(join(dir, "factory"))).toBe(false);
 	});
 
@@ -306,39 +486,381 @@ describe("the install step, with the network faked", () => {
 			throw new Error("getaddrinfo ENOTFOUND github.com");
 		};
 		await expect(
-			installVerified({
-				version,
-				targetId,
-				dir,
-				platform: "linux",
-				fetchImpl,
-			}),
+			installVerified({ version, targetId, dir, platform: "linux", fetchImpl }),
 		).rejects.toThrow("cannot reach the GitHub release");
 	});
 
-	test("a Windows install keeps the .exe name and skips the executable bit", async () => {
-		const dir = inTempDir("install-win");
-		const asset = "the windows binary";
-		const winAssetName = assetFileName(version, "windows-x64");
-		const fake = fakeFetch(
-			new Map([
-				[
-					`${base}${checksumName}`,
-					new TextEncoder().encode(
-						`${sha256Hex(new TextEncoder().encode(asset))}  ${winAssetName}\n`,
-					),
-				],
-				[`${base}${winAssetName}`, new TextEncoder().encode(asset)],
-			]),
+	test("a stalled download ends on its timeout instead of hanging the run", async () => {
+		const dir = inTempDir("install-stall");
+		// The fake answers only when its signal says stop, the way a socket
+		// that never delivers does.
+		const fetchImpl = (_url: string, init: { signal: AbortSignal }) =>
+			new Promise((_resolve, reject) => {
+				if (init.signal.aborted) {
+					reject(new Error("This operation was aborted"));
+					return;
+				}
+				init.signal.addEventListener("abort", () => reject(new Error("socket hang up")));
+			});
+		await expect(
+			installVerified({ version, targetId, dir, platform: "linux", fetchImpl, timeoutMs: 20 }),
+		).rejects.toThrow(
+			"the download of the checksum file stopped: the GitHub release did not answer within the timeout",
 		);
+		expect(existsSync(join(dir, "factory"))).toBe(false);
+	});
+
+	test("every download carries the timeout signal", async () => {
+		const dir = inTempDir("install-signal");
+		const release = fakeRelease(version, targetId, "bytes");
+		const seen: (AbortSignal | undefined)[] = [];
+		const fetchImpl = async (url: string, init: { signal?: AbortSignal }) => {
+			seen.push(init?.signal);
+			return release.fetchImpl(url);
+		};
+		await installVerified({
+			version,
+			targetId,
+			dir,
+			platform: "linux",
+			fetchImpl,
+			timeoutMs: 5_000,
+		});
+		expect(seen).toHaveLength(2);
+		for (const signal of seen) {
+			expect(signal).toBeInstanceOf(AbortSignal);
+			expect(signal?.aborted).toBe(false);
+		}
+	});
+
+	test("a Windows install keeps the .exe name", async () => {
+		const dir = inTempDir("install-win");
+		const release = fakeRelease(version, "windows-x64", "the windows binary");
 		const binaryPath = await installVerified({
 			version,
 			targetId: "windows-x64",
 			dir,
 			platform: "win32",
-			fetchImpl: fake.fetchImpl,
+			fetchImpl: release.fetchImpl,
 		});
 		expect(binaryPath).toBe(join(dir, "factory.exe"));
-		expect(readFileSync(binaryPath, "utf8")).toBe(asset);
+		expect(readFileSync(binaryPath, "utf8")).toBe("the windows binary");
+	});
+
+	test("a rename the system refuses because the binary runs says what to do", () => {
+		expect(renameFailureLine({ platform: "win32", binaryName: "factory.exe", code: "EBUSY" })).toBe(
+			"cannot replace the running factory.exe: close the control plane that is already running, then run the command again",
+		);
+		expect(
+			renameFailureLine({ platform: "win32", binaryName: "factory.exe", code: "EACCES" }),
+		).toBeDefined();
+		// A unix busy rename, and any other code, stay the raw failure: nothing
+		// the operator can do is hidden behind a line about closing the app.
+		expect(
+			renameFailureLine({ platform: "linux", binaryName: "factory", code: "EBUSY" }),
+		).toBeUndefined();
+		expect(
+			renameFailureLine({ platform: "win32", binaryName: "factory.exe", code: "ENOSPC" }),
+		).toBeUndefined();
+	});
+});
+
+describe("the whole run, with the network and the child process faked", () => {
+	const version = "0.2.0";
+	const targetId = "linux-x64";
+
+	test("a machine with no cache downloads, installs, and runs the binary", async () => {
+		const home = inTempDir("run-first");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "the prebuilt binary");
+		const exec = fakeExec();
+		const outcome = await runInstaller({
+			facts,
+			version,
+			argv: ["--config", "/tmp/one.toml"],
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 0 });
+		expect(exec.calls).toEqual([
+			{ binaryPath: cachedBinaryPath(facts, targetId), argv: ["--config", "/tmp/one.toml"] },
+		]);
+		expect(release.asked).toEqual([
+			`${release.base}${release.checksumName}`,
+			`${release.base}${release.assetName}`,
+		]);
+	});
+
+	test("a second run reads the note, checks the bytes, and makes no request", async () => {
+		const home = inTempDir("run-cached");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "the prebuilt binary");
+		await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: fakeExec().exec,
+		});
+		const askedAfterFirst = release.asked.length;
+		const exec = fakeExec({ status: 3 });
+		const outcome = await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 3 });
+		expect(release.asked).toHaveLength(askedAfterFirst);
+	});
+
+	test("a new version downloads its own binary", async () => {
+		const home = inTempDir("run-upgrade");
+		const facts = tempFacts(home);
+		const old = fakeRelease(version, targetId, "the old binary");
+		await runInstaller({ facts, version, fetchImpl: old.fetchImpl, exec: fakeExec().exec });
+		const newer = fakeRelease("0.3.0", targetId, "the new binary");
+		const outcome = await runInstaller({
+			facts,
+			version: "0.3.0",
+			fetchImpl: newer.fetchImpl,
+			exec: fakeExec().exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 0 });
+		expect(newer.asked).toHaveLength(2);
+		const binaryPath = cachedBinaryPath(facts, targetId);
+		expect(readFileSync(binaryPath, "utf8")).toBe("the new binary");
+		expect(parseInstallNote(readFileSync(notePathFor(binaryPath), "utf8"))).toEqual({
+			version: "0.3.0",
+			targetId,
+			digest: sha256Hex(newer.assetBytes),
+		});
+	});
+
+	test("a damaged cache re-downloads instead of failing the run", async () => {
+		const home = inTempDir("run-damaged");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "the prebuilt binary");
+		await runInstaller({ facts, version, fetchImpl: release.fetchImpl, exec: fakeExec().exec });
+		const binaryPath = cachedBinaryPath(facts, targetId);
+		writeFileSync(binaryPath, "overwritten by something else");
+		const exec = fakeExec();
+		const outcome = await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 0 });
+		// The second run took the network again and left the good bytes in place.
+		expect(release.asked).toHaveLength(4);
+		expect(readFileSync(binaryPath, "utf8")).toBe("the prebuilt binary");
+		expect(exec.calls).toHaveLength(1);
+	});
+
+	test("another target's note in a shared home cannot be trusted", async () => {
+		const home = inTempDir("run-shared-home");
+		const facts = tempFacts(home);
+		const binaryPath = cachedBinaryPath(facts, targetId);
+		mkdirSync(installDirFor(facts, targetId), { recursive: true, mode: 0o700 });
+		writeFileSync(binaryPath, "a binary this kernel cannot run");
+		writeFileSync(
+			notePathFor(binaryPath),
+			formatInstallNote({
+				version,
+				targetId: "linux-arm64",
+				digest: sha256HexOfFile(binaryPath),
+			}),
+			"utf8",
+		);
+		const release = fakeRelease(version, targetId, "the right binary");
+		const outcome = await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: fakeExec().exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 0 });
+		expect(release.asked).toHaveLength(2);
+		expect(readFileSync(binaryPath, "utf8")).toBe("the right binary");
+	});
+
+	test("a machine the release builds nothing for is one readable line", async () => {
+		const home = inTempDir("run-no-target");
+		const release = fakeRelease(version, targetId, "bytes");
+		const exec = fakeExec();
+		const outcome = await runInstaller({
+			facts: tempFacts(home, { platform: "freebsd", arch: "x64" }),
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome).toEqual({
+			kind: "fail",
+			line: `the control plane has no binary for freebsd-x64; supported targets: ${TARGETS.join(", ")}`,
+		});
+		expect(exec.calls).toHaveLength(0);
+		expect(release.asked).toHaveLength(0);
+	});
+
+	test("an install that cannot be verified is the failure line, and nothing runs", async () => {
+		const home = inTempDir("run-404");
+		const missing = fakeFetch(new Map());
+		const exec = fakeExec();
+		const outcome = await runInstaller({
+			facts: tempFacts(home),
+			version,
+			fetchImpl: missing.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome.kind).toBe("fail");
+		expect((outcome as { line: string }).line).toContain(
+			"the GitHub release does not carry the checksum file",
+		);
+		expect(exec.calls).toHaveLength(0);
+	});
+
+	test("a binary that will not start is a failure line naming the path", async () => {
+		const home = inTempDir("run-exec-fails");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "bytes");
+		const exec = fakeExec({ error: new Error("ENOEXEC: cannot execute binary file") });
+		const outcome = await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome).toEqual({
+			kind: "fail",
+			line: `cannot run the control plane binary at ${cachedBinaryPath(facts, targetId)}: ENOEXEC: cannot execute binary file`,
+		});
+	});
+
+	test("a child the operator signalled ends as a signal to re-raise", async () => {
+		const home = inTempDir("run-signal");
+		const release = fakeRelease(version, targetId, "bytes");
+		const outcome = await runInstaller({
+			facts: tempFacts(home),
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: fakeExec({ status: null, signal: "SIGINT" }).exec,
+		});
+		expect(outcome).toEqual({ kind: "signal", signal: "SIGINT" });
+	});
+
+	test("a child that reported no code and no signal is a failed run", async () => {
+		const home = inTempDir("run-no-code");
+		const release = fakeRelease(version, targetId, "bytes");
+		const outcome = await runInstaller({
+			facts: tempFacts(home),
+			version,
+			fetchImpl: release.fetchImpl,
+			exec: fakeExec({ status: null }).exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 1 });
+	});
+});
+
+describe("the shipped bin, started the way npm starts it", () => {
+	const REAL_BIN = join(import.meta.dir, "..", "bin", "factory-bin.mjs");
+
+	/** The facts the spawned bin resolves for this machine. */
+	function machineFacts(home: string) {
+		const header = (process.report.getReport() as unknown as ProcessReportHeader).header;
+		return {
+			platform: process.platform,
+			arch: process.arch,
+			glibc: typeof header.glibcVersionRuntime === "string",
+			homedir: home,
+			xdgDataHome: join(home, "data-home"),
+			localAppData: join(home, "local-app-data"),
+		};
+	}
+
+	/**
+	 * A cache already in place for this machine and version, holding a script
+	 * instead of a real binary: the run has no reason to reach the network, and
+	 * the script's own output is what proves the exec happened.
+	 */
+	function seedCache(home: string): string {
+		const facts = machineFacts(home);
+		const targetId = targetIdFor(facts);
+		expect(targetId).not.toBeNull();
+		const binaryPath = cachedBinaryPath(facts, targetId as string);
+		mkdirSync(installDirFor(facts, targetId as string), { recursive: true, mode: 0o700 });
+		const marker = "the cached control plane ran";
+		const script =
+			process.platform === "win32"
+				? `@echo off\r\necho ${marker} %1\r\nexit /b 42\r\n`
+				: `#!/bin/sh\necho ${marker} "$1"\nexit 42\n`;
+		writeFileSync(binaryPath, script);
+		if (process.platform !== "win32") chmodSync(binaryPath, 0o755);
+		writeFileSync(
+			notePathFor(binaryPath),
+			formatInstallNote({
+				version: packageJsonVersion(),
+				targetId: targetId as string,
+				digest: sha256HexOfFile(binaryPath),
+			}),
+			"utf8",
+		);
+		return marker;
+	}
+
+	/** Start the published entry under Node, the runtime npx provides. */
+	function runUnderNode(entryPath: string, argv: string[], home: string) {
+		const env = {
+			...process.env,
+			HOME: home,
+			USERPROFILE: home,
+			XDG_DATA_HOME: join(home, "data-home"),
+			LOCALAPPDATA: join(home, "local-app-data"),
+		};
+		if (process.platform === "win32" && entryPath.endsWith(".cmd")) {
+			return spawnSync(entryPath, argv, { encoding: "utf8", env, shell: true, timeout: 60_000 });
+		}
+		return spawnSync("node", [entryPath, ...argv], { encoding: "utf8", env, timeout: 60_000 });
+	}
+
+	test("node is on this machine, the runtime the published bin runs on", () => {
+		const probe = spawnSync("node", ["--version"], { encoding: "utf8" });
+		expect(probe.status).toBe(0);
+	});
+
+	test("an npm bin shim reaches the install step and runs the cached binary", () => {
+		const home = inTempDir("bin-shim");
+		const marker = seedCache(home);
+		// The shape npm writes: a launcher in a bin directory that names the
+		// package's real bin. Node realpaths the module URL of the file it runs
+		// but not argv[1], so a guard that compares the two by their given paths
+		// matches nothing here.
+		const shimDir = join(home, "node_modules", ".bin");
+		mkdirSync(shimDir, { recursive: true });
+		let shim: string;
+		if (process.platform === "win32") {
+			shim = join(shimDir, "factory.cmd");
+			writeFileSync(shim, `@echo off\r\nnode "${REAL_BIN}" %*\r\n`);
+		} else {
+			shim = join(shimDir, "factory");
+			symlinkSync(REAL_BIN, shim);
+		}
+
+		const result = runUnderNode(shim, ["--config", "/tmp/one.toml"], home);
+		// Before the guard resolved both sides, this was the whole failure: the
+		// run section was skipped, and the process ended 0 with no output, no
+		// install, and no error.
+		expect(result.status).toBe(42);
+		expect(result.stdout).toContain(marker);
+		expect(result.stdout).toContain("--config");
+		expect(result.stderr).not.toContain("mlsf:");
+	});
+
+	test("the same bin by its real path runs the same way", () => {
+		const home = inTempDir("bin-real");
+		const marker = seedCache(home);
+		const result = runUnderNode(REAL_BIN, ["--version"], home);
+		expect(result.status).toBe(42);
+		expect(result.stdout).toContain(marker);
+		expect(result.stderr).not.toContain("mlsf:");
 	});
 });

@@ -2,10 +2,10 @@
 /**
  * Build one prebuilt binary of the control plane.
  *
- * `bun run scripts/build-binary.ts <target> --out <dir>` compiles the entry
- * (src/factory.ts) through `bun build --compile` for one target: the output
+ * `bun run build <target> --out <dir>` compiles the entry (src/factory.ts)
+ * through `bun build --compile` for one target: the output
  * is the standalone executable the release publishes and the npm package's
- * installer downloads (ADR 0056). The build stamps the package's version
+ * installer downloads (ADR 0056), and the release leg runs this same command. The build stamps the package's version
  * into the binary, where the `--version` flag reads it, and it requires the
  * OpenTUI native core of the target in node_modules: the compile embeds the
  * core the install placed, so a missing core is a missing screen, not a
@@ -13,7 +13,8 @@
  *
  * The asset names come from src/binary-install.mjs, the module the published
  * installer reads: the producer and the consumer cannot name the same file
- * differently.
+ * differently, and the release workflow's own steps are pinned against them
+ * by test/release-workflow.test.ts.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -184,7 +185,7 @@ if (import.meta.main) {
 		outFlag < 0 ||
 		argv[outFlag + 1] === undefined
 	) {
-		console.error("usage: bun run scripts/build-binary.ts <target> --out <dir>");
+		console.error("usage: bun run build <target> --out <dir>");
 		console.error(`targets: ${TARGETS.join(", ")}`);
 		process.exit(1);
 	}

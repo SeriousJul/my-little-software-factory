@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.2
       # Node stays for the publish itself and the tag check below: the build,
       # the checks, and the docs all run on Bun, but npm publish is the one
       # step only Node does.
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.2
       - uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -83,11 +83,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.2
       # The optional platform cores stay out: the build adds the one the
       # target runs, and the compile embeds what the install placed.
       - run: bun install --omit=optional
-      - run: bun run scripts/build-binary.ts ${{ matrix.target }} --out dist
+      - run: bun run build ${{ matrix.target }} --out dist
       # The leg that builds the runner's own target runs the binary it just
       # built: a compile that produces an unrunnable file fails here.
       - name: The built binary answers --version on this runner
@@ -101,7 +101,14 @@ jobs:
         if: matrix.target == 'linux-x64-musl'
         run: |
           asset="$(ls dist/factory-*)"
-          docker run --rm -v "$PWD/dist:/dist" -e BINARY="$(basename "$asset")" alpine:3.20 "/dist/$BINARY" --version
+          test "$(ls dist/factory-* | wc -l)" -eq 1
+          # The OpenTUI musl core is linked against the GNU C++ runtime, which
+          # the alpine base image does not carry: without libstdc++ the binary
+          # dies on a relocation error before it answers anything. The
+          # operator's musl machine needs the same package, and the
+          # prerequisites name it.
+          docker run --rm -v "$PWD/dist:/dist" -e BINARY="$(basename "$asset")" alpine:3.20 \
+            sh -c 'apk add --no-cache libstdc++ >/dev/null && "/dist/$BINARY" --version'
       - uses: actions/upload-artifact@v7
         with:
           name: factory-${{ matrix.target }}
@@ -110,6 +117,11 @@ jobs:
   # The macOS leg runs on the runner the binary targets. The darwin-x64
   # binary and the arm64 linux binaries take no smoke: the record in
   # docs/verification/release.md names them as unverified on a runner.
+  #
+  # Every asset name in this job is the release's version as a wildcard over
+  # the file the build writes. test/release-workflow.test.ts pins each one
+  # against the shared assetFileName: this job is a third party to that name,
+  # and a step that names a file the build never produces blocks the upload.
   smoke-darwin:
     needs: build
     runs-on: macos-latest
@@ -118,8 +130,15 @@ jobs:
         with:
           name: factory-darwin-arm64
           path: dist
+      # upload-artifact keeps no file modes: everything it stores comes back
+      # 644, so the leg makes the file runnable before it asks it a question.
+      # The installer sets its own mode, so the loss stops here.
       - name: The darwin-arm64 binary answers --version on macOS
-        run: ./dist/factory-*-darwin-arm64 --version
+        run: |
+          asset="$(ls dist/factory-*-darwin-arm64)"
+          test "$(ls dist/factory-*-darwin-arm64 | wc -l)" -eq 1
+          chmod +x "$asset"
+          "$asset" --version
 
   smoke-windows:
     needs: build
@@ -130,7 +149,15 @@ jobs:
           name: factory-windows-x64
           path: dist
       - name: The windows-x64 binary answers --version on Windows
-        run: ./dist/factory-windows-x64.exe --version
+        shell: pwsh
+        run: |
+          $assets = @(Get-ChildItem -Path 'dist/factory-*-windows-x64.exe' -ErrorAction SilentlyContinue)
+          if ($assets.Count -ne 1) {
+            Write-Error "expected one windows-x64 asset in dist, found $($assets.Count)"
+            exit 1
+          }
+          & $assets[0].FullName --version
+          exit $LASTEXITCODE
 
   # The release carries every target and the checksums the installer
   # verifies against. It waits on the smoke jobs: a binary that does not run
@@ -170,11 +197,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          gh release create "v${version}" \
-            --title "v${version}" \
-            --notes "The control plane v${version}.
+          # Create the release only where it is missing: a re-run of this job
+          # after the create step already ran has to complete the release, not
+          # fail on the name it took. The upload is --clobber either way.
+          if ! gh release view "v${version}" >/dev/null 2>&1; then
+            gh release create "v${version}" \
+              --title "v${version}" \
+              --notes "The control plane v${version}.
 
 Install with \`npx mlsf\` (or \`npx my-little-software-factory\`): the package installs the prebuilt binary for your platform from this release and verifies it against \`factory-${version}.sha256sums\`. The binary needs neither Node nor Bun.
 
 Targets: linux-x64, linux-x64-musl, linux-arm64, linux-arm64-musl, darwin-x64, darwin-arm64, windows-x64."
+          fi
           gh release upload "v${version}" dist/factory-"${version}"-* --clobber

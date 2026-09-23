@@ -9,6 +9,8 @@
  * runners, and the smoke steps there run the binaries it builds.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { BINARY_TARGETS, buildCommand, packageVersion } from "../scripts/build-binary.ts";
 import { assetFileName, TARGETS } from "../src/binary-install.mjs";
 
@@ -56,5 +58,34 @@ describe("the build command", () => {
 describe("the version the build stamps", () => {
 	test("the version comes from the repository's package.json", () => {
 		expect(packageVersion()).toBe("0.1.0");
+	});
+});
+
+describe("the command the build is called by", () => {
+	test("the repository declares it, and it names this script", () => {
+		const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+			scripts: Record<string, string>;
+		};
+		// `bun run build <target> --out <dir>` is what docs/development/commands.md
+		// teaches and what the release leg runs.
+		expect(pkg.scripts.build).toBe("bun run scripts/build-binary.ts");
+	});
+
+	test("a call without a target shows the command it wants back", async () => {
+		const proc = Bun.spawn(
+			[process.execPath, "run", join(import.meta.dir, "..", "scripts", "build-binary.ts")],
+			{
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, stderr] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
+		await proc.exited;
+		expect(stdout).toBe("");
+		expect(stderr).toContain("usage: bun run build <target> --out <dir>");
+		expect(stderr).toContain(TARGETS.join(", "));
 	});
 });

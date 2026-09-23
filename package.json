@@ -12,6 +12,7 @@
 		"src/binary-install.mjs"
 	],
 	"scripts": {
+		"build": "bun run scripts/build-binary.ts",
 		"dev": "bun --watch src/factory.ts --config config/development.toml",
 		"gallery": "bun bin/factory-gallery.mjs",
 		"test": "bun test --parallel --isolate --timeout=$([ -n \"$CI\" ] && printf 60000 || printf 30000)",
@@ -35,20 +36,18 @@
 		"type": "git",
 		"url": "https://github.com/SeriousJul/my-little-software-factory"
 	},
-	"dependencies": {
-		"@opentui/core": "^0.5.11",
-		"@opentui/react": "^0.5.11",
-		"react": "^19.2.0",
-		"smol-toml": "^1.8.0",
-		"string-width": "^8.2.2"
-	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.11",
 		"@hughescr/stryker-bun-runner": "^1",
+		"@opentui/core": "^0.5.11",
+		"@opentui/react": "^0.5.11",
 		"@stryker-mutator/core": "^10",
 		"@types/bun": "^1.3.4",
 		"@types/react": "^19.2.0",
 		"fontkit": "^2.0.4",
+		"react": "^19.2.0",
+		"smol-toml": "^1.8.0",
+		"string-width": "^8.2.2",
 		"typescript": "^5.9.0",
 		"vitepress": "^1.6.4"
 	}

@@ -28,4 +28,10 @@ on Windows - until the release's binaries are signed (ADR 0056). The binary
 is verified against the release's SHA-256 checksums before the installer
 keeps it.
 
+On a musl Linux machine - Alpine and the Alpine-derived images - the binary
+needs the GNU C++ runtime, which the base image does not carry: install
+`libstdc++` (`apk add libstdc++`) before the first run. The release's musl
+smoke runs in a container that installs it, and measured without it the
+binary stops on a relocation error before it answers anything.
+
 Next: [first launch](./first-launch.md).

@@ -15,6 +15,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | `bun run lint`        | Lint and check formatting with Biome                   |
 | `bun run fmt`         | Lint, format, and fix with Biome                       |
 | `bun run typecheck`   | Typecheck with TypeScript                              |
+| `bun run build`       | Compile one prebuilt binary of the control plane        |
 | `bun run screenshots` | Regenerate the guide screenshots from fixture state     |
 
 `bun run dev` runs the source tree; it reads
@@ -49,6 +50,27 @@ of the push gate, and a run usually picks its own scope:
 [mutation testing](./mutation-testing.md) for what a campaign measures and what
 it costs, and [ADR 0055](../adr/0055-mutation-testing-runs-on-the-bun-test-runner.md)
 for the setup and the measured budget.
+
+## Prebuilt binary
+
+`bun run build <target> --out <dir>` compiles the control plane into the
+standalone executable the release publishes (ADR 0056), for one target:
+`linux-x64`, `linux-x64-musl`, `linux-arm64`, `linux-arm64-musl`,
+`darwin-x64`, `darwin-arm64`, or `windows-x64`. It prints the usage line and
+the target list when it is called without them.
+
+```sh
+bun run build linux-x64 --out dist
+./dist/factory-$(node -p "require('./package.json').version")-linux-x64 --version
+```
+
+The build installs the target's OpenTUI native core when it is not already in
+`node_modules`, with `--no-save`, so the compile embeds exactly the one core
+the target runs. Each release leg builds one target on a clean runner
+(`bun install --omit=optional` first), and `bun run build` is the same command
+the leg runs. The app's runtime libraries are development dependencies: the
+binary carries them, and the npm package that installs the binary carries
+nothing but the installer.
 
 ## Shared control gallery
 
