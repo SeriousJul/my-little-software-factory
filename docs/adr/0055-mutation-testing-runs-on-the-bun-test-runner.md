@@ -50,13 +50,20 @@ to any descendant of the command.
 `bun run mutate` is its only entry.** `stryker.config.mjs` holds the campaign's
 shape and `scripts/mutate.sh` runs it under the crash guard and always removes
 the sandbox its own campaign left. It stands down from that removal only for a
-request to keep the temp dir: `false` and `0`, the two values Stryker's own
-parser reads as "never delete", plus `never` spelled out, in the
-`--cleanTempDir=x` form and the separated `--cleanTempDir x` one. Each campaign
-gets a temp dir of its own under `.stryker-tmp`, named for its process, and the
-removal is anchored to that one directory: Stryker's cleanup deletes the whole
-temp dir it is handed, so a shared one is two campaigns in one checkout
-destroying each other's work. Measured on this branch before that change, a
+request to keep the temp dir that Stryker itself honors: `false` and `0`, the two
+values its option parser reads as "do not delete", in the `--cleanTempDir=x`
+form and the separated `--cleanTempDir x` one. It stands down for nothing else,
+because core owns the deletion and this entry point cannot undo one: it reads any
+text but `false` and `0` as truthy, so `--cleanTempDir=never` asks Stryker to
+take the tree down, and the command says that at its gate rather than printing a
+keep it cannot deliver. Each campaign gets a temp dir of its own under
+`.stryker-tmp`, named for its process, and the removal is anchored to that one
+directory by its resolved path, so no `--tempDirName` the caller types can point
+`rm -rf` outside the campaign. Stryker's cleanup deletes the whole temp dir it is
+handed, so a shared one is two campaigns in one checkout destroying each other's
+work, and `.stryker-tmp` is in `ignorePatterns` because core auto-excludes only
+the single name it was handed: without that line a campaign copies a sibling's
+sandbox into its own. Measured on this branch before that change, a
 campaign that ran beside another in the same worktree reported 3 of its 9 mutants
 as errors. The command refuses to start a campaign on a Bun older than `1.3.7`,
 the release the plugin's inspector correlation needs; the control plane's own
@@ -122,9 +129,10 @@ survives the rewrite.
   campaigns and three dry runs measured on Bun 1.4.2: 1,765 mutants ran with zero
   runner errors, and the whole-`src` dry run passed once the two adjustments above
   landed. The rework of this branch's review re-ran campaigns over `src/fs.ts`,
-  `src/lines.ts`, and `src/herdr.ts` after each change, ending with two side by
-  side in one checkout, and cancelled one dry run on purpose to measure the
-  initial run's bound. A campaign runs the real terminal tests and the real
+  `src/lines.ts`, and `src/herdr.ts` after each change, ending with one campaign
+  that kept its sandbox beside one that cleaned up, one run on the value Stryker
+  reads as a delete, and one dry run cancelled on purpose to measure the initial
+  run's bound. A campaign runs the real terminal tests and the real
   `bun:sqlite` state tests, and the recorded scores and the incomplete checks
   stand in [the verification record](../verification/mutation-testing.md).
 - The budget, measured: 8 workers ran 814 mutants in 11 minutes of mutant time
@@ -145,7 +153,7 @@ survives the rewrite.
   577 of 913. That says where the first gaps stand, not what the plane's score
   is.
 - The initial run is the whole suite in one process with no `--parallel`, so it
-  costs 3 minutes 25 seconds to 3 minutes 31 seconds against the 38 seconds
+  costs 3 minutes 24 seconds to 3 minutes 31 seconds against the 38 seconds
   `bun run test` takes. Two bounds stand over it and the tighter one governs.
   Core computes `dryRunTimeoutMinutes * 60 000`, hands it to the test runner as
   the dry run's `timeout`, and races that number itself: the runner core calls is
@@ -188,5 +196,7 @@ survives the rewrite.
   started in is written to: it resolves its own repository root, and the suite's
   harness test runs a copy of the script in a directory of its own so a campaign
   that is live in a worktree keeps its sandbox. Two campaigns in one checkout run
-  side by side without touching each other, and the reports are the one thing they
+  side by side without reaching each other's tree at either end of a run - the
+  removal names only its own campaign's dir, and the project copy ignores the
+  whole temp tree - and the reports are the one thing they
   still share: the last run to finish owns `reports/mutation`.

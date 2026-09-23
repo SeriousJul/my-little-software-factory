@@ -32,6 +32,21 @@ export default {
 		"!src/components/shared/gallery.ts",
 	],
 	ignorePatterns: [
+		// The temp tree, which is where every campaign's sandbox lives. Core
+		// excludes the temp dir from the project copy by matching the one
+		// `tempDirName` it was handed (`fs/project-reader.js` builds its ignore
+		// rules as ALWAYS_IGNORE plus `tempDirName`), and `scripts/mutate.sh`
+		// moves each campaign one level deeper so two campaigns in one checkout
+		// cannot delete each other's tree. The rule then names
+		// `.stryker-tmp/campaign-<pid>` and matches nothing above it, so without
+		// this line a campaign walks and copies a sibling campaign's sandbox into
+		// its own - measured on this branch, one planted
+		// `.stryker-tmp/probe-sibling/sandbox-ABC/deep/probe.txt` took the project
+		// read from 297 files to 298 and reappeared inside the new sandbox, and a
+		// sandbox kept by `--cleanTempDir=false` is copied whole by every campaign
+		// after it. Measured with this line here: the same probe leaves the read at
+		// 297 files and reaches no sandbox.
+		".stryker-tmp",
 		// This checkout's code-index directory - 38 MB in the main worktree, and
 		// rewritten while a campaign runs. The suite never reads it.
 		".codegraph",
@@ -52,6 +67,9 @@ export default {
 	// The base of the campaign's working tree. `scripts/mutate.sh` hands Stryker a
 	// `--tempDirName` under it for each run, so a campaign cleans its own dir and
 	// not a sibling campaign's; this value is what a direct `stryker run` uses.
+	// The tree it names is copied away from, not into: `.stryker-tmp` is in
+	// `ignorePatterns` above, because core only auto-excludes the one name it is
+	// handed.
 	tempDirName: ".stryker-tmp",
 	// "always": the sandbox goes even when a mutant run ends the campaign badly.
 	// The entry point's own removal covers the case this cannot: a child that dies

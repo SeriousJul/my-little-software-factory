@@ -32,8 +32,11 @@ copy, runs `bun test` against it, and removes that sandbox afterwards: the worki
 tree never holds a mutant. Each campaign gets a directory of its own there,
 named for its process, so two campaigns in one checkout do not delete each
 other's tree; they still share `reports/mutation`, where the last run to finish
-owns the report. Reports are not committed - `mutation.html` to read and
-`mutation.json` for a program to diff. The run takes the machine: it spawns one
+owns the report. The copy step ignores that whole temp tree, so a campaign reads
+none of what the campaigns before it left in it: Stryker excludes only the one
+temp directory it is handed, and the per-campaign name sits one level deeper.
+Reports are not committed - `mutation.html` to read and `mutation.json` for a
+program to diff. The run takes the machine: it spawns one
 `bun test` process per worker, each about 250 MB, and `concurrency` in
 `stryker.config.mjs` sets how many run at once - a quarter of the machine's
 logical cores there, which is the measured 8 on a 32-core machine and scales down
@@ -41,8 +44,13 @@ on a smaller one.
 
 To look inside a campaign's sandbox after it ends, ask Stryker to keep it and the
 entry point stands down with it: `bun run mutate -- --cleanTempDir false` (the
-`--cleanTempDir=false` form works the same). Any value that asks Stryker to
-delete the tree - `true`, `always` - leaves the removal armed.
+`--cleanTempDir=false` form works the same). Those are the only two values that
+keep it: `false` and `0` are exactly what Stryker's own option parser reads as
+"do not delete", and this entry point stands down for no value core does not, so
+`true`, `always`, and `never` all leave the removal armed. `never` is the one
+spelling whose English and whose parsed reading disagree - Stryker's parser takes
+any text but `false` and `0` as truthy - so the command says so at its gate
+instead of promising a sandbox that its own runner then takes down.
 
 The command refuses to start on a Bun older than `1.3.7`, the release that added
 the inspector events the runner reads to tie a mutant to its tests. The control
@@ -68,7 +76,7 @@ in one process - and the tighter one governs. `dryRunTimeoutMinutes` is core's:
 it races the dry run it hands the test runner. `bun.timeout` is the plugin's kill
 bound for one child, plus a fixed 30 seconds it allows itself for the inspector
 drain on that first run. The config sets 10 minutes and 300 seconds against a run
-that measures 3 minutes 25 seconds to 3 minutes 31 seconds here, so the plugin's
+that measures 3 minutes 24 seconds to 3 minutes 31 seconds here, so the plugin's
 330 seconds is what stands over it with room. A mutant run is bounded the same
 two ways: core gives it `timeoutFactor * netTime + timeoutMS + overhead`, where
 `netTime` is what the tests covering that one mutant took in the initial run, and
@@ -81,7 +89,7 @@ Measured on a 32-core machine, Bun 1.4.2, the suite of this repository:
 | Thing                                                             | Cost                         |
 | ----------------------------------------------------------------- | ---------------------------- |
 | `bun run test`                                                    | 38 s                         |
-| The campaign's initial run: the whole suite, instrumented, serial | 3 min 31 s                   |
+| The campaign's initial run: the whole suite, instrumented, serial | 3 min 24 s to 3 min 31 s    |
 | Mutants in `src`                                                  | 27,293 over 75 files         |
 | Mutants in the campaign's scope (`src` without the gallery)       | 26,177 over 74 files         |
 | 814 mutants of session-record and domain logic, 8 workers         | 11 min, about 4,400 per hour |

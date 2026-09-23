@@ -22,17 +22,23 @@
 # before it reaches that line, and the EXIT trap still runs. An operator who
 # asks Stryker to keep the temp dir wants the sandbox to look inside it, so the
 # trap stands down for the values that ask it: `false` and `0`, which is exactly
-# what Stryker's own option parser reads as "never delete" (parseCleanDirOption),
-# plus `never`, which that parser does not define and which this stand-down
-# therefore honors on its own. `true` and `always` ask Stryker to delete the tree,
-# and the trap stays armed for them.
+# what Stryker's own option parser reads as "do not delete"
+# (parseCleanDirOption in @stryker-mutator/core/dist/src/stryker-cli.js). It
+# stands down for nothing else, because this entry point cannot delete less than
+# core while core holds the tree. `never` is the plain-English spelling of that
+# request and is not one of the parser's values: it reads any text but `false`
+# and `0` as truthy, so `--cleanTempDir=never` asks core to delete the temp dir,
+# and `TemporaryDirectory.dispose` takes it down on a run that ends cleanly. The
+# line below says so at the gate instead of promising a keep this entry point
+# cannot deliver. `true`, `always`, and that `never` all leave the trap armed.
 #
 # Each campaign takes a temp dir of its own, named for this process, because
 # Stryker's temp dir is one tree that a cleanup deletes whole: two campaigns in
 # one checkout destroy each other's sandbox. Measured on this branch, a campaign
 # that ran beside another in the same worktree reported 3 of its 9 mutants as
-# errors. The per-campaign dir also means the removal below can never name a tree
-# this campaign did not create.
+# errors. The per-campaign dir is also the tree the removal is anchored to: see
+# the resolved-path check below, which is what keeps a caller-named dir from
+# pointing that removal outside the campaign.
 
 set -u
 
@@ -53,6 +59,7 @@ cd "$repo_root" || {
 # `--tempDirName` that names a tree of the caller's instead.
 temp_dir=".stryker-tmp/campaign-$$"
 keep_temp=0
+asked_for_never=0
 temp_dir_from_caller=0
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
@@ -78,33 +85,49 @@ for ((i = 0; i < ${#args[@]}; i++)); do
 			;;
 	esac
 	# Stryker lowercases the value before it reads it, so the match does too.
-	case "${value,,}" in false | 0 | never) keep_temp=1 ;; esac
+	case "${value,,}" in
+		false | 0) keep_temp=1 ;;
+		# The one value whose English reading and whose parsed reading disagree.
+		never) asked_for_never=1 ;;
+	esac
 done
+
+if [ "$asked_for_never" -eq 1 ] && [ "$keep_temp" -eq 0 ]; then
+	echo "mutate: Stryker reads --cleanTempDir=never as a request to delete the temp dir, so the sandbox goes with the run. Use --cleanTempDir=false to keep it for inspection." >&2
+fi
 
 if [ "$temp_dir_from_caller" -eq 0 ]; then
 	args+=("--tempDirName=$temp_dir")
 fi
 
-# The tree the removal may name: this campaign's own, under `.stryker-tmp`, and
-# nothing a caller located outside it. An absolute or oddly-located
-# `--tempDirName` is a tree this script did not choose and will not delete.
+# The tree the removal may name: this campaign's own, under the temp parent, and
+# nothing a caller located outside it. The test runs on the resolved path, not on
+# the text the caller typed, because a prefix test on an unnormalized string is
+# no anchor at all: `.stryker-tmp/../../victim` begins with the right words and
+# names the tree above this checkout, where `..` carries `rm -rf` out of the
+# campaign. `realpath -m` answers for a tree that does not exist yet, which is
+# the normal case here. When it cannot answer, or the name is not a tree under
+# the temp parent, this entry point removes nothing and Stryker's own cleanup is
+# the only cleanup that runs.
+temp_parent="$(realpath -m -- "$repo_root/.stryker-tmp" 2>/dev/null)" || temp_parent=""
+campaign_dir="$(realpath -m -- "$temp_dir" 2>/dev/null)" || campaign_dir=""
 remove_target=""
-case "$temp_dir" in
-	.stryker-tmp/*)
-		if [ "$keep_temp" -eq 0 ]; then
-			remove_target="$repo_root/$temp_dir"
-		fi
-		;;
-	*)
-		if [ "$keep_temp" -eq 0 ]; then
-			echo "mutate: --tempDirName=$temp_dir names a tree outside .stryker-tmp, so this entry point leaves its cleanup to Stryker." >&2
-		fi
-		;;
-esac
+if [ "$keep_temp" -eq 0 ] && [ -n "$temp_parent" ] && [ -n "$campaign_dir" ]; then
+	# The campaign's own dir and nothing else: a name that resolves to the temp
+	# parent itself would take down every sibling campaign's tree with it.
+	case "$campaign_dir" in
+		"$temp_parent"/*) remove_target="$campaign_dir" ;;
+		*)
+			echo "mutate: --tempDirName=$temp_dir is no campaign dir under $temp_parent, so this entry point leaves its cleanup to Stryker." >&2
+			;;
+	esac
+fi
 if [ -n "$remove_target" ]; then
 	# The campaign's dir first, then the parent, and only while it holds nothing
-	# else: `rmdir` fails on a tree another campaign is still using.
-	trap 'rm -rf "$remove_target"; rmdir "$repo_root/.stryker-tmp" 2>/dev/null || true' EXIT
+	# else: `rmdir` fails on a tree another campaign is still using. Both names
+	# are resolved and absolute, so the removal answers to this script's own
+	# repository root wherever the caller ran the command from.
+	trap 'rm -rf "$remove_target"; rmdir "$temp_parent" 2>/dev/null || true' EXIT
 fi
 
 # The Bun test-runner plugin correlates a test run to its mutants through the
