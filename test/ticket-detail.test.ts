@@ -1,8 +1,8 @@
 /** Deterministic wheel-burst policy tests for the native Ticket detail viewport. */
 import { describe, expect, test } from "bun:test";
 import {
-	detailLines,
 	type DetailLine,
+	detailLines,
 	newWheelBurst,
 	WHEEL_ACCELERATION_PAUSE_MS,
 	wheelRows,
