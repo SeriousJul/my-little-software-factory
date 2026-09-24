@@ -1725,10 +1725,23 @@ describe("the awaiting rule", () => {
 			const { state, intents, coordinator } = continuationRig();
 			const claim = state.claimHandoff("github:github.com:I_6", choice, "open");
 			if (!claim.ok) throw new Error(claim.reason);
+			// The projection folds the unfinished attempt into the open position's
+			// actionable fact, and the walk reads that fact first: one test of the
+			// position's standing, stated twice on the row.
+			const position = state
+				.projectedTickets(config.workflowStates, config.defaultTaskType)
+				.find((candidate) => candidate.identity === "github:github.com:I_6");
+			expect(position?.handoffRecoveryRequired).toBe(true);
+			expect(position?.actionable).toBe(false);
+			expect(state.handoffInFlight("github:github.com:I_6")).toBe(true);
 			await coordinator.tick();
 			expect(routes(intents)).toHaveLength(0);
-			// The ledger, not the position's state: the attempt stands unresolved.
-			expect(state.handoffInFlight("github:github.com:I_6")).toBe(true);
+			// The claim at the ask agrees: the same attempt is a hard refusal, so
+			// a route that reached the enqueue would never take a row either.
+			expect(state.handoffClaimCheck("github:github.com:I_6", "workflow")).toEqual({
+				ok: false,
+				reason: expect.stringContaining("recovery is required"),
+			});
 			state.close();
 		});
 
@@ -4090,16 +4103,137 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 		});
 	}
 
+	/**
+	 * The config with the pull request's own States: `ready-for-review` offers
+	 * the review the re-fired outcome names. Without these States every ticket
+	 * falls to the default task, and a fixture cannot tell "not open" apart
+	 * from "offers another task" - the second guard answers first.
+	 */
+	const pullStateConfig: FactoryConfig = {
+		...config,
+		workflowStates: [
+			{
+				name: "ready-for-review",
+				taskType: "review",
+				match: { sourceKind: "github-pull-request", labelsAny: ["ready-for-review"] },
+			},
+		],
+	};
+
 	test("a pull request that is in flight holds the route", async () => {
-		const { state, intents, setAgents, coordinator } = rig({ autoOn: true, agents: [] });
+		const { state, intents, setAgents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			config: pullStateConfig,
+		});
 		landPulls(state, pullTicket());
 		// The pull request's own turn runs: it is not open, and the route starts
-		// nothing on it.
+		// nothing on it. The position still offers the review the outcome names,
+		// so the task guard cannot stand in for this one.
 		pullOwnWork(state, setAgents, "running");
+		expect(
+			state
+				.projectedTickets(pullStateConfig.workflowStates, "implement")
+				.find((candidate) => candidate.identity === pullIdentity)?.suggestedTaskType,
+		).toBe("review");
 		refiredCycle(state, refiredOutcome());
 		await coordinator.tick();
 		expect(routeAsks(intents)).toBe(0);
 		expect(state.ticketState(pullIdentity)).toBe("running");
+		state.close();
+	});
+
+	/**
+	 * The position holds its own unfinished attempt: the walk reads that as
+	 * recovery, and the claim refuses it at the ask. This walk pins both
+	 * layers on one fixture, because either alone holds the route - the walk
+	 * skips the position, and the state's gate refuses an ask that reaches it.
+	 * That is defense in depth, and the record says so.
+	 */
+	test("a pull request with an unfinished attempt holds the route", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			config: pullStateConfig,
+		});
+		landPulls(state, pullTicket());
+		// Claimed and never settled: the attempt stands unresolved.
+		const claim = state.claimHandoff(pullIdentity, { ...choice, taskType: "review" }, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		const position = state
+			.projectedTickets(pullStateConfig.workflowStates, "implement")
+			.find((candidate) => candidate.identity === pullIdentity);
+		expect(position?.handoffRecoveryRequired).toBe(true);
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		expect(routeAsks(intents)).toBe(0);
+		// The state's own gate agrees: an ask that reached this position would
+		// be refused at the enqueue (ADR 0049).
+		expect(state.handoffClaimCheck(pullIdentity, "workflow")).toEqual({
+			ok: false,
+			reason: expect.stringContaining("recovery is required"),
+		});
+		state.close();
+	});
+
+	/**
+	 * The skip's route reads the closed cycle that rests open behind it: a
+	 * re-fired trace on a ticket that has since been handed off again, or that
+	 * awaits another turn, is not the skip this walk starts on. The order of
+	 * the closed cycle and the new turn is what this fixture holds.
+	 */
+	test("a re-fired trace on a ticket that is no longer open holds the route", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			config: pullStateConfig,
+		});
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome());
+		expect(state.ticketState(issueIdentity)).toBe("open");
+		expect(state.lastCompletion(issueIdentity)?.transition?.refired).toBe(true);
+		// The issue is handed off again before the cycle runs: its re-fired
+		// trace still stands, and the walk's entry test is the ticket's state.
+		// The source re-reads first, so the claim the walk's own fixture makes
+		// clears the re-verify gate that bounds a finished cycle.
+		state.applyFetch(source, {
+			status: "success",
+			fetchedAt: "2026-08-31T11:02:00Z",
+			tickets: [fetched()],
+		});
+		handOut(state, issueIdentity, "implement");
+		expect(state.ticketState(issueIdentity)).toBe("handed-off");
+		await coordinator.tick();
+		// The walk starts on the open ticket the skip left behind. An in-flight
+		// ticket with the same re-fired trace is not its candidate (ADR 0051).
+		expect(routeAsks(intents)).toBe(0);
+		state.close();
+	});
+
+	/**
+	 * The position's own actionability, taken alone. A claim holds both this
+	 * fact and the in-flight state above, so the pair is witnessed here on a
+	 * position that stands open: its source is unhealthy, which makes it
+	 * unactionable while it stays open, and the actionable guard is the only
+	 * one left between the position and the add.
+	 */
+	test("a pull request whose source is unhealthy holds the route", async () => {
+		const { state, intents, coordinator } = rig({
+			autoOn: true,
+			agents: [],
+			config: pullStateConfig,
+		});
+		landPulls(state, pullTicket());
+		refiredCycle(state, refiredOutcome());
+		// The position stays open; its source goes unhealthy under it.
+		state.applyFetch(pullSource, { status: "failed", reason: "gh is not authenticated" });
+		const position = state
+			.projectedTickets(pullStateConfig.workflowStates, "implement")
+			.find((candidate) => candidate.identity === pullIdentity);
+		expect(position?.state).toBe("open");
+		expect(position?.actionable).toBe(false);
+		await coordinator.tick();
+		expect(routeAsks(intents)).toBe(0);
 		state.close();
 	});
 

@@ -1259,6 +1259,12 @@ export class ObservationCoordinator {
 			const outcome = completion?.transition ?? null;
 			if (
 				outcome === null ||
+				// The marker carries the shape: `refired` is set only on an
+				// outcome that fired and derived a position, so a re-fired trace
+				// with no position or no fire is not a state the plane writes.
+				// These three tests hold the record against a damaged trace, and
+				// no walk reaches them on its own; the marker, the fire, the
+				// advance, and the write are the four this suite measures.
 				outcome.refired !== true ||
 				outcome.fired !== true ||
 				outcome.autoAdvance !== true ||
@@ -1273,11 +1279,16 @@ export class ObservationCoordinator {
 			const position = this.state
 				.projectedTickets(config.workflowStates, config.defaultTaskType)
 				.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
-			if (position === undefined || position.state !== "open") continue;
+			if (position === undefined) continue;
 			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
+			// One test of the position's standing. The projection builds
+			// `actionable` from the open state, so it holds every position that
+			// left the list - in flight, awaiting, or gone - as well as one the
+			// source cannot read, and an open ticket with an unresolved attempt is
+			// not actionable either. The queue's one-item-per-ticket rule is this
+			// cycle's own gate above: the walk adds only into an empty queue
+			// (ADR 0051).
 			if (!position.actionable) continue;
-			if (position.handoffRecoveryRequired) continue;
-			if (this.state.hasWorkItem(position.identity)) continue;
 			// The Same-type hold over the refresh lag: a position whose newest
 			// closed cycle completed the task it still suggests by stale labels
 			// has already run this route's task, and the add waits for the moved
@@ -1480,9 +1491,14 @@ export class ObservationCoordinator {
 		// the ticket whose turn just settled, and the claim check owns its
 		// standing, so the top-up does not demand the open ticket's health of
 		// it.
+		// The position's standing, in one test. An unfinished attempt is folded
+		// into the open position's `actionable` by the projection, and an
+		// awaiting position is the settled ticket's own row, whose attempt the
+		// settle resolved - so the recovery fact never stands apart from this
+		// one. The queue's one-item-per-ticket rule is this cycle's own gate
+		// above: the walk adds only into an empty queue, and the claim check at
+		// the ask refuses the same ledger a second time (ADR 0051).
 		if (position.state === "open" && !position.actionable) return null;
-		if (position.handoffRecoveryRequired) return null;
-		if (this.state.hasWorkItem(position.identity)) return null;
 		if (this.state.sameTypeHoldActive(position.identity, position.suggestedTaskType)) return null;
 		if (position.handoffCount >= config.maxHandoffsPerTicket) return null;
 		return position;
