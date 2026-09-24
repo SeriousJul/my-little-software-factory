@@ -140,11 +140,13 @@ describe("the native cores a build may embed", () => {
 
 	test("the add names every core the target needs, not one and whatever else resolves", () => {
 		// The loader's libc branch survives every --target, so a linux compile
-		// needs both siblings of its architecture. `bun add` resolves an os/cpu
-		// pair and no libc, so which siblings a resolver brings is its filter,
-		// not this build's decision: measured on this host, a plain `bun install`
-		// brought both x64 variants and `bun install --omit=optional` brought
-		// none. Naming what is missing is what makes the compile's need explicit.
+		// needs both siblings of its architecture and a tree holding only the
+		// glibc core fails the compile with `Could not resolve:
+		// "@opentui/core-linux-x64-musl"`. Which siblings a resolver brings is its
+		// optional-dependency filter's decision - measured on this host, a plain
+		// `bun install` brought both x64 variants and
+		// `bun install --omit=optional` brought none - so the build names what it
+		// needs instead of depending on that.
 		expect(missingNativeCores(BINARY_TARGETS["linux-x64"], ["@opentui/core-linux-x64"])).toEqual([
 			"@opentui/core-linux-x64-musl",
 		]);

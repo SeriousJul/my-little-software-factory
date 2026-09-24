@@ -172,17 +172,22 @@ this repository. Until that tag runs, every row below is incomplete.
   cross-compile and binary runs were measured on: the release ships from no
   compiler the gates did not run. `test/release-workflow.test.ts` fails if
   one pin drifts from the others.
-- The rework run of this branch measured `bun run lint`, `bun run typecheck`,
-  `bun run test` (2063 pass, 0 fail, 0 skipped, bun 1.4.2, node 26.9.0), and
-  `bun run docs:build`, all green, on the tree rebased onto `main` at
-  `58e062c`. No other `bun test` process was running on the machine when the
+- The second rework run of this branch measured `bun run lint`, `bun run
+  typecheck`, `bun run test` (2050 pass, 0 fail, 0 skipped, bun 1.4.2, node
+  26.9.0), and `bun run docs:build`, all green, on the tree rebased onto `main`
+  at `58e062c`. No other `bun test` process was running on the machine when that
   gate ran; the check is recorded here rather than assumed. The suite's own
   pseudo-terminal and screenshot cases skip on a machine that cannot run
   them, so a run that reports skips is the machine, not the branch.
-- The third review pass's fixes were gated the same way on this tree: `bun run
-  lint`, `bun run typecheck`, `bun run test` (2063 pass, 0 fail, 0 skipped)
-  against 85 files, and `bun run docs:build`, all green, with no other
-  `bun test` process running. The 13 tests over the previous pass's 2050 are the
+- The third review pass's fixes were gated on this tree: `bun run lint`, `bun
+  run typecheck`, `bun run test` (2063 pass, 0 fail, 0 skipped) against 85
+  files, and `bun run docs:build`, all green. Machine state, recorded rather
+  than assumed: the first of those full runs overlapped another worktree's
+  `bun test` (three named files, started 19:02:22), and the gate was re-run once
+  that process had gone, with no `bun test` of any other kind on the machine.
+  Both runs reported 2063 pass, 0 fail, 0 skipped, so no load flake appeared and
+  none is claimed - a file that fails in the full suite and passes alone is the
+  shape that would name one. The 13 tests over the previous pass's 2050 are the
   core-set decisions in `test/build-binary.test.ts`, the three smoke-comparison
   assertions in `test/release-workflow.test.ts`, and the four alias-launcher
   spawns in the new `test/alias-launcher.test.ts`.
@@ -223,6 +228,12 @@ this repository. Until that tag runs, every row below is incomplete.
   `bun.lock`. A plain `bun install` on this host places both `linux-x64`
   variants, so the host's own target builds from it and a foreign target still
   stops.
+- The add's own change was measured the same way, in a fresh tree built to hold
+  only the glibc core: `bun install --omit=optional`, then the target's own core
+  added, then the musl sibling taken out. On the previous guard, which returned
+  early once the target's own package was present, the compile died at
+  `Could not resolve: "@opentui/core-linux-x64-musl"`; on this one the add named
+  the sibling and `linux-x64` built at the same 101,316,064 bytes.
 - The version comparison in the four smoke steps was run against fake binaries
   for the three POSIX steps (the `linux-x64`, the alpine `linux-x64-musl` with
   `docker` stood in, and the `darwin-arm64`): the tag's own line passes,

@@ -23,16 +23,20 @@
  * `if (process.env.OPENTUI_LIBC === "musl")`. An environment read is not
  * statically knowable at build time - setting `OPENTUI_LIBC=glibc` for the
  * compile does not settle it - so on a linux leg both the glibc and the musl
- * sibling of the target's architecture must resolve. The add names them one by
- * one rather than leaving the pair to `bun add`'s os/cpu filter, which resolves
- * no libc, and the compiled linux binaries carry both - about 6.3 MB of native
- * library a given machine never loads. So the add is not a size measure: on a
- * linux leg it is the step that makes the imports the compile cannot prune
+ * sibling of the target's architecture must resolve. The add therefore names
+ * every core the target needs that the tree lacks, one by one, rather than
+ * trusting what a resolver's optional-dependency filter happens to bring: a
+ * tree holding only the glibc core fails the compile with `Could not resolve:
+ * "@opentui/core-linux-x64-musl"`, and the add names the sibling and the same
+ * target builds. The compiled linux binaries carry both - about 6.3 MB of
+ * native library a given machine never loads. So the add is not a size measure:
+ * on a linux leg it is the step that makes the imports the compile cannot prune
  * resolvable at all. The four linux, two darwin, and windows legs are measured
  * target by target in docs/verification/release.md, and the build refuses a
  * tree that holds a core outside the target's set: the compile embeds every
  * core it can resolve, so that tree builds a different artifact under the
  * release's own name.
+ *
  * Dropping the dead variant is not a local flag: `--external` moves the
  * specifier to run time in a binary that has no run-time `node_modules`, and
  * deleting the sibling from a linux tree fails the build with an unresolved
@@ -59,7 +63,7 @@ export interface BinaryTarget {
 	id: string;
 	/** The `bun build --compile --target` value for the id. */
 	bunTarget: string;
-	/** The OpenTUI native core this target runs at the last branch it can reach. */
+	/** The OpenTUI native core this target loads at run time, its own arch and libc. */
 	opentuiPackage: string;
 	/** The `bun add --os` value for the target's operating system. */
 	os: string;
