@@ -15,6 +15,7 @@ description: The bun commands of the repository, the shared control gallery, and
 | `bun run lint`        | Lint and check formatting with Biome                   |
 | `bun run fmt`         | Lint, format, and fix with Biome                       |
 | `bun run typecheck`   | Typecheck with TypeScript                              |
+| `bun run build`       | Compile one prebuilt binary of the control plane        |
 | `bun run screenshots` | Regenerate the guide screenshots from fixture state     |
 
 `bun run dev` runs the source tree; it reads
@@ -49,6 +50,39 @@ of the push gate, and a run usually picks its own scope:
 [mutation testing](./mutation-testing.md) for what a campaign measures and what
 it costs, and [ADR 0055](../adr/0055-mutation-testing-runs-on-the-bun-test-runner.md)
 for the setup and the measured budget.
+
+## Prebuilt binary
+
+`bun run build <target> --out <dir>` compiles the control plane into the
+standalone executable the release publishes (ADR 0056), for one target:
+`linux-x64`, `linux-x64-musl`, `linux-arm64`, `linux-arm64-musl`,
+`darwin-x64`, `darwin-arm64`, or `windows-x64`. It prints the usage line and
+the target list when it is called without them.
+
+```sh
+bun install --omit=optional
+bun run build linux-x64 --out dist
+./dist/factory-$(node -p "require('./package.json').version")-linux-x64 --version
+```
+
+The build adds the target's OpenTUI native cores when they are not in
+`node_modules`, with `--no-save`, and stops before the compile when the tree
+holds a core the target must not embed. The compile embeds every core it can
+resolve, so one build tree carries one target: after a leg for another target,
+`bun install --omit=optional` clears the leftover cores back to the release's
+tree, and the line the build prints names that command. The example above puts
+that install first because it is the step every release leg runs; a tree already
+carrying exactly the target's cores needs no reinstall. That add is what makes the core resolvable to the
+bundler, not a size measure: `@opentui/core` names eight platform packages in
+literal dynamic imports, and the bundler prunes the platform and arch tests per
+`--target` but cannot prune the libc test, which reads `process.env.OPENTUI_LIBC`.
+So a Linux leg places both libc variants and its binary carries both, and a
+Darwin or Windows leg builds with one. Each release leg builds one target on a
+clean runner (`bun install --omit=optional` first), and `bun run build` is the
+same command the leg runs; the measured core count and byte size per target are
+in [the release record](../verification/release.md). The app's runtime
+libraries are development dependencies: the binary carries them, and the npm
+package that installs the binary carries nothing but the installer.
 
 ## Shared control gallery
 

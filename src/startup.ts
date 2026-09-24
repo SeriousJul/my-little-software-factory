@@ -38,6 +38,15 @@ import { createTicketSource } from "./ticket-source.ts";
 /** The argument list, or the one usage line the operator reads instead. */
 export type StartupArgsResult = { ok: true; configPath: string } | { ok: false; reason: string };
 
+/**
+ * The argument list as a decision: run the plane on a config path, print the
+ * plane's version, or show the usage line.
+ */
+export type StartupDecision =
+	| { kind: "run"; configPath: string }
+	| { kind: "version" }
+	| { kind: "usage"; reason: string };
+
 /** A loaded config, or the one failure line the operator reads instead. */
 export type StartupConfigResult =
 	| { ok: true; config: FactoryConfig; note?: string }
@@ -91,6 +100,9 @@ export function startupLogger(config: FactoryConfig, configPath: string): Logger
 	});
 }
 
+/** The usage line the argument handling shows for anything it does not take. */
+export const USAGE = "usage: factory [--config <path>] | factory --version";
+
 /**
  * The argument list: no argument is the shipped default path, and
  * `--config <path>` names one. Anything else is the usage line.
@@ -99,7 +111,19 @@ export function configPathFromArgs(args: readonly string[]): StartupArgsResult {
 	if (args.length === 0) return { ok: true, configPath: defaultConfigPath() };
 	if (args.length === 2 && args[0] === "--config" && args[1] !== "")
 		return { ok: true, configPath: args[1] };
-	return { ok: false, reason: "usage: factory [--config <path>]" };
+	return { ok: false, reason: USAGE };
+}
+
+/**
+ * The argument list as a decision: `--version` prints the plane's version
+ * (the entry answers it before any boot), and every other list is the config
+ * path or the usage line.
+ */
+export function startupArgs(args: readonly string[]): StartupDecision {
+	if (args.length === 1 && args[0] === "--version") return { kind: "version" };
+	const parsed = configPathFromArgs(args);
+	if (parsed.ok) return { kind: "run", configPath: parsed.configPath };
+	return { kind: "usage", reason: parsed.reason };
 }
 
 /**
@@ -215,16 +239,16 @@ export function installStateShutdown(
 }
 
 /**
- * The whole startup: the arguments, the config, the model list check, and
- * the state open, in the boot order.
+ * The whole startup: the config, the model list check, and the state open,
+ * in the boot order.
+ *
+ * It takes the config path the argument decision already settled
+ * (`startupArgs`): one list, one parser, so the path the entry acts on and
+ * the path the boot loads cannot drift. A usage line stays the argument
+ * decision's answer, not a second parse in here.
  */
-export async function runStartup(args: readonly string[]): Promise<StartupResult> {
-	const parsed = configPathFromArgs(args);
-	if (!parsed.ok) {
-		return { ok: false, lines: [parsed.reason], exitCode: 1 };
-	}
-
-	const loaded = await loadStartupConfig(parsed.configPath);
+export async function runStartup(configPath: string): Promise<StartupResult> {
+	const loaded = await loadStartupConfig(configPath);
 	if (!loaded.ok) {
 		return { ok: false, lines: [loaded.reason], exitCode: 1 };
 	}
@@ -232,8 +256,8 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 	const notes: string[] = [];
 	if (loaded.note !== undefined) notes.push(loaded.note);
 
-	const statePath = statePathFor(loaded.config, parsed.configPath);
-	const logger = startupLogger(loaded.config, parsed.configPath);
+	const statePath = statePathFor(loaded.config, configPath);
+	const logger = startupLogger(loaded.config, configPath);
 	const runner = createChildProcessRunner();
 	// The config's model values, checked against what the agent runtimes
 	// actually offer. An unavailable list only warns: one agent kind that
@@ -260,12 +284,12 @@ export async function runStartup(args: readonly string[]): Promise<StartupResult
 
 	const sources = loaded.config.sources.map((source) => createTicketSource(source, runner));
 	logger.info(
-		`boot: bun ${typeof Bun !== "undefined" ? Bun.version : "unknown"}, config ${parsed.configPath}, state ${statePath}, sources ${sources.length}`,
+		`boot: bun ${typeof Bun !== "undefined" ? Bun.version : "unknown"}, config ${configPath}, state ${statePath}, sources ${sources.length}`,
 	);
 	return {
 		ok: true,
 		config: loaded.config,
-		configPath: parsed.configPath,
+		configPath,
 		statePath,
 		state: opened.state,
 		runner,

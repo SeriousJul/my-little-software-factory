@@ -23,10 +23,12 @@ import {
 	loadStartupConfig,
 	openStartupState,
 	runStartup,
+	startupArgs,
+	USAGE,
 } from "../src/startup.ts";
 import { stubEnv, unstubAllEnvs } from "./env-stub.ts";
 
-const USAGE = "usage: factory [--config <path>]";
+const USAGE_EXPECTED = "usage: factory [--config <path>] | factory --version";
 
 /** The checked-in Default configuration the package ships. */
 const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
@@ -88,6 +90,10 @@ function configBody(stateFile?: string, sources?: boolean, defaultModel?: string
 }
 
 describe("the startup argument handling", () => {
+	test("the usage line names both the config flag and the version flag", () => {
+		expect(USAGE).toBe(USAGE_EXPECTED);
+	});
+
 	test("no argument is the shipped default config path", () => {
 		expect(configPathFromArgs([])).toEqual({ ok: true, configPath: defaultConfigPath() });
 	});
@@ -101,12 +107,26 @@ describe("the startup argument handling", () => {
 
 	test.each([
 		["an unknown argument", ["--unknown"]],
+		["the --version flag, which the boot does not take", ["--version"]],
 		["a --config flag with no path", ["--config"]],
 		["an empty config path", ["--config", ""]],
 		["a different flag with a value", ["--other", "/tmp/one/config.toml"]],
 		["a trailing extra argument", ["--config", "/tmp/one/config.toml", "extra"]],
 	])("any other argument list yields the usage line: %s", (_name, args) => {
-		expect(configPathFromArgs(args)).toEqual({ ok: false, reason: USAGE });
+		expect(configPathFromArgs(args)).toEqual({ ok: false, reason: USAGE_EXPECTED });
+	});
+
+	test("--version alone is the version decision, which the entry answers before the boot", () => {
+		expect(startupArgs(["--version"])).toEqual({ kind: "version" });
+	});
+
+	test("every non-version argument list is the run or the usage decision", () => {
+		expect(startupArgs([])).toEqual({ kind: "run", configPath: defaultConfigPath() });
+		expect(startupArgs(["--config", "/tmp/one/config.toml"])).toEqual({
+			kind: "run",
+			configPath: "/tmp/one/config.toml",
+		});
+		expect(startupArgs(["--unknown"])).toEqual({ kind: "usage", reason: USAGE_EXPECTED });
 	});
 });
 
@@ -313,17 +333,12 @@ describe("the state shutdown", () => {
 });
 
 describe("the whole startup", () => {
-	test("a bad argument list is the usage line and a nonzero exit", async () => {
-		const result = await runStartup(["--unknown"]);
-		expect(result).toEqual({ ok: false, lines: [USAGE], exitCode: 1 });
-	});
-
 	test("an invalid config stops before the state opens", async () => {
 		const stateHome = inTempDir("run-config")("state-home");
 		stubEnv("XDG_STATE_HOME", stateHome);
 		const at = inTempDir("run-config")("invalid.toml");
 		writeFileSync(at, "default-agent = 42\n", "utf8");
-		const result = await runStartup(["--config", at]);
+		const result = await runStartup(at);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
@@ -337,7 +352,7 @@ describe("the whole startup", () => {
 		mkdirSync(blocked, { recursive: true });
 		const configPath = inTempDir("run-state")("config.toml");
 		writeFileSync(configPath, configBody(blocked), "utf8");
-		const result = await runStartup(["--config", configPath]);
+		const result = await runStartup(configPath);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
@@ -361,7 +376,7 @@ describe("the whole startup", () => {
 		const emptyBin = inTempDir("run-state-warn")("empty-bin");
 		mkdirSync(emptyBin, { recursive: true });
 		stubEnv("PATH", emptyBin);
-		const result = await runStartup(["--config", configPath]);
+		const result = await runStartup(configPath);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
 		expect(result.exitCode).toBe(1);
@@ -378,7 +393,7 @@ describe("the whole startup", () => {
 		const statePath = inTempDir("run-ready")("state.sqlite");
 		const configPath = inTempDir("run-ready")("config.toml");
 		writeFileSync(configPath, configBody(statePath, true), "utf8");
-		const result = await runStartup(["--config", configPath]);
+		const result = await runStartup(configPath);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.configPath).toBe(configPath);
@@ -394,7 +409,7 @@ describe("the whole startup", () => {
 		const stateHome = inTempDir("run-defaults")("state-home");
 		stubEnv("XDG_STATE_HOME", stateHome);
 		const missing = inTempDir("run-defaults")("does-not-exist.toml");
-		const result = await runStartup(["--config", missing]);
+		const result = await runStartup(missing);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.config).toEqual(
