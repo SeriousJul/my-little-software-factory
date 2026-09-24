@@ -26,6 +26,11 @@ _Avoid_: tab, pane, view, accordion, group
 The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle, group header
 
+**List filter**:
+A section's view control over which of its own rows exist in the view: the Ticket section's cycle is active, ignored, all, and the Consultation section's is open, closed, all.
+It is a view, not factory state, and it says nothing about any Ticket or Consultation. It is not the Grouping axis, which slices the rows that show, and not a fold, which shuts a Group's rows and no more.
+_Avoid_: search, hide toggle, view mode, grouping, fold
+
 **Response editor**:
 The Interaction mode that composes the operator's answer to an awaiting Consultation. Its draft is a Consultation fact, not an Agent turn, until the control plane sends it.
 _Avoid_: reply box, chat input
@@ -140,6 +145,11 @@ _Avoid_: offline source
 A ticket source that the operator deleted from the Config file.
 The plane stops reading it: its open tickets leave the list, its in-flight tickets stay visible and cannot be handed off, and no warning is pinned, because the removal is the operator's own decision.
 _Avoid_: disabled source, dropped source
+
+**Ignored ticket**:
+A Ticket the operator has judged out of the factory's way for the foreseeable future by their own act, until they take it back.
+Its Ticket state, its Parallel limit seat, and its source facts are unchanged: the ignore says only that the plane lists it nowhere and starts no Agent on it by itself.
+_Avoid_: hidden ticket, shelved ticket, buried, wontfix, archived, dismissed
 
 **Attention band**:
 The ticket list's first sort: awaiting tickets first, then the in-flight states, running before handed-off, then open actionable tickets, then open tickets that are not actionable.
