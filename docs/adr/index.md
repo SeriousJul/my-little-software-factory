@@ -66,3 +66,5 @@ body states the context, the decision, and the consequences.
 - [ADR 0055: Mutation testing runs on the Bun test runner](./0055-mutation-testing-runs-on-the-bun-test-runner.md)
 - [ADR 0056: The control plane ships as a prebuilt binary the npm package installs](./0056-the-control-plane-ships-as-a-prebuilt-binary-the-npm-package-installs-it.md)
 - [ADR 0057: The review score read takes the verdict line under its markdown](./0057-the-review-score-read-takes-the-verdict-line-under-its-markdown.md)
+- [ADR 0058: The grouping axis is factory state and the folds are not](./0058-the-grouping-axis-is-factory-state-and-the-folds-are-not.md)
+- [ADR 0059: A Group presents the attention order and never a new sort](./0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)

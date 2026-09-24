@@ -19,12 +19,12 @@ The always-present base surface of the control plane. It holds three list sectio
 _Avoid_: dashboard, home, screen, primary view
 
 **Section**:
-An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows. No section is ever hidden: the Work section keeps its header row while it is empty (ADR 0049).
-_Avoid_: tab, pane, view, accordion
+An independently collapsable list in the Main view. The Ticket section holds the ticket list, the Consultation section holds the Consultation list, and the Work section holds the Work queue. All three can be expanded at the same time. A collapsed section shrinks to its header row, and the cursor's step crosses over it to the next section the terminal shows. No section is ever hidden: the Work section keeps its header row while it is empty (ADR 0049). A Group is inside a section's list, never a section itself.
+_Avoid_: tab, pane, view, accordion, group
 
 **Section header**:
 The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) and the conditional held count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
-_Avoid_: title bar, tab label, accordion toggle
+_Avoid_: title bar, tab label, accordion toggle, group header
 
 **Response editor**:
 The Interaction mode that composes the operator's answer to an awaiting Consultation. Its draft is a Consultation fact, not an Agent turn, until the control plane sends it.
@@ -141,10 +141,23 @@ A ticket source that the operator deleted from the Config file.
 The plane stops reading it: its open tickets leave the list, its in-flight tickets stay visible and cannot be handed off, and no warning is pinned, because the removal is the operator's own decision.
 _Avoid_: disabled source, dropped source
 
-**Attention group**:
+**Attention band**:
 The ticket list's first sort: awaiting tickets first, then the in-flight states, running before handed-off, then open actionable tickets, then open tickets that are not actionable.
-Within its group the list sorts by newest external update, then ticket identity (ADR 0050).
-_Avoid_: list bucket, triage group
+Within its band the list sorts by newest external update, then ticket identity (ADR 0050).
+_Avoid_: attention group, list bucket, triage group
+
+**Group**:
+A run of ticket rows in the Ticket section's list that share one value of the Grouping axis, under its own Group header.
+A collapsed group shows nothing but its header. A group is a presentation of the list order and never a new one: the order inside it is the order the flat list holds, and the groups stand by the best attention band among the tickets they hold (ADR 0059).
+_Avoid_: bucket, category, folder, section
+
+**Group header**:
+The row that names one Group, its count, and the count of held decisions it hides. The cursor can rest on it, and no ticket is selected there.
+_Avoid_: section header, divider, group row
+
+**Grouping axis**:
+The one fact that splits the Ticket section's list into groups: `none`, `repository`, `source`, `task`, `state`, or `position`. Its value is factory state on the state file; which groups stand collapsed is not (ADR 0058).
+_Avoid_: group-by field, sort key, filter, view mode
 
 **Issue reference**:
 The fact that a pull request closes one or more issues, read from the source.
