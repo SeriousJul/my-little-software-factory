@@ -10,12 +10,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { ticketCloseDialog } from "../src/components/ticket-close.ts";
-import {
-	type ENVIRONMENT_KINDS,
-	type Ticket,
-	type TicketState,
-	UNRANKED_PRIORITY,
-} from "../src/domain/ticket.ts";
+import type { ENVIRONMENT_KINDS, Ticket, TicketState } from "../src/domain/ticket.ts";
 
 /** The ticket one dialog state renders: a handoff of the named environment. */
 function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[number]): Ticket {
@@ -60,7 +55,6 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,
-		priority: UNRANKED_PRIORITY,
 	};
 }
 

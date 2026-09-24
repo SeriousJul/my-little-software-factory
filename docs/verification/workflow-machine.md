@@ -32,7 +32,7 @@ Agent.
 | The default source list carries an open item before it holds any workflow label, so a fresh pull request can be labeled | `test/ticket-source.test.ts` | Passed |
 | The decision modal states the written facts, the failed write, and the missing pull request above the rows that decide on them | `test/auto-mode.test.ts` | Passed |
 | The Re-fire row stands on an outcome that fired no branch or failed its write, and a complete outcome shows none: the confirm refreshes the pull request sources, fires the turn's transition again, and swaps the re-fired outcome onto the trace only while it still records the outcome the operator acted on, the turn staying awaiting with no decision change (ADR 0054) | `test/auto-mode.test.ts`, `test/decision-modal.test.ts`, `test/state.test.ts` | Passed |
-| An auto-advance transition routes the derived position without the operator, in manual mode too, and every other completion closes in auto mode | `test/observation.test.ts`, `test/auto-mode.test.ts` | Passed |
+| An auto-advance transition routes the derived position without the operator, while auto mode is on; the route enters the Work queue, and a settled turn that offers a continuation rests in awaiting for the operator in manual mode. The in-manual-mode route this record first measured is retired (ADR 0051) | `test/observation.test.ts`, `test/auto-mode.test.ts` | Passed |
 | A pre-machine config is rewritten at load: rules become states, expressible edges become transitions, the shipped parking state and the seed transitions come over with the clean templates, and every dropped edge is named in the report | `test/config-migration.test.ts` | Passed |
 | The migration backs the old file up, writes its report, keeps the file's mode, validates the rewrite before it writes, and stops the load with the file unchanged on any failure | `test/config-migration.test.ts` | Passed |
 | After the migration the loader is strict: a pre-machine key is one readable config error that points at the backup | `test/config-migration.test.ts`, `test/config.test.ts` | Passed |
@@ -83,15 +83,18 @@ Observed, in order:
   rank it stood at was `low`, not `high`: the alert carries an operator
   priority override `low` set in the live state, which beats its
   `high` severity label and travels the link (ADR 0042). The criterion's
-  `high` assumes the alert ranked by its severity label. With the
+  `high` assumes the pull request ranked by its severity label. With the
   override in force, the pull request stood in the `low` band, behind
   the ranked tickets, not first in the ticket list, and offered
   `review` from its derived position.
-- After the refresh re-read the sources, the stored repository
-  identities read canonical lowercase, the API's owner casing left in
-  the display name: the issue and pull request sources write the
-  canonical form, and the branch link holds across the casing an older
-  plane stored, which was the fault that kept the legacy pair unlinked.
+  This walk is a dated record of the run, and the rule it measured is
+  retired: the ticket priority, its rank inheritance, its operator
+  override, and the ranked order are gone, and the Work queue's order is
+  the only order (ADR 0050). The severity labels the walk names still
+  stand as facts on the row; they order nothing. The branch link the walk
+  reads still stands: the closing references remain the source fact the
+  fixing-pull-request rule and the transition's linked-pull-request
+  lookup read (ADR 0042, kept by ADR 0050).
 
 Could not run:
 

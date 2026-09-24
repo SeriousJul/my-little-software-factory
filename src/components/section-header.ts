@@ -28,6 +28,11 @@ interface SectionHeaderProps {
 	recovery?: number;
 	/** The Work queue's depth for the Work section's header (ADR 0034). */
 	waiting?: number;
+	/**
+	 * The queue pause for the Work section's header (ADR 0052): the brake on
+	 * the queue's drain, factory state that shows where the pane owns it.
+	 */
+	paused?: boolean;
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
@@ -81,6 +86,7 @@ export function SectionHeader({
 	awaitingResponse = 0,
 	recovery = 0,
 	waiting = 0,
+	paused = false,
 	held = 0,
 	bell = false,
 	heldBell = false,
@@ -97,8 +103,8 @@ export function SectionHeader({
 				: `open ${open}  running ${running}  awaiting ${awaiting}`
 			: section === "work"
 				? wide
-					? `waiting: ${waiting}`
-					: `waiting ${waiting}`
+					? `waiting: ${waiting}${paused ? "  paused" : ""}`
+					: `waiting ${waiting}${paused ? "  paused" : ""}`
 				: wide
 					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
 					: `awaiting ${awaitingResponse}  recovery ${recovery}`;

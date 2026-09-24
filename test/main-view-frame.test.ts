@@ -296,10 +296,11 @@ describe("the merged Main view", () => {
 				expect(rows[0]).toContain("▾ Tickets  open: 5  running: 2  awaiting: 1");
 				expect(headerOf(frame, "Tickets").startsWith("▾")).toBe(true);
 				expect(headerOf(frame, "Consultations").startsWith("▾")).toBe(true);
-				// Both sections own a list box at the same time, and the
-				// steady zero for held keeps its row unclaimed: the held
-				// count shows only above zero.
-				expect(paneTopRows(frame)).toBe(2);
+				// All three sections own a list box at the same time (the Work
+				// section stands always visible, ADR 0049), and the steady zero
+				// for held keeps its row unclaimed: the held count shows only
+				// above zero.
+				expect(paneTopRows(frame)).toBe(3);
 				expect(headerOf(frame, "Tickets")).not.toContain("held");
 				// One detail pane answers for the section under the cursor:
 				// it shows the selected Ticket while the cursor is in the
@@ -376,7 +377,7 @@ describe("the merged Main view", () => {
 				);
 			},
 			59,
-			24,
+			27,
 			{
 				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
@@ -393,7 +394,7 @@ describe("the merged Main view", () => {
 				);
 			},
 			40,
-			19,
+			27,
 			{
 				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
@@ -420,7 +421,7 @@ describe("the merged Main view", () => {
 				);
 			},
 			59,
-			24,
+			27,
 			{
 				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
@@ -465,7 +466,9 @@ describe("the merged Main view", () => {
 						headerOf(f, "Tickets").startsWith("▸"),
 					);
 					expect(headerOf(collapsed, "Consultations").startsWith("▾")).toBe(true);
-					expect(paneTopRows(collapsed)).toBe(1);
+					// The Consultation box and the always-visible Work box both
+					// stand while the Ticket section is collapsed.
+					expect(paneTopRows(collapsed)).toBe(2);
 					expect(detailPaneText(collapsed)).toContain("Retry policy for webhooks");
 					// The step out of the collapsed section crosses to the first
 					// visible Consultation.
@@ -481,10 +484,11 @@ describe("the merged Main view", () => {
 						"the Consultation section to collapse",
 						(f) => headerOf(f, "Consultations").startsWith("▸"),
 					);
-					// Both sections are collapsed now: their headers stay, their
-					// boxes are gone, and the detail keeps the retained row.
+					// The Consultation section is collapsed now: its header
+					// stays, its box is gone, and the detail keeps the retained
+					// row. The Work box stands always visible (ADR 0049).
 					expect(headerOf(collapsedAgain, "Tickets").startsWith("▸")).toBe(true);
-					expect(paneTopRows(collapsedAgain)).toBe(0);
+					expect(paneTopRows(collapsedAgain)).toBe(1);
 					expect(detailPaneText(collapsedAgain)).toContain("consultation-cccccccc");
 					const restored = await press(
 						setup,
@@ -493,8 +497,8 @@ describe("the merged Main view", () => {
 						(f) => headerOf(f, "Consultations").startsWith("▾"),
 					);
 					// The Ticket section stayed collapsed: only the Consultation
-					// box came back.
-					expect(paneTopRows(restored)).toBe(1);
+					// box came back, beside the always-visible Work box.
+					expect(paneTopRows(restored)).toBe(2);
 					expect(restored).toContain("┌─❯ Consultations");
 				},
 				state,
@@ -605,7 +609,9 @@ describe("the merged Main view", () => {
 				await press(setup, "x", "the Ticket section to collapse", (f) =>
 					headerOf(f, "Tickets").startsWith("▸"),
 				);
-				expect(paneTopRows(setup.captureCharFrame())).toBe(1);
+				// The Consultation box and the always-visible Work box both
+				// stand while the Ticket section is collapsed.
+				expect(paneTopRows(setup.captureCharFrame())).toBe(2);
 				// The Ticket header holds its own row above its box: the
 				// collapsed header is row one, below the mode line.
 				await mouseClick(setup, 10, 1);
@@ -619,7 +625,7 @@ describe("the merged Main view", () => {
 				expect(frame).toContain("┌─❯ Tickets");
 				// A click on the expanded Consultation header collapses the
 				// section, and the cursor stays on the row it held.
-				await mouseClick(setup, 10, 22);
+				await mouseClick(setup, 10, 15);
 				const collapsed = await awaitFrame(
 					setup,
 					(candidate) => headerOf(candidate, "Consultations").startsWith("▸"),
@@ -736,7 +742,7 @@ describe("the merged Main view", () => {
 					expect(view).toContain("[consultation-types.<name>] to the config file");
 				},
 				60,
-				20,
+				27,
 				{ state, config: narrowConfig, home, runner: emptyAgentRunner(), sources: [source] },
 			);
 		} finally {
@@ -755,20 +761,20 @@ describe("the merged Main view", () => {
 					// line and the Action bar stay permanent, and both sections
 					// still hold a real list box.
 					const frame = await settle(setup);
-					expect(rowsOf(frame)).toHaveLength(19);
+					expect(rowsOf(frame)).toHaveLength(27);
 					expect(rowsOf(frame)[0]).toContain("auto: off");
 					expect(rowsOf(frame)[1]).toContain("Tickets");
-					expect(rowsOf(frame)[9]).toContain("Consultations");
-					expect(paneTopRows(frame)).toBe(2);
+					expect(rowsOf(frame)[12]).toContain("Consultations");
+					expect(paneTopRows(frame)).toBe(3);
 					expect(actionBarRowOf(frame)).toContain("? Help");
 					expect(messageRowOf(frame)).not.toBe(actionBarRowOf(frame));
 					// The toggle answers at the minimum size, and the room the
-					// collapsed section frees goes to the one that stays.
+					// collapsed section frees goes to the ones that stay.
 					const collapsed = await press(setup, "x", "the Ticket section to collapse", (f) =>
 						headerOf(f, "Tickets").startsWith("▸"),
 					);
-					expect(rowsOf(collapsed)).toHaveLength(19);
-					expect(paneTopRows(collapsed)).toBe(1);
+					expect(rowsOf(collapsed)).toHaveLength(27);
+					expect(paneTopRows(collapsed)).toBe(2);
 					// The collapsed Ticket section keeps its header row, so the
 					// Consultation header and box rise one row.
 					expect(rowsOf(collapsed)[2]).toContain("Consultations");
@@ -778,7 +784,7 @@ describe("the merged Main view", () => {
 				state,
 				undefined,
 				40,
-				19,
+				27,
 			);
 		} finally {
 			state.close();
@@ -795,10 +801,10 @@ describe("the merged Main view", () => {
 				// The Consultation header and box sit below the Ticket
 				// section's: at this size the Ticket section holds the cursor,
 				// so the Consultation box keeps its minimum of three content
-				// rows, and the second seeded row sits on frame row 26.
-				// The click moves the cursor, and the Consultation box grows
-				// to the remaining rows, so the selected row rests on 13.
-				await mouseClick(setup, 10, 26);
+				// rows, and the second seeded row sits on frame row 19. The
+				// click takes the row and grows the Consultation box to the
+				// remaining rows, so the selected row rests on 13.
+				await mouseClick(setup, 10, 19);
 				const selected = await awaitFrame(
 					setup,
 					(f) => rowsOf(f)[13]?.includes("❯ ") === true,
@@ -904,7 +910,7 @@ describe("the merged Main view", () => {
 				// in both sections.
 				expect(rows[0]).toContain("auto: off");
 				expect(rows[1]).toContain("Tickets");
-				expect(rows[22]).toContain("Consultations");
+				expect(rows[15]).toContain("Consultations");
 				expect(rows[2]).toContain("┌─");
 				expect(rows.at(-3)).toContain("└─");
 				expect(actionBarRowOf(frame)).toContain("x Section");
@@ -1088,7 +1094,7 @@ describe("the merged Main view", () => {
 				state,
 				{ sources: [source] },
 				WIDTH,
-				24,
+				27,
 				liveConsultationAgents([uid("t")]),
 			);
 		} finally {

@@ -18,6 +18,7 @@ import {
 	actionBarRowOf,
 	awaitFrame,
 	closeOverlay,
+	frameText,
 	HEIGHT,
 	markerRowOf,
 	messageRowOf,
@@ -25,6 +26,7 @@ import {
 	openLauncher,
 	openMessageView,
 	press,
+	pressArrow,
 	pressF2,
 	rgb,
 	roleColor,
@@ -37,7 +39,12 @@ import {
 } from "./app-harness.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import { DelayedRunner } from "./delayed-runner.ts";
-import { agentListJson, FakeRunner } from "./fake-runner.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	workspaceCreateJson,
+	workspaceListJson,
+} from "./fake-runner.ts";
 import { FakeSource } from "./fake-source.ts";
 import { SAMPLE_TICKETS } from "./sample-tickets.ts";
 import {
@@ -250,7 +257,14 @@ describe("the permanent Message line", () => {
 		}
 	});
 
-	test("surfaces a failed referenced issue read as one warning on the line (ADR 0023)", async () => {
+	/**
+	 * The source warnings' channel: a refresh that absorbs a peripheral
+	 * failure says so once, and the line carries the sentence. ADR 0050
+	 * retired the referenced-issue read that first used it; the security
+	 * sources still write it, when a repository has the feed's feature off
+	 * (the reason the live case below carries).
+	 */
+	test("surfaces a source refresh's absorbed failure as one warning on the line", async () => {
 		const state = freshState();
 		const source = new FakeSource("pulls", "github-pull-requests", success([issueTicket()]));
 		try {
@@ -259,24 +273,23 @@ describe("the permanent Message line", () => {
 					// The first refresh settles cleanly.
 					source.settle(success([issueTicket()]));
 					await awaitFrame(setup, (f) => f.includes("Add a webhook retry policy"), "the ticket");
-					// The next refresh fails its direct read: the source still
+					// The next refresh absorbs one feed's failure: the source still
 					// succeeds, and its one warning line surfaces on the line.
 					setup.mockInput.pressKey("r");
 					await callsReached(source, 2);
+					const disabled = "Dependabot alerts are disabled for acme/factory";
 					source.settle({
 						status: "success",
 						fetchedAt: "2026-08-31T10:02:00Z",
 						tickets: [issueTicket()],
-						warnings: ["referenced issue read failed: GitHub rate limit exceeded"],
+						warnings: [disabled],
 					});
 					const frame = await awaitFrame(
 						setup,
-						(f) => messageRowOf(f).includes("referenced issue read failed"),
+						(f) => messageRowOf(f).includes("Dependabot alerts are disabled for"),
 						"the warning",
 					);
-					expect(messageRowOf(frame).trim()).toBe(
-						"Warning: referenced issue read failed: GitHub rate limit exceeded",
-					);
+					expect(messageRowOf(frame).trim()).toBe(`Warning: ${disabled}`);
 					source.settle(success([issueTicket()]));
 				},
 				WIDTH,
@@ -310,15 +323,16 @@ describe("the permanent Message line", () => {
 					await press(setup, "return", "the handoff working", (f) =>
 						messageRowOf(f).startsWith("Working: handing off"),
 					);
-					// Its failure becomes the error, covering the working.
+					// Its pickup fails: the item drops with the warning that names
+					// the operation and the reason (ADR 0049), covering the working.
 					await awaitFrame(
 						setup,
-						(f) => messageRowOf(f).startsWith("Error: "),
-						"the handoff error",
+						(f) => messageRowOf(f).startsWith("Warning: queued handoff"),
+						"the handoff drop warning",
 						15000,
 					);
 					expect(messageRowOf(setup.captureCharFrame()).trim()).toBe(
-						"Error: error: the daemon is down",
+						'Warning: queued handoff for "Add a webhook retry policy" was not run: error: the daemon is down',
 					);
 					// A new operation replaces the error with its own working.
 					await press(setup, "r", "the refresh working", (f) =>
@@ -734,6 +748,70 @@ describe("the permanent Message line", () => {
 			HEIGHT,
 			{ config: BASE_CONFIG, runner: longLineHandoffRunner(), initialTickets: SAMPLE_TICKETS },
 		);
+	});
+
+	test("the queue's own words stand on the line, in the queue's own place", async () => {
+		// The one-seat config runs the first start, and holds the second in
+		// the Work queue while the seat stays full. The queue's lines are the
+		// module's facts read back on the Message line: the enqueue's notice
+		// says where the start waits, the queue's Delete says where it went,
+		// and the pickup's notice says where it ran.
+		const cappedConfig = { ...issuesConfig, maxParallelAgents: 1 };
+		const state = freshState();
+		const source = new FakeSource("issues", "github-issues", success([issueTicket()]));
+		// The fake herdr answers every command with no body; the workspace
+		// list the pickup asks needs its JSON, or the start fails on the
+		// unreadable answer the queue line would not carry.
+		const runner = new FakeRunner();
+		runner.set("herdr", ["workspace", "list"], { stdout: workspaceListJson([]) });
+		runner.setDefault({ stdout: workspaceCreateJson("ws-1") });
+		try {
+			await withApp(
+				async (setup) => {
+					// Two open tickets: the first takes the seat, the second
+					// waits behind it in the queue.
+					const secondTicket = issueTicket("github:github.com:I_6", {
+						title: "Keep tickets across starts",
+					});
+					source.settle(success([issueTicket(), secondTicket]));
+					await awaitFrame(
+						setup,
+						(f) => rowsOf(f).some((row) => row.includes("Keep tickets acro")),
+						"the second ticket",
+					);
+					await press(setup, "return", "the first start", (f) =>
+						messageRowOf(f).includes("started from the Work queue"),
+					);
+					// The queue takes the second start while the seat stays
+					// full, and its notice stands on the line.
+					await pressArrow(setup, "down", "the cursor to the second ticket", (f) =>
+						rowsOf(f).some((row) => row.includes("Keep tickets acro")),
+					);
+					const queued = await press(setup, "return", "the second start", (f) =>
+						messageRowOf(f).includes("is in the Work queue; it starts when a seat frees"),
+					);
+					expect(frameText(queued)).toContain("waiting: 1");
+					// The queue's Delete removes the item, and its own words
+					// stand on the line.
+					await press(setup, "return", "the queue-jump to the item", (f) =>
+						f.includes("┌─❯ Work queue"),
+					);
+					await press(setup, "delete", "the item removed", (f) =>
+						messageRowOf(f).includes("was removed"),
+					);
+					const frame = await settle(setup);
+					expect(messageRowOf(frame)).toContain(
+						`the waiting start for "Keep tickets across starts" was removed`,
+					);
+					expect(frameText(frame)).toContain("waiting: 0");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: cappedConfig, state, runner, sources: [source] },
+			);
+		} finally {
+			state.close();
+		}
 	});
 
 	test("is silent for scheduled refreshes, and warns on a failed fetch", async () => {

@@ -85,16 +85,6 @@ acceleration = 0.8
 # Rows moved by one accelerated wheel event. At least speed.
 maximum-speed = 6
 
-# --- Priority -------------------------------------------------------------
-
-# An ordered list of labels that ranks tickets: the first entry is the
-# highest rank. A ticket that carries one of these labels ranks by it. The
-# operator bumps a rank from the ticket detail, and a bump beats the label.
-# An "off" bump sets the ticket unranked. Omitted: tickets are not ranked
-# and the list keeps its previous order.
-[priority]
-labels = ["critical", "high", "low"]
-
 # --- Logging --------------------------------------------------------------
 
 # The plane's own file log. The TUI owns the terminal, so the run's record
@@ -366,7 +356,6 @@ host = "github.com"
 | `attention-bell` | no | `true` | Ring the terminal bell when a Consultation settles. |
 | `interaction-exit-key` | no | `f12` | Exit Agent interaction mode. A function key `f1` to `f24`, or `ctrl` plus one letter. Not `ctrl+c`: the emergency exit owns that key. |
 | `scroll` | no | the `[scroll]` defaults | The detail-pane scroll. |
-| `priority` | no | none | The ordered priority labels that rank tickets. Omitted: tickets are not ranked and the list keeps its previous order. |
 | `logging` | no | none | The plane's own file log. Omitted: the run writes no log, the state of a config the plane seeded before logging. |
 | `agents` | yes | - | The agent types. At least one table. |
 | `task-types` | yes | - | The task types. At least one table. |
@@ -391,12 +380,6 @@ host = "github.com"
 | `file` | no | `factory.log` next to the state file | The log file. A relative path resolves against the directory of this config file. |
 | `max-size-mib` | no | `10` | The size, in mebibytes, at which the current file rotates. A whole number of 1 or more. |
 | `keep` | no | `5` | The rotated files kept, from `file.1` up to the `keep`-th file. A whole number of 1 or more. |
-
-**`[priority]`** (optional table).
-
-| Key | Required | Default | What it does |
-| --- | --- | --- | --- |
-| `labels` | yes, when the table is set | - | The ordered priority labels. The first entry is the highest rank. A ticket carrying one ranks by it; an operator bump beats the label, and an `off` bump sets the ticket unranked. |
 
 **`[agents.<name>]`** (one table per agent type).
 
@@ -483,7 +466,7 @@ carries the command that creates them.
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
 | `pull-request-facts` | no | none | The labels the transition writes on the ticket's fixing pull request, the same convergence. No fixing pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own fixing pull request: one surface takes both fact lists in one write. |
 | `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the review's score against. The review posts its score on the pull request - a comment or a review body - in the template's fixed line, and the branch reads the newest record that carries one. A whole number from 0 to 100. A score branch requires it. |
-| `auto-advance` | no | `false` | The factory decides the completed turn without the operator: the position it derives hands off at any time, and a transition with no position closes the cycle even in manual mode. |
+| `auto-advance` | no | `false` | The factory decides the completed turn without the operator, in auto mode: the position it derives enters the Work queue as the top-up's continuation, and a transition that derives no position closes the cycle. Manual mode runs no top-up, so a routable turn rests in awaiting for the operator's Decision screen (ADR 0051). |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
 | `environment` | no | - | The environment the route the transition derives runs in. One of `live-worktree` or `worktree`. |
 | `branches` | no | none | The judgment branches, in order. The first branch whose `when` holds fires; a branch with no `when` is the fallback the transition fires on when no judgment held. |
@@ -502,19 +485,23 @@ carries the command that creates them.
 ## Notes
 
 A transition's `auto-advance` lets the control plane decide the completions
-of its task type without the operator even in manual mode. A branch carries
-its own `auto-advance` to decide one judgment's completion and leave the
-others to the transition's. The plane fires the transition on every completed
-turn: it writes the label facts, and the
-machine re-derives the position from the written labels on the ticket and
-its fixing pull request. One ticket that is both the settled ticket and the
-fixing pull request - a pull request ticket - is one surface: the plane
-converges it to the two fact lists at once, in one write. A derived position
-hands off while the parallel limit and the per-ticket handoff limit have
-room; a transition that derives no position closes the cycle, and a route at
-either limit degrades the same way the open dispatch does. The agents never
-write workflow labels (ADR 0027): the plane writes them, and a ticket's
-position is always re-derived from the labels it carries.
+of its task type without the operator, while Auto-handoff mode is on. A branch
+carries its own `auto-advance` to decide one judgment's completion and leave
+the others to the transition's. The plane fires the transition on every
+completed turn: it writes the label facts, and the machine re-derives the
+position from the written labels on the ticket and its fixing pull request.
+One ticket that is both the settled ticket and the fixing pull request - a
+pull request ticket - is one surface: the plane converges it to the two fact
+lists at once, in one write. A derived position enters the Work queue as the
+auto top-up's continuation, one item per cycle into an empty queue, and the
+parallel limit is no longer a hold on the add: the seat the item cannot take
+is the wait its row holds (ADR 0049, ADR 0051). A transition that derives no
+position closes the cycle, and a route at the per-ticket handoff limit
+degrades to close. A transition whose label write failed closes nothing: the
+plane does not route from labels it did not write, and the turn rests in
+awaiting for the operator. The agents never write workflow labels (ADR 0027):
+the plane writes them, and a ticket's position is always re-derived from the
+labels it carries.
 
 The `pull-request-open` and `pull-request-closed` judgments read the linked
 pull request's own record straight from the source at fire time, live the
@@ -537,9 +524,8 @@ key is rejected at startup instead of misread as applied.
 
 The three security kinds read the repository security tab, one call set per
 configured repository, and each item appears in the ticket list as one
-ticket. The item's severity becomes its single ticket label, so the Priority
-label list ranks security tickets; an open secret scanning alert always
-carries the label `critical` (ADR 0029).
+ticket. The item's severity becomes its single ticket label; an open secret
+scanning alert always carries the label `critical` (ADR 0029).
 
 - `github-security-advisories` lists the repository's security advisories in
   `triage`, `draft`, and `published` state; `closed` and `withdrawn`
@@ -591,8 +577,7 @@ the `needs-work`, `ready-for-review`, and `ready-to-ship` pull requests to
 at its task type, and one parking state for a pull request that carries none
 of them - with the transitions that move a ticket between them. They also
 define one `consult` Consultation type that passes your input straight
-through. They carry the three priority labels `critical`, `high`, and `low`.
-They have no ticket sources and no repository mappings: uncommenting one
+through. They have no ticket sources and no repository mappings: uncommenting one
 security source block is the only setup a fresh install needs. The security
 task types carry `thinking = "high"` and a transition that writes
 `ready-for-review` on the opened pull request with `auto-advance = true`: the

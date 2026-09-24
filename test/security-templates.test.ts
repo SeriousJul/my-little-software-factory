@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { parse as parseToml } from "smol-toml";
 
 import { validateConfig } from "../src/config.ts";
-import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import { renderPrompt } from "../src/handoff.ts";
 
 const SHIPPED_DEFAULT_CONFIG = fileURLToPath(new URL("../config/default.toml", import.meta.url));
@@ -77,7 +77,6 @@ function ticketOf(kind: keyof typeof tickets): Ticket {
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,
-		priority: UNRANKED_PRIORITY,
 		...tickets[kind],
 	} as Ticket;
 }

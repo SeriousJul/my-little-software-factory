@@ -133,41 +133,6 @@ describe("factory SQLite state", () => {
 		state.close();
 	});
 
-	test("lists the live tickets with the labels of their newest membership (ADR 0023)", () => {
-		const state = openFactoryState(":memory:");
-		state.initializeSources([sourceA, sourceB]);
-		state.applyFetch(sourceA, success([fetched()]));
-		expect(state.liveTicketLabels()).toEqual([
-			{ identity: "github:github.com:I_5", labels: ["ready-for-agent"] },
-		]);
-		// A second source lists the same ticket with other labels and a
-		// newer update: the newest membership's labels win.
-		state.applyFetch(
-			sourceB,
-			success([
-				{
-					...fetched(),
-					labels: ["needs-work"],
-					externalUpdatedAt: "2026-08-31T11:00:00Z",
-				},
-			]),
-		);
-		expect(state.liveTicketLabels()).toEqual([
-			{ identity: "github:github.com:I_5", labels: ["needs-work"] },
-		]);
-		// A ticket that left one source stays live through the other. The
-		// newest membership (the inactive one, matching the rank read's
-		// rule) still supplies the labels.
-		state.applyFetch(sourceB, success([]));
-		expect(state.liveTicketLabels()).toEqual([
-			{ identity: "github:github.com:I_5", labels: ["needs-work"] },
-		]);
-		// A ticket that leaves every source is no longer live.
-		state.applyFetch(sourceA, success([]));
-		expect(state.liveTicketLabels()).toEqual([]);
-		state.close();
-	});
-
 	test("merges overlapping memberships, lets a healthy source act, and preserves durable handoff state", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
@@ -1270,7 +1235,7 @@ describe("factory SQLite state", () => {
 			DROP TABLE consultation_turns;
 			DROP TABLE consultations;
 			DROP TABLE checkout_conflict_confirmations;
-			DROP TABLE referenced_issues;
+			DROP TABLE queue_pause;
 			DROP TABLE auto_handoff_mode;
 			DROP TABLE work_queue;
 		`);
@@ -1292,12 +1257,9 @@ describe("factory SQLite state", () => {
 				" ALTER TABLE handoffs DROP COLUMN leftover_cleared_at;" +
 				" ALTER TABLE handoffs DROP COLUMN herdr_name;",
 		);
-		// The v11 override belongs to the run after this record: a v2 ticket
-		// never stored a Priority override.
 		// The v13 fact belongs to the run after this record: a v2 trace never
 		// stored the transition outcome.
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 2").run();
 		db.close();
 
@@ -1366,18 +1328,13 @@ describe("factory SQLite state", () => {
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
 		).run();
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
-		// The v12 facts belong to the run after this record: the issue the
-		// control plane read directly has no fact yet.
-		db.exec("DROP TABLE referenced_issues;");
-		// The v13 mode and the v14 queue belong to the run after this record: a
-		// v5 file stored no Auto-handoff mode, and no Work queue.
-		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-		// The v11 override belongs to the run after this record: a v5 ticket
-		// never stored a Priority override.
+		// The v13 mode, the v14 queue, and the v19 queue pause belong to the run
+		// after this record: a v5 file stored no Auto-handoff mode, no Work
+		// queue, and no queue pause.
+		db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v13 fact belongs to the run after this record: a v5 trace never
 		// stored the transition outcome.
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 5").run();
 		db.prepare(
 			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
@@ -1444,18 +1401,13 @@ describe("factory SQLite state", () => {
 			"ALTER TABLE consultations ADD COLUMN live_conflict_override INTEGER NOT NULL DEFAULT 0",
 		).run();
 		db.exec("DROP TABLE checkout_conflict_confirmations;");
-		// The v12 facts belong to the run after this record: the issue the
-		// control plane read directly has no fact yet.
-		db.exec("DROP TABLE referenced_issues;");
-		// The v13 mode and the v14 queue belong to the run after this record: a
-		// v7 file stored no Auto-handoff mode, and no Work queue.
-		db.exec("DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
-		// The v11 override belongs to the run after this record: a v7 ticket
-		// never stored a Priority override.
+		// The v13 mode, the v14 queue, and the v19 queue pause belong to the run
+		// after this record: a v7 file stored no Auto-handoff mode, no Work
+		// queue, and no queue pause.
+		db.exec("DROP TABLE queue_pause; DROP TABLE auto_handoff_mode; DROP TABLE work_queue;");
 		// The v13 fact belongs to the run after this record: a v7 trace never
 		// stored the transition outcome.
 		db.prepare("ALTER TABLE completion_traces DROP COLUMN transition_json").run();
-		db.prepare("ALTER TABLE tickets DROP COLUMN priority_override").run();
 		db.prepare("UPDATE schema_version SET version = 7").run();
 		db.prepare(
 			"UPDATE handoffs SET choice_json = json_remove(choice_json, '$.contextWindow')",
@@ -1658,6 +1610,47 @@ describe("factory SQLite state", () => {
 		reopened.close();
 	});
 
+	test("a v19 file migrates to v20: the queue pause lands and the retired facts drop", () => {
+		// The queue pause's fact stands before the v19 file: the v19 code held
+		// no priority or referenced-issues facts of its own, so the file a
+		// re-labeled v19 build left behind still carries the retired column and
+		// table. The open asks the file, not the stamp.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([fetched()]));
+		state.close();
+
+		const db = new Database(path);
+		db.exec(
+			"ALTER TABLE tickets ADD COLUMN priority_override TEXT; CREATE TABLE referenced_issues (id INTEGER PRIMARY KEY);",
+		);
+		db.prepare("UPDATE schema_version SET version = 19").run();
+		db.close();
+
+		const reopened = openFactoryState(path);
+		// The pause lands unpaused on the existing file, and the retired
+		// facts are gone from the file.
+		expect(reopened.queuePaused()).toBe(false);
+		const check = new Database(path, { readonly: true });
+		const tables = check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+			name: string;
+		}[];
+		const tableNames = tables.map((row) => row.name);
+		expect(tableNames).toContain("queue_pause");
+		expect(tableNames).not.toContain("referenced_issues");
+		const columns = (check.prepare("PRAGMA table_info(tickets)").all() as { name: string }[]).map(
+			(row) => row.name,
+		);
+		expect(columns).not.toContain("priority_override");
+		// The stamp stands at the target on the healed file.
+		expect(
+			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+		).toBe(SCHEMA_VERSION);
+		check.close();
+		reopened.close();
+	});
+
 	test("a v17 file migrates to v18: the queue row gains the route's settled ticket", () => {
 		const path = statePath();
 		const state = openFactoryState(path);
@@ -1756,6 +1749,28 @@ describe("factory SQLite state", () => {
 			(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
 		).toBe(SCHEMA_VERSION);
 		check.close();
+	});
+
+	describe("the queue pause (ADR 0052)", () => {
+		test("the write is durable: a fresh open of the same file reads it back", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			expect(state.queuePaused()).toBe(false);
+			state.setQueuePaused(true);
+			expect(state.queuePaused()).toBe(true);
+			state.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.queuePaused()).toBe(true);
+			// The pause is the file's own fact: the toggle writes it back off,
+			// and a third open reads the off.
+			reopened.setQueuePaused(false);
+			expect(reopened.queuePaused()).toBe(false);
+			reopened.close();
+			const third = openFactoryState(path);
+			expect(third.queuePaused()).toBe(false);
+			third.close();
+		});
 	});
 
 	test("a settled turn stores its log and a re-settle refreshes it in place", () => {
@@ -2621,7 +2636,7 @@ describe("the work queue (ADR 0034)", () => {
 		]);
 	});
 
-	test("u and d move one place, and an item at an edge moves nowhere", () => {
+	test("+ and - move one place, and an item at an edge moves nowhere", () => {
 		const state = openFactoryState(":memory:");
 		enqueue(state, "t1");
 		enqueue(state, "t2");
@@ -2629,7 +2644,7 @@ describe("the work queue (ADR 0034)", () => {
 		// The front item cannot move up, the back item cannot move down.
 		expect(state.moveWorkItem("t1", "up")).toBe(false);
 		expect(state.moveWorkItem("t3", "down")).toBe(false);
-		// d takes the front item behind the middle one; the swap is atomic
+		// `-` takes the front item behind the middle one; the swap is atomic
 		// on the queue's primary key, so no step of it shares a position.
 		expect(state.moveWorkItem("t1", "down")).toBe(true);
 		expect(state.workQueue().map(workQueueIdentityOf)).toEqual(["t2", "t1", "t3"]);

@@ -49,8 +49,15 @@ and `bun run test`.
 | No refused key is hinted by the Action bar unless the Key guide names it, in every base mode of all three sections (the catalogue-wide guard that keeps the refusal, the guide, and the bar in step) | `test/controls.test.ts` | Passed |
 | Goto in the Consultation base mode focuses the Agent pane while the pane is alive in the last poll and states its reason otherwise, and never changes the Consultation | `test/controls.test.ts`, `test/consultation-frame.test.ts` | Passed |
 | Goto in the Ticket base modes (`g`) focuses the agent's pane on an in-flight ticket while the pane is alive in the last poll, on an `awaiting` ticket while the handoff recorded a pane, and states the Consultation's own refusal otherwise; it never moves the ticket's state, and the Decision modal's and Live view's Goto rows moved none | `test/controls.test.ts`, `test/live-view.test.ts`, `test/auto-mode.test.ts`, `test/domain.test.ts`, `test/state.test.ts` | Passed |
-| The Work queue section dispatches its list, detail, reorder, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the Consultation section's `d` and `f` refused there in that section's words and named in neither the queue's guide nor its bar; the Section stays hidden while it is empty and collapsed, and the cursor crosses into it only while it stands | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
-| The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a manual start asked at a full Parallel limit waits with its origin and captured choice (walked through the real decision modal), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat, the cancel line states only the removal the module measured (nothing claimed for a row its pickup had already taken), the module says nothing on the line for a row the operator removed after its run reached herdr, a picked-up route records its decision on the turn it came from through the one helper the direct route shares, the observation's automatic restart and automatic route skip a ticket the queue already waits for, a pickup of a restarted or routed item whose ticket took its seat in the race that skip misses cancels the item and names the start on the line, and the observation cycle runs the pickup before the open dispatch against the one seat count, in auto mode and in manual mode alike | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
+| The Work queue section dispatches its list, detail, order-move, pause, and removal from the shared catalogue; its list and detail modes name themselves in the Key guide and keep each section's keys in its own guide, the Consultation section's `d` and `f` refused there in that section's words and named in neither the queue's guide nor its bar; the Section stands on the Main view whatever the queue holds (ADR 0049), and the cursor crosses into it while it is expanded | `test/work-queue-frame.test.ts`, `test/key-guide.test.ts`, `test/controls.test.ts`, `test/shared-gallery.test.ts` | Passed |
+| The Work queue's detail names whose start a waiting row is - the operator's or the factory's auto top-up - so an automatic continuation route and the operator's own route of the same origin read apart on the pane (ADR 0051), and the Work header's depth counts the rows whatever asked | `test/work-queue-frame.test.ts` | Passed |
+| The Consultation submit runs the Work queue's enqueue check ahead of any write: a type the config no longer names, and a type whose settings do not fit, refuse the ask with the reason on the Message line, leave no record and no queue row, and run no external step - no repository resolve, no clone, no herdr call - while the launcher keeps the operator's form (ADR 0049) | `test/consultation-operations.test.ts`, `test/consultation-frame.test.ts` | Passed |
+| The queue pause holds the auto top-up's adds at the observation seam: auto mode on, the queue empty, an eligible ticket ready, and the paused cycle adds nothing; the resume adds the one item (ADR 0052) | `test/observation.test.ts` | Passed |
+| The continuation and re-fired-skip walks' guard lists are measured guard by guard in auto mode, each with the route isolated from the cycle's other adds: the ticket open, the outcome re-fired, fired, auto-advancing, and written clean, the position standing open, offering the outcome's task, actionable, past the Same-type hold, and under its handoff limit (ADR 0051, stories 43 and 22). Each guard was confirmed by deletion: the source line removed leaves the suite red. Two facts the walk tests are not reached on their own and are recorded as such: `actionable` already carries the position's unfinished attempt and its non-open state (the projection builds it from both), and the queue's one-item-per-ticket rule is the cycle's own empty-queue gate, so a per-ticket test inside the walk cannot be reached. The `fired` and position-identity tests hold a damaged trace and no fixture writes one | `test/observation.test.ts` | Passed |
+| An item the pickup dropped is reconsidered by the top-up every cycle the queue is empty, the restart included: the ask's start report clears the episode mark on every exit that ends the item without a start, and a restart that started keeps it until the ticket leaves in-flight. Story 24 holds whole, and ADR 0051 stands as written; both halves were confirmed by deletion (ADR 0051, story 24) | `test/observation.test.ts` | Passed |
+| The Consultation's hard checks run at the Work queue's enqueue, as ADR 0049 writes them, and the start re-reads the same fit on the record it picked up; both moments are measured, and ADR 0049 stands as written | `test/consultation-operations.test.ts`, `test/consultation-frame.test.ts`, `test/handoff.test.ts` | Passed |
+| The `p` key reports a state file that will not take the write instead of raising out of the key handler, the way the Auto-handoff mode's toggle does, and leaves the pause where it stood (ADR 0052) | `test/work-queue-frame.test.ts` | Passed |
+| The Work queue's facts hold outside the surface that shows them: the queue and its order survive the state file closing and reopening, a start asked while the seats are full waits with its origin and captured choice (walked through the real decision modal), and the automatic adds wait there too, since every start enters the queue (ADR 0049), a removal ends the whole waiting start including the claim a pickup parked behind the held herdr seat, the cancel line states only the removal the module measured (nothing claimed for a row its pickup had already taken), the module says nothing on the line for a row the operator removed after its run reached herdr, a picked-up route records its decision on the turn it came from through the one helper the direct route shares, the observation's automatic restart and automatic route skip a ticket the queue already waits for, a pickup of a restarted or routed item whose ticket took its seat in the race that skip misses cancels the item and names the start on the line, and the observation cycle runs the pickup before the auto top-up against the one seat count - the pickup in both modes, the top-up in auto mode alone (ADR 0051), since the open dispatch the first version of this row named is retired | `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/observation.test.ts`, `test/parallel.test.ts` | Passed |
 | Force-dispatch (issue #89, ADR 0034): Enter on a queue row starts the item over a full Parallel limit through the dispatch module's one seam - the claim re-runs every hard start check the pickup runs and skips only the cap, the seat count stands over the limit until the work settles, a failed claim or a failed start leaves the queue with the failure's warning and the ticket keeps its state, and the catalogue refuses the key while a Handoff runs or the queue is empty. A Consultation item runs the same key through its own pickup seam (issue #90): the item leaves the queue on every answer, the started line names the cap when the seat count stood over it, and the catalogue refuses the key for a Handoff item only while a Handoff runs - a Consultation start never parks on the herdr seat | `test/handoff-dispatch.test.ts`, `test/work-queue-frame.test.ts`, `test/consultation-frame.test.ts`, `test/controls.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed by the automated suite. The frame is what the checks read: no screen-reader path was measured for the key, and the terminal walks above have not been re-run for it. |
 | Close in the Ticket base modes (`w`) ends the selected ticket's work cycle behind the shared confirmation panel: it refuses an `open` ticket with its reason, opens the dialog with the body its own handoff's environment states on an in-flight or `awaiting` one, leaves everything unchanged on Cancel, ends an in-flight cycle with no completion trace, records the `closed` decision on an `awaiting` one, stops the agent through the Close cleanup, and records the leftover herdr refuses | `test/controls.test.ts`, `test/ticket-close.test.ts`, `test/domain.test.ts`, `test/state.test.ts`, `test/handoff-dispatch.test.ts`, `test/auto-mode.test.ts` | Passed |
 | The confirmation panel dispatches the Ticket close's rows through the catalogue, and the gallery holds the dialog's states | `test/action-bar.test.ts`, `test/key-guide.test.ts`, `test/shared-gallery.test.ts` | Passed |
@@ -313,22 +320,22 @@ them the Consultation section's `d` (Delete) and `f` (History) reached a queue
 cursor: in the Work queue detail `d` resolved to the Consultation's Delete and
 stated "only a closed Consultation can be deleted", a fact about a row the
 queue's cursor can never hold, and both queue modes listed `d Delete` in the
-Key guide's current-mode section beside the queue's own `d Queue down`.
+Key guide's current-mode section beside the queue's own reorder keys.
 
 The ownership rule that issue #85 built for the Ticket section now covers every
 section that does not own a Consultation control: the marker reads the mode's
 section, not one section's name. In both Work queue modes `d` and `f` state
 "this control is available only in the Consultation section" and claim the key,
-and the queue's guide and Action bar name neither control. The queue's own `d`
-keeps its meaning: in its list the key stays Queue down, the refusal the mode
-states is the queue's own ("the item is last in the queue"), and a closed
+and the queue's guide and Action bar name neither control. A closed
 Consultation elsewhere steals nothing, because the ownership decides the
-refusal before the selected row does.
+refusal before the selected row does. (The queue's own `d Queue down` the first
+version of this record described is gone: ADR 0049 retired the `u` and `d`
+reorder keys, and `+` and `-` move the selected item now.)
 
 The automatic suite covers the refusal, the guide omission, and the bar
 omission in both queue modes, and extends the catalogue-wide guard walk to all
 six base modes (`test/controls.test.ts`); the guide's current-mode rows, which
-name the queue's own `d Queue down` and neither Consultation row
+name the queue's own keys and neither Consultation row
 (`test/key-guide.test.ts`); and the frame walk that boots the real app with two
 waiting starts, presses `f` in the Work queue list and `d` in the Work queue
 detail, reads the refusal on the Message line, and compares the queue's rows,
@@ -740,12 +747,14 @@ What is measured automatically, on this branch:
   pane and only there, and no modal surface states a border color - the
   architecture check holds all three and names the offender by file
   (`test/shared-control-architecture.test.ts`).
-- The nested border at the plane's declared minimum (40 by 19): the box's
+- The nested border at the plane's declared minimum (40 by 27, the floor
+  ADR 0049 raised with the Work queue's third permanent section): the box's
   border one cell in on every side, the pane's border and its padding inside
   the box's padding, the log's floor of three rows held inside the pane,
   the region's rows standing below the pane's bottom border with the
   selection on Close, and the keys dispatching in both regions - the region
-  selection moving to Goto and the body scrolling one row (`test/decision-modal.test.ts`).
+  selection moving to Goto and the body jumping to the log's head
+  (`test/decision-modal.test.ts`).
 - The nested border with the pane's chrome yielded: at a low box the pane
   yields its padding before the log yields rows, keeps its border, and the
   scrollbar stays pinned to the body's last column inside the pane on full,
@@ -794,10 +803,10 @@ nested border above:
   cause above its rows, the short log's pinned floor, and the empty log's
   reason in its pane (`test/shared-gallery.test.ts`).
 
-On first paint, the declared minimum (40 by 19) cannot reach the
-stand-down: the box holds twelve body rows, and the context row, the pane's
-chrome, the log's floor, and the region's minimum of one row fit within
-them. The operator reaches it by resizing the terminal over the open
+On first paint, the declared minimum (40 by 27) cannot reach the
+stand-down: the box holds the rows the context row, the pane's
+chrome, the log's floor, and the region's minimum of one row need, with room
+over. The operator reaches it by resizing the terminal over the open
 modal, which the yield steps above walk in the harness's frames. Nothing is
 claimed for a walk that was not run.
 

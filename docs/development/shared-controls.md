@@ -45,6 +45,26 @@ OpenTUI's field primitives are candidates for the shared implementation, not
 public escape routes for separate screen-specific editors. Do not create a
 second key definition system that can disagree with dispatch or help.
 
+## The Message line's ranks
+
+The Message line shows one fact at a time, and the ranks are the shared
+selector's, not any section's. A failure outranks everything. Active progress
+outranks an outcome, so a warning written during a refresh waits behind its
+`Working:` line and appears when the refresh settles. A control's own result
+outranks a standing notice and the source health.
+
+A notice - the line that states the app will decide without the operator, and
+the line a section's own key writes as its feedback - yields to every fact an
+operation wrote (ADR 0049). The consequence is plane-wide, not one section's:
+a standing warning or error outranks any notice, so a key whose whole answer
+is a notice can be invisible while an older operation fact holds the line. A
+section that relies on a notice to show a state must carry that state on its
+own surface as well, the way the Work section carries its pause on its header
+beside the depth it holds, and its frame test pins the ranking. Do not
+"restore" a notice above an operation fact: the notice's rank below an
+operation fact is a decided rule with a measured walk, not slot order's
+accident.
+
 ## The Action bar and the Key guide
 
 The Action bar hints only the keys the Key guide names in the current
@@ -65,13 +85,12 @@ rule, not drift:
   and History (`f`) (issue #85): the Ticket section does not ask the
   operator to learn those keys, and the Ticket bar follows its guide, so it
   hints neither.
-- The Work queue section omits the same two controls (ADR 0034). Its two
-  modes join the shared base modes, so the Consultation section's keys
-  reach them as a key the queue can never dispatch: `d` is the queue's own
-  Queue down in its list and answers nothing in its detail, and `f` belongs
-  to no queue control at all. Each section's guide names the keys that
-  section dispatches, so a queue cursor shows neither row, and its bar
-  hints neither.
+- The Work queue section omits the same two controls (ADR 0034, ADR 0049).
+  Its two modes join the shared base modes, so the Consultation section's keys
+  reach them as a key the queue can never dispatch: `d` and `f` belong to no
+  queue control at all now that ADR 0049 retired the queue's `u` and `d`
+  reorder keys. Each section's guide names the keys that section dispatches,
+  so a queue cursor shows neither row, and its bar hints neither.
 
 The catalogue states the section ownership once per control
 (`consultationSectionOnly`), and the refusal, the guide, and the bar read

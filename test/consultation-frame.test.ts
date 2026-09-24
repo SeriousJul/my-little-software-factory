@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
-import { type Ticket, UNRANKED_PRIORITY } from "../src/domain/ticket.ts";
+import type { Ticket } from "../src/domain/ticket.ts";
 import type {
 	CommandOptions,
 	CommandResult,
@@ -131,7 +131,6 @@ const selectedTicket: Ticket = {
 	actionable: true,
 	handoffRecoveryRequired: false,
 	leftover: null,
-	priority: UNRANKED_PRIORITY,
 };
 
 function configFor(): FactoryConfig {
@@ -2166,7 +2165,20 @@ describe("Consultation live-worktree launch through the UI", () => {
 		}
 	});
 
-	test("an unfit Model fails the launch before it resolves the Repository", async () => {
+	/**
+	 * ADR 0049 puts the Consultation's hard checks at the Work queue's enqueue:
+	 * the type still exists and its settings fit, so a start the config cannot
+	 * run never takes a queue row. The unfit Model therefore leaves no record at
+	 * all - the ask refuses, its reason stands on the Message line, and the
+	 * launcher keeps the operator's form for the fix. The check also runs ahead
+	 * of the route's first external change: a live launch resolves its
+	 * Repository, and a resolve clones a missing checkout. None of that runs
+	 * behind an unfit setting. Story 6's `failed` record stays the pickup's own
+	 * answer: the start re-reads the same fit on the record it took, and
+	 * "a pickup whose start fails leaves the record failed with its reason"
+	 * walks it at the operations seam.
+	 */
+	test("an unfit Model refuses the submit before the record or any external step", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const inner = new FakeRunner();
 		stubLiveCheckout(inner, false);
@@ -2185,9 +2197,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 				},
 			},
 		};
-		// The reads that resolve one Repository: the launcher makes them to verify
-		// its option, and a launch route resolves the Repository the same way, which
-		// clones a checkout that is missing.
+		// The reads that resolve one Repository: the launcher makes them to
+		// verify its option.
 		const resolveReads = () =>
 			runner.commands().filter((command) => command.includes("rev-parse --git-dir")).length;
 		try {
@@ -2203,16 +2214,17 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					const readsBeforeLaunch = resolveReads();
 					await launchConsultationDraft(setup, "review auth");
-					const failed = await awaitFrame(
+					const refused = await awaitFrame(
 						setup,
-						(f) => f.includes("State: failed"),
-						"the fit check to refuse the launch",
+						(f) => messageRowOf(f).includes("consultation not queued"),
+						"the enqueue's refusal",
 					);
-					expect(frameText(failed)).toContain('has no model "openai/gpt-4o"');
-					// The check runs ahead of the route's first external change: a
-					// live launch resolves its Repository, and a resolve clones a
-					// missing checkout, records the path, and then drives Herdr.
-					// None of that happened behind an unfit setting.
+					expect(messageRowOf(refused)).toContain('has no model "openai/gpt-4o"');
+					// No record and no queue item: the ask never entered the channel.
+					expect(state.consultations("all")).toEqual([]);
+					expect(state.workQueue()).toEqual([]);
+					// The launcher stayed open with the operator's form for the fix.
+					expect(frameText(refused)).toContain("Consultation launcher");
 					const joined = runner.commands().join("\n");
 					expect(resolveReads()).toBe(readsBeforeLaunch);
 					expect(joined).not.toContain("git clone");
@@ -2220,11 +2232,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(joined).not.toContain("herdr tab create");
 					expect(joined).not.toContain("agent start");
 					expect(joined).not.toContain("agent prompt");
-					// One Consultation start asks the Agent's CLI once, not once per step.
+					// The ask asks the Agent's CLI once.
 					expect(inner.modelListCalls).toEqual(["pi"]);
-					const [consultation] = state.consultations("open");
-					expect(consultation.state).toBe("failed");
-					expect(consultation.paneId).toBeNull();
 				},
 				WIDTH,
 				32,
@@ -3037,6 +3046,69 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		}
 	});
 
+	/**
+	 * ADR 0052: the queue pause holds the drain, a Consultation's item and a
+	 * Handoff's alike. The seat stands free here on purpose - the pause, not
+	 * the cap, is what holds the pickup - and the submit's own line says so
+	 * instead of promising a seat that will not come.
+	 */
+	test("the queue pause holds a Consultation's item with a free seat, and the submit says why", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		// No seeded Consultation: nothing holds the one seat.
+		const inner = new FakeRunner();
+		stubCheckout(inner);
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		state.setQueuePaused(true);
+		try {
+			await withApp(
+				async (setup) => {
+					await openLauncher(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("acme/factory"),
+						"the verified Repository option",
+					);
+					await launchConsultationDraft(setup, "review auth");
+					const frame = await awaitFrame(
+						setup,
+						(f) => messageRowOf(f).includes("consultation queued"),
+						"the queued notice",
+					);
+					const queued = state.consultations("all").find((c) => c.state === "queued");
+					expect(queued).toBeDefined();
+					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
+					// The line names the pause as the reason the item waits, not the
+					// cap: the seat is free, and the pickup is what stands down.
+					expect(messageRowOf(frame)).toContain(
+						`consultation queued: ${queued.id.slice(0, 8)} waits in the Work queue; the queue is paused`,
+					);
+					expect(messageRowOf(frame)).not.toContain("Parallel limit seat");
+					// The Work section carries the item and the pause on its header.
+					expect(frame).toContain("waiting: 1");
+					expect(frameText(frame)).toContain("paused");
+					// And the pause held it: the record is still `queued`, its item
+					// still stands, and the enqueue ran no external step.
+					expect(state.workQueue()).toEqual([
+						expect.objectContaining({ kind: "consultation", consultationId: queued.id }),
+					]);
+					expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+					expect(runner.commands()).not.toContain(expect.stringContaining("agent start"));
+				},
+				WIDTH,
+				32,
+				{
+					state,
+					runner,
+					config: { ...configFor(), maxParallelAgents: 1 },
+					home,
+					initialTickets: [],
+				},
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("key w abandons a queued Consultation and takes its item out of the queue", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		seed(state, seatId);
@@ -3205,18 +3277,12 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 					if (queued === undefined) throw new Error("the queued Consultation is not recorded");
 					const id8 = queued.id.slice(0, 8);
 					// The cap is full from the boot: the seed's seat stands on the
-					// line, and the cursor crosses into the Work queue's row.
+					// line. The frame holds no room for the Work section's rows,
+					// so it rests collapsed, and Enter on the queued row jumps to
+					// its item and expands the section with it (ADR 0049).
 					expect(setup.captureCharFrame()).toContain("auto: off 1/1");
-					const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) =>
-						/\bWork\b/.test(row),
-					);
-					expect(headerRow).toBeGreaterThanOrEqual(0);
-					await mouseClick(setup, 2, headerRow);
-					await settle(setup, 300);
-					await awaitFrame(
-						setup,
-						(f) => f.includes("❯ Work queue"),
-						"the cursor in the Work queue",
+					await press(setup, "return", "the cursor in the Work queue", (f) =>
+						f.includes("┌─❯ Work queue"),
 					);
 					// Enter force-dispatches the item over the full cap: the line
 					// names the cap, the seat count stands over the limit, the item
@@ -3286,10 +3352,12 @@ describe("the launcher's Consultation queue at a full cap (ADR 0034, issue #90)"
 		);
 		const queued = state.consultations("all").find((c) => c.state === "queued");
 		if (queued === undefined) throw new Error("the queued Consultation is not recorded");
-		const headerRow = rowsOf(setup.captureCharFrame()).findIndex((row) => /\bWork\b/.test(row));
-		expect(headerRow).toBeGreaterThanOrEqual(0);
-		await mouseClick(setup, 2, headerRow);
-		await awaitFrame(setup, (f) => f.includes("❯ Work queue"), "the cursor in the Work queue");
+		// The frame holds no room for the Work section's rows, so it rests
+		// collapsed, and Enter on the queued row jumps to its item and
+		// expands the section with it (ADR 0049).
+		await press(setup, "return", "the cursor in the Work queue", (f) =>
+			f.includes("┌─❯ Work queue"),
+		);
 		// The item's row stands under the kind word, with the record's identity.
 		const frame = setup.captureCharFrame();
 		expect(frame).toContain("consultation");

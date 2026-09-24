@@ -45,6 +45,18 @@ export function workQueueDetailLines(
 			text: `Origin: ${item.kind === "handoff" ? item.origin : "consultation"}   place ${item.position + 1} of ${workQueueDepth}`,
 			fg: paint("text"),
 		},
+		// Who asked for the start (ADR 0051): the operator staged this row, or
+		// the factory's top-up added it. The origin word alone cannot tell them
+		// apart - the operator's route and the factory's continuation are both
+		// `workflow` - and the queue's depth is the operator's queue, not the
+		// factory's noise, so the detail says whose start this is.
+		{
+			text:
+				item.kind === "handoff" && item.automatic
+					? "Asked by: the factory's auto top-up"
+					: "Asked by: the operator",
+			fg: paint("subtext0"),
+		},
 		{ text: `Enqueued: ${item.enqueuedAt.slice(11, 19)}`, fg: paint("subtext0") },
 	];
 	if (item.kind === "consultation") {

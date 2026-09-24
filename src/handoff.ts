@@ -432,12 +432,25 @@ export type ConsultationStartCheck =
 	| { ok: false; reason: string };
 
 /**
+ * The settings a Consultation start pre-flight reads. A stored Consultation
+ * carries them, and so does the Consultation type the submit resolves before
+ * the record exists: the enqueue check and the start check are the same rule
+ * asked at two moments (ADR 0049), so one shape serves both.
+ */
+export type ConsultationStartSettings = Pick<
+	Consultation,
+	"agentType" | "environment" | "model" | "thinking" | "contextWindow"
+>;
+
+/**
  * The pre-flight of a Consultation start: the record checks and the setting fit
  * check.
  *
- * A launch route resolves its repository, and a resolve can clone a repository,
- * before it reaches `handOffConsultation`, so the route runs this first: an
- * unfit model or thinking level must leave no checkout behind. The verdict
+ * The Work queue's enqueue runs this before a Consultation start takes its row
+ * (ADR 0049): a start that already fails refuses to enter, and the reason
+ * stands on the Message line at the ask. The launch route runs it again before
+ * it resolves its repository, and a resolve can clone a repository, so an unfit
+ * model or thinking level must leave no checkout behind. The verdict
  * rides into the start, so the Agent's Model list answers one query per
  * Consultation rather than one per step.
  */
@@ -446,7 +459,7 @@ export async function checkConsultationStart({
 	config,
 	runner,
 }: {
-	consultation: Consultation;
+	consultation: ConsultationStartSettings;
 	config: FactoryConfig;
 	runner: CommandRunner;
 }): Promise<ConsultationStartCheck> {

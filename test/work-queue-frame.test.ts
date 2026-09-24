@@ -1,8 +1,8 @@
 /**
- * The Work queue's frame tests (ADR 0034): the section appears the moment a
- * manual start waits for a Parallel limit seat, its rows carry the origin
- * and the ticket's title, u and d reorder the waiting starts, Delete cancels
- * the start under the cursor, and the section goes away again with its queue.
+ * The Work queue's frame tests (ADR 0049): the section stands on the Main
+ * view whatever the queue holds, its rows carry the origin and the ticket's
+ * title, + and - move the selected item, Delete cancels the start under the
+ * cursor, and the emptied section keeps its header with its count.
  *
  * The tests boot the real app against a temporary state with a FakeSource,
  * and they seed the queue straight into the state the way a refused manual
@@ -10,7 +10,7 @@
  * to run, and these frames verify the waiting, not the running.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import { baseChoice } from "../src/handoff.ts";
 import type { CommandRunner } from "../src/runner.ts";
 import { type FactoryState, openFactoryState, workQueueIdentityOf } from "../src/state.ts";
 import {
+	actionBarRowOf,
 	awaitFrame,
 	detailPaneText,
 	frameText,
@@ -124,12 +125,17 @@ function forcedFixture() {
 /** Put one waiting item in the queue and boot the app around it. */
 function forceDispatchApp(fixture: ReturnType<typeof forcedFixture>) {
 	const { state, source, runner, config } = fixture;
-	const enqueue = (ticketIdentity: string, origin: "open" | "workflow" | "restart" = "open") => {
+	const enqueue = (
+		ticketIdentity: string,
+		origin: "open" | "workflow" | "restart" = "open",
+		automatic = false,
+	) => {
 		const result = state.enqueueWork({
 			ticketIdentity,
 			origin,
 			choice: baseChoice("pi", "live-worktree", "implement"),
 			previousMessage: "",
+			automatic,
 		});
 		if (!result.ok) throw new Error(result.reason);
 	};
@@ -161,20 +167,38 @@ function twoTickets() {
 	];
 }
 
-/** One state with the queue the test enqueues, plus the source that settles it. */
-function queuedFixture(state: FactoryState) {
+/**
+ * One state with the queue the test enqueues, plus the source that settles it.
+ *
+ * The one seat is held from boot: a durable claim on the second ticket keeps
+ * the free-seat figure at zero, so the observation's pickup never runs and
+ * the frame the test reads is the resting one. A test that claims the
+ * second ticket itself boots with the seat free.
+ */
+function queuedFixture(state: FactoryState, holdSeat = true) {
 	const tickets = twoTickets();
 	const source = new FakeSource("issues", "github-issues", success(tickets));
-	const enqueue = (ticketIdentity: string, origin: "open" | "workflow" | "restart" = "open") => {
+	const enqueue = (
+		ticketIdentity: string,
+		origin: "open" | "workflow" | "restart" = "open",
+		automatic = false,
+	) => {
 		const result = state.enqueueWork({
 			ticketIdentity,
 			origin,
 			choice: baseChoice("pi", "live-worktree", "implement"),
 			previousMessage: "",
+			automatic,
 		});
 		if (!result.ok) throw new Error(result.reason);
 	};
 	const runner: CommandRunner = emptyAgentRunner();
+	if (holdSeat) {
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch({ name: "issues", kind: "github-issues" }, success(tickets));
+		const held = state.claimHandoff(SECOND, baseChoice("pi", "live-worktree", "implement"), "open");
+		if (!held.ok) throw new Error(held.reason);
+	}
 	return { state, source, enqueue, runner };
 }
 
@@ -211,13 +235,22 @@ const booted = (
 const workHeaderRow = (frame: string): number =>
 	rowsOf(frame).findIndex((row) => /\bWork\b/.test(row));
 
-/** Click the Work header, the same toggle x takes for the cursor. */
 type AppSetup = Parameters<Parameters<typeof withApp>[0]>[0];
 
+// ADR 0049: the Work section is always visible and starts expanded, so the
+// old click-the-header-to-expand helper now lands the cursor on the first
+// queue row instead, where the queue's keys and the detail act on it.
 async function clickWorkHeader(setup: AppSetup): Promise<void> {
-	const row = workHeaderRow(setup.captureCharFrame());
+	// The click lands on the first queue row inside the Work queue's own box:
+	// the Ticket rows lead with the same origin-looking state badges, so the
+	// walk starts below the queue's top border, not at the frame's first
+	// match.
+	const rows = rowsOf(stripAnsi(setup.captureCharFrame()));
+	const boxTop = rows.findIndex((row) => row.includes("Work queue"));
+	expect(boxTop).toBeGreaterThanOrEqual(0);
+	const row = rows.slice(boxTop + 1).findIndex((row) => /\[(open|workflow|restart)\]\s+/.test(row));
 	expect(row).toBeGreaterThanOrEqual(0);
-	await mouseClick(setup, 2, row);
+	await mouseClick(setup, 2, boxTop + 1 + row);
 }
 
 /**
@@ -238,12 +271,287 @@ const stripAnsi = (text: string): string =>
 const queueRowIndex = (frame: string, lead: RegExp): number =>
 	rowsOf(stripAnsi(frame)).findIndex((row) => lead.test(row));
 
+/** The queue's own rows, by origin lead, for the before-and-after compares. */
+const queueRowsOf = (frame: string): string[] =>
+	rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]\s+/.test(row));
+
 /** The queue rows lead with their origin, padded to a fixed width. */
 const openRowLead = /\[open\]\s+Add a webhook retry policy/;
 const workflowRowLead = /\[workflow\]\s+Close the stale deploy branch/;
 
 describe("the Work queue section", () => {
-	test("an idle factory keeps the two-section frame", async () => {
+	/**
+	 * ADR 0051: the queue holds two kinds of waiting start, and the origin word
+	 * alone cannot tell them apart - the operator's route and the factory's
+	 * continuation are both `workflow`. The detail names whose start the row
+	 * is, so the depth the header carries reads as the operator's queue with
+	 * the factory's adds marked where they stand.
+	 */
+	test("the detail says whose start a waiting row is", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST, "workflow", true);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
+					await clickWorkHeader(setup);
+					// The top-up's item, first in the queue: the detail says the
+					// factory asked, and names the origin it waits on.
+					const automaticFrame = await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("Origin: workflow"),
+						"the first item's detail",
+					);
+					expect(detailPaneText(automaticFrame)).toContain("Asked by: the factory's auto top-up");
+					// The operator's own row reads the other way. The shared
+					// cursor walks to it with the list's own key.
+					await press(setup, "j", "the second item", (f) =>
+						detailPaneText(f).includes("Asked by: the operator"),
+					);
+					expect(detailPaneText(setup.captureCharFrame())).toContain("Origin: workflow");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0052: the pause is durable factory state, and the write that refuses
+	 * is an operation fact the operator must hear. The `p` key reports the
+	 * refused write on the Message line and leaves the pause where it stood,
+	 * the way the Auto-handoff mode's toggle reports its own failure - two
+	 * facts of one kind must not fail two ways.
+	 */
+	test("p reports a state file that will not take the write, and moves nothing", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					// The state file refuses every write, the way a read-only
+					// volume or a full disk does.
+					const pauseSpy = spyOn(state, "setQueuePaused").mockImplementation(() => {
+						throw new Error("cannot store the queue pause: read-only file system");
+					});
+					const refused = await press(setup, "p", "the refused write", (f) =>
+						messageRowOf(f).includes("the queue pause did not move"),
+					);
+					expect(messageRowOf(refused)).toContain("read-only file system");
+					// The key reached the write and the write refused it.
+					expect(pauseSpy).toHaveBeenCalledWith(true);
+					// The pause stands where it was: the header carries no pause
+					// fact, and the state file holds none either.
+					expect(frameText(refused)).not.toContain("paused");
+					expect(state.queuePaused()).toBe(false);
+					pauseSpy.mockRestore();
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("p pauses the queue's drain, and p again resumes it", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					// The header carries no pause fact while the drain runs.
+					const resting = await settle(setup);
+					expect(frameText(resting)).toContain("waiting: 1");
+					expect(frameText(resting)).not.toContain("paused");
+					// The cursor lands on the queue row, and p stands by its keys.
+					await clickWorkHeader(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Work queue"),
+						"the cursor on the queue row",
+					);
+					// The bar offers the pause while the queue holds a waiting row.
+					expect(actionBarRowOf(setup.captureCharFrame())).toContain("p Pause queue");
+					// p stands the pause: the header carries the fact and the line
+					// says what happened. The bar's own label flip (Pause queue to
+					// Resume queue) is measured where the bar reads the context: in
+					// the catalogue test for the queue-pause control.
+					const paused = await press(setup, "p", "the queue pause", (f) =>
+						messageRowOf(f).includes("Work queue paused"),
+					);
+					// The pause fact stands by its count on the header's own row, in
+					// the raw frame: the two spaces are the header's own padding.
+					expect(paused).toContain("waiting: 1  paused");
+					expect(messageRowOf(paused)).toContain("Work queue paused");
+					// p again resumes: the fact leaves the header and the line
+					// says so.
+					const resumed = await press(setup, "p", "the queue resume", (f) =>
+						messageRowOf(f).includes("Work queue resumed"),
+					);
+					expect(frameText(resumed)).toContain("waiting: 1");
+					expect(frameText(resumed)).not.toContain("paused");
+					// The pause was the file's own fact while it stood, and the
+					// resume wrote the off back: the store reads it either way.
+					expect(state.queuePaused()).toBe(false);
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * The notice's rank, decided (ADR 0052).
+	 *
+	 * `p` answers with a notice, not a warning: a control that ran has nothing
+	 * to warn about. A notice holds its own slot below the fact an operation
+	 * wrote, so a `p` press that lands while a refusal still stands on the
+	 * line leaves that refusal readable, and the pause is still readable on
+	 * the header. This is the walk that makes the ranking a decided fact and
+	 * not an accident of the slot order.
+	 */
+	test("p behind a standing warning keeps the warning on the line and the pause on the header", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					await awaitFrame(
+						setup,
+						(f) => f.includes("┌─❯ Work queue"),
+						"the cursor on the queue row",
+					);
+					// An operation writes its refusal on the line, and it stands:
+					// this config ships no Consultation type, so the launch key
+					// refuses and says why.
+					await press(setup, "c", "the refusal on the line", (f) =>
+						messageRowOf(f).startsWith("Warning:"),
+					);
+					const beforePause = setup.captureCharFrame();
+					expect(messageRowOf(beforePause)).toContain("no Consultation types configured");
+					// The pause's notice lands behind it, so the line keeps the
+					// refusal, and the header carries the pause the line cannot show.
+					setup.mockInput.pressKey("p");
+					await awaitFrame(
+						setup,
+						(f) => f.includes("waiting: 1  paused"),
+						"the pause on the header",
+					);
+					const paused = setup.captureCharFrame();
+					expect(messageRowOf(paused)).toBe(messageRowOf(beforePause));
+					expect(messageRowOf(paused)).not.toContain("Work queue paused");
+					expect(state.queuePaused()).toBe(true);
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * Story 10 (ADR 0049): the Work section starts expanded and collapses
+	 * with `x` like the other two. The collapsed header keeps its count: the
+	 * section is always on the Main view, and only its list leaves.
+	 */
+	test("x collapses the Work section, and the header keeps its count", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					// The cursor is on the queue row, and the list stands.
+					await clickWorkHeader(setup);
+					await awaitFrame(setup, (f) => f.includes("┌─❯ Work queue"), "the queue cursor");
+					// `x` collapses the section: the header's arrow turns, the list
+					// leaves, and the header keeps its count on the frame.
+					const collapsed = await press(setup, "x", "the Work section to collapse", (f) =>
+						f.includes("▸ Work"),
+					);
+					expect(collapsed).toContain("waiting: 1");
+					expect(queueRowIndex(collapsed, openRowLead)).toBe(-1);
+					// The cursor left with the list: the cross now walks the two
+					// standing sections, and `x` again brings the queue back.
+					const expanded = await press(
+						setup,
+						"x",
+						"the Work section to expand",
+						(f) => queueRowIndex(f, openRowLead) >= 0,
+					);
+					expect(expanded).toContain("▾ Work");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * Story 12 (ADR 0050): the retired priority keys answer nothing. `u` is
+	 * no longer a ControlKey at all, so a stray press is silent in every
+	 * mode: no dispatch, no Message line, no queue movement.
+	 */
+	test("a stray u press is silent in the queue and in the Ticket list", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					const before = await settle(setup);
+					// In the queue list: the press leaves the rows, the order, and
+					// the Message line as they stood.
+					const pressed = await press(setup, "u", "the retired key to do nothing", (f) =>
+						f.includes("waiting: 2"),
+					);
+					expect(pressed).toContain("waiting: 2");
+					expect(queueRowsOf(pressed)).toEqual(queueRowsOf(before));
+					expect(messageRowOf(pressed)).toBe(messageRowOf(before));
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	test("an idle factory keeps the three-section frame", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, runner } = queuedFixture(state);
 		try {
@@ -255,10 +563,11 @@ describe("the Work queue section", () => {
 						(f) => f.includes("▾ Tickets"),
 						"the Tickets section",
 					);
-					expect(workHeaderRow(frame)).toBe(-1);
-					// `awaiting` holds the word `waiting` inside it, so the
-					// count form is what the Work header would add.
-					expect(frameText(frame)).not.toMatch(/\bwaiting/);
+					// The Work section is always visible (ADR 0049): the empty
+					// queue keeps its header row with its count, the way the
+					// Ticket and Consultation sections do.
+					expect(workHeaderRow(frame)).toBeGreaterThanOrEqual(0);
+					expect(frameText(frame)).toContain("waiting: 0");
 				},
 				state,
 				source,
@@ -283,17 +592,17 @@ describe("the Work queue section", () => {
 						(f) => f.includes("Work") && f.includes("waiting: 2"),
 						"the Work header",
 					);
-					// Collapsed by default: the header carries the count, the
-					// rows wait behind it.
-					expect(frame).toContain("▸ Work");
-					// The click expands, and the cursor lands on the first row.
+					// Expanded by default (ADR 0049): the header carries the
+					// count, and the rows stand under it.
+					expect(frame).toContain("▾ Work");
+					// The click lands the cursor on the first queue row.
 					await clickWorkHeader(setup);
 					const expanded = await awaitFrame(
 						setup,
-						(f) => f.includes("▾ Work"),
-						"the expanded Work section",
+						(f) => f.includes("▾ Work") && f.includes("[open]"),
+						"the Work queue item row",
 					);
-					expect(expanded).toContain("❯ Work queue");
+					expect(queueRowIndex(expanded, openRowLead)).toBeGreaterThanOrEqual(0);
 					// Queue order: the earlier enqueue leads, and each row
 					// carries the origin its start came in with.
 					expect(queueRowIndex(expanded, openRowLead)).toBeLessThanOrEqual(
@@ -322,11 +631,12 @@ describe("the Work queue section", () => {
 	 */
 	test("the waiting ticket wears the queued badge in row and detail, and the cancel gives the open badge back", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
-		const { source, enqueue, runner } = queuedFixture(state);
+		const { source, enqueue, runner } = queuedFixture(state, false);
 		// Seed the tickets into the state before the app boots, then hold the
-		// one seat with a durable claim for the second ticket. The claim keeps
-		// the free-seat figure at zero, so the observation's pickup never runs
-		// and the Waiting badge the test reads is the resting one.
+		// one seat with this test's own durable claim for the second ticket.
+		// The claim keeps the free-seat figure at zero, so the observation's
+		// pickup never runs and the Waiting badge the test reads is the resting
+		// one.
 		const outcome = success(twoTickets());
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
 		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
@@ -382,7 +692,7 @@ describe("the Work queue section", () => {
 		}
 	});
 
-	test("u and d reorder the waiting starts, and the captured choice stays put", async () => {
+	test("+ and - reorder the waiting starts, and the captured choice stays put", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
@@ -398,21 +708,21 @@ describe("the Work queue section", () => {
 					);
 					await clickWorkHeader(setup);
 					await awaitFrame(setup, (f) => f.includes("▾ Work"), "the expanded Work section");
-					// d takes the first item to the back: the workflow route
+					// - takes the first item to the back: the workflow route
 					// leads the queue now, and the cursor follows its item.
 					const swapped = await press(
 						setup,
-						"d",
+						"-",
 						"the first item to move to the back",
 						(f) => queueRowIndex(f, workflowRowLead) < queueRowIndex(f, openRowLead),
 					);
 					expect(detailPaneText(swapped)).toContain("Origin: open");
 					expect(detailPaneText(swapped)).toContain("place 2 of 2");
-					// u brings it back, and the queue order leads with the
+					// + brings it back, and the queue order leads with the
 					// workflow route again.
 					const restored = await press(
 						setup,
-						"u",
+						"+",
 						"the item to move back to the front",
 						(f) => queueRowIndex(f, openRowLead) < queueRowIndex(f, workflowRowLead),
 					);
@@ -500,9 +810,8 @@ describe("the Work queue section", () => {
 						rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]/.test(row));
 					const before = await settle(setup);
 					// In the list `f` is the Consultation's History key, and the
-					// queue refuses it. `d` is the queue's own Queue down, so it
-					// must NOT carry the refusal: this press moves the item, and the
-					// line stays clear of the other section's words.
+					// queue refuses it in the owning section's words: the refusal
+					// moves nothing, and the queue keeps its rows and its depth.
 					let refusal = await press(setup, "f", "the history refusal in the queue list", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
@@ -510,9 +819,9 @@ describe("the Work queue section", () => {
 					expect(queueRows(refusal)).toEqual(queueRows(before));
 					expect(markerRowOf(refusal)).toBe(markerRowOf(list));
 					expect(detailPaneText(refusal)).toContain("place 1 of 2");
-					// The detail pane: `d` belongs to no queue control here, so the
-					// Consultation's Delete resolves and refuses, and the detail
-					// keeps the item under its cursor.
+					// The detail pane: ADR 0049 retired the queue's own `d` reorder
+					// key, so the Consultation's Delete resolves and refuses, and the
+					// detail keeps the item under its cursor.
 					setup.mockInput.pressKey("l");
 					const detail = await awaitFrame(
 						setup,
@@ -710,7 +1019,7 @@ describe("the Work queue section", () => {
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
-					(f) => f.includes("❯ Work queue"),
+					(f) => f.includes("place 1 of 1"),
 					"the queue's row under the cursor",
 				);
 				// The cap is full from the boot: the held seat stands on the line.
@@ -759,7 +1068,7 @@ describe("the Work queue section", () => {
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
-					(f) => f.includes("❯ Work queue"),
+					(f) => f.includes("place 1 of 1"),
 					"the queue's row under the cursor",
 				);
 				const frame = await press(setup, "return", "the start's failure on the Message line", (f) =>
@@ -794,7 +1103,7 @@ describe("the Work queue section", () => {
 				await clickWorkHeader(setup);
 				await awaitFrame(
 					setup,
-					(f) => f.includes("❯ Work queue"),
+					(f) => f.includes("place 1 of 1"),
 					"the queue's row under the cursor",
 				);
 				const frame = await press(setup, "return", "the claim's refusal on the Message line", (f) =>
@@ -813,7 +1122,7 @@ describe("the Work queue section", () => {
 		}
 	});
 
-	test("the section goes away with its queue, and down crosses into it while it stands", async () => {
+	test("the emptied section keeps its header with its count, and down crosses into it while it stands", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);
 		enqueue(FIRST);
@@ -839,18 +1148,17 @@ describe("the Work queue section", () => {
 					const across = await press(setup, "j", "the cursor to cross into the Work queue", (f) =>
 						detailPaneText(f).includes("Origin: open"),
 					);
-					expect(across).toContain("❯ Work queue");
-					// Cancel both items: the queue empties, and the section
-					// hides with it.
+					expect(across).toContain("[open]");
+					// Cancel both items: the queue empties, and the section keeps its
+					// header with its count (ADR 0049), the way the other sections do.
 					await press(setup, "delete", "the first item to cancel", (f) => f.includes("waiting: 1"));
 					await press(setup, "delete", "the last item to cancel", (f) => f.includes("waiting: 0"));
-					await clickWorkHeader(setup);
 					const empty = await awaitFrame(
 						setup,
-						(f) => !f.includes("Work"),
-						"the Work section to hide",
+						(f) => f.includes("Work") && f.includes("waiting: 0"),
+						"the emptied Work section",
 					);
-					expect(workHeaderRow(empty)).toBe(-1);
+					expect(workHeaderRow(empty)).toBeGreaterThanOrEqual(0);
 				},
 				state,
 				source,

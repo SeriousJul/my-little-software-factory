@@ -262,23 +262,17 @@ describe("the shared control catalogue", () => {
 				available: false,
 				reason: "this control is available only in the Consultation section",
 			});
-			// In the queue list `d` is the queue's own Queue down, and a closed
-			// Consultation elsewhere cannot steal it: the queue's refusal stands.
-			// In the queue detail no queue key answers `d`, so the Consultation's
-			// Delete resolves there and states the section refusal, not its own
-			// closed-Consultation reason.
+			// The queue's own `u` and `d` reorder keys are gone (ADR 0049), so no
+			// queue key answers `d`: the Consultation's Delete resolves there and
+			// states the section refusal, not its own closed-Consultation reason.
 			const deleteControl = controlForKey({ name: "d" }, context);
 			if (deleteControl === undefined) throw new Error("d answers nothing in the queue modes");
 			const deleteAvailability = availabilityFor(deleteControl, context);
-			if (mode === "work-queue-detail") {
-				expect(deleteControl.id).toBe("consultation-delete");
-				expect(deleteAvailability).toEqual({
-					available: false,
-					reason: "this control is available only in the Consultation section",
-				});
-			} else {
-				expect(deleteControl.id).toBe("queue-down");
-			}
+			expect(deleteControl.id).toBe("consultation-delete");
+			expect(deleteAvailability).toEqual({
+				available: false,
+				reason: "this control is available only in the Consultation section",
+			});
 			const ids = guideControls(context).map(({ control }) => control.id);
 			expect(ids).not.toContain("history");
 			expect(ids).not.toContain("consultation-delete");
@@ -296,6 +290,71 @@ describe("the shared control catalogue", () => {
 		const detail = contextFor("work-queue-detail", withClosedConsultation);
 		const deleteControl = controlById("consultation-delete");
 		expect(availabilityFor(deleteControl, detail).available).toBe(false);
+	});
+
+	test("p pauses and resumes the queue, and the bar's label rides on the pause", () => {
+		// One item under the cursor, unpaused: the key resolves to the pause,
+		// the bar hints it, and the label names the pause.
+		const open = contextFor("work-queue-list", { ...queueValues, queuePaused: false });
+		const unpaused = controlForKey({ name: "p" }, open);
+		expect(unpaused?.id).toBe("queue-pause");
+		if (unpaused === undefined) throw new Error("p answers nothing in the queue mode");
+		expect(availabilityFor(unpaused, open)).toEqual({ available: true });
+		expect(actionBarControls("work-queue-list", open).map((control) => control.id)).toContain(
+			"queue-pause",
+		);
+		expect(unpaused.barLabel?.(open)).toBe("Pause queue");
+		// Paused: the same key now resolves to the resume, and the bar's label
+		// flips with the fact the shell writes.
+		const paused = contextFor("work-queue-list", { ...queueValues, queuePaused: true });
+		const resume = controlForKey({ name: "p" }, paused);
+		expect(resume?.id).toBe("queue-pause");
+		if (resume === undefined) throw new Error("p answers nothing in the queue mode");
+		expect(availabilityFor(resume, paused)).toEqual({ available: true });
+		expect(resume.barLabel?.(paused)).toBe("Resume queue");
+	});
+
+	/**
+	 * Story 48 (ADR 0049, ADR 0052): the queue's own keys refuse outside the
+	 * queue. `p`, `+`, and `-` belong to the Work queue alone, so in the
+	 * Ticket and Consultation sections the catalogue resolves the key, states
+	 * the queue's ownership words, and the guide and bar of each other
+	 * section name none of the three.
+	 */
+	test("p, +, and - refuse outside the Work queue, in the queue's words", () => {
+		for (const mode of [
+			"ticket-list",
+			"ticket-detail",
+			"consultation-list",
+			"consultation-detail",
+		] as const) {
+			const context = contextFor(mode, values);
+			for (const key of ["p", "+", "-"] as const) {
+				const control = controlForKey({ name: key }, context);
+				const expected =
+					key === "p" ? "queue-pause" : key === "+" ? "queue-promote" : "queue-demote";
+				if (control === undefined || control.id !== expected)
+					throw new Error(`${key} does not resolve to ${expected} in ${mode}`);
+				expect(availabilityFor(control, context)).toEqual({
+					available: false,
+					reason: "this control is available only in the Work queue section",
+				});
+			}
+			const ids = guideControls(context).map(({ control }) => control.id);
+			expect(ids).not.toContain("queue-pause");
+			expect(ids).not.toContain("queue-promote");
+			expect(ids).not.toContain("queue-demote");
+			const hinted = actionBarControls(mode, context).map((control) => control.id);
+			expect(hinted).not.toContain("queue-pause");
+			expect(hinted).not.toContain("queue-promote");
+			expect(hinted).not.toContain("queue-demote");
+		}
+		// In the queue's own modes the keys keep their meanings: the pause is
+		// available, and the order moves answer with their own availability.
+		const queue = contextFor("work-queue-list", queueValues);
+		expect(controlForKey({ name: "p" }, queue)?.id).toBe("queue-pause");
+		expect(controlForKey({ name: "+" }, queue)?.id).toBe("queue-promote");
+		expect(controlForKey({ name: "-" }, queue)?.id).toBe("queue-demote");
 	});
 
 	test("g is Goto in both Consultation panes, and it needs the Agent's pane alive", () => {

@@ -31,6 +31,8 @@ export interface ConfigMigrationResult {
 	backupFileName: string;
 	/** The migration report file name, next to the config. */
 	reportFileName: string;
+	/** The load's note line: what the migration did, in the operator's words. */
+	noteText: string;
 }
 
 /**
@@ -43,6 +45,10 @@ export interface ConfigMigrationResult {
 export function hasOldWorkflowMachineKeys(data: unknown): boolean {
 	if (!isRecord(data)) return false;
 	if ("task-rules" in data || "workflows" in data) return true;
+	// The retired Priority table (ADR 0050) rides the same migration: a file
+	// that carries it alone is still a file the strict loader would refuse,
+	// and the load migrates it the way it migrates the machine keys.
+	if ("priority" in data) return true;
 	const taskTypes = data["task-types"];
 	if (!isRecord(taskTypes)) return false;
 	for (const task of Object.values(taskTypes)) {
@@ -237,13 +243,21 @@ export function migrateWorkflowMachineConfig(
 			`Auto-handoff mode is the state file's own fact the \`a\` key toggles ` +
 			`(ADR 0036); the config no longer reads a default for it.`;
 	}
+	let priorityLine: string | null = null;
+	if ("priority" in originalData) {
+		priorityLine =
+			`The \`[priority]\` table: dropped (ADR 0050). Ticket priority is retired; ` +
+			`the Work queue's order the operator steers with \`+\` and \`-\` is the order ` +
+			`of work, and the ticket list orders by attention: the newest external ` +
+			`update first, then the ticket identity.`;
+	}
 	const newData: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(originalData)) {
 		if (key === "task-rules") {
 			newData.states = states;
 			continue;
 		}
-		if (key === "workflows" || key === "auto-handoff") continue;
+		if (key === "workflows" || key === "auto-handoff" || key === "priority") continue;
 		if (key === "task-types") {
 			newData["task-types"] = newTaskTypes;
 			continue;
@@ -253,8 +267,17 @@ export function migrateWorkflowMachineConfig(
 	if (newData.states === undefined) newData.states = states;
 	if (newData["task-types"] === undefined) newData["task-types"] = newTaskTypes;
 
+	// A file the machine keys alone mark is a workflow machine migration; a
+	// file only the retired Priority table marks is a priority retirement
+	// (ADR 0050), and the two word their own header and report title.
+	const machineMigrated =
+		"task-rules" in originalData || "workflows" in originalData || autoCloseLines.length > 0;
+	const migrationHeader = machineMigrated
+		? `# Migrated to the workflow machine on ${date} (ADR 0027).`
+		: `# The retired [priority] table was removed on ${date} (ADR 0050).`;
+	const migrationTitle = machineMigrated ? "Workflow machine migration" : "Priority retirement";
 	const configText = [
-		`# Migrated to the workflow machine on ${date} (ADR 0027).`,
+		migrationHeader,
 		`# The pre-migration file is at ${backupFileName}; the migration report at ${reportFileName}.`,
 		"# The plane owns the workflow labels: states name the machine's states,",
 		"# and each task type's transition writes the label facts its",
@@ -263,55 +286,77 @@ export function migrateWorkflowMachineConfig(
 		stringify(newData),
 	].join("\n");
 
+	// The report says what the rewrite did. A machine migration rewrote the
+	// whole workflow: its sections name the states, the transitions, and the
+	// templates. A priority-only rewrite touched one table: its sections name
+	// that table and nothing else, so the file never claims a change it did
+	// not make (ADR 0050).
+	const machineSections = machineMigrated
+		? [
+				"## States",
+				"",
+				"Rules became states: one state per rule, named for the rule's task type,",
+				"with the rule's match carried over.",
+				"",
+				...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
+				...(installedParks.length > 0
+					? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
+					: []),
+				"",
+				"## Transitions",
+				"",
+				"Expressible edges became transitions: the transition writes the state",
+				"label facts of the edge's single target, on the surface the state",
+				"names, and carries the edge's agent and environment pins.",
+				"",
+				...(transitions.size > 0
+					? [...transitions.values()].map((entry) => `- ${entry.line}`)
+					: ["No edges were expressible as transitions."]),
+				...(installedTransitions.length > 0
+					? [
+							"",
+							"Transitions installed from the shipped seed with the clean template:",
+							"",
+							...installedTransitions.map((line) => `- ${line}`),
+						]
+					: []),
+				...(droppedEdges.length > 0
+					? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
+					: []),
+				"",
+				"## Templates",
+				"",
+				"The four seed templates are replaced on exact match; a customized",
+				"template is left untouched.",
+				"",
+				...(templateLines.length > 0
+					? templateLines
+					: ["No seed task types: no template actions."]),
+				"",
+				"## Dropped keys",
+				"",
+				...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
+			]
+		: [
+				"## Dropped keys",
+				"",
+				"The rewrite removed one table and changed no other value: the states,",
+				"the transitions, and the templates in the file are the ones the file",
+				"already carried.",
+			];
+
 	const reportText = [
-		"# Workflow machine migration",
+		`# ${migrationTitle}`,
 		"",
-		`The config at \`${configPath}\` carried the pre-workflow-machine keys. The`,
-		`control plane rewrote it at load on ${date} (ADR 0027). The pre-migration`,
+		`The config at \`${configPath}\` carried ${
+			machineMigrated ? "the pre-workflow-machine keys" : "the retired [priority] table"
+		}. The`,
+		`control plane rewrote it at load on ${date} (${machineMigrated ? "ADR 0027" : "ADR 0050"}). The pre-migration`,
 		`file is at \`${backupFileName}\`, next to the config, and this report at \`${reportFileName}\`.`,
 		"",
-		"## States",
-		"",
-		"Rules became states: one state per rule, named for the rule's task type,",
-		"with the rule's match carried over.",
-		"",
-		...(stateLines.length > 0 ? stateLines : ["No task rules: no states were derived."]),
-		...(installedParks.length > 0
-			? ["", "Parking states appended from the shipped machine:", "", ...installedParks]
-			: []),
-		"",
-		"## Transitions",
-		"",
-		"Expressible edges became transitions: the transition writes the state",
-		"label facts of the edge's single target, on the surface the state",
-		"names, and carries the edge's agent and environment pins.",
-		"",
-		...(transitions.size > 0
-			? [...transitions.values()].map((entry) => `- ${entry.line}`)
-			: ["No edges were expressible as transitions."]),
-		...(installedTransitions.length > 0
-			? [
-					"",
-					"Transitions installed from the shipped seed with the clean template:",
-					"",
-					...installedTransitions.map((line) => `- ${line}`),
-				]
-			: []),
-		...(droppedEdges.length > 0
-			? ["", "Dropped edges, named:", "", ...droppedEdges.map((line) => `- ${line}`)]
-			: []),
-		"",
-		"## Templates",
-		"",
-		"The four seed templates are replaced on exact match; a customized",
-		"template is left untouched.",
-		"",
-		...(templateLines.length > 0 ? templateLines : ["No seed task types: no template actions."]),
-		"",
-		"## Dropped keys",
-		"",
-		...(autoCloseLines.length > 0 ? autoCloseLines : ["No `auto-close` flags were set."]),
+		...machineSections,
 		...(autoHandoffLine === null ? [] : ["", autoHandoffLine]),
+		...(priorityLine === null ? [] : ["", priorityLine]),
 		"",
 		"## Behavior changes to know",
 		"",
@@ -319,17 +364,25 @@ export function migrateWorkflowMachineConfig(
 		`comments in the file are dropped. The backup at \`${backupFileName}\` keeps`,
 		"them.",
 		"",
-		"The default source list is wider than the pre-migration default. The",
-		"issue source now lists every open issue that is not `blocked`, and",
-		"the pull request source lists every open pull request that is not a",
-		"draft unless it carries `needs-work`. With auto-handoff on, the",
-		"default task type now hands off every open issue the machine has not",
-		"placed in a state. Tighten a source's `filter` to keep the old",
-		"narrower list.",
+		...(machineMigrated
+			? [
+					"The default source list is wider than the pre-migration default. The",
+					"issue source now lists every open issue that is not `blocked`, and",
+					"the pull request source lists every open pull request that is not a",
+					"draft unless it carries `needs-work`. With auto-handoff on, the",
+					"default task type now hands off every open issue the machine has not",
+					"placed in a state. Tighten a source's `filter` to keep the old",
+					"narrower list.",
+				]
+			: []),
 		"",
 	].join("\n");
 
-	return { configText, reportText, backupFileName, reportFileName };
+	const noteText = machineMigrated
+		? `the config at ${configPath} was migrated to the workflow machine; the pre-migration file is at ${backupFileName} and the report at ${reportFileName}`
+		: `the config at ${configPath} was migrated off the retired priority table; the pre-migration file is at ${backupFileName} and the report at ${reportFileName}`;
+
+	return { configText, reportText, backupFileName, reportFileName, noteText };
 }
 
 /**

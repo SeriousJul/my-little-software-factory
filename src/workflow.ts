@@ -481,18 +481,6 @@ export function findFixingPullRequest(tickets: readonly Ticket[], ticket: Ticket
 }
 
 /**
- * The tickets a pull request fixes (ADR 0042), read from the pull request's
- * side: the tickets it closes, or the tickets its head branch carries. The
- * rank inheritance reads this side.
- */
-export function fixedTickets(tickets: readonly Ticket[], pullRequest: Ticket): Ticket[] {
-	return tickets.filter(
-		(candidate) =>
-			candidate.identity !== pullRequest.identity && pullRequestFixesTicket(pullRequest, candidate),
-	);
-}
-
-/**
  * Whether a ticket is covered by an open fixing pull request (ADR 0042):
  * the ticket is open, and at least one open pull request fixes it. The list
  * rule withholds a covered ticket's row, and a draft fixing pull request
@@ -533,7 +521,6 @@ export async function fireTransition(
 	const tickets = request.state.projectedTickets(
 		request.config.workflowStates,
 		request.config.defaultTaskType,
-		[],
 	);
 	const ticket = tickets.find((item) => item.identity === request.ticketIdentity);
 	if (ticket === undefined) return null;

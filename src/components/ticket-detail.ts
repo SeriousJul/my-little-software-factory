@@ -18,7 +18,6 @@ import {
 	type TicketMarker,
 } from "../domain/ticket.ts";
 import type { HandoffChoice } from "../handoff.ts";
-import { prioritySourceWord } from "../priority.ts";
 import { maxScrollOf, usePaneGeometry } from "./geometry.ts";
 import { paneMouse } from "./pane-mouse.ts";
 import { turnEndCauseLine } from "./shared/presentation.ts";
@@ -87,26 +86,6 @@ type DetailChoice = Pick<
  */
 function detailChoice(ticket: Ticket, suggestedChoice?: HandoffChoice): DetailChoice | undefined {
 	return ticket.state === "open" ? suggestedChoice : (ticket.handoff ?? undefined);
-}
-
-/**
- * The fact row of the ticket's effective priority (ADR 0022): the rank's
- * label and where it comes from - the operator's override, or the ticket's
- * own label. The row is the priority selector's own face: the Select
- * priority control and the bump keys step the stored override, and the line
- * states what each step wrote. An override that names no rank - `off`, or a
- * label the config list dropped - states its stored label. An unranked
- * ticket without one reads `none`.
- */
-function priorityFact(ticket: Ticket): { text: string; fg: string | undefined } {
-	if (ticket.priority.rank !== null) {
-		const word = prioritySourceWord(ticket.priority);
-		const label = ticket.priority.label ?? "none";
-		return { text: word === null ? label : `${label} (${word})`, fg: paint("text") };
-	}
-	if (ticket.priority.label !== null)
-		return { text: `${ticket.priority.label} (set by you)`, fg: paint("text") };
-	return { text: "none", fg: paint("subtext0") };
 }
 
 /**
@@ -231,13 +210,6 @@ export function detailContent(
 		presentation.unknown ? paint("yellow") : paint("mauve"),
 	);
 	addLeft(`Handoffs: ${ticket.handoffCount}/${handoffLimit}`, paint("text"));
-	// The effective rank and where it comes from, beside the task type the
-	// rank orders: the operator reads what the bump will move from (ADR 0022).
-	// When the rank is inherited, the fact names the source that supplied it:
-	// `Priority: critical (issue #123)`, the fixing alert by `alert #9`, the
-	// fixing advisory by its key alone (ADR 0023, ADR 0042).
-	const fact = priorityFact(ticket);
-	addLeft(`Priority: ${fact.text}`, fact.fg);
 	// The Source column: where the ticket comes from, the way the operator
 	// reads the source facts in one column.
 	addRight(`Source kind: ${ticket.sourceKind}`, paint("text"));

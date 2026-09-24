@@ -215,6 +215,39 @@ export class ConsultationOperations {
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
 	}
 
+	/**
+	 * The Consultation enqueue's hard check (ADR 0049): the type the ask names
+	 * still exists, and the settings that type resolves to still fit.
+	 *
+	 * The Work queue is the single start channel, and every hard check runs at
+	 * the enqueue: a Consultation the config cannot start never takes a row, and
+	 * the reason stands on the Message line at the ask. The check reads the
+	 * type's settings - the record's settings are the type's, both at the create
+	 * below and at the pickup's re-read - and it is the same
+	 * `checkConsultationStart` the start runs. The start runs it again on the
+	 * record it picked up, because the fit answer is a runtime read and a queued
+	 * record must answer to the config it starts under; that re-read is what
+	 * leaves the `failed` record story 6 asks for when the config moved while
+	 * the item waited. A refuse returns the reason; a pass returns nothing.
+	 */
+	async checkEnqueue(typeName: string): Promise<string | undefined> {
+		const config = this.config();
+		const type = config.consultationTypes[typeName];
+		if (type === undefined) return `unknown Consultation type ${typeName}`;
+		const check = await checkConsultationStart({
+			consultation: {
+				agentType: type.agent,
+				environment: type.environment,
+				model: type.model ?? "",
+				thinking: type.thinking ?? "",
+				contextWindow: type.contextWindow ?? "",
+			},
+			config,
+			runner: this.runner,
+		});
+		return check.ok ? undefined : check.reason;
+	}
+
 	create(input: ConsultationCreateInput): Consultation | undefined {
 		const type = this.config().consultationTypes[input.typeName];
 		if (type === undefined) {

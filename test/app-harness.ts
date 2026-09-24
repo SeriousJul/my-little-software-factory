@@ -69,8 +69,10 @@ const STATE_BADGES = TICKET_STATES.filter((state) => state !== "handed-off").map
  * the first frame the face stands on; the animation itself is not something
  * the frame snapshots verify.
  */
-export const startingFaceOf = (frame: string): string | null =>
-	SPINNER_FRAMES.find((glyph) => frame.includes(`${glyph} starting`)) ?? null;
+export const startingFaceOf = (frame: string | undefined): string | null =>
+	frame === undefined
+		? null
+		: (SPINNER_FRAMES.find((glyph) => frame.includes(`${glyph} starting`)) ?? null);
 
 /**
  * The frame with the animated face standing on its first frame.

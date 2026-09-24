@@ -316,20 +316,37 @@ describe("the in-app Key guide", () => {
 			await withApp(
 				async (setup) => {
 					source.settle(success(tickets));
-					// The Work header stands with its count; it starts collapsed.
+					// The Work header stands with its count; it starts expanded (ADR 0049).
+					// Wait for the source's title to reach the queue row as well: the
+					// row holds the raw ticket identity until the first source poll.
 					const header = await awaitFrame(
 						setup,
-						(f) => f.includes("Work") && f.includes("waiting: 1"),
+						(f) =>
+							f.includes("▾ Work") &&
+							f.includes("waiting: 1") &&
+							f.includes("Add a webhook retry policy"),
 						"the Work header",
 					);
-					expect(header).toContain("▸ Work");
-					// Expand the section: the click lands the cursor on the first row.
-					const workRow = rowsOf(header).findIndex((row) => /\bWork\b/.test(row));
+					expect(header).toContain("▾ Work");
+					// The section is already expanded; the click lands the cursor on
+					// the item row. The Ticket section shows the same title with the
+					// same badge, so the queue row is the first match below the Work
+					// header, not the first match in the frame.
+					const headerRows = rowsOf(header);
+					const workHeaderRow = headerRows.findIndex((row) => row.startsWith("▾ Work"));
+					const workRow =
+						headerRows
+							.slice(workHeaderRow + 1)
+							.findIndex(
+								(row) => row.includes("[open]") && row.includes("Add a webhook retry policy"),
+							) +
+						workHeaderRow +
+						1;
 					await mouseClick(setup, 2, workRow);
 					const list = await awaitFrame(
 						setup,
-						(f) => f.includes("▾ Work") && f.includes("❯ Work queue"),
-						"the expanded Work section",
+						(f) => f.includes("▾ Work") && f.includes("Add a webhook retry policy 1"),
+						"the Work queue item row",
 					);
 					expect(list).toMatch(/\[open\]\s+Add a webhook retry policy/);
 
@@ -345,8 +362,9 @@ describe("the in-app Key guide", () => {
 						listIndexOf("Current interaction mode"),
 						listIndexOf("Global controls"),
 					);
-					expect(listCurrent).toContain("u Queue up - the item is first in the queue");
-					expect(listCurrent).toContain("d Queue down - the item is last in the queue");
+					expect(listCurrent).toContain("+ Promote - the item is first in the queue");
+					expect(listCurrent).toContain("- Demote - the item is last in the queue");
+					expect(listCurrent.some((row) => row.startsWith("p Pause queue"))).toBe(true);
 					expect(listCurrent).toContain("Delete Remove");
 					// Enter is the queue's force-dispatch (issue #89), with its note
 					// saying what the start does and where the failure ends. The note
@@ -361,8 +379,8 @@ describe("the in-app Key guide", () => {
 					// The Consultation section's `d Delete` and `f History` run on
 					// the shared base modes, so they reach a queue mode as a key the
 					// queue can never dispatch. Each section's guide names only the
-					// keys it owns (issue #85, ADR 0034): the queue's `d Queue down`
-					// stands, and the other section's two rows stay out.
+					// keys it owns (issue #85, ADR 0034): the queue's own keys stand,
+					// and the other section's two rows stay out.
 					expect(listCurrent.some((row) => row.startsWith("d Delete"))).toBe(false);
 					expect(listCurrent.some((row) => row.startsWith("f History"))).toBe(false);
 					await closeOverlay(setup, "Key guide", "the guide to close");
@@ -428,6 +446,7 @@ describe("the in-app Key guide", () => {
 				expect(between(indexOf("Current interaction mode"), indexOf("Global controls"))).toEqual([
 					"↑↓/jk Move",
 					"→/l Detail",
+					"Enter Queue item - the selected row has no waiting queue item",
 					"Enter Hand off",
 					"Enter Live view - only an in-flight Ticket has a Live view",
 					"Enter Decide - the selected Ticket has no completion to decide",
@@ -444,9 +463,6 @@ describe("the in-app Key guide", () => {
 					"[consultation-types.<name>] to the config file",
 					"e Override",
 					"r Refresh - no Ticket sources exist",
-					// The Priority bump and clear, each with its own note.
-					"+/- Bump priority - raises or lowers the rank",
-					"⌫ Clear priority - removes the set rank",
 					"F1/? Help",
 					"m/F2 Message - the current Message fits on the Message line",
 				]);
@@ -474,8 +490,8 @@ describe("the in-app Key guide", () => {
 					}
 				};
 				note(await settle(setup));
-				const ladder = Array.from({ length: 37 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/56`,
+				const ladder = Array.from({ length: 35 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/54`,
 				);
 				for (const range of ladder) note(await scrollGuide(setup, "j", range));
 				// The Control plane section names the merged Main view's controls -
@@ -519,9 +535,6 @@ describe("the in-app Key guide", () => {
 					"Type Edit",
 					"Backspace Delete",
 					"⌫ Clear",
-					// The detail pane's Priority selector, cataloged on its own
-					// keys with its note, whatever mode opened the guide.
-					"→/l Select priority - sets the Override: the ranks in order, off, and default",
 					"F12 Exit interaction",
 					"Esc Cancel",
 					"Tab Field",
@@ -771,10 +784,7 @@ describe("the in-app Key guide", () => {
 				expect(rowOf("r Refresh")).toContain("no Ticket sources exist");
 				expect(rowOf("m/F2 Message")).toContain("the current Message fits on the Message line");
 
-				// The Priority rows carry their notes, and the recovery note
-				// rides the always-available Emergency exit.
-				expect(rowOf("Bump priority")).toContain("raises or lowers the rank");
-				expect(rowOf("Clear priority")).toContain("removes the set rank");
+				// The recovery note rides the always-available Emergency exit.
 				expect(rowOf("Ctrl+C Emergency exit")).toContain(
 					"may require Handoff recovery on the next start",
 				);
@@ -813,14 +823,10 @@ describe("the in-app Key guide", () => {
 				const rowOf = (needle: string) => rows.findIndex((row) => norm(row).includes(needle));
 
 				// Available: the key wears the focus color, the label the text
-				// color. The Priority rows are available here: a Ticket is
-				// selected.
+				// color.
 				const moveRow = rowOf("Move");
 				expect(spanColorAt(setup, moveRow, "↑↓/jk")).toEqual(rgb(roleColor("accent")));
 				expect(spanColorAt(setup, moveRow, "Move")).toEqual(rgb(roleColor("text")));
-				const bumpRow = rowOf("Bump priority");
-				expect(spanColorAt(setup, bumpRow, "+/-")).toEqual(rgb(roleColor("accent")));
-				expect(spanColorAt(setup, bumpRow, "Bump priority")).toEqual(rgb(roleColor("text")));
 				// Unavailable: the key and the label are dim, the reason dim.
 				const refreshRow = rowOf("r Refresh");
 				expect(spanColorAt(setup, refreshRow, "r")).toEqual(rgb(roleColor("subtext0")));
@@ -903,23 +909,23 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/56");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/54");
 
-				await scrollGuide(setup, "j", "2-20/56");
-				await scrollGuide(setup, "j", "3-21/56");
-				await scrollGuide(setup, "k", "2-20/56");
-				await scrollGuide(setup, "k", "1-19/56");
+				await scrollGuide(setup, "j", "2-20/54");
+				await scrollGuide(setup, "j", "3-21/54");
+				await scrollGuide(setup, "k", "2-20/54");
+				await scrollGuide(setup, "k", "1-19/54");
 				// Top boundary: k holds the range.
 				setup.mockInput.pressKey("k");
-				expect(await settle(setup, 500)).toContain("1-19/56");
+				expect(await settle(setup, 500)).toContain("1-19/54");
 				// Walk to the bottom, one step per frame.
-				const ladder = Array.from({ length: 36 }, (_, step) => step + 2).map(
-					(row) => `${row}-${row + 18}/56`,
+				const ladder = Array.from({ length: 34 }, (_, step) => step + 2).map(
+					(row) => `${row}-${row + 18}/54`,
 				);
 				for (const range of ladder) await scrollGuide(setup, "j", range);
 				// Bottom boundary: j holds the range.
 				setup.mockInput.pressKey("j");
-				expect(await settle(setup, 500)).toContain("38-56/56");
+				expect(await settle(setup, 500)).toContain("36-54/54");
 			},
 			WIDTH,
 			HEIGHT,
@@ -941,18 +947,20 @@ describe("the in-app Key guide", () => {
 				let frame = await settle(setup);
 				expect(stillFrame(rowsOf(frame)[markerRowOf(frame)])).toBe(stillFrame(selectedBefore));
 
-				// The detail focus and scroll, on a short terminal where the
-				// detail pane overflows. The list keeps the focus through the
-				// resize, and the probe reads the pane's raw column, so a scroll
-				// that only swaps a blank padding row still shows.
+				// The detail focus and scroll, at the new three-section floor
+				// (ADR 0049 raised it to 27) on a narrow terminal where the detail
+				// pane overflows: the narrow width wraps the description past the
+				// pane's rows. The list keeps the focus through the resize, and the
+				// probe reads the pane's raw column, so a scroll that only swaps a
+				// blank padding row still shows.
 				await focusDetail(setup);
-				setup.resize(WIDTH, 20);
+				setup.resize(60, 27);
 				await settle(setup);
 				setup.mockInput.pressKey("l");
 				await settle(setup);
 				const detailCol = (f: string): string =>
 					rowsOf(f)
-						.map((row) => row.slice(WIDTH / 2 + 2, WIDTH - 2))
+						.map((row) => row.slice(32, 58))
 						.join("\n");
 				const detailTop = detailCol(setup.captureCharFrame());
 				await press(
@@ -1022,7 +1030,7 @@ describe("the in-app Key guide", () => {
 				setup.mockInput.pressKey("j");
 				await awaitFrame(
 					setup,
-					(f) => actionBarRowOf(f).includes("2-20/56"),
+					(f) => actionBarRowOf(f).includes("2-20/54"),
 					"the guide to scroll",
 				);
 				// e opens no panel, r warns no refresh, q quits nothing,
@@ -1125,7 +1133,7 @@ describe("the in-app Key guide", () => {
 				await openGuide(setup, "?");
 				const bar = actionBarRowOf(await settle(setup));
 				expect(bar).toContain("↑↓/jk Scroll");
-				expect(bar).toContain("1-19/56");
+				expect(bar).toContain("1-19/54");
 				expect(bar).toContain("Esc/F1/? Close");
 				expect(bar).not.toContain("Help");
 				expect(bar).not.toContain("Message");
@@ -1141,7 +1149,7 @@ describe("the in-app Key guide", () => {
 		await withApp(
 			async (setup) => {
 				await openGuide(setup, "?");
-				expect(actionBarRowOf(await settle(setup))).toContain("1-19/56");
+				expect(actionBarRowOf(await settle(setup))).toContain("1-19/54");
 
 				// A short, wide terminal: four visible rows, the full title
 				// still fitting, and more total rows because the reason column is
@@ -1153,13 +1161,13 @@ describe("the in-app Key guide", () => {
 				// The selector's note, the Close reason, and the Recovery note wrap
 				// on this narrow terminal, so the guide runs longer than at the full
 				// width.
-				expect(actionBarRowOf(frame)).toContain("1-4/80");
+				expect(actionBarRowOf(frame)).toContain("1-4/76");
 
-				await scrollGuide(setup, "j", "2-5/80");
+				await scrollGuide(setup, "j", "2-5/76");
 				// Back to size: the scroll the terminal gave back is kept.
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
-				expect(actionBarRowOf(frame)).toContain("2-20/56");
+				expect(actionBarRowOf(frame)).toContain("2-20/54");
 
 				// Below the useful size the terminal takes its compact frame:
 				// the modal caps at the terminal, the title falls back to the
@@ -1177,7 +1185,7 @@ describe("the in-app Key guide", () => {
 				setup.resize(WIDTH, HEIGHT);
 				frame = await settle(setup);
 				expect(frame).toContain("Key guide - Ticket list");
-				expect(actionBarRowOf(frame)).toContain("2-20/56");
+				expect(actionBarRowOf(frame)).toContain("2-20/54");
 			},
 			WIDTH,
 			HEIGHT,

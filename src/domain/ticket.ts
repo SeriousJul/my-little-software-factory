@@ -1,7 +1,6 @@
 /** Provider-neutral factory ticket types and state transitions. */
 
 import type { TransitionOutcome } from "../config.ts";
-import type { TicketPriority } from "../priority.ts";
 import { isHeldCause, type TurnEndCause, type TurnLogEntry } from "../turn-log.ts";
 
 /**
@@ -114,13 +113,13 @@ export interface RepositoryRef {
 
 /**
  * The attribute key a pull request membership stores its Issue references
- * in (ADR 0023).
+ * in (ADR 0042, kept by ADR 0050).
  */
 export const ISSUE_REFERENCES_ATTRIBUTE = "closes";
 
 /**
  * One Issue reference a pull request membership stores as a source fact
- * (ADR 0023). The reference is tracked by the issue's identity, which is
+ * (ADR 0042, kept by ADR 0050). The reference is tracked by the issue's identity, which is
  * stable across the repository.
  */
 export interface IssueReference {
@@ -164,7 +163,7 @@ export function issueReferencesOf(attributes: Record<string, string>): IssueRefe
 
 /**
  * A membership's attributes with the pull request's Issue references stored
- * (ADR 0023). A pull request that closes nothing carries no attribute. The
+ * (ADR 0042, kept by ADR 0050). A pull request that closes nothing carries no attribute. The
  * references are a source fact like `draft`: a refresh can change them.
  */
 export function withIssueReferences(
@@ -295,17 +294,7 @@ export interface Ticket {
 	 * null when nothing of its closed handoffs is still alive in herdr.
 	 */
 	leftover: LeftoverEnvironment | null;
-	/** The ticket's effective priority (ADR 0022), against the config's label list. */
-	priority: TicketPriority;
 }
-
-/** The unranked priority: no rank, no label, no source, no reference. */
-export const UNRANKED_PRIORITY: TicketPriority = {
-	rank: null,
-	label: null,
-	source: "none",
-	inheritedFrom: null,
-};
 
 /** The marker an observation poll sets on an in-flight ticket. */
 export type TicketMarker = "blocked" | "missing";
