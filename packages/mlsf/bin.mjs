@@ -24,6 +24,11 @@ const child = spawn(process.execPath, [realBin, ...process.argv.slice(2)], {
 });
 child.on("exit", (code, signal) => {
 	if (signal) {
+		// Drop this signal's listener before the re-raise, or the re-raise runs
+		// the handler instead of taking the default action and the exit below
+		// wins the race: the shipped bin dies from the signal, and the alias has
+		// to answer the same way for the same interrupt.
+		process.removeAllListeners(signal);
 		process.kill(process.pid, signal);
 		// A signal the launcher's runtime does not act on must not end the run
 		// as a success: the child died by that signal, so the launcher leaves

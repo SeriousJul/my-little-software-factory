@@ -37,13 +37,13 @@ These checks run in `bun run test` and the docs build.
 | The cache is keyed by target, so two machines of different architecture that share one home cannot read each other's note, and an empty or relative data home from the environment is ignored rather than resolved against the working directory | `test/installer.test.ts` | Passed |
 | A cold `--version` is answered by the installer with the binary's own line, and asks the network for nothing; a cached `--version` still goes to the binary | `test/installer.test.ts` (the line is also pinned against the text `src/factory.ts` writes), and the packed bin through the npm shim answered `factory 0.1.0` with an empty data home in 0.2 s | Passed |
 | The first run says it is downloading before it asks the network for anything, and a cached run says nothing | `test/installer.test.ts`, with the fetch and the writer faked; and the packed `./node_modules/.bin/factory` printed the note line before its incomplete-release line | Passed |
-| The first run says it is downloading before it asks the network for the binary, and a cached run says nothing | `test/installer.test.ts`, with the fetch and the writer faked | Passed |
 | The checksums file and the binary are bound by separate timeouts, and the binary's is raised by `MLSF_DOWNLOAD_TIMEOUT_MS` | `test/installer.test.ts` (both bounds, the readable line, and the override's parse) | Passed |
 | The install note names the version, the target, and the binary's SHA-256; a cache that cannot account for itself (no note, another target's note, bytes written over, a note that does not parse) re-downloads instead of failing every later run | `test/installer.test.ts`, with the network faked | Passed |
 | The install directory and its note are private to their owner, and every download carries a timeout so a stalled network ends the run with a line instead of hanging it | `test/installer.test.ts` | Passed |
 | A Windows rename refused because the binary is running says to close the running control plane | `test/installer.test.ts` pins the line's decision (`renameFailureLine`); the raw `EBUSY` path itself is the operating system's, measured on the first Windows run | Passed (decision), Incomplete (the real busy rename) |
 | The whole install-and-run (`runInstaller`) resolves the target, reuses or installs the cache, hands the arguments to the binary, and returns the line, the exit code, or the signal the entry then acts on | `test/installer.test.ts`, with the fetch and the child process faked | Passed |
 | The published bin, started under Node through the symlink shape npm writes in `node_modules/.bin`, reaches the install step and runs the cached binary | `test/installer.test.ts` spawns `node` on the shipped `bin/factory-bin.mjs` twice: by its real path and through a shim, with a cache seeded so no request is made. It is red on the pre-fix entry guard (exit 0, no output) and green on the realpath'ed guard | Passed |
+| The alias launcher starts the main package's own bin with the operator's arguments, forwards its exit code, and ends a signalled child by that signal rather than by a code of its own | `test/alias-launcher.test.ts` starts the real `packages/mlsf/bin.mjs` under Node in an install-shaped tree with a stand-in main bin. It is red on the pre-fix launcher (exit 1 where the shipped bin died by SIGTERM) and green on the one that drops the listener before the re-raise | Passed |
 | A clean install of the packed tarball installs the installer and nothing else | The author ran `npm pack` and `npm install ./my-little-software-factory-0.1.0.tgz` in an empty project (npm, node 26, 2026-09-24): `added 1 package`, `node_modules` 36 kB, and `./node_modules/.bin/factory --version` reached the install step with its readable incomplete-release line | Passed |
 | The checksums file is read before the asset, a mismatched or missing checksum installs nothing, and a verified asset lands at its cache path with its install note | `test/installer.test.ts`, with the network faked | Passed |
 | The build command compiles the entry per target with the package's version stamped into the binary, and is the command the release leg runs | `test/build-binary.test.ts`, `test/release-workflow.test.ts` | Passed |
@@ -51,7 +51,8 @@ These checks run in `bun run test` and the docs build.
 | A compiled `linux-x64` binary answers `factory --version` with the stamped version and seeds a missing config file from the embedded Default configuration, verbatim | The author compiled the binary and ran it on a pseudo-terminal (bun 1.4.2, linux-x64, 2026-09-24): `factory 0.1.0` with no state and no config on disk, then a `script`-owned pseudo-terminal run that wrote the seed note, left a byte-for-byte copy of `config/default.toml` (`cmp` clean), and drew the app's own words | Passed |
 | Every one of the seven targets cross-compiles from one Linux host through the release leg's exact steps, and the output is the true executable of each target | The author ran `bun install --omit=optional` and `bun run build <target> --out dist` for all seven targets (bun 1.4.2, 2026-09-24); `file` reports ELF x64 and aarch64, the two musl targets with the musl interpreter, Mach-O x86_64 and arm64, and PE32+ | Passed |
 | A built binary embeds the native core it runs, and the count and size are read off the artifact, not inferred from the leg | The author ran each leg's exact steps in a clean tree and counted the embedded cores with `strings` (bun 1.4.2, 2026-09-24). See the table below. The three non-Linux targets carry one core each; all four Linux targets carry both libc variants | Passed |
-| Every release binary answers `--version` on its own operating system: `linux-x64` on its build runner, `linux-x64-musl` in an alpine container, `darwin-arm64` on macOS, `windows-x64` on Windows | The smoke jobs of `.github/workflows/release.yml`, run on every tag | Not measured until the first tag |
+| Every release binary answers `--version` with the release's own version line on its operating system: `linux-x64` on its build runner, `linux-x64-musl` in an alpine container, `darwin-arm64` on macOS, `windows-x64` on Windows. Each step compares the line, so a binary that answers `factory unknown` with exit 0 fails the leg | The smoke steps of `.github/workflows/release.yml`; `test/release-workflow.test.ts` pins that every step compares its answer with `factory <tag version>`. The comparison itself ran here against fake binaries for all three POSIX steps: the right line passes, `factory unknown` and a stale version each stop with its own message; the Windows step is PowerShell and could not run on this host | Not measured on a real binary until the first tag |
+| The build stops before a compile when the tree holds a core the target must not embed, so the record's per-target core count is true of a contributor's binary as well as a release leg's | `test/build-binary.test.ts` (the required set per target, every clean leg's measured install set passes it, and a dirty tree names the extra core); the author ran the check against this worktree's own `node_modules`, which holds a leftover `core-win32-x64`, and every target stopped with the line that names it and the command that clears it | Passed |
 
 ## The built artifact, read off the artifact
 
@@ -75,10 +76,25 @@ Linux x64 host, 2026-09-24, from version `0.1.0`.
 So the release's claim is: a binary embeds the native library it runs, and a
 Linux binary embeds its sibling too. `bun add --os=<os> --cpu=<cpu>` resolves
 an operating-system and architecture pair, not a libc, and `@opentui/core`'s
-asset loader names all six platform packages in literal dynamic imports, which
-the bundler must resolve whatever `--target` it is given. The dead sibling is
-about 6.3 MB per Linux artifact - `libopentui.so` is 6,312,560 bytes on the
-glibc package and 6,292,208 on the musl one.
+asset loader names eight platform packages in literal dynamic imports
+(`core-darwin-x64`, `core-darwin-arm64`, `core-linux-x64`,
+`core-linux-x64-musl`, `core-linux-arm64`, `core-linux-arm64-musl`,
+`core-win32-x64`, `core-win32-arm64`). The bundler prunes the `process.platform`
+and `process.arch` tests to the `--target` it is given, so a leg resolves only
+the imports its target can reach; what it cannot prune is the libc test inside
+the Linux branches, `process.env.OPENTUI_LIBC === "musl"`, because an
+evironment read is not knowable at build time. That single fact is why a Linux
+leg needs both siblings of its architecture and why the dead sibling ships, and
+why a Darwin or Windows leg builds from one core. The dead sibling is about
+6.3 MB per Linux artifact - `libopentui.so` is 6,312,560 bytes on the glibc
+package and 6,292,208 on the musl one.
+
+The pruning was measured on bun 1.4.2 with a stand-in loader of the same shape
+in a scratch tree: a target whose own package was absent failed to compile
+(`Could not resolve: "nope-darwin-arm64"`), a different target of the same
+platform compiled with it absent, and the Linux leg failed on its absent `-musl`
+sibling even with `OPENTUI_LIBC=glibc` set for the build - the environment read
+does not settle at compile time.
 
 Two routes to drop it were measured on the `linux-x64` leg, and neither works
 from this repository:
@@ -97,9 +113,12 @@ from this repository:
   leaves the literal import at `:8130` unresolved. A tree without the sibling
   has no route to an artifact.
 
-The remaining route is upstream: OpenTUI's loader has to stop naming a variant
-it is not running, or this release accepts the extra 6.3 MB on the four Linux
-targets. This record states the second, per target, from the artifact.
+The remaining route is upstream: OpenTUI's loader has to make the libc choice
+statically knowable - a flag the build reads, or a separate entry per libc -
+or this release accepts the extra 6.3 MB on the four Linux targets. The dead
+variant is not a variant the loader names for no reason: every package it names
+on a Linux target is one that target can reach at run time. This record states
+the second, per target, from the artifact.
 
 ## What is verified at the first publish
 
@@ -154,12 +173,19 @@ this repository. Until that tag runs, every row below is incomplete.
   compiler the gates did not run. `test/release-workflow.test.ts` fails if
   one pin drifts from the others.
 - The rework run of this branch measured `bun run lint`, `bun run typecheck`,
-  `bun run test` (2050 pass, 0 fail, 0 skipped, bun 1.4.2, node 26.9.0), and
+  `bun run test` (2063 pass, 0 fail, 0 skipped, bun 1.4.2, node 26.9.0), and
   `bun run docs:build`, all green, on the tree rebased onto `main` at
   `58e062c`. No other `bun test` process was running on the machine when the
   gate ran; the check is recorded here rather than assumed. The suite's own
   pseudo-terminal and screenshot cases skip on a machine that cannot run
   them, so a run that reports skips is the machine, not the branch.
+- The third review pass's fixes were gated the same way on this tree: `bun run
+  lint`, `bun run typecheck`, `bun run test` (2063 pass, 0 fail, 0 skipped)
+  against 85 files, and `bun run docs:build`, all green, with no other
+  `bun test` process running. The 13 tests over the previous pass's 2050 are the
+  core-set decisions in `test/build-binary.test.ts`, the three smoke-comparison
+  assertions in `test/release-workflow.test.ts`, and the four alias-launcher
+  spawns in the new `test/alias-launcher.test.ts`.
 - The rebase itself is part of this record: `ADR 0055` (mutation testing,
   #157) landed after the last rebase and touched `package.json`, `bun.lock`,
   `docs/adr/index.md`, and `docs/development/commands.md`. The four conflicts
@@ -168,6 +194,48 @@ this repository. Until that tag runs, every row below is incomplete.
 - Every claim this pass read off a built artifact is in the table above, and
   the two routes to shrink a Linux artifact are recorded with the command that
   failed and the error it gave, so the next reader does not re-try them.
+- The loader claim above was wrong in its count and its cause on the previous
+  pass, and this pass corrected it everywhere it appeared: the loader names
+  eight platform packages, not six, and the branch that survives every
+  `--target` is the `OPENTUI_LIBC` environment read on the Linux legs, not the
+  platform and architecture tests. The accepted cost is unchanged; the reason
+  for it was.
+- The pruning was measured rather than read: a stand-in loader of the same
+  shape in a scratch tree compiled for a target whose platform siblings were
+  absent, failed for the target whose own package was absent, and failed for a
+  Linux target with its `-musl` sibling absent even with `OPENTUI_LIBC=glibc`
+  set for the build (bun 1.4.2, 2026-09-24).
+- All seven release legs were re-run through their exact steps in a fresh tree
+  after the core-set check went in (`bun install --omit=optional`, then
+  `bun run build <target> --out dist`, bun 1.4.2, 2026-09-24), and each built
+  and matched its row byte for byte: `linux-x64` 101,316,064, `linux-x64-musl`
+  95,286,832, `linux-arm64` 100,452,648, `linux-arm64-musl` 93,588,688,
+  `darwin-x64` 82,342,160, `darwin-arm64` 75,254,898, `windows-x64` 99,871,232.
+  The core count each tree held is the count the table names, so the check
+  passes every clean leg and the non-Linux legs prove one core compiles.
+  The `linux-x64` artifact answered `factory 0.1.0`. The check's own path was
+  measured by planting a foreign core directory in this worktree's
+  `node_modules/@opentui`: the `linux-x64` build then stopped holding 3 cores and
+  naming the planted `@opentui/core-win32-x64`, and the `darwin-arm64` build
+  stopped naming all three, each with the command that clears them. After the
+  planted directory was removed the `linux-x64` build passed again, and
+  `CI=true bun install --frozen-lockfile` changed neither `package.json` nor
+  `bun.lock`. A plain `bun install` on this host places both `linux-x64`
+  variants, so the host's own target builds from it and a foreign target still
+  stops.
+- The version comparison in the four smoke steps was run against fake binaries
+  for the three POSIX steps (the `linux-x64`, the alpine `linux-x64-musl` with
+  `docker` stood in, and the `darwin-arm64`): the tag's own line passes,
+  `factory unknown` and a stale version each stop the step with its own
+  message. The Windows step is PowerShell and no PowerShell exists on this
+  machine, so its comparison is read but not executed - `test/release-workflow.test.ts`
+  pins its shape beside the other three.
+- The alias launcher's signal path was measured before and after its one-line
+  fix, through a real install-shaped tree with the real `packages/mlsf/bin.mjs`
+  under Node: pre-fix it answered exit 1 where the shipped bin died by SIGTERM,
+  and after it dies by the signal (143) like the shipped bin.
+  `test/alias-launcher.test.ts` is red on the pre-fix file and green on the
+  patched one.
 - The Windows busy-rename line is the decision of one pure function; the
   operating system's `EBUSY` behind it was not produced on a Windows
   machine in this pass. It stays the row above rather than a claim here.

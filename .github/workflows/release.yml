@@ -65,8 +65,9 @@ jobs:
   # One leg per target, each on a clean runner: the leg installs its own
   # operating system's and architecture's OpenTUI cores and no others. A Linux
   # leg gets both libc variants that way, because @opentui/core's loader names
-  # six literal platform imports and the bundler resolves every one of them
-  # whatever --target it is given. scripts/build-binary.ts says why, and
+  # eight literal platform imports behind platform and arch tests the bundler
+  # prunes per --target, and a libc test it cannot prune: an environment read
+  # is not knowable at build time. scripts/build-binary.ts says why, and
   # docs/verification/release.md records the core count and the byte size of
   # each target's artifact.
   build:
@@ -94,13 +95,19 @@ jobs:
       - run: bun install --omit=optional
       - run: bun run build ${{ matrix.target }} --out dist
       # The leg that builds the runner's own target runs the binary it just
-      # built: a compile that produces an unrunnable file fails here.
+      # built: a compile that produces an unrunnable file fails here. The step
+      # reads the answer, not just the exit code: a binary that prints the wrong
+      # version exits 0 like any other, and the version line is what ties the
+      # artifact to the tag it shipped on.
       - name: The built binary answers --version on this runner
         if: matrix.target == 'linux-x64'
         run: |
           asset="$(ls dist/factory-*)"
           test "$(ls dist/factory-* | wc -l)" -eq 1
-          "$asset" --version
+          want="factory ${GITHUB_REF_NAME#v}"
+          answer="$("$asset" --version)"
+          test "$answer" = "$want" || { echo "the linux-x64 binary answered '$answer'; the tag wants '$want'"; exit 1; }
+          echo "linux-x64 answers $answer"
       # The glibc runner cannot run the musl binary; an alpine container can.
       - name: The musl binary answers --version in an alpine container
         if: matrix.target == 'linux-x64-musl'
@@ -112,8 +119,11 @@ jobs:
           # dies on a relocation error before it answers anything. The
           # operator's musl machine needs the same package, and the
           # prerequisites name it.
-          docker run --rm -v "$PWD/dist:/dist" -e BINARY="$(basename "$asset")" alpine:3.20 \
-            sh -c 'apk add --no-cache libstdc++ >/dev/null && "/dist/$BINARY" --version'
+          want="factory ${GITHUB_REF_NAME#v}"
+          answer="$(docker run --rm -v "$PWD/dist:/dist" -e BINARY="$(basename "$asset")" alpine:3.20 \
+            sh -c 'apk add --no-cache libstdc++ >/dev/null && "/dist/$BINARY" --version')"
+          test "$answer" = "$want" || { echo "the linux-x64-musl binary answered '$answer'; the tag wants '$want'"; exit 1; }
+          echo "linux-x64-musl answers $answer"
       - uses: actions/upload-artifact@v7
         with:
           name: factory-${{ matrix.target }}
@@ -143,7 +153,10 @@ jobs:
           asset="$(ls dist/factory-*-darwin-arm64)"
           test "$(ls dist/factory-*-darwin-arm64 | wc -l)" -eq 1
           chmod +x "$asset"
-          "$asset" --version
+          want="factory ${GITHUB_REF_NAME#v}"
+          answer="$("$asset" --version)"
+          test "$answer" = "$want" || { echo "the darwin-arm64 binary answered '$answer'; the tag wants '$want'"; exit 1; }
+          echo "darwin-arm64 answers $answer"
 
   smoke-windows:
     needs: build
@@ -161,7 +174,15 @@ jobs:
             Write-Error "expected one windows-x64 asset in dist, found $($assets.Count)"
             exit 1
           }
-          & $assets[0].FullName --version
+          # The same read the POSIX legs make: the line has to say the tag's
+          # version, not merely arrive with exit 0.
+          $answer = ((& $assets[0].FullName --version) | Out-String).Trim()
+          $want = "factory " + $env:GITHUB_REF_NAME.Substring(1)
+          if ($answer -ne $want) {
+            Write-Error "the windows-x64 binary answered '$answer'; the release is $want"
+            exit 1
+          }
+          Write-Output $answer
           exit $LASTEXITCODE
 
   # The release carries every target and the checksums the installer

@@ -92,10 +92,18 @@ description: The module map of the source tree, for agents working in this repos
 	real facts, the entry guard that recognizes the path npm's bin shim was
 	started through (both sides realpath'ed), the operator's terminal for the
 	download note, and the process exits the run outcome asks for.
+- `packages/mlsf/bin.mjs`: the short-name alias launcher. It reads the main
+	package's own bin and re-execs it under Node with the operator's arguments, so
+	`npx mlsf` and `npx my-little-software-factory` are one command. It adds no
+	decision of its own; what it owns is how the run ends - the child's exit code
+	forwarded, and a child the signal killed ending the launcher by that signal
+	like the shipped bin. `test/alias-launcher.test.ts` pins it under Node.
 - `scripts/build-binary.ts`: the release build. `bun run build <target> --out
-	<dir>` compiles one prebuilt binary with `bun build --compile`, installs the
-	target's OpenTUI native cores first - the step that makes them resolvable to
-	the bundler, which is why a Linux artifact carries both libc variants -
+	<dir>` compiles one prebuilt binary with `bun build --compile`, checks that
+	the tree holds exactly the OpenTUI native cores that target needs and adds the
+	missing ones first - the step that makes them resolvable to the bundler,
+	which is why a Linux artifact carries both libc variants and a build that
+	found a foreign core would ship a different artifact under the release's name -
 	stamps the package version into the binary, and names the asset through the
 	shared `assetFileName` the installer reads.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
@@ -108,6 +116,10 @@ description: The module map of the source tree, for agents working in this repos
 - `src/components/ticket-close.ts`: the Ticket Close dialog's facts. The shell
 	renders them and the gallery shows them, so the confirmation an operator
 	reads and the example a review reads are one definition (ADR 0031).
-- `test/`: the test suite.
+- `test/`: the test suite. `test/installer.test.ts` holds the installer's
+	decisions and the shipped bin's runs under Node, `test/build-binary.test.ts`
+	the release build's, `test/release-workflow.test.ts` the workflow's side of
+	the asset names and the version smokes, and `test/alias-launcher.test.ts` the
+	alias launcher's.
 	The seam is the rendered terminal frame and the recorded command sequence.
 	No test touches a real herdr session or a real git repository.

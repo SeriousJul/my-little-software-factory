@@ -156,6 +156,72 @@ describe("the asset names the workflow's steps use", () => {
 });
 
 describe("the steps that run a binary on its own operating system", () => {
+	/**
+	 * One step's own text, with its shell line continuations joined.
+	 *
+	 * A step is the block between its `- name:` line and the next step at the
+	 * same indentation. The continuations are joined because a captured command
+	 * spans them: the alpine leg's `docker run` is one command over two lines.
+	 */
+	function stepBlock(name: string): string {
+		const lines = RELEASE_YML.split("\n");
+		const start = lines.findIndex((line) => line.trim() === `- name: ${name}`);
+		expect(start, `no step named: ${name}`).toBeGreaterThanOrEqual(0);
+		const indent = lines[start].search(/\S/);
+		const body: string[] = [lines[start]];
+		for (const line of lines.slice(start + 1)) {
+			if (line.trim() === "") continue;
+			if (line.search(/\S/) <= indent) break;
+			body.push(line);
+		}
+		return body.join(" ").replace(/\\\s+/g, " ");
+	}
+
+	/** Every step that runs a built binary and asks it for its version. */
+	function versionSmokeSteps(): string[] {
+		return [...RELEASE_YML.matchAll(/^ {6}- name: (The .* answers --version.*)$/gm)].map(
+			(match) => match[1],
+		);
+	}
+
+	test("each leg runs a version smoke at all", () => {
+		expect(versionSmokeSteps()).toHaveLength(4);
+	});
+
+	test("every version smoke compares the binary's answer with the tag's version", () => {
+		// Exit 0 is not the property. A compiled binary prints `factory unknown`
+		// with exit 0 the moment the build's version stamp stops reaching
+		// src/version.ts, and every smoke would stay green while the release
+		// shipped binaries that lie about what they are. The version line is
+		// also the only thing in the smoke that ties the artifact to the tag.
+		for (const name of versionSmokeSteps()) {
+			const step = stepBlock(name);
+			// The answer is read into a variable, not written to the log: the
+			// POSIX legs capture a command substitution and the PowerShell leg
+			// assigns a pipeline, and either way the text has to be in hand before
+			// the step decides.
+			expect(step).toMatch(/answer="\$\(|\$answer = \(/);
+			// The expected line comes from the tag, the one value the release's
+			// own version is measured against.
+			expect(step).toMatch(/\$\{GITHUB_REF_NAME#v\}|GITHUB_REF_NAME\.Substring\(1\)/);
+			expect(step).toMatch(/factory /);
+			// And a mismatch ends the step nonzero.
+			expect(step).toMatch(
+				/test "\$answer" = "\$want" \|\| \{[^}]*exit 1|if \(\$answer -ne \$want\)[\s\S]*exit 1/,
+			);
+		}
+	});
+
+	test("no version smoke ends by running the binary for its output alone", () => {
+		// The shape the fix replaced: the step's last act was `"$asset"
+		// --version`, so the run proved only that the file starts.
+		for (const name of versionSmokeSteps()) {
+			const step = stepBlock(name);
+			expect(step).not.toMatch(/(?:^|\s)"\$asset" --version\s*;?\s*$/);
+			expect(step).not.toMatch(/& \$assets\[0\]\.FullName --version\s*$/);
+		}
+	});
+
 	test("the build leg runs its own target and exactly one file", () => {
 		// The leg runs the repository's own build command: the command a
 		// contributor types is the command that ships.

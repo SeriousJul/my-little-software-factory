@@ -32,10 +32,13 @@ them to the GitHub Release beside the checksums file: `linux-x64`,
 `darwin-arm64`, and `windows-x64`. Each leg compiles on a clean runner with
 only its own operating system's and architecture's OpenTUI cores installed.
 That is one core for `darwin-x64`, `darwin-arm64`, and `windows-x64` and two
-for each Linux target, because `@opentui/core`'s loader names all six platform
-packages in literal dynamic imports and the bundler must resolve every one of
-them whatever `--target` it is given: a tree that holds one Linux core does not
-compile. A Linux binary therefore carries both libc variants, about 6.3 MB of
+for each Linux target. `@opentui/core`'s loader names eight platform packages
+in literal dynamic imports, and the bundler prunes the `process.platform` and
+`process.arch` branches to the `--target` it is given, so a leg needs only the
+cores its target can reach. What no target settles is the libc test inside the
+Linux branches, `process.env.OPENTUI_LIBC === "musl"`: an environment read is
+not knowable at build time, so both siblings of the target's architecture must
+resolve. A Linux binary therefore carries both libc variants, about 6.3 MB of
 native library the machine it runs on never loads. The measured core count and
 byte size per target are in the verification record. The build stamps the
 package's version into the binary, where the new `factory --version` flag reads
@@ -93,10 +96,12 @@ installer degrades to its readable incomplete-release line.
   variant is most of the size difference between a Linux binary and a Darwin or
   Windows one. It is not a flag the build can drop: measured on this branch,
   `--external` on the sibling left the artifact byte-for-byte unchanged, and a
-  tree without the sibling failed the compile with an unresolved import.
-  Taking it out needs OpenTUI's loader to stop naming a variant it is not
-  running, which is upstream's change to make. The release accepts the extra
-  6.3 MB, and the record states the core count and the byte size per target.
+  Linux tree without the sibling failed the compile with an unresolved import.
+  Taking it out needs the loader to make the libc choice statically knowable -
+  the platform and architecture branches already are, which is why a non-Linux
+  leg builds with one core - and that is upstream's change to make. The release
+  accepts the extra 6.3 MB, and the record states the core count and the byte
+  size per target.
 - Every update re-downloads the binary for the new version, because the
   install note beside the cached binary names the version it came with. The
   note also names the target and the digest, so a cache that cannot account
