@@ -79,8 +79,12 @@ export interface HandoffIntent {
 	 * re-fired skip's route, the restart, and the newest open ticket from the
 	 * top-up. It enters the Work queue like every other start (ADR 0049), and
 	 * the queue reads the mark to tell its own lines: the top-up adds one item
-	 * at a time into an empty queue, and a waiting automatic row states that
-	 * the factory, not the operator, asked for it.
+	 * at a time into an empty queue, and the pickup of an automatic item skips
+	 * the placement a manual start crosses. The waiting row's own detail states
+	 * whose start it is - the Work queue's detail pane names the factory's
+	 * top-up ask apart from the operator's, which the origin word alone cannot
+	 * do because the operator's route and the factory's continuation are both
+	 * `workflow`.
 	 */
 	automatic?: boolean;
 	/**
@@ -1567,10 +1571,12 @@ interface ClaimedHandoff {
 	 */
 	workQueuePickup?: boolean;
 	/**
-	 * True for the automatic starts (ADR 0045): the auto-handoff, the workflow
-	 * advance, the automatic restart. The run skips the placement they never
-	 * make; a Work queue item is a manual start, so its pickup and its
-	 * force-dispatch both cross it.
+	 * True for the starts the factory asked for itself (ADR 0051): the top-up's
+	 * continuation route, its restart, and its new open ticket. The run skips
+	 * the placement those starts never made. A Work queue item is a manual start
+	 * unless it carries `automatic`, so a manual item's pickup and its
+	 * force-dispatch both cross the placement, and the top-up's item crosses
+	 * neither (ADR 0049).
 	 */
 	automatic: boolean;
 }

@@ -471,6 +471,53 @@ describe("Consultation operations: launch", () => {
 		expect(statusTexts(harness).at(-1)).toBe("unknown Consultation type unknown");
 	});
 
+	/**
+	 * ADR 0049 puts the Consultation's hard checks at the Work queue's enqueue:
+	 * the type still exists and its settings fit, so a start the config cannot
+	 * run never takes a row and its reason stands on the Message line at the
+	 * ask. The submit reads the type's own settings - the record's settings are
+	 * the type's - and asks the same check the start asks.
+	 */
+	describe("the enqueue's hard check (ADR 0049)", () => {
+		test("a type the config no longer names refuses the enqueue", async () => {
+			const fixture = makeFixture();
+			const runner = new LifecycleRunner();
+			const harness = makeHarness(fixture, runner);
+
+			expect(await harness.operations.checkEnqueue("unknown")).toBe(
+				"unknown Consultation type unknown",
+			);
+			// No row and no record: the ask never entered the channel.
+			expect(fixture.state.workQueue()).toEqual([]);
+			expect(fixture.state.consultations("all")).toEqual([]);
+			expect(runner.commands()).toEqual([]);
+		});
+
+		test("an unfit Model refuses the enqueue before any external step", async () => {
+			const fixture = makeFixture("gpt-4o");
+			const runner = new LifecycleRunner();
+			runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const harness = makeHarness(fixture, runner);
+
+			const refusal = await harness.operations.checkEnqueue("grill");
+
+			expect(refusal).toContain('has no model "gpt-4o"');
+			// The check is the runtime read itself: one Model list, nothing else.
+			expect(runner.inner.modelListCalls).toEqual(["pi"]);
+			expect(runner.commands()).toEqual([]);
+		});
+
+		test("a fitting type passes the enqueue check and asks nothing else", async () => {
+			const fixture = makeFixture();
+			const runner = new LifecycleRunner();
+			runner.inner.setModelList("pi", ["anthropic/claude-sonnet-4-5"]);
+			const harness = makeHarness(fixture, runner);
+
+			expect(await harness.operations.checkEnqueue("grill")).toBeUndefined();
+			expect(runner.commands()).toEqual([]);
+		});
+	});
+
 	test("refuses empty and oversized opening input before creating a record", () => {
 		const fixture = makeFixture();
 		const harness = makeHarness(fixture, new LifecycleRunner());

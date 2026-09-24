@@ -1,9 +1,11 @@
 /**
  * The shared Parallel limit seat count (issue #87, ADR 0034).
  *
- * One source for every reader of the count: the automatic start gates in the
- * observation cycle (the open dispatch, the workflow route, the restart) and
- * the mode line in the app. A seat is held by:
+ * One source for every reader of the count: the Work queue's pickup, which
+ * takes only the free seats for its waiting items (ADR 0049), and the mode
+ * line in the app. The automatic gates read it through the pickup, not on
+ * their own: the top-up adds into the queue whatever the seats look like, and
+ * the wait lives in the row (ADR 0051). A seat is held by:
  *
  * - an in-flight ticket (`handed-off` or `running`) whose own agent the
  *   latest successful herdr poll listed - a live agent in the ticket's pane

@@ -1981,14 +1981,6 @@ export class FactoryState {
 		}
 	}
 
-	/** Whether the queue already waits for the Consultation: one item per record. */
-	hasConsultationWorkItem(consultationId: string): boolean {
-		return (
-			this.db.prepare("SELECT 1 FROM work_queue WHERE consultation_id = ?").get(consultationId) !=
-			null
-		);
-	}
-
 	/**
 	 * Add the `queued` Consultation's item to the end of the queue (ADR 0034,
 	 * issue #90). The item is the pointer to the record: the record holds the

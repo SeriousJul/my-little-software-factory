@@ -10,7 +10,7 @@
  * to run, and these frames verify the waiting, not the running.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,12 +125,17 @@ function forcedFixture() {
 /** Put one waiting item in the queue and boot the app around it. */
 function forceDispatchApp(fixture: ReturnType<typeof forcedFixture>) {
 	const { state, source, runner, config } = fixture;
-	const enqueue = (ticketIdentity: string, origin: "open" | "workflow" | "restart" = "open") => {
+	const enqueue = (
+		ticketIdentity: string,
+		origin: "open" | "workflow" | "restart" = "open",
+		automatic = false,
+	) => {
 		const result = state.enqueueWork({
 			ticketIdentity,
 			origin,
 			choice: baseChoice("pi", "live-worktree", "implement"),
 			previousMessage: "",
+			automatic,
 		});
 		if (!result.ok) throw new Error(result.reason);
 	};
@@ -173,12 +178,17 @@ function twoTickets() {
 function queuedFixture(state: FactoryState, holdSeat = true) {
 	const tickets = twoTickets();
 	const source = new FakeSource("issues", "github-issues", success(tickets));
-	const enqueue = (ticketIdentity: string, origin: "open" | "workflow" | "restart" = "open") => {
+	const enqueue = (
+		ticketIdentity: string,
+		origin: "open" | "workflow" | "restart" = "open",
+		automatic = false,
+	) => {
 		const result = state.enqueueWork({
 			ticketIdentity,
 			origin,
 			choice: baseChoice("pi", "live-worktree", "implement"),
 			previousMessage: "",
+			automatic,
 		});
 		if (!result.ok) throw new Error(result.reason);
 	};
@@ -270,6 +280,91 @@ const openRowLead = /\[open\]\s+Add a webhook retry policy/;
 const workflowRowLead = /\[workflow\]\s+Close the stale deploy branch/;
 
 describe("the Work queue section", () => {
+	/**
+	 * ADR 0051: the queue holds two kinds of waiting start, and the origin word
+	 * alone cannot tell them apart - the operator's route and the factory's
+	 * continuation are both `workflow`. The detail names whose start the row
+	 * is, so the depth the header carries reads as the operator's queue with
+	 * the factory's adds marked where they stand.
+	 */
+	test("the detail says whose start a waiting row is", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST, "workflow", true);
+		enqueue(SECOND, "workflow");
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => f.includes("waiting: 2"), "the Work header");
+					await clickWorkHeader(setup);
+					// The top-up's item, first in the queue: the detail says the
+					// factory asked, and names the origin it waits on.
+					const automaticFrame = await awaitFrame(
+						setup,
+						(f) => detailPaneText(f).includes("Origin: workflow"),
+						"the first item's detail",
+					);
+					expect(detailPaneText(automaticFrame)).toContain("Asked by: the factory's auto top-up");
+					// The operator's own row reads the other way. The shared
+					// cursor walks to it with the list's own key.
+					await press(setup, "j", "the second item", (f) =>
+						detailPaneText(f).includes("Asked by: the operator"),
+					);
+					expect(detailPaneText(setup.captureCharFrame())).toContain("Origin: workflow");
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0052: the pause is durable factory state, and the write that refuses
+	 * is an operation fact the operator must hear. The `p` key reports the
+	 * refused write on the Message line and leaves the pause where it stood,
+	 * the way the Auto-handoff mode's toggle reports its own failure - two
+	 * facts of one kind must not fail two ways.
+	 */
+	test("p reports a state file that will not take the write, and moves nothing", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const { source, enqueue, runner } = queuedFixture(state);
+		enqueue(FIRST);
+		try {
+			await booted(
+				async (setup) => {
+					source.settle(success(twoTickets()));
+					await awaitFrame(setup, (f) => queueRowIndex(f, openRowLead) >= 0, "the queued start");
+					await clickWorkHeader(setup);
+					// The state file refuses every write, the way a read-only
+					// volume or a full disk does.
+					const pauseSpy = spyOn(state, "setQueuePaused").mockImplementation(() => {
+						throw new Error("cannot store the queue pause: read-only file system");
+					});
+					const refused = await press(setup, "p", "the refused write", (f) =>
+						messageRowOf(f).includes("the queue pause did not move"),
+					);
+					expect(messageRowOf(refused)).toContain("read-only file system");
+					// The key reached the write and the write refused it.
+					expect(pauseSpy).toHaveBeenCalledWith(true);
+					// The pause stands where it was: the header carries no pause
+					// fact, and the state file holds none either.
+					expect(frameText(refused)).not.toContain("paused");
+					expect(state.queuePaused()).toBe(false);
+					pauseSpy.mockRestore();
+				},
+				state,
+				source,
+				runner,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
 	test("p pauses the queue's drain, and p again resumes it", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const { source, enqueue, runner } = queuedFixture(state);

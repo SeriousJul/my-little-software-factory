@@ -14,11 +14,13 @@
  * `a` toggles auto-handoff in the Ticket section and writes the mode to the
  * state file at once, so the next run reads it back (ADR 0036).
  *
- * The Main view is one surface with two independently collapsable sections
- * (ADR 0019): both lists stay in the left column, both expanded by default,
- * and one detail pane on the right renders the selected item, whatever
- * section it comes from. `x` toggles the section under the cursor, and one
- * Message line, one Action bar, and one control catalog answer for both.
+ * The Main view is one surface with three sections (ADR 0019, ADR 0049): the
+ * Ticket, Consultation, and Work lists stay in the left column, all three
+ * expanded by default, and one detail pane on the right renders the selected
+ * item, whatever section it comes from. The Work section is always visible: it
+ * keeps its header row while it is empty, the way the other two do. `x`
+ * toggles the section under the cursor, and one Message line, one Action bar,
+ * and one control catalog answer for all three.
  */
 import os from "node:os";
 import type { Selection } from "@opentui/core";
@@ -1881,7 +1883,7 @@ export function App({
 		});
 	};
 
-	const startConsultation = (
+	const submitConsultation = (
 		typeName: string,
 		repository: ConsultationRepositoryOption,
 		input: string,
@@ -1890,48 +1892,57 @@ export function App({
 			setStatus({ kind: "error", text: "Consultations require durable SQLite state" });
 			return;
 		}
-		// The Consultation submit goes through the Work queue (ADR 0049):
-		// the durable record and its queue item commit in one write in
-		// `queued` state, and the immediate pickup pass that follows every
-		// enqueue starts the record in the same tick when a seat is free.
-		// The queue pause holds the pickup, not the ask (ADR 0052).
-		const replaced =
-			replacementConsultationId === null
-				? undefined
-				: state.consultation(replacementConsultationId);
-		const consultation =
-			replaced === undefined
-				? consultationOperations.create({
-						typeName,
-						repository,
-						initialInput: input,
-						replacementOf: replacementConsultationId,
-						queued: true,
-					})
-				: consultationOperations.replace(replaced, {
-						typeName,
-						repository,
-						initialInput: input,
-						queued: true,
-					});
-		if (consultation === undefined) return;
-		setLauncher(false);
-		setReplacementConsultationId(null);
-		historyFilterRef.current = "open";
-		setHistoryFilter("open");
-		// Stay on the record the replacement points back at, or on the
-		// launched Consultation when it replaces nothing.
-		selectConsultationById(consultation.replacementOf ?? consultation.id);
-		// The record and its item committed in one write: the queue re-reads
-		// it through the same refresh a handoff enqueue runs, and the
-		// immediate pickup pass takes the seat when one is free.
-		replaceTickets();
-		setNoticeMessage(
-			state.queuePaused()
-				? `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue; the queue is paused`
-				: `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
-		);
-		void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
+		// The Consultation submit goes through the Work queue (ADR 0049). The
+		// enqueue's hard check runs first: the type still exists, and the
+		// settings that type resolves to still fit. A Consultation the config
+		// cannot start never takes a row: the reason stands on the Message line
+		// at the ask, and the launcher stays open with the operator's form for
+		// the fix. The check is async - the Setting fit reads the Agent's Model
+		// list - so the whole submit runs behind it, the way every other start's
+		// ask does.
+		void consultationOperations.checkEnqueue(typeName).then((refusal) => {
+			if (refusal !== undefined) {
+				setErrorMessage(`consultation not queued: ${refusal}`);
+				return;
+			}
+			const replaced =
+				replacementConsultationId === null
+					? undefined
+					: state.consultation(replacementConsultationId);
+			const consultation =
+				replaced === undefined
+					? consultationOperations.create({
+							typeName,
+							repository,
+							initialInput: input,
+							replacementOf: replacementConsultationId,
+							queued: true,
+						})
+					: consultationOperations.replace(replaced, {
+							typeName,
+							repository,
+							initialInput: input,
+							queued: true,
+						});
+			if (consultation === undefined) return;
+			setLauncher(false);
+			setReplacementConsultationId(null);
+			historyFilterRef.current = "open";
+			setHistoryFilter("open");
+			// Stay on the record the replacement points back at, or on the
+			// launched Consultation when it replaces nothing.
+			selectConsultationById(consultation.replacementOf ?? consultation.id);
+			// The record and its item committed in one write: the queue re-reads
+			// it through the same refresh a handoff enqueue runs, and the
+			// immediate pickup pass takes the seat when one is free.
+			replaceTickets();
+			setNoticeMessage(
+				state.queuePaused()
+					? `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue; the queue is paused`
+					: `consultation queued: ${consultation.id.slice(0, 8)} waits in the Work queue for a free Parallel limit seat`,
+			);
+			void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
+		});
 	};
 	const recoverConsultationOpening = (consultation: Consultation) => {
 		if (consultation.state !== "opening") return;
@@ -2612,8 +2623,11 @@ export function App({
 						setPanel({ kind: "consultation-delete", identity: selected.id });
 				},
 				// `s` schedules the unscheduled record back into the Work queue
-				// (issue #91): the state's one write moves it to `queued` at the
-				// queue's tail, and the pickup is its only starter from there.
+				// (issue #91, ADR 0049): the enqueue's hard check runs first, the
+				// same one the launcher's submit runs, so a record the config cannot
+				// start never takes a row. The state's one write then moves it to
+				// `queued` at the queue's tail, and the pickup is its only starter
+				// from there.
 				"consultation-schedule": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
@@ -2621,18 +2635,24 @@ export function App({
 						setWarningMessage("Consultations require SQLite state");
 						return;
 					}
-					// The operations own the Message line and the Consultation rows,
-					// but the queue rows re-read only here: the item lands at the
-					// queue's tail in the same write the section's Delete path
-					// refreshes, so the schedule path does the same. An immediate
-					// pickup pass follows every enqueue (ADR 0049), so the scheduled
-					// record takes a free seat in this tick instead of waiting for the
-					// next poll; the pause and the cap are the pickup's own checks.
-					const scheduled = consultationOperations.schedule(selected);
-					if (scheduled) {
-						replaceTickets();
-						void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
-					}
+					void consultationOperations.checkEnqueue(selected.typeName).then((refusal) => {
+						if (refusal !== undefined) {
+							setErrorMessage(`consultation not scheduled: ${refusal}`);
+							return;
+						}
+						// The operations own the Message line and the Consultation rows,
+						// but the queue rows re-read only here: the item lands at the
+						// queue's tail in the same write the section's Delete path
+						// refreshes, so the schedule path does the same. An immediate
+						// pickup pass follows every enqueue (ADR 0049), so the scheduled
+						// record takes a free seat in this tick instead of waiting for the
+						// next poll; the pause and the cap are the pickup's own checks.
+						const scheduled = consultationOperations.schedule(selected);
+						if (scheduled) {
+							replaceTickets();
+							void handoffDispatchRef.current?.dispatch.pickupWorkQueue();
+						}
+					});
 				},
 				// Enter starts the unscheduled record now (issue #91): the pickup
 				// seam with the cap skipped. The operations own every line the
@@ -2720,7 +2740,20 @@ export function App({
 				"queue-pause": () => {
 					if (state === undefined) return;
 					const next = !state.queuePaused();
-					state.setQueuePaused(next);
+					// The write is guarded the way the Auto-handoff mode's identical
+					// fact is, so two facts of one kind do not fail two ways (ADR
+					// 0052). The difference is what a refused write means: the pickup
+					// and the top-up read the pause from the state, not from this
+					// shell's copy, so a write that failed left the brake where it
+					// stood. The key says so and moves nothing - the section's
+					// header, the bar's hint, and the drain all keep reading the
+					// value that stands.
+					try {
+						state.setQueuePaused(next);
+					} catch (error) {
+						setErrorMessage(`the queue pause did not move: ${errorMessage(error)}`);
+						return;
+					}
 					setQueuePaused(next);
 					setNoticeMessage(next ? "Work queue paused" : "Work queue resumed");
 					if (!next) void handoffDispatch?.pickupWorkQueue();
@@ -3841,7 +3874,7 @@ export function App({
 				onLaunch: (typeName, repository, text) => {
 					// The form is with the Agent now, so nothing is left to keep.
 					setLauncherForm(null);
-					startConsultation(typeName, repository, text);
+					submitConsultation(typeName, repository, text);
 				},
 				onClose: (kept) => {
 					setLauncherForm({ owner: launcherOwner, draft: kept });

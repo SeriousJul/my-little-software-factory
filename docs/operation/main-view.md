@@ -23,7 +23,11 @@ auto-handoff top-up makes (ADR 0051), and the Consultation starts (issue
 so an idle factory keeps its three-Section frame with an empty queue that
 says `no waiting starts`. A queued Handoff start carries the ticket's
 title, the start's origin, and its place in the queue; the detail pane
-shows the choice the start carried. A queued Consultation start carries
+shows the choice the start carried and names whose start the row is -
+`Asked by: the operator` for a start the operator staged, `Asked by: the
+factory's auto top-up` for one the auto-handoff added (ADR 0051). The
+origin word alone cannot tell them apart: the operator's route and the
+factory's continuation are both `workflow`. A queued Consultation start carries
 the kind word and the record's identity prefix, and the detail pane reads
 the record the item names - the ask, the type, the state - with the record
 gone saying so in its place. `+` and `-` move the item under the cursor

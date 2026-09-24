@@ -1635,6 +1635,225 @@ describe("the awaiting rule", () => {
 		state.close();
 	});
 
+	/**
+	 * ADR 0051's gate list, read by the continuation walk through
+	 * `continuationPosition`. Each guard holds the position instead of adding
+	 * it. The walks run in auto mode, because manual mode runs no top-up at
+	 * all - a guard tested there is the mode gate, not the guard. And each
+	 * test asks about the route alone: the same cycle may legitimately hand
+	 * the open position off as a new open ticket, and that add is not this
+	 * route.
+	 */
+	describe("the continuation walk's guards (ADR 0051)", () => {
+		/**
+		 * The config with a State that offers a task of its own on an issue
+		 * label: the position's suggested task then differs from the `implement`
+		 * the outcome names, which is the "still offers the task" guard.
+		 */
+		const stateConfig: FactoryConfig = {
+			...config,
+			workflowStates: [
+				{
+					name: "on-hold",
+					taskType: "polish",
+					match: { sourceKind: "github-issue", labelsAny: ["on-hold"] },
+				},
+			],
+		};
+
+		/** One awaiting ticket whose settled turn routes into the open position. */
+		function continuationRig(over: { config?: FactoryConfig } = {}) {
+			const cfg = over.config ?? config;
+			const r = rig({ autoOn: true, agents: [], config: cfg });
+			r.state.applyFetch(source, success([fetched("github:github.com:I_6"), fetched()]));
+			settleFor(r.state, "github:github.com:I_5", "route", routeOutcome("github:github.com:I_6"));
+			return r;
+		}
+
+		const routes = (intents: readonly HandoffIntent[]) =>
+			intents.filter((intent) => intent.origin === "workflow");
+
+		test("the base walk routes: the position stands open and offers the task", async () => {
+			const { state, intents, coordinator } = continuationRig();
+			await coordinator.tick();
+			expect(routes(intents)).toHaveLength(1);
+			state.close();
+		});
+
+		test("a position that no longer offers the task holds the continuation", async () => {
+			// The `on-hold` label moves the position onto the State that offers
+			// polish: the outcome names implement, the position offers polish, and
+			// the add waits for the labels the machine wrote to agree with it.
+			const { state, intents, coordinator } = continuationRig({ config: stateConfig });
+			state.applyFetch(source, success([fetched("github:github.com:I_6", ["on-hold"]), fetched()]));
+			await coordinator.tick();
+			expect(routes(intents)).toHaveLength(0);
+			state.close();
+		});
+
+		test("a position that is not open holds the continuation", async () => {
+			const { state, intents, setAgents, coordinator } = continuationRig();
+			// The position runs a live turn of its own: it is not open, and the
+			// route starts nothing on it.
+			handOut(state, "github:github.com:I_6", "implement");
+			setAgents([agent("pane-implement", "working")]);
+			await coordinator.tick();
+			expect(routes(intents)).toHaveLength(0);
+			expect(state.ticketState("github:github.com:I_6")).toBe("running");
+			state.close();
+		});
+
+		test("a position that is not actionable holds the continuation", async () => {
+			const { state, intents, coordinator } = continuationRig();
+			// The source's health went unhealthy: an open ticket the plane cannot
+			// act on holds the add, the way the claim check refuses it.
+			state.applyFetch(source, { status: "failed", reason: "gh is not authenticated" });
+			await coordinator.tick();
+			expect(routes(intents)).toHaveLength(0);
+			state.close();
+		});
+
+		/**
+		 * An unresolved attempt makes the position both `handoffRecoveryRequired`
+		 * and not actionable, and the claim refuses it at the ask, so the walk
+		 * reaches the recovery guard only through a position the projection
+		 * still shows as open and healthy. This walk pins the fact the guard
+		 * shares with the actionable guard and the claim's own ledger check: a
+		 * position with an unfinished attempt starts nothing.
+		 */
+		test("a position with an unfinished attempt holds the continuation", async () => {
+			const { state, intents, coordinator } = continuationRig();
+			const claim = state.claimHandoff("github:github.com:I_6", choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			await coordinator.tick();
+			expect(routes(intents)).toHaveLength(0);
+			// The ledger, not the position's state: the attempt stands unresolved.
+			expect(state.handoffInFlight("github:github.com:I_6")).toBe(true);
+			state.close();
+		});
+
+		/**
+		 * A queue that holds one row stops the top-up at its depth gate, so the
+		 * per-ticket guard inside the walk is never reached from a cycle the
+		 * queue already holds an item in. This walk pins the gate that holds the
+		 * row instead: the operator's waiting start keeps the position, and the
+		 * top-up adds nothing behind it.
+		 */
+		test("a waiting queue item holds the whole top-up, the position included", async () => {
+			const { state, intents, coordinator } = continuationRig();
+			expect(
+				state.enqueueWork({
+					ticketIdentity: "github:github.com:I_6",
+					routeFromIdentity: null,
+					origin: "open",
+					choice,
+					previousMessage: "",
+					automatic: false,
+				}).ok,
+			).toBe(true);
+			// The queue's depth is the top-up's pace (ADR 0051): no add runs while
+			// the operator's item waits, and the row stands untouched.
+			await coordinator.tick();
+			expect(intents).toEqual([]);
+			expect(state.workQueue()).toHaveLength(1);
+			state.close();
+		});
+
+		/**
+		 * Close one position's settled turn the way the plane does, and re-read
+		 * its source: the cycle ends, the ticket returns to open still wearing the
+		 * labels that offer the same task, and only the Same-type hold is left
+		 * between it and a second start.
+		 */
+		function closedSameTypeCycle(state: FactoryState, identity: string): void {
+			// The turn settles `completed`: the hold reads the cause of the
+			// cycle's last trace, and only a completed turn of the suggested task
+			// holds a repeat.
+			const attempt = settleForCause(state, identity, "implement", "completed");
+			state.applyCompletionDecision({
+				ticketIdentity: identity,
+				handoffId: attempt,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:00:30Z",
+			});
+			state.applyFetch(source, {
+				status: "success",
+				fetchedAt: "2026-08-31T11:01:00Z",
+				tickets: [fetched(identity), fetched("github:github.com:I_5")],
+			});
+		}
+
+		test("a position under the Same-type hold holds the continuation", async () => {
+			const { state, intents, coordinator } = continuationRig();
+			// The position's newest closed cycle completed the very task it still
+			// suggests by labels the refresh has not moved: the hold waits for the
+			// moved labels to land instead of starting the task twice.
+			closedSameTypeCycle(state, "github:github.com:I_6");
+			expect(state.sameTypeHoldActive("github:github.com:I_6", "implement")).toBe(true);
+			await coordinator.tick();
+			expect(routes(intents)).toHaveLength(0);
+			state.close();
+		});
+
+		/**
+		 * A ticket at its handoff limit is ignored (ADR 0051): the limit is the
+		 * continuation walk's own guard, not one of the claim's hard gates, so
+		 * the walk is the only place that can hold it.
+		 */
+		test("a position at its handoff limit holds the continuation", async () => {
+			const { state, intents, coordinator } = continuationRig();
+			// Two closed cycles put the position at the rig's limit of two. Each
+			// settles `aborted`, not `completed`, so the Same-type hold stands
+			// clear and the limit is the only guard left between the position and
+			// the add; each closes with its source re-read, so the ticket stands
+			// open and eligible to start.
+			for (let cycle = 0; cycle < 2; cycle += 1) {
+				const attempt = settleForCause(state, "github:github.com:I_6", "review", "aborted");
+				state.applyCompletionDecision({
+					ticketIdentity: "github:github.com:I_6",
+					handoffId: attempt,
+					decision: "closed",
+					decidedAt: "2026-08-31T11:00:30Z",
+				});
+				state.applyFetch(source, {
+					status: "success",
+					fetchedAt: `2026-08-31T11:0${cycle + 1}:00Z`,
+					tickets: [fetched("github:github.com:I_6"), fetched()],
+				});
+			}
+			expect(state.ticketState("github:github.com:I_6")).toBe("open");
+			expect(state.sameTypeHoldActive("github:github.com:I_6", "implement")).toBe(false);
+			expect(state.handoffCount("github:github.com:I_6")).toBe(2);
+			await coordinator.tick();
+			// The limit ignores the ticket: its route adds nothing, and no row
+			// stands in the queue (ADR 0051).
+			expect(routes(intents)).toHaveLength(0);
+			expect(state.workQueue()).toEqual([]);
+			state.close();
+		});
+	});
+
+	/**
+	 * ADR 0052: the queue pause holds the top-up's adds at the observation seam
+	 * too. Auto mode is on, the queue is empty, and an eligible ticket stands
+	 * ready - the pause alone is what keeps the cycle from adding. The resume
+	 * frees the adds again.
+	 */
+	test("the queue pause holds the top-up's add, and the resume adds", async () => {
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
+		state.setQueuePaused(true);
+		await coordinator.tick();
+		// The pause held the add: no ask, no row, and the queue stayed empty.
+		expect(intents).toEqual([]);
+		expect(state.workQueue()).toEqual([]);
+		state.setQueuePaused(false);
+		await coordinator.tick();
+		// Resumed, the same eligible ticket takes the one automatic add.
+		expect(intents).toEqual([expect.objectContaining({ origin: "open", automatic: true })]);
+		expect(state.workQueue()).toHaveLength(1);
+		state.close();
+	});
+
 	test("a route starts fresh from its target task profile", async () => {
 		const targetProfileConfig: FactoryConfig = {
 			...config,
@@ -1943,14 +2162,16 @@ describe("the open dispatch", () => {
 	 * Story 47 (ADR 0051): the top-up's own Message lines. The operator
 	 * reads what the factory added and what the channel refused, in the
 	 * words the plane writes: the add names the ticket and the walk, and
-	 * the refusal names the walk and the dispatch's reason.
+	 * the refusal names the walk and the dispatch's reason. Every line names
+	 * the ticket by the title the row shows, the way every other queue line
+	 * does - not by its raw identity.
 	 */
 	test("the top-up's open add line names the ticket on the Message", async () => {
 		const { state, coordinator, statuses } = rig({ autoOn: true, agents: [] });
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "info",
-			text: "work queue top-up: handing off ticket github:github.com:I_5",
+			text: 'work queue top-up: handing off "Persist source facts"',
 		});
 		state.close();
 	});
@@ -1963,7 +2184,7 @@ describe("the open dispatch", () => {
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "info",
-			text: "work queue top-up: routing ticket github:github.com:I_5 to implement",
+			text: 'work queue top-up: routing "Persist source facts" to implement',
 		});
 		state.close();
 	});
@@ -1975,7 +2196,7 @@ describe("the open dispatch", () => {
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "info",
-			text: "work queue top-up: restarting ticket github:github.com:I_5",
+			text: 'work queue top-up: restarting "Persist source facts"',
 		});
 		state.close();
 	});
@@ -1990,19 +2211,21 @@ describe("the open dispatch", () => {
 		await coordinator.tick();
 		expect(statuses).toContainEqual({
 			kind: "warning",
-			text: "work queue top-up could not hand off ticket github:github.com:I_5: the ticket is now running",
+			text: 'work queue top-up could not hand off "Persist source facts": the ticket is now running',
 		});
 		state.close();
 	});
 
 	/**
-	 * Story 24 (ADR 0051): the restart's episode mark. An ask the dispatch
-	 * refuses never took a queue row, so the mark leaves with it and the next
-	 * empty-queue cycle asks again. An ask the queue accepted keeps the mark:
-	 * the plane does not re-ask a start the seat already refused while the
-	 * ticket stays in-flight.
+	 * Story 24 (ADR 0051): an item the pickup dropped is reconsidered every
+	 * cycle the queue is empty - the restart included. The top-up marks the
+	 * ticket restarted for the episode when it asks, and every exit that ends
+	 * the item without a start clears the mark through the ask's own start
+	 * report: a dispatch refusal never took a row, and a pickup drop, an
+	 * operator remove, or a race cancel leaves a row that already went. A
+	 * restart that actually started keeps its mark until the episode ends.
 	 */
-	test("a refused top-up restart is asked again, an accepted one is not", async () => {
+	test("a refused top-up restart is asked again, a started one is not", async () => {
 		const refused = rig({ autoOn: true, agents: [], refuseDispatch: "the ledger is unclear" });
 		handOut(refused.state, "github:github.com:I_5");
 		refused.advance(STARTUP_GRACE_MS + 1);
@@ -2017,14 +2240,33 @@ describe("the open dispatch", () => {
 		accepted.advance(STARTUP_GRACE_MS + 1);
 		await accepted.coordinator.tick();
 		expect(accepted.intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
-		// The item leaves the queue the way a pickup drop leaves it: the next
-		// empty-queue cycle does NOT re-ask. ADR 0051's exception: a restart
-		// the seat already refused keeps its episode mark, and the operator's
-		// Missing-modal restart is the free path.
+		// The start landed: the episode mark stands, and the ticket is not
+		// restarted again while it holds the episode.
+		accepted.reportStart({ ok: true });
 		accepted.state.removeWorkItem("github:github.com:I_5");
 		await accepted.coordinator.tick();
 		expect(accepted.intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
 		accepted.state.close();
+	});
+
+	test("a top-up restart the pickup dropped is asked again", async () => {
+		const { state, intents, coordinator, advance, reportStart } = rig({
+			autoOn: true,
+			agents: [],
+		});
+		handOut(state, "github:github.com:I_5");
+		advance(STARTUP_GRACE_MS + 1);
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(1);
+		// The seat refused the start: this is ADR 0049's drop, and the ask
+		// hears it through its own start report. The episode mark leaves with
+		// the row, so story 24's re-entry stands for a restart as it does for
+		// the other three adds.
+		reportStart({ ok: false, reason: "the source is not healthy" });
+		state.removeWorkItem("github:github.com:I_5");
+		await coordinator.tick();
+		expect(intents.filter((intent) => intent.origin === "restart")).toHaveLength(2);
+		state.close();
 	});
 
 	test("a started handoff leaves the open walk's candidates", async () => {
@@ -3685,7 +3927,19 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 		});
 	}
 
+	/**
+	 * The skip's route asks among the cycle's intents. A guard test asks about
+	 * the route alone: in auto mode the same cycle may legitimately hand the
+	 * open pull request off as a new open ticket, and that add is not the
+	 * route under test.
+	 */
+	function routeAsks(intents: readonly { origin: string }[]): number {
+		return intents.filter((intent) => intent.origin === "workflow").length;
+	}
+
 	test("manual mode holds the re-fired skip's route for the operator", async () => {
+		// This walk is the mode gate itself, not one of the route's guards: the
+		// top-up does not run in manual mode at all (ADR 0051).
 		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
 		landPulls(state, pullTicket());
 		refiredCycle(state, refiredOutcome());
@@ -3790,54 +4044,99 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 
 	test("a pull request that no longer offers the task holds the route", async () => {
 		for (const labels of [[], ["needs-work"]]) {
-			const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+			const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 			// No ready-for-review label: the position offers the default task,
 			// not the review the outcome names, and the route waits for the
 			// labels to stand.
 			landPulls(state, pullTicket(labels));
 			refiredCycle(state, refiredOutcome());
 			await coordinator.tick();
-			expect(intents).toHaveLength(0);
+			// The position offers the default task, not the review the outcome
+			// names, so the route holds and the labels wait to land.
+			expect(routeAsks(intents)).toBe(0);
 			state.close();
 		}
 	});
 
-	test("a pull request that is not open holds the route", async () => {
-		for (const stateShape of ["running", "awaiting"] as const) {
-			const { state, intents, setAgents, coordinator } = rig({ autoOn: false, agents: [] });
-			landPulls(state, pullTicket());
-			// The pull request's own work: in flight, or resting awaiting its
-			// own settled turn. Either way it is not open, and the route
-			// starts nothing on it.
-			const claim = state.claimHandoff(pullIdentity, { ...choice, taskType: "review" }, "open");
-			if (!claim.ok) throw new Error(claim.reason);
-			state.settleHandoff(claim.claim.attemptId, true, undefined, {
-				paneId: "pane-pull",
-				tabId: "tab-1",
-				workspaceId: "ws-1",
-			});
-			if (stateShape === "running") {
-				setAgents([agent("pane-pull", "working")]);
-			} else {
-				state.settleTurn({
-					ticketIdentity: pullIdentity,
-					handoffId: claim.claim.attemptId,
-					taskType: "review",
-					agentType: "pi",
-					message: "settled the pull's turn",
-					turnLog: [{ kind: "text", text: "settled the pull's turn" }],
-					completedAt: "2026-08-31T11:00:00Z",
-				});
-			}
-			refiredCycle(state, refiredOutcome());
-			await coordinator.tick();
-			expect(intents).toHaveLength(0);
-			state.close();
+	/**
+	 * The pull request's own work standing between it and the route: claimed,
+	 * settled into awaiting, or nothing. The route starts on an open position
+	 * only.
+	 */
+	function pullOwnWork(
+		state: FactoryState,
+		setAgents: (agents: HerdrAgent[]) => void,
+		shape: "running" | "awaiting",
+	): void {
+		const claim = state.claimHandoff(pullIdentity, { ...choice, taskType: "review" }, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true, undefined, {
+			paneId: "pane-pull",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+		});
+		if (shape === "running") {
+			setAgents([agent("pane-pull", "working")]);
+			return;
 		}
+		state.settleTurn({
+			ticketIdentity: pullIdentity,
+			handoffId: claim.claim.attemptId,
+			taskType: "review",
+			agentType: "pi",
+			message: "settled the pull's turn",
+			turnLog: [{ kind: "text", text: "settled the pull's turn" }],
+			completedAt: "2026-08-31T11:00:00Z",
+		});
+	}
+
+	test("a pull request that is in flight holds the route", async () => {
+		const { state, intents, setAgents, coordinator } = rig({ autoOn: true, agents: [] });
+		landPulls(state, pullTicket());
+		// The pull request's own turn runs: it is not open, and the route starts
+		// nothing on it.
+		pullOwnWork(state, setAgents, "running");
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		expect(routeAsks(intents)).toBe(0);
+		expect(state.ticketState(pullIdentity)).toBe("running");
+		state.close();
+	});
+
+	/**
+	 * The awaiting arm is not a guard the top-up holds: the cycle runs the
+	 * automatic rule first, and the machine resolves the pull's own settled
+	 * turn (its review task offers no continuation), closing that cycle before
+	 * the route walk reads the row (ADR 0051). The position is open by then, so
+	 * the route legitimately stands. This walk pins that order, which is the
+	 * fact the retired "not open" fixture only reached in manual mode.
+	 */
+	test("a pull request whose own settled turn the machine closes routes after that close", async () => {
+		const { state, intents, setAgents, coordinator } = rig({ autoOn: true, agents: [] });
+		landPulls(state, pullTicket());
+		pullOwnWork(state, setAgents, "awaiting");
+		expect(state.ticketState(pullIdentity)).toBe("awaiting");
+		refiredCycle(state, refiredOutcome());
+		await coordinator.tick();
+		// The machine closed the pull's own cycle first, and the same cycle's
+		// route walk then took the position the close freed.
+		expect(state.ticketState(pullIdentity)).toBe("open");
+		expect(state.lastCompletion(pullIdentity)?.decision).toBe("auto-closed");
+		expect(routeAsks(intents)).toBe(1);
+		expect(intents[0]).toEqual(
+			expect.objectContaining({
+				origin: "workflow",
+				automatic: true,
+				ticketIdentity: pullIdentity,
+				routeFromIdentity: issueIdentity,
+				choice: expect.objectContaining({ taskType: "review" }),
+			}),
+		);
+		state.close();
 	});
 
 	test("the Same-type hold over the refresh lag holds the route", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		// The pull request ran a review cycle that completed, and its moved
 		// labels have not landed: it still wears the labels by which it
@@ -3873,7 +4172,7 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 	});
 
 	test("a pull request at its handoff limit holds the route", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		// Two closed cycles put the pull request at the rig's limit of two.
 		for (let cycle = 0; cycle < 2; cycle += 1) {
@@ -3908,23 +4207,23 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 	});
 
 	test("a re-fired outcome that auto-advances nothing routes nothing", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		refiredCycle(state, refiredOutcome({ autoAdvance: false }));
 		await coordinator.tick();
-		expect(intents).toHaveLength(0);
+		expect(routeAsks(intents)).toBe(0);
 		state.close();
 	});
 
 	test("a re-fired outcome with a failed write routes nothing", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		refiredCycle(
 			state,
 			refiredOutcome({ writeFailure: "gh pr edit #12 failed: HTTP 403", reason: "" }),
 		);
 		await coordinator.tick();
-		expect(intents).toHaveLength(0);
+		expect(routeAsks(intents)).toBe(0);
 		state.close();
 	});
 
@@ -3932,19 +4231,23 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 		// The marker is the guard: a routable settle-time outcome on an open
 		// ticket is not a re-fired skip, and the operator's close of it stands
 		// without a second route.
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		refiredCycle(
 			state,
 			outcome({ positionTaskType: "review", positionTicketIdentity: pullIdentity }),
 		);
 		await coordinator.tick();
-		expect(intents).toHaveLength(0);
+		// The marker is the guard: the routable settle-time outcome on the open
+		// pull request is not a re-fired skip, so the route holds on it. The
+		// pull's own open add stands: it is a different start, not this route.
+		expect(routeAsks(intents)).toBe(0);
+		expect(intents.some((intent) => intent.origin === "open")).toBe(true);
 		state.close();
 	});
 
 	test("a trace that records no transition routes nothing", async () => {
-		const { state, intents, coordinator } = rig({ autoOn: false, agents: [] });
+		const { state, intents, coordinator } = rig({ autoOn: true, agents: [] });
 		landPulls(state, pullTicket());
 		const attempt = settleFor(state, issueIdentity, "implement", null);
 		state.applyCompletionDecision({
@@ -3954,7 +4257,7 @@ describe("the re-fired skip's route (ADR 0042)", () => {
 			decidedAt: "2026-08-31T11:00:30Z",
 		});
 		await coordinator.tick();
-		expect(intents).toHaveLength(0);
+		expect(routeAsks(intents)).toBe(0);
 		state.close();
 	});
 });

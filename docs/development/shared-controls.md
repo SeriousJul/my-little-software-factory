@@ -45,6 +45,26 @@ OpenTUI's field primitives are candidates for the shared implementation, not
 public escape routes for separate screen-specific editors. Do not create a
 second key definition system that can disagree with dispatch or help.
 
+## The Message line's ranks
+
+The Message line shows one fact at a time, and the ranks are the shared
+selector's, not any section's. A failure outranks everything. Active progress
+outranks an outcome, so a warning written during a refresh waits behind its
+`Working:` line and appears when the refresh settles. A control's own result
+outranks a standing notice and the source health.
+
+A notice - the line that states the app will decide without the operator, and
+the line a section's own key writes as its feedback - yields to every fact an
+operation wrote (ADR 0049). The consequence is plane-wide, not one section's:
+a standing warning or error outranks any notice, so a key whose whole answer
+is a notice can be invisible while an older operation fact holds the line. A
+section that relies on a notice to show a state must carry that state on its
+own surface as well, the way the Work section carries its pause on its header
+beside the depth it holds, and its frame test pins the ranking. Do not
+"restore" a notice above an operation fact: the notice's rank below an
+operation fact is a decided rule with a measured walk, not slot order's
+accident.
+
 ## The Action bar and the Key guide
 
 The Action bar hints only the keys the Key guide names in the current

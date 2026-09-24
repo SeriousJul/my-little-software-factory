@@ -2165,7 +2165,20 @@ describe("Consultation live-worktree launch through the UI", () => {
 		}
 	});
 
-	test("an unfit Model fails the launch before it resolves the Repository", async () => {
+	/**
+	 * ADR 0049 puts the Consultation's hard checks at the Work queue's enqueue:
+	 * the type still exists and its settings fit, so a start the config cannot
+	 * run never takes a queue row. The unfit Model therefore leaves no record at
+	 * all - the ask refuses, its reason stands on the Message line, and the
+	 * launcher keeps the operator's form for the fix. The check also runs ahead
+	 * of the route's first external change: a live launch resolves its
+	 * Repository, and a resolve clones a missing checkout. None of that runs
+	 * behind an unfit setting. Story 6's `failed` record stays the pickup's own
+	 * answer: the start re-reads the same fit on the record it took, and
+	 * "a pickup whose start fails leaves the record failed with its reason"
+	 * walks it at the operations seam.
+	 */
+	test("an unfit Model refuses the submit before the record or any external step", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const inner = new FakeRunner();
 		stubLiveCheckout(inner, false);
@@ -2184,9 +2197,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 				},
 			},
 		};
-		// The reads that resolve one Repository: the launcher makes them to verify
-		// its option, and a launch route resolves the Repository the same way, which
-		// clones a checkout that is missing.
+		// The reads that resolve one Repository: the launcher makes them to
+		// verify its option.
 		const resolveReads = () =>
 			runner.commands().filter((command) => command.includes("rev-parse --git-dir")).length;
 		try {
@@ -2202,16 +2214,17 @@ describe("Consultation live-worktree launch through the UI", () => {
 					);
 					const readsBeforeLaunch = resolveReads();
 					await launchConsultationDraft(setup, "review auth");
-					const failed = await awaitFrame(
+					const refused = await awaitFrame(
 						setup,
-						(f) => f.includes("State: failed"),
-						"the fit check to refuse the launch",
+						(f) => messageRowOf(f).includes("consultation not queued"),
+						"the enqueue's refusal",
 					);
-					expect(frameText(failed)).toContain('has no model "openai/gpt-4o"');
-					// The check runs ahead of the route's first external change: a
-					// live launch resolves its Repository, and a resolve clones a
-					// missing checkout, records the path, and then drives Herdr.
-					// None of that happened behind an unfit setting.
+					expect(messageRowOf(refused)).toContain('has no model "openai/gpt-4o"');
+					// No record and no queue item: the ask never entered the channel.
+					expect(state.consultations("all")).toEqual([]);
+					expect(state.workQueue()).toEqual([]);
+					// The launcher stayed open with the operator's form for the fix.
+					expect(frameText(refused)).toContain("Consultation launcher");
 					const joined = runner.commands().join("\n");
 					expect(resolveReads()).toBe(readsBeforeLaunch);
 					expect(joined).not.toContain("git clone");
@@ -2219,11 +2232,8 @@ describe("Consultation live-worktree launch through the UI", () => {
 					expect(joined).not.toContain("herdr tab create");
 					expect(joined).not.toContain("agent start");
 					expect(joined).not.toContain("agent prompt");
-					// One Consultation start asks the Agent's CLI once, not once per step.
+					// The ask asks the Agent's CLI once.
 					expect(inner.modelListCalls).toEqual(["pi"]);
-					const [consultation] = state.consultations("open");
-					expect(consultation.state).toBe("failed");
-					expect(consultation.paneId).toBeNull();
 				},
 				WIDTH,
 				32,

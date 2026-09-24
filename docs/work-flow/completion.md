@@ -73,25 +73,37 @@ Auto-handoff mode decides without the operator, within the configured
 limits:
 
 - A fired transition that carries `auto-advance` routes the task of the
-	position it derived, while the parallel limit has room, in manual mode
-	too. The handoff starts on the ticket that position sits on, which is the
-	fixing pull request when the written labels put the pull request in the
-	machine. At the per-ticket handoff limit the route degrades to close, and
-	a full parallel limit leaves the ticket awaiting until a slot frees. The
-	route's `auto-handed-off` decision lands the same way the operator's does:
-	only once the routed handoff has started the agent. A route that cannot
-	start - because its Agent takes one of the settings its target Task
-	profile names - records nothing on the turn, says why on the status line,
-	and leaves the turn undecided, so the next poll can route it once the
-	config or the panel fixes the pair.
-- Every other settled turn closes: with auto-handoff on, the control plane
-	closes a completion whose transition did not auto-advance, whose
-	transition found no position, or whose label write failed. With
-	auto-handoff off such a turn waits for the operator instead.
-- Every eligible open ticket is handed off with the config defaults when the
-	parallel limit allows it. The limit counts the live agents: the in-flight
-	tickets in `handed-off` or `running` whose agent was alive in the latest
-	poll. A blocked agent still counts; a missing agent holds no slot.
+	position it derived. The route is the auto top-up's continuation: it enters
+	the Work queue like every other start (ADR 0049, ADR 0051), so a full
+	parallel limit is no longer a wait in awaiting - the item waits in the
+	queue, and the top-up adds one item at a time into an empty queue. The
+	handoff starts on the ticket that position sits on, which is the fixing
+	pull request when the written labels put the pull request in the machine.
+	At the per-ticket handoff limit the route degrades to close. The route's
+	`auto-handed-off` decision lands the same way the operator's does: only
+	once the routed handoff has started the agent. A route that cannot start -
+	because its Agent takes one of the settings its target Task profile names
+	- records nothing on the turn, says why on the status line, and leaves the
+	turn undecided, so the next empty-queue cycle can route it once the config
+	or the panel fixes the pair.
+- Manual mode runs no top-up (ADR 0051). A settled turn that offers a
+	continuation rests in awaiting, and the operator's Decision screen routes
+	it; that route enters the queue like every start.
+- Every other settled turn the machine resolves closes: with auto-handoff on,
+	the control plane closes a completion whose transition did not
+	auto-advance, or whose transition found no position. A transition whose
+	label write failed no longer closes: the plane does not route from labels
+	it did not write, and the turn rests in awaiting for the operator's
+	Decision screen. With auto-handoff off, every routable turn waits for the
+	operator instead.
+- Every eligible open ticket is handed off with the config defaults as the
+	top-up's one new open ticket, in the list's order, when the queue is empty.
+	The parallel limit no longer holds the add (ADR 0051): the seat the item
+	cannot take is the wait the queue row holds. The limit counts the live
+	agents at the pickup: the in-flight tickets in `handed-off` or `running`
+	whose agent was alive in the latest poll, the unresolved claims, and the
+	Consultations in `opening` or `working`. A blocked agent still counts; a
+	missing agent holds no slot.
 - The per-ticket handoff limit stops the close-and-rehandoff loop. When a
 ticket reaches it, auto-handoff leaves it open. A manual handoff may pass
 	the limit. A cycle closed with no trace counts toward it like a cycle
@@ -129,10 +141,10 @@ itself. The pause is derived from the completion traces on every cycle and
 never stored, so it survives a restart. It holds only the automatic origins -
 the open handoff, the workflow route, and the restart of a missing agent - and
 it ends at the next `completed` settle, or when the operator decides the held
-turn that started it. It never blocks a manual handoff. The open handoff and
-the restart run only in auto mode; the route block applies in manual mode
-too, where an auto-advance transition still routes without the operator,
-exactly like the Parallel limit. A Consultation never contributes to the pause.
+turn that started it. It never blocks a manual handoff, and it never blocks
+the queue's own pickup: an item that already stands in the queue takes its
+seat. Every automatic start runs only in auto mode, where the top-up owns it
+(ADR 0051), and a Consultation never contributes to the pause.
 
 Both cycle-end gates read the cycle that ended last, and a cycle that ended
 with no trace row is one of them (ADR 0031). The re-verify gate waits for the

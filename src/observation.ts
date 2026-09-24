@@ -1241,8 +1241,8 @@ export class ObservationCoordinator {
 					),
 					previousMessage: this.promptPreviousMessage(completion),
 				},
-				`work queue top-up: routing ticket ${ticket.identity} to ${position.suggestedTaskType}`,
-				`work queue top-up could not route ticket ${ticket.identity}`,
+				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${position.suggestedTaskType}`,
+				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
 			);
 			// One add per cycle: the walk stops at the first item the queue took,
 			// and a refused ask moves on to the next candidate.
@@ -1296,8 +1296,8 @@ export class ObservationCoordinator {
 					}),
 					previousMessage: this.promptPreviousMessage(completion),
 				},
-				`work queue top-up: routing ticket ${ticket.identity} to ${outcome.positionTaskType}`,
-				`work queue top-up could not route ticket ${ticket.identity}`,
+				`work queue top-up: routing ${this.ticketName(ticket.identity)} to ${outcome.positionTaskType}`,
+				`work queue top-up could not route ${this.ticketName(ticket.identity)}`,
 			);
 			if (added !== "refused") return true;
 		}
@@ -1330,6 +1330,17 @@ export class ObservationCoordinator {
 					origin: "restart",
 					automatic: true,
 					ticketIdentity: ticket.ticketIdentity,
+					// The episode mark stands only for a restart that holds its place
+					// or runs. Every exit that ends the item without a start - the
+					// pickup's drop, the operator's remove, a race cancel - clears the
+					// mark through this answer, so the next empty-queue cycle asks
+					// again. That is ADR 0051's re-entry rule read at the drop, and a
+					// gate that still holds the ticket parks it again there: the
+					// re-verify gate and the handoff limit stand in the claim, and the
+					// dispatch's warning names them (ADR 0049).
+					onStarted: (started) => {
+						if (!started.ok) this.restarted.delete(ticket.ticketIdentity);
+					},
 					// The same choices the previous handoff ran with: the
 					// operator's restart keeps the model, thinking level, and
 					// context window, and the auto one matches it.
@@ -1343,12 +1354,13 @@ export class ObservationCoordinator {
 					),
 					previousMessage: this.promptPreviousMessage(previous),
 				},
-				`work queue top-up: restarting ticket ${ticket.ticketIdentity}`,
-				`work queue top-up could not restart ticket ${ticket.ticketIdentity}`,
+				`work queue top-up: restarting ${this.ticketName(ticket.ticketIdentity)}`,
+				`work queue top-up could not restart ${this.ticketName(ticket.ticketIdentity)}`,
 			);
 			if (added === "refused") {
-				// The ask never took a queue row, so the episode mark leaves with
-				// it: the ticket stays in-flight, and the next cycle asks again.
+				// The ask never took a queue row, so the episode mark leaves with it:
+				// the ticket stays in-flight, and the next cycle asks again. A row
+				// that did enter answers through its `onStarted` above.
 				this.restarted.delete(ticket.ticketIdentity);
 				continue;
 			}
@@ -1390,12 +1402,26 @@ export class ObservationCoordinator {
 					choice,
 					previousMessage: "",
 				},
-				`work queue top-up: handing off ticket ${ticket.identity}`,
-				`work queue top-up could not hand off ticket ${ticket.identity}`,
+				`work queue top-up: handing off ${this.ticketName(ticket.identity)}`,
+				`work queue top-up could not hand off ${this.ticketName(ticket.identity)}`,
 			);
 			if (added !== "refused") return true;
 		}
 		return false;
+	}
+
+	/**
+	 * The ticket the Message line names: the projection's title, the same words
+	 * the Work queue's row shows. Every queue line in the plane reads the live
+	 * projection this way (ADR 0049), and the projection, not the visible list,
+	 * so a covered ticket is still named by its title.
+	 */
+	private ticketName(identity: string): string {
+		const config = this.config();
+		const title = this.state
+			.projectedTickets(config.workflowStates, config.defaultTaskType)
+			.find((candidate) => candidate.identity === identity)?.title;
+		return title === undefined ? `ticket ${identity}` : `"${title}"`;
 	}
 
 	/**

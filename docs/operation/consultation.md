@@ -24,8 +24,12 @@ its availability and reason.
 	Consultation, `c` launches a Consultation, `f` cycles the history filter
 	through open, closed, and all, `w` closes the selected Consultation, `d`
 	deletes a closed or an unscheduled one, and `s` schedules an `unscheduled`
-	one back into the Work queue (issue #91): the record returns to `queued`
-	with its item at the queue's tail, and the pickup is its only starter. A close that stops a live Agent - an opening,
+	one back into the Work queue (issue #91): the enqueue's hard check runs
+	first, the same one the launcher's submit runs, so a record the config
+	cannot start never takes a row and its reason stands on the Message line;
+	otherwise the record returns to `queued` with its item at the queue's
+	tail, the immediate pickup pass takes a free seat in the same tick, and
+	the pickup is its only starter from there. A close that stops a live Agent - an opening,
 	a working, or an awaiting-response Consultation - confirms first: the
 	dialog names the Agent and states what the close keeps, the worktree and
 	branch on a worktree Consultation and the checkout on a live-worktree
@@ -49,15 +53,19 @@ its availability and reason.
 	that deletes it. A Consultation starts on the agent, environment, model,
 	thinking level, and context window its type names, each one passed through
 	the agent's own template, so the type must name an agent that maps every
-	setting it sets. The start runs the Setting fit check first and fails with
-	a readable reason when its agent cannot take one of them, before it touches
-	herdr or the repository. A submit into a full Parallel limit creates the
-	record in `queued` state and enqueues it in the Work queue instead of
-	starting it (ADR 0034): the queue's pickup starts it when a seat frees, and
-	the notice names the record and the queue it waits in. Recovery re-checks
-	the stored record, so a config
-	change cannot start an opening Consultation without the settings its record
-	names.
+	setting it sets. The Work queue is the single start channel (ADR 0049): every
+	submit creates the record in `queued` state and enqueues it, and the queue's
+	pickup starts it when a seat frees. The submit runs the enqueue's hard
+	check first - the type still exists, and the settings it resolves to fit -
+	so a Consultation the config cannot start never takes a row: the refusal
+	stands on the Message line, and the launcher keeps the unfinished form for
+	the fix. A seat that is not free is the wait the row holds, and the notice
+	names the record and the queue it waits in. The start re-reads the same
+	fit on the record it picked up, so a config change while the item waited
+	leaves the terminal `failed` record with its reason rather than an unfit
+	agent. Recovery re-checks
+	the stored record the same way, so a config change cannot start an opening
+	Consultation without the settings its record names.
 - `Enter` answers the selected Consultation with the surface its state needs
 	(ADR 0038): it opens the response editor on an awaiting one and Agent
 	interaction on a working or blocked one, and it opens the recovery panel on

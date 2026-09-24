@@ -466,7 +466,7 @@ carries the command that creates them.
 | `ticket-facts` | no | none | The labels the transition writes on the ticket. The plane converges the ticket to its own workflow labels: it removes the workflow labels the ticket no longer holds and adds these. |
 | `pull-request-facts` | no | none | The labels the transition writes on the ticket's fixing pull request, the same convergence. No fixing pull request: the fact is skipped, the ticket's facts still stand, and the skip is a fact on the fire. A pull request ticket is its own fixing pull request: one surface takes both fact lists in one write. |
 | `score-threshold` | no | - | The score a `score-above-threshold` or `score-below-threshold` branch compares the review's score against. The review posts its score on the pull request - a comment or a review body - in the template's fixed line, and the branch reads the newest record that carries one. A whole number from 0 to 100. A score branch requires it. |
-| `auto-advance` | no | `false` | The factory decides the completed turn without the operator: the position it derives hands off at any time, and a transition with no position closes the cycle even in manual mode. |
+| `auto-advance` | no | `false` | The factory decides the completed turn without the operator, in auto mode: the position it derives enters the Work queue as the top-up's continuation, and a transition that derives no position closes the cycle. Manual mode runs no top-up, so a routable turn rests in awaiting for the operator's Decision screen (ADR 0051). |
 | `agent` | no | - | The agent type the route the transition derives runs on. It must name an `[agents.*]` table. |
 | `environment` | no | - | The environment the route the transition derives runs in. One of `live-worktree` or `worktree`. |
 | `branches` | no | none | The judgment branches, in order. The first branch whose `when` holds fires; a branch with no `when` is the fallback the transition fires on when no judgment held. |
@@ -485,19 +485,23 @@ carries the command that creates them.
 ## Notes
 
 A transition's `auto-advance` lets the control plane decide the completions
-of its task type without the operator even in manual mode. A branch carries
-its own `auto-advance` to decide one judgment's completion and leave the
-others to the transition's. The plane fires the transition on every completed
-turn: it writes the label facts, and the
-machine re-derives the position from the written labels on the ticket and
-its fixing pull request. One ticket that is both the settled ticket and the
-fixing pull request - a pull request ticket - is one surface: the plane
-converges it to the two fact lists at once, in one write. A derived position
-hands off while the parallel limit and the per-ticket handoff limit have
-room; a transition that derives no position closes the cycle, and a route at
-either limit degrades the same way the open dispatch does. The agents never
-write workflow labels (ADR 0027): the plane writes them, and a ticket's
-position is always re-derived from the labels it carries.
+of its task type without the operator, while Auto-handoff mode is on. A branch
+carries its own `auto-advance` to decide one judgment's completion and leave
+the others to the transition's. The plane fires the transition on every
+completed turn: it writes the label facts, and the machine re-derives the
+position from the written labels on the ticket and its fixing pull request.
+One ticket that is both the settled ticket and the fixing pull request - a
+pull request ticket - is one surface: the plane converges it to the two fact
+lists at once, in one write. A derived position enters the Work queue as the
+auto top-up's continuation, one item per cycle into an empty queue, and the
+parallel limit is no longer a hold on the add: the seat the item cannot take
+is the wait its row holds (ADR 0049, ADR 0051). A transition that derives no
+position closes the cycle, and a route at the per-ticket handoff limit
+degrades to close. A transition whose label write failed closes nothing: the
+plane does not route from labels it did not write, and the turn rests in
+awaiting for the operator. The agents never write workflow labels (ADR 0027):
+the plane writes them, and a ticket's position is always re-derived from the
+labels it carries.
 
 The `pull-request-open` and `pull-request-closed` judgments read the linked
 pull request's own record straight from the source at fire time, live the
