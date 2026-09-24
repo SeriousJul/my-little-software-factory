@@ -5,10 +5,11 @@
  * the label facts on the ticket and its fixing pull request, and the machine
  * re-derives every position from the written labels. The transition names no
  * destination. The judgments read from the source at the settle (ADR 0047):
- * the review score from the pull request's comments and its reviews (ADR
- * 0053), and the open state from the pull request's own record, with the
- * projection's last refresh as the read's fallback. The branch that holds fires, and its facts and pins take
- * effect.
+ * the review score from every comment and every review the pull request
+ * carries, at the verdict's fixed line (ADRs 0053 and 0057), and the open
+ * state from the pull request's own record, with the projection's last
+ * refresh as the read's fallback. The branch that holds fires, and its facts
+ * and pins take effect.
  */
 
 import type {
@@ -158,18 +159,66 @@ function effective(
 }
 
 /**
- * The review score a completion message reports; null when the message
- * carries none. The seed review template ends in `- **Score:** 85 / 100`.
- * The line is the fixed format the template carries, and a number in loose
- * prose is not a score. When the line appears more than once, the last
- * occurrence is the verdict: the agent restates the score after the final
- * pass, and the earlier lines are scratch.
+ * The markdown a posted line wears that is not part of what it says: the
+ * block markers in front of it (a heading, a list bullet, a quote, a table
+ * cell) and the emphasis runs inside it. The verdict line the review agent
+ * posts carries both, and neither changes the line's meaning.
+ */
+function withoutMarkdown(line: string): string {
+	return line
+		.replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+|>+\s*|\|+\s*)+/, "")
+		.replace(/[*_`]+/g, "");
+}
+
+/**
+ * The fixed score line: the label, at its line's start or after a lead-in
+ * that ends in a mark, its separator, and its number, with an optional
+ * scale. The separator is the line's colon or equals sign, or the bar of the
+ * table cell a scored row carries. The lookahead keeps the line's own score:
+ * what follows the number is the scale, the line's end, or the line's
+ * punctuation, never a word. A scale written in words is not the line's own
+ * form, so `Score: 92 out of 100.` stays prose and reports nothing.
+ */
+const SCORE_LINE =
+	/(?:^|[\d)\]}>:;,-]\s*)(?:(?:review|total|final|overall|combined|verdict)\s+)?score\s*[:=|]\s*(\d{1,3}(?:\.\d+)?)(?:\s*(?:%|\/\s*(\d{1,3}(?:\.\d+)?)))?(?=\s*(?:$|[,.;:!)[\]}|_-]))/gi;
+
+/**
+ * The review score a posted verdict reports; null when it carries none. The
+ * seed review template's fixed line is `- **Score:** 85 / 100`, and the line
+ * is the contract: the score label, its separator, and its number. The read
+ * takes the line under the markdown the post wears around it (ADR 0057): a
+ * heading's `##`, a list bullet, the emphasis run inside the label, the
+ * colon written inside the bold instead of outside it, and the number's
+ * scale written as `/ 100`, `/100`, or `%`.
+ *
+ * The label still decides what is a score line and what is not, so a number
+ * named in prose stays out of the judgment: `the mutation score: 79.48 %`
+ * names its number after a word, and `Score: 92 out of 100.` writes its
+ * scale in words rather than in the line's own form. The label is read only
+ * at the start of its line or after a lead-in that ends in a mark, and a
+ * number out of the 0 to 100 range is not a score at all.
+ *
+ * When the line appears more than once, the last one is the verdict: the
+ * agent restates the score after the final pass, and the earlier lines are
+ * scratch.
  */
 export function scoreFromMessage(message: string): number | null {
-	const matches = [...message.matchAll(/\*\*score:\*\*\s*(\d{1,3})/gi)];
-	if (matches.length === 0) return null;
-	const value = Number(matches[matches.length - 1][1]);
-	return Number.isInteger(value) && value >= 0 && value <= 100 ? value : null;
+	let score: number | null = null;
+	for (const rawLine of message.split("\n")) {
+		const line = withoutMarkdown(rawLine);
+		for (const match of line.matchAll(SCORE_LINE)) {
+			const value = Number(match[1]);
+			if (!Number.isFinite(value) || value < 0 || value > 100) continue;
+			const denominator = match[2] === undefined ? undefined : Number(match[2]);
+			if (denominator === undefined || denominator === 100) {
+				score = value;
+				continue;
+			}
+			// The line names its own scale: a score of 18 out of 20 is 90.
+			if (denominator > 0 && value <= denominator) score = (value * 100) / denominator;
+		}
+	}
+	return score === null || Number.isInteger(score) ? score : Math.round(score);
 }
 
 /** Whether the transition's branches test a score judgment. */
@@ -219,9 +268,10 @@ async function readPullRequestScore(
 		ghOptions = resolved.options;
 	}
 	const repository = membership.repository.displayName;
-	// The two timelines the verdict can post to, read together: a read that
-	// fails on one timeline contributes nothing, and the records that stand
-	// decide.
+	// The two timelines the verdict can post to, read together and read whole:
+	// each read walks every page, because GitHub answers a long thread oldest
+	// first and the verdict is the newest post. A read that fails on one
+	// timeline contributes nothing, and the records that stand decide.
 	const [comments, reviews] = await Promise.all([
 		readVerdictList(
 			request,
@@ -251,8 +301,10 @@ async function readPullRequestScore(
 
 /**
  * One verdict list the score read collects: the pull request's comments or
- * its reviews, each record as its body and its time. Null when the read
- * fails or the answer is not a list; the other timeline's records stand.
+ * its reviews, each record as its body and its time. The read walks every
+ * page of its timeline, so a verdict on a long thread is in the list the
+ * judgment sorts. Null when the read fails or the answer is not a list; the
+ * other timeline's records stand.
  */
 async function readVerdictList(
 	request: FireTransitionRequest,
@@ -263,7 +315,11 @@ async function readVerdictList(
 ): Promise<{ body: string; at: string }[] | null> {
 	let result: CommandResult;
 	try {
-		result = await request.runner.run("gh", ["api", "--hostname", source.host, path], ghOptions);
+		result = await request.runner.run(
+			"gh",
+			["api", "--paginate", "--hostname", source.host, path],
+			ghOptions,
+		);
 	} catch {
 		return null;
 	}

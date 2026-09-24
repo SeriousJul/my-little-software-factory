@@ -269,11 +269,14 @@ function ticketAt(state: ReturnType<typeof seededState>, identity: string): Tick
 }
 
 /**
- * The exact argv of the pull request's comment read: the source's host, and
- * the issue-style comment list of the pull the score tests fire on (#12).
+ * The exact argv of the pull request's comment read: the paginated walk, the
+ * source's host, and the issue-style comment list of the pull the score
+ * tests fire on (#12). GitHub answers a comment list oldest first, so the
+ * read walks every page to reach the newest verdict.
  */
 const COMMENT_READ_ARGS = [
 	"api",
+	"--paginate",
 	"--hostname",
 	"github.com",
 	"repos/acme/factory/issues/12/comments?per_page=100",
@@ -290,11 +293,13 @@ function setReviewComments(
 }
 
 /**
- * The exact argv of the pull request's review read: the source's host, and
- * the review list of the pull the score tests fire on (#12).
+ * The exact argv of the pull request's review read: the paginated walk, the
+ * source's host, and the review list of the pull the score tests fire on
+ * (#12).
  */
 const REVIEW_READ_ARGS = [
 	"api",
+	"--paginate",
 	"--hostname",
 	"github.com",
 	"repos/acme/factory/pulls/12/reviews?per_page=100",
@@ -465,9 +470,45 @@ describe("the review score", () => {
 	test("a score named in loose prose is not a score", () => {
 		// The plane reads only the fixed format line the template carries, not
 		// any number in the message: a prose sentence that names a number is
-		// not the agent's verdict.
+		// not the agent's verdict. The read takes the label only as the line's
+		// own first word, so a number that stands after a word, or a scale the
+		// line spells out, reports no score.
 		expect(scoreFromMessage("Score: 92 out of 100.")).toBeNull();
 		expect(scoreFromMessage("The total score is 61.")).toBeNull();
+		expect(scoreFromMessage("The mutation score: 79.48 % across the slice.")).toBeNull();
+		expect(scoreFromMessage("Both slice scores now divide: 647 of 814 = 79.48 %")).toBeNull();
+	});
+
+	test("the line's markdown decoration does not hide the score", () => {
+		// What a review agent posts is the fixed line under the decoration the
+		// pull request's markdown wears: a heading, a list item, a table cell,
+		// the colon inside the bold, and the number inside the bold. Each is
+		// the same verdict, and each once reported no score at all.
+		expect(scoreFromMessage("## Score: 83 / 100")).toBe(83);
+		expect(scoreFromMessage("### Score: 92 / 100")).toBe(92);
+		expect(scoreFromMessage("**Score: 85 / 100**")).toBe(85);
+		expect(scoreFromMessage("Score: **88/100**")).toBe(88);
+		expect(scoreFromMessage("| Score | 84 / 100 |\n| Spec | Pass |")).toBe(84);
+		expect(scoreFromMessage("- Score: 81/100")).toBe(81);
+		expect(scoreFromMessage("**Review score:** 90 / 100")).toBe(90);
+		expect(scoreFromMessage("> **Score:** 74 / 100")).toBe(74);
+		expect(scoreFromMessage("**Score:** 92%")).toBe(92);
+	});
+
+	test("a score out of another total is read on the 100 scale", () => {
+		// A line that names its own scale is still the fixed line: the judgment
+		// reads the score out of 100, whatever total the agent divided by.
+		expect(scoreFromMessage("**Score:** 18 / 20")).toBe(90);
+		expect(scoreFromMessage("Score: 9 / 10")).toBe(90);
+		expect(scoreFromMessage("Score: 90 / 100")).toBe(90);
+	});
+
+	test("a quoted score in a sentence is not the line's score", () => {
+		// A review body that quotes an earlier verdict in prose reports its own
+		// line, not the quote.
+		expect(
+			scoreFromMessage("The last review's score: 40 / 100 was wrong here.\n**Score:** 95 / 100"),
+		).toBe(95);
 	});
 
 	test("the last score line is the verdict", () => {
@@ -561,6 +602,48 @@ describe("the review score read from the pull request's comments and reviews", (
 			taskType: "review",
 		});
 		expect(outcome).toMatchObject({ when: "score-above-threshold" });
+	});
+
+	test("a verdict line that posts as a heading is the verdict", async () => {
+		// The real miss this read fixed: a review agent posted its verdict as a
+		// markdown heading rather than the template's bolded list item, the
+		// decoration hid the line, and no score branch held on a turn whose
+		// verdict the plane could see.
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, []);
+		setReviewBodies(runner, [
+			{
+				body: "## Score: 83 / 100\n\n### Specification Check\n\nPass, with required changes.",
+				submitted_at: "2026-08-31T12:00:00Z",
+			},
+		]);
+		const outcome = await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(outcome).toMatchObject({ fired: true, when: "score-below-threshold" });
+	});
+
+	test("both verdict timelines are read to their last page", async () => {
+		// GitHub answers a comment list oldest first, so a verdict the thread
+		// posted after the first 100 records is off the page: the judgment
+		// reads the whole timeline, not its first page.
+		const runner = new FakeRunner();
+		const state = loadPull();
+		setReviewComments(runner, []);
+		setReviewBodies(runner, []);
+		await fireTransition({
+			config: MACHINE_CONFIG,
+			state,
+			runner,
+			ticketIdentity: pullIdentity,
+			taskType: "review",
+		});
+		expect(runner.commands()).toEqual([COMMENT_READ_COMMAND, REVIEW_READ_COMMAND]);
 	});
 
 	test("a later review over an earlier comment is the verdict", async () => {
