@@ -25,6 +25,10 @@ const child = spawn(process.execPath, [realBin, ...process.argv.slice(2)], {
 child.on("exit", (code, signal) => {
 	if (signal) {
 		process.kill(process.pid, signal);
+		// A signal the launcher's runtime does not act on must not end the run
+		// as a success: the child died by that signal, so the launcher leaves
+		// nonzero.
+		process.exit(1);
 	} else {
 		process.exit(code ?? 1);
 	}
@@ -49,5 +53,8 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 		// Raise the same signal on the launcher so it dies from it, as the
 		// child does.
 		process.kill(process.pid, signal);
+		// And if the runtime swallows it, end nonzero rather than return from
+		// the handler and let the launcher exit 0 with its child gone.
+		process.exit(1);
 	});
 }

@@ -68,10 +68,17 @@ async function main() {
 		facts: processFacts(),
 		version: require("../package.json").version,
 		argv: process.argv.slice(2),
+		// The first run transfers about 100 MB. Without a line before it the
+		// terminal shows nothing while the download runs, which reads as a hang.
+		report: (line) => process.stderr.write(`mlsf: ${line}\n`),
 	});
 	if (outcome.kind === "fail") {
 		process.stderr.write(`mlsf: ${outcome.line}\n`);
 		process.exit(1);
+	}
+	if (outcome.kind === "print") {
+		process.stdout.write(`${outcome.line}\n`);
+		process.exit(0);
 	}
 	if (outcome.kind === "signal") {
 		try {
@@ -79,7 +86,10 @@ async function main() {
 		} catch {
 			process.exit(1);
 		}
-		return;
+		// A signal this runtime does not act on leaves the process alive with
+		// its child gone and its work failed. End nonzero here rather than let
+		// the run return its way out of main and exit 0.
+		process.exit(1);
 	}
 	process.exit(outcome.code);
 }

@@ -31,17 +31,23 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import {
+	ASSET_TIMEOUT_MS,
 	assetFileName,
 	assetUrl,
+	BIN_SUBDIR,
 	binaryNameFor,
+	CHECKSUM_TIMEOUT_MS,
 	cacheIsCurrent,
 	checksumFileName,
 	checksumMatches,
 	checksumUrl,
 	DATA_DIR,
+	DOWNLOAD_TIMEOUT_ENV,
+	downloadNote,
+	downloadTimeoutOverrideMs,
 	formatInstallNote,
 	installDirFor,
 	installVerified,
@@ -54,6 +60,7 @@ import {
 	sha256HexOfFile,
 	TARGETS,
 	targetIdFor,
+	versionAnswer,
 } from "../src/binary-install.mjs";
 
 const tempDirs: string[] = [];
@@ -271,6 +278,44 @@ describe("the cache path the install lands in", () => {
 				"windows-x64",
 			),
 		).toBe(join("C:\\Users\\op\\AppData\\Local", DATA_DIR, "bin", "windows-x64"));
+	});
+
+	// An empty or relative data home is no data home: the XDG Base Directory
+	// specification says to ignore it, and src/config.ts does the same for
+	// XDG_STATE_HOME. A relative base lands the cache in the working directory,
+	// where a planted binary arrives with a note of its own, and the note's
+	// digest is the check a cache is held to.
+	test.each([
+		["the empty string", ""],
+		["a relative path", "./.local/share"],
+		["a bare name", "share"],
+	])("a data home that is %s is treated as unset", (_name, value) => {
+		const facts = { platform: "linux", homedir: "/home/op", xdgDataHome: value };
+		expect(installDirFor(facts, "linux-x64")).toBe(
+			join("/home/op", ".local", "share", DATA_DIR, "bin", "linux-x64"),
+		);
+	});
+
+	test("a relative local app data is treated as unset", () => {
+		const facts = { platform: "win32", homedir: "C:\\Users\\op", localAppData: "AppData\\Local" };
+		expect(installDirFor(facts, "windows-x64")).toBe(
+			join("C:\\Users\\op", "AppData", "Local", DATA_DIR, "bin", "windows-x64"),
+		);
+	});
+
+	test("a Windows absolute local app data is a usable one", () => {
+		// The absolute test is the target platform's, not the host's: a
+		// LOCALAPPDATA value like `C:\Users\op\AppData\Local` is not absolute by
+		// the POSIX rule, and treating it as unset would move a Windows machine's
+		// cache without naming a reason.
+		const facts = {
+			platform: "win32",
+			homedir: "C:\\Users\\op",
+			localAppData: "D:\\factory-cache",
+		};
+		expect(installDirFor(facts, "windows-x64")).toBe(
+			join("D:\\factory-cache", DATA_DIR, "bin", "windows-x64"),
+		);
 	});
 
 	test("the install directory needs the target it is for", () => {
@@ -503,9 +548,16 @@ describe("the install step, with the network faked", () => {
 				init.signal.addEventListener("abort", () => reject(new Error("socket hang up")));
 			});
 		await expect(
-			installVerified({ version, targetId, dir, platform: "linux", fetchImpl, timeoutMs: 20 }),
+			installVerified({
+				version,
+				targetId,
+				dir,
+				platform: "linux",
+				fetchImpl,
+				checksumTimeoutMs: 20,
+			}),
 		).rejects.toThrow(
-			"the download of the checksum file stopped: the GitHub release did not answer within the timeout",
+			`the checksum file did not finish downloading within ${0.02} s; nothing was installed. A slow connection can be given more time with ${DOWNLOAD_TIMEOUT_ENV}`,
 		);
 		expect(existsSync(join(dir, "factory"))).toBe(false);
 	});
@@ -524,7 +576,8 @@ describe("the install step, with the network faked", () => {
 			dir,
 			platform: "linux",
 			fetchImpl,
-			timeoutMs: 5_000,
+			checksumTimeoutMs: 5_000,
+			assetTimeoutMs: 5_000,
 		});
 		expect(seen).toHaveLength(2);
 		for (const signal of seen) {
@@ -684,6 +737,58 @@ describe("the whole run, with the network and the child process faked", () => {
 		expect(readFileSync(binaryPath, "utf8")).toBe("the right binary");
 	});
 
+	test("a planted cache at a relative data home cannot be the one that runs", async () => {
+		// The review's repro, held to its shape: an empty XDG_DATA_HOME used to
+		// resolve the cache against the working directory, where the planted
+		// binary and its note arrive together and the note's own digest is the
+		// check - so the digest passes and the planted program runs with no
+		// network at all. The value is ignored now, the cache lands under the
+		// home, and the run has to reach the release.
+		const workdir = inTempDir("run-planted-relative-cwd");
+		const home = inTempDir("run-planted-relative-home");
+		const previous = process.cwd();
+		process.chdir(workdir);
+		try {
+			const facts = tempFacts(home, { xdgDataHome: "" });
+			// The path the old decision produced: the empty value used as the
+			// base, so the result was relative and resolved against the working
+			// directory. It is written out here rather than through installDirFor,
+			// because installDirFor no longer produces it.
+			const plantedDir = join(".", DATA_DIR, BIN_SUBDIR, targetId);
+			mkdirSync(plantedDir, { recursive: true, mode: 0o700 });
+			const plantedPath = join(plantedDir, binaryNameFor(targetId));
+			writeFileSync(plantedPath, "a program that is not the control plane");
+			writeFileSync(
+				notePathFor(plantedPath),
+				formatInstallNote({
+					version,
+					targetId,
+					digest: sha256HexOfFile(plantedPath),
+				}),
+				"utf8",
+			);
+			const release = fakeRelease(version, targetId, "the real binary");
+			const exec = fakeExec();
+			const outcome = await runInstaller({
+				facts,
+				version,
+				fetchImpl: release.fetchImpl,
+				exec: exec.exec,
+			});
+			expect(outcome).toEqual({ kind: "exit", code: 0 });
+			expect(release.asked).toHaveLength(2);
+			// What ran is the release's bytes under the home, not the planted file
+			// beside the checkout.
+			expect(exec.calls[0]?.binaryPath).toBe(cachedBinaryPath(facts, targetId));
+			expect(isAbsolute(exec.calls[0]?.binaryPath ?? "")).toBe(true);
+			expect(readFileSync(join(workdir, plantedPath), "utf8")).toBe(
+				"a program that is not the control plane",
+			);
+		} finally {
+			process.chdir(previous);
+		}
+	});
+
 	test("a machine the release builds nothing for is one readable line", async () => {
 		const home = inTempDir("run-no-target");
 		const release = fakeRelease(version, targetId, "bytes");
@@ -758,6 +863,161 @@ describe("the whole run, with the network and the child process faked", () => {
 			exec: fakeExec({ status: null }).exec,
 		});
 		expect(outcome).toEqual({ kind: "exit", code: 1 });
+	});
+
+	// The flag's whole point (ADR 0056) is that it answers on a machine with no
+	// state. Paying for a ~100 MB download to print one line contradicts that,
+	// so the installer answers it from the version it installs when the cache
+	// holds no binary, and the exec path stays the answer once it does.
+	test("a cold --version answers from the installer and downloads nothing", async () => {
+		const home = inTempDir("run-version-cold");
+		const release = fakeRelease(version, targetId, "bytes");
+		const exec = fakeExec();
+		const outcome = await runInstaller({
+			facts: tempFacts(home),
+			version,
+			argv: ["--version"],
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		expect(outcome).toEqual({ kind: "print", line: `factory ${version}` });
+		expect(release.asked).toHaveLength(0);
+		expect(exec.calls).toHaveLength(0);
+	});
+
+	test("a cached --version still goes to the binary itself", async () => {
+		const home = inTempDir("run-version-warm");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "bytes");
+		await runInstaller({ facts, version, fetchImpl: release.fetchImpl, exec: fakeExec().exec });
+		const exec = fakeExec();
+		const outcome = await runInstaller({
+			facts,
+			version,
+			argv: ["--version"],
+			fetchImpl: release.fetchImpl,
+			exec: exec.exec,
+		});
+		// The answer the operator reads comes from the program the flag names, so
+		// a warm cache execs as any other argument list does.
+		expect(outcome).toEqual({ kind: "exit", code: 0 });
+		expect(exec.calls).toEqual([
+			{ binaryPath: cachedBinaryPath(facts, targetId), argv: ["--version"] },
+		]);
+	});
+
+	test("a --version beside another argument is not the version flag", async () => {
+		const home = inTempDir("run-version-mixed");
+		const release = fakeRelease(version, targetId, "bytes");
+		const outcome = await runInstaller({
+			facts: tempFacts(home),
+			version,
+			argv: ["--version", "--config", "/tmp/one.toml"],
+			fetchImpl: release.fetchImpl,
+			exec: fakeExec().exec,
+		});
+		expect(outcome).toEqual({ kind: "exit", code: 0 });
+		// The list is the app's to answer, so the install runs and the binary takes
+		// the arguments as written.
+		expect(release.asked).toHaveLength(2);
+	});
+
+	test("the first run says it is downloading before it asks for anything", async () => {
+		const home = inTempDir("run-download-note");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "the prebuilt binary");
+		// What had been asked for when the note was written: nothing. The note
+		// exists so a slow transfer is not mistaken for a hang, and a line written
+		// after the first request - or after the bytes land - cannot do that.
+		const askedAtNote: string[] = [];
+		const notes: string[] = [];
+		await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			report: (line: string) => {
+				notes.push(line);
+				askedAtNote.push(release.asked.join(","));
+			},
+		});
+		expect(notes).toEqual([downloadNote(version, targetId)]);
+		expect(askedAtNote).toEqual([""]);
+		expect(release.asked).toEqual([
+			`${release.base}${release.checksumName}`,
+			`${release.base}${release.assetName}`,
+		]);
+	});
+
+	test("a cached run writes no note and makes no request", async () => {
+		const home = inTempDir("run-cached-note");
+		const facts = tempFacts(home);
+		const release = fakeRelease(version, targetId, "bytes");
+		const notes: string[] = [];
+		await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			report: (l) => notes.push(l),
+		});
+		const before = release.asked.length;
+		await runInstaller({
+			facts,
+			version,
+			fetchImpl: release.fetchImpl,
+			report: (l) => notes.push(l),
+		});
+		expect(notes).toHaveLength(1);
+		expect(release.asked).toHaveLength(before);
+	});
+});
+
+describe("the version answer and the download note, as text", () => {
+	test("--version alone is the only list the installer answers itself", () => {
+		expect(versionAnswer(["--version"], "0.2.0")).toBe("factory 0.2.0");
+		expect(versionAnswer([], "0.2.0")).toBeUndefined();
+		expect(versionAnswer(["--version", "--json"], "0.2.0")).toBeUndefined();
+		expect(versionAnswer(["--config", "x.toml"], "0.2.0")).toBeUndefined();
+	});
+
+	test("the installer's line is the answer the compiled binary gives", () => {
+		// src/factory.ts writes `factory <version>` for the same flag: the two
+		// answers are read as one product line, so they cannot drift by accident.
+		const entry = readFileSync(join(import.meta.dir, "..", "src", "factory.ts"), "utf8");
+		// The version answer and the download note must reach the operator's
+		// terminal, so this test names them by a marker built without a live
+		// template placeholder.
+		const dollar = String.fromCharCode(36);
+		const line = ["`factory ", dollar, "{await factoryVersion()}\\n`"].join("");
+		expect(entry).toContain(line);
+		expect(versionAnswer(["--version"], "0.2.0")).toBe("factory 0.2.0");
+	});
+
+	test("the note names the asset the run is about to transfer", () => {
+		expect(downloadNote("0.2.0", "linux-x64")).toBe(
+			"the control plane is not installed for linux-x64 yet; downloading " +
+				"factory-0.2.0-linux-x64 from the release. It happens once per version.",
+		);
+	});
+});
+
+describe("the download bounds", () => {
+	test("the small file and the whole runtime are not bound by one number", () => {
+		// 300 bytes and about 100 MB, fetched in one install: a single bound can
+		// only be right for one of them.
+		expect(CHECKSUM_TIMEOUT_MS).toBe(30_000);
+		expect(ASSET_TIMEOUT_MS).toBeGreaterThan(CHECKSUM_TIMEOUT_MS);
+	});
+
+	test.each([
+		["unset", undefined, ASSET_TIMEOUT_MS],
+		["empty", "", ASSET_TIMEOUT_MS],
+		["a real override", "900000", 900_000],
+		["spaces around the number", " 45000 ", 45_000],
+		["not a number", "soon", ASSET_TIMEOUT_MS],
+		["zero", "0", ASSET_TIMEOUT_MS],
+		["a negative bound", "-5", ASSET_TIMEOUT_MS],
+	])("the override %s gives the default or the number", (_name, value, expected) => {
+		expect(downloadTimeoutOverrideMs(ASSET_TIMEOUT_MS, value)).toBe(expected);
 	});
 });
 
@@ -862,5 +1122,59 @@ describe("the shipped bin, started the way npm starts it", () => {
 		expect(result.status).toBe(42);
 		expect(result.stdout).toContain(marker);
 		expect(result.stderr).not.toContain("mlsf:");
+	});
+
+	test("a cold --version answers through the shipped bin, with no cache and no request", () => {
+		// The empty home holds no cache, so the only way this prints a version is
+		// the installer's own answer: the flag that exists to work on a machine
+		// with no state cannot pay for the binary to do it (ADR 0056). Nothing on
+		// this machine holds the release's bytes for this version either - the
+		// run that reached the network would say so in its own line.
+		const home = inTempDir("bin-version-cold");
+		const result = runUnderNode(REAL_BIN, ["--version"], home);
+		expect(result.status).toBe(0);
+		expect(result.stdout.trim()).toBe(`factory ${packageJsonVersion()}`);
+		expect(result.stderr).toBe("");
+		// No cache was written for a line the launcher already knew.
+		expect(
+			existsSync(installDirFor(machineFacts(home), targetIdFor(machineFacts(home)) as string)),
+		).toBe(false);
+	});
+
+	test("a child the signal killed ends the shipped bin by that signal, not by 0", () => {
+		const home = inTempDir("bin-signal");
+		// The seeded cache runs a script that kills itself, the way the operator's
+		// Ctrl+C ends the real binary.
+		const facts = machineFacts(home);
+		const targetId = targetIdFor(facts) as string;
+		const binaryPath = cachedBinaryPath(facts, targetId);
+		mkdirSync(installDirFor(facts, targetId), { recursive: true, mode: 0o700 });
+		const script =
+			process.platform === "win32"
+				? "@echo off\r\nexit /b 0\r\n"
+				: "#!/bin/sh\nkill -TERM $$\nsleep 5\n";
+		writeFileSync(binaryPath, script);
+		if (process.platform !== "win32") chmodSync(binaryPath, 0o755);
+		writeFileSync(
+			notePathFor(binaryPath),
+			formatInstallNote({
+				version: packageJsonVersion(),
+				targetId,
+				digest: sha256HexOfFile(binaryPath),
+			}),
+			"utf8",
+		);
+
+		const result = runUnderNode(REAL_BIN, [], home);
+		if (process.platform === "win32") {
+			// The cmd script ends by its own code: the shape this machine can
+			// measure is the unix one below.
+			expect(result.status).toBe(0);
+			return;
+		}
+		// The launcher re-raised the child's signal on itself, so the process the
+		// operator sees died of SIGTERM with no exit code of its own.
+		expect(result.signal).toBe("SIGTERM");
+		expect(result.status).toBeNull();
 	});
 });

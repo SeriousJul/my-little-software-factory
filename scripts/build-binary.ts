@@ -3,13 +3,26 @@
  * Build one prebuilt binary of the control plane.
  *
  * `bun run build <target> --out <dir>` compiles the entry (src/factory.ts)
- * through `bun build --compile` for one target: the output
- * is the standalone executable the release publishes and the npm package's
- * installer downloads (ADR 0056), and the release leg runs this same command. The build stamps the package's version
- * into the binary, where the `--version` flag reads it, and it requires the
- * OpenTUI native core of the target in node_modules: the compile embeds the
- * core the install placed, so a missing core is a missing screen, not a
- * missing warning.
+ * through `bun build --compile` for one target: the output is the standalone
+ * executable the release publishes and the npm package's installer downloads
+ * (ADR 0056), and the release leg runs this same command. The build stamps the
+ * package's version into the binary, where the `--version` flag reads it, and
+ * it requires the OpenTUI native core of the target in node_modules.
+ *
+ * What that add is for, and what it does not do: `@opentui/core`'s asset
+ * loader names all six platform packages - one per os, arch, and libc - in
+ * literal dynamic imports, and the bundler must resolve every one of them
+ * whatever `--target` it is given. So the add is not a size measure: it is the
+ * step that makes those imports resolvable at all, and a tree that holds only
+ * one core does not compile. `bun add` resolves an `os`/`cpu` pair rather than
+ * a libc, so on a linux leg it places both the glibc and the musl variant, and
+ * the compiled linux binaries carry both - about 6.3 MB of native library a
+ * given machine never loads. The four linux, two darwin, and windows legs are
+ * measured target by target in docs/verification/release.md. Dropping the dead
+ * variant is not a local flag: `--external` moves the specifier to run time in
+ * a binary that has no run-time `node_modules`, and deleting the sibling from
+ * the tree fails the build with an unresolved import, so the fix is upstream
+ * in OpenTUI's loader or nowhere.
  *
  * The asset names come from src/binary-install.mjs, the module the published
  * installer reads: the producer and the consumer cannot name the same file
@@ -117,10 +130,18 @@ export function packageVersion(): string {
 /**
  * The OpenTUI native core of the target, present in node_modules.
  *
- * A plain install places only the core of the host, so a target that is not
- * the host takes an explicit add of its core at the installed version of
- * @opentui/core. The add is `--no-save`: the build's needs are the build's
- * to keep, not the repository's manifest.
+ * This is the step that makes `@opentui/core`'s six literal platform imports
+ * resolvable for the bundler, not a step that trims the artifact: see this
+ * file's header. A plain install places only the host's core, so a target that
+ * is not the host takes an explicit add of its core at the installed version of
+ * @opentui/core. The add is `--no-save`: the build's needs are the build's to
+ * keep, not the repository's manifest.
+ *
+ * The guard is an early return on the target's own package, so a tree that
+ * already carries it - a contributor's, or a re-run leg - builds without a
+ * second add. It is not a claim about how many cores the tree holds: on a linux
+ * leg that holds both variants, as the add itself places them, it compiles and
+ * the output carries both.
  */
 export async function ensureNativeCore(target: BinaryTarget): Promise<void> {
 	if (existsSync(join(ROOT, "node_modules", target.opentuiPackage))) return;
@@ -131,8 +152,9 @@ export async function ensureNativeCore(target: BinaryTarget): Promise<void> {
 		throw new Error("the installed @opentui/core carries no version to match its core");
 	}
 	// The --os and --cpu overrides make the add place the target's core even
-	// though the host is a different machine, and they keep the host's own
-	// core out of the tree, so the compile embeds exactly one native core.
+	// though the host is a different machine. They resolve an os/cpu pair, not a
+	// libc, so a linux add brings both linux variants - which is what the
+	// compile needs, and what the linux artifacts ship.
 	const proc = Bun.spawn(
 		[
 			"bun",

@@ -43,6 +43,21 @@ function shellVar(name: string): string {
 	return `${DOLLAR}{${name}}`;
 }
 
+/** A shell `*` glob, with its quotes dropped, as a whole-name regular expression. */
+function shellGlobToRegExp(pattern: string): RegExp {
+	const source = pattern
+		.replace(/"/g, "")
+		.replace(/[.+^${}()|[\]\\?]/g, "\\$&")
+		.replace(/\*/g, ".*");
+	return new RegExp(`^${source}$`);
+}
+
+/** The names in `files` a shell glob selects, in the order it would pass them. */
+function shellExpand(pattern: string, files: string[]): string[] {
+	const matches = shellGlobToRegExp(pattern);
+	return files.filter((file) => matches.test(file));
+}
+
 describe("the targets the release builds", () => {
 	test("the build matrix lists every target the installer can resolve", () => {
 		const matrix = RELEASE_YML.slice(
@@ -87,6 +102,41 @@ describe("the asset names the workflow's steps use", () => {
 
 	test("the checksums file the release job writes is the one the installer reads", () => {
 		expect(RELEASE_YML).toContain(checksumFileName(VERSION).replace(VERSION, shellVar("version")));
+	});
+
+	test("the upload step sends every asset and the checksums file, and nothing else", () => {
+		// The one line that decides what the release carries. Last round's
+		// blocking finding was a `dist/factory-<version>-*` glob that matched the
+		// seven binaries and not the sums file, whose separator is a `.`: the npm
+		// package published, the binaries uploaded, and no install could complete
+		// on any platform, because the installer's first fetch is the sums file.
+		// So: take the names the module produces, add what else can sit in a
+		// re-run's dist, and apply the workflow's own glob to that directory.
+		const upload = RELEASE_YML.match(/gh release upload \S+ (.+?) --clobber/);
+		expect(upload).not.toBeNull();
+		// One shell pattern, and it names the version as a shell variable: a
+		// literal version in an upload line is a second name to drift from the
+		// shared one.
+		expect(upload?.[1]).toContain(shellVar("version"));
+		const pattern = (upload?.[1] ?? "").replace(shellVar("version"), VERSION).replace(/"/g, "");
+		const stray = ["dist/SHA256SUMS.txt", "dist/factory-nightly.zip", "dist/artifact-hashes"];
+		const dist = [
+			...TARGETS.map((targetId) => `dist/${assetFileName(VERSION, targetId)}`),
+			`dist/${checksumFileName(VERSION)}`,
+			...stray,
+		];
+		expect(shellExpand(pattern, dist)).toEqual(dist.filter((name) => !stray.includes(name)));
+	});
+
+	test("the release job checks the checksums file before it uploads it", () => {
+		// The completeness loop checked the seven binaries with `test -s` and
+		// never the sums file, which is how the missing upload stayed invisible.
+		const job = RELEASE_YML.slice(RELEASE_YML.indexOf("  release:"));
+		expect(job).toMatch(/if ! test -s "dist\/\$sums"/);
+		// Every asset the release carries is named by the file, so an install of
+		// any target finds its line.
+		expect(job).toContain(`grep -q "  ${DOLLAR}{file##dist/}$" "dist/${DOLLAR}sums"`);
+		expect(job).toContain("sha256sum -c --strict");
 	});
 
 	test("the release job's own file name is the shared asset name", () => {
@@ -167,6 +217,40 @@ describe("the compiler the release ships from", () => {
 
 	test("the build legs install without the optional platform cores", () => {
 		expect(RELEASE_YML).toContain("bun install --omit=optional");
+	});
+});
+
+describe("the workflow file's own shape", () => {
+	test("no step's run block leaks its text back to column zero", () => {
+		// A `run: |` block ends where a line loses the block's indentation, so a
+		// wrapped note or a here-doc body written at column zero silently cuts
+		// the script short: the first tag's release job lost its
+		// `gh release upload` line that way, and GitHub parsed the note's prose
+		// as top-level keys. Every line that is not indented under a key must be
+		// a top-level key of the file itself.
+		for (const name of ["release.yml", "ci.yml", "site-deploy.yml"]) {
+			const text = readFileSync(join(WORKFLOWS_DIR, name), "utf8");
+			const leaked = text
+				.split("\n")
+				.map((line, index) => ({ line, number: index + 1 }))
+				.filter(
+					({ line }) =>
+						line.trim() !== "" &&
+						!line.startsWith(" ") &&
+						!line.startsWith("#") &&
+						!/^[a-zA-Z][\w-]*:($| )/.test(line),
+				);
+			expect(leaked, `${name} leaks these lines to column zero`).toEqual([]);
+		}
+	});
+
+	test("the release job's create step still holds its upload line", () => {
+		// The one step that must survive the check above: the create and the
+		// upload are one script, and a cut in it drops the upload with no error.
+		const job = RELEASE_YML.slice(RELEASE_YML.indexOf("  release:"));
+		const step = job.slice(job.indexOf("Upload the binaries"));
+		expect(step).toContain("gh release create");
+		expect(step.indexOf("gh release create")).toBeLessThan(step.indexOf("gh release upload"));
 	});
 });
 

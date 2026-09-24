@@ -62,9 +62,13 @@ jobs:
       - name: Publish the mlsf alias with provenance
         run: npm publish --provenance --prefix packages/mlsf
 
-  # One leg per target, each on a clean runner: the leg installs only the
-  # OpenTUI core of its target, so the binary it compiles embeds exactly the
-  # native library the target runs, and no other.
+  # One leg per target, each on a clean runner: the leg installs its own
+  # operating system's and architecture's OpenTUI cores and no others. A Linux
+  # leg gets both libc variants that way, because @opentui/core's loader names
+  # six literal platform imports and the bundler resolves every one of them
+  # whatever --target it is given. scripts/build-binary.ts says why, and
+  # docs/verification/release.md records the core count and the byte size of
+  # each target's artifact.
   build:
     needs: checks
     runs-on: ubuntu-latest
@@ -84,8 +88,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      # The optional platform cores stay out: the build adds the one the
-      # target runs, and the compile embeds what the install placed.
+      # The optional platform cores stay out of the plain install: the build
+      # adds the cores of its target, and the compile embeds what the install
+      # placed.
       - run: bun install --omit=optional
       - run: bun run build ${{ matrix.target }} --out dist
       # The leg that builds the runner's own target runs the binary it just
@@ -179,6 +184,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist
           for dir in artifacts/factory-*/; do cp "$dir"factory-* dist/; done
+          assets=()
           for t in linux-x64 linux-x64-musl linux-arm64 linux-arm64-musl darwin-x64 darwin-arm64 windows-x64; do
             case "$t" in
               windows-*) ext=".exe" ;;
@@ -189,9 +195,37 @@ jobs:
               echo "missing $file: the build leg for $t failed or uploaded nothing"
               exit 1
             fi
+            assets+=("$file")
           done
-          (cd dist && sha256sum factory-"${version}"-* > "factory-${version}.sha256sums")
-          cat "dist/factory-${version}.sha256sums"
+          # The checksums file is the installer's first read on every platform:
+          # a release that carries no sums file installs nothing anywhere. Each
+          # line holds the bare asset name, the form `checksumMatches` looks up.
+          sums="factory-${version}.sha256sums"
+          (cd dist && sha256sum "factory-${version}-"* > "$sums")
+          if ! test -s "dist/$sums"; then
+            echo "missing dist/$sums: the installer cannot look up an asset it cannot name"
+            exit 1
+          fi
+          # dist must hold exactly the seven assets and the one sums file. The
+          # upload line's glob is wider than the checksum glob (`-` after the
+          # version versus any separator), so a file that fits one and not the
+          # other would ship unverified or be looked up by no installer.
+          found=$(find dist -maxdepth 1 -type f | wc -l)
+          if [ "$found" -ne $(( ${#assets[@]} + 1 )) ]; then
+            echo "dist holds $found files; the release takes ${#assets[@]} assets and one sums file"
+            find dist -maxdepth 1 -type f
+            exit 1
+          fi
+          # Every asset the release uploads is named by the sums file, and every
+          # line names a file that is there with the bytes it says.
+          for file in "${assets[@]}"; do
+            if ! grep -q "  ${file##dist/}$" "dist/$sums"; then
+              echo "dist/$sums does not name ${file##dist/}: an install of that target stops at the checksum read"
+              exit 1
+            fi
+          done
+          (cd dist && sha256sum -c --strict "$sums")
+          cat "dist/$sums"
       - name: Upload the binaries and the checksums to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -205,8 +239,14 @@ jobs:
               --title "v${version}" \
               --notes "The control plane v${version}.
 
-Install with \`npx mlsf\` (or \`npx my-little-software-factory\`): the package installs the prebuilt binary for your platform from this release and verifies it against \`factory-${version}.sha256sums\`. The binary needs neither Node nor Bun.
+          Install with \`npx mlsf\` (or \`npx my-little-software-factory\`): the package installs the prebuilt binary for your platform from this release and verifies it against \`factory-${version}.sha256sums\`. The binary needs neither Node nor Bun.
 
-Targets: linux-x64, linux-x64-musl, linux-arm64, linux-arm64-musl, darwin-x64, darwin-arm64, windows-x64."
+          Targets: linux-x64, linux-x64-musl, linux-arm64, linux-arm64-musl, darwin-x64, darwin-arm64, windows-x64."
           fi
-          gh release upload "v${version}" dist/factory-"${version}"-* --clobber
+          # One glob for both: `factory-<version>-*` names the seven binaries
+          # and `factory-<version>.sha256sums` beside them, so the sums file the
+          # installer fetches first is the same file the release job wrote.
+          # `checksumFileName` and `assetFileName` share the `factory-<version>`
+          # stem, and test/release-workflow.test.ts pins that this list covers
+          # every asset name and the sums name alike.
+          gh release upload "v${version}" dist/factory-"${version}"* --clobber

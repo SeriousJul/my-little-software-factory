@@ -30,10 +30,16 @@ package carries.
 them to the GitHub Release beside the checksums file: `linux-x64`,
 `linux-x64-musl`, `linux-arm64`, `linux-arm64-musl`, `darwin-x64`,
 `darwin-arm64`, and `windows-x64`. Each leg compiles on a clean runner with
-only the OpenTUI core of its target installed, so a binary embeds exactly
-the native library it runs. The build stamps the package's version into the
-binary, where the new `factory --version` flag reads it; a source run reads
-the version from the repository's package.json instead.
+only its own operating system's and architecture's OpenTUI cores installed.
+That is one core for `darwin-x64`, `darwin-arm64`, and `windows-x64` and two
+for each Linux target, because `@opentui/core`'s loader names all six platform
+packages in literal dynamic imports and the bundler must resolve every one of
+them whatever `--target` it is given: a tree that holds one Linux core does not
+compile. A Linux binary therefore carries both libc variants, about 6.3 MB of
+native library the machine it runs on never loads. The measured core count and
+byte size per target are in the verification record. The build stamps the
+package's version into the binary, where the new `factory --version` flag reads
+it; a source run reads the version from the repository's package.json instead.
 
 **The npm package complements the binary; the package is the installer.** The
 npm package no longer carries the app's source. It carries
@@ -45,7 +51,10 @@ checksums file, and caches it under the data home
 Windows) in a directory per target, beside an install note that names the
 version, the target, and the digest it was verified against. A second run
 finds the cached binary, checks its bytes against that note, and skips the
-network. `npx mlsf` and `npx my-little-software-factory` stay the
+network. An empty or relative data home from the environment is no data home:
+the run ignores it the way the Config paths do, and a cache never lands in the
+working directory, where a planted binary could arrive with a note that agrees
+with it. `npx mlsf` and `npx my-little-software-factory` stay the
 one command the operator types; a machine with no Bun and no Node of its
 own runs the control plane once the binary is installed, and a machine that
 keeps the binary cached needs neither.
@@ -80,12 +89,25 @@ installer degrades to its readable incomplete-release line.
 - The npm package shrinks to the installer and its decisions. The source
   leaves the tarball; the repository and the docs remain the source of
   truth for the app.
+- Each Linux binary carries the glibc and the musl OpenTUI core, and the dead
+  variant is most of the size difference between a Linux binary and a Darwin or
+  Windows one. It is not a flag the build can drop: measured on this branch,
+  `--external` on the sibling left the artifact byte-for-byte unchanged, and a
+  tree without the sibling failed the compile with an unresolved import.
+  Taking it out needs OpenTUI's loader to stop naming a variant it is not
+  running, which is upstream's change to make. The release accepts the extra
+  6.3 MB, and the record states the core count and the byte size per target.
 - Every update re-downloads the binary for the new version, because the
   install note beside the cached binary names the version it came with. The
   note also names the target and the digest, so a cache that cannot account
   for itself - another machine's note in a shared home, a file written over -
   re-downloads instead of failing every later run. The download is the size
   of the binary for the machine's target, once per version.
+- `--version` is answered by the installer while no binary is cached, and by
+  the binary once one is. The flag exists to work on a machine with no state,
+  so a cold run must not pay for a ~100 MB download to print one line; the
+  installer holds the version it is about to install, and the line is the text
+  the compiled binary prints for the same flag.
 - The shipped Default configuration is embedded in the binary and is seeded
   verbatim, as before: the read that seeds a missing config file is the file
   import's read, which reaches the embedded copy in a compiled binary and

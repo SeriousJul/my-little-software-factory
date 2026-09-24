@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-19
+Superseded in part by ADR 0056: the npm alias no longer bootstraps on Node and re-execs the app under a Bun on the `PATH`; the package installs a prebuilt binary that needs neither runtime. Bun stays the runtime the source run and the release build use, and every other decision here stands.
 
 ## Context
 

@@ -65,12 +65,15 @@ bun run build linux-x64 --out dist
 ```
 
 The build installs the target's OpenTUI native core when it is not already in
-`node_modules`, with `--no-save`, so the compile embeds exactly the one core
-the target runs. Each release leg builds one target on a clean runner
+`node_modules`, with `--no-save`. That add is what makes the core resolvable to
+the bundler, not a size measure: `@opentui/core` names all six platform packages
+in literal dynamic imports, so a Linux leg places both libc variants and its
+binary carries both. Each release leg builds one target on a clean runner
 (`bun install --omit=optional` first), and `bun run build` is the same command
-the leg runs. The app's runtime libraries are development dependencies: the
-binary carries them, and the npm package that installs the binary carries
-nothing but the installer.
+the leg runs; the measured core count and byte size per target are in
+[the release record](../verification/release.md). The app's runtime libraries
+are development dependencies: the binary carries them, and the npm package that
+installs the binary carries nothing but the installer.
 
 ## Shared control gallery
 

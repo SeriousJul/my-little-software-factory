@@ -82,19 +82,22 @@ description: The module map of the source tree, for agents working in this repos
 - `src/binary-install.mjs`: the prebuilt binary's installer, in plain
 	JavaScript because the published package runs it on Node (ADR 0056). The
 	target the machine resolves to, the asset and checksum names, the
-	target-keyed cache path under the data home, the install note beside the
-	binary, the download and its SHA-256 check, and the whole run
-	(`runInstaller`) live here, with the machine's facts, the fetch, and the
-	child process taken as injected values. `test/installer.test.ts` pins them.
+	target-keyed cache path under the data home (an empty or relative data home
+	is no data home), the install note beside the binary, the download and its
+	SHA-256 check, the two download bounds, the cold `--version` answer, and the
+	whole run (`runInstaller`) live here, with the machine's facts, the fetch,
+	the operator's terminal, and the child process taken as injected values.
+	`test/installer.test.ts` pins them.
 - `bin/factory-bin.mjs`: the published bin and nothing else - the machine's
 	real facts, the entry guard that recognizes the path npm's bin shim was
-	started through (both sides realpath'ed), and the process exits the run
-	outcome asks for.
+	started through (both sides realpath'ed), the operator's terminal for the
+	download note, and the process exits the run outcome asks for.
 - `scripts/build-binary.ts`: the release build. `bun run build <target> --out
-	<dir>` compiles one prebuilt binary with `bun build --compile`, installs
-	only that target's OpenTUI native core first, stamps the package version
-	into the binary, and names the asset through the shared `assetFileName` the
-	installer reads.
+	<dir>` compiles one prebuilt binary with `bun build --compile`, installs the
+	target's OpenTUI native cores first - the step that makes them resolvable to
+	the bundler, which is why a Linux artifact carries both libc variants -
+	stamps the package version into the binary, and names the asset through the
+	shared `assetFileName` the installer reads.
 - `test/sample-tickets.ts`: deterministic data used by legacy frame tests only.
 - `src/components/`: the app shell, the ticket list pane, the ticket detail
 	pane, the native ticket detail viewport, the override panel, the decision
