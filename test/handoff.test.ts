@@ -3167,42 +3167,40 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		expect(runner.commands()).toEqual([]);
 	});
 
-	test("a worktree close returns herdr's focus to the control plane's workspace", async () => {
+	test("a worktree close sends no focus command; herdr keeps the operator's view", async () => {
 		const runner = new FakeRunner();
 
 		const failure = await closeHandoffEnvironment(
 			{ environment: "worktree", tabId: "tab-1", workspaceId: "ws-1" },
 			runner,
-			{ controlPlaneWorkspaceId: "ws-cp" },
 		);
 
-		// herdr moves its focus to the repository's parent workspace when a
-		// linked worktree is removed. The operator worked the close from the
-		// control plane, so its workspace is where the view returns.
+		// The control plane never moves herdr's view on its own (ADR 0061).
+		// herdr 0.9.1 keeps each client on the workspace it views, and a close
+		// of a workspace the client is not viewing leaves that view alone, so
+		// there is nothing to return and no focus command follows the removal.
 		expect(failure).toBeUndefined();
-		expect(runner.commands()).toEqual([
-			"herdr worktree remove --workspace ws-1",
-			"herdr workspace focus ws-cp",
-		]);
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
+		expect(runner.commands().join("\n")).not.toContain("workspace focus");
 	});
 
-	test("a tab close leaves herdr's focus where it stood", async () => {
+	test("a tab close sends no focus command", async () => {
 		const runner = new FakeRunner();
 
 		const failure = await closeHandoffEnvironment(
 			{ environment: "live-worktree", tabId: "tab-1", workspaceId: "ws-1" },
 			runner,
-			{ controlPlaneWorkspaceId: "ws-cp" },
 		);
 
 		// The tab close keeps the workspace and the tabs beside it, so herdr
-		// leaves its workspace focus where it stood: the cleanup never issues
+		// leaves the operator's view where it stood: the cleanup never issues
 		// a focus command.
 		expect(failure).toBeUndefined();
 		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
+		expect(runner.commands().join("\n")).not.toContain("focus");
 	});
 
-	test("a left workspace close returns herdr's focus to the control plane's workspace", async () => {
+	test("a left workspace close sends no focus command", async () => {
 		const runner = new FakeRunner();
 		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
 			code: 1,
@@ -3213,38 +3211,34 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		const failure = await closeHandoffEnvironment(
 			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
 			runner,
-			{ controlPlaneWorkspaceId: "ws-home" },
 		);
 
-		// The workspace the fallback closed is gone too: the focus returns to
-		// the control plane.
+		// The fallback workspace close is a close like any other: the plane
+		// names no workspace for its own, so the sequence ends at herdr.
 		expect(failure).toBeUndefined();
 		expect(runner.commands()).toEqual([
 			"herdr worktree remove --workspace ws-1",
 			"herdr workspace close ws-1",
-			"herdr workspace focus ws-home",
 		]);
+		expect(runner.commands().join("\n")).not.toContain("workspace focus");
 	});
 
-	test("a focus failure never fails the close and never retries", async () => {
+	test("a herdr refusal of a close still reports its reason and takes no focus", async () => {
 		const runner = new FakeRunner();
-		runner.set("herdr", ["workspace", "focus", "ws-cp"], {
+		runner.set("herdr", ["worktree", "remove", "--workspace", "ws-1"], {
 			code: 1,
-			stderr: "error: the herdr server is down\n",
+			stderr:
+				'{"error":{"code":"workspace_close_failed","message":"the server is down"},"id":"cli"}\n',
 		});
 
 		const failure = await closeHandoffEnvironment(
 			{ environment: "worktree", tabId: null, workspaceId: "ws-1" },
 			runner,
-			{ controlPlaneWorkspaceId: "ws-cp" },
 		);
 
-		// The environment is gone: the close stands. herdr's own choice of the
-		// focus stands too: the restore gave up after one error.
-		expect(failure).toBeUndefined();
-		expect(runner.commands()).toEqual([
-			"herdr worktree remove --workspace ws-1",
-			"herdr workspace focus ws-cp",
-		]);
+		// Dropping the focus call costs no bookkeeping: a refusal is still one
+		// command and still comes back as the reason the caller reports.
+		expect(failure).toBe("the server is down (workspace_close_failed)");
+		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
 	});
 });

@@ -54,13 +54,15 @@ The first row, "Close", ends the work cycle: the ticket returns to open
 with its cycle number incremented, and the handoff's environment is closed
 without touching the git branch, so pushed work and pull requests survive:
 a worktree handoff loses its worktree checkout and its herdr workspace,
-a live worktree handoff loses its tab.
+a live worktree handoff loses its tab. The close moves herdr's view
+nowhere: it sends no focus command, so the operator keeps watching the pane
+they chose (ADR 0061).
 The second row, "Goto", focuses the agent's pane so the operator can steer
 it; the ticket stays where it is, `awaiting` until the poll moves it or the
 operator decides. The confirmation on the Message line names the workspace
-the pane lives in, since herdr 0.9 keeps each client's own view and a CLI
-focus no longer moves the operator's view (the Live view page carries the
-full note). Goto is navigation, not a completion decision, so the trace
+the pane lives in: the Goto moves herdr's view to that pane, and no other
+act of the plane does (ADR 0061, and the Live view page carries the full
+note). Goto is navigation, not a completion decision, so the trace
 does not record it: the turn's pending trace stays pending, and the next
 settle refreshes it with the agent's new last message.
 The settled turn's transition facts stand above those rows (ADR 0027): one

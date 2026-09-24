@@ -55,7 +55,8 @@ rejection stands.
 
 - The agent runs through herdr (ADR 0002): a live worktree handoff creates a
 	herdr workspace at the checkout with a fresh tab, and a worktree handoff
-	lets herdr create a git worktree first.
+	lets herdr create a git worktree first. Every create states `--no-focus`,
+	so building the environment never takes the operator's view (ADR 0061).
 - A worktree handoff branches `factory/<ticket id>-<title slug>` from the
 	checkout's current `HEAD`. An existing branch is reused: the worktree
 	that holds it is reopened, and a branch no worktree holds is checked out

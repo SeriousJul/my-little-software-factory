@@ -243,8 +243,8 @@ Goto control in the Consultation base modes (`g`) focuses the Agent pane while
 it is alive in the last poll and states its reason otherwise; it is a
 navigation, and it never changes the Consultation. Its confirmation is a
 result on the Message line, never a warning, and it names the workspace
-herdr shows, so the operator can switch herdr's view there: since herdr 0.9
-a CLI focus no longer moves an attached client's view.
+herdr moved the view into: the Goto is the plane's one focus move, and a
+focus request moves every attached client's view (ADR 0061).
 
 The automatic suite covers the record's parsing and caps (`test/turn-log.test.ts`),
 the body's selection and rows (`test/consultation-detail.test.ts`), Goto's
@@ -983,3 +983,73 @@ branch, rebased on origin/main: `bun run lint` and `bun run typecheck` pass,
 and `bun run test` passes in full (1816 pass, 0 skip, 0 fail, 75 files,
 twice in a row, about 38 s per run, on Bun 1.4.2, no concurrent `bun test`
 on the machine), no test skipped.
+
+## The close that moves no view (issue #158, ADR 0061)
+
+The rule is one sentence: the control plane never moves herdr's view on its
+own. It asks for no focus when it builds an environment, and it asks for none
+when it ends one. Goto, key `g`, is the one focus move the plane makes, and
+the operator makes it at the key.
+
+The proof runs at two seams, and neither reaches a herdr session.
+
+The frame seam drives the real screens and reads the command list the injected
+runner recorded (`test/herdr-view-frame.test.ts`). It walks the four flows the
+rule touches: the Close action on a worktree cycle, the Decision screen's
+route close of the settled workspace, the same close for an item that waited
+in the Work queue and runs at the freed seat with no keypress beside it, and
+the Consultation close of a workspace. Each asserts the herdr work that ran
+and that no focus command ran with it. Two more cases stand beside them: the
+Close cleanup herdr refuses still reports its reason on the Message line and
+still records the surviving environment as the ticket's leftover, and Goto
+still asks herdr for the Agent's pane and still names the workspace the view
+landed in. The handoff that follows a route still builds its environment with
+every create stating its `--no-focus`.
+
+The static seam is a declared dependency rule, not a behavior test
+(`test/herdr-view-architecture.test.ts`). It scans the plane's own sources and
+refuses a workspace focus command anywhere in them, refuses a tab or a pane
+focus, allows an agent focus command only at the Goto seam in
+`src/components/app.ts`, refuses a control-plane workspace id (the thread that
+aimed the old compensating call is retired, so no new file can re-add the
+move unnoticed), and refuses a herdr create whose argv does not state its
+no-focus default. The create check reads each argv on its own, so a file that
+says `--no-focus` once and creates elsewhere fails it: that mutation was
+verified to turn the check red, as was re-adding a `workspace focus` after a
+worktree removal, which turns the frame case red.
+
+The unit seams flipped rather than duplicated. The handoff module's Close
+cleanup tests now name the absence, the dispatch rig test that used to require
+the focus command requires its absence, and the Consultation operations
+harness test does the same; each keeps its other assertions.
+
+The herdr facts are read from herdr 0.9.1 source, and ADR 0061 names the two
+places: `src/server/headless/client_views.rs`, where a public-socket request
+moves every attached shell client only for `workspace.focus`, `tab.focus`,
+`pane.focus`, `agent.focus`, and a create that asks for focus, and
+`src/server/clients.rs`, where a client keeps its viewed workspace while that
+workspace exists and falls back to the session focus only when it no longer
+does. The behavior was read from that version; the plane has not been checked
+against a later one.
+
+**Incomplete: the live herdr walk.** The suite cannot observe a window, so no
+test here claims what the operator sees. Two cases stay with the operator on
+herdr 0.9.1, and neither has been run:
+
+1. A Close cleanup of a worktree workspace while another workspace is viewed:
+   herdr's view stays on the workspace the operator was reading, and the two-hop
+   jump to the plane is gone.
+2. A queued route item's close that lands while the view is elsewhere: the view
+   stays where it was, with no keypress beside the close.
+
+Until the operator runs them, this is evidence from the command seam and the
+herdr source, not from a window. The one jump that survives by design is
+herdr's own: when the plane closes the one workspace the client is viewing,
+herdr moves that client, because the workspace it was looking at no longer
+exists.
+
+`bun run lint` and `bun run typecheck` pass. `bun run test` passes in full at
+the pushed state: 2026 pass, 0 skip, 0 fail, 85 files, on Bun 1.4.2, with no
+other `bun test` process on the machine. The screen-reader target remains
+unverified, and the terminal walks recorded earlier in this file have not been
+re-run.

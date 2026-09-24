@@ -29,7 +29,6 @@ import {
 	checkConsultationStart,
 	handOffConsultation,
 	renderConsultationPrompt,
-	restoreControlPlaneFocus,
 } from "./handoff.ts";
 import type { HerdrAgent } from "./herdr.ts";
 import { consultationAgentName } from "./naming.ts";
@@ -113,14 +112,6 @@ export interface ConsultationOperationsOptions {
 	callbacks: ConsultationOperationCallbacks;
 	/** Persist a sibling-clone mapping, when repository resolution creates one. */
 	persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
-	/**
-	 * The workspace the control plane runs in, when it runs inside herdr.
-	 *
-	 * A workspace close moves herdr's focus off the closed workspace, so the
-	 * cleanup returns it here: the operator worked the close from the control
-	 * plane. Outside herdr there is none, and herdr's own choice stands.
-	 */
-	controlPlaneWorkspaceId?: string | null;
 	textBatchBytes?: number;
 }
 
@@ -197,7 +188,6 @@ export class ConsultationOperations {
 	private readonly persistRepositoryMapping?: (
 		mapping: RepositoryMapping,
 	) => Promise<string | undefined>;
-	private readonly controlPlaneWorkspaceId: string | null;
 	private readonly operationQueues = new Map<string, Promise<void>>();
 	private readonly openingOperations = new Set<string>();
 	private readonly closeOperations = new Map<string, CloseOperation>();
@@ -211,7 +201,6 @@ export class ConsultationOperations {
 		this.tickets = options.tickets;
 		this.callbacks = options.callbacks;
 		this.persistRepositoryMapping = options.persistRepositoryMapping;
-		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId ?? null;
 		this.inputQueue = new ConsultationInputQueue(this.runner, options.textBatchBytes);
 	}
 
@@ -695,13 +684,9 @@ export class ConsultationOperations {
 				const result = await this.runner.run("herdr", plan.command);
 				if (result.code !== 0) throw new Error(commandFailureText(result));
 				if (operation.cancelled) return;
-				// A closed workspace moves herdr's focus (a linked worktree
-				// removal lands on the repository's parent, a closed workspace
-				// on a neighbor): return it to the control plane, where the
-				// operator worked the close. A tab or pane close keeps the
-				// workspace, so herdr's focus stands.
-				if (plan.command[0] === "workspace")
-					await restoreControlPlaneFocus(this.runner, this.controlPlaneWorkspaceId);
+				// A close sends no focus command, whatever it takes down: the plane
+				// never moves herdr's view on its own (ADR 0061), and a close of a
+				// workspace the client is not viewing leaves that view alone.
 				if (operation.cancelled) return;
 				for (const resource of plan.closes)
 					this.state.markConsultationResourceClosed(current.id, resource.kind, resource.resourceId);

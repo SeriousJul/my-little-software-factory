@@ -281,12 +281,8 @@ function realRunner(): CommandRunner {
 	return lazyRealRunner;
 }
 
-// The workspace the control plane runs in, when it runs inside a herdr pane.
-// A close cleanup that removes a workspace returns herdr's focus here,
-// because the operator worked the close from the control plane and herdr
-// moves the focus when a workspace disappears. Outside herdr the id is null
-// and herdr's own choice stands.
-const CONTROL_PLANE_WORKSPACE_ID = process.env.HERDR_WORKSPACE_ID ?? null;
+// The workspace the control plane runs in is never named: the plane sends no
+// herdr workspace focus command, so it holds no id to aim one with (ADR 0061).
 
 export function App({
 	config: configProp,
@@ -1036,7 +1032,6 @@ export function App({
 			config: () => configRef.current,
 			home: homeDir,
 			tickets: () => ticketsRef.current,
-			controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
 				onStatus: setStatus,
@@ -1077,7 +1072,6 @@ export function App({
 					consultationOperationsRef.current?.pickup(consultationId) ??
 					Promise.resolve({ kind: "moved" } as const),
 				home: homeDir,
-				controlPlaneWorkspaceId: CONTROL_PLANE_WORKSPACE_ID,
 				working: (text) => setWorkingMessage(text, "handoff"),
 				warning: setWarningMessage,
 				error: setErrorMessage,
@@ -1476,10 +1470,10 @@ export function App({
 	/**
 	 * The label of one workspace in herdr's own navigator.
 	 *
-	 * Herdr 0.9 keeps one view per attached client, so a CLI focus no longer
-	 * moves the operator's view. A Goto confirmation names the workspace herdr
-	 * shows, and the operator switches there. A read that fails names nothing:
-	 * the line keeps its old shape rather than stating a wrong fact.
+	 * A Goto moves every herdr client's view to the pane it names (ADR 0061),
+	 * and the confirmation still names the workspace so the operator can say
+	 * where the view landed. A read that fails names nothing: the line keeps
+	 * its old shape rather than stating a wrong fact.
 	 */
 	const workspaceLabelOf = async (workspaceId: string): Promise<string | null> => {
 		const result = await commandRunner.run("herdr", ["workspace", "get", workspaceId]);
@@ -1521,10 +1515,10 @@ export function App({
 			}
 			// The Live view closes on a Goto, so the confirmation stands on the
 			// Message line as a result, never as a warning. A Goto records no
-			// trace, and a Handoff or refresh still running stands alone. The
-			// line names the workspace, and the operator switches herdr's view
-			// there: since herdr 0.9 a CLI focus no longer moves an attached
-			// client's view.
+			// trace, and a Handoff or refresh still running stands alone. The line
+			// names the workspace herdr moved every client's view into (ADR 0061):
+			// Goto is the one focus move the plane makes, and the operator asked
+			// for it at the key.
 			const workspaceId = ticket.handoff?.workspaceId ?? null;
 			const label = workspaceId === null ? null : await workspaceLabelOf(workspaceId);
 			reportMessage({
@@ -2697,9 +2691,9 @@ export function App({
 					if (selected === undefined || selected.paneId === null) return;
 					// Navigation only (ADR 0025): the Consultation record stays
 					// untouched, and the confirmation stands on the Message line
-					// as a result, never as a warning. Since herdr 0.9 a CLI
-					// focus no longer moves an attached client's view, so the
-					// line names the workspace the operator switches to.
+					// as a result, never as a warning. The Goto moves herdr's view
+					// to the Agent's pane (ADR 0061), and the line names the
+					// workspace it landed in.
 					void commandRunner
 						.run("herdr", ["agent", "focus", selected.paneId])
 						.then(async (result) => {

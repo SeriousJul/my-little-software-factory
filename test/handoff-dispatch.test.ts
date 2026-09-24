@@ -1521,16 +1521,17 @@ describe("the Close cleanup", () => {
 		]);
 	});
 
-	test("a cleanup returns herdr's focus to the workspace the operator works in", async () => {
+	test("a cleanup moves herdr's view nowhere: it sends no focus command", async () => {
 		const rigRef = rig();
 		const stored = seedClosedHandoff(rigRef, FIRST, worktreeChoice);
-		const dispatch = withRunner(rigRef, rigRef.runner, {
-			controlPlaneWorkspaceId: "ws-control-plane",
-		});
-		await expect(dispatch.closeCleanup(FIRST.identity, stored, "closed")).resolves.toBeUndefined();
-		// herdr moved its focus when the workspace disappeared: the cleanup
-		// brings it back to the control plane.
-		expect(rigRef.commands()).toContain("herdr workspace focus ws-control-plane");
+		await expect(
+			rigRef.dispatch.closeCleanup(FIRST.identity, stored, "closed"),
+		).resolves.toBeUndefined();
+		// The workspace is gone and the plane says nothing about where herdr's
+		// view should go: it never moves the operator on its own (ADR 0061),
+		// and it holds no id for the workspace it runs in.
+		expect(rigRef.commands()).toContain("herdr worktree remove --workspace ws-1");
+		expect(rigRef.commands().join("\n")).not.toContain("workspace focus");
 	});
 });
 

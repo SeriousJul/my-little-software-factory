@@ -353,8 +353,8 @@ It records the resources that might remain and never removes a worktree or branc
 _Avoid_: abandon, force delete
 
 **Goto**:
-The control that focuses the Agent's pane in herdr from a Ticket or Consultation row, key `g` in both sections.
-It is navigation: it changes no ticket, work cycle, or Consultation record.
+The control that moves herdr's view to the Agent's pane from a Ticket or Consultation row, key `g` in both sections.
+It is navigation: it changes no ticket, work cycle, or Consultation record. It is the one focus move the control plane makes, and the only one the operator asked for at a key (ADR 0061). Its confirmation names the workspace the view landed in.
 _Avoid_: jump, follow, attach
 
 **Handoff**:
@@ -530,6 +530,16 @@ The workspace, tab, or Agent of a ticket's closed Handoff that Herdr still holds
 It is a durable fact on the ticket, visible in its row and in its detail, and its cleanup runs in herdr, not in the control plane.
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
+
+**herdr view**:
+What one herdr client shows: the workspace that client is looking at, in its own window.
+Each client keeps its own view, and a view persists while the workspace it shows exists. A focus request that arrives from outside a client (a CLI command, an Agent, the control plane) moves every attached client's view, never one client's alone: herdr has no command that aims a view at a single client. The control plane never moves a view on its own (ADR 0061); the one move it makes is the Goto, at the operator's key. The surviving exception is herdr's own: when the workspace a client is viewing stops existing, that client falls back to the session focus.
+_Avoid_: focus, screen, pane, window, session focus
+
+**Session focus**:
+The workspace herdr's server treats as active.
+It is not any client's herdr view: a client keeps its own view while that workspace exists, and a client that is not viewing a workspace is not moved by what the session focus does. The control plane reads no fact of the session focus. Its close, its reuse, its grouping, and its naming all go by the workspace, tab, or pane id the plane recorded, or by a checkout path, so where the session focus lands after a close is harmless to the plane's work (ADR 0061).
+_Avoid_: herdr view, current workspace, active pane, focus
 
 **Placement**:
 The label write the control plane makes when a manual Handoff's final task type differs from the task the ticket's position suggests: it places the ticket on the state that offers the chosen task type (ADR 0045).

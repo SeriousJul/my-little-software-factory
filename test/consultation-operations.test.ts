@@ -259,7 +259,6 @@ function makeHarness(
 	fixture: Fixture,
 	runner: CommandRunner,
 	options: {
-		controlPlaneWorkspaceId?: string | null;
 		home?: string;
 		tickets?: () => readonly Ticket[];
 		persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
@@ -277,7 +276,6 @@ function makeHarness(
 			config: () => fixture.config,
 			home: options.home ?? fixture.home,
 			tickets: options.tickets ?? (() => []),
-			controlPlaneWorkspaceId: options.controlPlaneWorkspaceId ?? null,
 			persistRepositoryMapping: options.persistRepositoryMapping,
 			textBatchBytes: options.textBatchBytes,
 			callbacks: {
@@ -1471,7 +1469,7 @@ describe("Consultation operations: close", () => {
 			[LAUNCH.tabId],
 			[{ pane_id: LAUNCH.paneId, tab_id: LAUNCH.tabId }],
 		);
-		const harness = makeHarness(fixture, runner, { controlPlaneWorkspaceId: "ws-control" });
+		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.close(consultation);
 
@@ -1481,8 +1479,10 @@ describe("Consultation operations: close", () => {
 			`herdr tab list --workspace ${LAUNCH.workspaceId}`,
 			`herdr pane list --workspace ${LAUNCH.workspaceId}`,
 			`herdr workspace close ${LAUNCH.workspaceId}`,
-			"herdr workspace focus ws-control",
 		]);
+		// The plane never follows a close with a focus command: herdr keeps
+		// each client on the workspace it views (ADR 0061).
+		expect(runner.commands().join("\n")).not.toContain("focus");
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		// The worktree and its branch survive: retained, never removed.
@@ -1508,13 +1508,13 @@ describe("Consultation operations: close", () => {
 			[LAUNCH.tabId, "tab-foreign"],
 			[{ pane_id: LAUNCH.paneId, tab_id: LAUNCH.tabId }],
 		);
-		const harness = makeHarness(fixture, runner, { controlPlaneWorkspaceId: "ws-control" });
+		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.close(consultation);
 
 		expect(runner.commands()).toContain(`herdr tab close ${LAUNCH.tabId}`);
 		expect(runner.commands().join("\n")).not.toContain("workspace close");
-		expect(runner.commands().join("\n")).not.toContain("workspace focus");
+		expect(runner.commands().join("\n")).not.toContain("focus");
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		expect(closed.resources.find((r) => r.kind === "workspace")).toMatchObject({ owned: false });
