@@ -533,6 +533,12 @@ It is a durable fact on the ticket, visible in its row and in its detail, and it
 It never blocks a Handoff of that ticket.
 _Avoid_: orphaned agent, zombie workspace, stale checkout
 
+**Leftover worktree directory**:
+The directory Herdr's naming rule reserves for a Branch, standing on disk after Git stopped recording the worktree that held it.
+It blocks a fresh worktree for that Branch, and it is no tool's to remove: the control plane moves it aside under a name that says what it is, and never deletes it (ADR 0062).
+It is not a Leftover environment, which is a workspace, tab, or Agent Herdr still holds.
+_Avoid_: stale checkout, orphaned worktree, ghost directory
+
 **herdr view**:
 What one herdr client shows: the workspace that client is looking at, in its own window.
 Each client keeps its own view, and a view persists while the workspace it shows exists. A focus request that arrives from outside a client (a CLI command, an Agent, the control plane) moves every attached client's view, never one client's alone: herdr has no command that aims a view at a single client. The control plane never moves a view on its own (ADR 0061); the one move it makes is the Goto, at the operator's key. The surviving exception is herdr's own: when the workspace a client is viewing stops existing, that client falls back to the session focus.

@@ -7,8 +7,8 @@
  * real herdr session.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -143,6 +143,89 @@ function stubRemoteDefaultBranch(runner: FakeRunner, branch = "main"): void {
 	runner.set("git", ["-C", CHECKOUT, "symbolic-ref", "refs/remotes/origin/HEAD"], {
 		stdout: `refs/remotes/origin/${branch}\n`,
 	});
+}
+
+/**
+ * The absolute path herdr's naming rule gives the ticket's worktree checkout.
+ *
+ * The file's `WORKTREE_PATH` constant is built before the temp home exists, so
+ * it is the path the fake herdr answers carry. A test that stands a real
+ * directory on disk reads this one instead.
+ */
+function ticketWorktreePath(): string {
+	return join(HOME, "worktrees", "billing", "factory-7-retry-policy-for-webhooks");
+}
+
+/**
+ * The herdr answer for a create git refuses because the checkout path stands:
+ * the stable code, and Git's whole stderr as the message.
+ */
+function worktreeCreateBlocked(path: string): { code: number; stderr: string } {
+	return {
+		code: 1,
+		stderr:
+			'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/7-retry-policy-for-webhooks\')' +
+			`\\nfatal: '${path}' already exists` +
+			'"},"id":"cli:worktree:create"}\n',
+	};
+}
+
+/**
+ * The worktree list that names the directory herdr will use for the ticket's
+ * branch, without holding that directory: the repository's other linked
+ * worktree gives the parent, the same way ADR 0046 reads it.
+ */
+function siblingWorktreeList(): string {
+	return worktreeListJson([
+		{ path: CHECKOUT, linked: false },
+		{
+			path: join(HOME, "worktrees", "billing", "factory-6-another-ticket"),
+			branch: "factory/6-another-ticket",
+		},
+	]);
+}
+
+/** Stand one directory up with the entries a removed checkout leaves behind. */
+function makeDirectory(path: string, entries: Record<string, string>): void {
+	for (const name of Object.keys(entries)) {
+		const full = join(path, name);
+		mkdirSync(join(full, ".."), { recursive: true });
+		writeFileSync(full, entries[name]);
+	}
+}
+
+/** The reuse sequence up to its fresh create: the branch exists, no worktree holds it. */
+function reuseToFreshCreate(runner: FakeRunner): void {
+	runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+		stdout: "  factory/7-retry-policy-for-webhooks\n",
+	});
+	runner.set(
+		"herdr",
+		[
+			"worktree",
+			"open",
+			"--cwd",
+			CHECKOUT,
+			"--branch",
+			"factory/7-retry-policy-for-webhooks",
+			"--no-focus",
+		],
+		{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+	);
+	runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], { stdout: siblingWorktreeList() });
+}
+
+/** The create argv the reuse sequence sends for the ticket's branch. */
+function createOnBranch(): string[] {
+	return [
+		"worktree",
+		"create",
+		"--cwd",
+		CHECKOUT,
+		"--branch",
+		"factory/7-retry-policy-for-webhooks",
+		"--no-focus",
+	];
 }
 
 /** A Consultation record, as the state hands it to its own start. */
@@ -1728,6 +1811,201 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(outcome.status).toBe("failed");
 		expect(reasonOf(outcome)).toContain("the worktree will not open");
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree create"));
+	});
+});
+
+describe("handOffTicket: the leftover worktree directory that blocks a create", () => {
+	afterEach(() => {
+		rmSync(join(HOME, "worktrees"), { recursive: true, force: true });
+	});
+
+	test("the plane moves the leftover aside, creates again, and starts the agent", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		reuseToFreshCreate(runner);
+		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
+		runner.setSequence("herdr", createOnBranch(), [
+			worktreeCreateBlocked(ticketWorktreePath()),
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		]);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The create ran twice: the refusal, the move, then the same ask.
+		expect(
+			runner.commands().filter((command) => command.includes("worktree create --cwd")),
+		).toHaveLength(2);
+		// Nothing was deleted: the leftover stands whole under the name that says so.
+		expect(existsSync(ticketWorktreePath())).toBe(false);
+		expect(readFileSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
+			"cache",
+		);
+		expect(outcome.notes?.leftoverWorktree).toBe(
+			`the plane moved the leftover worktree directory ${ticketWorktreePath()} aside to ${ticketWorktreePath()}.leftover`,
+		);
+	});
+
+	test("a second leftover takes the next free name, so the first stays where it is", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		reuseToFreshCreate(runner);
+		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "second" });
+		makeDirectory(`${ticketWorktreePath()}.leftover`, { ".docusaurus/routes.js": "first" });
+		runner.setSequence("herdr", createOnBranch(), [
+			worktreeCreateBlocked(ticketWorktreePath()),
+			{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+		]);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		expect(readFileSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`, "utf8")).toBe(
+			"first",
+		);
+		expect(readFileSync(`${ticketWorktreePath()}.leftover-2/.docusaurus/routes.js`, "utf8")).toBe(
+			"second",
+		);
+	});
+
+	test("a refusal with no leftover directory beside it runs one create and moves nothing", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		reuseToFreshCreate(runner);
+		runner.set("herdr", createOnBranch(), worktreeCreateBlocked(ticketWorktreePath()));
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("already exists");
+		expect(runner.commands().filter((command) => command.includes("worktree create"))).toHaveLength(
+			1,
+		);
+		expect(outcome.notes?.leftoverWorktree).toBeUndefined();
+	});
+
+	test("an empty directory blocks nothing, so the plane leaves it and its refusal alone", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		reuseToFreshCreate(runner);
+		mkdirSync(ticketWorktreePath(), { recursive: true });
+		runner.set("herdr", createOnBranch(), worktreeCreateBlocked(ticketWorktreePath()));
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		// git takes an empty directory, so that refusal is about something else.
+		expect(existsSync(ticketWorktreePath())).toBe(true);
+		expect(existsSync(`${ticketWorktreePath()}.leftover`)).toBe(false);
+	});
+
+	test("a path git still records is herdr's to clear: the plane never moves it", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		reuseToFreshCreate(runner);
+		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
+		// git's list holds the ticket's own path, and prunes it: a stale record,
+		// not an untracked directory.
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], {
+			stdout: worktreeListJson([
+				{ path: CHECKOUT, linked: false },
+				{
+					path: ticketWorktreePath(),
+					branch: "factory/7-retry-policy-for-webhooks",
+					prunable: true,
+				},
+			]),
+		});
+		runner.set("herdr", createOnBranch(), {
+			code: 1,
+			stderr:
+				'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/7-retry-policy-for-webhooks\')' +
+				`\\nfatal: '${ticketWorktreePath()}' is a missing but already registered worktree;` +
+				"\\nuse 'add -f' to override, or 'prune' or 'remove' to clear\"},\"id\":\"cli:worktree:create\"}\n",
+		});
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(reasonOf(outcome)).toContain("already registered worktree");
+		expect(existsSync(`${ticketWorktreePath()}.leftover`)).toBe(false);
+		expect(readFileSync(join(ticketWorktreePath(), ".docusaurus/routes.js"), "utf8")).toBe("cache");
+	});
+
+	test("a path that holds a .git entry is a checkout: the plane never moves it", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		reuseToFreshCreate(runner);
+		makeDirectory(ticketWorktreePath(), {
+			".git": "gitdir: /somewhere/worktrees/x",
+			"src/app.ts": "the work",
+		});
+		runner.set("herdr", createOnBranch(), worktreeCreateBlocked(ticketWorktreePath()));
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		expect(existsSync(`${ticketWorktreePath()}.leftover`)).toBe(false);
+		expect(existsSync(join(ticketWorktreePath(), ".git"))).toBe(true);
+	});
+
+	test("the fresh create on a new branch takes the same recovery", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "",
+		});
+		stubRemoteDefaultBranch(runner);
+		runner.set("herdr", ["worktree", "list", "--cwd", CHECKOUT], { stdout: siblingWorktreeList() });
+		makeDirectory(ticketWorktreePath(), { ".docusaurus/routes.js": "cache" });
+		runner.setSequence(
+			"herdr",
+			[...createOnBranch().slice(0, 6), "--base", "origin/main", "--no-focus"],
+			[
+				worktreeCreateBlocked(ticketWorktreePath()),
+				{ stdout: worktreeCreateJson("ws-wt", "pane-wt") },
+			],
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("ok");
+		// The retry asks the same create, the worktree base and all.
+		expect(runner.commands().filter((command) => command.includes("worktree create"))).toHaveLength(
+			2,
+		);
+		expect(
+			runner.commands().filter((command) => command.includes("--base origin/main")),
+		).toHaveLength(2);
+		expect(existsSync(`${ticketWorktreePath()}.leftover/.docusaurus/routes.js`)).toBe(true);
 	});
 });
 

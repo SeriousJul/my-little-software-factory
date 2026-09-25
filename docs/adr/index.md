@@ -70,3 +70,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0059: A Group presents the attention order and never a new sort](./0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)
 - [ADR 0060: An operator ignores a ticket out of the factory's way](./0060-an-operator-ignores-a-ticket-out-of-the-factorys-way.md)
 - [ADR 0061: The control plane never moves herdr's view on its own](./0061-the-control-plane-never-moves-herdr-s-view-on-its-own.md)
+- [ADR 0062: The plane moves a leftover worktree directory aside, and never deletes it](./0062-the-plane-moves-a-leftover-worktree-directory-aside-and-never-deletes-it.md)

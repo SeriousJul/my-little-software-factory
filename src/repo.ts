@@ -56,6 +56,12 @@ export interface ResolutionNotes {
 	 * names the base actually used (ref name plus short sha) and the reason.
 	 */
 	worktreeBase?: string;
+	/**
+	 * A leftover worktree directory stood where herdr needed to create the
+	 * ticket's checkout; the note names both paths, because the plane moves
+	 * that directory aside and never deletes it.
+	 */
+	leftoverWorktree?: string;
 }
 
 /** A repository resolved to a checkout path on this machine. */

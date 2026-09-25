@@ -1099,6 +1099,9 @@ export class ConsultationOperations {
 			...(outcome.status === "ok" && outcome.notes?.worktreeBase !== undefined
 				? [outcome.notes.worktreeBase]
 				: []),
+			// The moved directory is a fact on the operator's disk whether or not
+			// the start landed, so this line carries no status gate.
+			...(outcome.notes?.leftoverWorktree === undefined ? [] : [outcome.notes.leftoverWorktree]),
 		];
 		if (outcome.status === "failed") {
 			this.state.failConsultationOpening(consultation.id, lines.join("; ") || outcome.reason);

@@ -1209,6 +1209,44 @@ describe("the outcome wording", () => {
 		]);
 	});
 
+	test("a moved leftover checkout says so on a clean outcome", async () => {
+		const line = sink();
+		await reportHandoffOutcome(
+			{
+				status: "ok",
+				agent,
+				notes: {
+					leftoverWorktree:
+						"the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
+				},
+			},
+			line.reports,
+		);
+		expect(line.events).toEqual([
+			"clear-working",
+			"warning:the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
+		]);
+	});
+
+	test("a moved leftover checkout still says so when the start failed beside it", async () => {
+		const line = sink();
+		await reportHandoffOutcome(
+			{
+				status: "failed",
+				reason: "herdr is unavailable",
+				notes: {
+					leftoverWorktree:
+						"the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
+				},
+			},
+			line.reports,
+		);
+		expect(line.events).toEqual([
+			"clear-working",
+			"error:herdr is unavailable; the plane moved the leftover worktree directory /w/x aside to /w/x.leftover",
+		]);
+	});
+
 	test("a failed outcome reports its own reason, and never the note it carried", async () => {
 		const line = sink();
 		await reportHandoffOutcome(

@@ -34,6 +34,12 @@
  * attempt left behind. It never deletes a branch that pre-dates the
  * handoff: that branch may hold the ticket's earlier work.
  *
+ * One residue is not a herdr environment at all, and no tool clears it: the
+ * directory herdr named for a branch can stay on disk after git stopped
+ * recording the checkout it held, and git then refuses every create on the
+ * path the naming rule reserves. The handoff moves that directory aside, and
+ * never deletes one: see ADR 0062 and `moveLeftoverWorktreeDirectory`.
+ *
  * The Close cleanup of a finished work cycle is a different cut: it removes
  * the worktree checkout but never the branch, so pushed work and pull
  * requests survive. See closeHandoffEnvironment. It can fail: herdr refuses
@@ -45,6 +51,7 @@
  */
 import type { FactoryConfig, TransitionPin } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
+import { fileExists, movePath, readDirectoryNames } from "./fs.ts";
 import { failureLine } from "./lines.ts";
 import {
 	branchNameFor,
@@ -665,7 +672,7 @@ async function startConsultationWorktree(
 	const base = await freshWorktreeBase(checkout, ctx.runner);
 	if ("fail" in base) return failed(base.fail, ctx) as ConsultationHandoffOutcome;
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
-	const created = await ctx.runner.run("herdr", [
+	const created = await createWorktree(ctx, checkout, branch, [
 		"worktree",
 		"create",
 		"--cwd",
@@ -1013,7 +1020,7 @@ async function startWorktreeHandoff(
 	const base = await freshWorktreeBase(checkout, ctx.runner);
 	if ("fail" in base) return failed(base.fail, ctx);
 	if (base.note !== undefined) ctx.notes = { ...ctx.notes, worktreeBase: base.note };
-	const created = await ctx.runner.run("herdr", [
+	const created = await createWorktree(ctx, checkout, branch, [
 		"worktree",
 		"create",
 		"--cwd",
@@ -1125,7 +1132,7 @@ async function startReusedBranchHandoff(
 		}
 	}
 	// No worktree holds the branch: check it out into a fresh worktree.
-	const created = await ctx.runner.run("herdr", [
+	const created = await createWorktree(ctx, checkout, branch, [
 		"worktree",
 		"create",
 		"--cwd",
@@ -1168,6 +1175,16 @@ async function startReusedBranchHandoff(
 	);
 }
 
+/** The numbered `.leftover-<n>` names one leftover directory may ask for. */
+const LEFTOVER_PATH_TAKES = 20;
+
+/** One `herdr worktree list` entry, as the list writes it. */
+interface WorktreeListEntry {
+	readonly path: string;
+	readonly is_linked_worktree?: unknown;
+	readonly is_prunable?: unknown;
+}
+
 /**
  * The path the ticket's worktree stands in, when the branch lookup found
  * nothing: herdr names a worktree checkout after the branch it was made
@@ -1190,22 +1207,142 @@ async function findTicketWorktreePath(
 	branch: string,
 	ctx: HandoffContext,
 ): Promise<string | null> {
+	const paths = await readTicketWorktreePaths(checkout, branch, ctx);
+	return paths.standingPath;
+}
+
+/**
+ * One `herdr worktree create`, and the one recovery a blocked path allows.
+ *
+ * git refuses to check a branch out over a directory that holds anything, and
+ * that is how a ticket can stop for good: the checkout herdr made for the
+ * branch is gone from git, while the directory it held stays behind with a
+ * build cache in it (an Agent's dev server recreates the path after the
+ * removal). The branch then exists, no worktree holds it, and every create
+ * answers the same way, so the ticket can never run again.
+ *
+ * The plane answers that refusal once, and answers it without destroying
+ * anything: it moves the leftover directory aside under a name that states
+ * what it is, then asks herdr for the create again. A refusal that has no
+ * such directory beside the branch's own name is left exactly as it came
+ * back, and the second create's answer is the one the handoff reports.
+ */
+async function createWorktree(
+	ctx: HandoffContext,
+	checkout: string,
+	branch: string,
+	argv: readonly string[],
+): Promise<CommandResult> {
+	const created = await ctx.runner.run("herdr", argv);
+	if (created.code === 0) {
+		return created;
+	}
+	const moved = await moveLeftoverWorktreeDirectory(checkout, branch, ctx);
+	if (moved === null) {
+		return created;
+	}
+	ctx.notes = { ...ctx.notes, leftoverWorktree: moved.note };
+	return await ctx.runner.run("herdr", argv);
+}
+
+/**
+ * Move the leftover directory at one branch's own worktree path aside.
+ *
+ * Three answers must hold before the plane touches a path in the operator's
+ * home, and each one closes a door it must not walk through:
+ *
+ * - The naming rule must name the path. A worktree list that does not read
+ *   keeps every directory where it is, the same way it keeps the reopen
+ *   lookup silent (ADR 0046).
+ * - git must hold no record of the path. A recorded worktree, prunable or
+ *   not, is herdr's to open or remove: the reopen by path already took the
+ *   standing one, and `git worktree remove` is the answer for a stale
+ *   record, not a rename by the plane.
+ * - The directory must hold no `.git` entry, and must hold something. An
+ *   empty directory is no block at all, so a refusal beside it is about
+ *   something else; a directory with a `.git` entry is a checkout, and the
+ *   plane never moves a checkout (ADR 0012).
+ *
+ * The new name is `<path>.leftover`, then `<path>.leftover-2` and up, at the
+ * first free slot: a second leftover from the same ticket stays whole rather
+ * than land on top of the first.
+ *
+ * The list is read again here, after the refusal. The reuse sequence's read
+ * came before the create, and what this rule needs is the state the create
+ * actually met.
+ */
+async function moveLeftoverWorktreeDirectory(
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+): Promise<{ readonly from: string; readonly to: string; readonly note: string } | null> {
+	const paths = await readTicketWorktreePaths(checkout, branch, ctx);
+	const from = paths.candidate;
+	if (from === null || paths.recorded) {
+		return null;
+	}
+	const entries = await readDirectoryNames(from);
+	if (entries === null || entries.length === 0 || entries.includes(".git")) {
+		return null;
+	}
+	const to = await freeLeftoverPath(from);
+	if (to === null || !(await movePath(from, to))) {
+		return null;
+	}
+	return {
+		from,
+		to,
+		note: `the plane moved the leftover worktree directory ${from} aside to ${to}`,
+	};
+}
+
+/** The first free `<path>.leftover[-<n>]` beside one worktree path. */
+async function freeLeftoverPath(path: string): Promise<string | null> {
+	const first = `${path}.leftover`;
+	if (!(await fileExists(first))) {
+		return first;
+	}
+	for (let take = 2; take <= LEFTOVER_PATH_TAKES + 1; take += 1) {
+		const candidate = `${path}.leftover-${take}`;
+		if (!(await fileExists(candidate))) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+/**
+ * What herdr's worktree list and the checkout answer about one branch's
+ * worktree path. The naming rule gives one path, and three facts come back
+ * from it: the path itself, whether a worktree git still prunes-free stands
+ * there, and whether git holds any record of it at all.
+ *
+ * A list that does not read answers nothing: `candidate` and `standingPath`
+ * stay null and `recorded` stays false, so a caller neither reopens a path it
+ * cannot name nor moves a directory it cannot place.
+ */
+async function readTicketWorktreePaths(
+	checkout: string,
+	branch: string,
+	ctx: HandoffContext,
+): Promise<TicketWorktreePaths> {
+	const empty: TicketWorktreePaths = { candidate: null, standingPath: null, recorded: false };
 	const listed = await ctx.runner.run("herdr", ["worktree", "list", "--cwd", checkout]);
 	if (listed.code !== 0) {
-		return null;
+		return empty;
 	}
 	let data: unknown;
 	try {
 		data = JSON.parse(listed.stdout);
 	} catch {
-		return null;
+		return empty;
 	}
 	const worktrees = (data as { result?: { worktrees?: unknown } }).result?.worktrees;
 	if (!Array.isArray(worktrees)) {
-		return null;
+		return empty;
 	}
 	const entries = worktrees.filter(
-		(entry): entry is { path: string; is_linked_worktree?: unknown; is_prunable?: unknown } =>
+		(entry): entry is WorktreeListEntry =>
 			typeof entry === "object" &&
 			entry !== null &&
 			typeof (entry as { path?: unknown }).path === "string",
@@ -1214,19 +1351,32 @@ async function findTicketWorktreePath(
 	// this repository; the candidate sits in it under the branch's name.
 	const linked = entries.find((entry) => entry.is_linked_worktree === true);
 	if (linked === undefined) {
-		return null;
+		return empty;
 	}
 	const parent = linked.path.slice(0, linked.path.lastIndexOf("/"));
 	if (parent === "") {
-		return null;
+		return empty;
 	}
 	const candidate = `${parent}/${branch.replaceAll("/", "-")}`;
-	return entries.some(
+	const standing = entries.some(
 		(entry) =>
 			entry.path === candidate && entry.is_linked_worktree === true && entry.is_prunable !== true,
-	)
-		? candidate
-		: null;
+	);
+	return {
+		candidate,
+		standingPath: standing ? candidate : null,
+		recorded: entries.some((entry) => entry.path === candidate),
+	};
+}
+
+/** The three answers one branch's worktree path gives. */
+interface TicketWorktreePaths {
+	/** The path the naming rule gives the branch, or null when no parent reads. */
+	candidate: string | null;
+	/** That path, when a worktree git does not prune stands in it. */
+	standingPath: string | null;
+	/** Whether git's own list holds the path, prunable or not. */
+	recorded: boolean;
 }
 
 /**

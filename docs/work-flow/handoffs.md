@@ -65,6 +65,13 @@ rejection stands.
 	is reopened by its path, on the branch it holds, instead (ADR 0046).
 	A worktree handoff that fails before the agent starts removes the
 	worktree and the branch, so a retry can run.
+	When herdr's own path for the branch stands on disk with no worktree in
+	it - what a build cache leaves behind after a checkout is removed - the
+	plane moves that directory aside to `<path>.leftover`, creates the
+	worktree again, and names both paths on the Message line. It never
+	deletes one: untracked work and a build cache look the same from outside
+	(ADR 0062). A path git still records, or one that holds a `.git` entry,
+	is left exactly where it is.
 - The agent starts under the title slug as its herdr name, with the settings
 	the agent type maps (model, thinking level, context window), and receives
 	the prompt rendered from the task type's template with the ticket's
