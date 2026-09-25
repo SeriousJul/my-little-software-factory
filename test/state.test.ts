@@ -1785,13 +1785,13 @@ describe("factory SQLite state", () => {
 			expect(ticket.ignoredAt).toBeNull();
 
 			expect(state.setTicketIgnored(ticket.identity, true, null)).toEqual({ ok: true });
-			expect(state.ticketIgnored(ticket.identity)).toBe(true);
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
 			state.close();
 
 			// A second plane on the same file - another operator, or a restart -
 			// reads the same answer, and the row's projection carries it.
 			const reopened = openFactoryState(path);
-			expect(reopened.ticketIgnored(ticket.identity)).toBe(true);
+			expect(reopened.ignoredTickets().has(ticket.identity)).toBe(true);
 			expect(reopened.visibleTickets([], "implement")).toEqual([]);
 			expect(reopened.projectedTickets([], "implement")).toEqual([
 				expect.objectContaining({
@@ -1818,11 +1818,11 @@ describe("factory SQLite state", () => {
 			// The source stops listing the item: the membership goes inactive,
 			// and the ticket row stays with its flag.
 			state.applyFetch(sourceA, success([]));
-			expect(state.ticketIgnored(ticket.identity)).toBe(true);
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
 			// The item returns to the source: the same identity reads ignored, and
 			// the active view holds it out again.
 			state.applyFetch(sourceA, success([fetched()]));
-			expect(state.ticketIgnored(ticket.identity)).toBe(true);
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
 			expect(state.visibleTickets([], "implement")).toEqual([]);
 			expect(state.visibleTickets([], "implement", "ignored").map((row) => row.identity)).toEqual([
 				ticket.identity,
@@ -1900,12 +1900,12 @@ describe("factory SQLite state", () => {
 			// ADR 0060: nothing but the operator's own key clears the flag. The row's
 			// face is what the list rule reads, so a live or awaiting Ticket keeps its
 			// row while the flag stands, and a resting one loses it again.
-			expect(state.ticketIgnored(ticket.identity)).toBe(true);
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
 			expect(state.visibleTickets([], "implement").map((row) => row.identity)).toEqual([
 				ticket.identity,
 			]);
 			state.closeWorkCycle(ticket.identity);
-			expect(state.ticketIgnored(ticket.identity)).toBe(true);
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
 			expect(state.visibleTickets([], "implement")).toEqual([]);
 			// Taking the Ticket back is never refused, and it costs the flag.
 			expect(state.setTicketIgnored(ticket.identity, false, "missing")).toEqual({ ok: true });
@@ -1956,7 +1956,7 @@ describe("factory SQLite state", () => {
 			});
 			expect(identities("active")).toEqual([live.identity]);
 			expect(state.ticketObligation(live.identity, null)).toBe("awaiting");
-			expect(state.ticketIgnored(live.identity)).toBe(true);
+			expect(state.ignoredTickets().has(live.identity)).toBe(true);
 			// Close its cycle: the Ticket rests, and the same flag takes the row back.
 			state.applyCompletionDecision({
 				ticketIdentity: live.identity,
@@ -2061,7 +2061,7 @@ describe("factory SQLite state", () => {
 			db.close();
 
 			const reopened = openFactoryState(path);
-			expect(reopened.ticketIgnored("github:github.com:I_5")).toBe(false);
+			expect(reopened.ignoredTickets().has("github:github.com:I_5")).toBe(false);
 			expect(reopened.projectedTickets([], "implement")).toEqual([
 				expect.objectContaining({ identity: "github:github.com:I_5", ignored: false }),
 			]);
@@ -2091,7 +2091,7 @@ describe("factory SQLite state", () => {
 			db.close();
 
 			const reopened = openFactoryState(path);
-			expect(reopened.ticketIgnored("github:github.com:I_5")).toBe(false);
+			expect(reopened.ignoredTickets().has("github:github.com:I_5")).toBe(false);
 			expect(reopened.setTicketIgnored("github:github.com:I_5", true, null).ok).toBe(true);
 			reopened.close();
 		});

@@ -1942,7 +1942,7 @@ describe("the awaiting rule", () => {
 			// the row is listed again because its work is live, and the gate keeps
 			// holding the automatic Restart out cycle after cycle until the operator
 			// takes the Ticket back or decides it by hand.
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(statuses.slice(before).map((status) => status.text)).toEqual([]);
 			expect(
 				state.visibleTickets([], "implement").map((ticket) => `${ticket.identity}:${ticket.state}`),
@@ -1978,7 +1978,7 @@ describe("the awaiting rule", () => {
 			expect(state.ticketState("github:github.com:I_5")).toBe("awaiting");
 			// Nothing cleared the flag: the row is listed because it owes a decision,
 			// and the obligation reads the same facts the row's face wears.
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
 				"github:github.com:I_5",
 			]);
@@ -2013,7 +2013,7 @@ describe("the awaiting rule", () => {
 			// A held turn is the fact the Dispatch pause stalls every automatic start
 			// on, and the held count reads the list: an ignored held Ticket stays in
 			// that list, so the stall is never invisible (ADR 0060).
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(state.dispatchPauseActive()).toBe(true);
 			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
 				"github:github.com:I_5",
@@ -2056,7 +2056,7 @@ describe("the awaiting rule", () => {
 			expect(state.lastCompletion("github:github.com:I_5")?.transition).toEqual(written);
 			// The settle left the Ticket awaiting a decision, so its row stands in the
 			// list while the flag stays set underneath it (ADR 0060).
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
 				"github:github.com:I_5",
 			]);
@@ -2074,7 +2074,7 @@ describe("the awaiting rule", () => {
 			// Live work owes no decision yet, and the flag stands on it: the row stays
 			// listed because there is live work to reach, and the seat stays counted,
 			// so the Parallel limit keeps telling the truth.
-			expect(state.ticketIgnored("github:github.com:I_5")).toBe(true);
+			expect(state.ignoredTickets().has("github:github.com:I_5")).toBe(true);
 			expect(state.ticketState("github:github.com:I_5")).toBe("running");
 			expect(state.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
 				"github:github.com:I_5",

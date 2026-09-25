@@ -263,7 +263,7 @@ describe("the ignore key", () => {
 					).toBe(true);
 					// The flag is factory state on the state file, read back through
 					// the file's own API, and the row's projection carries it.
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					expect(state.projectedTickets([], "implement")).toEqual([
 						expect.objectContaining({
 							identity: FIRST,
@@ -312,7 +312,7 @@ describe("the ignore key", () => {
 						(f) => !headerRow(f).includes("ignored") && listRowOf(f, FIRST_LEAD) < 0,
 					);
 					expect(messageRowOf(cleared)).toContain(`"${firstTitle}" is not ignored`);
-					expect(state.ticketIgnored(FIRST)).toBe(false);
+					expect(state.ignoredTickets().has(FIRST)).toBe(false);
 					// Back on the active rows, the Ticket is listed again.
 					const active = await press(
 						setup,
@@ -665,7 +665,7 @@ describe("the obligation gate", () => {
 						"the selected Ticket cannot be ignored: it awaits a decision",
 					);
 					// The refusal is a refusal: the flag never lands, and the row stays.
-					expect(state.ticketIgnored(FIRST)).toBe(false);
+					expect(state.ignoredTickets().has(FIRST)).toBe(false);
 					expect(listRowOf(refused, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
 				WIDTH,
@@ -706,7 +706,7 @@ describe("the obligation gate", () => {
 					expect(messageRowOf(refused)).toContain(
 						"the selected Ticket cannot be ignored: its Agent is missing",
 					);
-					expect(state.ticketIgnored(FIRST)).toBe(false);
+					expect(state.ignoredTickets().has(FIRST)).toBe(false);
 					expect(refused).toContain("missing");
 				},
 				WIDTH,
@@ -754,7 +754,7 @@ describe("the ignore and the machine", () => {
 						`"${firstTitle}" is ignored: no automatic start, and its row stays while its work is live`,
 					);
 					// The flag stands underneath the row, and the same key takes it back.
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					const taken = await press(setup, "i", "the un-ignore", (f) => {
 						const row = rowsOf(f).find((r) => r.startsWith("│") && r.includes("[running]"));
 						return row !== undefined && !row.includes("ignored");
@@ -762,7 +762,7 @@ describe("the ignore and the machine", () => {
 					expect(messageRowOf(taken)).toContain(
 						`"${firstTitle}" is not ignored: the machine may start it again`,
 					);
-					expect(state.ticketIgnored(FIRST)).toBe(false);
+					expect(state.ignoredTickets().has(FIRST)).toBe(false);
 				},
 				WIDTH,
 				HEIGHT,
@@ -855,7 +855,7 @@ describe("the ignore and the machine", () => {
 					// stands under it: the pile still names it, and its row is back in the
 					// active view because there is live work to reach (ADR 0060).
 					expect(headerRow(frame)).toContain("ignored: 1");
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					expect(listRowOf(frame, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
 				},
 				WIDTH,
@@ -1068,7 +1068,7 @@ describe("the ignore and the machine", () => {
 						"the source's drop",
 					);
 					expect(listRowOf(dropped, SECOND_LEAD)).toBeGreaterThanOrEqual(0);
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					// The item comes back: the flag follows the Ticket, not the
 					// membership, and the row stays out of the active view.
 					await refreshed(setup, src);
@@ -1089,7 +1089,7 @@ describe("the ignore and the machine", () => {
 			const reopened = openFactoryState(path);
 			const secondSrc = new FakeSource("issues", "github-issues", success(twoTickets()));
 			try {
-				expect(reopened.ticketIgnored(FIRST)).toBe(true);
+				expect(reopened.ignoredTickets().has(FIRST)).toBe(true);
 				expect(reopened.visibleTickets([], "implement").map((ticket) => ticket.identity)).toEqual([
 					SECOND,
 				]);
@@ -1147,7 +1147,7 @@ describe("the ignore and the machine", () => {
 						"the running badge",
 					);
 					await press(setup, "i", "the ignore", (f) => messageRowOf(f).includes("is ignored"));
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					runner.set("herdr", ["agent", "list"], { stdout: agentListJson([]) });
 					// The row keeps its badge and its marker, and no line says the flag
 					// moved: the row never left, because its work was live.
@@ -1158,7 +1158,7 @@ describe("the ignore and the machine", () => {
 					);
 					expect(gone).toContain("ignored");
 					expect(messageRowOf(gone)).not.toContain("no longer ignored");
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					expect(state.ticketObligation(FIRST, "missing")).toBe("missing");
 					// The machine starts nothing on it by itself: auto mode is on, the
 					// seat is free, and after a hundred cycles of the walk that would
@@ -1166,7 +1166,7 @@ describe("the ignore and the machine", () => {
 					// the flag still stands.
 					await settle(setup, 500);
 					expect(state.workQueue()).toEqual([]);
-					expect(state.ticketIgnored(FIRST)).toBe(true);
+					expect(state.ignoredTickets().has(FIRST)).toBe(true);
 					// The key that put the Ticket away is the key that puts it back: the
 					// row offers Un-ignore beside its own badge, and the restart the flag
 					// held out is the operator's own ask from here.

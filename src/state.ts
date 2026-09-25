@@ -1695,22 +1695,20 @@ export class FactoryState {
 	}
 
 	/**
-	 * The ignore's own gate (ADR 0060): the flag the Top-up's walks hold out.
+	 * The pile, in one read (ADR 0060): every Ticket identity the flag stands on.
 	 *
-	 * The one test of the flag, read from the ticket row by its identity. It
-	 * stands beside the Same-type hold as an automatic gate and never as a hard
-	 * start gate - the Pickup, the start asked for by hand, and the
-	 * force-dispatch all run an ignored Ticket's item, the way they run past the
-	 * hold and the cap. The gate takes the flag, not the row's face: an ignored
-	 * Ticket whose row the list reveals for its live work is still no automatic
-	 * start, so `ticket.ignored` on a row the caller already holds answers the
-	 * same question this read does.
+	 * The ignore's own gate, and the one read of it. A walk that holds a projected
+	 * row asks that row - `ticket.ignored` is the same flag - and the Restart walk,
+	 * which reads the in-flight rows that carry no flag of their own, asks this
+	 * once per cycle instead of one query per candidate. The gate takes the flag,
+	 * not the row's face: an ignored Ticket whose row the list reveals for its live
+	 * work is still no automatic start.
 	 */
-	ticketIgnored(identity: string): boolean {
-		const row = this.db.prepare("SELECT ignored FROM tickets WHERE identity = ?").get(identity) as
-			| { ignored: number }
-			| undefined;
-		return row?.ignored === 1;
+	ignoredTickets(): Set<string> {
+		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
+			identity: string;
+		}>;
+		return new Set(rows.map((row) => row.identity));
 	}
 
 	/**
@@ -1748,6 +1746,10 @@ export class FactoryState {
 	 * always runs, because taking a Ticket back costs the same effort as putting
 	 * it away and never hides work.
 	 *
+	 * Nothing else clears the flag: the row's own facts decide whether the list
+	 * shows the Ticket, and an ignored Ticket with live work or a decision owed
+	 * keeps its row while the flag stays set (see `ignoreWithholdsRow`).
+	 *
 	 * The moment the flag was set is stored with it, so the detail pane names it.
 	 */
 	setTicketIgnored(
@@ -1767,22 +1769,6 @@ export class FactoryState {
 			.prepare("UPDATE tickets SET ignored = ?, ignored_at = ? WHERE identity = ?")
 			.run(ignored ? 1 : 0, ignored ? new Date(this.now()).toISOString() : null, identity);
 		return { ok: true };
-	}
-
-	/**
-	 * The pile, in one read (ADR 0060): every Ticket identity the flag stands on.
-	 *
-	 * The observation cycle asks this once per cycle for the rows its walks read
-	 * by identity alone - the in-flight tickets carry no projection - and the
-	 * answer is the same flag the row's own face wears. The gate takes the flag,
-	 * not the row's face: an ignored Ticket whose row the list reveals for its
-	 * live work is still no automatic start.
-	 */
-	ignoredTickets(): Set<string> {
-		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{
-			identity: string;
-		}>;
-		return new Set(rows.map((row) => row.identity));
 	}
 
 	/**
