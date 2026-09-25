@@ -1232,6 +1232,61 @@ describe("handOffTicket: the worktree sequence", () => {
 		expect(runner.commands()).not.toContain(expect.stringContaining("worktree remove"));
 	});
 
+	test("a refused worktree create states the line that names the failure", async () => {
+		const runner = new FakeRunner();
+		conventionCheckout(runner);
+		runner.set("git", ["-C", CHECKOUT, "branch", "--list", "factory/7-retry-policy-for-webhooks"], {
+			stdout: "  factory/7-retry-policy-for-webhooks\n",
+		});
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"open",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{ code: 1, stderr: WORKTREE_NOT_FOUND_ERROR },
+		);
+		// herdr answers a refused create with Git's whole stderr: the line of
+		// the work it was doing first, and the refusal last.
+		runner.set(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				CHECKOUT,
+				"--branch",
+				"factory/7-retry-policy-for-webhooks",
+				"--no-focus",
+			],
+			{
+				code: 1,
+				stderr:
+					'{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out \'factory/7-retry-policy-for-webhooks\')' +
+					"\\nfatal: 'factory/7-retry-policy-for-webhooks' is already used by worktree at '/home/op/worktrees/billing/factory-7'" +
+					'"},"id":"cli:worktree:create"}\n',
+			},
+		);
+
+		const outcome = await handOffTicket(
+			ticket,
+			{ ...defaultChoice, environment: "worktree" },
+			{ config: BASE_CONFIG, runner, home: HOME },
+		);
+
+		expect(outcome.status).toBe("failed");
+		// The operator reads the refusal they can act on and herdr's stable
+		// code, never the progress line that precedes it.
+		expect(reasonOf(outcome)).toBe(
+			"fatal: 'factory/7-retry-policy-for-webhooks' is already used by worktree at '/home/op/worktrees/billing/factory-7' (worktree_create_failed)",
+		);
+	});
+
 	test("a started agent keeps the worktree even when the prompt fails", async () => {
 		const runner = new FakeRunner();
 		conventionCheckout(runner);

@@ -45,6 +45,7 @@
  */
 import type { FactoryConfig, TransitionPin } from "./config.ts";
 import type { EnvironmentKind, Ticket } from "./domain/ticket.ts";
+import { failureLine } from "./lines.ts";
 import {
 	branchNameFor,
 	consultationAgentName,
@@ -1846,6 +1847,11 @@ function failedCommand(result: CommandResult, ctx: HandoffContext): HandoffOutco
  * what the operator can act on. Herdr's error code rides along: it is the
  * stable part of the answer, and a message can change with the herdr
  * version. A failure herdr did not write as JSON keeps its raw line.
+ *
+ * The message carries another tool's whole answer when herdr only ran it: a
+ * refused `worktree create` holds Git's progress line and its refusal. The
+ * plane states the line that names the failure, the way it reads a raw
+ * failure; the Message line is one row, so the rest never reaches the operator.
  */
 export function herdrFailureText(result: CommandResult): string {
 	const code = herdrErrorCode(result);
@@ -1853,7 +1859,11 @@ export function herdrFailureText(result: CommandResult): string {
 		return commandFailureText(result);
 	}
 	const message = herdrErrorMessage(result);
-	return message === "" ? code : `${message} (${code})`;
+	if (message === "") {
+		return code;
+	}
+	const line = failureLine(message) ?? message.trim();
+	return `${line} (${code})`;
 }
 
 /** The `error.message` of a herdr JSON error, or "" when it carries none. */

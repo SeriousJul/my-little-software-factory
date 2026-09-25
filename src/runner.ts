@@ -11,7 +11,7 @@
  */
 import { execFile } from "node:child_process";
 
-import { firstNonEmptyLine } from "./lines.ts";
+import { failureLine } from "./lines.ts";
 
 /** The result of one command: the exit status plus both streams. */
 export interface CommandResult {
@@ -284,9 +284,15 @@ function unparseableModelTable(command: string, detail: string): ModelListResult
 	};
 }
 
-/** The first readable line of a failed command's output. */
+/**
+ * The readable line of a failed command's output.
+ *
+ * A command prints the work it is doing before it prints the refusal, so the
+ * plane reads the line that names the failure, not the first line of the
+ * output: see `failureLine`.
+ */
 export function commandFailureText(result: CommandResult): string {
-	return firstNonEmptyLine(result.stderr) ?? `exit code ${result.code}`;
+	return failureLine(result.stderr) ?? `exit code ${result.code}`;
 }
 
 /** Map a spawn-level failure to a failed command with a readable reason. */

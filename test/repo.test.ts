@@ -434,4 +434,18 @@ describe("commandFailureText", () => {
 		).toBe("fatal: no such file");
 		expect(commandFailureText({ code: 3, stdout: "", stderr: "" })).toBe("exit code 3");
 	});
+
+	test("is the line that names the failure when the command printed its work first", () => {
+		expect(
+			commandFailureText({
+				code: 128,
+				stdout: "",
+				stderr:
+					"Preparing worktree (checking out 'factory/7-retry-policy-for-webhooks')\n" +
+					"fatal: 'factory/7-retry-policy-for-webhooks' is already used by worktree at '/home/op/worktrees/billing/factory-7'\n",
+			}),
+		).toBe(
+			"fatal: 'factory/7-retry-policy-for-webhooks' is already used by worktree at '/home/op/worktrees/billing/factory-7'",
+		);
+	});
 });
