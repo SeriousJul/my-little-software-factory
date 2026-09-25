@@ -181,30 +181,39 @@ export function TicketList({
 					),
 				]
 			: visible.map((row, offset) =>
-					row.kind === "group"
+					row.kind === "gap"
 						? createElement(
+								// The blank row that parts one Group from the one above it: it
+								// holds no word and no cursor, and the window counts it like any
+								// other row.
 								"text",
-								{ key: `group:${row.group.value}` },
-								...groupHeaderSpans(
-									row.group,
-									start + offset === selectedIndex,
-									geometry.usableCols,
-								),
+								{ key: `gap:${start + offset}`, style: { width: "100%", height: 1 } },
+								"",
 							)
-						: createElement(
-								"text",
-								{ key: row.item.identity },
-								...rowSpans(
-									row.item,
-									start + offset === selectedIndex,
-									geometry.usableCols,
-									markerOf(row.item),
-									limitReached(row.item),
-									starting(row.item),
-									queueWait(row.item),
-									faceFrame,
+						: row.kind === "group"
+							? createElement(
+									"text",
+									{ key: `group:${row.group.value}` },
+									...groupHeaderSpans(
+										row.group,
+										start + offset === selectedIndex,
+										geometry.usableCols,
+									),
+								)
+							: createElement(
+									"text",
+									{ key: row.item.identity },
+									...rowSpans(
+										row.item,
+										start + offset === selectedIndex,
+										geometry.usableCols,
+										markerOf(row.item),
+										limitReached(row.item),
+										starting(row.item),
+										queueWait(row.item),
+										faceFrame,
+									),
 								),
-							),
 				)),
 	);
 }

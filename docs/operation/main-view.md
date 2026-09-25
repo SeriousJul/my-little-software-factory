@@ -193,6 +193,13 @@ the detail pane shows. A left click on a header folds the same Group. Every
 Ticket control refuses where the cursor stands on a header, in the catalogue's
 own words for no selection, and the detail pane keeps the last ticket it showed.
 
+One blank row parts a Group from the one above it, and none stands above the
+first Group, so the list still opens on its header. That row holds no ticket and
+no cursor: one step crosses it to the next row the operator can read, a click on
+it takes the Group it parts and folds nothing, and the window counts it the way
+it counts a header, so a grouped pane shows fewer tickets than the flat list
+beside it.
+
 **A fold hides rows and never facts** (ADR 0059). The Section header's counts,
 the mode line, the Parallel limit, the Pickup, the Top-up, the handoff gates,
 and every Decision route read the same facts with a Group open or shut, and the

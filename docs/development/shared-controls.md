@@ -209,8 +209,9 @@ presentation's ink and holds no palette of its own.
 A section's list can be split into **Groups**: runs of rows that share one value
 of one **Grouping axis**, each under one **Group header** the operator can
 collapse. The mechanism - the axis vocabulary and its fixed cycle, the group
-keys, the Group ordering, the fold state, the header row, and the window, mouse
-hit test, and cursor step over the mixed row list - is the shared module
+keys, the Group ordering, the fold state, the header row, the blank row that
+parts two Groups, and the window, mouse hit test, and cursor step over the mixed
+row list - is the shared module
 [src/components/shared/grouping.ts](../../src/components/shared/grouping.ts),
 reached through the shared list interface in
 [list-pane.ts](../../src/components/list-pane.ts) (ADR 0014). Only the Ticket

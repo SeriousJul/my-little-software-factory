@@ -55,11 +55,13 @@ export function rowAnchorOf<T extends IdentifiedItem>(
 	rows: readonly ListedRow<T>[],
 	index: number,
 ): RowAnchor | undefined {
-	const row = rows[index];
+	const row = rows[settleRowIndex(rows, index)];
 	if (row === undefined) return undefined;
-	return row.kind === "item"
-		? { kind: "ticket", identity: row.item.identity }
-		: { kind: "group", value: row.group.value };
+	if (row.kind === "item") return { kind: "ticket", identity: row.item.identity };
+	if (row.kind === "group") return { kind: "group", value: row.group.value };
+	// The settle above never leaves the read on the air between Groups, so an
+	// anchor is only ever missing where the list holds no row at all.
+	return undefined;
 }
 
 /**
@@ -76,7 +78,8 @@ export function rowIndexForAnchor<T extends IdentifiedItem>(
 	items: readonly T[],
 	keyOf: (item: T) => string,
 ): number {
-	const clamped = (index: number) => Math.max(0, Math.min(index, Math.max(0, rows.length - 1)));
+	const clamped = (index: number) =>
+		settleRowIndex(rows, Math.max(0, Math.min(index, Math.max(0, rows.length - 1))));
 	if (anchor === undefined) return clamped(fallbackIndex);
 	const at = rows.findIndex((row) =>
 		anchor.kind === "ticket"
@@ -152,13 +155,82 @@ export interface GroupHeader {
 }
 
 /**
- * One row of a section's list: a row of the list itself, or the header that
- * opens a Group of them.
+ * One row of a section's list: a row of the list itself, the header that opens
+ * a Group of them, or the blank row that parts one Group from the next.
  *
  * The window, the mouse hit test, and the cursor step all read this one list,
  * so a header costs a window row and takes the cursor exactly like a row does.
+ * The gap costs a window row as well, but it holds no cursor: the step crosses
+ * over it and a click on it lands on the Group it belongs to.
  */
-export type ListedRow<T> = { kind: "item"; item: T } | { kind: "group"; group: GroupHeader };
+export type ListedRow<T> =
+	| { kind: "item"; item: T }
+	| { kind: "group"; group: GroupHeader }
+	| { kind: "gap" };
+
+/**
+ * The row the cursor can hold at `index`, or the header below it for a gap.
+ *
+ * The air belongs to the Group under it, so the settle moves down to that
+ * Group's header. A list never opens or closes with a gap, so a gap always has
+ * a row below it to land on.
+ */
+export function settleRowIndex<T>(rows: readonly ListedRow<T>[], index: number): number {
+	if (rows[index]?.kind !== "gap") return index;
+	for (let at = index + 1; at < rows.length; at += 1) {
+		if (rows[at]?.kind !== "gap") return at;
+	}
+	return index;
+}
+
+/**
+ * The row `delta` steps from `from`, with the air between Groups crossed over.
+ *
+ * A gap is presentation, so no step may end on one: one step moves to the next
+ * row that holds something, exactly the row a list without spacing walks to.
+ * The walk stops at the list's own edge, so a step past the last row rests
+ * there the way the flat list always did.
+ */
+export function stepRowIndex<T>(
+	rows: readonly ListedRow<T>[],
+	from: number,
+	delta: number,
+): number {
+	if (rows.length === 0) return 0;
+	let at = settleRowIndex(rows, Math.max(0, Math.min(rows.length - 1, from)));
+	const direction = delta < 0 ? -1 : 1;
+	for (let remaining = Math.abs(delta); remaining > 0; remaining -= 1) {
+		const next = advanceRowIndex(rows, at, direction);
+		if (next === at) break;
+		at = next;
+	}
+	return at;
+}
+
+/** One row in `direction`'s direction, crossing the air that holds no cursor. */
+function advanceRowIndex<T>(
+	rows: readonly ListedRow<T>[],
+	from: number,
+	direction: 1 | -1,
+): number {
+	let at = Math.max(0, Math.min(rows.length - 1, from + direction));
+	while (rows[at]?.kind === "gap") {
+		const stepped = at + direction;
+		// The list's edge row is never a gap, so the crossing cannot run off.
+		if (stepped < 0 || stepped >= rows.length) return from;
+		at = stepped;
+	}
+	return at;
+}
+
+/** The rows the cursor can rest on: the air between Groups holds none. */
+export function cursorRowCount<T>(rows: readonly ListedRow<T>[]): number {
+	let count = 0;
+	for (const row of rows) {
+		if (row.kind !== "gap") count += 1;
+	}
+	return count;
+}
 
 /** What the grouping mechanism asks the section for: the facts one row carries. */
 export interface GroupingOf<T> {
@@ -232,6 +304,10 @@ export function groupedRows<T>(
 	const rows: ListedRow<T>[] = [];
 	for (const group of groups) {
 		const collapsed = grouping.isFolded(group.value);
+		// One blank row parts a Group from the one above it, and none stands
+		// above the first: the list opens on its header exactly as it did before
+		// the spacing, and every Group keeps the same air at its head.
+		if (rows.length > 0) rows.push({ kind: "gap" });
 		rows.push({
 			kind: "group",
 			group: { value: group.value, count: group.items.length, held: group.held, collapsed },

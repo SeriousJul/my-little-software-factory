@@ -148,12 +148,15 @@ import { type MainSection, SectionHeader } from "./section-header.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
 import type { GroupHeader } from "./shared/grouping.ts";
 import {
+	cursorRowCount,
 	type GroupFolds,
 	groupingAxisNotice,
 	groupingEmptyMessage,
 	type ListedRow,
 	NO_GROUP_FOLDS,
 	rowAnchorOf,
+	settleRowIndex,
+	stepRowIndex,
 	ticketRowIndexForAnchor,
 	ticketRows,
 	toggleFold,
@@ -2632,8 +2635,11 @@ export function App({
 			// the sequence's only row.
 			listCanMove: (() => {
 				// The Ticket section's cursor walks the row list, Group headers
-				// included, so its count is the row list's (issue #159).
+				// included, so its edge is the row list's last index (issue #159).
 				const t = ticketRowsRef.current.length;
+				// The blank row between two Groups holds no cursor, so the walk asks
+				// how many rows it can rest on rather than how many rows it draws.
+				const tStops = cursorRowCount(ticketRowsRef.current);
 				const c = consultationsRef.current.length;
 				const w = workQueueRef.current.length;
 				const tOpen = ticketsExpandedRef.current;
@@ -2661,7 +2667,8 @@ export function App({
 						(cOpen && (c > 1 || (consultationIndexRef.current === 0 && tOpen))) || (!cOpen && tOpen)
 					);
 				return (
-					(tOpen && (t > 1 || (cOpen && selectedIndexRef.current >= t - 1))) || (!tOpen && cOpen)
+					(tOpen && (tStops > 1 || (cOpen && selectedIndexRef.current >= t - 1))) ||
+					(!tOpen && cOpen)
 				);
 			})(),
 			detailCanScroll:
@@ -3477,17 +3484,21 @@ export function App({
 	 *
 	 * The index is a place in the row list, so it can name a Group header: the
 	 * cursor rests there, the Ticket controls refuse it in the catalogue's
-	 * words, and the fold takes the shared `x`.
+	 * words, and the fold takes the shared `x`. It can also name the blank row
+	 * between two Groups, which holds no cursor: the click lands on the Group
+	 * that row parts, and never folds it.
 	 */
 	function selectTicketRow(index: number) {
 		const rows = ticketRowsRef.current;
-		const next = clamp(index, 0, Math.max(0, rows.length - 1));
+		const next = settleRowIndex(rows, clamp(index, 0, Math.max(0, rows.length - 1)));
 		if (next === selectedIndexRef.current) return;
 		selectedIndexRef.current = next;
 		setSelectedIndex(next);
 	}
 	function moveList(delta: number) {
-		selectTicketRow(selectedIndexRef.current + delta);
+		// One step moves the cursor to the next row that holds something: the
+		// blank row between two Groups is crossed over, never rested on.
+		selectTicketRow(stepRowIndex(ticketRowsRef.current, selectedIndexRef.current, delta));
 	}
 	/**
 	 * Cycle the Grouping axis (issue #159, ADR 0058).

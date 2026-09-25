@@ -372,6 +372,23 @@ function paneHolds(frame: string, pattern: RegExp): boolean {
 	return listPaneRows(frame).some((row) => pattern.test(row));
 }
 
+/**
+ * The Ticket list's rows with the air kept: one entry per window row, the box's
+ * own padding trimmed away, and a blank row read as `""`.
+ *
+ * `listRows` folds the blank rows out, so it cannot show the row that parts two
+ * Groups. The Grouping axis puts that air in front of every header but the
+ * first, and only these exact rows say so.
+ */
+function airRows(frame: string): string[] {
+	const rows = listPaneRows(frame).map((row) => row.trimEnd());
+	const first = rows.findIndex((row) => row !== "");
+	if (first < 0) return [];
+	let last = rows.length - 1;
+	while (last > first && rows[last] === "") last -= 1;
+	return rows.slice(first, last + 1);
+}
+
 /** The ticket rows inside the Ticket list, in frame order. */
 function ticketRows(frame: string): string[] {
 	return listRows(frame).filter((row) => !/^[❯ ]*[▾▸] \S/.test(row));
@@ -526,20 +543,26 @@ describe("the Ticket section's Groups", () => {
 	});
 
 	test("the position axis files a ticket no State matches under unmatched", async () => {
-		await bootGrouped(async (setup) => {
-			for (const word of ["repository", "source", "task", "state"] as const) {
-				await pressTab(setup, word, (f) => new RegExp(`Group: ${word}`).test(actionBarRowOf(f)));
-			}
-			const frame = await pressTab(setup, "the position axis", (f) =>
-				/Group: position/.test(actionBarRowOf(f)),
-			);
-			expect(headers(frame)).toEqual([
-				"▾ awaiting-review 1",
-				"▾ on-hold 1",
-				"▾ ready-for-agent 2",
-				"▾ unmatched 1",
-			]);
-		});
+		await bootGrouped(
+			async (setup) => {
+				for (const word of ["repository", "source", "task", "state"] as const) {
+					await pressTab(setup, word, (f) => new RegExp(`Group: ${word}`).test(actionBarRowOf(f)));
+				}
+				const frame = await pressTab(setup, "the position axis", (f) =>
+					/Group: position/.test(actionBarRowOf(f)),
+				);
+				expect(headers(frame)).toEqual([
+					"▾ awaiting-review 1",
+					"▾ on-hold 1",
+					"▾ ready-for-agent 2",
+					"▾ unmatched 1",
+				]);
+				// Exactly one blank row parts each pair of Groups and none stands
+				// above the first, so four headers leave three blanks between them.
+				expect(airRows(frame).filter((row) => row === "")).toHaveLength(3);
+			},
+			{ size: [WIDTH, 40] },
+		);
 	});
 
 	test("x on a Group header folds that Group, and x again opens it", async () => {
@@ -681,18 +704,19 @@ describe("the Ticket section's Groups", () => {
 		);
 	});
 
-	test("each header costs a window row, and the window keeps sliding", async () => {
+	test("each header and the air above the next Group cost a window row", async () => {
 		await bootGrouped(
 			async (setup) => {
 				const flat = await settle(setup);
-				// The flat list fills the pane with tickets alone.
+				// The flat list fills the pane with tickets alone: no header, no air.
 				expect(ticketRows(flat)).toHaveLength(5);
+				expect(airRows(flat).some((row) => row === "")).toBe(false);
 				await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
 				const frame = await settle(setup);
-				// The same window now spends two of its rows on headers, so two
-				// fewer tickets stand on screen (story 65).
+				// The same window now spends two rows on headers and one more on the
+				// air that parts them, so three fewer tickets stand on screen (story 65).
 				expect(headers(frame)).toHaveLength(2);
-				expect(ticketRows(frame)).toHaveLength(4);
+				expect(ticketRows(frame)).toHaveLength(3);
 				await press(setup, "end", "the last row", (f) =>
 					(rowsOf(f)[markerRowOf(f)] ?? "").includes("Unlabeled work"),
 				);
@@ -703,6 +727,76 @@ describe("the Ticket section's Groups", () => {
 			},
 			{ size: [WIDTH, 27] },
 		);
+	});
+
+	test("one blank row parts each Group, and none stands above the first", async () => {
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const frame = await settle(setup);
+			// The list opens on its first header: the air belongs to the Group it
+			// parts, so the first Group has none above it.
+			expect(airRows(frame)[0]).toContain("▾ acme/factory");
+			// One blank row, then the next Group's header, then its own rows.
+			const billingAt = airRows(frame).findIndex((row) => row.includes("▾ acme/billing"));
+			expect(airRows(frame)[billingAt - 1]).toBe("");
+			expect(airRows(frame)[billingAt - 2]).toContain("Held turn");
+			expect(airRows(frame)[billingAt]).toContain("▾ acme/billing");
+			// Exactly one blank stands between the two Groups, and none elsewhere.
+			expect(airRows(frame).filter((row) => row === "")).toHaveLength(1);
+		});
+	});
+
+	test("the cursor steps over the blank row and never rests on it", async () => {
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			// Down through the first Group's rows, one press per row.
+			await pressArrow(setup, "down", "the second row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Webhook retry"),
+			);
+			await pressArrow(setup, "down", "the Group's last row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
+			);
+			// The next Down crosses the blank row and lands on the Group header
+			// under it: one press still moves the cursor to the next row it can hold.
+			const onHeader = await pressArrow(setup, "down", "the next Group's header", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
+			);
+			expect(actionBarRowOf(onHeader)).toContain("x Fold group");
+			// The step back crosses the same air the other way.
+			await pressArrow(setup, "up", "the row above the air", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Held turn"),
+			);
+			// The list's last row is a ticket, so the edge lands on a word too.
+			const end = await press(setup, "end", "the last row", (f) =>
+				(rowsOf(f)[markerRowOf(f)] ?? "").includes("Unlabeled work"),
+			);
+			expect(markerRowOf(end)).toBeGreaterThan(0);
+		});
+	});
+
+	test("a click on the blank row takes the Group it parts, and folds nothing", async () => {
+		await bootGrouped(async (setup) => {
+			await pressTab(setup, "the repository Groups", (f) => headers(f).length === 2);
+			const before = await settle(setup);
+			const airRow = rowIndexOf(before, /▾ acme\/billing/) - 1;
+			// The click aims at the air itself, not at a word the row might hold.
+			expect(
+				listHalfOf(rowsOf(before)[airRow] ?? "")
+					.replace(/[│┌┐└┘─]/gu, " ")
+					.trim(),
+			).toBe("");
+			await mouseClick(setup, 4, airRow);
+			// The air holds no cursor, so the click takes the Group it parts.
+			const landed = await awaitFrame(
+				setup,
+				(f) => (rowsOf(f)[markerRowOf(f)] ?? "").includes("▾ acme/billing"),
+				"the Group the air parts",
+			);
+			expect(actionBarRowOf(landed)).toContain("x Fold group");
+			// And the Group stays open: a click on air folds nothing.
+			expect(headers(landed)).toContain("▾ acme/billing 2");
+			expect(ticketRows(landed).some((row) => row.includes("Legacy import"))).toBe(true);
+		});
 	});
 
 	test("a frame of nothing but Group headers still reads its counts", async () => {
@@ -896,11 +990,14 @@ describe("the Ticket section's Groups", () => {
 					messageRowOf(f).includes("grouped by repository"),
 				);
 				// The empty-message pane holds no rows: the sample projection
-				// carries the tickets, and the headers stand above them.
+				// carries the tickets, and the headers stand above them. The window
+				// is tall enough for the whole split, air included, so the first
+				// Group's header is on screen.
 				expect(grouped).toContain("▾ acme/portal");
+				expect(headers(grouped).length).toBeGreaterThan(1);
 			},
 			WIDTH,
-			34,
+			40,
 			{
 				config: BASE_CONFIG,
 				runner: emptyAgentRunner(),
