@@ -29,9 +29,11 @@ stream's scroll, the leave, and the Goto confirm. `Enter` is the Goto:
 pure focus, the same navigation as `g` in the Ticket section. It focuses
 the agent's pane and closes the screen. It changes no state and records no
 decision. The confirmation stands on the Message line and names the
-workspace the pane lives in: since herdr 0.9 each herdr client keeps its
-own view, so a CLI focus no longer moves the operator's view, and the
-operator switches herdr to the named workspace to see the agent.
+workspace the pane lives in: the Goto moves herdr's view to the agent's
+pane, which is the one focus move the control plane makes and the one the
+operator asked for at the key (ADR 0061). Ending an environment is not
+such a move: a Close cleanup, a route close, or a Consultation close never
+changes what the operator is looking at.
 
 When the turn settles and the factory leaves the decision to the operator,
 the same screen carries the decision: the pane re-titles from `Agent view`

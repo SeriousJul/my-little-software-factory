@@ -54,6 +54,7 @@ import { BASE_CONFIG } from "./base-config.ts";
 import {
 	agentListJson,
 	FakeRunner,
+	herdrFocusCommands,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceListJson,
@@ -2567,6 +2568,10 @@ describe("the Close cleanup", () => {
 				expect(joined).not.toContain("branch --delete");
 				expect(joined).not.toContain("workspace close");
 				expect(joined).not.toContain("tab close");
+				// The close ends the environment and never moves herdr's view
+				// along with it (ADR 0061): the operator stays on the pane they
+				// were reading.
+				expect(herdrFocusCommands(commands)).toEqual([]);
 			},
 			WIDTH,
 			HEIGHT,

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { FactoryConfig, TransitionOutcome } from "../src/config.ts";
-import type { FetchedTicket } from "../src/domain/ticket.ts";
+import type { EnvironmentKind, FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
 import { sleep } from "./app-harness.ts";
@@ -95,6 +95,7 @@ export function seedInFlightTurn(
 	state: FactoryState,
 	outcome: FetchOutcome,
 	identity = "github:github.com:I_5",
+	environment: EnvironmentKind = "live-worktree",
 ): string {
 	const source = { name: "issues", kind: "github-issues" };
 	state.initializeSources([source]);
@@ -103,7 +104,7 @@ export function seedInFlightTurn(
 		identity,
 		{
 			agentType: "pi",
-			environment: "live-worktree",
+			environment,
 			taskType: "implement",
 			model: "",
 			thinking: "",
@@ -131,8 +132,9 @@ export function seedAwaitingTurn(
 	outcome: FetchOutcome,
 	identity = "github:github.com:I_5",
 	transition?: TransitionOutcome | null,
+	environment: EnvironmentKind = "live-worktree",
 ): string {
-	const attemptId = seedInFlightTurn(state, outcome, identity);
+	const attemptId = seedInFlightTurn(state, outcome, identity, environment);
 	state.settleTurn({
 		ticketIdentity: identity,
 		handoffId: attemptId,

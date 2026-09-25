@@ -13,25 +13,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-
-/** Every TypeScript source file under `src`, the library's own files aside. */
-function sourceFiles(directory: string, keep: (file: string) => boolean = () => true): string[] {
-	const found: string[] = [];
-	for (const entry of readdirSync(directory)) {
-		const path = join(directory, entry);
-		if (statSync(path).isDirectory()) {
-			found.push(...sourceFiles(path, keep));
-			continue;
-		}
-		if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
-			const rel = relative(process.cwd(), path);
-			if (keep(rel)) found.push(rel);
-		}
-	}
-	return found;
-}
+import { existsSync, readFileSync } from "node:fs";
+import { sourceFiles } from "./static-checks.ts";
 
 /** The library's own directory: the only place a renderer field may live. */
 const LIBRARY = "src/components/shared/";

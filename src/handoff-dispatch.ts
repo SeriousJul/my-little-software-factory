@@ -211,12 +211,6 @@ export interface HandoffDispatchOptions extends HandoffDispatchReports {
 	 */
 	pickupConsultation?: (consultationId: string) => Promise<ConsultationPickupOutcome>;
 	home: string;
-	/**
-	 * The herdr workspace the control plane itself runs in, or null outside
-	 * herdr. A Close cleanup that removes a workspace returns herdr's focus
-	 * there, because the operator worked the close from the control plane.
-	 */
-	controlPlaneWorkspaceId?: string | null;
 	/** Persist a repository mapping discovered during handoff, if one is found. */
 	persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 	/**
@@ -365,7 +359,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		consultationId: string,
 	) => Promise<ConsultationPickupOutcome>;
 	private readonly home: string;
-	private readonly controlPlaneWorkspaceId: string | null | undefined;
 	private readonly reports: HandoffDispatchReports;
 	private readonly persistMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
 	private readonly log?: Logger;
@@ -400,7 +393,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 		this.seatCount = options.seatCount;
 		this.pickupConsultation = options.pickupConsultation;
 		this.home = options.home;
-		this.controlPlaneWorkspaceId = options.controlPlaneWorkspaceId;
 		this.persistMapping = options.persistMapping;
 		this.log = options.log;
 		this.reports = {
@@ -1313,7 +1305,6 @@ class HandoffDispatchModule implements HandoffDispatch {
 					workspaceId: stored.workspaceId,
 				},
 				this.runner,
-				{ controlPlaneWorkspaceId: this.controlPlaneWorkspaceId },
 			);
 		} catch (error) {
 			return `the close did not run: ${errorMessage(error)}`;
@@ -1500,7 +1491,7 @@ class HandoffDispatchModule implements HandoffDispatch {
 					workspaceId: handoff.workspaceId,
 				},
 				this.runner,
-				{ ...options, controlPlaneWorkspaceId: this.controlPlaneWorkspaceId },
+				options,
 			);
 			if (failure === undefined) {
 				const reach = closeCleanupReach(handoff);
