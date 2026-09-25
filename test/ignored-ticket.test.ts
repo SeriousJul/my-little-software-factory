@@ -1301,12 +1301,7 @@ describe("the ignored marker's frame", () => {
 					// names the pile the flag made.
 					expect(headerRow(active)).toContain("ignored: 1");
 					// `f` reaches the row: the pile holds what no other view shows.
-					const pile = await press(
-						setup,
-						"f",
-						"the pile",
-						(f) => ticketRowHolds(f, FIRST_LEAD),
-					);
+					const pile = await press(setup, "f", "the pile", (f) => ticketRowHolds(f, FIRST_LEAD));
 					expect(pile).toContain("ignored");
 					expect(detailPaneText(pile)).toContain(firstTitle);
 					expect(actionBarRowOf(pile)).toContain("i Un-ignore");
@@ -1390,7 +1385,13 @@ describe("the ignored marker's frame", () => {
 				},
 				WIDTH,
 				HEIGHT,
-				{ config: fixtureConfig(), state, sources: [src], runner: emptyAgentRunner(), pollIntervalMs: 60_000 },
+				{
+					config: fixtureConfig(),
+					state,
+					sources: [src],
+					runner: emptyAgentRunner(),
+					pollIntervalMs: 60_000,
+				},
 			);
 		} finally {
 			state.close();

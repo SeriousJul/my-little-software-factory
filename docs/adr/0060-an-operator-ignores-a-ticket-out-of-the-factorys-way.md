@@ -106,7 +106,11 @@ the cycle still shows that ticket. The ignored view keeps the attention bands an
 the newest-external-update order and carries no order of its own, the way a Group
 presents the list's order and never a new one (ADR 0059). It is the ledger of
 the flag: every row the operator put away stands in it, including one the active
-view shows again while its work is live. An ignored row keeps its state badge and
+view shows again while its work is live, and including one ADR 0042's covered
+rule takes out of the list - a Ticket ignored first and covered by a fixing pull
+request that appears later stands in the pile and in no other view, because the
+only key that clears a flag rides on the row, and a pile that hid the row would
+hide the key with it. An ignored row keeps its state badge and
 takes a trailing marker beside the handoff-limit and leftover markers, and the
 detail pane states the ignore, the moment it was set, and the key that clears it.
 The Ticket header carries a conditional `ignored n` cell above zero, with no
@@ -188,9 +192,11 @@ are.
   section draws follow the operator's view.
 - The list rule lives in the state module alone: one read returns the drawn rows,
   the active view, and the pile, and no screen re-applies the covered rule or the
-  ignore rule beside it. The gate is one flag, read from the row a walk already
-  holds or from one read of the pile per cycle, so neither rule costs a second
-  projection read on a refresh.
+  ignore rule beside it. The pile reads the flag over the projection before the
+  list rule, so it is the ledger of the operator's acts, and the drawn rows and
+  the active view read it after the covered rule, so the list stays ADR 0042's.
+  The gate is one flag, read from the row a walk already holds or from one read of
+  the pile per cycle, so neither rule costs a second projection read on a refresh.
 - The missing-Agent fact is one rule too: one helper answers what the latest poll
   reports for a Ticket's pane, and the in-flight pass, the Restart walk, the
   Parallel limit seat count, and the list's failure badge all read it, so the

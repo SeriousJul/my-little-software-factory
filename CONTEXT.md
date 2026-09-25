@@ -23,7 +23,7 @@ An independently collapsable list in the Main view. The Ticket section holds the
 _Avoid_: tab, pane, view, accordion, group
 
 **Section header**:
-The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and the conditional ignored count. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
+The row that names one section of the Main view. A collapsed section is nothing but its header row. The Ticket section's header carries the pipeline counts (open, running, awaiting) with the conditional held count and its bell, then the conditional ignored count - the machine's own fact first, so a short row cuts the count of the pile and never a decision the operator owes. The Consultation section's header carries that section's attention facts (awaiting response, recovery). The Work section's header carries the queue's depth. A click on the header toggles that section.
 _Avoid_: title bar, tab label, accordion toggle, group header
 
 **List filter**:
@@ -150,6 +150,7 @@ _Avoid_: disabled source, dropped source
 A Ticket the operator has judged out of the factory's way for the foreseeable future by their own act, until they take it back.
 Its Ticket state, its Parallel limit seat, and its source facts are unchanged: the ignore says only that the plane starts no Agent on it by itself, and lists it nowhere while it rests.
 The ignore hides a resting row and never a live one: a Ticket with work in flight or a decision owed keeps its row beside its own marker, and it goes back into the pile when its cycle ends (ADR 0060).
+The pile is the ledger of the operator's own acts: every flagged Ticket stands in it, the covered ones included, because only the key on the row ends an ignore.
 _Avoid_: hidden ticket, shelved ticket, buried, wontfix, archived, dismissed
 
 **Attention band**:
