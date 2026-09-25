@@ -490,7 +490,7 @@ describe("the in-app Key guide", () => {
 					// The ignore and the List filter name the Ticket section's own
 					// two keys (ADR 0060); the section's guide holds them and the
 					// Consultation section's guide holds nothing of either.
-					"i Ignore - hides the Ticket from the list and every automatic start",
+					"i Ignore - hides a resting row and stops every automatic start",
 					"f Filter - cycles the Ticket list: active, ignored, all",
 					// The axis row wraps: its note names the whole cycle, and the
 					// label column is sized to the longest reason.

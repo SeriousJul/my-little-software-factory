@@ -672,7 +672,7 @@ describe("the ignore key", () => {
 					// And the Key guide opened from the Ticket list holds both rows.
 					setup.mockInput.pressKey("?");
 					const guide = await awaitFrame(setup, (f) => f.includes("Key guide"), "the Key guide");
-					expect(guide).toContain("hides the Ticket from the list and every automatic start");
+					expect(guide).toContain("hides a resting row and stops every automatic start");
 					expect(guide).toContain("cycles the Ticket list: active, ignored, all");
 				},
 				WIDTH,
@@ -683,6 +683,45 @@ describe("the ignore key", () => {
 			state.close();
 		}
 	});
+});
+
+/**
+ * ADR 0060: the two keys that need the state file say so in the same words.
+ * The in-memory shell holds no list rule, so it has no pile for `f` to lift and
+ * nowhere to keep the flag `i` writes: each states the missing fact on the
+ * Message line and leaves the list standing, so neither press reads as a view
+ * change the frame cannot show.
+ */
+test("the no-state shell refuses i and f with the same missing fact", async () => {
+	const seeded = openFactoryState(statePath());
+	seeded.initializeSources([{ name: "issues", kind: "github-issues" }]);
+	seeded.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+	const projection = seeded.visibleTickets([], "implement");
+	seeded.close();
+	await withApp(
+		async (setup) => {
+			await awaitFrame(setup, (f) => ticketRowHolds(f, FIRST_LEAD), "the shell's Ticket row");
+			const refusedIgnore = await press(setup, "i", "the ignore refusal", (f) =>
+				messageRowOf(f).includes("needs SQLite state"),
+			);
+			expect(messageRowOf(refusedIgnore)).toContain("ignoring a Ticket needs SQLite state");
+			const refusedFilter = await press(setup, "f", "the filter refusal", (f) =>
+				messageRowOf(f).includes("list filter needs SQLite state"),
+			);
+			// Neither press moved the list: every view of the shell is the rows it
+			// was handed, and no pile exists to reveal or hide.
+			expect(ticketRowHolds(refusedFilter, FIRST_LEAD)).toBe(true);
+			expect(refusedFilter).not.toContain("ignored:");
+		},
+		WIDTH,
+		HEIGHT,
+		{
+			config: fixtureConfig(),
+			runner: emptyAgentRunner(),
+			initialTickets: projection,
+			pollIntervalMs: 60_000,
+		},
+	);
 });
 
 describe("the obligation gate", () => {
@@ -1038,11 +1077,17 @@ describe("the ignore and the machine", () => {
 						(f) => ticketRowHolds(f, FIRST_LEAD) && detailPaneText(f).includes(firstTitle),
 					);
 					await press(setup, "return", "the start to wait", (f) => f.includes("waiting: 1"));
-					// The queue's own jump: Enter on the piled row lands the cursor on the
-					// item its ask made, where Delete removes it. The list rule withholds
-					// the Ticket's own row from the active view, so the line has to name the
-					// Ticket from the projection before the rule (ADR 0042, ADR 0060).
-					await press(setup, "return", "the queue cursor", (f) => f.includes("┌─❯ Work queue"));
+					// Back to the active rows before the removal: the list rule withholds the
+					// Ticket's own row there, so the line has to name the Ticket from the
+					// projection before the rule, not from the rows the section draws
+					// (ADR 0042, ADR 0060).
+					await press(setup, "f", "every row", (f) => ticketRowHolds(f, FIRST_LEAD));
+					await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
+					// The cursor walks out of the Ticket list and down the visible flow: the
+					// empty Consultation section is a row, and down from it crosses into the
+					// Work queue, where Delete removes the item (ADR 0034).
+					await press(setup, "j", "the Consultation row", (f) => f.includes("❯ Consultations"));
+					await press(setup, "j", "the queue cursor", (f) => f.includes("┌─❯ Work queue"));
 					const line = await press(setup, "delete", "the item removed", (f) =>
 						messageRowOf(f).includes("was removed"),
 					);
@@ -1369,6 +1414,13 @@ describe("the ignored marker's frame", () => {
 					await press(setup, "f", "the pile again", (f) => ticketRowHolds(f, FIRST_LEAD));
 					const cleared = await press(setup, "i", "the clear", (f) =>
 						messageRowOf(f).includes("is not ignored"),
+					);
+					// The whole line, because the flag is gone and the row is still
+					// nowhere: the covered rule holds it out on its own, and ADR 0060
+					// states the clear returns the row to no list at all. A line that
+					// promised a returned row would contradict this same frame.
+					expect(messageRowOf(cleared)).toContain(
+						`"${firstTitle}" is not ignored: an open fixing pull request still holds its row out of the list`,
 					);
 					expect(headerRow(cleared)).not.toContain("ignored:");
 					expect(state.ignoredTickets().has(FIRST)).toBe(false);

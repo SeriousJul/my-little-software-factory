@@ -640,6 +640,29 @@ function ticketFilterContext(filter: "active" | "ignored" | "all"): ControlConte
 	});
 }
 
+/** The Work queue's list context, where `f` owns no list at all (ADR 0060):
+ * the key names two lists and this section holds neither. */
+function queueFilterContext(): ControlContext {
+	return contextFor("work-queue-list", {
+		listCanMove: true,
+		detailCanScroll: false,
+		workQueueDepth: 1,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** The refusal `f` answers with where it owns nothing, read through the
+ * catalogue's own availability: the example states the sentence the plane
+ * states, never a copy of it, so a picture cannot outlive a rewording. */
+function ticketFilterRefusal(context: ControlContext): string {
+	const control = controlById("ticket-filter");
+	return refusalText(control, availabilityFor(control, context));
+}
+
 /** The Consultation-detail context the Goto example runs on. */
 function gotoContext(paneAlive: boolean): ControlContext {
 	return contextFor("consultation-detail", {
@@ -1058,12 +1081,11 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				width: columns.contentWidth,
 			}),
 			// The refusal the Work queue owns: `f` answers in two lists, and this
-			// section in neither of them.
+			// section in neither of them. The sentence comes through the catalogue's
+			// own availability, so the picture cannot drift from the refusal the plane
+			// states (ADR 0060).
 			messageRowElement(
-				{
-					severity: "warning",
-					text: "this control is available only in the Ticket section and the Consultation section",
-				},
+				{ severity: "warning", text: ticketFilterRefusal(queueFilterContext()) },
 				columns.contentWidth,
 			),
 			createElement(

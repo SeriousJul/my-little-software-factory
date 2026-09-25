@@ -134,9 +134,16 @@ agent works keeps its row because there is live work to reach, one whose turn
 settled keeps its row because a decision is owed, and the row goes back into the
 pile when the cycle ends and the ticket rests. The flag stays set under both, so
 the row wears `ignored` beside its own state badge while its work runs, and the
-`i` line says whether the act took the row or kept it. `f` cycles the list through
+`i` line states the row's place from the read the act caused: a resting row is
+gone, a live row stays, and a clear that leaves the row to the covered rule says
+so instead of promising a row. `f` cycles the list through
 the active rows, the pile the flag names, and both, and the filter opens on the
-active rows at every boot. The pile is the ledger of the operator's own acts: it
+active rows at every boot; without a state file the list rule has no pile to
+lift, so `f` states that in the same words `i` states the missing fact in. The
+section's counts and the held-count bell read the active view, never the drawn
+rows, and every read that resolves a ticket by identity - a Work queue row and
+the line that cancels its item, an open panel and the Live view's pane read -
+reads the whole projection, so a cycle of `f` moves none of them. The pile is the ledger of the operator's own acts: it
 holds every row the flag stands on, so a ticket that is ignored *and* covered -
 one whose fixing pull request appeared after the ignore - stands in the pile and
 in no other view, and the same key reaches it there. The detail pane names the

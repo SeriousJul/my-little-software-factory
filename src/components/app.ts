@@ -541,8 +541,14 @@ export function App({
 	 * and its placement facts instead of falling back to a raw identity or
 	 * closing the screen that shows it.
 	 */
-	const findTicket = (identity: string): Ticket | undefined =>
-		listViewsRef.current.all.find((ticket) => ticket.identity === identity);
+	// The callback is stable on purpose: it reads the projection through the ref,
+	// so a surface that takes it as an effect dependency re-runs on the facts it
+	// watches, not on every render.
+	const findTicket = useCallback(
+		(identity: string): Ticket | undefined =>
+			listViewsRef.current.projection.find((ticket) => ticket.identity === identity),
+		[],
+	);
 	// The row the list draws: the item's ticket by its title while the ticket
 	// is still in the projection, by its identity once it is gone, and the
 	// Consultation's item by the record's identity prefix (ADR 0034, issue #90).
@@ -1430,7 +1436,7 @@ export function App({
 					// remembered by hand here.
 					setListViews((current) => {
 						const next = inMemoryTicketViews(
-							current.all.map((row: Ticket) =>
+							current.projection.map((row: Ticket) =>
 								row.identity === ticket.identity
 									? { ...row, state: "handed-off" as const, handoff }
 									: row,
@@ -2329,6 +2335,15 @@ export function App({
 	 * filter's cycle does.
 	 */
 	const cycleTicketFilter = () => {
+		if (state === undefined) {
+			// The reveal shows the rows the list rule withholds, and the in-memory
+			// projection runs no list rule at all: every view is the rows it was
+			// handed, so the key has no pile to show. It says so in the same words
+			// `i` says the missing fact in, rather than moving a filter the frame
+			// cannot see (ADR 0060).
+			setWarningMessage("the Ticket list filter needs SQLite state");
+			return;
+		}
 		const next = nextTicketListFilter(ticketFilterRef.current);
 		ticketFilterRef.current = next;
 		setTicketFilter(next);
@@ -2374,12 +2389,15 @@ export function App({
 		// its stated semantics - the item goes, the ticket keeps its state.
 		const cancelled =
 			ignored === true && handoffDispatch?.removeQueueItem(ticket.identity) === true;
-		// The row's face decides the sentence, by the list rule's own answer for the
-		// flag as it now stands: a resting Ticket's row leaves with the flag and
-		// returns without it, while a Ticket with live work or a decision owed keeps
-		// its row either way (ADR 0060). So the line and the list cannot disagree.
+		// The row's place in the list decides the sentence, read from the re-read the
+		// act just caused: a resting Ticket's row leaves with the flag and returns
+		// without it, while a Ticket with live work or a decision owed keeps its row
+		// either way. `active` is the list rule's own answer - the covered rule beside
+		// the ignore's - so a clear that returns no row says which rule still holds it
+		// out instead of promising a row the list does not draw (ADR 0042, ADR 0060).
 		const resting = ignoreWithholdsRow({ ...ticket, ignored: true });
 		replaceTickets();
+		const backInList = listViewsRef.current.active.some((row) => row.identity === ticket.identity);
 		const name = `"${ticket.title}"`;
 		if (ignored) {
 			reportMessage({
@@ -2393,9 +2411,11 @@ export function App({
 		} else {
 			reportMessage({
 				severity: "info",
-				text: resting
-					? `${name} is not ignored: its row is back in the list`
-					: `${name} is not ignored: the machine may start it again`,
+				text: !resting
+					? `${name} is not ignored: the machine may start it again`
+					: backInList
+						? `${name} is not ignored: its row is back in the list`
+						: `${name} is not ignored: an open fixing pull request still holds its row out of the list`,
 			});
 		}
 	};
@@ -3907,9 +3927,10 @@ export function App({
 		const refresh = async () => {
 			// Re-read the pane the ticket's current handoff records, so a
 			// routed handoff moves the stream to the new pane on the next
-			// tick. The projection before the list rule reaches the Ticket whether
-			// or not the list holds its row (ADR 0060).
-			const ticket = listViewsRef.current.all.find((item) => item.identity === identity);
+			// tick. The one identity read reaches the Ticket whether or not the
+			// list draws its row, so the stream never loses its pane to a filter
+			// cycle or a withheld row (ADR 0042, ADR 0060).
+			const ticket = findTicket(identity);
 			const paneId = ticket?.handoff?.paneId ?? null;
 			if (paneId === null) {
 				if (active)
@@ -3936,7 +3957,7 @@ export function App({
 			active = false;
 			clearInterval(timer);
 		};
-	}, [panel, liveMode, commandRunner]);
+	}, [panel, liveMode, commandRunner, findTicket]);
 	// An empty grouped list names the axis in its message, so "no tickets" says
 	// which view the operator is reading (issue #159, user story 9).
 	const emptyMessage =

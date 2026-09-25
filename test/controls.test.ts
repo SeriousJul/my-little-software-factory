@@ -378,6 +378,32 @@ describe("the shared control catalogue", () => {
 				available: false,
 				reason: "the selected Ticket cannot be ignored: its Agent is missing",
 			});
+			// Taking a Ticket back is never refused, so the flag stands under each
+			// obligation the row's own face wears: the row that cannot be put away is
+			// always the row that can be taken back (ADR 0060, user story 15). The three
+			// contexts run the un-ignore past each refusal's own fact.
+			for (const owed of [
+				contextFor(mode, {
+					...values,
+					selectedTicket: rowTicket({ state: "awaiting", ignored: true, lastCompletion: null }),
+				}),
+				contextFor(mode, {
+					...values,
+					selectedTicket: rowTicket({
+						state: "awaiting",
+						ignored: true,
+						lastCompletion: { cause: "failed", decision: null },
+					}),
+				}),
+				contextFor(mode, {
+					...values,
+					selectedTicket: rowTicket({ state: "running", ignored: true, lastCompletion: null }),
+					selectedTicketMarker: "missing",
+				}),
+			]) {
+				expect(availabilityFor(ignore, owed)).toEqual({ available: true });
+				expect(controlById("ticket-ignore").barLabel?.(owed)).toBe("Un-ignore");
+			}
 			// A blocked Agent owes no decision, so the key stands.
 			const blocked = contextFor(mode, {
 				...values,

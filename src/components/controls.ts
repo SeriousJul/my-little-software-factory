@@ -1204,7 +1204,10 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		modes: [...baseModes],
 		ticketSectionOnly: true,
 		availability: ticketIgnore,
-		guideNote: "hides the Ticket from the list and every automatic start",
+		// The reveal rule, not the withheld-row absolute the first version stated:
+		// the flag hides a resting row, while a row with live work or a decision owed
+		// stays listed under it (ADR 0060).
+		guideNote: "hides a resting row and stops every automatic start",
 	},
 	{
 		// `f` cycles the Ticket section's List filter (ADR 0060): the pile the

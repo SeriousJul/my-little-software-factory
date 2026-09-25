@@ -2106,43 +2106,57 @@ describe("Consultation live-worktree launch through the UI", () => {
 	});
 
 	/**
-	 * ADR 0060: the ignore moves a resting row, and it changes no fact. A Ticket
-	 * the operator judged out can still hold live work they asked for by hand, and
-	 * the safety read that names who owns the live checkout takes the rows the
-	 * machine reads - never the rows the Ticket list happens to draw - so the
-	 * conflict keeps naming that Ticket instead of degrading to a bare Herdr Agent.
+	 * ADR 0060: the ignore moves a resting row, and it changes no fact - and no
+	 * machine read follows the operator's List filter. The safety read that names
+	 * who owns the live checkout takes the rows the machine reads, so with the
+	 * filter cycled to the pile it still names every live Ticket: the one the
+	 * operator judged out, which a read that dropped flagged rows would lose, and
+	 * the one the pile does not draw at all, which a read that followed the view
+	 * would lose. Neither conflict degrades to a bare Herdr Agent.
 	 */
-	test("an ignored Ticket with live work is still named as the checkout conflict", async () => {
+	test("every live checkout conflict is named whatever the List filter draws", async () => {
 		const state = openFactoryState(join(home, "state.sqlite"));
 		const inner = new FakeRunner();
 		stubLiveCheckout(inner, false);
 		stubLiveLaunchExisting(inner);
 		stubPaneReadText(inner, "pane-c1", "Agent: live answer");
-		// The Ticket's own Agent works in this exact checkout, and the Ticket is
-		// ignored: the row leaves the list, the Agent does not.
-		const ticketIdentity = "github:github.com:I_9";
-		const fetchedTicket = issueTicket(ticketIdentity, { title: "Watch agent turns" });
+		// Two Tickets work in this exact checkout: the judged-out one and the one
+		// the operator left in the list. Both Agents are live; neither row's place
+		// in the filter decides whether the safety read names it.
+		const ignoredTicket = "github:github.com:I_9";
+		const listedTicket = "github:github.com:I_7";
 		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
-		state.applyFetch({ name: "issues", kind: "github-issues" }, success([fetchedTicket]));
-		const claim = state.claimHandoff(
-			ticketIdentity,
-			{
-				agentType: "pi",
-				environment: "live-worktree",
-				taskType: "implement",
-				model: "",
-				thinking: "",
-				contextWindow: "",
-			},
-			"open",
+		state.applyFetch(
+			{ name: "issues", kind: "github-issues" },
+			success([
+				issueTicket(ignoredTicket, { title: "Watch agent turns" }),
+				issueTicket(listedTicket, { title: "Rank tickets by priority", externalKey: "#7" }),
+			]),
 		);
-		if (!claim.ok) throw new Error(claim.reason);
-		state.settleHandoff(claim.claim.attemptId, true, undefined, {
-			paneId: "pane-tick",
-			tabId: "tab-tick",
-			workspaceId: "ws-tick",
-		});
-		expect(state.setTicketIgnored(ticketIdentity, true, null)).toEqual({ ok: true });
+		for (const [identity, pane] of [
+			[ignoredTicket, "pane-tick"],
+			[listedTicket, "pane-rank"],
+		] as const) {
+			const claim = state.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "live-worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: pane,
+				tabId: `tab-${pane}`,
+				workspaceId: `ws-${pane}`,
+			});
+		}
+		expect(state.setTicketIgnored(ignoredTicket, true, null)).toEqual({ ok: true });
 		const conflictList = JSON.stringify({
 			result: {
 				agents: [
@@ -2155,6 +2169,15 @@ describe("Consultation live-worktree launch through the UI", () => {
 						name: "watch-agent-turns",
 						checkout_path: checkout,
 					},
+					{
+						pane_id: "pane-rank",
+						tab_id: "tab-rank",
+						workspace_id: "ws-rank",
+						agent: "pi",
+						agent_status: "working",
+						name: "rank-tickets-by-priority",
+						checkout_path: checkout,
+					},
 				],
 			},
 		});
@@ -2162,8 +2185,16 @@ describe("Consultation live-worktree launch through the UI", () => {
 		try {
 			await withApp(
 				async (setup) => {
-					// The ignored Ticket holds no row in the active list the operator sees,
-					// and its Agent still holds the checkout.
+					// The pile view: the drawn rows hold only the Ticket the operator
+					// judged out, so the list the screen shows is not the list the
+					// machine reads.
+					const pile = await press(setup, "f", "the pile", (f) => f.includes("ignored: 1"));
+					// Exactly one in-flight row stands in the drawn list: the judged-out one.
+					const drawnRows = rowsOf(frameText(pile)).filter((row) =>
+						row.includes("[running] [implement]"),
+					);
+					expect(drawnRows).toHaveLength(1);
+					expect(drawnRows[0]).toContain("Watch age");
 					await openLauncher(setup);
 					await awaitFrame(
 						setup,
@@ -2176,10 +2207,119 @@ describe("Consultation live-worktree launch through the UI", () => {
 						(f) => f.includes("Live checkout conflict"),
 						"the live checkout conflict panel",
 					);
-					// The conflict names the Ticket, not a bare Herdr Agent: the identity the
+					// Both Tickets are named, not a bare Herdr Agent: the identity the
 					// confirmation records is the same one the operator would read.
-					expect(frameText(panel)).toContain(`Conflict: Ticket ${ticketIdentity}`);
-					expect(frameText(panel)).not.toContain("Conflict: Herdr Agent pi (pane-tick)");
+					expect(frameText(panel)).toContain(`Conflict: Ticket ${ignoredTicket}`);
+					expect(frameText(panel)).toContain(`Conflict: Ticket ${listedTicket}`);
+					expect(frameText(panel)).not.toContain("Conflict: Herdr Agent");
+				},
+				WIDTH,
+				32,
+				{ state, runner, config: { ...liveConfigFor(), maxParallelAgents: 4 }, home },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0060: the launcher's repository choices come from the rows the machine
+	 * reads, so a cycle of the operator's List filter moves nothing and
+	 * re-validates nothing. The pile view draws only the Tickets the operator
+	 * judged out, and one repository stands on a row the pile never shows while
+	 * another stands only on a judged-out row: a catalog that followed the view
+	 * would lose the first, and a catalog that dropped the flag would lose the
+	 * second. The cycle visits all three choices, and it asks git for nothing new.
+	 */
+	test("the repository catalog holds every Ticket's repository across a filter cycle", async () => {
+		const state = openFactoryState(join(home, "state.sqlite"));
+		const inner = new FakeRunner();
+		stubLiveCheckout(inner, false);
+		// Two repositories the config does not name, so the catalog can only learn
+		// them from a Ticket's own row: one on a judged-out Ticket with live work,
+		// one on a settled Ticket the pile leaves out.
+		const judged = "github:github.com:I_9";
+		const settled = "github:github.com:I_7";
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch(
+			{ name: "issues", kind: "github-issues" },
+			success([
+				issueTicket(judged, {
+					title: "Watch agent turns",
+					repository: {
+						identity: "github.com/acme/billing",
+						displayName: "acme/billing",
+						cloneUrl: "https://github.com/acme/billing.git",
+					},
+				}),
+				issueTicket(settled, {
+					title: "Rank tickets by priority",
+					externalKey: "#7",
+					repository: {
+						identity: "github.com/acme/tools",
+						displayName: "acme/tools",
+						cloneUrl: "https://github.com/acme/tools.git",
+					},
+				}),
+			]),
+		);
+		for (const identity of [judged, settled]) {
+			const claim = state.claimHandoff(
+				identity,
+				{
+					agentType: "pi",
+					environment: "worktree",
+					taskType: "implement",
+					model: "",
+					thinking: "",
+					contextWindow: "",
+				},
+				"open",
+			);
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: `pane-${identity.slice(-1)}`,
+				tabId: `tab-${identity.slice(-1)}`,
+				workspaceId: `ws-${identity.slice(-1)}`,
+			});
+		}
+		// One row the operator judged out, one row they left in the list: each
+		// carries a repository no other row names.
+		expect(state.setTicketIgnored(judged, true, null)).toEqual({ ok: true });
+		const runner = new ConsultationRunner(inner, agentListJson([]));
+		try {
+			await withApp(
+				async (setup) => {
+					// The pile view: the drawn rows hold only the judged-out Ticket, so
+					// acme/tools stands on no drawn row at all.
+					await press(setup, "f", "the pile", (f) => f.includes("ignored: 1"));
+					const validatedBefore = runner
+						.commands()
+						.filter((command) => command.includes("rev-parse")).length;
+					await openLauncher(setup);
+					await tabUntilSlot(setup, "\u276f Repository");
+					// The selector's own walk: every choice it offers, collected as the
+					// cycle moves. A repository the catalog lost is never visited.
+					const choices = ["acme/billing", "acme/factory", "acme/tools"];
+					const choiceOn = (frame: string): string | undefined =>
+						choices.find((name) => frameText(frame).includes(`Repository ${name}`));
+					const seen = new Set<string>();
+					let current = await settle(setup);
+					for (let step = 0; step < 3; step += 1) {
+						const shown = choiceOn(current);
+						if (shown !== undefined) seen.add(shown);
+						current = await pressArrow(setup, "right", "the next Repository", (f) => {
+							const next = choiceOn(f);
+							return next !== undefined && next !== shown;
+						});
+					}
+					expect([...seen].sort()).toEqual(choices);
+					// And the cycle asked git for nothing new: the catalog never turned
+					// over, so no option was validated a second time.
+					const validatedAfter = runner
+						.commands()
+						.filter((command) => command.includes("rev-parse")).length;
+					expect(validatedAfter).toBe(validatedBefore);
 				},
 				WIDTH,
 				32,
