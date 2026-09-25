@@ -25,6 +25,7 @@ import {
 	actionBarRowOf,
 	awaitFrame,
 	detailPaneText,
+	frameText,
 	HEIGHT,
 	messageRowOf,
 	press,
@@ -171,6 +172,15 @@ function ticketRowHolds(frame: string, lead: string): boolean {
 	return rowsOf(frame).some(
 		(row) => row.startsWith("│") && row.includes("[implement]") && row.includes(lead),
 	);
+}
+
+/**
+ * Whether the frame's Ticket pane holds a Group header for one value with one
+ * row under it. The header paints its count in its own cell, so the read folds
+ * the layout gaps first.
+ */
+function groupWithOneRow(frame: string, value: string): boolean {
+	return rowsOf(frameText(frame)).some((row) => /[▾▸] /.test(row) && row.includes(`${value} 1`));
 }
 
 /** The Ticket section's header row. */
@@ -566,6 +576,48 @@ describe("the ignore key", () => {
 						(f) => listRowOf(f, SECOND_LEAD) >= 0,
 					);
 					expect(listRowOf(back, FIRST_LEAD)).toBeGreaterThanOrEqual(0);
+				},
+				WIDTH,
+				HEIGHT,
+				props,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0060's consequence beside ADR 0058 and ADR 0059: the axis slices the rows
+	 * the list rule already left, so a Ticket the ignore withholds while it rests
+	 * sits in no Group and is counted by no Group header, and the pile the filter
+	 * reveals groups its own rows the same way. Measured here because the two
+	 * features land on one list (issue #163).
+	 */
+	test("the axis counts the rows the ignore leaves, and the pile its own", async () => {
+		const { state, src, props } = rig();
+		state.setGroupingAxis("tickets", "repository");
+		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		try {
+			await withApp(
+				async (setup) => {
+					await listed(setup, src, SECOND_LEAD);
+					const grouped = await awaitFrame(
+						setup,
+						(f) => groupWithOneRow(f, "acme/factory"),
+						"the Group header of the one row the list left",
+					);
+					// One repository, one row: the ignored Ticket holds no Group place and
+					// no header count, and its own row is nowhere in the pane.
+					expect(groupWithOneRow(grouped, "acme/factory")).toBe(true);
+					expect(listRowOf(grouped, FIRST_LEAD)).toBe(-1);
+					// The pile reads under the same axis, with its own count.
+					const pile = await press(
+						setup,
+						"f",
+						"the grouped pile",
+						(f) => groupWithOneRow(f, "acme/factory") && listRowOf(f, FIRST_LEAD) >= 0,
+					);
+					expect(pile).toContain("ignored");
 				},
 				WIDTH,
 				HEIGHT,
