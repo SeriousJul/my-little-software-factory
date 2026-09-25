@@ -91,6 +91,8 @@ const ticket: Ticket = {
 	matchedStateName: null,
 	actionable: true,
 	handoffRecoveryRequired: false,
+	ignored: false,
+	ignoredAt: null,
 	handoffCount: 0,
 	lastCompletion: null,
 	leftover: null,

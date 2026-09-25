@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import type { TransitionOutcome } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import { withIssueReferences } from "../src/domain/ticket.ts";
 import {
 	type FactoryState,
 	openFactoryState,
@@ -1914,6 +1915,378 @@ describe("factory SQLite state", () => {
 			const third = openFactoryState(path);
 			expect(third.queuePaused()).toBe(false);
 			third.close();
+		});
+	});
+
+	describe("the ignored ticket (ADR 0060)", () => {
+		test("the flag and its moment are durable factory state on the ticket row", () => {
+			const path = statePath();
+			const state = openFactoryState(path, () => Date.parse("2026-09-24T10:00:00Z"));
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const [ticket] = state.visibleTickets([], "implement");
+			expect(ticket.ignored).toBe(false);
+			expect(ticket.ignoredAt).toBeNull();
+
+			expect(state.setTicketIgnored(ticket.identity, true, null)).toEqual({ ok: true });
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
+			state.close();
+
+			// A second plane on the same file - another operator, or a restart -
+			// reads the same answer, and the row's projection carries it.
+			const reopened = openFactoryState(path);
+			expect(reopened.ignoredTickets().has(ticket.identity)).toBe(true);
+			expect(reopened.visibleTickets([], "implement")).toEqual([]);
+			expect(reopened.projectedTickets([], "implement")).toEqual([
+				expect.objectContaining({
+					identity: ticket.identity,
+					ignored: true,
+					ignoredAt: "2026-09-24T10:00:00.000Z",
+				}),
+			]);
+			// The clear costs the same effort as the set, and the moment leaves
+			// with the flag.
+			expect(reopened.setTicketIgnored(ticket.identity, false, null)).toEqual({ ok: true });
+			expect(reopened.projectedTickets([], "implement")[0]).toEqual(
+				expect.objectContaining({ ignored: false, ignoredAt: null }),
+			);
+			reopened.close();
+		});
+
+		test("the flag follows the Ticket across a source that drops it and brings it back", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const [ticket] = state.visibleTickets([], "implement");
+			expect(state.setTicketIgnored(ticket.identity, true, null).ok).toBe(true);
+			// The source stops listing the item: the membership goes inactive,
+			// and the ticket row stays with its flag.
+			state.applyFetch(sourceA, success([]));
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
+			// The item returns to the source: the same identity reads ignored, and
+			// the active view holds it out again.
+			state.applyFetch(sourceA, success([fetched()]));
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
+			expect(state.visibleTickets([], "implement")).toEqual([]);
+			expect(state.visibleTickets([], "implement", "ignored").map((row) => row.identity)).toEqual([
+				ticket.identity,
+			]);
+			state.close();
+		});
+
+		test("the write refuses a Ticket that owes a decision, in the obligation's words", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const [ticket] = state.visibleTickets([], "implement");
+			// An open ticket owes nothing: the act runs.
+			expect(state.setTicketIgnored(ticket.identity, true, null)).toEqual({ ok: true });
+			expect(state.setTicketIgnored(ticket.identity, false, null)).toEqual({ ok: true });
+			// A settled turn rests on the operator's decision.
+			const claim = state.claimHandoff(ticket.identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true);
+			state.settleTurn({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "the turn is done",
+				turnLog: textLog("the turn is done"),
+				completedAt: "2026-08-31T11:00:00Z",
+			});
+			expect(state.ticketObligation(ticket.identity, null)).toBe("awaiting");
+			expect(state.setTicketIgnored(ticket.identity, true, null)).toEqual({
+				ok: false,
+				reason: "the selected Ticket cannot be ignored: it awaits a decision",
+			});
+			// A held turn names its own fact.
+			state.settleTurn({
+				ticketIdentity: ticket.identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "the turn failed",
+				turnLog: textLog("the turn failed"),
+				completedAt: "2026-08-31T11:05:00Z",
+				cause: "failed",
+			});
+			expect(state.ticketObligation(ticket.identity, null)).toBe("held");
+			expect(state.setTicketIgnored(ticket.identity, true, null)).toEqual({
+				ok: false,
+				reason: "the selected Ticket cannot be ignored: its held turn awaits a decision",
+			});
+			state.close();
+		});
+
+		test("a missing Agent refuses the ignore, and the flag never leaves by itself", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const [ticket] = state.visibleTickets([], "implement");
+			const claim = state.claimHandoff(ticket.identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			// The agent works: no obligation, and the key runs.
+			expect(state.setTicketIgnored(ticket.identity, true, null)).toEqual({ ok: true });
+			expect(state.setTicketIgnored(ticket.identity, false, null)).toEqual({ ok: true });
+			// The poll's marker says the Agent is gone: the write refuses it, and
+			// only for the Ticket the marker stands on.
+			expect(state.setTicketIgnored(ticket.identity, true, "missing")).toEqual({
+				ok: false,
+				reason: "the selected Ticket cannot be ignored: its Agent is missing",
+			});
+			expect(state.setTicketIgnored(ticket.identity, true, "blocked").ok).toBe(true);
+			// ADR 0060: nothing but the operator's own key clears the flag. The row's
+			// face is what the list rule reads, so a live or awaiting Ticket keeps its
+			// row while the flag stands, and a resting one loses it again.
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
+			expect(state.visibleTickets([], "implement").map((row) => row.identity)).toEqual([
+				ticket.identity,
+			]);
+			state.closeWorkCycle(ticket.identity);
+			expect(state.ignoredTickets().has(ticket.identity)).toBe(true);
+			expect(state.visibleTickets([], "implement")).toEqual([]);
+			// Taking the Ticket back is never refused, and it costs the flag.
+			expect(state.setTicketIgnored(ticket.identity, false, "missing")).toEqual({ ok: true });
+			expect(state.visibleTickets([], "implement").map((row) => row.identity)).toEqual([
+				ticket.identity,
+			]);
+			state.close();
+		});
+
+		/**
+		 * ADR 0060: the ignore hides a resting Ticket and never live work or a
+		 * decision owed, so no obligation is ever out of the list the counts, the
+		 * bell, and the Decision surface read. The pile the `ignored` view shows is
+		 * every row the flag stands on.
+		 */
+		test("the ignore withholds a resting row and reveals a live or awaiting one", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			const rest = fetched();
+			const live = fetched("github:github.com:I_6");
+			state.applyFetch(sourceA, success([rest, live]));
+			expect(state.setTicketIgnored(rest.identity, true, null).ok).toBe(true);
+			const claim = state.claimHandoff(live.identity, choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true, undefined, {
+				paneId: "pane-1",
+				tabId: "tab-1",
+				workspaceId: "ws-1",
+			});
+			expect(state.setTicketIgnored(live.identity, true, null).ok).toBe(true);
+			const identities = (filter: "active" | "ignored" | "all") =>
+				state.visibleTickets([], "implement", filter).map((ticket) => ticket.identity);
+			// The resting row leaves the active view; the live one stays for its work.
+			expect(identities("active")).toEqual([live.identity]);
+			// The pile names both: the ledger of what the operator put away.
+			expect(identities("ignored")).toEqual([live.identity, rest.identity]);
+			expect(identities("all")).toEqual([live.identity, rest.identity]);
+			// Settle the live turn: awaiting owes a decision, so its row stays in the
+			// active view, and the flag still stands on it.
+			state.settleTurn({
+				ticketIdentity: live.identity,
+				handoffId: claim.claim.attemptId,
+				taskType: "implement",
+				agentType: "pi",
+				message: "the turn is done",
+				turnLog: textLog("the turn is done"),
+				completedAt: "2026-08-31T11:00:00Z",
+			});
+			expect(identities("active")).toEqual([live.identity]);
+			expect(state.ticketObligation(live.identity, null)).toBe("awaiting");
+			expect(state.ignoredTickets().has(live.identity)).toBe(true);
+			// Close its cycle: the Ticket rests, and the same flag takes the row back.
+			state.applyCompletionDecision({
+				ticketIdentity: live.identity,
+				handoffId: claim.claim.attemptId,
+				decision: "closed",
+				decidedAt: "2026-08-31T11:30:00Z",
+			});
+			expect(identities("active")).toEqual([]);
+			// Both rest, and the pile keeps the list's own order: the attention group,
+			// then the newest external update (ADR 0050).
+			expect(identities("ignored")).toEqual([rest.identity, live.identity]);
+			state.close();
+		});
+
+		test("the projection's three filter states hold the covered rule beside them", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			const issue = fetched();
+			const pull = {
+				...fetched("github:github.com:P_7"),
+				sourceKind: "github-pull-request",
+				externalKey: "#7",
+				title: "Pull 7",
+				attributes: withIssueReferences({}, [
+					{ identity: null, number: 5, repository: "acme/factory" },
+				]),
+			};
+			state.applyFetch(sourceA, success([issue, pull]));
+			const identities = (filter: "active" | "ignored" | "all") =>
+				state.visibleTickets([], "implement", filter).map((ticket) => ticket.identity);
+			// The covered issue leaves the active view beside its pull request.
+			expect(identities("active")).toEqual(["github:github.com:P_7"]);
+			expect(state.setTicketIgnored("github:github.com:P_7", true, null).ok).toBe(true);
+			// The ignored view holds the ignored row, the active view holds the
+			// rest, and `all` holds both - and the covered issue is in none of
+			// them, because the covered rule says nothing about the ignore.
+			expect(identities("ignored")).toEqual(["github:github.com:P_7"]);
+			expect(identities("all")).toEqual(["github:github.com:P_7"]);
+			expect(identities("active")).toEqual([]);
+			// The empty active view is the filtered list, not an idle factory:
+			// the rows the ignore took away are the pile `f` shows.
+			state.close();
+		});
+
+		test("the pile holds a Ticket that is both ignored and covered", () => {
+			// ADR 0060: the pile is the ledger of what the operator put away, so
+			// every row the flag stands on stands in it. The two causes are not
+			// symmetric: the covered rule takes a row out of the list, and the
+			// ignore is the operator's own act, recorded. A Ticket that is both
+			// must stay reachable, because the only key that clears the flag is the
+			// one on its row (user story 6).
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			const coveredIssue = fetched();
+			const pull = {
+				...fetched("github:github.com:P_7"),
+				sourceKind: "github-pull-request",
+				externalKey: "#7",
+				title: "Pull 7",
+				attributes: withIssueReferences({}, [
+					{ identity: null, number: 5, repository: "acme/factory" },
+				]),
+			};
+			state.applyFetch(sourceA, success([coveredIssue, pull]));
+			// Rest first: the issue is covered, so it is out of the list before the
+			// operator ever touches it, and a fixing pull request appearing after an
+			// ignore reaches the same state by the ordinary refresh path.
+			expect(
+				state.visibleTickets([], "implement", "active").map((ticket) => ticket.identity),
+			).toEqual(["github:github.com:P_7"]);
+			expect(state.setTicketIgnored(coveredIssue.identity, true, null).ok).toBe(true);
+			const identities = (filter: "active" | "ignored" | "all") =>
+				state
+					.visibleTickets([], "implement", filter)
+					.map((ticket) => ticket.identity)
+					.sort();
+			// Neither the active view nor the `all` list shows it: the covered rule
+			// still holds the list (ADR 0042), and the ignore never reaches it.
+			expect(identities("active")).toEqual(["github:github.com:P_7"]);
+			expect(identities("all")).toEqual(["github:github.com:P_7"]);
+			// The pile shows it, and it stands nowhere else: `f` is the only way to
+			// reach the row, and the row is the only place the `i` key runs.
+			expect(identities("ignored")).toEqual([coveredIssue.identity]);
+			// The gate reads the flag, so the machine holds the Ticket out either way.
+			expect(state.ignoredTickets().has(coveredIssue.identity)).toBe(true);
+			expect(
+				state.ticketListViews([], "implement", "ignored").ignored.map((ticket) => ticket.identity),
+			).toEqual(expect.arrayContaining([coveredIssue.identity]));
+			expect(state.setTicketIgnored(coveredIssue.identity, false, null).ok).toBe(true);
+			expect(identities("ignored")).toEqual([]);
+			state.close();
+		});
+
+		test("the ignored view keeps the attention bands and the newest-external-update order", () => {
+			const state = openFactoryState(":memory:");
+			state.initializeSources([sourceA]);
+			// Three open Tickets with three external update times: the pile reads
+			// by the attention band first and the newest update after, the order
+			// the active list holds (ADR 0059's one rule for the ignored view).
+			const dated = (identity: string, at: string): FetchedTicket => ({
+				...fetched(identity),
+				externalUpdatedAt: at,
+			});
+			state.applyFetch(
+				sourceA,
+				success([
+					dated("github:github.com:I_5", "2026-08-31T09:00:00Z"),
+					dated("github:github.com:I_6", "2026-08-31T12:00:00Z"),
+					dated("github:github.com:I_7", "2026-08-31T10:00:00Z"),
+				]),
+			);
+			for (const identity of [
+				"github:github.com:I_5",
+				"github:github.com:I_6",
+				"github:github.com:I_7",
+			]) {
+				expect(state.setTicketIgnored(identity, true, null).ok).toBe(true);
+			}
+			// I_5 runs an Agent, so it leads the pile; the rest read by the newest
+			// external update, exactly as the active list sorts them.
+			const running = state.claimHandoff("github:github.com:I_5", choice, "open");
+			if (!running.ok) throw new Error(running.reason);
+			state.settleHandoff(running.claim.attemptId, true);
+			expect(
+				state
+					.visibleTickets([], "implement", "ignored")
+					.map((ticket) => [ticket.identity, ticket.state]),
+			).toEqual([
+				["github:github.com:I_5", "handed-off"],
+				["github:github.com:I_6", "open"],
+				["github:github.com:I_7", "open"],
+			]);
+			state.close();
+		});
+
+		test("a v21 file migrates to v22: the flag lands off, and the rows keep their state", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			const claim = state.claimHandoff("github:github.com:I_5", choice, "open");
+			if (!claim.ok) throw new Error(claim.reason);
+			state.settleHandoff(claim.claim.attemptId, true);
+			state.close();
+
+			// The older file: the stamp at 21, and no flag column at all.
+			const db = new Database(path);
+			db.exec("ALTER TABLE tickets DROP COLUMN ignored");
+			db.exec("ALTER TABLE tickets DROP COLUMN ignored_at");
+			db.prepare("UPDATE schema_version SET version = 21").run();
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.ignoredTickets().has("github:github.com:I_5")).toBe(false);
+			expect(reopened.projectedTickets([], "implement")).toEqual([
+				expect.objectContaining({ identity: "github:github.com:I_5", ignored: false }),
+			]);
+			expect(reopened.setTicketIgnored("github:github.com:I_5", true, null).ok).toBe(true);
+			reopened.close();
+
+			const check = new Database(path, { readonly: true });
+			expect(
+				(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+			).toBe(SCHEMA_VERSION);
+			check.close();
+		});
+
+		test("a file stamped at the target without the column heals on open", () => {
+			// The standing rule the queue's own columns carry: ask the file, not
+			// the stamp. A build that stamped v22 before its step ran left a file
+			// the stamp does not describe, and the missing column is the file's
+			// own confession.
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			state.close();
+
+			const db = new Database(path);
+			db.exec("ALTER TABLE tickets DROP COLUMN ignored");
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.ignoredTickets().has("github:github.com:I_5")).toBe(false);
+			expect(reopened.setTicketIgnored("github:github.com:I_5", true, null).ok).toBe(true);
+			reopened.close();
 		});
 	});
 

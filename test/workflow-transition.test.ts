@@ -1046,6 +1046,8 @@ function stubTicket(
 		matchedStateName: null,
 		actionable: true,
 		handoffRecoveryRequired: false,
+		ignored: false,
+		ignoredAt: null,
 		leftover: null,
 		...over,
 	};

@@ -44,12 +44,15 @@
  * 5. The Work queue's pickup (ADR 0049): the items the free seats take, in
  *    queue order, run before the top-up. Every pickup ends in start or
  *    drop, so the queue never sits stuck.
- * 6. The auto top-up (ADR 0051): while Auto-handoff mode is on, the queue
- *    pause is down, the Dispatch pause is clear, and the queue is empty,
- *    the cycle adds exactly one item - a continuation first, then a
+ * 6. The auto top-up (ADR 0051, ADR 0060): while Auto-handoff mode is on,
+ *    the queue pause is down, the Dispatch pause is clear, and the queue is
+ *    empty, the cycle adds exactly one item - a continuation first, then a
  *    restart, then a new open ticket, else nothing. A queue that holds even
  *    one item holds the automatic adds until it drains, so the queue never
- *    piles.
+ *    piles. An ignored ticket (ADR 0060) is out of every one of those walks,
+ *    and it stays out while its row shows again for live work or a decision
+ *    owed: the flag holds the machine out, and only the operator's own key
+ *    clears it.
  *
  * When herdr cannot be listed at all, the loop pauses and holds: the last
  * known facts stay, and the UI warns. Nothing is re-run blindly on
@@ -58,10 +61,10 @@
  */
 
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
-import { type Completion, isHeldCompletion, type Ticket } from "./domain/ticket.ts";
+import { type Completion, isHeldCompletion, type Ticket, ticketIgnored } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
-import type { HerdrAgent } from "./herdr.ts";
+import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
 import { identifyHandoffAgentName } from "./naming.ts";
 import { type RefreshClock, SYSTEM_CLOCK } from "./refresh.ts";
 import { type CommandRunner, commandFailureText } from "./runner.ts";
@@ -572,24 +575,22 @@ export class ObservationCoordinator {
 		let changed = reclaimed;
 		for (const ticket of inFlight) {
 			if (ticket.paneId === null) continue;
-			const agent = byPane.get(ticket.paneId);
-			// The pane id of a closed pane is handed out again: a live agent in
-			// the ticket's pane that is not the ticket's own leaves the ticket's
-			// agent missing, so the missing path runs instead of the settle.
-			const foreign =
-				agent !== undefined &&
-				identifyHandoffAgentName(
-					agent.name,
-					this.state.agentNameForTicket(ticket.ticketIdentity),
-				) === "foreign";
-			if (agent === undefined || foreign) {
+			// The one missing-Agent rule: the id of a closed pane is handed out
+			// again, so a live agent in the ticket's pane that is not the ticket's
+			// own leaves the ticket's agent missing, and the missing path runs
+			// instead of the settle.
+			const own = ownAgentInPane(
+				byPane.get(ticket.paneId),
+				this.state.agentNameForTicket(ticket.ticketIdentity),
+			);
+			if (own === null) {
 				if (autoOn) {
 					changed = (await this.handleMissing(ticket)) || changed;
 					if (this.stopped) return;
 				}
 				continue;
 			}
-			const status = normalizeAgentStatus(agent.status);
+			const status = normalizeAgentStatus(own.status);
 			// A state correction on read: herdr owns the fact of whether the
 			// agent is working, so the poll corrects the stored state to
 			// match it, and the list shows reality without the control plane
@@ -601,9 +602,9 @@ export class ObservationCoordinator {
 				// One read serves the decision and the trace: the same session
 				// read that settles the turn supplies its log, cause, and
 				// detail (ADR 0015).
-				const turnEnd = await this.maybeReadTurnEnd(ticket, agent);
+				const turnEnd = await this.maybeReadTurnEnd(ticket, own);
 				if (this.maybeSettles(ticket, turnEnd)) {
-					changed = (await this.settle(ticket, agent, turnEnd)) || changed;
+					changed = (await this.settle(ticket, own, turnEnd)) || changed;
 					if (this.stopped) return;
 				}
 			}
@@ -613,18 +614,14 @@ export class ObservationCoordinator {
 		// turn. It holds a slot and its next settle refreshes the same trace.
 		for (const ticket of this.state.ticketsByState(["awaiting"])) {
 			if (ticket.paneId === null) continue;
-			const agent = byPane.get(ticket.paneId);
-			if (agent === undefined || normalizeAgentStatus(agent.status) !== "working") continue;
 			// The same identity rule as the in-flight loop: a working agent in
 			// the ticket's reused pane id that is not the ticket's own does not
 			// resume the ticket's pending turn.
-			if (
-				identifyHandoffAgentName(
-					agent.name,
-					this.state.agentNameForTicket(ticket.ticketIdentity),
-				) === "foreign"
-			)
-				continue;
+			const own = ownAgentInPane(
+				byPane.get(ticket.paneId),
+				this.state.agentNameForTicket(ticket.ticketIdentity),
+			);
+			if (own === null || normalizeAgentStatus(own.status) !== "working") continue;
 			if (this.state.reopenTurn(ticket.ticketIdentity, ticket.handoffAttemptId)) {
 				changed = true;
 			}
@@ -1209,12 +1206,28 @@ export class ObservationCoordinator {
 		// is the top-up's pace.
 		if (this.state.workQueue().length > 0) return false;
 		const config = this.config();
+		// The pile, in one read for the walk that holds an identity and no row
+		// (ADR 0060): the in-flight tickets the Restart walk reads carry no flag of
+		// their own, so one read answers the whole cycle in place of one query per
+		// candidate. Every other walk asks `ticketIgnored` of the row it holds.
+		const ignored = this.state.ignoredTickets();
+		// The list, in one read. The continuation and re-fired-skip walks take the
+		// active view: the rows the whole list rule leaves. The open-ticket add takes
+		// the `all` view instead - every row the covered rule leaves, the ignore aside
+		// - and gates the flag on its own, so the gate is the walk's own test and not
+		// an accident of which view it happens to read.
+		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
+		const tickets = list.active;
 		// 1. Continuation: the awaiting tickets whose latest settled turn
 		// fired a transition that auto-advances into a position the machine
 		// still offers a task for, in the ticket list's order.
-		const tickets = this.state.visibleTickets(config.workflowStates, config.defaultTaskType);
 		for (const ticket of tickets) {
 			if (ticket.state !== "awaiting") continue;
+			// The ignore gate (ADR 0060): an ignored Ticket is no automatic start.
+			// The row is here in the active view the whole time its Agent works or
+			// its decision stays owed, so this test - not the filter - is what holds
+			// the machine out, and it is the one gate predicate on the row's flag.
+			if (ticketIgnored(ticket)) continue;
 			const position = this.continuationPosition(ticket);
 			if (position === null) continue;
 			const completion = this.state.lastCompletion(ticket.identity);
@@ -1280,6 +1293,12 @@ export class ObservationCoordinator {
 				.projectedTickets(config.workflowStates, config.defaultTaskType)
 				.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
 			if (position === undefined) continue;
+			// The ignore gate (ADR 0060): this walk reads the projection before the
+			// list rule on purpose, because ADR 0042's route must reach its position
+			// even when the row is withheld, and a resting ignored position is
+			// withheld while a live one is listed. Either way the one gate predicate on
+			// the row the walk holds is what answers.
+			if (ticketIgnored(position)) continue;
 			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
 			// One test of the position's standing. The projection builds
 			// `actionable` from the open state, so it holds every position that
@@ -1321,16 +1340,23 @@ export class ObservationCoordinator {
 		const byPane = new Map<string, HerdrAgent>();
 		for (const agent of agents) byPane.set(agent.paneId, agent);
 		for (const ticket of this.state.ticketsByState(["handed-off", "running"])) {
+			// The ignore gate (ADR 0060): this walk reads the in-flight tickets
+			// directly, not the list, and an ignored Ticket whose Agent is missing is
+			// listed all the same because its work is live - so without the test the
+			// plane would start an Agent on work the operator judged out, and it would
+			// keep starting it for as long as the flag stood. The identity is all this
+			// walk holds, so it asks the cycle's own read of the pile.
+			if (ignored.has(ticket.ticketIdentity)) continue;
 			if (this.now() - Date.parse(ticket.startedAt) < this.startupGraceMs) continue;
 			if (ticket.paneId === null) continue;
-			const agent = byPane.get(ticket.paneId);
-			const foreign =
-				agent !== undefined &&
-				identifyHandoffAgentName(
-					agent.name,
+			// The one missing-Agent rule, read the way the in-flight pass reads it.
+			if (
+				ownAgentInPane(
+					byPane.get(ticket.paneId),
 					this.state.agentNameForTicket(ticket.ticketIdentity),
-				) === "foreign";
-			if (agent !== undefined && !foreign) continue;
+				) !== null
+			)
+				continue;
 			if (this.state.handoffCount(ticket.ticketIdentity) >= config.maxHandoffsPerTicket) continue;
 			if (this.state.hasWorkItem(ticket.ticketIdentity)) continue;
 			if (this.restarted.has(ticket.ticketIdentity)) continue;
@@ -1382,8 +1408,13 @@ export class ObservationCoordinator {
 		// the handoff limit, re-verified since its last cycle ended, offering a
 		// task, and past the Same-type hold. A full parallel seat is no longer
 		// a hold here: the item rests in the queue until a seat frees.
-		for (const ticket of tickets) {
+		for (const ticket of list.rows) {
 			if (ticket.state !== "open" || !ticket.actionable) continue;
+			// The ignore gate (ADR 0060), on this walk's own read: the `all` view holds
+			// every row the covered rule leaves, so a resting ignored row stands here
+			// and this test is the one that holds it out. The gate is the flag on the
+			// row, never the filter that drew it.
+			if (ticketIgnored(ticket)) continue;
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
 			// The ticket's last cycle may have ended on a source change the agent
 			// made (a merged pull request, a closed issue). Its membership still
@@ -1485,6 +1516,10 @@ export class ObservationCoordinator {
 			.projectedTickets(config.workflowStates, config.defaultTaskType)
 			.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
 		if (position === undefined) return null;
+		// The ignore gate (ADR 0060): the route starts an Agent on the position,
+		// and the position is read from the projection before the list rule, so the
+		// one gate predicate on the row this walk holds is what answers.
+		if (ticketIgnored(position)) return null;
 		if (position.state !== "open" && position.state !== "awaiting") return null;
 		if (position.suggestedTaskType !== outcome.positionTaskType) return null;
 		// The actionable fact is the open position's: an awaiting position is

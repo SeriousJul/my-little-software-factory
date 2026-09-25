@@ -87,6 +87,8 @@ describe("the shared control gallery", () => {
 			"notes",
 			"spinner",
 			"queue-order",
+			"ticket-ignore",
+			"ticket-filter",
 			"session-view",
 			"agent-view-fallback",
 			"captured-history-fallback",
@@ -406,6 +408,61 @@ describe("the shared control gallery", () => {
 		// renderer's own default is not a paint.
 		expect(spanColors(setup, "openai/gpt-5.1")).toEqual([[255, 255, 255]]);
 		expect(spanColors(setup, "Launch Consultation")).toEqual([[255, 255, 255]]);
+	});
+
+	/**
+	 * The Ticket ignore example (ADR 0060): the bar's flip, the header's cell for
+	 * the pile, and the three obligations the key refuses.
+	 *
+	 * Every refusal's words come from the catalogue through the gallery, so a
+	 * change to the refusal's sentence fails here rather than drifting between a
+	 * literal picture and the live frame. The example opens tall: three bars and
+	 * three Message rows stand in it beside the header and the note.
+	 */
+	test("the Ticket ignore example holds the flip and the three refusals", async () => {
+		const setup = await gallery("ticket-ignore", 120, 30);
+		const charFrame = setup.captureCharFrame();
+		const text = frameText(charFrame);
+		const lines = rowsOf(charFrame);
+		expect(text).toContain(stateLine("ticket-ignore"));
+		// The bar's flip, in the words the two rows read: the key beside an
+		// active row puts the Ticket away, the key beside a piled row takes it
+		// back, and both Ticket panes name it.
+		expect(text).toContain("i Ignore");
+		expect(text).toContain("i Un-ignore");
+		// The header's conditional cell for the pile the filter hides.
+		expect(text).toContain("ignored: 1");
+		// Each obligation states its own clause once, on one Message row, and on
+		// the bar that refuses it: no duplicated picture, and the refused key
+		// still stands dimmed on its row's bar rather than vanishing from it.
+		for (const clause of [
+			"it awaits a decision",
+			"its held turn awaits a decision",
+			"its Agent is missing",
+		]) {
+			const stated = lines.filter((line) => line.includes(clause));
+			expect(stated).toHaveLength(1);
+			expect(stated[0]).toContain(`the selected Ticket cannot be ignored: ${clause}`);
+		}
+		// The active row's own bar names the key, and each of the three refused
+		// rows names it on its bar.
+		expect(lines.filter((line) => line.includes("i Ignore")).length).toBe(4);
+	});
+
+	test("the List filter example holds the cycle's three hints and the queue refusal", async () => {
+		const setup = await gallery("ticket-filter", 150, 24);
+		const text = frameText(setup.captureCharFrame());
+		expect(text).toContain(stateLine("ticket-filter"));
+		// The hint names the view the cycle moves to, in all three states. The
+		// example opens wide: the filter is the section's lowest rung, so a narrow
+		// bar packs it away before it touches the Launch or the Close.
+		expect(text).toContain("f Show ignored");
+		expect(text).toContain("f Show all");
+		expect(text).toContain("f Show active");
+		// The Work queue owns neither meaning of the key, and says so.
+		expect(text).toContain(
+			"this control is available only in the Ticket section and the Consultation section",
+		);
 	});
 
 	test("the Consultation detail example shows the Session view and its fallbacks", async () => {

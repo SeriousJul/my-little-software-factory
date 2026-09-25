@@ -64,14 +64,27 @@ row adds no second line about it. The line the cancel writes states only
 what the module measured: a removal when a row stood under the cursor,
 and the queue holding no such row when its pickup had already taken it.
 Up and down move the cursor through the visible rows and cross the
-section boundary when the sections are adjacent. `d` and `f` belong to
-the Consultation section: in the Work queue they state that section's
-refusal, and the queue's guide and Action bar name neither key (issue
-#85, ADR 0034). The mode the bar and the guide state derives from the
-section that holds the cursor and its focused pane.
+section boundary when the sections are adjacent. `d` belongs to the
+Consultation section alone: in the Ticket section and the Work queue it
+states that section's refusal, and neither the guide nor the Action bar
+names it (issue #85, ADR 0034). `f` belongs to two lists: it cycles the
+Ticket section's List filter, and it is the Consultation section's history
+(ADR 0060). In the Work queue the key states that the Ticket section and the
+Consultation section own it, and the queue's guide and bar name it nowhere.
+The mode the bar and the guide state derives from the section that holds the
+cursor and its focused pane.
 
 The Ticket header always shows the pipeline counts - open, running, and
-awaiting - with the held count appended only when it is non-zero. The
+awaiting - then the held count with its bell marker and then the ignored count,
+each of the last two only when it is non-zero (ADR 0060). The order is the
+machine's: a held turn is a decision the plane waits on and an ignore is a
+judgment it does not, so a row too short for both conditional cells spends its
+last cells on the pile and never on the held count or its bell. The ignored cell
+counts the Tickets the flag names, so the header says the list is filtered before
+the operator looks for a row that is not there.
+All four counts, and the held-count bell, read the machine's active view rather
+than the operator's List filter, so a cycle of `f` moves none of them and rings
+nothing. The
 Consultation header carries its attention facts (awaiting response,
 recovery). Both counts are computed from the in-memory projection on each
 render; neither queries the state.
@@ -101,7 +114,40 @@ ticket off with `Enter`, open the decision modal on an awaiting one, the
 missing modal on a ticket whose agent is gone, and the override panel with
 `e`. `a` toggles
 auto-handoff, `r` refreshes, `g` goes to the agent's pane, `w` closes the work
-cycle of the selected ticket behind a confirmation (ADR 0031), and `q` quits.
+cycle of the selected ticket behind a confirmation (ADR 0031), `i` ignores the
+selected ticket or takes it back, and `f` cycles the Ticket section's List
+filter (ADR 0060), and `q` quits.
+The list rule that takes a row away has two causes in one read, in the state
+module alone (ADR 0042, ADR 0060): a covered open ticket - one an open fixing
+pull request fixes - and an ignored ticket at rest - one the operator judged out
+of the factory's way. The ignore is the operator's act on one ticket, and the
+flag is factory state on the state file: the plane writes nothing to the source
+for it, and nothing clears the flag but that same key. The ticket keeps its
+state, its Parallel limit seat, and its source facts; every automatic start - the
+Top-up's continuation, its re-fired skip, its restart, and its open-ticket add -
+leaves it out. A start the operator asks for by hand still runs, and the waiting
+start an ignore finds in the Work queue leaves with the row. The key refuses a
+ticket that owes a decision now - one `awaiting`, one whose newest settled turn is
+held, and one whose agent is missing - and states that reason on the Message line.
+The ignore then hides a resting row and never a live one: an ignored ticket whose
+agent works keeps its row because there is live work to reach, one whose turn
+settled keeps its row because a decision is owed, and the row goes back into the
+pile when the cycle ends and the ticket rests. The flag stays set under both, so
+the row wears `ignored` beside its own state badge while its work runs, and the
+`i` line states the row's place from the read the act caused: a resting row is
+gone, a live row stays, and a clear that leaves the row to the covered rule says
+so instead of promising a row. `f` cycles the list through
+the active rows, the pile the flag names, and both, and the filter opens on the
+active rows at every boot; without a state file the list rule has no pile to
+lift, so `f` states that in the same words `i` states the missing fact in. The
+section's counts and the held-count bell read the active view, never the drawn
+rows, and every read that resolves a ticket by identity - a Work queue row and
+the line that cancels its item, an open panel and the Live view's pane read -
+reads the whole projection, so a cycle of `f` moves none of them. The pile is the ledger of the operator's own acts: it
+holds every row the flag stands on, so a ticket that is ignored *and* covered -
+one whose fixing pull request appeared after the ignore - stands in the pile and
+in no other view, and the same key reaches it there. The detail pane names the
+ignore, the moment it was set, and the key that clears it.
 The ticket list no longer carries a rank: the ticket priority is retired in
 favor of the queue's order (ADR 0050), and the detail pane holds no priority
 row and the list no key that raises, lowers, or clears a rank. `+` and `-`
@@ -222,9 +268,11 @@ minimum of three content rows, so the list the operator works in gets the
 room. The floor this sets is 27 rows (ADR 0049): the shortest terminal the
 control plane draws its three sections at. The
 Ticket header always shows the pipeline counts - open, running, and awaiting,
-in the labelled form on a terminal of at least 60 columns and the short form
-below - and appends the held count with its bell marker only when it is
-non-zero. The Consultation header carries that section's attention facts, its
+in the labelled form on a terminal 60 columns and wider and the bare form
+below - appends the held count with its bell marker and then the ignored count
+only when each is non-zero, the held cell first so a short row cuts the view
+fact and not the machine's (ADR 0060), and truncates at the row's end so a narrow
+terminal never hides the section's own name. The Consultation header carries that section's attention facts, its
 awaiting-response and recovery counts, the bell marker while the bell rings,
 and "new output" while that fact holds, so a Consultation that needs
 the operator is visible whether the section is expanded or collapsed and no

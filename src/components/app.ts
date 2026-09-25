@@ -51,7 +51,10 @@ import {
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
 	holdsDecision,
+	ignoreWithholdsRow,
+	nextTicketListFilter,
 	type Ticket,
+	type TicketListFilter,
 } from "../domain/ticket.ts";
 import {
 	baseChoice,
@@ -66,7 +69,7 @@ import {
 	reportHandoffOutcome,
 	type StoredHandoffFacts,
 } from "../handoff-dispatch.ts";
-import type { HerdrAgent } from "../herdr.ts";
+import { type HerdrAgent, ownAgentInPane } from "../herdr.ts";
 import type { Logger } from "../logging.ts";
 import { agentNameFor, type HandoffAgentIdentity, identifyHandoffAgentName } from "../naming.ts";
 import {
@@ -92,6 +95,8 @@ import { type TaskProfileStart, taskProfilesOf } from "../setting-resolution.ts"
 import {
 	type Consultation,
 	type FactoryState,
+	inMemoryTicketViews,
+	type TicketListViews,
 	type WorkQueueItem,
 	workQueueIdentityOf,
 } from "../state.ts";
@@ -320,7 +325,26 @@ export function App({
 	const [config, setConfig] = useState<FactoryConfig>(() => configProp);
 	// Only test callers supply deterministic tickets. Production starts with
 	// the empty SQLite projection while configured sources refresh.
-	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
+	// The Ticket section's list, in one read per refresh (ADR 0042, ADR 0060):
+	// the rows the operator's List filter shows, the active view the section's
+	// counts and the held bell read, the pile the ignore withholds, and the
+	// projection before the list rule the reads that resolve a Ticket by
+	// identity take. The in-memory shell holds no list rule, so all its views
+	// are the rows it was given.
+	const [listViews, setListViews] = useState<TicketListViews>(() => {
+		if (state !== undefined)
+			return state.ticketListViews(config.workflowStates, config.defaultTaskType, "active");
+		return inMemoryTicketViews(initialTickets ?? []);
+	});
+	const tickets = listViews.rows;
+	/**
+	 * The rows the machine reads (ADR 0060): the active view of the Ticket
+	 * section's list rule, never the operator's List filter. The section's
+	 * counts, the held-count bell, and the Consultation launcher's repository
+	 * choices all take it, so a filter cycle moves none of them and each stays
+	 * the fact the factory stands on.
+	 */
+	const machineTickets = listViews.active;
 	const ticketsRef = useRef(tickets);
 	/**
 	 * The Grouping axis in effect for the Ticket section's list (issue #159).
@@ -377,6 +401,17 @@ export function App({
 	const consultationIndexRef = useRef(0);
 	const [historyFilter, setHistoryFilter] = useState<"open" | "closed" | "all">("open");
 	const historyFilterRef = useRef<"open" | "closed" | "all">("open");
+	// The Ticket section's List filter (ADR 0060): one of ADR 0036's session view
+	// facts, beside the Consultation section's history filter. It is a view, not
+	// factory state, and it opens on the active rows at every boot: a restart
+	// never greets the operator with the pile they dismissed.
+	const [ticketFilter, setTicketFilter] = useState<TicketListFilter>("active");
+	const ticketFilterRef = useRef<TicketListFilter>("active");
+	// The one list read's other views, kept beside the drawn rows: the active
+	// view every machine read and the section's counts take, and the projection
+	// before the list rule every read that resolves a Ticket by identity takes.
+	const listViewsRef = useRef(listViews);
+	listViewsRef.current = listViews;
 	const [launcher, setLauncher] = useState(false);
 	const [replacementConsultationId, setReplacementConsultationId] = useState<string | null>(null);
 	// The launcher's unfinished form, kept for this application run only. A
@@ -483,6 +518,7 @@ export function App({
 	workQueueIndexRef.current = workQueueIndex;
 	workQueueDetailScrollRef.current = workQueueDetailScroll;
 	historyFilterRef.current = historyFilter;
+	ticketFilterRef.current = ticketFilter;
 	// The Work queue read in queue order (ADR 0034): the manual starts waiting
 	// for a Parallel limit seat. It follows the other two projections: one read
 	// into UI state, re-read on the refresh every change ends in - the dispatch
@@ -494,6 +530,25 @@ export function App({
 	);
 	const workQueueRef = useRef<readonly WorkQueueItem[]>(workQueue);
 	workQueueRef.current = workQueue;
+	/**
+	 * The Ticket one identity names, whatever the list shows (ADR 0042, ADR 0060).
+	 *
+	 * The reads that resolve a Ticket by identity - a Work queue row naming the
+	 * ticket its start waits for, an open panel following its Ticket across a
+	 * refresh, the route's position, a confirmed override - ask the projection
+	 * before the list rule, never the drawn rows. A row the list rule withholds
+	 * is still the Ticket the operator named, so it keeps its title, its pane,
+	 * and its placement facts instead of falling back to a raw identity or
+	 * closing the screen that shows it.
+	 */
+	// The callback is stable on purpose: it reads the projection through the ref,
+	// so a surface that takes it as an effect dependency re-runs on the facts it
+	// watches, not on every render.
+	const findTicket = useCallback(
+		(identity: string): Ticket | undefined =>
+			listViewsRef.current.projection.find((ticket) => ticket.identity === identity),
+		[],
+	);
 	// The row the list draws: the item's ticket by its title while the ticket
 	// is still in the projection, by its identity once it is gone, and the
 	// Consultation's item by the record's identity prefix (ADR 0034, issue #90).
@@ -502,8 +557,10 @@ export function App({
 		title:
 			item.kind === "consultation"
 				? item.consultationId.slice(0, 8)
-				: (tickets.find((ticket) => ticket.identity === item.ticketIdentity)?.title ??
-					item.ticketIdentity),
+				: // The projection before the list rule (ADR 0042, ADR 0060): a waiting
+					// start of an ignored or covered Ticket still names its ticket, not
+					// the raw identity the row would fall back to.
+					(findTicket(item.ticketIdentity)?.title ?? item.ticketIdentity),
 	}));
 	// The cursor never rests on a queue that no longer holds its row: a pickup
 	// or a cancel that empties the section sends the selection home, and the
@@ -694,9 +751,13 @@ export function App({
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
 	// ended failed, aborted, truncated, or no-turn with no decision, read
 	// through the domain's one rule so this count and a Group header's agree.
-	// A ticket whose agent works again has left awaiting and is no longer held
-	// (its next settle overwrites the trace).
-	const heldCount = tickets.filter(holdsDecision).length;
+	// They rest in awaiting, held against every automatic decision, until the
+	// operator acts. A ticket whose agent works again has left awaiting and is no
+	// longer held (its next settle overwrites the trace). The count reads the
+	// active view beside every other header count, so an ignored Ticket that owes
+	// a decision is counted the moment its row returns, and a List filter cycle
+	// never moves the baseline the bell compares against (ADR 0060).
+	const heldCount = machineTickets.filter(holdsDecision).length;
 	const modeLine =
 		state === undefined
 			? ""
@@ -705,13 +766,21 @@ export function App({
 				}${autoMode && dispatchPause ? " paused" : ""}`;
 	const consultationCounts = state?.consultationCounts() ?? { awaitingResponse: 0, recovery: 0 };
 	// The steady pipeline counts the Ticket header carries (user stories 11
-	// through 16): open, in flight, and awaiting a decision. They come from
-	// the in-memory ticket array on each render, so no query runs for them.
-	const openCount = tickets.filter((ticket) => ticket.state === "open").length;
-	const runningCount = tickets.filter(
+	// through 16): open, in flight, and awaiting a decision. They come from the
+	// active view on each render, so no query runs for them and the operator's
+	// List filter never moves them (ADR 0060): the machine's obligations and the
+	// rows the section counts do not bend around the view, and cycling `f` rings
+	// no bell.
+	const openCount = machineTickets.filter((ticket) => ticket.state === "open").length;
+	const runningCount = machineTickets.filter(
 		(ticket) => ticket.state === "handed-off" || ticket.state === "running",
 	).length;
-	const awaitingCount = tickets.filter((ticket) => ticket.state === "awaiting").length;
+	const awaitingCount = machineTickets.filter((ticket) => ticket.state === "awaiting").length;
+	// The ignored count the Ticket header carries (ADR 0060): the pile the flag
+	// made, read from the same list step as the rows themselves, so the number
+	// names exactly the rows the `ignored` view shows and nothing re-applies the
+	// covered rule or the ignore rule in the screen.
+	const ignoredCount = listViews.ignored.length;
 	// The held count the bell compares against: a rise rings the terminal bell
 	// and flashes the Tickets header, a fall or a steady count does not.
 	useEffect(() => {
@@ -847,17 +916,21 @@ export function App({
 	detailTicketRef.current = detailTicket;
 	const selectedTicket = detailTicket;
 	/**
-	 * The identity of the live agent in the ticket's handoff pane, from the
-	 * names alone: the handoff's recorded name, or the stable name the
-	 * handoff asked for first, against the name the agent runs under. Herdr
-	 * hands the id of a closed pane out again, so a different agent in the
-	 * id is not the ticket's own.
+	 * The name the Ticket's own Agent runs under: the handoff's recorded name,
+	 * or the stable name the handoff asked for first. Herdr hands the id of a
+	 * closed pane out again, so this is the name the pane's agent is checked
+	 * against.
 	 */
-	const ticketAgentIdentity = (ticket: Ticket, agent: HerdrAgent): HandoffAgentIdentity => {
+	const ticketAgentName = (ticket: Ticket): string => {
 		const recorded = ticket.handoff?.herdrName ?? null;
-		const expected = recorded !== null && recorded !== "" ? recorded : agentNameFor(ticket.title);
-		return identifyHandoffAgentName(agent.name, expected);
+		return recorded !== null && recorded !== "" ? recorded : agentNameFor(ticket.title);
 	};
+	/**
+	 * The identity of the live agent in the ticket's handoff pane, from the
+	 * names alone (ADR 0043).
+	 */
+	const ticketAgentIdentity = (ticket: Ticket, agent: HerdrAgent): HandoffAgentIdentity =>
+		identifyHandoffAgentName(agent.name, ticketAgentName(ticket));
 	// The Consultation the shared detail pane points at: the one under the
 	// unified cursor. None while the cursor is on the Ticket list, so the
 	// detail renders the ticket and no polling runs for a Consultation the
@@ -980,26 +1053,35 @@ export function App({
 	const replaceTickets = useCallback(() => {
 		if (state === undefined) return;
 		const currentConfig = configRef.current;
-		// The list orders the open state by the ticket's own task type, then
-		// the newest external update (ADR 0050).
-		const next = state.visibleTickets(currentConfig.workflowStates, currentConfig.defaultTaskType);
+		// One projection read serves the drawn rows, the active view the section's
+		// counts and the held bell take, the pile the header names, and the
+		// projection before the list rule the identity reads take. The list orders
+		// the open state by the ticket's own task type, then the newest external
+		// update (ADR 0050); the Ticket section's List filter decides which rows the
+		// operator sees (ADR 0060), and no other read follows it.
+		const next = state.ticketListViews(
+			currentConfig.workflowStates,
+			currentConfig.defaultTaskType,
+			ticketFilterRef.current,
+		);
 		const currentIndex = selectedIndexRef.current;
 		const anchor = rowAnchorOf(ticketRowsRef.current, currentIndex);
-		const nextRows = ticketRows(next, groupingAxisRef.current, groupFoldsRef.current);
-		// The cursor keeps the ticket it held through a re-read, the way it did
-		// before grouping; a ticket that left the list lands the cursor on the
-		// row nearest the one it held (issue #159, user story 43).
+		const nextRows = ticketRows(next.rows, groupingAxisRef.current, groupFoldsRef.current);
+		// The cursor keeps the ticket it held through a re-read and through a change
+		// of the operator's List filter; a ticket that left the row list lands the
+		// cursor on the row nearest the one it held (issue #159, user story 43).
 		const nextIndex = ticketRowIndexForAnchor(
 			nextRows,
 			anchor,
 			currentIndex,
-			next,
+			next.rows,
 			groupingAxisRef.current,
 		);
-		ticketsRef.current = next;
+		listViewsRef.current = next;
+		ticketsRef.current = next.rows;
 		ticketRowsRef.current = nextRows;
 		selectedIndexRef.current = nextIndex;
-		setTickets(next);
+		setListViews(next);
 		setHealths(state.sourceHealths());
 		setSelectedIndex(nextIndex);
 		// The Work queue rides on the same re-read: an enqueue, a pickup, and a
@@ -1090,13 +1172,16 @@ export function App({
 		// No successful observation yet: an unreadable herdr must not read
 		// as "every pane is missing".
 		if (paneId === null || agentsRef.current === null) return null;
-		const agent = agentsRef.current.find((candidate) => candidate.paneId === paneId);
-		if (agent === undefined) return "missing";
-		// A live agent that is not the ticket's own - herdr placed another
-		// agent in the ticket's reused pane id - leaves the ticket's agent
-		// missing, the way an absent one does.
-		if (ticketAgentIdentity(ticket, agent) === "foreign") return "missing";
-		return normalizeAgentStatus(agent.status) === "blocked" ? "blocked" : null;
+		// The one missing-Agent rule, shared with the in-flight pass, the Restart
+		// walk, and the Parallel limit seat count: a live agent that is not the
+		// ticket's own - herdr placed another agent in the ticket's reused pane
+		// id - leaves the ticket's agent missing, the way an absent one does.
+		const own = ownAgentInPane(
+			agentsRef.current.find((candidate) => candidate.paneId === paneId),
+			ticketAgentName(ticket),
+		);
+		if (own === null) return "missing";
+		return normalizeAgentStatus(own.status) === "blocked" ? "blocked" : null;
 	};
 	/**
 	 * The Starting window (ADR 0030) one ticket reads from the app's facts:
@@ -1156,7 +1241,11 @@ export function App({
 			runner: commandRunner,
 			config: () => configRef.current,
 			home: homeDir,
-			tickets: () => ticketsRef.current,
+			// The rows the machine reads, never the operator's List filter (ADR 0060):
+			// the live-checkout conflict read names the in-flight Ticket whose Agent
+			// holds the checkout, and a Ticket the operator judged out of the list is
+			// still live work the confirmation has to name.
+			tickets: () => listViewsRef.current.active,
 			persistRepositoryMapping: persistMapping,
 			callbacks: {
 				onStatus: setStatus,
@@ -1342,13 +1431,19 @@ export function App({
 						workspaceId: outcome.agent.workspaceId,
 						herdrName: outcome.agent.name,
 					};
-					setTickets((all) => {
-						const next = all.map((candidate) =>
-							candidate.identity === ticket.identity
-								? { ...candidate, state: "handed-off" as const, handoff }
-								: candidate,
+					// The in-memory shell holds one array and derives every view from
+					// it, so a patch lands once and no view of the list rule is
+					// remembered by hand here.
+					setListViews((current) => {
+						const next = inMemoryTicketViews(
+							current.projection.map((row: Ticket) =>
+								row.identity === ticket.identity
+									? { ...row, state: "handed-off" as const, handoff }
+									: row,
+							),
 						);
-						ticketsRef.current = next;
+						listViewsRef.current = next;
+						ticketsRef.current = next.rows;
 						return next;
 					});
 				}
@@ -1401,9 +1496,9 @@ export function App({
 		const pending = overrideRef.current;
 		setOverride(null);
 		if (pending === null) return;
-		const ticket = ticketsRef.current.find(
-			(candidate) => candidate.identity === pending.ticketIdentity,
-		);
+		// The projection before the list rule (ADR 0042, ADR 0060): the override
+		// confirms the Ticket it named, whether or not the list still holds the row.
+		const ticket = findTicket(pending.ticketIdentity);
 		if (ticket === undefined) {
 			setWarningMessage("the ticket no longer exists");
 			return;
@@ -1858,8 +1953,9 @@ export function App({
 	 * row, and an in-flight one ends its cycle with no completion record.
 	 */
 	const runTicketClose = (asked: Ticket) => {
-		const ticket =
-			ticketsRef.current.find((candidate) => candidate.identity === asked.identity) ?? asked;
+		// The projection before the list rule: the row can leave the list while the
+		// confirmation stands, and the Close still runs on the Ticket it named.
+		const ticket = findTicket(asked.identity) ?? asked;
 		if (ticket.state === "awaiting") {
 			closeDecidedCycle(ticket);
 			return;
@@ -1954,9 +2050,11 @@ export function App({
 	 */
 	const taskPlacementsFor = (pending: PendingOverride): Record<string, PlacementEvaluation> => {
 		const activeConfig = configRef.current;
-		const settled = ticketsRef.current.find(
-			(candidate) => candidate.identity === pending.ticketIdentity,
-		);
+		// Both rows come from the projection before the list rule (ADR 0042,
+		// ADR 0060): ADR 0042's route reaches a position whose own row is withheld,
+		// and so does an ignored one - the placement facts are the position's, not
+		// the view's.
+		const settled = findTicket(pending.ticketIdentity);
 		if (settled === undefined) return {};
 		// A route dispatches on the position's own ticket (ADR 0027), so the
 		// placement is read on that ticket, not the settled one.
@@ -1964,10 +2062,7 @@ export function App({
 			pending.origin === "workflow"
 				? (settled.lastCompletion?.transition?.positionTicketIdentity ?? settled.identity)
 				: settled.identity;
-		const ticket =
-			identity === settled.identity
-				? settled
-				: ticketsRef.current.find((candidate) => candidate.identity === identity);
+		const ticket = identity === settled.identity ? settled : findTicket(identity);
 		if (ticket === undefined) return {};
 		const evaluations: Record<string, PlacementEvaluation> = {};
 		for (const taskType of Object.keys(activeConfig.taskTypes)) {
@@ -2232,6 +2327,98 @@ export function App({
 		setConsultationScroll(999999);
 		setNewOutput(false);
 	};
+	/**
+	 * `f` cycles the Ticket section's List filter (ADR 0060): active, ignored,
+	 * all. The pile the ignore made is one keypress from view in either
+	 * direction, and the cursor keeps its Ticket when the new view still shows
+	 * it - the re-read preserves the row by identity, the way the history
+	 * filter's cycle does.
+	 */
+	const cycleTicketFilter = () => {
+		if (state === undefined) {
+			// The reveal shows the rows the list rule withholds, and the in-memory
+			// projection runs no list rule at all: every view is the rows it was
+			// handed, so the key has no pile to show. It says so in the same words
+			// `i` says the missing fact in, rather than moving a filter the frame
+			// cannot see (ADR 0060).
+			setWarningMessage("the Ticket list filter needs SQLite state");
+			return;
+		}
+		const next = nextTicketListFilter(ticketFilterRef.current);
+		ticketFilterRef.current = next;
+		setTicketFilter(next);
+		replaceTickets();
+	};
+	/**
+	 * `i` ignores the selected Ticket, or takes it back (ADR 0060).
+	 *
+	 * The flag is factory state on the state file, and the plane writes nothing
+	 * to the source: no label, no close, no comment. The write is the authority -
+	 * it re-reads the obligation the catalogue's availability already judged, so a
+	 * Ticket that owes a decision cannot be hidden from its operator.
+	 *
+	 * The line states what the act actually did, because the ignore hides a
+	 * resting Ticket and never a live one: a Ticket whose row the list keeps for
+	 * its work in flight says so, and its row goes back into the pile when the
+	 * cycle ends. The flag stands under both - nothing but this key clears it.
+	 *
+	 * An ignore also takes the Ticket's waiting start out of the Work queue
+	 * through the dispatch module's cancel path, so the queue never holds work the
+	 * operator put away; a start asked for after the ignore still runs.
+	 */
+	const toggleTicketIgnore = () => {
+		// The Ticket under the cursor, read the way every Ticket control reads it
+		// (issue #159): a Group header holds no Ticket, and the catalogue refused
+		// the key with its own words before this ran.
+		const ticket = ticketAtCursor();
+		if (ticket === undefined) return;
+		if (state === undefined) {
+			// The ignore is durable factory state: the in-memory projection this
+			// shell holds has nowhere to keep it, so the key says so instead of
+			// acting as a view switch the operator would read as an ignore.
+			setWarningMessage("ignoring a Ticket needs SQLite state");
+			return;
+		}
+		const ignored = !ticket.ignored;
+		const result = state.setTicketIgnored(ticket.identity, ignored, markerOf(ticket));
+		if (!result.ok) {
+			setWarningMessage(result.reason);
+			return;
+		}
+		// The waiting start leaves with the row (ADR 0060): the cancel path keeps
+		// its stated semantics - the item goes, the ticket keeps its state.
+		const cancelled =
+			ignored === true && handoffDispatch?.removeQueueItem(ticket.identity) === true;
+		// The row's place in the list decides the sentence, read from the re-read the
+		// act just caused: a resting Ticket's row leaves with the flag and returns
+		// without it, while a Ticket with live work or a decision owed keeps its row
+		// either way. `active` is the list rule's own answer - the covered rule beside
+		// the ignore's - so a clear that returns no row says which rule still holds it
+		// out instead of promising a row the list does not draw (ADR 0042, ADR 0060).
+		const resting = ignoreWithholdsRow({ ...ticket, ignored: true });
+		replaceTickets();
+		const backInList = listViewsRef.current.active.some((row) => row.identity === ticket.identity);
+		const name = `"${ticket.title}"`;
+		if (ignored) {
+			reportMessage({
+				severity: "info",
+				text: cancelled
+					? `${name} is ignored; its waiting start left the Work queue`
+					: resting
+						? `${name} is ignored: no row, no counts, no automatic start`
+						: `${name} is ignored: no automatic start, and its row stays while its work is live`,
+			});
+		} else {
+			reportMessage({
+				severity: "info",
+				text: !resting
+					? `${name} is not ignored: the machine may start it again`
+					: backInList
+						? `${name} is not ignored: its row is back in the list`
+						: `${name} is not ignored: an open fixing pull request still holds its row out of the list`,
+			});
+		}
+	};
 	const cycleConsultationHistory = () => {
 		const next =
 			historyFilterRef.current === "open"
@@ -2374,10 +2561,10 @@ export function App({
 		// and let it answer a later start of the same ticket.
 		const removed = handoffDispatch.removeQueueItem(item.ticketIdentity);
 		// The name the operator reads on the line: the title while the ticket
-		// is still in the projection, its identity once it is gone.
-		const title = ticketsRef.current.find(
-			(candidate) => candidate.identity === item.ticketIdentity,
-		)?.title;
+		// is still in the projection, its identity once it is gone. The projection
+		// before the list rule, so an ignored Ticket's waiting start names its
+		// ticket instead of falling back to the raw identity (ADR 0042, ADR 0060).
+		const title = findTicket(item.ticketIdentity)?.title;
 		const name = title === undefined ? `ticket ${item.ticketIdentity}` : `"${title}"`;
 		if (removed) {
 			setNoticeMessage(`the waiting start for ${name} was removed`);
@@ -2521,6 +2708,11 @@ export function App({
 			consultationPaneAlive: selectedConsultationPaneAlive,
 			ticketPaneAlive: selectedTicketPaneAlive,
 			ticketPaneForeign: selectedTicketPaneForeign,
+			// The ignore's obligation read takes the row's own facts (ADR 0060): the
+			// failure marker the list's badge wears, and the List filter the `f` hint
+			// names the next state of.
+			selectedTicketMarker: selectedTicket === undefined ? null : markerOf(selectedTicket),
+			ticketListFilter: ticketFilterRef.current,
 			consultationTypesConfigured: Object.keys(config.consultationTypes).length > 0,
 			interactionExitKey: configRef.current.interactionExitKey,
 			// The queue pause's own fact (ADR 0052): the `p` hint reads it, so
@@ -2741,6 +2933,11 @@ export function App({
 					}
 				},
 				history: cycleConsultationHistory,
+				// `i` ignores the selected Ticket or takes it back, and `f` cycles the
+				// Ticket section's List filter (ADR 0060). The catalogue gated the
+				// obligation and the section, so both run the act and nothing else.
+				"ticket-ignore": () => toggleTicketIgnore(),
+				"ticket-filter": () => cycleTicketFilter(),
 				"consultation-recovery": () => {
 					const selected = consultationsRef.current[consultationIndexRef.current];
 					if (selected === undefined) return;
@@ -2983,15 +3180,16 @@ export function App({
 	}, [state, replaceTickets, replaceConsultations]);
 	// Repository choices are validated before the launcher presents them. A
 	// stale mapping stays hidden instead of letting an operator start in an
-	// unrelated checkout.
-	const repositoryCatalogKey = consultationRepositoryCatalog(config, tickets)
+	// unrelated checkout. The active view answers them (ADR 0060): the operator's
+	// List filter never moves the catalog, so a cycle of `f` re-validates nothing.
+	const repositoryCatalogKey = consultationRepositoryCatalog(config, machineTickets)
 		.map((option) => `${option.identity}\u0000${option.path}`)
 		.join("\u0001");
-	// biome-ignore lint/correctness/useExhaustiveDependencies: repositoryCatalogKey is derived from config and tickets and tracks both
+	// biome-ignore lint/correctness/useExhaustiveDependencies: repositoryCatalogKey is derived from config and machineTickets and tracks both
 	useEffect(() => {
 		let active = true;
 		void validateConsultationRepositoryOptions(
-			consultationRepositoryCatalog(config, tickets),
+			consultationRepositoryCatalog(config, machineTickets),
 			commandRunner,
 			homeDir,
 		).then((options) => {
@@ -3617,7 +3815,10 @@ export function App({
 	const panelTicket =
 		ticketPanel === null
 			? undefined
-			: ticketsRef.current.find((ticket) => ticket.identity === ticketPanel.identity);
+			: // The projection before the list rule (ADR 0060): an open panel follows its
+				// Ticket across a refresh or a lift, and never tears itself down because the
+				// row left the view the operator happens to be in.
+				findTicket(ticketPanel.identity);
 	const panelConsultation =
 		panel !== null && ticketPanel === null
 			? consultationsRef.current.find((item) => item.id === panel.identity)
@@ -3726,8 +3927,10 @@ export function App({
 		const refresh = async () => {
 			// Re-read the pane the ticket's current handoff records, so a
 			// routed handoff moves the stream to the new pane on the next
-			// tick.
-			const ticket = ticketsRef.current.find((item) => item.identity === identity);
+			// tick. The one identity read reaches the Ticket whether or not the
+			// list draws its row, so the stream never loses its pane to a filter
+			// cycle or a withheld row (ADR 0042, ADR 0060).
+			const ticket = findTicket(identity);
 			const paneId = ticket?.handoff?.paneId ?? null;
 			if (paneId === null) {
 				if (active)
@@ -3754,7 +3957,7 @@ export function App({
 			active = false;
 			clearInterval(timer);
 		};
-	}, [panel, liveMode, commandRunner]);
+	}, [panel, liveMode, commandRunner, findTicket]);
 	// An empty grouped list names the axis in its message, so "no tickets" says
 	// which view the operator is reading (issue #159, user story 9).
 	const emptyMessage =
@@ -3765,7 +3968,17 @@ export function App({
 						? "no ticket sources configured"
 						: healths.length === 0 || healths.some((health) => health.health === "loading")
 							? "loading tickets..."
-							: "no tickets match the configured sources",
+							: // A hidden pile is not an idle factory (ADR 0060): the empty active
+								// view points at the key that shows the rows the ignore took away, and
+								// a filtered view with no rows names the view the operator is in. The
+								// number is the pile itself, the same one the header's `ignored` cell
+								// names: where the active view stands empty, every flagged row is out
+								// of it, because a row with live work or a decision owed stays in.
+								ignoredCount > 0 && ticketFilter === "active"
+								? `no active Tickets; ${ignoredCount} ignored - press f`
+								: ticketFilter === "ignored"
+									? "no ignored Tickets - press f"
+									: "no tickets match the configured sources",
 					groupingAxis,
 				);
 	const replacementConsultation =
@@ -3900,6 +4113,7 @@ export function App({
 						running: runningCount,
 						awaiting: awaitingCount,
 						held: heldCount,
+						ignored: ignoredCount,
 						heldBell,
 						active: mainSurfaceActive,
 						onToggle: () => clickSection("tickets"),

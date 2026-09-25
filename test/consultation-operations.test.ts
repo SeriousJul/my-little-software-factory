@@ -941,6 +941,8 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			matchedStateName: null,
 			actionable: true,
 			handoffRecoveryRequired: false,
+			ignored: false,
+			ignoredAt: null,
 			leftover: null,
 		};
 	}

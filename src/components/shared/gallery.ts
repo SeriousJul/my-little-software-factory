@@ -24,8 +24,8 @@ import { ActionPanel } from "../action-panel.ts";
 import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
-import { useControlDispatch } from "../control-dispatch.ts";
-import { type ControlContext, contextFor } from "../controls.ts";
+import { refusalText, useControlDispatch } from "../control-dispatch.ts";
+import { availabilityFor, type ControlContext, contextFor, controlById } from "../controls.ts";
 import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import {
@@ -505,6 +505,7 @@ function heldCompletion(): Completion {
 function sampleTicket(
 	state: "running" | "awaiting" | "open",
 	environment: "worktree" | "live-worktree" = "worktree",
+	ignored = false,
 ): Ticket {
 	const now = "2026-02-17T10:00:00.000Z";
 	return {
@@ -567,6 +568,8 @@ function sampleTicket(
 		matchedStateName: null,
 		actionable: true,
 		handoffRecoveryRequired: false,
+		ignored,
+		ignoredAt: ignored ? "2026-02-17T10:00:00.000Z" : null,
 		leftover: null,
 	};
 }
@@ -584,6 +587,80 @@ function ticketGotoContext(paneAlive: boolean): ControlContext {
 		messageTruncated: false,
 		consultationTypesConfigured: true,
 	});
+}
+
+/** The Ticket-base-mode context the Ticket-ignore example runs on (ADR 0060).
+ *
+ * One row the operator can put away, one row they already put away, and the
+ * obligation the key refuses: the row's own facts answer all three, so the
+ * example shows the bar's flip beside the refusals the same key states.
+ */
+function ticketIgnoreContext(
+	state: "open" | "awaiting" | "held" | "running",
+	ignored: boolean,
+	marker: "missing" | null = null,
+): ControlContext {
+	const ticket = sampleTicket(state === "held" ? "awaiting" : state, "worktree", ignored);
+	return contextFor(ignored ? "ticket-detail" : "ticket-list", {
+		// The held row is the awaiting one with its failed turn still undecided:
+		// the fact `obligationOf` reads for the `held` clause of the refusal.
+		selectedTicket: state === "held" ? { ...ticket, lastCompletion: heldCompletion() } : ticket,
+		selectedTicketMarker: marker,
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** The refusal the ignore states for one row's facts, in the catalogue's own
+ * words: the example reads the availability the frame reads, so the sentence
+ * on the line and the sentence the control answers with are one sentence. */
+function ticketIgnoreRefusal(context: ControlContext): string {
+	const control = controlById("ticket-ignore");
+	return refusalText(control, availabilityFor(control, context));
+}
+
+/** The context the List-filter example runs on (ADR 0060): the filter's own
+ * value is what the hint reads, so one helper draws all three states. */
+function ticketFilterContext(filter: "active" | "ignored" | "all"): ControlContext {
+	return contextFor(filter === "ignored" ? "ticket-detail" : "ticket-list", {
+		selectedTicket: sampleTicket("open", "worktree", filter === "ignored"),
+		ticketListFilter: filter,
+		listCanMove: true,
+		detailCanScroll: true,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** The Work queue's list context, where `f` owns no list at all (ADR 0060):
+ * the key names two lists and this section holds neither. */
+function queueFilterContext(): ControlContext {
+	return contextFor("work-queue-list", {
+		listCanMove: true,
+		detailCanScroll: false,
+		workQueueDepth: 1,
+		sourceCount: 0,
+		refreshingSourceCount: 0,
+		handoffActive: false,
+		messageTruncated: false,
+		consultationTypesConfigured: true,
+	});
+}
+
+/** The refusal `f` answers with where it owns nothing, read through the
+ * catalogue's own availability: the example states the sentence the plane
+ * states, never a copy of it, so a picture cannot outlive a rewording. */
+function ticketFilterRefusal(context: ControlContext): string {
+	const control = controlById("ticket-filter");
+	return refusalText(control, availabilityFor(control, context));
 }
 
 /** The Consultation-detail context the Goto example runs on. */
@@ -893,6 +970,133 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				),
 			];
 		},
+	},
+	{
+		// The Ticket section's `i` (ADR 0060): the bar's label flips between the
+		// Ignore an active row offers and the Un-ignore a piled row offers, and the
+		// three obligations the key refuses each stand on their own bar and their
+		// own line. Every refusal's words come from the catalogue itself, through
+		// `availabilityFor`, so the example cannot drift from the sentence the frame
+		// writes - which is what the gallery holds a reviewer to see.
+		id: "ticket-ignore",
+		state: "Ticket ignore: the flip, and the three obligations the key refuses",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			// The three rows the key refuses, on the facts each obligation reads: the
+			// awaiting state, the held turn beside its undecided decision, and the
+			// last poll's missing-Agent marker - the same marker the row's badge wears.
+			const awaiting = ticketIgnoreContext("awaiting", false);
+			const held = ticketIgnoreContext("held", false);
+			const missing = ticketIgnoreContext("running", false, "missing");
+			const refusedBar = (key: string, context: ControlContext) =>
+				createElement(ActionBar, {
+					key,
+					mode: context.mode,
+					context,
+					width: columns.contentWidth,
+				});
+			return [
+				// The bar beside an active row: the key puts the Ticket away.
+				createElement(ActionBar, {
+					key: "ignore-bar",
+					mode: "ticket-list",
+					context: ticketIgnoreContext("open", false),
+					width: columns.contentWidth,
+				}),
+				// The bar beside a piled row: the same key takes it back.
+				createElement(ActionBar, {
+					key: "unignore-bar",
+					mode: "ticket-detail",
+					context: ticketIgnoreContext("open", true),
+					width: columns.contentWidth,
+				}),
+				// A piled row's own face: the marker rides the trailing lane beside the
+				// state badge, in the written word the no-color frame keeps.
+				createElement(SectionHeader, {
+					key: "tickets-header",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 0,
+					running: 0,
+					awaiting: 0,
+					ignored: 1,
+					onToggle: () => undefined,
+				}),
+				// The awaiting row: the key is there, dimmed, and the reason is one
+				// press away on the line the operator already watches.
+				refusedBar("awaiting-refused", awaiting),
+				messageRowElement(
+					{ severity: "warning", text: ticketIgnoreRefusal(awaiting) },
+					columns.contentWidth,
+				),
+				// The held row: the same sentence, in the held turn's own clause.
+				refusedBar("held-refused", held),
+				messageRowElement(
+					{ severity: "warning", text: ticketIgnoreRefusal(held) },
+					columns.contentWidth,
+				),
+				// The missing Agent's refusal reads the marker the row's own badge
+				// wears, and the refused key leaves no hint on the bar.
+				refusedBar("missing-refused", missing),
+				messageRowElement(
+					{ severity: "warning", text: ticketIgnoreRefusal(missing) },
+					columns.contentWidth,
+				),
+				createElement(
+					"text",
+					{ key: "ticket-ignore-note", fg: paint("subtext0") },
+					truncateToWidth(
+						"the flag is factory state on the state file, and the plane writes nothing to the source",
+						columns.contentWidth,
+					),
+				),
+			];
+		},
+	},
+	{
+		// The Ticket section's `f` (ADR 0060): the hint names the view the cycle
+		// moves to, the way the queue pause flips between Pause and Resume, and the
+		// Work queue states the two lists that own the key.
+		id: "ticket-filter",
+		state: "List filter: Show ignored, Show all, Show active, and the queue's refusal",
+		render: (columns, _holds, _inputActive, _wiring) => [
+			createElement(ActionBar, {
+				key: "filter-from-active",
+				mode: "ticket-list",
+				context: ticketFilterContext("active"),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "filter-from-ignored",
+				mode: "ticket-detail",
+				context: ticketFilterContext("ignored"),
+				width: columns.contentWidth,
+			}),
+			createElement(ActionBar, {
+				key: "filter-from-all",
+				mode: "ticket-list",
+				context: ticketFilterContext("all"),
+				width: columns.contentWidth,
+			}),
+			// The refusal the Work queue owns: `f` answers in two lists, and this
+			// section in neither of them. The sentence comes through the catalogue's
+			// own availability, so the picture cannot drift from the refusal the plane
+			// states (ADR 0060).
+			messageRowElement(
+				{ severity: "warning", text: ticketFilterRefusal(queueFilterContext()) },
+				columns.contentWidth,
+			),
+			createElement(
+				"text",
+				{ key: "ticket-filter-note", fg: paint("subtext0") },
+				truncateToWidth(
+					"the filter is a session view fact: it opens on the active rows at every boot",
+					columns.contentWidth,
+				),
+			),
+		],
 	},
 	{
 		// The Consultation detail's own bodies (ADR 0025): the Session view

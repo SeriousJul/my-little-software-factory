@@ -40,6 +40,8 @@ const ticket = (title: string, externalKey = "#1"): Ticket => ({
 	matchedStateName: null,
 	actionable: true,
 	handoffRecoveryRequired: false,
+	ignored: false,
+	ignoredAt: null,
 	handoffCount: 0,
 	lastCompletion: null,
 	leftover: null,

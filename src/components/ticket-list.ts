@@ -5,7 +5,8 @@
  * title, and repository, laid out on an exact budget of cells so a row
  * never overflows the pane. A blocked or missing agent shows its failure
  * in place of the state badge; a ticket at the handoff limit, or one whose
- * closed cycle still has an environment alive in herdr, wears its markers
+ * closed cycle still has an environment alive in herdr, or one the operator has
+ * ignored (ADR 0060), wears its markers
  * as trailing text. Trailing markers are all or nothing: a row too narrow
  * to hold them beside a readable title drops every one of them, and the
  * detail pane keeps carrying the facts. The task type badge sits between the state badge and
@@ -54,6 +55,11 @@ const REPO_GAP = 1;
 const LIMIT_TEXT = "handoff limit";
 /** The marker a ticket with an environment still alive in herdr wears. */
 const LEFTOVER_TEXT = "leftover";
+/**
+ * The marker an ignored ticket wears (ADR 0060). The fact is the written word,
+ * so it stands in the no-color presentation and under an inherited Theme alike.
+ */
+const IGNORED_TEXT = "ignored";
 const MARKER_GAP = 1;
 /** Two cells: "❯ " when the row is selected, two spaces otherwise. */
 const SELECTION_WIDTH = 2;
@@ -230,6 +236,9 @@ function rowSpans(
 	const trailing: { text: string; fg: string | undefined }[] = [];
 	if (atLimit) trailing.push({ text: LIMIT_TEXT, fg: paint("yellow") });
 	if (ticket.leftover !== null) trailing.push({ text: LEFTOVER_TEXT, fg: paint("yellow") });
+	// The ignore rides the same lane: the state badge keeps its own slot, so an
+	// ignored Ticket whose Agent works still reads `running` (ADR 0060).
+	if (ticket.ignored) trailing.push({ text: IGNORED_TEXT, fg: paint("subtext0") });
 
 	if (budget >= SELECTION_WIDTH) {
 		// The selected row's marker and title wear bold: the emphasis the

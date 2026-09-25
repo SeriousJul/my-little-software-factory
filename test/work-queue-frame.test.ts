@@ -809,13 +809,17 @@ describe("the Work queue section", () => {
 					const queueRows = (frame: string) =>
 						rowsOf(stripAnsi(frame)).filter((row) => /\[(open|workflow|restart)\]/.test(row));
 					const before = await settle(setup);
-					// In the list `f` is the Consultation's History key, and the
-					// queue refuses it in the owning section's words: the refusal
-					// moves nothing, and the queue keeps its rows and its depth.
-					let refusal = await press(setup, "f", "the history refusal in the queue list", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
+					// In the list `f` is a filter key of two sections - the Ticket
+					// section's List filter and the Consultation section's history - and
+					// the queue owns neither, so it refuses the key in the two owners'
+					// words (ADR 0060): the refusal moves nothing, and the queue keeps
+					// its rows and its depth.
+					let refusal = await press(setup, "f", "the filter refusal in the queue list", (f) =>
+						messageRowOf(f).includes("only in the Ticket section and the Consultation section"),
 					);
-					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
+					expect(messageRowOf(refusal)).toContain(
+						"only in the Ticket section and the Consultation section",
+					);
 					expect(queueRows(refusal)).toEqual(queueRows(before));
 					expect(markerRowOf(refusal)).toBe(markerRowOf(list));
 					expect(detailPaneText(refusal)).toContain("place 1 of 2");
@@ -828,13 +832,20 @@ describe("the Work queue section", () => {
 						(f) => f.includes("❯ Work queue") === false && f.includes("Origin: open"),
 						"the Work queue detail pane",
 					);
+					// The first press puts the Consultation refusal on the Message
+					// line, so the line the queue's own `f` refusal left stands aside
+					// before the pane is compared: the frame the key writes is measured
+					// against the frame the same line already held.
+					await press(setup, "d", "the delete refusal in the queue detail", (f) =>
+						messageRowOf(f).includes("only in the Consultation section"),
+					);
 					const detailBefore = await settle(setup);
-					refusal = await press(setup, "d", "the delete refusal in the queue detail", (f) =>
+					refusal = await press(setup, "d", "the delete refusal again in the queue detail", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
 					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
-					expect(queueRows(refusal)).toEqual(queueRows(detailBefore));
-					expect(detailPaneText(refusal)).toBe(detailPaneText(detail));
+					expect(queueRows(refusal)).toEqual(queueRows(detail));
+					expect(detailPaneText(refusal)).toBe(detailPaneText(detailBefore));
 					// The queue still holds both starts at the same depth.
 					expect(frameText(refusal)).toContain("waiting: 2");
 				},

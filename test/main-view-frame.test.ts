@@ -836,7 +836,9 @@ describe("the merged Main view", () => {
 					// the Ticket-only keys answer the Consultation section: the
 					// key states what is missing, and nothing changes. The frame
 					// holds the proof: every row of both sections, and both list
-					// selections, come back unchanged after each press.
+					// selections, come back unchanged after each press. `f` is no
+					// such refusal here - the Ticket section owns it now (ADR 0060),
+					// and the ignored pile the empty list shows is the next test's.
 					const consultationSection = (frame: string) =>
 						rowsOf(frame).filter((row) => row.includes("Consultations") || row.includes("grill"));
 					const ticketSection = (frame: string) => {
@@ -857,27 +859,18 @@ describe("the merged Main view", () => {
 					);
 					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
 					unchanged(listBefore, refusal, "after d in the Ticket list");
-					refusal = await press(setup, "f", "the history refusal", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
-					);
-					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
-					unchanged(listBefore, refusal, "after f in the Ticket list");
 					// ...and the Ticket detail pane carries the same refusal, the
-					// seeded Consultation untouched by either key.
+					// seeded Consultation untouched by the key.
 					await focusDetail(setup);
 					const detailBefore = await settle(setup);
 					refusal = await press(setup, "d", "the delete refusal on the detail pane", (f) =>
 						messageRowOf(f).includes("only in the Consultation section"),
 					);
 					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
-					refusal = await press(setup, "f", "the history refusal on the detail pane", (f) =>
-						messageRowOf(f).includes("only in the Consultation section"),
-					);
-					expect(messageRowOf(refusal)).toContain("only in the Consultation section");
 					// The refusal changes no Consultation state: the section's header
 					// facts and its rows come back exactly as they were, and its
 					// history filter stays open.
-					unchanged(detailBefore, refusal, "after d and f on the Ticket detail pane");
+					unchanged(detailBefore, refusal, "after d on the Ticket detail pane");
 
 					// A Ticket-section control answers the same way in the
 					// Consultation section: the key states what is missing.
