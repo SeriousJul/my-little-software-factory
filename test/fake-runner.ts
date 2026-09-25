@@ -33,9 +33,11 @@ export interface RecordedCommand {
  * plain `"focus"` test would read those as a move.
  *
  * A create that asks for focus is a view move too by the ADR's own fact list,
- * and this helper cannot see it: the `--no-focus` states ride on a different
- * argv shape. `test/herdr-view-architecture.test.ts` guards that half, so
- * every create the plane builds states its no-focus default.
+ * and this helper cannot see it: it reads the four focus commands, not a
+ * flag. `test/herdr-view-architecture.test.ts` owns that half from both
+ * sides, refusing a herdr create whose argv does not state `--no-focus` and
+ * refusing the `--focus` token wherever a source carries it, so no create the
+ * plane builds can ask herdr for the view.
  */
 export function herdrFocusCommands(commands: readonly string[]): string[] {
 	return commands.filter((command) =>

@@ -1802,7 +1802,7 @@ export async function closeHandoffEnvironment(
  * on disk, so the handoff that follows reopens the worktree on its branch
  * in a fresh workspace. The live-worktree environment loses its tab, and
  * the shared workspace and the tabs beside it stay. The work continues
- * where it stood; only the herdr view of it is new.
+ * where it stood; only the herdr workspace that holds it is new.
  *
  * Best effort, the way the handoff's own close of the predecessor tab is:
  * an environment herdr no longer holds is already gone, and that answers

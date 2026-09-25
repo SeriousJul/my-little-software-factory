@@ -82,7 +82,11 @@ Three consequences follow for the code:
   herdr's config for the Theme (ADR 0024).
 - A static check over the plane's own sources refuses a workspace focus
   command anywhere in it, allows an agent focus command only at the Goto
-  seam, and refuses a herdr create that does not state its no-focus default.
+  seam, refuses a herdr create that does not state its no-focus default, and
+  refuses herdr's `--focus` flag wherever a source carries it. The last two
+  are one rule read from both sides: herdr takes the last focus flag it reads,
+  so a create that states `--no-focus` and then asks for focus still moves
+  every attached client.
 
 ## Consequences
 
@@ -124,6 +128,11 @@ Three consequences follow for the code:
   ADR 0046 describes; it does not change that decision.** ADR 0046's route
   still closes the previous handoff's environment at the ask; only the focus
   command that followed the close is retired.
+- The ADR index is hand-maintained: `docs/adr/index.md` is a written list, not
+  a generated one, and a new decision takes the next free number and is
+  appended at the end of the list rather than inserted by date or title. This
+  entry is ADR 0061 because 0057 to 0060 were already taken by the time it
+  landed, and the index carries it as the last line.
 - The suite cannot observe a window, so the live herdr 0.9.1 walk is not
   claimed by any test here. It stays with the operator: a Close cleanup of a
   worktree workspace while another workspace is viewed, and a queued route

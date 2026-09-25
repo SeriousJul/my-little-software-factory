@@ -536,7 +536,7 @@ What one herdr client shows: the workspace that client is looking at, in its own
 Each client keeps its own view, and a view persists while the workspace it shows exists. A focus request that arrives from outside a client (a CLI command, an Agent, the control plane) moves every attached client's view, never one client's alone: herdr has no command that aims a view at a single client. The control plane never moves a view on its own (ADR 0061); the one move it makes is the Goto, at the operator's key. The surviving exception is herdr's own: when the workspace a client is viewing stops existing, that client falls back to the session focus.
 _Avoid_: focus, screen, pane, window, session focus
 
-**Session focus**:
+**session focus**:
 The workspace herdr's server treats as active.
 It is not any client's herdr view: a client keeps its own view while that workspace exists, and a client that is not viewing a workspace is not moved by what the session focus does. The control plane reads no fact of the session focus. Its close, its reuse, its grouping, and its naming all go by the workspace, tab, or pane id the plane recorded, or by a checkout path, so where the session focus lands after a close is harmless to the plane's work (ADR 0061).
 _Avoid_: herdr view, current workspace, active pane, focus

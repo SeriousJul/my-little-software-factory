@@ -473,9 +473,13 @@ describe("the environment a handoff builds stays out of the view", () => {
 						`herdr tab create --workspace ws-build --cwd ${checkout} --no-focus`,
 					);
 					expect(herdrFocusCommands(commands)).toEqual([]);
-					// No create reached herdr without its flag: the contract stands.
-					for (const create of commands.filter((c) => / (create|open) /u.test(c)))
+					// No create reached herdr without its flag, and none asked for
+					// the view beside it: herdr takes the last focus flag it reads,
+					// so both halves are the contract (ADR 0061, story 13).
+					for (const create of commands.filter((c) => / (create|open) /u.test(c))) {
 						expect(create).toContain("--no-focus");
+						expect(create.split(" ")).not.toContain("--focus");
+					}
 				},
 				WIDTH,
 				34,

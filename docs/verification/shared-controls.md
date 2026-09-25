@@ -1007,7 +1007,8 @@ Close cleanup herdr refuses still reports its reason on the Message line and
 still records the surviving environment as the ticket's leftover, and Goto
 still asks herdr for the Agent's pane and still names the workspace the view
 landed in. The handoff that follows a route still builds its environment with
-every create stating its `--no-focus`.
+every create stating its `--no-focus` and no create asking herdr for the view
+with `--focus`.
 
 The static seam is a declared dependency rule, not a behavior test
 (`test/herdr-view-architecture.test.ts`). It scans the plane's own sources and
@@ -1021,9 +1022,20 @@ argv must carry its `--no-focus` push between the declaration and the runner
 call, so a file that says `--no-focus` once and creates elsewhere, or pushes
 the flag after the call, fails it. An argv a function returns, or one passed
 to the runner under another name, stays outside the scan; the file's header
-states both limits. The re-ordered push was verified to turn the check red
-in this rework, as was re-adding a `workspace focus` after a worktree
-removal, which turns the frame case red.
+states both limits. The ask side of the rule has no such limit: herdr's
+`--focus` flag is refused as a token wherever a source carries it, which
+covers `worktree open` and a `pane move --focus` beside a create, because
+herdr applies its flags in argv order and a create that states its default
+and then asks for focus moves every attached client. That refusal carries its
+own positive control, a case that feeds the pattern the argv herdr takes and
+the plane's real default, so an empty offender list cannot come from a
+pattern that matches nothing. The re-ordered push was verified to turn the
+check red in this rework, as was re-adding a `workspace focus` after a
+worktree removal, which turns the frame case red. The `--focus` ask was
+verified red on both create shapes: beside the `--no-focus` of an inline
+workspace create, and pushed onto the assembled tab create after its default.
+Each also turns the route and build frame cases red, because the fake runner
+keys its answers on the exact argv a create sends.
 
 The unit seams flipped rather than duplicated. The handoff module's Close
 cleanup tests now name the absence, the dispatch rig test that used to require

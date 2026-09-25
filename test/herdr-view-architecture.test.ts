@@ -20,6 +20,9 @@
  * a runner call that receives the argv under another name is not matched, so
  * such a create passes without its flag being seen. The frame seam owns those
  * shapes; a new file that hides a create in either shape is not caught here.
+ * The ask side of the same rule carries no such limit: the focus flag itself
+ * is refused wherever it stands in a source, so a create that asks for focus
+ * in one of those two hidden shapes still fails.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -33,6 +36,14 @@ const WORKSPACE_FOCUS = /"workspace"\s*,\s*"focus"/u;
 const TAB_FOCUS = /"tab"\s*,\s*"focus"/u;
 const PANE_FOCUS = /"pane"\s*,\s*"focus"/u;
 const AGENT_FOCUS = /"agent"\s*,\s*"focus"/u;
+
+/**
+ * herdr's focus flag as a string token. In herdr 0.9.1 several commands take
+ * it, among them `workspace create`, `tab create`, `worktree open`,
+ * `pane split`, and `pane move`, and each one moves every attached client's
+ * view, so the plane sends none of them.
+ */
+const HERDR_FOCUS_FLAG = /["']--focus["']/u;
 
 describe("the plane sends herdr no workspace focus", () => {
 	test("the scan reads the plane's own sources", () => {
@@ -99,6 +110,8 @@ describe("the plane sends herdr no workspace focus", () => {
 		// create must carry `--no-focus` inside it, or the variable it is assigned
 		// to must be pushed the flag before the runner call. A file that says
 		// `--no-focus` once and creates elsewhere is exactly the drift this refuses.
+		// The next test refuses the ask side: a create argv that also carries
+		// `--focus` states nothing, because herdr takes the last flag it reads.
 		const offenders: string[] = [];
 		for (const file of sources) {
 			const source = readFileSync(file, "utf8");
@@ -128,5 +141,28 @@ describe("the plane sends herdr no workspace focus", () => {
 			}
 		}
 		expect(offenders).toEqual([]);
+	});
+
+	test("no source hands herdr a focus flag", () => {
+		// herdr applies its flags in argv order, so `--no-focus --focus` leaves
+		// focus set: a create that states its default and then asks for focus
+		// moves every attached client, which is the grab story 13 forbids. The
+		// rule is the flag itself, not its place in an argv, so this reads the
+		// whole file for the token instead of one argv shape. It is wider than
+		// the create scan above on purpose: it also reaches the two shapes that
+		// scan cannot read, and the flag on any other herdr command that takes
+		// it, a `pane split --focus` or a `pane move --focus` among them.
+		const offenders = sources.filter((file) => HERDR_FOCUS_FLAG.test(readFileSync(file, "utf8")));
+		expect(offenders).toEqual([]);
+	});
+
+	test("the focus-flag scan reads the token it refuses", () => {
+		// A scan whose pattern matches nothing is worse than no scan: it reads
+		// as a guard and enforces nothing. This feeds the pattern the argv herdr
+		// takes, the flag last, and the plane's real default, so a quiet edit to
+		// the pattern cannot pass unnoticed.
+		expect(HERDR_FOCUS_FLAG.test(`["workspace", "create", "--no-focus", "--focus"]`)).toBe(true);
+		expect(HERDR_FOCUS_FLAG.test(`["workspace", "create", "--no-focus"]`)).toBe(false);
+		expect(HERDR_FOCUS_FLAG.test(`['worktree', 'open', '--focus']`)).toBe(true);
 	});
 });
