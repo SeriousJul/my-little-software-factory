@@ -683,7 +683,6 @@ export class ConsultationOperations {
 			if (plan.command !== undefined) {
 				const result = await this.runner.run("herdr", plan.command);
 				if (result.code !== 0) throw new Error(commandFailureText(result));
-				if (operation.cancelled) return;
 				// A close sends no focus command, whatever it takes down: the plane
 				// never moves herdr's view on its own (ADR 0061), and a close of a
 				// workspace the client is not viewing leaves that view alone.

@@ -36,7 +36,13 @@ import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import { type Consultation, type FactoryState, openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner, tabCreateJson, worktreeCreateJson } from "./fake-runner.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	herdrFocusCommands,
+	tabCreateJson,
+	worktreeCreateJson,
+} from "./fake-runner.ts";
 
 const directories: string[] = [];
 const states: FactoryState[] = [];
@@ -1482,7 +1488,7 @@ describe("Consultation operations: close", () => {
 		]);
 		// The plane never follows a close with a focus command: herdr keeps
 		// each client on the workspace it views (ADR 0061).
-		expect(runner.commands().join("\n")).not.toContain("focus");
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		// The worktree and its branch survive: retained, never removed.
@@ -1514,7 +1520,7 @@ describe("Consultation operations: close", () => {
 
 		expect(runner.commands()).toContain(`herdr tab close ${LAUNCH.tabId}`);
 		expect(runner.commands().join("\n")).not.toContain("workspace close");
-		expect(runner.commands().join("\n")).not.toContain("focus");
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		expect(closed.resources.find((r) => r.kind === "workspace")).toMatchObject({ owned: false });

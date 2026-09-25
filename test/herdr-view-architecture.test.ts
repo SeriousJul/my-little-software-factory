@@ -14,25 +14,17 @@
  * file refuses the shape a new screen would take to re-add the move, so the
  * rule cannot be restored unnoticed, the way the shared-control library check
  * refuses a screen-built field.
+ *
+ * Two known limits of the create scan, stated so no reader trusts more than
+ * it holds: an argv a function assembles and returns is not read at all, and
+ * a runner call that receives the argv under another name is not matched, so
+ * such a create passes without its flag being seen. The frame seam owns those
+ * shapes; a new file that hides a create in either shape is not caught here.
  */
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-
-/** Every TypeScript source file under `src`. */
-function sourceFiles(directory: string): string[] {
-	const found: string[] = [];
-	for (const entry of readdirSync(directory)) {
-		const path = join(directory, entry);
-		if (statSync(path).isDirectory()) {
-			found.push(...sourceFiles(path));
-			continue;
-		}
-		if (entry.endsWith(".ts") || entry.endsWith(".tsx")) found.push(relative(process.cwd(), path));
-	}
-	return found;
-}
+import { readFileSync } from "node:fs";
+import { sourceFiles } from "./static-checks.ts";
 
 const sources = sourceFiles("src");
 
@@ -114,8 +106,17 @@ describe("the plane sends herdr no workspace focus", () => {
 				const [, variable, literal] = match;
 				if (!/"(?:workspace|tab|worktree)"\s*,\s*"(?:create|open)"/u.test(literal)) continue;
 				if (/--no-focus/u.test(literal)) continue;
-				// The assembled argv: the flag is pushed onto the same variable.
-				if (new RegExp(`${variable}\\.push\\(\\s*"--no-focus"\\s*\\)`, "u").test(source)) continue;
+				// The assembled argv: the flag must be pushed onto the same
+				// variable after its declaration and before the first runner
+				// call that carries it, so a push written after the call, or
+				// beside a different same-named argv, cannot pass. A create the
+				// check cannot read at all - an argv a function assembles and
+				// returns, or a call that passes the argv under another name -
+				// stays outside this scan; the frame seam owns those shapes.
+				const declared = source.slice(match.index ?? 0);
+				const push = new RegExp(`${variable}\\.push\\(\\s*"--no-focus"`, "u").exec(declared);
+				const call = new RegExp(`run\\(\\s*"herdr"\\s*,\\s*${variable}\\b`, "u").exec(declared);
+				if (push !== null && (call === null || push.index < call.index)) continue;
 				offenders.push(`${file}: ${variable}`);
 			}
 			// A create argv written inline, with no variable to push onto, must

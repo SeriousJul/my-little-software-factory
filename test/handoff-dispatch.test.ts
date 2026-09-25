@@ -34,6 +34,7 @@ import { FactoryState, type HandoffOrigin, workQueueIdentityOf } from "../src/st
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
+	herdrFocusCommands,
 	tabCreateJson,
 	WORKTREE_NOT_FOUND_ERROR,
 	workspaceCreateJson,
@@ -1531,7 +1532,7 @@ describe("the Close cleanup", () => {
 		// view should go: it never moves the operator on its own (ADR 0061),
 		// and it holds no id for the workspace it runs in.
 		expect(rigRef.commands()).toContain("herdr worktree remove --workspace ws-1");
-		expect(rigRef.commands().join("\n")).not.toContain("workspace focus");
+		expect(herdrFocusCommands(rigRef.commands())).toEqual([]);
 	});
 });
 

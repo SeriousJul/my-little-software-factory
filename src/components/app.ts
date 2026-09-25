@@ -281,9 +281,6 @@ function realRunner(): CommandRunner {
 	return lazyRealRunner;
 }
 
-// The workspace the control plane runs in is never named: the plane sends no
-// herdr workspace focus command, so it holds no id to aim one with (ADR 0061).
-
 export function App({
 	config: configProp,
 	runner,
@@ -1473,7 +1470,9 @@ export function App({
 	 * A Goto moves every herdr client's view to the pane it names (ADR 0061),
 	 * and the confirmation still names the workspace so the operator can say
 	 * where the view landed. A read that fails names nothing: the line keeps
-	 * its old shape rather than stating a wrong fact.
+	 * its old shape rather than stating a wrong fact. The workspace the control
+	 * plane runs in is never named: the plane holds no id for it, so nothing
+	 * here can aim a focus move at it (ADR 0061).
 	 */
 	const workspaceLabelOf = async (workspaceId: string): Promise<string | null> => {
 		const result = await commandRunner.run("herdr", ["workspace", "get", workspaceId]);

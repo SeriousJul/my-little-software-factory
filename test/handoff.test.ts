@@ -30,6 +30,7 @@ import type { Consultation } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
+	herdrFocusCommands,
 	tabCreateJson,
 	WORKTREE_NOT_FOUND_ERROR,
 	workspaceCreateJson,
@@ -3181,7 +3182,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		// there is nothing to return and no focus command follows the removal.
 		expect(failure).toBeUndefined();
 		expect(runner.commands()).toEqual(["herdr worktree remove --workspace ws-1"]);
-		expect(runner.commands().join("\n")).not.toContain("workspace focus");
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 	});
 
 	test("a tab close sends no focus command", async () => {
@@ -3197,7 +3198,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 		// a focus command.
 		expect(failure).toBeUndefined();
 		expect(runner.commands()).toEqual(["herdr tab close tab-1"]);
-		expect(runner.commands().join("\n")).not.toContain("focus");
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 	});
 
 	test("a left workspace close sends no focus command", async () => {
@@ -3220,7 +3221,7 @@ describe("closeHandoffEnvironment: the Close cleanup", () => {
 			"herdr worktree remove --workspace ws-1",
 			"herdr workspace close ws-1",
 		]);
-		expect(runner.commands().join("\n")).not.toContain("workspace focus");
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 	});
 
 	test("a herdr refusal of a close still reports its reason and takes no focus", async () => {

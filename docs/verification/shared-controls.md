@@ -994,12 +994,15 @@ the operator makes it at the key.
 The proof runs at two seams, and neither reaches a herdr session.
 
 The frame seam drives the real screens and reads the command list the injected
-runner recorded (`test/herdr-view-frame.test.ts`). It walks the four flows the
-rule touches: the Close action on a worktree cycle, the Decision screen's
-route close of the settled workspace, the same close for an item that waited
-in the Work queue and runs at the freed seat with no keypress beside it, and
-the Consultation close of a workspace. Each asserts the herdr work that ran
-and that no focus command ran with it. Two more cases stand beside them: the
+runner recorded. `test/herdr-view-frame.test.ts` walks three of the four flows
+the rule touches: the Close action on a worktree cycle, the Decision screen's
+route close of the settled workspace, and the same close for an item that
+waited in the Work queue and runs at the freed seat with no keypress beside
+it. Each asserts the herdr work that ran and that no focus command ran with
+it. The fourth flow, the Consultation close of a workspace, is proven at its
+own frame seam: the close case in `test/consultation-frame.test.ts` walks the
+confirmation panel through the real UI and asserts the same absence beside
+the workspace, tab, and pane closes. Two more cases stand beside them: the
 Close cleanup herdr refuses still reports its reason on the Message line and
 still records the surviving environment as the ticket's leftover, and Goto
 still asks herdr for the Agent's pane and still names the workspace the view
@@ -1013,10 +1016,14 @@ focus, allows an agent focus command only at the Goto seam in
 `src/components/app.ts`, refuses a control-plane workspace id (the thread that
 aimed the old compensating call is retired, so no new file can re-add the
 move unnoticed), and refuses a herdr create whose argv does not state its
-no-focus default. The create check reads each argv on its own, so a file that
-says `--no-focus` once and creates elsewhere fails it: that mutation was
-verified to turn the check red, as was re-adding a `workspace focus` after a
-worktree removal, which turns the frame case red.
+no-focus default. The create check reads each argv on its own: an assembled
+argv must carry its `--no-focus` push between the declaration and the runner
+call, so a file that says `--no-focus` once and creates elsewhere, or pushes
+the flag after the call, fails it. An argv a function returns, or one passed
+to the runner under another name, stays outside the scan; the file's header
+states both limits. The re-ordered push was verified to turn the check red
+in this rework, as was re-adding a `workspace focus` after a worktree
+removal, which turns the frame case red.
 
 The unit seams flipped rather than duplicated. The handoff module's Close
 cleanup tests now name the absence, the dispatch rig test that used to require

@@ -3,12 +3,14 @@
  *
  * An end-of-environment act is bookkeeping the operator cannot watch: the
  * Close cleanup of a finished cycle, a route's close of the previous
- * handoff's environment at the ask, that same close when it runs at the free
- * seat for an item that waited in the Work queue, and a Consultation close
- * that takes its workspace down. Each flow here runs through the real screens
- * at a fixed terminal size, and each reads the same fact off the injected
- * runner: herdr did the work the plane asked for, and the plane sent no
- * focus command with it.
+ * handoff's environment at the ask, and that same close when it runs at the
+ * free seat for an item that waited in the Work queue. Each flow here runs
+ * through the real screens at a fixed terminal size, and each reads the same
+ * fact off the injected runner: herdr did the work the plane asked for, and
+ * the plane sent no focus command with it. The fourth flow the rule touches,
+ * the Consultation close of a workspace, stands at its own frame seam: the
+ * close case in `test/consultation-frame.test.ts` walks the real UI and
+ * asserts the same absence beside every close.
  *
  * The one focus move the plane makes is Goto, the operator's own key, and
  * `test/herdr-view-architecture.test.ts` is the static half of the same rule.

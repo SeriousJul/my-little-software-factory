@@ -31,6 +31,11 @@ export interface RecordedCommand {
  * The negative assertion of ADR 0061 reads this instead of a substring
  * match, because `--no-focus` rides on every create the plane sends and a
  * plain `"focus"` test would read those as a move.
+ *
+ * A create that asks for focus is a view move too by the ADR's own fact list,
+ * and this helper cannot see it: the `--no-focus` states ride on a different
+ * argv shape. `test/herdr-view-architecture.test.ts` guards that half, so
+ * every create the plane builds states its no-focus default.
  */
 export function herdrFocusCommands(commands: readonly string[]): string[] {
 	return commands.filter((command) =>

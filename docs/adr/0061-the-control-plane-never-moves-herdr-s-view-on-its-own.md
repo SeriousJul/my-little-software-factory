@@ -41,11 +41,11 @@ The behavior was read from herdr 0.9.1 source, at two places:
 Two more herdr facts shape the decision:
 
 - Each herdr client keeps its own view, and a focus request from outside a
-  client moves every client's view. Per-client views are herdr's open request
-  (#3526), and the request to target one client from a command was closed as
-  a feature request (#4014): a custom command uses the public socket, and the
-  socket moves every client. There is no command that can aim only the
-  operator's own window.
+  client moves every client's view. Per-client views are herdr's shipped
+  model, delivered in herdr 0.9.0 (#3526), and the request to target one client
+  from a command was closed as not planned (#4014): a custom command uses
+  the public socket, and the socket moves every client. There is no command
+  that can aim only the operator's own window.
 - herdr's own session focus after a worktree close lands on a neighbour, and
   that is an open upstream issue (#1303). Nothing in the plane reads the
   session focus, so it stays cosmetic here.
