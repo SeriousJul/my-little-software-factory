@@ -115,7 +115,10 @@ takes a trailing marker beside the handoff-limit and leftover markers, and the
 detail pane states the ignore, the moment it was set, and the key that clears it.
 The Ticket header carries a conditional `ignored n` cell above zero, with no
 bell and no click: the header's click already toggles the section, and the held
-bell carries a fact the ignore cannot hold. The `i` line says which of the two
+bell carries a fact the ignore cannot hold. It is the row's last cell for that
+same reason: the row truncates at its end, so the held count and the bell that
+rings on it stand ahead of it, and a view fact never cuts a decision the operator
+owes. The `i` line says which of the two
 the act did: a resting Ticket loses its row, counts, and every automatic start,
 and a live one keeps its row under the flag.
 
