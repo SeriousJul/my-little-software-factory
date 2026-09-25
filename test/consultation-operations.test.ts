@@ -13,7 +13,7 @@
  */
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,6 +42,7 @@ import {
 	herdrFocusCommands,
 	tabCreateJson,
 	worktreeCreateJson,
+	worktreeListJson,
 } from "./fake-runner.ts";
 
 const directories: string[] = [];
@@ -672,6 +673,62 @@ describe("Consultation operations: launch", () => {
 		// reaches the operator where Consultation warnings already appear.
 		expect(statusTexts(harness).join("\n")).toContain(
 			`the worktree base fell back to HEAD ${WORKTREE_HEAD.slice(0, 7)}: no default branch found on origin (tried the origin/HEAD symref, then origin/main, then origin/master)`,
+		);
+	});
+
+	test("a Consultation create a leftover directory blocks moves the leftover aside and starts", async () => {
+		const fixture = makeFixture();
+		const runner = new LifecycleRunner();
+		const id = uid("2c");
+		const consultation = seed(fixture.state, fixture, id);
+		const branch = consultationBranchName(id, "grill");
+		stubWorktreeLaunch(runner.inner, fixture.checkout, id);
+		// The naming rule's path for this Consultation stands on disk with a
+		// build cache in it, and git holds no record of it: the same residue a
+		// ticket handoff meets, at the shared create step (ADR 0062).
+		const root = join(fixture.home, "worktrees", "acme-factory");
+		const candidate = join(root, branch.replaceAll("/", "-"));
+		runner.inner.set("herdr", ["worktree", "list", "--cwd", fixture.checkout], {
+			stdout: worktreeListJson([
+				{ path: fixture.checkout, linked: false },
+				{ path: join(root, "factory-6-another-consultation") },
+			]),
+		});
+		mkdirSync(join(candidate, ".docusaurus"), { recursive: true });
+		writeFileSync(join(candidate, ".docusaurus", "routes.js"), "cache");
+		runner.inner.setSequence(
+			"herdr",
+			[
+				"worktree",
+				"create",
+				"--cwd",
+				fixture.checkout,
+				"--branch",
+				branch,
+				"--base",
+				"origin/main",
+				"--no-focus",
+			],
+			[
+				{
+					code: 1,
+					stderr:
+						`{"error":{"code":"worktree_create_failed","message":"Preparing worktree (checking out '${branch}')` +
+						`\\nfatal: '${candidate}' already exists"},"id":"cli:worktree:create"}\n`,
+				},
+				{ stdout: worktreeCreateJson(LAUNCH.workspaceId, LAUNCH.paneId) },
+			],
+		);
+		stubPaneRead(runner.inner, LAUNCH.paneId, "Agent: opened");
+		const harness = makeHarness(fixture, runner);
+
+		await harness.operations.launch(consultation);
+
+		expect(current(fixture.state, id).state).toBe("working");
+		expect(existsSync(join(candidate, ".docusaurus", "routes.js"))).toBe(false);
+		expect(existsSync(join(`${candidate}.leftover`, ".docusaurus", "routes.js"))).toBe(true);
+		expect(statusTexts(harness).join("\n")).toContain(
+			`the plane moved the leftover worktree directory ${candidate} aside to ${candidate}.leftover`,
 		);
 	});
 

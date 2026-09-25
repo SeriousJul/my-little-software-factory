@@ -1175,7 +1175,7 @@ async function startReusedBranchHandoff(
 	);
 }
 
-/** The numbered `.leftover-<n>` names one leftover directory may ask for. */
+/** How many numbered `.leftover-<n>` names one leftover directory may ask for. */
 const LEFTOVER_PATH_TAKES = 20;
 
 /** One `herdr worktree list` entry, as the list writes it. */
@@ -1308,6 +1308,9 @@ async function freeLeftoverPath(path: string): Promise<string | null> {
 			return candidate;
 		}
 	}
+	// Every numbered name is taken: a leftover from an earlier handoff of the
+	// same ticket holds the slot, and the plane does not move a second one
+	// over it.
 	return null;
 }
 
