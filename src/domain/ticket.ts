@@ -330,6 +330,21 @@ export function attentionBand(ticket: Ticket): number {
 }
 
 /**
+ * Whether a Ticket holds a decision the operator owes (ADR 0016, ADR 0017).
+ *
+ * The held turn is an awaiting ticket whose last settled turn ended failed,
+ * aborted, truncated, or with no turn, and carries no decision yet. Every
+ * surface that marks or counts one reads this rule: the row's `held` badge,
+ * the detail pane's warning, the Section header's held count, and a Group
+ * header's held count. The last two must agree beside the same title, so the
+ * test of the state stands here and not at each call site: a held turn whose
+ * agent works again has left `awaiting` and is retried, not held.
+ */
+export function holdsDecision(ticket: Ticket): boolean {
+	return ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion);
+}
+
+/**
  * The state line and its moves.
  *
  * - open -> handed-off: a handoff started the agent.

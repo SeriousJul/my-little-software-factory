@@ -28,7 +28,7 @@ import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
 import { type ReactElement, useRef } from "react";
 
-import { isHeldCompletion, type Ticket } from "../domain/ticket.ts";
+import { holdsDecision, type Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
 import { groupHeaderSpans, type ListedRow } from "./shared/grouping.ts";
@@ -263,7 +263,7 @@ function rowSpans(
 					spinnerFace(faceFrame, STARTING_WORD, BADGE_WIDTH),
 				),
 			);
-		else if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion))
+		else if (holdsDecision(ticket))
 			spans.push(createElement("span", { fg: paint("yellow") }, heldBadge()));
 		else if (queueWait)
 			// The Queue wait badge wears the open role: the ticket keeps its

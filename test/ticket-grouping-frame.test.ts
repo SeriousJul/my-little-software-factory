@@ -18,8 +18,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import { widthOf } from "../src/components/text.ts";
 import type { FactoryConfig } from "../src/config.ts";
+import type { GroupingAxis } from "../src/domain/grouping.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import type { FetchOutcome } from "../src/ticket-source.ts";
@@ -104,6 +105,20 @@ function tickets(): FetchedTicket[] {
 	];
 }
 
+/**
+ * The fixture with `extra` more tickets on acme/factory.
+ *
+ * A Group whose count costs two digits is what breaks a narrow header's cell
+ * budget, because the count and the held count together leave the value no cell
+ * at the plane's minimum width (issue #159, user stories 65 and 66).
+ */
+function crowdTickets(extra: number): FetchedTicket[] {
+	const crowd = Array.from({ length: extra }, (_unused, index) =>
+		issue(100 + index, `Crowd ticket ${index + 1}`, FACTORY, ["ready-for-agent"]),
+	);
+	return [...tickets(), ...crowd];
+}
+
 const ISSUES = { name: "issues", kind: "github-issues" };
 const TRIAGE = { name: "triage", kind: "github-issues" };
 
@@ -173,10 +188,17 @@ const groupConfig: FactoryConfig = {
  * outranks every notice on the Message line, which would hide the axis's own
  * statement from the frames that check it.
  */
-function groupedState(hold = false): { state: FactoryState; sources: FakeSource[] } {
+function groupedState(
+	hold = false,
+	listed: FetchedTicket[] = tickets(),
+	axis?: GroupingAxis,
+): { state: FactoryState; sources: FakeSource[] } {
 	const state = openFactoryState(join(home, "state.sqlite"));
 	state.initializeSources([ISSUES, TRIAGE]);
-	state.applyFetch(ISSUES, success(tickets()));
+	// The axis a restart reads back from the state file (ADR 0058), so a frame
+	// can boot on a split instead of stepping the cycle with presses.
+	if (axis !== undefined) state.setGroupingAxis("tickets", axis);
+	state.applyFetch(ISSUES, success(listed));
 	state.applyFetch(TRIAGE, success(triageListing()));
 	if (hold) {
 		const claim = state.claimHandoff(
@@ -211,7 +233,7 @@ function groupedState(hold = false): { state: FactoryState; sources: FakeSource[
 	return {
 		state,
 		sources: [
-			new FakeSource("issues", "github-issues", success(tickets())),
+			new FakeSource("issues", "github-issues", success(listed)),
 			new FakeSource("triage", "github-issues", success(triageListing())),
 		],
 	};
@@ -225,15 +247,25 @@ function stateFile(): string {
 /** Boot the real app on the grouped fixture and hand the test its handle. */
 async function bootGrouped(
 	body: (setup: AppSetup, fixture: { state: FactoryState; sources: FakeSource[] }) => Promise<void>,
-	options: { size?: readonly [number, number]; hold?: boolean; state?: FactoryState } = {},
+	options: {
+		size?: readonly [number, number];
+		hold?: boolean;
+		state?: FactoryState;
+		/** The listing the `issues` feed reports, for a Group with a crowd. */
+		list?: FetchedTicket[];
+		/** The axis to seed in the state file, so the frame boots on the split. */
+		axis?: GroupingAxis;
+	} = {},
 ): Promise<void> {
-	const made = options.state === undefined ? groupedState(options.hold === true) : null;
+	const listed = options.list ?? tickets();
+	const made =
+		options.state === undefined ? groupedState(options.hold === true, listed, options.axis) : null;
 	const fixture = made ?? { state: options.state as FactoryState, sources: [] };
 	const sources =
 		fixture.sources.length > 0
 			? fixture.sources
 			: [
-					new FakeSource("issues", "github-issues", success(tickets())),
+					new FakeSource("issues", "github-issues", success(listed)),
 					new FakeSource("triage", "github-issues", success(triageListing())),
 				];
 	if (made !== null) opened.push(fixture.state);
@@ -241,7 +273,7 @@ async function bootGrouped(
 	try {
 		await withApp(
 			async (setup) => {
-				sources[0].settle(success(tickets()));
+				sources[0].settle(success(listed));
 				sources[1].settle(success(triageListing()));
 				await awaitFrame(setup, (frame) => frame.includes("❯ Tickets"), "the ticket list");
 				await body(setup, { state: fixture.state, sources });
@@ -314,6 +346,30 @@ function headers(frame: string): string[] {
 	return listRows(frame)
 		.filter((row) => /^[▾▸] \S/.test(row) || /^❯ [▾▸] \S/.test(row))
 		.map((row) => row.replace(/^❯ /, ""));
+}
+
+/**
+ * The Ticket list's rows as the terminal holds them, gaps and all.
+ *
+ * `listRows` folds the runs of spaces that carry a row's layout away; these
+ * narrow-frame tests must read them, because a header that overflows its pane
+ * splits its counts over two rows, and only the exact cells show that.
+ */
+function listPaneRows(frame: string): string[] {
+	const rows = rowsOf(frame);
+	const top = rows.findIndex((row) => /─\s*(❯\s+)?Tickets─/u.test(row));
+	if (top < 0) return [];
+	const out: string[] = [];
+	for (const row of rows.slice(top + 1)) {
+		if (row.startsWith("└")) break;
+		out.push(listHalfOf(row).replace(/[│┌┐└┘─]/gu, " "));
+	}
+	return out;
+}
+
+/** Whether any Ticket list row holds the pattern, gaps and all. */
+function paneHolds(frame: string, pattern: RegExp): boolean {
+	return listPaneRows(frame).some((row) => pattern.test(row));
 }
 
 /** The ticket rows inside the Ticket list, in frame order. */
@@ -668,6 +724,67 @@ describe("the Ticket section's Groups", () => {
 				expect(headers(frame)).toEqual(["▸ review 1", "▸ implement 3", "▸ parked 1"]);
 			},
 			{ size: [WIDTH, 27] },
+		);
+	});
+
+	// The plane's minimum width is where a Group header's fixed cells spend the
+	// whole budget: 40 columns leave the list pane 20 cells and its text area 16.
+	// The marker column costs 4 of them and `  11  held 1` costs 12, so the value
+	// is the field that must give up its last cell. A header that overflowed its
+	// pane would wrap onto a second window row, split the held count across two
+	// rows, and cost the window a ticket row, which works against ADR 0059
+	// (user stories 65 and 66). The axis comes from the state file, so the frame
+	// holds the split before any press can step past it.
+	test("a Group header at the minimum width drops its value before it wraps", async () => {
+		await bootGrouped(
+			async (setup) => {
+				const frame = await settle(setup);
+				// The factory Group owns the window's first row, and the billing
+				// Group's header stands below the fold the window draws.
+				const header = listPaneRows(frame).filter((row) => /[▾▸]/u.test(row));
+				expect(header).toHaveLength(1);
+				expect(header[0]).toContain("11  held 1");
+				// The frame is the grid it booted on: no row pushed content into the
+				// row under it.
+				expect(rowsOf(frame).every((row) => widthOf(row) === 40)).toBe(true);
+				// The header cost one window row, so its tickets still stand below it.
+				expect(ticketRows(frame).length).toBeGreaterThan(1);
+				// The case the counts exist for: folded, the header still carries
+				// both counts whole, in its one row and with the fold on its glyph.
+				const folded = await press(setup, "x", "the fold", (f) => paneHolds(f, /▸/u));
+				const foldedHeader = listPaneRows(folded).filter((row) => row.includes("▸"));
+				expect(foldedHeader).toHaveLength(1);
+				expect(foldedHeader[0]).toContain("11  held 1");
+				expect(rowsOf(folded).every((row) => widthOf(row) === 40)).toBe(true);
+			},
+			{ size: [40, 27], hold: true, list: crowdTickets(8), axis: "repository" },
+		);
+	});
+
+	/**
+	 * A count so wide the header cannot pay for the value and both counts.
+	 *
+	 * The same budget, one rung further: `  101  held 1` costs 13 cells against
+	 * the 12 the marker column leaves. The rule the pane states for its ticket
+	 * rows, a field is dropped and never wrapped, then takes the ticket count off
+	 * the line and keeps the held count, because the held count is the fact the
+	 * fold owes (ADR 0059).
+	 */
+	test("a Group header too narrow for both counts keeps the held count", async () => {
+		await bootGrouped(
+			async (setup) => {
+				const frame = await settle(setup);
+				const header = listPaneRows(frame).filter((row) => /[▾▸]/u.test(row));
+				expect(header).toHaveLength(1);
+				expect(header[0]).toContain("held 1");
+				expect(header[0]).not.toContain("101");
+				expect(rowsOf(frame).every((row) => widthOf(row) === 40)).toBe(true);
+				// The value word takes the cells the dropped count left, cut to its
+				// tail: the header still names its Group, and the held count still
+				// stands beside it in the same row.
+				expect(header[0]).toContain("…ory");
+			},
+			{ size: [40, 27], hold: true, list: crowdTickets(98), axis: "repository" },
 		);
 	});
 

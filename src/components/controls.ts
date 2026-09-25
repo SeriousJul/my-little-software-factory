@@ -1129,7 +1129,12 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		keyLabel: "Tab",
 		scope: "control-plane",
 		actionBar: true,
-		barLabel: (context) => groupingAxisHint(context.groupingAxis ?? "none"),
+		// Only a split axis names a hint: at `none` the entry is hidden from the bar
+		// by `showInBar` below, so no word stands here for a flat list.
+		barLabel: (context) =>
+			context.groupingAxis === undefined || context.groupingAxis === "none"
+				? undefined
+				: groupingAxisHint(context.groupingAxis),
 		// Just above the Launch entry: the split the list wears outranks the
 		// entry the control plane reached for, and the base modes' common
 		// controls outrank it, so a narrow row keeps Move, Detail, the Enter

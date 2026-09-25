@@ -24,8 +24,8 @@
 import { createElement } from "@opentui/react";
 import type { ReactElement } from "react";
 
-import type { GroupingAxis } from "../../domain/grouping.ts";
-import { attentionBand, isHeldCompletion, type Ticket } from "../../domain/ticket.ts";
+import type { GroupingAxis, SplitGroupingAxis } from "../../domain/grouping.ts";
+import { attentionBand, holdsDecision, type Ticket } from "../../domain/ticket.ts";
 import { newestMembership } from "../../task-selection.ts";
 import { truncateTailToWidth, widthOf } from "../text.ts";
 import { paint, ticketTaskType } from "../theme.ts";
@@ -107,9 +107,17 @@ export function ticketRowIndexForAnchor(
 	);
 }
 
-/** The Action bar hint: the axis in effect, named as the split the list wears. */
-export function groupingAxisHint(axis: GroupingAxis): string {
-	return axis === "none" ? "Group" : `Group: ${axis}`;
+/**
+ * The Action bar hint: the split the list wears.
+ *
+ * The `none` axis draws no hint: the flat list needs no word that says so, and
+ * the control's `showInBar` hides its entry there (issue #159), so only an axis
+ * that splits the list into Groups can reach a bar, and only those axes stand in
+ * this function's type. The Key guide carries the control in every frame, and
+ * the Message line states every change.
+ */
+export function groupingAxisHint(axis: SplitGroupingAxis): string {
+	return `Group: ${axis}`;
 }
 
 /** The Message line a press of the axis control leaves on every change. */
@@ -275,7 +283,7 @@ export function ticketRows(
 		keyOf: (ticket) => ticketGroupKey(axis, ticket),
 		bandOf: attentionBand,
 		updatedOf: (ticket) => ticket.externalUpdatedAt,
-		heldOf: (ticket) => ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion),
+		heldOf: holdsDecision,
 		isFolded: (value) => folded.has(value),
 	});
 }
@@ -311,9 +319,14 @@ export function ticketGroupKey(axis: GroupingAxis, ticket: Ticket): string {
 	}
 }
 
-/** The counts a header carries: the ticket count, and the held count above zero. */
-function groupCountText(group: GroupHeader): string {
-	return `  ${group.count}${group.held > 0 ? `  held ${group.held}` : ""}`;
+/**
+ * The counts a header carries, as the two fields a narrow budget drops in order.
+ *
+ * The held count is the payload a fold cannot hide (ADR 0059), so it stands
+ * last: the ticket count gives up its cells before it does.
+ */
+function groupCountFields(group: GroupHeader): { total: string; held: string } {
+	return { total: `  ${group.count}`, held: group.held > 0 ? `  held ${group.held}` : "" };
 }
 
 /**
@@ -321,10 +334,17 @@ function groupCountText(group: GroupHeader): string {
  *
  * The header owns the marker column a ticket row owns, so the cursor reads the
  * same at either kind of row and the member rows keep all their cells
- * (story 28). The counts keep their cells and the value gives up its tail: an
- * operator who folds a Group must still read what the fold hides. The fold
- * rides on the glyph and never on a color, so the no-color presentation loses
- * nothing and a fold cannot be missed where the terminal paints no color.
+ * (story 28). The row follows the list pane's rule, shared with the ticket
+ * rows beside it: a field is dropped, never wrapped. A header that overflowed
+ * its pane would cost the window two rows and split its counts across them, so
+ * an operator who folds a Group would lose the very fact that justified the
+ * fold (ADR 0059). The value gives up its tail first and its last cell too; the
+ * ticket count gives up before the held count does; and the marker column
+ * stands either way, because it carries the cursor and the fold. Neither side
+ * is padded out to the pane: the header reads as one short line the way a row
+ * with no repository does. The fold rides on the glyph and never on a color,
+ * so the no-color presentation loses nothing and a fold cannot be missed where
+ * the terminal paints no color.
  */
 export function groupHeaderSpans(
 	group: GroupHeader,
@@ -332,12 +352,17 @@ export function groupHeaderSpans(
 	usableCols: number,
 ): ReactElement[] {
 	const prefix = `${selected ? "❯ " : "  "}${group.collapsed ? "▸" : "▾"} `;
-	const counts = groupCountText(group);
-	// The counts keep their cells and the value gives up its tail, and neither
-	// side is padded out to the pane: the header reads as one short line the
-	// way a row with no repository does.
-	const valueWidth = Math.max(1, usableCols - widthOf(prefix) - widthOf(counts));
-	const value = truncateTailToWidth(group.value, valueWidth);
+	const counts = groupCountFields(group);
+	// One budget, spent by the fixed cells first, so the line never costs more
+	// than the `usableCols` it is laid out on.
+	let room = usableCols - widthOf(prefix);
+	const held = widthOf(counts.held) <= room ? counts.held : "";
+	room -= widthOf(held);
+	const total = widthOf(counts.total) <= room ? counts.total : "";
+	room -= widthOf(total);
+	// A room below one cell yields no value at all: the Group's words are the
+	// first thing a narrow pane gives up, and its counts are the last.
+	const value = truncateTailToWidth(group.value, room);
 	const dim = paint("subtext0");
 	return [
 		createElement("span", { fg: selected ? paint("text") : dim }, prefix),
@@ -347,6 +372,6 @@ export function groupHeaderSpans(
 		...(selected
 			? [createElement("b", { fg: paint("text") }, value)]
 			: [createElement("span", { fg: dim }, value)]),
-		createElement("span", { fg: dim }, counts),
+		createElement("span", { fg: dim }, `${total}${held}`),
 	];
 }

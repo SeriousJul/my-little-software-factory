@@ -12,7 +12,7 @@ import {
 
 import type { ScrollConfig } from "../config.ts";
 import {
-	isHeldCompletion,
+	holdsDecision,
 	type LeftoverEnvironment,
 	type Ticket,
 	type TicketMarker,
@@ -281,7 +281,7 @@ export function detailContent(
 		// It only shows while the ticket rests in awaiting: a held turn whose
 		// agent works again is retried, not held, and the pane says so without
 		// a warning.
-		if (ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion)) {
+		if (holdsDecision(ticket)) {
 			const causeLine = turnEndCauseLine(completion.cause, completion.detail);
 			for (const wrapped of wrapToWidth(causeLine, usableCols))
 				lines.push({ text: wrapped, fg: paint("yellow") });

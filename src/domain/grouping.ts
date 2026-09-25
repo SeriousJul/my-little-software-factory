@@ -15,6 +15,17 @@
 export const GROUPING_AXES = ["none", "repository", "source", "task", "state", "position"] as const;
 export type GroupingAxis = (typeof GROUPING_AXES)[number];
 
+/**
+ * The axes that split a list into Groups: every value of the axis but `none`.
+ *
+ * `none` stays a value of the axis, because the cycle always offers it and the
+ * state file stores it. This type is for the reading that only exists once a
+ * Group stands on screen: a header's words, or the bar's hint that names the
+ * split. It keeps a surface from writing a branch for the flat list no operator
+ * can ever be shown.
+ */
+export type SplitGroupingAxis = Exclude<GroupingAxis, "none">;
+
 /** The axis a fresh state file starts with, and one with no stored row reads as. */
 export const DEFAULT_GROUPING_AXIS: GroupingAxis = "none";
 

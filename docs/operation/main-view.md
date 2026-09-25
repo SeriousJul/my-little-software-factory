@@ -132,7 +132,12 @@ own; the Position axis reads the Workflow state the machine matched on this read
 ticket no state matches under `unmatched`.
 
 The header carries its ticket count and, above zero, its held count, with no
-axis prefix, and the fold rides on the glyph beside it, never on a color. Member
+axis prefix, and the fold rides on the glyph beside it, never on a color. The
+line follows the list pane's rule for its ticket rows: a field is dropped, never
+wrapped. Where the pane is too narrow for everything, the Group's value gives up
+its tail and then its last cell, and the ticket count gives up before the held
+count does, because a wrapped header would cost the window a row and split the
+count a fold exists to keep. Member
 rows keep every cell they had in the flat list. `x` is resolved by the facts
 under the cursor: on a Group header it folds that Group and lands the cursor
 there, and anywhere else in the Ticket section - and in any other section - it

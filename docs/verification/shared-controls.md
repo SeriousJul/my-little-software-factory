@@ -21,27 +21,35 @@ Status: the automated checks pass. The `Tab` axis cycle, each axis's Groups, the
 flat `none` list, the fold by key and by mouse, the cursor at rest on a Group
 header and every refusal there, the detail pane holding its ticket, the Group
 order against the attention order, the counts on a header and on the Section
-header, the header-only short frame, the empty grouped message, and the axis
-surviving a restart were measured through the real App frame harness at fixed
-terminal sizes on a real state file with a fake command runner and fake sources,
-in `test/ticket-grouping-frame.test.ts`. The durable fact is measured in
-`test/state.test.ts` (the getter and setter round trip, the default on a fresh
-file, the v20 to v21 step, and the absence of any fold table), the derived
-Workflow state's name in the same file's projection walk, and the shared
-mechanism's ownership in `test/shared-control-architecture.test.ts`. The
-folded Group, the collapsed Group's held count, and the cursor on a header are
-asserted on the gallery's own `ticket-groups` example in
-`test/shared-gallery.test.ts`, and the catalogue's refusal, hint, and Key guide
-rows in `test/controls.test.ts`, `test/action-bar.test.ts`, and
-`test/key-guide.test.ts`.
+header, the header-only short frame, the Group header at the plane's minimum
+width - where the marker column and a double-digit count with a held turn spend
+the pane's whole budget, in the open and the folded frame, and again with a
+three-digit count that costs more than the budget holds - the empty grouped
+message, and the axis surviving a restart were measured through the real App
+frame harness at fixed terminal sizes on a real state file with a fake command
+runner and fake sources, in `test/ticket-grouping-frame.test.ts`. The durable
+fact is measured in `test/state.test.ts` (the getter and setter round trip, the
+default on a fresh file, the v20 to v21 step, and the absence of any fold
+table), the derived Workflow state's name in the same file's projection walk,
+and the shared mechanism's ownership in
+`test/shared-control-architecture.test.ts`. The folded Group, the collapsed
+Group's held count, and the cursor on a header are asserted on the gallery's own
+`ticket-groups` example in `test/shared-gallery.test.ts`; the catalogue's hint
+for every split axis, its refusal of the bar's hint at `none`, and its refusals
+on a header in `test/controls.test.ts`; the axis control's and the fold's guide
+rows in `test/key-guide.test.ts`; and the two rows' presence in the mode's own
+Key guide frame in `test/app.test.ts`.
 
 `bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
-change with no other `bun test` process on the machine (load average 3.6, the
-suite green at 2062 tests over 84 files, no skips). The grouping frames were
-each confirmed red by deletion: keying the fold store on one axis instead of the
-operator's own leaves "an axis visited twice comes back with its own folds" red,
-and reading the header fact outside the Ticket modes leaves "a Group header under
-the Ticket cursor gives no other section a fold" red.
+change with no other `bun test` process on the machine (load average 3.1, the
+suite green at 2064 tests over 84 files, no skips). The
+grouping frames were each confirmed red by deletion: keying the fold store on
+one axis instead of the operator's own leaves "an axis visited twice comes back
+with its own folds" red, reading the header fact outside the Ticket modes leaves
+"a Group header under the Ticket cursor gives no other section a fold" red, and
+handing the narrow header's budget a floor of one cell leaves "a Group header at
+the minimum width drops its value before it wraps" red on a header that wrapped
+its held count onto a second window row.
 
 ADR 0060's Ignored ticket is recorded as sitting in no Group and counted by no
 Group header. The ignore is not implemented on this branch, so nothing here

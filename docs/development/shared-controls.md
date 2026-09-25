@@ -228,7 +228,10 @@ Two rules are the standard, not the surface's choice:
   row. The grouping code is presentation: it reaches no queue order, no Top-up
   choice, no gate, no count, and no detail pane, and the plane's one band rule
   (`attentionBand` in [domain/ticket.ts](../../src/domain/ticket.ts)) stays the
-  single source both the projection's sort and the Group order read.
+  single source both the projection's sort and the Group order read. The held
+  count a header carries comes from the same file's one held-turn rule
+  (`holdsDecision`), so a Group's count can never disagree with the Section
+  header's, a row's badge, or the detail pane's warning.
 - **A group key is a fact, never a face** ([ADR
   0059](../adr/0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)).
   A Queue wait's `queued` badge, a Starting window's spinner, a held turn, and a
@@ -241,7 +244,11 @@ A fold hides rows and never facts. The rows a fold takes away are the only thing
 that changes: the Section header's counts, the mode line, the Parallel limit, the
 Pickup, the Top-up, the handoff gates, and every Decision route read the same
 facts with a Group open or shut, and a collapsed header still carries its count
-and its held count. The plane never folds or unfolds on its own - an operator
+and its held count. The header lays its line out on the list pane's own rule, a
+field is dropped and never wrapped: the Group's value gives up its tail and then
+its last cell before the counts do, and the ticket count gives up before the held
+count, because a header that overflowed its pane would split the count the fold
+exists to keep over two window rows. The plane never folds or unfolds on its own - an operator
 press or click is the only mover - and a fold never changes what is selected:
 where the cursor stands on a Group header no row is selected, so every control
 that needs one refuses with the catalogue's own reason, and the fold takes the

@@ -50,7 +50,7 @@ import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
 import {
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
-	isHeldCompletion,
+	holdsDecision,
 	type Ticket,
 } from "../domain/ticket.ts";
 import {
@@ -425,7 +425,19 @@ export function App({
 	 * so the pane always paints the facts of the current read.
 	 */
 	const detailTicketIdentityRef = useRef<string | null>(null);
-	/** The Ticket the detail pane shows, kept in a ref the key handlers read. */
+	/**
+	 * The Ticket the detail pane shows, kept in a ref the key handlers read.
+	 *
+	 * `ticketAtCursor`, defined below, reads this ref, and the render writes it
+	 * further below still, after that read. So a render asks the pane what the
+	 * previous render left there. Only one path reaches the read: a collapsed
+	 * Ticket section, whose cursor stands on no row the operator can see. There
+	 * the answer is the ticket the pane already shows, which is the fact the ref
+	 * exists to hold, and it is stable from the next frame: a collapsed section
+	 * moves no cursor, so nothing but a re-read that drops the ticket can move
+	 * the value. The write stands in the render body rather than in an effect, so
+	 * a key handler never reads a value one commit behind the frame on screen.
+	 */
 	const detailTicketRef = useRef<Ticket | undefined>(undefined);
 	/**
 	 * The Ticket section's list rows: each ticket, and the Group header above
@@ -687,14 +699,11 @@ export function App({
 	// handoffs, routes, and restarts until it is decided or a turn completes.
 	const dispatchPause = state?.dispatchPauseActive() ?? false;
 	// The held turns (ADR 0016, ADR 0017): the awaiting tickets whose last turn
-	// ended failed, aborted, truncated, or no-turn with no decision. They rest
-	// in awaiting, held against every automatic decision, until the operator
-	// acts. A ticket
-	// whose agent works again has left awaiting and is no longer held (its
-	// next settle overwrites the trace).
-	const heldCount = tickets.filter(
-		(ticket) => ticket.state === "awaiting" && isHeldCompletion(ticket.lastCompletion),
-	).length;
+	// ended failed, aborted, truncated, or no-turn with no decision, read
+	// through the domain's one rule so this count and a Group header's agree.
+	// A ticket whose agent works again has left awaiting and is no longer held
+	// (its next settle overwrites the trace).
+	const heldCount = tickets.filter(holdsDecision).length;
 	const modeLine =
 		state === undefined
 			? ""
@@ -821,6 +830,9 @@ export function App({
 	// a Group header (issue #159), so the pane never blanks out under an
 	// operator who is reading a ticket and stepping across a fold. The identity
 	// is what is retained, so the facts the pane states stay the live read.
+	// The read of `detailTicketRef` inside `ticketAtCursor` takes the value the
+	// previous render wrote: see that ref's declaration for why the order is the
+	// one this pane wants.
 	const cursorTicket = ticketAtCursor();
 	if (cursorTicket !== undefined) detailTicketIdentityRef.current = cursorTicket.identity;
 	const detailTicket =
@@ -837,6 +849,8 @@ export function App({
 		detailGeometry.visibleRows,
 		config.maxHandoffsPerTicket,
 	);
+	// The write of the render's own answer, for the next render and for the key
+	// handlers; the read above is the one this frame's pane paints with.
 	detailTicketRef.current = detailTicket;
 	const selectedTicket = detailTicket;
 	/**

@@ -12,6 +12,7 @@ import {
 	controlsForMode,
 	guideControls,
 } from "../src/components/controls.ts";
+import { GROUPING_AXES } from "../src/domain/grouping.ts";
 import type { Ticket } from "../src/domain/ticket.ts";
 import type { Consultation } from "../src/state.ts";
 
@@ -70,6 +71,12 @@ function guideGroupsFor(context: ControlContext, id: string): string[] {
 		.map(({ group }) => group);
 }
 
+/**
+ * The Grouping axis' split values: the ones that draw a header, so the ones the
+ * Action bar can name (issue #159).
+ */
+const SPLIT_AXES = GROUPING_AXES.filter((axis) => axis !== "none");
+
 // Issue #159: the Grouping axis is one key that steps a fixed cycle, and it
 // answers in both Ticket panes wherever the plane does, so a press in a
 // collapsed Ticket section still records the operator's choice.
@@ -80,15 +87,18 @@ test("Tab cycles the Grouping axis in both Ticket modes, and refuses nowhere", (
 		expect(control?.id).toBe("group-axis");
 		if (control === undefined) throw new Error(`Tab answers nothing in ${mode}`);
 		expect(availabilityFor(control, context)).toEqual({ available: true });
-		// The hint names the axis in effect, and the guide row carries the
+		// The flat list wears no hint of its own, and the bar hides the entry
+		// whole at `none`: the catalogue states no word an operator could never
+		// read, so a hint exists only where a Group header stands to explain it.
+		expect(control.barLabel?.(context)).toBeUndefined();
+		expect(actionBarControls(mode, context).map((entry) => entry.id)).not.toContain("group-axis");
+		// Every split axis names itself on the bar, and the guide row carries the
 		// whole cycle so the order is documented where it is used.
-		expect(control.barLabel?.(context)).toBe("Group");
-		expect(
-			controlForKey(
-				{ name: "tab" },
-				contextFor(mode, { ...values, groupingAxis: "task" }),
-			)?.barLabel?.(contextFor(mode, { ...values, groupingAxis: "task" })),
-		).toBe("Group: task");
+		for (const axis of SPLIT_AXES) {
+			const split = contextFor(mode, { ...values, groupingAxis: axis });
+			expect(controlForKey({ name: "tab" }, split)?.barLabel?.(split)).toBe(`Group: ${axis}`);
+			expect(actionBarControls(mode, split).map((entry) => entry.id)).toContain("group-axis");
+		}
 		expect(control.guideNote).toBe(
 			"cycles the grouping axis: none, repository, source, task, state, position",
 		);
