@@ -938,6 +938,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			externalUpdatedAt: "2026-09-01T00:00:00.000Z",
 			memberships: [],
 			suggestedTaskType: "implement",
+			matchedStateName: null,
 			actionable: true,
 			handoffRecoveryRequired: false,
 			leftover: null,

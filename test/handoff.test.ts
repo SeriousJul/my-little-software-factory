@@ -88,6 +88,7 @@ const ticket: Ticket = {
 	externalUpdatedAt: "2026-01-01T00:00:00Z",
 	memberships: [],
 	suggestedTaskType: "implement",
+	matchedStateName: null,
 	actionable: true,
 	handoffRecoveryRequired: false,
 	handoffCount: 0,

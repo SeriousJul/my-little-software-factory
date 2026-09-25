@@ -114,6 +114,150 @@ function success(tickets: FetchedTicket[]) {
 	return { status: "success" as const, fetchedAt: "2026-08-31T10:01:00Z", tickets };
 }
 
+// The States one projection read matches a ticket against: the first match
+// wins, a State with no task is a parking State, and no match at all leaves the
+// ticket on the fallback task type. The `position` grouping reads the matched
+// State's name, which the projection derives on every read and never stores
+// (issue #159).
+const POSITION_STATES = [
+	{
+		name: "ready-for-agent",
+		taskType: "implement",
+		match: { sourceKind: "github-issue" as const, labelsAll: ["ready-for-agent"] },
+	},
+	{
+		name: "needs-review",
+		taskType: "review",
+		match: { sourceKind: "github-issue" as const, labelsAny: ["needs-review"] },
+	},
+	// A parking State: the plane suggests nothing and starts nothing on its own.
+	{ name: "on-hold", match: { sourceKind: "github-issue" as const, labelsAny: ["hold"] } },
+];
+
+describe("the projection's matched Workflow state (issue #159)", () => {
+	/** One ticket with the labels the machine reads, listed on one source. */
+	function labeled(labels: string[], identity = "github:github.com:I_5"): FetchedTicket {
+		return { ...fetched(identity), labels };
+	}
+
+	test("the read names the State it matched, beside the task it suggests", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([labeled(["ready-for-agent"])]));
+		expect(state.visibleTickets(POSITION_STATES, "implement")[0]).toEqual(
+			expect.objectContaining({
+				suggestedTaskType: "implement",
+				matchedStateName: "ready-for-agent",
+			}),
+		);
+		state.close();
+	});
+
+	test("a ticket no State matches names no State, and keeps the fallback task", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([labeled(["something-else"])]));
+		expect(state.visibleTickets(POSITION_STATES, "implement")[0]).toEqual(
+			expect.objectContaining({ suggestedTaskType: "implement", matchedStateName: null }),
+		);
+		state.close();
+	});
+
+	test("a parking State names itself and suggests no task", () => {
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([labeled(["hold"])]));
+		expect(state.visibleTickets(POSITION_STATES, "implement")[0]).toEqual(
+			expect.objectContaining({ suggestedTaskType: null, matchedStateName: "on-hold" }),
+		);
+		state.close();
+	});
+
+	test("an in-flight ticket keeps its own matched State from the source facts", () => {
+		// The Handoff records the task it started with, and the position is
+		// still what the labels say: the two facts stand apart, and the
+		// grouping reads the State the machine matched now.
+		const state = openFactoryState(":memory:");
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([labeled(["needs-review"])]));
+		const [open] = state.visibleTickets(POSITION_STATES, "implement");
+		expect(open.matchedStateName).toBe("needs-review");
+		const claim = state.claimHandoff(open.identity, { ...choice, taskType: "implement" }, "open");
+		if (!claim.ok) throw new Error(claim.reason);
+		state.settleHandoff(claim.claim.attemptId, true);
+		const [flight] = state.visibleTickets(POSITION_STATES, "implement");
+		expect(flight).toEqual(
+			expect.objectContaining({
+				state: "handed-off",
+				handoff: expect.objectContaining({ taskType: "implement" }),
+				matchedStateName: "needs-review",
+			}),
+		);
+		state.close();
+	});
+
+	test("the name is derived on every read, never stored", () => {
+		// The same file, two configs: the State's name follows the machine the
+		// operator configured, so no stored row can drift from it.
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(sourceA, success([labeled(["hold"])]));
+		expect(state.visibleTickets(POSITION_STATES, "implement")[0].matchedStateName).toBe("on-hold");
+		state.close();
+
+		const reopened = openFactoryState(path);
+		expect(
+			reopened.visibleTickets(
+				[{ name: "parked-elsewhere", match: { labelsAny: ["hold"] } }],
+				"implement",
+			)[0].matchedStateName,
+		).toBe("parked-elsewhere");
+		reopened.close();
+	});
+
+	test("no gate, count, or queue order reads the matched State's name", () => {
+		// The field exists for the list's grouping alone. Two machines that
+		// differ only in the names they give the same match order the list and
+		// the queue identically, and hold the same counts.
+		const named = (name: string) => [
+			{ name, match: { sourceKind: "github-issue" as const, labelsAny: ["ready-for-agent"] } },
+		];
+		const path = statePath();
+		const state = openFactoryState(path);
+		state.initializeSources([sourceA]);
+		state.applyFetch(
+			sourceA,
+			success([
+				labeled(["ready-for-agent"]),
+				{
+					...labeled(["ready-for-agent"], "github:github.com:I_9"),
+					externalUpdatedAt: "2026-08-30T10:00:00Z",
+				},
+			]),
+		);
+		const first = state.visibleTickets(named("one-name"), "implement");
+		// The queue holds the first ticket's waiting start, so its order is the
+		// operator's, and a name change cannot move it.
+		const claimed = state.enqueueWork({
+			ticketIdentity: first[0].identity,
+			origin: "open",
+			choice,
+			previousMessage: "",
+		});
+		if (!claimed.ok) throw new Error(claimed.reason);
+		const queueBefore = state.workQueue().map((item) => workQueueIdentityOf(item));
+		const second = state.visibleTickets(named("other-name"), "implement");
+		expect(second.map((ticket) => ticket.identity)).toEqual(first.map((ticket) => ticket.identity));
+		expect(second.map((ticket) => ticket.actionable)).toEqual(
+			first.map((ticket) => ticket.actionable),
+		);
+		expect(state.workQueue().map((item) => workQueueIdentityOf(item))).toEqual(queueBefore);
+		expect(state.consultationCounts()).toEqual(state.consultationCounts());
+		state.close();
+	});
+});
+
 describe("factory SQLite state", () => {
 	test("keeps the prior complete snapshot after a source fails and blocks its handoff", () => {
 		const state = openFactoryState(":memory:");
@@ -1770,6 +1914,123 @@ describe("factory SQLite state", () => {
 			const third = openFactoryState(path);
 			expect(third.queuePaused()).toBe(false);
 			third.close();
+		});
+	});
+
+	// ADR 0058, issue #159: the Grouping axis is factory state on the state
+	// file, the way the Auto-handoff mode and the queue pause are. Which Groups
+	// stand folded is not: no table holds a fold, and a restart opens them all.
+	describe("the grouping axis (ADR 0058)", () => {
+		test("the write is durable: a fresh open of the same file reads it back", () => {
+			const path = statePath();
+			const state = openFactoryState(path);
+			// A fresh state file starts at `none`: no plane comes up grouped
+			// before the operator asks (user story 52).
+			expect(state.groupingAxis("tickets")).toBe("none");
+			state.setGroupingAxis("tickets", "repository");
+			expect(state.groupingAxis("tickets")).toBe("repository");
+			state.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupingAxis("tickets")).toBe("repository");
+			reopened.setGroupingAxis("tickets", "position");
+			expect(reopened.groupingAxis("tickets")).toBe("position");
+			reopened.close();
+			const third = openFactoryState(path);
+			expect(third.groupingAxis("tickets")).toBe("position");
+			third.close();
+		});
+
+		test("the record is keyed by section, not by one section", () => {
+			// A second list that takes grouping later writes its own row and
+			// needs no new schema version (user story 51). The row the plane
+			// writes today stands beside a row it does not know yet, and each
+			// reads its own answer.
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.setGroupingAxis("tickets", "task");
+			state.close();
+
+			const db = new Database(path);
+			db.prepare(
+				"INSERT INTO grouping_axis(section, axis) VALUES ('consultations', 'state')",
+			).run();
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupingAxis("tickets")).toBe("task");
+			const check = new Database(path, { readonly: true });
+			expect(
+				check.prepare("SELECT section, axis FROM grouping_axis ORDER BY section").all() as {
+					section: string;
+					axis: string;
+				}[],
+			).toEqual([
+				{ section: "consultations", axis: "state" },
+				{ section: "tickets", axis: "task" },
+			]);
+			check.close();
+			reopened.close();
+		});
+
+		test("a value the plane does not name reads back as the default", () => {
+			// The file is the operator's data, not the plane's code: a hand-edited
+			// or future value must open the flat list instead of failing startup.
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.close();
+			const db = new Database(path);
+			db.prepare("UPDATE grouping_axis SET axis = 'sideways' WHERE section = 'tickets'").run();
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupingAxis("tickets")).toBe("none");
+			reopened.close();
+		});
+
+		test("a v20 file migrates to v21: the axis lands at its default", () => {
+			// Story 57: an upgrade never fails startup over a missing row. The
+			// step seeds the default beside the work the file already carried.
+			const path = statePath();
+			const state = openFactoryState(path);
+			state.initializeSources([sourceA]);
+			state.applyFetch(sourceA, success([fetched()]));
+			state.setGroupingAxis("tickets", "source");
+			state.close();
+
+			const db = new Database(path);
+			db.exec("DROP TABLE grouping_axis");
+			db.prepare("UPDATE schema_version SET version = 20").run();
+			db.close();
+
+			const reopened = openFactoryState(path);
+			expect(reopened.groupingAxis("tickets")).toBe("none");
+			// The work the v20 file held still reads: the migration added a row
+			// and moved nothing else.
+			expect(reopened.visibleTickets([], "implement")[0].sourceKind).toBe("github-issue");
+			const check = new Database(path, { readonly: true });
+			expect(
+				(check.prepare("SELECT version FROM schema_version").get() as { version: number }).version,
+			).toBe(SCHEMA_VERSION);
+			check.close();
+			reopened.close();
+		});
+
+		test("no fold stands on the state file", () => {
+			// ADR 0058 holds the folds in memory: the file gains the axis table
+			// and no table that could carry a collapsed Group, so a restart can
+			// never bring back a fold that hides a decision the operator owes.
+			const path = statePath();
+			openFactoryState(path).close();
+			const check = new Database(path, { readonly: true });
+			const tables = (
+				check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+					name: string;
+				}[]
+			).map((row) => row.name);
+			check.close();
+			expect(tables).toContain("grouping_axis");
+			expect(tables.filter((name) => /fold|collaps/i.test(name))).toEqual([]);
 		});
 	});
 

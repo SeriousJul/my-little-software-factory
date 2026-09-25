@@ -129,6 +129,7 @@ const selectedTicket: Ticket = {
 	externalUpdatedAt: "2026-09-01T10:00:00.000Z",
 	memberships: [],
 	suggestedTaskType: "implement",
+	matchedStateName: null,
 	actionable: true,
 	handoffRecoveryRequired: false,
 	leftover: null,

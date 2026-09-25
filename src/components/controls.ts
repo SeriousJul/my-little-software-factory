@@ -14,8 +14,11 @@
  * only aliases that mode dispatches, and they are what its hints and guide
  * rows may name.
  */
+import type { GroupingAxis } from "../domain/grouping.ts";
 import type { Ticket } from "../domain/ticket.ts";
 import type { Consultation, WorkQueueItem } from "../state.ts";
+import type { GroupHeader } from "./shared/grouping.ts";
+import { groupingAxisHint } from "./shared/grouping.ts";
 import { widthOf } from "./text.ts";
 
 export type InteractionMode =
@@ -134,6 +137,31 @@ export interface ControlContext {
 	selectedTicket?: Ticket;
 	/** The Consultation the base panes point at, if the list holds one. */
 	selectedConsultation?: Consultation;
+	/**
+	 * The Grouping axis in effect for the Ticket section's list (issue #159).
+	 *
+	 * The shell states it from the factory state it read at boot and the press
+	 * that moved it, and the axis control's hint names it, so the operator never
+	 * has to infer the split from the rows.
+	 */
+	groupingAxis?: GroupingAxis;
+	/**
+	 * The Group header the Ticket cursor stands on, or null when it stands on a
+	 * Ticket row (issue #159).
+	 *
+	 * The list states it from the row under the cursor, and the fold control
+	 * gates on it: the shared `x` key folds a Group under a header and folds the
+	 * Section everywhere else, and the Action bar names only the meaning the
+	 * facts under the cursor run.
+	 */
+	selectedGroupHeader?: GroupHeader | null;
+	/**
+	 * Whether the Ticket cursor stands on a Group header (issue #159).
+	 *
+	 * No Ticket is selected there, so every Ticket control refuses with the
+	 * catalogue's own words and the fold control takes the shared `x` key.
+	 */
+	groupHeaderSelected?: boolean;
 	/**
 	 * The Work queue's item under the cursor, with the queue's depth beside it
 	 * (ADR 0034). The item's own position is the queue order's.
@@ -377,7 +405,10 @@ const handoffEligibility =
 /** A settled Ticket uses Enter to decide its completed work, not to hand it off. */
 const completionEligibility = (context: ControlContext): ControlAvailability => {
 	if (context.handoffActive) return unavailable("a Handoff is active");
-	return context.selectedTicket?.state === "awaiting"
+	// A Group header holds no Ticket (issue #159), and the refusal is this
+	// catalogue's own words, not a surface that swallows the key.
+	if (context.selectedTicket === undefined) return unavailable("no Ticket is selected");
+	return context.selectedTicket.state === "awaiting"
 		? available()
 		: unavailable("the selected Ticket has no completion to decide");
 };
@@ -426,6 +457,16 @@ const workQueueMode = (mode: InteractionMode): boolean =>
 	mode === "work-queue-list" || mode === "work-queue-detail";
 const ticketBaseMode = (mode: InteractionMode): boolean =>
 	mode === "ticket-list" || mode === "ticket-detail";
+/**
+ * Whether the shared `x` belongs to the Group fold right now (issue #159).
+ *
+ * The fact is the Ticket list's: a Group header exists in no other section, and
+ * the other two sections own no fold, so the mode decides before the row does.
+ * A cursor that happens to rest on a header while the Consultation section
+ * holds the focus leaves the other sections' Section toggle untouched.
+ */
+const groupFoldOwnsX = (context: ControlContext): boolean =>
+	ticketBaseMode(context.mode) && context.groupHeaderSelected === true;
 /**
  * The base modes of a section other than the Consultation section.
  *
@@ -982,10 +1023,21 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		actionBar: true,
 		priority: 71,
 		modes: ["ticket-list", "consultation-list"],
-		availability: (context) =>
-			context.queueItemForSelectedRow !== null && context.queueItemForSelectedRow !== undefined
+		availability: (context) => {
+			// A Group header holds no Ticket (issue #159): the key refuses in the
+			// catalogue's words for a missing selection, the way the section's other
+			// Ticket controls do, and never as a row that has no item.
+			if (
+				ticketBaseMode(context.mode) &&
+				context.selectedTicket === undefined &&
+				context.queueItemForSelectedRow === null
+			)
+				return unavailable("no Ticket is selected");
+			return context.queueItemForSelectedRow !== null &&
+				context.queueItemForSelectedRow !== undefined
 				? available()
-				: unavailable("the selected row has no waiting queue item"),
+				: unavailable("the selected row has no waiting queue item");
+		},
 		guideNote: "jumps to the row's waiting item in the Work queue",
 	},
 	{
@@ -1065,18 +1117,82 @@ const CONTROL_DEFINITIONS: readonly ControlDefinition[] = [
 		availability: ticketClose,
 	},
 	{
+		// The Grouping axis (issue #159): one press steps the Ticket section's list
+		// to the next split, and `none` is always in the cycle, so the flat list is
+		// one press away. `Tab` is bound in no list mode today, and the shared
+		// form's field movement is a different mode set, so the plane spends no
+		// letter twice. The hint names the axis in effect, and the shell writes the
+		// axis to the state file the moment the key lands (ADR 0058).
+		id: "group-axis",
+		label: "Group",
+		keys: () => ["tab"],
+		keyLabel: "Tab",
+		scope: "control-plane",
+		actionBar: true,
+		// Only a split axis names a hint: at `none` the entry is hidden from the bar
+		// by `showInBar` below, so no word stands here for a flat list.
+		barLabel: (context) =>
+			context.groupingAxis === undefined || context.groupingAxis === "none"
+				? undefined
+				: groupingAxisHint(context.groupingAxis),
+		// Just above the Launch entry: the split the list wears outranks the
+		// entry the control plane reached for, and the base modes' common
+		// controls outrank it, so a narrow row keeps Move, Detail, the Enter
+		// meaning, Goto, Close, and the Section toggle first (ADR 0034's
+		// packing ladder).
+		priority: 43,
+		// The flat list needs no hint that says so: the bar states the axis only
+		// where a Group header is on screen to explain it. The Key guide names
+		// the control whatever the axis in effect, and the Message line states
+		// every change.
+		modes: [...ticketBaseModes],
+		// The axis answers everywhere the plane does, a collapsed Ticket section
+		// included: a press still records the operator's choice (user story 10).
+		showInBar: (context) => context.groupingAxis !== undefined && context.groupingAxis !== "none",
+		availability: available,
+		guideNote: "cycles the grouping axis: none, repository, source, task, state, position",
+	},
+	{
+		// The fold that shares the `x` key with the section toggle (issue #159):
+		// the facts under the cursor decide which meaning a press runs, so the
+		// plane spends no new letter on a second idea. A fold hides rows and never
+		// facts (ADR 0059), and it lives in memory for the run alone (ADR 0058).
+		id: "group-fold",
+		label: "Fold",
+		keys: () => ["x"],
+		keyLabel: "x",
+		scope: "control-plane",
+		actionBar: true,
+		barLabel: (context) =>
+			context.selectedGroupHeader?.collapsed === true ? "Unfold group" : "Fold group",
+		// Just above the section toggle it shares the key with: where the cursor
+		// stands on a Group header this is the meaning that runs, and the bar
+		// states only that one.
+		priority: 47,
+		modes: [...ticketBaseModes],
+		availability: (context) =>
+			groupFoldOwnsX(context) ? available() : unavailable("no Group header is under the cursor"),
+		guideNote: "folds the Group under the cursor, or opens it back",
+	},
+	{
 		id: "section-toggle",
 		label: "Section",
 		// `x` collapses the section the cursor is in, or expands it back. The
 		// sections stay visible as long as the frame can hold them, so the
-		// toggle is a matter of room, not of access.
+		// toggle is a matter of room, not of access. The key is shared with the
+		// Group fold (issue #159), which owns it wherever the cursor stands on a
+		// Group header; the fold owns that fact, and the two refusals are the
+		// catalogue's, so one key keeps one meaning per moment.
 		keys: () => ["x"],
 		keyLabel: "x",
 		scope: "control-plane",
 		actionBar: true,
 		priority: 45,
 		modes: [...baseModes],
-		availability: available,
+		availability: (context) =>
+			groupFoldOwnsX(context)
+				? unavailable("the cursor stands on a Group header: x folds that Group")
+				: available(),
 		guideNote: SECTION_TOGGLE_NOTE,
 	},
 	{

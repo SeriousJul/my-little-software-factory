@@ -52,6 +52,7 @@ function ticket(state: TicketState, environment: (typeof ENVIRONMENT_KINDS)[numb
 		externalUpdatedAt: "2026-08-31T10:00:00Z",
 		memberships: [],
 		suggestedTaskType: "implement",
+		matchedStateName: null,
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,

@@ -107,6 +107,7 @@ describe("the shared control gallery", () => {
 			"consultation-detail-unscheduled",
 			"consultation-unscheduled-actions",
 			"consultation-detail-queued",
+			"ticket-groups",
 			"work-queue",
 			"work-force-dispatch",
 			"work-queue-item-consultation",
@@ -151,6 +152,29 @@ describe("the shared control gallery", () => {
 		expect(frameText(next)).toContain(
 			"Unavailable: Launch Consultation: initial input cannot be empty",
 		);
+	});
+
+	// Issue #159: the grouped Ticket list is a test surface, so the states a
+	// reviewer must see - a grouped list, a collapsed Group with its held count,
+	// and the cursor at rest on a Group header - are asserted here rather than
+	// in a private sketch.
+	test("the grouped Ticket list shows its Groups, its fold, and its header cursor", async () => {
+		const setup = await gallery("ticket-groups", 120, 34);
+		const text = frameText(setup.captureCharFrame());
+		// A Group header stands above each run, and it carries the count of the
+		// rows it holds and the held count above zero.
+		expect(text).toContain("▾ acme/billing 2 held 1");
+		expect(text).toContain("▾ acme/factory 2");
+		// A collapsed Group shows nothing but its header, and the fold rides on
+		// the glyph: the header still names what the fold hides.
+		expect(text).toContain("▸ acme/billing 2 held 1");
+		// The cursor rests on a Group header, and the marker column reads the
+		// same at either kind of row.
+		expect(text).toContain("❯ ▾ implement 3 held 1");
+		// The axis names itself in the hint the bar carries, and the Message
+		// lines are the words the press leaves on the line.
+		expect(text).toContain("Ticket list grouped by repository");
+		expect(text).toContain("Ticket list grouping off: the flat list");
 	});
 
 	test("the Type-ahead example shows its search and answers a query", async () => {
