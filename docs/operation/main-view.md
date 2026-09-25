@@ -108,6 +108,70 @@ row and the list no key that raises, lowers, or clears a rank. `+` and `-`
 are the Work queue's keys for the item under the cursor (ADR 0049), and the
 Ticket section names them nowhere.
 
+### Groups and the Grouping axis
+
+`Tab` splits the Ticket section's list into **Groups**: runs of ticket rows that
+share one value of one **Grouping axis** - `none`, `repository`, `source`,
+`task`, `state`, or `position` - each run under a **Group header** the operator
+can collapse (issue #159). One press steps to the next axis in that fixed order,
+so `none`, the flat list, is always one press away, and the control answers from
+the Ticket list and the Ticket detail alike. The Action bar hint names the axis
+in effect, the Message line states it on every change, and the Key guide carries
+both the axis control and the fold.
+
+A **Group is a presentation of the list order and never a new sort** (ADR 0059).
+The Groups stand by the best Attention band among the tickets they hold, then by
+the newest external update in the Group, then by the Group value; the order
+inside a Group is the order the flat list holds, band rules and all. A group key
+is a fact of the ticket, never a face the row wears: a Queue wait's `queued`
+badge groups under `open`, a Starting window's spinner under `handed-off`, and a
+held turn under `awaiting`, because the badge is a presentation. The Task axis
+reads the row's own badge rule, so `parked` and `unknown` are Groups of their
+own; the Position axis reads the Workflow state the machine matched on this read
+- derived from the source facts on every read and never stored - and files a
+ticket no state matches under `unmatched`.
+
+The header carries its ticket count and, above zero, its held count, with no
+axis prefix, and the fold rides on the glyph beside it, never on a color. Member
+rows keep every cell they had in the flat list. `x` is resolved by the facts
+under the cursor: on a Group header it folds that Group and lands the cursor
+there, and anywhere else in the Ticket section - and in any other section - it
+keeps the Section toggle. A collapsed Ticket section draws no header, so there
+its `x` is the Section toggle and the Ticket controls keep working on the ticket
+the detail pane shows. A left click on a header folds the same Group. Every
+Ticket control refuses where the cursor stands on a header, in the catalogue's
+own words for no selection, and the detail pane keeps the last ticket it showed.
+
+**A fold hides rows and never facts** (ADR 0059). The Section header's counts,
+the mode line, the Parallel limit, the Pickup, the Top-up, the handoff gates,
+and every Decision route read the same facts with a Group open or shut, and the
+Work queue's order stays the order of work. The plane never opens a Group by
+itself: a ticket that moves into a folded Group, or a held turn that arrives
+behind a fold, changes no fold. There is no collapse-all and no expand-all - the
+axis cycle to `none` is the one escape hatch - and a Group with no tickets never
+appears, so a repository or a feed that has gone leaves no ghost header.
+
+Each header costs one window row, so a short terminal's list window can hold
+nothing but headers; it still reads, because each header carries its counts, and
+one press returns the flat list.
+
+The Action bar hint names the axis wherever the list is split; the flat list
+states no axis, because it hides no split to name, and the control's row in the
+Key guide is there whatever the axis in effect. The Message line is a notice, so
+the axis a press chose yields its place on the line to a fact an operation wrote
+- which is why the split also stands in the headers themselves and in the hint.
+
+The axis is **factory state on the state file**, stored per section the way the
+Auto-handoff mode (ADR 0036) and the queue pause (ADR 0052) are (ADR 0058): a
+restart and a dev reload find the split where the operator left it, and a fresh
+file starts at `none`. A state file that will not take the write is reported on
+the Message line, and the view the operator asked for still stands for the run.
+**Collapsed Groups are session facts**: they live in memory for the run, keyed by
+the axis and the Group value, so an axis visited twice comes back as it was left
+and a restart never brings back a fold that hides a decision the operator owes.
+A plane with no state file keeps the axis in memory too, and grouping degrades
+to session-only instead of refusing the key.
+
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
 the Action bar reserve the two bottom rows at every terminal size, and each

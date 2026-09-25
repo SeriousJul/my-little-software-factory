@@ -15,6 +15,48 @@ See [the shared control standard](../development/shared-controls.md) for what th
 requires, and [ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for
 who owns control behavior.
 
+## The grouped Ticket list (issue #159, ADR 0058 and ADR 0059)
+
+Status: the automated checks pass. The `Tab` axis cycle, each axis's Groups, the
+flat `none` list, the fold by key and by mouse, the cursor at rest on a Group
+header and every refusal there, the detail pane holding its ticket, the Group
+order against the attention order, the counts on a header and on the Section
+header, the header-only short frame, the empty grouped message, and the axis
+surviving a restart were measured through the real App frame harness at fixed
+terminal sizes on a real state file with a fake command runner and fake sources,
+in `test/ticket-grouping-frame.test.ts`. The durable fact is measured in
+`test/state.test.ts` (the getter and setter round trip, the default on a fresh
+file, the v20 to v21 step, and the absence of any fold table), the derived
+Workflow state's name in the same file's projection walk, and the shared
+mechanism's ownership in `test/shared-control-architecture.test.ts`. The
+folded Group, the collapsed Group's held count, and the cursor on a header are
+asserted on the gallery's own `ticket-groups` example in
+`test/shared-gallery.test.ts`, and the catalogue's refusal, hint, and Key guide
+rows in `test/controls.test.ts`, `test/action-bar.test.ts`, and
+`test/key-guide.test.ts`.
+
+`bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
+change with no other `bun test` process on the machine (load average 3.6, the
+suite green at 2062 tests over 84 files, no skips). The grouping frames were
+each confirmed red by deletion: keying the fold store on one axis instead of the
+operator's own leaves "an axis visited twice comes back with its own folds" red,
+and reading the header fact outside the Ticket modes leaves "a Group header under
+the Ticket cursor gives no other section a fold" red.
+
+ADR 0060's Ignored ticket is recorded as sitting in no Group and counted by no
+Group header. The ignore is not implemented on this branch, so nothing here
+measures it; what the grouping leaves for it is a construction rather than a
+gate: the axis slices the rows the list already shows, so a Ticket that leaves
+those rows leaves every Group and every header count with no rule to write.
+
+What was not measured: no terminal walk of the grouped list was run in Ghostty
+or foot. The keyboard targets below were verified on the flat list before this
+feature, and the grouping frames are automated only, so the grouped frame is
+recorded as not walked by hand on a real terminal, and the screen-reader path is
+unverified here as it is everywhere else in this record: a frame snapshot and a
+key press say nothing about what a screen reader reads, and the Group header's
+role is not announced by anything the plane controls.
+
 ## What is verified automatically
 
 Every check below runs in `bun run lint`, `bun run typecheck`,

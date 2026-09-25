@@ -18,6 +18,8 @@ import {
 	STALE_AGENT_OUTPUT_WARNING,
 	turnEndWarning,
 } from "./consultation.ts";
+import type { GroupedSection, GroupingAxis } from "./domain/grouping.ts";
+import { DEFAULT_GROUPING_AXIS, isGroupingAxis } from "./domain/grouping.ts";
 import type {
 	Completion,
 	CompletionDecision,
@@ -27,9 +29,10 @@ import type {
 	Ticket,
 	TicketState,
 } from "./domain/ticket.ts";
+import { attentionBand } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
-import { selectTaskType } from "./task-selection.ts";
+import { matchState, taskTypeOfMatch } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import {
 	TURN_END_CAUSES,
@@ -41,7 +44,7 @@ import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./wor
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -810,6 +813,26 @@ const MIGRATION_V14_TO_V15 = `
 	${WORK_QUEUE_TABLE}
 `;
 
+/**
+ * The v21 step: the Grouping axis of a section's list (ADR 0058, issue #159).
+ *
+ * The axis says how the operator wants the list split, and it is the view fact
+ * the plane keeps: like the Auto-handoff mode (ADR 0036) and the queue pause
+ * (ADR 0052), it survives a restart and a dev reload, and one state file
+ * answers "how did this plane last look". The table is keyed by section rather
+ * than named for one section, so a second list that takes grouping later lands
+ * its own row with no new schema version; the Ticket section is the only row
+ * today. A fresh file starts every section at `none`, the flat list, so no
+ * plane comes up grouped before the operator asks.
+ */
+const MIGRATION_V20_TO_V21_GROUPING_AXIS = `
+	CREATE TABLE grouping_axis (
+		section TEXT PRIMARY KEY,
+		axis TEXT NOT NULL
+	);
+	INSERT INTO grouping_axis(section, axis) VALUES ('tickets', 'none');
+`;
+
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
 	try {
@@ -959,6 +982,10 @@ export class FactoryState {
 			// stays a no-op for it.
 			if (!this.hasColumn("work_queue", "is_automatic")) this.db.exec(MIGRATION_V18_TO_V19);
 			if (!this.hasTable("queue_pause")) this.db.exec(MIGRATION_V19_TO_V20_QUEUE_PAUSE);
+			// The axis table is asked for by name, the way the queue pause is: a
+			// file the step already seeded keeps its stored answer, and an older
+			// file opens grouped at `none` (user story 57).
+			if (!this.hasTable("grouping_axis")) this.db.exec(MIGRATION_V20_TO_V21_GROUPING_AXIS);
 			// Ask the file, not the stamp: a re-labeled newer file already lacks
 			// the retired column and the referenced-issues table, so each drop
 			// runs only when the fact is still present.
@@ -1150,6 +1177,12 @@ export class FactoryState {
 			)[0];
 			if (facts == null) continue;
 			const handoff = this.handoffFor(row.identity);
+			// One match answers both facts the list reads: the task the machine
+			// suggests and the name of the position that suggests it. The name is
+			// derived here and never stored, and no rule but the list's grouping
+			// reads it (issue #159).
+			const listed = storedMemberships.filter((membership) => membership.active);
+			const matched = matchState(listed, states);
 			tickets.push({
 				identity: row.identity,
 				title: facts.title,
@@ -1168,11 +1201,8 @@ export class FactoryState {
 				externalUpdatedAt: facts.externalUpdatedAt,
 				repositoryRef: facts.repository,
 				memberships: storedMemberships.map(({ active: _active, ...membership }) => membership),
-				suggestedTaskType: selectTaskType(
-					storedMemberships.filter((membership) => membership.active),
-					states,
-					fallbackTaskType,
-				),
+				suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
+				matchedStateName: matched === null ? null : matched.name,
 				actionable,
 				handoffRecoveryRequired: pending,
 				leftover: this.leftoverEnvironment(row.identity),
@@ -1200,7 +1230,7 @@ export class FactoryState {
 			.filter((ticket) => !isCoveredByFixingPullRequest(tickets, ticket))
 			.sort(
 				(left, right) =>
-					attentionGroup(left) - attentionGroup(right) ||
+					attentionBand(left) - attentionBand(right) ||
 					right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
 					left.identity.localeCompare(right.identity),
 			);
@@ -1507,6 +1537,44 @@ export class FactoryState {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new StateError(`cannot store the queue pause at ${this.path}: ${message}`);
+		}
+	}
+
+	/**
+	 * The Grouping axis of one section's list (ADR 0058, issue #159): the fact
+	 * the shell reads at boot, the way it reads the Auto-handoff mode and the
+	 * queue pause.
+	 *
+	 * It is stored, never derived: the key that changes the axis writes the new
+	 * value at once, and a restart finds the grouping where the operator left it.
+	 * A section with no stored row, and a value the plane does not name, both
+	 * read as `none`, the flat list, so an older file and a hand-edited one open
+	 * ungrouped instead of failing the startup.
+	 */
+	groupingAxis(section: GroupedSection): GroupingAxis {
+		const row = this.db.prepare("SELECT axis FROM grouping_axis WHERE section = ?").get(section) as
+			| { axis: string }
+			| undefined;
+		return row !== undefined && isGroupingAxis(row.axis) ? row.axis : DEFAULT_GROUPING_AXIS;
+	}
+
+	/**
+	 * Store the Grouping axis of one section. The write is the fact the next
+	 * startup and the next dev reload read back, so it is durable the moment it
+	 * returns. A write that fails throws a StateError naming the state file;
+	 * the caller decides what the operator sees, and the in-session view still
+	 * stands (ADR 0058).
+	 */
+	setGroupingAxis(section: GroupedSection, axis: GroupingAxis): void {
+		try {
+			this.db
+				.prepare(
+					"INSERT INTO grouping_axis(section, axis) VALUES (?, ?) ON CONFLICT(section) DO UPDATE SET axis = excluded.axis",
+				)
+				.run(section, axis);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the grouping axis at ${this.path}: ${message}`);
 		}
 	}
 
@@ -3868,14 +3936,6 @@ function utf8Suffix(value: string, maxBytes: number): string {
 	return suffix;
 }
 
-function attentionGroup(ticket: Ticket): number {
-	if (ticket.state === "awaiting") return 0;
-	if (ticket.state === "running") return 1;
-	if (ticket.state === "handed-off") return 2;
-	if (ticket.state === "open" && ticket.actionable) return 3;
-	if (ticket.state === "open") return 4;
-	return 5;
-}
 function jsonStringArray(value: string): string[] {
 	try {
 		const parsed: unknown = JSON.parse(value);

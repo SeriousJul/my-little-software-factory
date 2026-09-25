@@ -294,10 +294,40 @@ export interface Ticket {
 	 * null when nothing of its closed handoffs is still alive in herdr.
 	 */
 	leftover: LeftoverEnvironment | null;
+	/**
+	 * The name of the first Workflow state whose match holds on the ticket,
+	 * or null when no state matches it.
+	 *
+	 * The projection derives it on every read and never stores it, the way it
+	 * derives the Fixing pull request. It exists for the Ticket list's
+	 * `position` grouping alone (issue #159): no domain rule, gate, count, or
+	 * queue order reads it, so a drift in the name cannot move work.
+	 */
+	matchedStateName: string | null;
 }
 
 /** The marker an observation poll sets on an in-flight ticket. */
 export type TicketMarker = "blocked" | "missing";
+
+/**
+ * The Attention band of a ticket: the list's first sort (ADR 0050).
+ *
+ * It is the invisible rank the ticket list and its Groups both read, never a
+ * visible thing: a Group presents this order and never makes a new one
+ * (ADR 0059). Awaiting work comes first, then the states an Agent holds in
+ * flight with the running turn ahead of the handoff that started it, then open
+ * work the factory can act on, then open work it cannot. A state the plane has
+ * no band for stands last, so a fact it does not know cannot outrank a
+ * decision.
+ */
+export function attentionBand(ticket: Ticket): number {
+	if (ticket.state === "awaiting") return 0;
+	if (ticket.state === "running") return 1;
+	if (ticket.state === "handed-off") return 2;
+	if (ticket.state === "open" && ticket.actionable) return 3;
+	if (ticket.state === "open") return 4;
+	return 5;
+}
 
 /**
  * The state line and its moves.

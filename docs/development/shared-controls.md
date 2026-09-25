@@ -204,6 +204,58 @@ so the no-color presentation keeps the word and drops only the color. The
 surface names the word the face wears; the face paints the shared
 presentation's ink and holds no palette of its own.
 
+## The grouped list
+
+A section's list can be split into **Groups**: runs of rows that share one value
+of one **Grouping axis**, each under one **Group header** the operator can
+collapse. The mechanism - the axis vocabulary and its fixed cycle, the group
+keys, the Group ordering, the fold state, the header row, and the window, mouse
+hit test, and cursor step over the mixed row list - is the shared module
+[src/components/shared/grouping.ts](../../src/components/shared/grouping.ts),
+reached through the shared list interface in
+[list-pane.ts](../../src/components/list-pane.ts) (ADR 0014). Only the Ticket
+section asks for it today (issue #159); no screen builds its own fold, header,
+or group ordering, and a list that takes grouping later supplies its own fact
+rules to the same mechanism.
+
+Two rules are the standard, not the surface's choice:
+
+- **A Group presents the list order and never sorts it** ([ADR
+  0059](../adr/0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)).
+  The Groups stand by the best Attention band among the rows they hold, then the
+  newest external update in the Group, then the Group value; the order inside a
+  Group is the flat list's order, unchanged, and `none` is the flat list row for
+  row. The grouping code is presentation: it reaches no queue order, no Top-up
+  choice, no gate, no count, and no detail pane, and the plane's one band rule
+  (`attentionBand` in [domain/ticket.ts](../../src/domain/ticket.ts)) stays the
+  single source both the projection's sort and the Group order read.
+- **A group key is a fact, never a face** ([ADR
+  0059](../adr/0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)).
+  A Queue wait's `queued` badge, a Starting window's spinner, a held turn, and a
+  blocked or missing marker are presentations of a state and a poll-time marker,
+  so none of them is a key. Where an axis's fact has a row badge already - the
+  Task axis - the key reads that badge's own rule, so the Group a row sits in is
+  always explainable from the row.
+
+A fold hides rows and never facts. The rows a fold takes away are the only thing
+that changes: the Section header's counts, the mode line, the Parallel limit, the
+Pickup, the Top-up, the handoff gates, and every Decision route read the same
+facts with a Group open or shut, and a collapsed header still carries its count
+and its held count. The plane never folds or unfolds on its own - an operator
+press or click is the only mover - and a fold never changes what is selected:
+where the cursor stands on a Group header no row is selected, so every control
+that needs one refuses with the catalogue's own reason, and the fold takes the
+shared `x` that the Section toggle otherwise runs, resolved by the facts under
+the cursor. The header's glyph is the fold's marker, so the no-color
+presentation keeps every word and the fold needs no palette of its own.
+
+Which Groups stand folded is a session fact and is never written to disk; the
+Grouping axis is factory state and is, per
+[ADR 0058](../adr/0058-the-grouping-axis-is-factory-state-and-the-folds-are-not.md),
+in one row per section of the state file. A durable axis and a session fold are
+never read through one getter, and no plane comes up grouped before the operator
+asked.
+
 ## The Body pane and the Decision region
 
 The near-fullscreen decision surfaces - the Decision modal and the Live

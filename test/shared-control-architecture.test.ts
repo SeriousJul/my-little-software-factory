@@ -104,6 +104,46 @@ describe("the shared control library is the only control implementation", () => 
 		expect(offenders).toEqual([]);
 	});
 
+	// The Grouping axis' derived fact is the Ticket list's own read (issue #159,
+	// ADR 0059): the projection grows it on every read and no domain rule, gate,
+	// count, queue order, or detail pane reads it. A second reader is the drift
+	// this check refuses, the same way the rules above refuse a private field
+	// implementation.
+	test("only the grouping reads the matched Workflow state", () => {
+		// The domain carries the field, the projection derives it, the shared
+		// grouping module reads it, and the gallery's Ticket fixture names it
+		// the way every Ticket fixture states its facts.
+		const readers = new Set([
+			"src/domain/ticket.ts",
+			"src/state.ts",
+			"src/components/shared/grouping.ts",
+			"src/components/shared/gallery.ts",
+		]);
+		const offenders: string[] = [];
+		for (const file of sourceFiles("src")) {
+			if (readers.has(file)) continue;
+			if (/\bmatchedStateName\b/u.test(readFileSync(file, "utf8"))) offenders.push(file);
+		}
+		expect(offenders).toEqual([]);
+	});
+
+	test("the Ticket section owns the only grouped list", () => {
+		// Grouping is shared machinery reached through the shared list
+		// interface, so no other list pane may build headers of its own: the
+		// Consultation list and the Work queue keep their flat shape (issue
+		// #159, user story 58).
+		for (const file of [
+			"src/components/consultation-list.ts",
+			"src/components/work-queue-list.ts",
+		]) {
+			expect(readFileSync(file, "utf8")).not.toContain("shared/grouping.ts");
+		}
+		expect(sourceFiles("src").filter((file) => file.includes("grouping"))).toEqual([
+			"src/components/shared/grouping.ts",
+			"src/domain/grouping.ts",
+		]);
+	});
+
 	test("no screen paints an action row outside the shared row", () => {
 		// `actionRowSpans` is the raw paint of one action row: the marker, the
 		// label column, and the detail, in the shared presentation. A screen

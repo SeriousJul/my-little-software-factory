@@ -45,6 +45,8 @@ import {
 	type ConsultationOperations,
 	createConsultationOperations,
 } from "../consultation-operations.ts";
+import type { GroupingAxis } from "../domain/grouping.ts";
+import { DEFAULT_GROUPING_AXIS, nextGroupingAxis } from "../domain/grouping.ts";
 import {
 	HANDOFF_ENVIRONMENT_KINDS,
 	type Handoff,
@@ -139,6 +141,18 @@ import { type AgentModelList, type ModelListStatus, OverridePanel } from "./over
 import { RESPONSE_EDITOR_ROWS, ResponseEditor } from "./response-editor.ts";
 import { type MainSection, SectionHeader } from "./section-header.ts";
 import { COPY_REFUSED_REASON } from "./shared/fields.ts";
+import type { GroupHeader } from "./shared/grouping.ts";
+import {
+	type GroupFolds,
+	groupingAxisNotice,
+	groupingEmptyMessage,
+	type ListedRow,
+	NO_GROUP_FOLDS,
+	rowAnchorOf,
+	ticketRowIndexForAnchor,
+	ticketRows,
+	toggleFold,
+} from "./shared/grouping.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import { inStartingWindow, paint } from "./theme.ts";
 import { ticketCloseDialog } from "./ticket-close.ts";
@@ -171,6 +185,14 @@ type Panel =
  * the Stale Agent output, the glossary's name for it.
  */
 const STALE_STREAM_NOTE = "Stale Agent output: the last lines stand";
+/**
+ * The one section the plane groups today, and the row its axis holds on the
+ * state file (issue #159, ADR 0058).
+ *
+ * The record is keyed by section rather than by one section, so a second list
+ * that takes grouping later writes its own row with no new schema version.
+ */
+const TICKET_GROUP_SECTION = "tickets" as const;
 /**
  * The handoff waiting behind the override panel.
  *
@@ -307,6 +329,26 @@ export function App({
 	// the empty SQLite projection while configured sources refresh.
 	const [tickets, setTickets] = useState<Ticket[]>(() => [...(initialTickets ?? [])]);
 	const ticketsRef = useRef(tickets);
+	/**
+	 * The Grouping axis in effect for the Ticket section's list (issue #159).
+	 *
+	 * It is factory state (ADR 0058): the shell reads the operator's last choice
+	 * back from the state file at boot, so a restart and a dev reload find the
+	 * list split the way they left it. A plane with no state file has nothing
+	 * durable to read, keeps the axis for the run, and writes nothing.
+	 */
+	const [groupingAxis, setGroupingAxis] = useState<GroupingAxis>(
+		() => state?.groupingAxis(TICKET_GROUP_SECTION) ?? DEFAULT_GROUPING_AXIS,
+	);
+	const groupingAxisRef = useRef(groupingAxis);
+	/**
+	 * The Groups the operator folded: session facts, keyed by the axis and the
+	 * Group value, and never written to disk (ADR 0058). The plane comes up with
+	 * every Group open so a restart cannot hide a decision the operator owes, and
+	 * it never moves a fold on its own.
+	 */
+	const [groupFolds, setGroupFolds] = useState<GroupFolds>(NO_GROUP_FOLDS);
+	const groupFoldsRef = useRef<GroupFolds>(NO_GROUP_FOLDS);
 	// The two Main sections expand independently (ADR 0019): both stay open by
 	// default, and `x` collapses the one under the cursor to free rows for
 	// the other. The unified selection is the item the shared detail pane
@@ -375,9 +417,61 @@ export function App({
 	const heldCountRef = useRef(-1);
 	const [selectedIndex, setSelectedIndex] = useState(0);
 	const selectedIndexRef = useRef(0);
+	/**
+	 * The Ticket the detail pane last showed, by identity (issue #159).
+	 *
+	 * A Group header holds no Ticket, and the pane keeps the ticket the operator
+	 * was reading while the cursor rests on a header. Only the identity is kept,
+	 * so the pane always paints the facts of the current read.
+	 */
+	const detailTicketIdentityRef = useRef<string | null>(null);
+	/** The Ticket the detail pane shows, kept in a ref the key handlers read. */
+	const detailTicketRef = useRef<Ticket | undefined>(undefined);
+	/**
+	 * The Ticket section's list rows: each ticket, and the Group header above
+	 * each run the axis in effect makes (issue #159).
+	 *
+	 * The cursor, the window, the mouse hit test, and the Action bar all read
+	 * this one list, so a Group header costs a row and takes the cursor exactly
+	 * like a ticket does. `none` draws the tickets alone in the flat list's
+	 * order, which is the list exactly as it stood before grouping.
+	 */
+	const ticketRowsState: readonly ListedRow<Ticket>[] = ticketRows(
+		tickets,
+		groupingAxis,
+		groupFolds,
+	);
+	const ticketRowsRef = useRef<readonly ListedRow<Ticket>[]>(ticketRowsState);
+	ticketRowsRef.current = ticketRowsState;
+	/**
+	 * The Ticket under the cursor, read through the refs, so a render and a key
+	 * handler see the same fact (issue #159).
+	 *
+	 * A Group header holds no Ticket, so every Ticket control answers it with
+	 * the catalogue's own words for no selection. A collapsed Ticket section
+	 * draws no list at all, so its cursor's row is the Section's boundary and
+	 * names nothing the operator can see: the controls then keep working on the
+	 * Ticket the detail pane shows, exactly as they did before grouping.
+	 */
+	const ticketAtCursor = (): Ticket | undefined => {
+		const row = ticketRowsRef.current[selectedIndexRef.current];
+		if (row !== undefined && row.kind === "item") return row.item;
+		return ticketsExpandedRef.current ? undefined : detailTicketRef.current;
+	};
+	/**
+	 * The Group header under the cursor, or nothing where no header stands or
+	 * where the section draws no list.
+	 */
+	const groupHeaderAtCursor = (): GroupHeader | undefined => {
+		if (!ticketsExpandedRef.current) return undefined;
+		const row = ticketRowsRef.current[selectedIndexRef.current];
+		return row !== undefined && row.kind === "group" ? row.group : undefined;
+	};
 	const configRef = useRef(config);
 	configRef.current = config;
 	ticketsExpandedRef.current = ticketsExpanded;
+	groupingAxisRef.current = groupingAxis;
+	groupFoldsRef.current = groupFolds;
 	consultationsExpandedRef.current = consultationsExpanded;
 	workExpandedRef.current = workExpanded;
 	selectionRef.current = selection;
@@ -723,16 +817,28 @@ export function App({
 		? Math.max(1, consultationsBoxRows - SECTION_BOX_CHROME)
 		: 0;
 	const workContentRows = workExpanded ? Math.max(1, workBoxRows - SECTION_BOX_CHROME) : 0;
-	// The Scroll control's availability must agree with the native detail's
-	// own overflow, so it asks the pane for the measurement rather than
-	// repeating the pane's gutter rule here.
+	// The detail pane keeps the last Ticket it showed while the cursor stands on
+	// a Group header (issue #159), so the pane never blanks out under an
+	// operator who is reading a ticket and stepping across a fold. The identity
+	// is what is retained, so the facts the pane states stay the live read.
+	const cursorTicket = ticketAtCursor();
+	if (cursorTicket !== undefined) detailTicketIdentityRef.current = cursorTicket.identity;
+	const detailTicket =
+		cursorTicket ??
+		(detailTicketIdentityRef.current === null
+			? undefined
+			: tickets.find((ticket) => ticket.identity === detailTicketIdentityRef.current));
+	// The Scroll control's availability must agree with the native detail's own
+	// overflow, so it asks the pane for the measurement rather than repeating
+	// the pane's gutter rule here.
 	const detailMaxScroll = detailScrollRoom(
-		tickets[selectedIndex],
+		detailTicket,
 		detailGeometry.usableCols,
 		detailGeometry.visibleRows,
 		config.maxHandoffsPerTicket,
 	);
-	const selectedTicket = tickets[selectedIndex];
+	detailTicketRef.current = detailTicket;
+	const selectedTicket = detailTicket;
 	/**
 	 * The identity of the live agent in the ticket's handoff pane, from the
 	 * names alone: the handoff's recorded name, or the stable name the
@@ -871,12 +977,20 @@ export function App({
 		// the newest external update (ADR 0050).
 		const next = state.visibleTickets(currentConfig.workflowStates, currentConfig.defaultTaskType);
 		const currentIndex = selectedIndexRef.current;
-		const selectedId = ticketsRef.current[currentIndex]?.identity;
-		const preserved =
-			selectedId === undefined ? -1 : next.findIndex((ticket) => ticket.identity === selectedId);
-		const nextIndex =
-			preserved >= 0 ? preserved : Math.max(0, Math.min(currentIndex, next.length - 1));
+		const anchor = rowAnchorOf(ticketRowsRef.current, currentIndex);
+		const nextRows = ticketRows(next, groupingAxisRef.current, groupFoldsRef.current);
+		// The cursor keeps the ticket it held through a re-read, the way it did
+		// before grouping; a ticket that left the list lands the cursor on the
+		// row nearest the one it held (issue #159, user story 43).
+		const nextIndex = ticketRowIndexForAnchor(
+			nextRows,
+			anchor,
+			currentIndex,
+			next,
+			groupingAxisRef.current,
+		);
 		ticketsRef.current = next;
+		ticketRowsRef.current = nextRows;
 		selectedIndexRef.current = nextIndex;
 		setTickets(next);
 		setHealths(state.sourceHealths());
@@ -1254,8 +1368,11 @@ export function App({
 			setWarningMessage(refusalText(overrideControl, availability));
 			return;
 		}
-		const ticket = ticketsRef.current[selectedIndexRef.current];
-		if (ticket === undefined) return;
+		const row = ticketRowsRef.current[selectedIndexRef.current];
+		// A Group header holds no Ticket: the catalogue refused the key with its
+		// own words before this ran (issue #159).
+		if (row === undefined || row.kind !== "item") return;
+		const ticket = row.item;
 		const choice = choiceFor(ticket);
 		// Opening the panel is a point of use for the Model list (ADR 0010): the
 		// list of the agent the panel starts on is fetched fresh, so provider
@@ -2304,7 +2421,13 @@ export function App({
 							: "ticket-detail";
 	const controlContextFor = (mode: InteractionMode) =>
 		contextFor(mode, {
-			selectedTicket: ticketsRef.current[selectedIndexRef.current],
+			selectedTicket: ticketAtCursor(),
+			// The facts the grouping controls read: the axis in effect names the
+			// Action bar hint, and a cursor on a Group header is what turns the
+			// shared `x` from the section toggle into the fold (issue #159).
+			groupingAxis: groupingAxisRef.current,
+			groupHeaderSelected: groupHeaderAtCursor() !== undefined,
+			selectedGroupHeader: groupHeaderAtCursor() ?? null,
 			selectedConsultation:
 				selectionRef.current === "consultation"
 					? consultationsRef.current[consultationIndexRef.current]
@@ -2314,7 +2437,9 @@ export function App({
 			// next expanded one, so the list can move as long as the cursor is not
 			// the sequence's only row.
 			listCanMove: (() => {
-				const t = ticketsRef.current.length;
+				// The Ticket section's cursor walks the row list, Group headers
+				// included, so its count is the row list's (issue #159).
+				const t = ticketRowsRef.current.length;
 				const c = consultationsRef.current.length;
 				const w = workQueueRef.current.length;
 				const tOpen = ticketsExpandedRef.current;
@@ -2362,7 +2487,9 @@ export function App({
 				const queue = workQueueRef.current;
 				if (queue.length === 0) return null;
 				if (selectionRef.current === "ticket") {
-					const identity = ticketsRef.current[selectedIndexRef.current]?.identity;
+					// A Group header holds no Ticket, so no row of the queue
+					// waits under it (issue #159).
+					const identity = ticketAtCursor()?.identity;
 					return (
 						queue.find((item) => item.kind === "handoff" && item.ticketIdentity === identity) ??
 						null
@@ -2581,6 +2708,13 @@ export function App({
 				"move-list": ({ key }) => moveRange(key.name),
 				"scroll-detail": ({ key }) => moveRange(key.name),
 				"section-toggle": () => toggleSection(),
+				// `Tab` steps the Ticket list's Grouping axis (issue #159): the
+				// shell writes the durable value and states the axis on the
+				// Message line, and the list redraws with its Group headers.
+				"group-axis": () => cycleGroupingAxis(),
+				// The shared `x` on a Group header folds that Group; the
+				// catalogue resolved the key here on the facts under the cursor.
+				"group-fold": () => foldGroupAtCursor(),
 				launch: () => {
 					if (Object.keys(configRef.current.consultationTypes).length === 0)
 						setWarningMessage(
@@ -3133,14 +3267,104 @@ export function App({
 		}
 		focusPane("list");
 	}
-	function selectTicket(index: number) {
-		const next = clamp(index, 0, Math.max(0, ticketsRef.current.length - 1));
+	/**
+	 * Move the Ticket cursor to one row of the section's list (issue #159).
+	 *
+	 * The index is a place in the row list, so it can name a Group header: the
+	 * cursor rests there, the Ticket controls refuse it in the catalogue's
+	 * words, and the fold takes the shared `x`.
+	 */
+	function selectTicketRow(index: number) {
+		const rows = ticketRowsRef.current;
+		const next = clamp(index, 0, Math.max(0, rows.length - 1));
 		if (next === selectedIndexRef.current) return;
 		selectedIndexRef.current = next;
 		setSelectedIndex(next);
 	}
 	function moveList(delta: number) {
-		selectTicket(selectedIndexRef.current + delta);
+		selectTicketRow(selectedIndexRef.current + delta);
+	}
+	/**
+	 * Cycle the Grouping axis (issue #159, ADR 0058).
+	 *
+	 * The press writes the durable value first and the view follows the press in
+	 * every case: a state file that will not take the write is reported on the
+	 * Message line, and the split the operator asked for still stands for the run
+	 * (user story 56). The cursor keeps the ticket it held, so grouping never
+	 * loses the operator's place (user story 42).
+	 */
+	function cycleGroupingAxis() {
+		const next = nextGroupingAxis(groupingAxisRef.current);
+		const writeFailure =
+			state === undefined
+				? undefined
+				: ((): string | undefined => {
+						try {
+							state.setGroupingAxis(TICKET_GROUP_SECTION, next);
+							return undefined;
+						} catch (error) {
+							return errorMessage(error);
+						}
+					})();
+		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
+		const nextRows = ticketRows(ticketsRef.current, next, groupFoldsRef.current);
+		const nextIndex = ticketRowIndexForAnchor(
+			nextRows,
+			anchor,
+			selectedIndexRef.current,
+			ticketsRef.current,
+			next,
+		);
+		groupingAxisRef.current = next;
+		setGroupingAxis(next);
+		ticketRowsRef.current = nextRows;
+		selectedIndexRef.current = nextIndex;
+		setSelectedIndex(nextIndex);
+		if (writeFailure !== undefined)
+			setErrorMessage(`the grouping axis did not save: ${writeFailure}`);
+		else setNoticeMessage(groupingAxisNotice(next));
+	}
+	/**
+	 * Fold or open one Group (issue #159).
+	 *
+	 * The fold is the only thing that moves: no count, mode line, gate, or queue
+	 * fact reads the row list, so a fold changes what is shown and nothing else
+	 * (ADR 0059). The cursor lands on the Group header the fold was made at, so
+	 * the fold is reversible by hand without hunting for it (user story 34).
+	 */
+	function toggleGroupFold(value: string) {
+		const axis = groupingAxisRef.current;
+		const nextFolds = toggleFold(groupFoldsRef.current, axis, value);
+		const anchor = rowAnchorOf(ticketRowsRef.current, selectedIndexRef.current);
+		const nextRows = ticketRows(ticketsRef.current, axis, nextFolds);
+		const headerIndex = nextRows.findIndex(
+			(row) => row.kind === "group" && row.group.value === value,
+		);
+		const nextIndex =
+			headerIndex >= 0
+				? headerIndex
+				: ticketRowIndexForAnchor(
+						nextRows,
+						anchor,
+						selectedIndexRef.current,
+						ticketsRef.current,
+						axis,
+					);
+		groupFoldsRef.current = nextFolds;
+		setGroupFolds(nextFolds);
+		ticketRowsRef.current = nextRows;
+		selectedIndexRef.current = nextIndex;
+		setSelectedIndex(nextIndex);
+	}
+	/**
+	 * Fold or open the Group under the cursor, the shared `x` route (user
+	 * story 32). A press anywhere else keeps the Section toggle: the catalogue
+	 * resolved the key to this route on the facts under the cursor.
+	 */
+	function foldGroupAtCursor() {
+		const row = ticketRowsRef.current[selectedIndexRef.current];
+		if (row === undefined || row.kind !== "group") return;
+		toggleGroupFold(row.group.value);
 	}
 	function selectWorkQueue(index: number) {
 		const next = clamp(index, 0, Math.max(0, workQueueRef.current.length - 1));
@@ -3229,7 +3453,7 @@ export function App({
 					} else if (ticketsExpandedRef.current) {
 						selectionRef.current = "ticket";
 						setSelection("ticket");
-						selectTicket(Math.max(0, ticketsRef.current.length - 1));
+						selectTicketRow(Math.max(0, ticketRowsRef.current.length - 1));
 					}
 					return;
 				}
@@ -3247,7 +3471,7 @@ export function App({
 				} else if (ticketsExpandedRef.current) {
 					selectionRef.current = "ticket";
 					setSelection("ticket");
-					selectTicket(Math.max(0, ticketsRef.current.length - 1));
+					selectTicketRow(Math.max(0, ticketRowsRef.current.length - 1));
 				}
 			}
 			return;
@@ -3265,7 +3489,7 @@ export function App({
 					if (ticketsExpandedRef.current) {
 						selectionRef.current = "ticket";
 						setSelection("ticket");
-						selectTicket(Math.max(0, ticketsRef.current.length - 1));
+						selectTicketRow(Math.max(0, ticketRowsRef.current.length - 1));
 					}
 					return;
 				}
@@ -3289,7 +3513,7 @@ export function App({
 			if (delta < 0 && ticketsExpandedRef.current) {
 				selectionRef.current = "ticket";
 				setSelection("ticket");
-				selectTicket(Math.max(0, ticketsRef.current.length - 1));
+				selectTicketRow(Math.max(0, ticketRowsRef.current.length - 1));
 			}
 			return;
 		}
@@ -3298,7 +3522,7 @@ export function App({
 			return;
 		}
 		if (ticketsExpandedRef.current) {
-			if (delta > 0 && selectedIndexRef.current >= ticketsRef.current.length - 1) {
+			if (delta > 0 && selectedIndexRef.current >= ticketRowsRef.current.length - 1) {
 				// The cross reaches even an empty Consultation list: its empty
 				// message is the row the cursor takes, and the history filter
 				// still operates from there. It crosses into the Work queue when
@@ -3368,7 +3592,7 @@ export function App({
 			if (edge === "start") detailRef.current?.toStart();
 			else detailRef.current?.toEnd();
 		} else if (ticketsExpandedRef.current)
-			selectTicket(edge === "start" ? 0 : ticketsRef.current.length - 1);
+			selectTicketRow(edge === "start" ? 0 : ticketRowsRef.current.length - 1);
 	}
 	// The ticket panels are the closed set: the decision on a settled turn, the
 	// live view over an in-flight agent, the missing-agent choice, and the Close
@@ -3524,14 +3748,19 @@ export function App({
 			clearInterval(timer);
 		};
 	}, [panel, liveMode, commandRunner]);
+	// An empty grouped list names the axis in its message, so "no tickets" says
+	// which view the operator is reading (issue #159, user story 9).
 	const emptyMessage =
 		state === undefined
 			? undefined
-			: config.sources.length === 0
-				? "no ticket sources configured"
-				: healths.length === 0 || healths.some((health) => health.health === "loading")
-					? "loading tickets..."
-					: "no tickets match the configured sources";
+			: groupingEmptyMessage(
+					config.sources.length === 0
+						? "no ticket sources configured"
+						: healths.length === 0 || healths.some((health) => health.health === "loading")
+							? "loading tickets..."
+							: "no tickets match the configured sources",
+					groupingAxis,
+				);
 	const replacementConsultation =
 		replacementConsultationId === null
 			? undefined
@@ -3698,10 +3927,10 @@ export function App({
 							},
 							ticketsExpanded &&
 								createElement(TicketList, {
-									tickets,
+									rows: ticketRowsState,
 									selectedIndex,
 									focused: focusedPane === "list" && selection === "ticket",
-									rows: ticketsBoxRows,
+									height: ticketsBoxRows,
 									emptyMessage,
 									markerOf,
 									limitReached: (ticket) => ticket.handoffCount >= config.maxHandoffsPerTicket,
@@ -3711,7 +3940,15 @@ export function App({
 									onFocus: () => focusListSection("ticket"),
 									onSelect: (index: number) => {
 										focusListSection("ticket");
-										selectTicket(index);
+										// A left click on a Group header folds the Group
+										// it names, the way a click on a section header
+										// folds the section (issue #159, user story 33).
+										const row = ticketRowsRef.current[index];
+										if (row !== undefined && row.kind === "group") {
+											toggleGroupFold(row.group.value);
+											return;
+										}
+										selectTicketRow(index);
 									},
 									onMove: (delta) => {
 										// The first wheel spin into a section both moves the cursor

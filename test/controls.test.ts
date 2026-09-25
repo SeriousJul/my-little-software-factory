@@ -70,6 +70,173 @@ function guideGroupsFor(context: ControlContext, id: string): string[] {
 		.map(({ group }) => group);
 }
 
+// Issue #159: the Grouping axis is one key that steps a fixed cycle, and it
+// answers in both Ticket panes wherever the plane does, so a press in a
+// collapsed Ticket section still records the operator's choice.
+test("Tab cycles the Grouping axis in both Ticket modes, and refuses nowhere", () => {
+	for (const mode of ["ticket-list", "ticket-detail"] as const) {
+		const context = contextFor(mode, { ...values, groupingAxis: "none" });
+		const control = controlForKey({ name: "tab" }, context);
+		expect(control?.id).toBe("group-axis");
+		if (control === undefined) throw new Error(`Tab answers nothing in ${mode}`);
+		expect(availabilityFor(control, context)).toEqual({ available: true });
+		// The hint names the axis in effect, and the guide row carries the
+		// whole cycle so the order is documented where it is used.
+		expect(control.barLabel?.(context)).toBe("Group");
+		expect(
+			controlForKey(
+				{ name: "tab" },
+				contextFor(mode, { ...values, groupingAxis: "task" }),
+			)?.barLabel?.(contextFor(mode, { ...values, groupingAxis: "task" })),
+		).toBe("Group: task");
+		expect(control.guideNote).toBe(
+			"cycles the grouping axis: none, repository, source, task, state, position",
+		);
+	}
+	// The axis control belongs to the Ticket section alone: the other two
+	// sections bind no Tab at all, and their bars hint no axis. Their guides
+	// carry it only among the controls of another mode, the way they carry the
+	// Ticket section's Hand off, Close, and auto-handoff switch.
+	for (const mode of [
+		"consultation-list",
+		"consultation-detail",
+		"work-queue-list",
+		"work-queue-detail",
+	] as const) {
+		expect(controlForKey({ name: "tab" }, contextFor(mode, values))).toBeUndefined();
+		const groups = guideControls(contextFor(mode, values));
+		expect(
+			groups.filter(
+				({ control, group }) => control.id === "group-axis" && group === "Current interaction mode",
+			),
+		).toEqual([]);
+		expect(actionBarControls(mode, contextFor(mode, values)).map((c) => c.id)).not.toContain(
+			"group-axis",
+		);
+	}
+});
+
+// The header fact is the Ticket list's own: a cursor resting on a Group header
+// while another section holds the focus leaves that section's `x` the Section
+// toggle, in its own words, and no fold anywhere (issue #159).
+test("a Group header under the Ticket cursor gives no other section a fold", () => {
+	for (const mode of [
+		"consultation-list",
+		"consultation-detail",
+		"work-queue-list",
+		"work-queue-detail",
+	] as const) {
+		const context = contextFor(mode, {
+			...values,
+			groupingAxis: "repository",
+			groupHeaderSelected: true,
+			selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
+		});
+		expect(controlForKey({ name: "x" }, context)?.id).toBe("section-toggle");
+		expect(availabilityFor(controlById("section-toggle"), context)).toEqual({
+			available: true,
+		});
+	}
+});
+
+test("the flat list hints no axis, and a grouped list names its own", () => {
+	const context = contextFor("ticket-list", { ...values, groupingAxis: "none" });
+	expect(actionBarControls("ticket-list", context).map((c) => c.id)).not.toContain("group-axis");
+	const grouped = contextFor("ticket-list", { ...values, groupingAxis: "position" });
+	expect(actionBarControls("ticket-list", grouped).map((c) => c.id)).toContain("group-axis");
+});
+
+/**
+ * Story 31 and 32: one `x`, two meanings, resolved by the facts under the
+ * cursor. On a Group header the fold runs and the Section toggle stands
+ * down; on a ticket row the toggle runs and the fold states its reason.
+ * The Action bar states only the meaning the current facts run, and the
+ * Key guide names both, the way it names every meaning of Enter.
+ */
+test("x folds the Group under the cursor, and toggles the Section everywhere else", () => {
+	const onHeader = contextFor("ticket-list", {
+		...values,
+		groupingAxis: "repository",
+		groupHeaderSelected: true,
+		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
+	});
+	const fold = controlForKey({ name: "x" }, onHeader);
+	expect(fold?.id).toBe("group-fold");
+	if (fold === undefined) throw new Error("x answers nothing on a Group header");
+	expect(availabilityFor(fold, onHeader)).toEqual({ available: true });
+	expect(fold.barLabel?.(onHeader)).toBe("Fold group");
+	const collapsed = contextFor("ticket-list", {
+		...onHeader,
+		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: true },
+	});
+	expect(controlById("group-fold").barLabel?.(collapsed)).toBe("Unfold group");
+	// The bar names the fold and not the section toggle it replaces.
+	const hinted = actionBarControls("ticket-list", onHeader).map((control) => control.id);
+	expect(hinted).toContain("group-fold");
+	expect(hinted).not.toContain("section-toggle");
+	// The guide of the same mode still names both meanings of the key.
+	const ids = guideControls(onHeader).map(({ control }) => control.id);
+	expect(ids).toContain("section-toggle");
+	expect(ids).toContain("group-fold");
+
+	// On a ticket row the toggle keeps the key and the fold refuses.
+	const onRow = contextFor("ticket-list", {
+		...values,
+		groupingAxis: "repository",
+		groupHeaderSelected: false,
+		selectedGroupHeader: null,
+	});
+	expect(controlForKey({ name: "x" }, onRow)?.id).toBe("section-toggle");
+	expect(availabilityFor(controlById("section-toggle"), onRow)).toEqual({ available: true });
+	expect(availabilityFor(controlById("group-fold"), onRow)).toEqual({
+		available: false,
+		reason: "no Group header is under the cursor",
+	});
+	const rowHints = actionBarControls("ticket-list", onRow).map((control) => control.id);
+	expect(rowHints).toContain("section-toggle");
+	expect(rowHints).not.toContain("group-fold");
+});
+
+test("every Ticket control answers a Group header with no Ticket selected", () => {
+	// The shell leaves `selectedTicket` unset where the cursor stands on a
+	// header, and each control states that fact itself: no surface swallows
+	// the key (story 39).
+	const onHeader = contextFor("ticket-list", {
+		...values,
+		groupingAxis: "repository",
+		groupHeaderSelected: true,
+		selectedGroupHeader: { value: "acme/factory", count: 3, held: 0, collapsed: false },
+		queueItemForSelectedRow: null,
+	});
+	for (const id of ["handoff", "live-view", "decide-completion", "ticket-goto", "override"]) {
+		expect(availabilityFor(controlById(id), onHeader)).toEqual({
+			available: false,
+			reason: "no Ticket is selected",
+		});
+	}
+	expect(availabilityFor(controlById("ticket-close"), onHeader)).toEqual({
+		available: false,
+		reason: "no Ticket is selected",
+	});
+	expect(availabilityFor(controlById("queue-jump"), onHeader)).toEqual({
+		available: false,
+		reason: "no Ticket is selected",
+	});
+	// Enter resolves to the section's Hand off, so the refusal the operator
+	// reads is the catalogue's own words.
+	expect(controlForKey({ name: "return" }, onHeader)?.id).toBe("handoff");
+	// The Consultation section keeps its own words for the same row keys:
+	// nothing there reads as a missing Ticket.
+	const consultation = contextFor("consultation-list", {
+		...values,
+		queueItemForSelectedRow: null,
+	});
+	expect(availabilityFor(controlById("queue-jump"), consultation)).toEqual({
+		available: false,
+		reason: "the selected row has no waiting queue item",
+	});
+});
+
 describe("the shared control catalogue", () => {
 	test("x toggles the section under the cursor and is not an Interact alias", () => {
 		const context = contextFor("consultation-detail", values);

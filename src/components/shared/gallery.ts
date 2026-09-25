@@ -15,7 +15,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-import type { Ticket } from "../../domain/ticket.ts";
+import type { Completion, Ticket } from "../../domain/ticket.ts";
 import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
@@ -41,12 +41,14 @@ import { SectionHeader } from "../section-header.ts";
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
+import { TicketList } from "../ticket-list.ts";
 import { KeyGuide } from "../utility.ts";
 import { workQueueDetailLines } from "../work-queue-detail.ts";
 import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
+import { ticketRows } from "./grouping.ts";
 import {
 	controlInk,
 	inkForTheme,
@@ -450,6 +452,55 @@ function decisionModalRegions(
 	);
 }
 
+/**
+ * One Ticket for the grouped-list example: a repository, a state, and a
+ * suggested task, with no source membership and no Handoff.
+ */
+function groupTicket(
+	number: number,
+	repository: string,
+	title: string,
+	state: "open" | "running" | "awaiting",
+	taskType: string,
+): Ticket {
+	const base = sampleTicket(state);
+	return {
+		...base,
+		identity: `github:github.com:I_${number}`,
+		title,
+		repository,
+		repositoryRef: {
+			identity: `github.com/${repository}`,
+			displayName: repository,
+			cloneUrl: "",
+		},
+		handoff: state === "open" ? null : base.handoff,
+		suggestedTaskType: taskType,
+		matchedStateName: null,
+		lastCompletion: null,
+	};
+}
+
+/** A settled turn that holds its decision, so a Group header counts it. */
+function heldCompletion(): Completion {
+	const at = "2026-02-17T10:00:00.000Z";
+	return {
+		taskType: "implement",
+		transition: null,
+		agentType: "pi",
+		agentName: "hold-the-failed-turn",
+		model: "",
+		thinking: "",
+		contextWindow: "",
+		completedAt: at,
+		message: "The turn failed.",
+		turnLog: [{ kind: "text", text: "The turn failed." }],
+		cause: "failed",
+		detail: "",
+		decision: null,
+	};
+}
+
 /** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
 function sampleTicket(
 	state: "running" | "awaiting" | "open",
@@ -513,6 +564,7 @@ function sampleTicket(
 		externalUpdatedAt: now,
 		memberships: [],
 		suggestedTaskType: "implement",
+		matchedStateName: null,
 		actionable: true,
 		handoffRecoveryRequired: false,
 		leftover: null,
@@ -1247,6 +1299,119 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				onWheel: () => undefined,
 			}),
 		],
+	},
+	{
+		// The grouped Ticket list (issue #159): the rows the Grouping axis
+		// splits, the Group header above each run, a collapsed Group that keeps
+		// its count and its held count at the fold, and the cursor at rest on a
+		// header, where the bar names the fold and no Ticket is selected.
+		id: "ticket-groups",
+		state: "grouped list, collapsed Group with a held count, and the cursor on a header",
+		rows: 26,
+		render: (columns) => {
+			const listed = [
+				groupTicket(1, "acme/billing", "Webhook retry policy", "open", "implement"),
+				{
+					...groupTicket(2, "acme/billing", "Hold the failed turn", "awaiting", "implement"),
+					lastCompletion: heldCompletion(),
+				},
+				groupTicket(3, "acme/factory", "Split the gallery view", "open", "review"),
+				groupTicket(4, "acme/factory", "Park the legacy importer", "running", "fix"),
+			];
+			const bar = (key: string, header: boolean) =>
+				createElement(ActionBar, {
+					key,
+					mode: "ticket-list",
+					context: contextFor("ticket-list", {
+						listCanMove: true,
+						detailCanScroll: false,
+						selectedTicket: header ? undefined : listed[0],
+						groupingAxis: "repository",
+						groupHeaderSelected: header,
+						selectedGroupHeader: header
+							? { value: "acme/billing", count: 2, held: 1, collapsed: false }
+							: null,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				});
+			const folded = new Set<string>(["acme/billing"]);
+			return [
+				createElement(TicketList, {
+					key: "grouped",
+					rows: ticketRows(listed, "repository", {}),
+					selectedIndex: 1,
+					focused: true,
+					height: 9,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(TicketList, {
+					key: "folded",
+					rows: ticketRows(listed, "repository", { repository: folded }),
+					selectedIndex: 0,
+					focused: true,
+					height: 5,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(TicketList, {
+					key: "on-header",
+					rows: ticketRows(listed, "task", {}),
+					selectedIndex: 0,
+					focused: true,
+					height: 6,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				bar("bar-row", false),
+				bar("bar-header", true),
+				// The two Message lines the axis control leaves in turn: the
+				// split the press chose, and the way back to the flat list.
+				messageRowElement(
+					{ severity: "info", text: "Ticket list grouped by repository" },
+					columns.contentWidth,
+				),
+				messageRowElement(
+					{ severity: "info", text: "Ticket list grouping off: the flat list" },
+					columns.contentWidth,
+				),
+				createElement(
+					"text",
+					{
+						key: "groups-note",
+						style: { width: "100%", height: 1 },
+						fg: controlInk().detail.fg ?? undefined,
+					},
+					truncateToWidth(
+						"Tab cycles the grouping axis; x on a Group header folds that Group, and x anywhere else folds the Section",
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 	{
 		// The Work queue's list (ADR 0034): the rows in the shared order with

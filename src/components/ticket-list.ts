@@ -14,6 +14,15 @@
  * does, so a row never wraps and the title stays readable. The window
  * slides so the selected ticket stays visible when the tickets overflow
  * the pane.
+ *
+ * Under a Grouping axis the pane draws the section's list rows instead: one row
+ * per ticket, and one Group header above each run of rows that share one value
+ * of the axis (issue #159). A header costs a window row and takes the cursor
+ * exactly as a ticket row does, and a collapsed Group draws its header alone,
+ * with the count and the held count the fold hides. A left click on a header
+ * folds the Group it names. The header's words come from the shared grouping
+ * module and its colors from the paint layer, so the fold needs no palette of
+ * its own and no color alone carries it.
  */
 import type { BoxRenderable } from "@opentui/core";
 import { createElement } from "@opentui/react";
@@ -22,6 +31,7 @@ import { type ReactElement, useRef } from "react";
 import { isHeldCompletion, type Ticket } from "../domain/ticket.ts";
 import { usePaneGeometry } from "./geometry.ts";
 import { listMouse, listWindow } from "./list-pane.ts";
+import { groupHeaderSpans, type ListedRow } from "./shared/grouping.ts";
 import { spinnerFace, useSpinnerFrame } from "./shared/spinner.ts";
 import { padToWidth, truncateToWidth, widthOf } from "./text.ts";
 import {
@@ -51,11 +61,17 @@ const SELECTION_WIDTH = 2;
 const TITLE_MINIMUM = 2;
 
 interface TicketListProps {
-	tickets: readonly Ticket[];
+	/**
+	 * The list's rows: each ticket, and the Group header above each run the
+	 * Grouping axis makes. The `none` axis holds the tickets alone, in the flat
+	 * list's order, so the pane draws today's list with no header.
+	 */
+	rows: readonly ListedRow<Ticket>[];
+	/** The cursor's place in that row list: it can rest on a Group header. */
 	selectedIndex: number;
 	focused: boolean;
 	/** The box's exact height in cells, from the Main view's section layout. */
-	rows: number;
+	height: number;
 	emptyMessage?: string;
 	/** The failure badge of a ticket from the last observation, or null. */
 	markerOf: (ticket: Ticket) => "blocked" | "missing" | null;
@@ -77,15 +93,16 @@ interface TicketListProps {
 	/** False while an overlay owns input above the panes. */
 	active: boolean;
 	onFocus: () => void;
+	/** The cursor moves to one row of the list, by its place in the row list. */
 	onSelect: (index: number) => void;
 	onMove: (delta: number) => void;
 }
 
 export function TicketList({
-	tickets,
+	rows,
 	selectedIndex,
 	focused,
-	rows,
+	height,
 	emptyMessage,
 	markerOf,
 	limitReached,
@@ -99,10 +116,12 @@ export function TicketList({
 	const geometry = usePaneGeometry("list");
 	// The Main view hands the box its exact height: two border rows and two
 	// padding rows are chrome, and the rest is the window's room.
-	const visibleRows = Math.max(1, rows - 4);
+	const visibleRows = Math.max(1, height - 4);
 	const rootRef = useRef<BoxRenderable | null>(null);
 
-	const { start, visible } = listWindow(tickets, selectedIndex, visibleRows);
+	// The window, the mouse hit test, and the cursor step all read the one row
+	// list, so a Group header costs a window row exactly like a ticket does.
+	const { start, visible } = listWindow(rows, selectedIndex, visibleRows);
 	// The row wears the face as written text, not as a mounted control: the row
 	// is one text renderable, and a text renderable takes no nested control, so
 	// the face is the shared face's text at the shared frame, painted as one run
@@ -111,7 +130,9 @@ export function TicketList({
 	// is not on screen owes no motion, and the face stands on its first frame
 	// the moment the window opens, so a frame snapshot read at the open holds.
 	// The word, not the glyph, is the fact (ADR 0030).
-	const faceFrame = useSpinnerFrame(visible.some((ticket) => starting(ticket)));
+	const faceFrame = useSpinnerFrame(
+		visible.some((row) => row.kind === "item" && starting(row.item)),
+	);
 	const handleMouse = listMouse({
 		active: () => active,
 		onFocus,
@@ -120,7 +141,7 @@ export function TicketList({
 		rootRef,
 		start,
 		visibleRows: visible.length,
-		itemCount: tickets.length,
+		itemCount: rows.length,
 	});
 
 	return createElement(
@@ -138,7 +159,7 @@ export function TicketList({
 				// the rounded box would no longer match the geometry the
 				// rows and the detail pane lay their text on.
 				width: geometry.paneCols,
-				height: rows,
+				height,
 				flexGrow: 0,
 				flexShrink: 0,
 				flexDirection: "column",
@@ -153,21 +174,31 @@ export function TicketList({
 						truncateToWidth(emptyMessage, geometry.usableCols),
 					),
 				]
-			: visible.map((ticket) =>
-					createElement(
-						"text",
-						{ key: ticket.identity },
-						...rowSpans(
-							ticket,
-							ticket.identity === tickets[selectedIndex].identity,
-							geometry.usableCols,
-							markerOf(ticket),
-							limitReached(ticket),
-							starting(ticket),
-							queueWait(ticket),
-							faceFrame,
-						),
-					),
+			: visible.map((row, offset) =>
+					row.kind === "group"
+						? createElement(
+								"text",
+								{ key: `group:${row.group.value}` },
+								...groupHeaderSpans(
+									row.group,
+									start + offset === selectedIndex,
+									geometry.usableCols,
+								),
+							)
+						: createElement(
+								"text",
+								{ key: row.item.identity },
+								...rowSpans(
+									row.item,
+									start + offset === selectedIndex,
+									geometry.usableCols,
+									markerOf(row.item),
+									limitReached(row.item),
+									starting(row.item),
+									queueWait(row.item),
+									faceFrame,
+								),
+							),
 				)),
 	);
 }

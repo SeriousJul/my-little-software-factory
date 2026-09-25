@@ -1409,19 +1409,37 @@ describe("the control plane", () => {
 					);
 					// The guide opens on this mode's section, and the sections
 					// keep the catalogue's order on screen. A hint priority
-					// that moves reorders these rows.
+					// that moves reorders these rows. The current section runs
+					// past one window now that the grouping controls are
+					// cataloged in it (issue #159), so the sections are read in
+					// the order the walk to the bottom shows them.
 					let rows = rowsOf(frame);
 					let indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
+					const seen: string[] = [];
+					const noteSections = (): void => {
+						for (const row of rowsOf(setup.captureCharFrame())) {
+							for (const section of [
+								"Current interaction mode",
+								"Global controls",
+								"Control plane controls",
+							]) {
+								if (row.includes(section) && !seen.includes(section)) seen.push(section);
+							}
+						}
+					};
 					const modeIdx = indexOf("Current interaction mode");
-					const globalIdx = indexOf("Global controls");
 					expect(modeIdx).toBeGreaterThan(0);
-					expect(globalIdx).toBeGreaterThan(modeIdx);
-					const modeSection = rows.slice(modeIdx, globalIdx).join("\n");
+					const modeSection = rows.slice(modeIdx).join("\n");
 					expect(modeSection).toContain("Move");
 					expect(modeSection).toContain("Hand off");
 					// The three meanings of Enter each keep their own row.
 					expect(modeSection).toContain("Live view");
 					expect(modeSection).toContain("Decide");
+					// The Grouping axis and the Group fold join the mode's rows,
+					// and the Global section sits below them: the walk finds it.
+					expect(modeSection).toContain("Tab");
+					expect(modeSection).toContain("Fold");
+					noteSections();
 
 					// The Control plane header sits below the opening window:
 					// step the guide down until it and the Global section share
@@ -1434,12 +1452,21 @@ describe("the control plane", () => {
 						setup.mockInput.pressKey("j");
 						await settle(setup);
 					}
+					for (let step = 0; step < 12 && !seen.includes("Control plane controls"); step += 1) {
+						setup.mockInput.pressKey("j");
+						await settle(setup);
+						noteSections();
+					}
+					expect(seen).toEqual([
+						"Current interaction mode",
+						"Global controls",
+						"Control plane controls",
+					]);
 					rows = rowsOf(setup.captureCharFrame());
 					indexOf = (needle: string) => rows.findIndex((row) => row.includes(needle));
-					const scrolledGlobalIdx = indexOf("Global controls");
-					const controlPlaneIdx = indexOf("Control plane controls");
-					expect(controlPlaneIdx).toBeGreaterThan(scrolledGlobalIdx);
-					const globalSection = rows.slice(scrolledGlobalIdx, controlPlaneIdx).join("\n");
+					const globalSection = rows
+						.slice(indexOf("Global controls"), indexOf("Control plane controls"))
+						.join("\n");
 					expect(globalSection).toContain("Quit");
 					// Closing the guide returns to the tickets view.
 					setup.mockInput.pressEscape();
