@@ -53,6 +53,7 @@ function sample(
 		externalUpdatedAt: "2026-01-01T00:00:00Z",
 		memberships: [],
 		suggestedTaskType: "implement",
+		matchedStateName: null,
 		actionable: state === "open",
 		handoffRecoveryRequired: false,
 		handoffCount,

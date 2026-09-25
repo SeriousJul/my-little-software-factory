@@ -33,11 +33,12 @@ its availability and reason.
 	a working, or an awaiting-response Consultation - confirms first: the
 	dialog names the Agent and states what the close keeps, the worktree and
 	branch on a worktree Consultation and the checkout on a live-worktree
-	one. A `missing`, a `failed`, a `queued`, or an `unscheduled`
-	Consultation closes without a dialog: these hold nothing live to stop,
-	and the `queued` one's Work queue item leaves with the record. A
-	`closing` one opens the Retry and Force-close recovery panel instead,
-	and
+	one. The close takes its workspace, tab, or pane down and moves nothing:
+	it never changes what the operator is looking at in herdr (ADR 0061). A
+	`missing`, a `failed`, a `queued`, or an `unscheduled` Consultation closes
+	without a dialog: these hold nothing live to stop, and the `queued` one's
+	Work queue item leaves with the record. A `closing` one opens the Retry and
+	Force-close recovery panel instead, and
 	a `closed` one refuses. `h` or `Left` moves between the section's own
 	list and the detail pane, and `x` collapses or restores the section under
 	the cursor. The Consultation that needs the operator keeps its attention

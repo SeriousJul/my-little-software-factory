@@ -58,6 +58,7 @@ import {
 import { BASE_CONFIG } from "./base-config.ts";
 import {
 	FakeRunner,
+	herdrFocusCommands,
 	tabCreateJson,
 	workspaceCreateJson,
 	workspaceGetJson,
@@ -129,6 +130,7 @@ const selectedTicket: Ticket = {
 	externalUpdatedAt: "2026-09-01T10:00:00.000Z",
 	memberships: [],
 	suggestedTaskType: "implement",
+	matchedStateName: null,
 	actionable: true,
 	handoffRecoveryRequired: false,
 	ignored: false,
@@ -1424,6 +1426,9 @@ describe("Consultation close and cleanup through the UI", () => {
 					expect(commands).toContain(`herdr workspace close ws-${a}`);
 					expect(commands).toContain(`herdr tab close tab-${b}`);
 					expect(commands).toContain(`herdr pane close pane-${c}`);
+					// No close moves herdr's view on the plane's own (ADR 0061):
+					// the plane sends no focus command beside any of them.
+					expect(herdrFocusCommands(commands)).toEqual([]);
 					// The cleanup never deletes a Consultation worktree or branch.
 					expect(commands.join("\n")).not.toContain("worktree remove");
 					expect(commands.join("\n")).not.toContain("branch -D");

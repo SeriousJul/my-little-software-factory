@@ -36,7 +36,13 @@ import type { RepositoryMapping } from "../src/repo.ts";
 import type { CommandOptions, CommandResult, CommandRunner } from "../src/runner.ts";
 import { type Consultation, type FactoryState, openFactoryState } from "../src/state.ts";
 import { BASE_CONFIG } from "./base-config.ts";
-import { agentListJson, FakeRunner, tabCreateJson, worktreeCreateJson } from "./fake-runner.ts";
+import {
+	agentListJson,
+	FakeRunner,
+	herdrFocusCommands,
+	tabCreateJson,
+	worktreeCreateJson,
+} from "./fake-runner.ts";
 
 const directories: string[] = [];
 const states: FactoryState[] = [];
@@ -259,7 +265,6 @@ function makeHarness(
 	fixture: Fixture,
 	runner: CommandRunner,
 	options: {
-		controlPlaneWorkspaceId?: string | null;
 		home?: string;
 		tickets?: () => readonly Ticket[];
 		persistRepositoryMapping?: (mapping: RepositoryMapping) => Promise<string | undefined>;
@@ -277,7 +282,6 @@ function makeHarness(
 			config: () => fixture.config,
 			home: options.home ?? fixture.home,
 			tickets: options.tickets ?? (() => []),
-			controlPlaneWorkspaceId: options.controlPlaneWorkspaceId ?? null,
 			persistRepositoryMapping: options.persistRepositoryMapping,
 			textBatchBytes: options.textBatchBytes,
 			callbacks: {
@@ -934,6 +938,7 @@ describe("Consultation operations: live checkout confirmation lifetime", () => {
 			externalUpdatedAt: "2026-09-01T00:00:00.000Z",
 			memberships: [],
 			suggestedTaskType: "implement",
+			matchedStateName: null,
 			actionable: true,
 			handoffRecoveryRequired: false,
 			ignored: false,
@@ -1473,7 +1478,7 @@ describe("Consultation operations: close", () => {
 			[LAUNCH.tabId],
 			[{ pane_id: LAUNCH.paneId, tab_id: LAUNCH.tabId }],
 		);
-		const harness = makeHarness(fixture, runner, { controlPlaneWorkspaceId: "ws-control" });
+		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.close(consultation);
 
@@ -1483,8 +1488,10 @@ describe("Consultation operations: close", () => {
 			`herdr tab list --workspace ${LAUNCH.workspaceId}`,
 			`herdr pane list --workspace ${LAUNCH.workspaceId}`,
 			`herdr workspace close ${LAUNCH.workspaceId}`,
-			"herdr workspace focus ws-control",
 		]);
+		// The plane never follows a close with a focus command: herdr keeps
+		// each client on the workspace it views (ADR 0061).
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		// The worktree and its branch survive: retained, never removed.
@@ -1510,13 +1517,13 @@ describe("Consultation operations: close", () => {
 			[LAUNCH.tabId, "tab-foreign"],
 			[{ pane_id: LAUNCH.paneId, tab_id: LAUNCH.tabId }],
 		);
-		const harness = makeHarness(fixture, runner, { controlPlaneWorkspaceId: "ws-control" });
+		const harness = makeHarness(fixture, runner);
 
 		await harness.operations.close(consultation);
 
 		expect(runner.commands()).toContain(`herdr tab close ${LAUNCH.tabId}`);
 		expect(runner.commands().join("\n")).not.toContain("workspace close");
-		expect(runner.commands().join("\n")).not.toContain("workspace focus");
+		expect(herdrFocusCommands(runner.commands())).toEqual([]);
 		const closed = current(fixture.state, id);
 		expect(closed.state).toBe("closed");
 		expect(closed.resources.find((r) => r.kind === "workspace")).toMatchObject({ owned: false });

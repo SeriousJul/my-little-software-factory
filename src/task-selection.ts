@@ -3,6 +3,24 @@ import type { WorkflowState } from "./config.ts";
 import type { SourceMembership } from "./domain/ticket.ts";
 
 /**
+ * The first State whose match holds on any membership, or null when none does.
+ *
+ * One walk names the ticket's position in the machine, so the Suggested task
+ * type and the `position` grouping read the same match and cannot disagree.
+ */
+export function matchState(
+	memberships: readonly SourceMembership[],
+	states: readonly WorkflowState[],
+): WorkflowState | null {
+	for (const state of states) {
+		if (memberships.some((membership) => membershipMatchesState(membership, state))) {
+			return state;
+		}
+	}
+	return null;
+}
+
+/**
  * The suggested task type of a ticket, or null when the machine offers none.
  *
  * The first state whose match holds on any current membership wins, and the
@@ -16,12 +34,19 @@ export function selectTaskType(
 	states: readonly WorkflowState[],
 	fallback: string,
 ): string | null {
-	for (const state of states) {
-		if (memberships.some((membership) => membershipMatchesState(membership, state))) {
-			return state.taskType ?? null;
-		}
-	}
-	return fallback;
+	return taskTypeOfMatch(matchState(memberships, states), fallback);
+}
+
+/**
+ * The task one matched State offers: its own, or null for a parking State, or
+ * the fallback when no State matched.
+ *
+ * The projection reads a match once and derives both facts from it, so the
+ * Suggested task type and the `position` grouping always name the same State.
+ */
+export function taskTypeOfMatch(matched: WorkflowState | null, fallback: string): string | null {
+	if (matched === null) return fallback;
+	return matched.taskType ?? null;
 }
 
 /**

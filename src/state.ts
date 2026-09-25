@@ -18,6 +18,8 @@ import {
 	STALE_AGENT_OUTPUT_WARNING,
 	turnEndWarning,
 } from "./consultation.ts";
+import type { GroupedSection, GroupingAxis } from "./domain/grouping.ts";
+import { DEFAULT_GROUPING_AXIS, isGroupingAxis } from "./domain/grouping.ts";
 import type {
 	Completion,
 	CompletionDecision,
@@ -30,10 +32,10 @@ import type {
 	TicketObligation,
 	TicketState,
 } from "./domain/ticket.ts";
-import { ignoreRefusal, ignoreWithholdsRow, obligationOf } from "./domain/ticket.ts";
+import { attentionBand, ignoreRefusal, ignoreWithholdsRow, obligationOf } from "./domain/ticket.ts";
 import type { HandoffChoice } from "./handoff.ts";
 import { agentNameFor, identifyHandoffAgentName } from "./naming.ts";
-import { selectTaskType } from "./task-selection.ts";
+import { matchState, taskTypeOfMatch } from "./task-selection.ts";
 import type { FetchOutcome } from "./ticket-source.ts";
 import {
 	TURN_END_CAUSES,
@@ -45,7 +47,7 @@ import { isCoveredByFixingPullRequest, NO_LINKED_PULL_REQUEST_SKIP } from "./wor
 
 /** The schema every state file the plane opens is brought to. Exported so a
  * test can assert the stamp a migration left instead of copying the number. */
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 type Health = SourceMembership["health"];
 
 export class StateError extends Error {
@@ -374,7 +376,7 @@ export interface HandoffTicket {
  * What one Ticket-list read gives the screen (ADR 0042, ADR 0060).
  *
  * One projection read serves the drawn rows, the active view the section's
- * counts and the held-count bell take, the pile the ignore withholds, and the
+ * counts and the held-count bell take, the pile the flag names, and the
  * projection before the list rule that resolves a Ticket by identity. The
  * list rule lives in the state module alone: no screen re-applies either cause.
  */
@@ -383,12 +385,24 @@ export interface TicketListViews {
 	rows: Ticket[];
 	/** The active view: the machine's rows, the header's counts, and the bell. */
 	active: Ticket[];
-	/** The rows the flag names: the pile the `ignored` view shows and the header counts. */
+	/** The rows the flag names: the pile the `ignored` view shows and the header count. */
 	ignored: Ticket[];
-	/** How many rows the ignore withholds from the active view: the hidden pile. */
-	withheld: number;
 	/** Every projected row, before the list rule: the reads that resolve a Ticket by identity. */
 	all: Ticket[];
+}
+
+/**
+ * The in-memory shell's views, built from the one array it holds.
+ *
+ * A plane with no SQLite state holds no list rule and no order of its own: the
+ * rows a test caller hands it are the rows it draws, in the order it drew them,
+ * and nothing stands in the pile. The shell keeps that one array and reads every
+ * view through here, so the shape of `TicketListViews` is written in one place
+ * and a new view of the list rule cannot be forgotten at a call site.
+ */
+export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListViews {
+	const rows = [...projection];
+	return { rows, active: rows, ignored: [], all: rows };
 }
 
 /**
@@ -401,8 +415,17 @@ export interface TicketListViews {
  * decision owed, so the row the operator reaches the Live view, the Close, and
  * the decision from is never the one the list rule hides. What is left keeps
  * the attention band order: the group first, then the newest external update,
- * then the ticket identity (ADR 0050) - the order the ignored view shares and
- * never replaces.
+ * then the ticket identity (ADR 0050) - the order every view shares and never
+ * replaces.
+ *
+ * The three views answer three different questions, and only the first two
+ * apply the covered rule. The drawn rows and the active view are the list, so a
+ * covered row stands in neither. The pile is the ledger of the operator's own
+ * acts: every row the flag stands on, covered or not, live or at rest, because
+ * the only way to clear an ignore is to reach the row and press the key, and a
+ * Ticket that is both flagged and covered would otherwise stand in no view at
+ * all. The header's ignored count names that ledger, so the number and the
+ * `ignored` view always hold the same rows.
  *
  * The state's read and the in-memory shell that holds no SQLite state both
  * come through here, so the rule is one rule and no screen re-applies either
@@ -412,32 +435,25 @@ export function listTicketViews(
 	projection: readonly Ticket[],
 	filter: TicketListFilter,
 ): TicketListViews {
-	const listed = projection
-		.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket))
-		.sort(
-			(left, right) =>
-				attentionGroup(left) - attentionGroup(right) ||
-				right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
-				left.identity.localeCompare(right.identity),
-		);
-	const active: Ticket[] = [];
-	const ignored: Ticket[] = [];
-	let withheld = 0;
-	for (const ticket of listed) {
-		// The pile is every row the flag stands on: the ledger of what the operator
-		// put away, including a Ticket the list shows again while its work is live or
-		// its decision stays owed. The active view is the machine's read: every row
-		// the list rule leaves, which is the pile's rows except the ones the ignore
-		// withholds while they rest.
-		if (ticket.ignored) ignored.push(ticket);
-		if (ignoreWithholdsRow(ticket)) withheld += 1;
-		else active.push(ticket);
-	}
+	const ordered = [...projection].sort(
+		(left, right) =>
+			attentionBand(left) - attentionBand(right) ||
+			right.externalUpdatedAt.localeCompare(left.externalUpdatedAt) ||
+			left.identity.localeCompare(right.identity),
+	);
+	const listed = ordered.filter((ticket) => !isCoveredByFixingPullRequest(projection, ticket));
+	// The pile is every row the flag stands on - the ledger of what the operator
+	// put away, including a Ticket the list shows again while its work is live or
+	// its decision stays owed, and one the covered rule takes out of the list.
+	const ignored = ordered.filter((ticket) => ticket.ignored);
+	// The active view is the machine's read: every row the list rule leaves,
+	// which is the drawn rows except the ones the ignore withholds while they
+	// rest.
+	const active = listed.filter((ticket) => !ignoreWithholdsRow(ticket));
 	return {
 		rows: filter === "active" ? active : filter === "ignored" ? ignored : listed,
 		active,
 		ignored,
-		withheld,
 		all: [...projection],
 	};
 }
@@ -887,7 +903,27 @@ const MIGRATION_V14_TO_V15 = `
 `;
 
 /**
- * The v21 step: the ignored ticket (ADR 0060).
+ * The v21 step: the Grouping axis of a section's list (ADR 0058, issue #159).
+ *
+ * The axis says how the operator wants the list split, and it is the view fact
+ * the plane keeps: like the Auto-handoff mode (ADR 0036) and the queue pause
+ * (ADR 0052), it survives a restart and a dev reload, and one state file
+ * answers "how did this plane last look". The table is keyed by section rather
+ * than named for one section, so a second list that takes grouping later lands
+ * its own row with no new schema version; the Ticket section is the only row
+ * today. A fresh file starts every section at `none`, the flat list, so no
+ * plane comes up grouped before the operator asks.
+ */
+const MIGRATION_V20_TO_V21_GROUPING_AXIS = `
+	CREATE TABLE grouping_axis (
+		section TEXT PRIMARY KEY,
+		axis TEXT NOT NULL
+	);
+	INSERT INTO grouping_axis(section, axis) VALUES ('tickets', 'none');
+`;
+
+/**
+ * The v22 step: the ignored ticket (ADR 0060).
  *
  * The flag and the moment it was set ride on the ticket row, keyed by the
  * ticket's stable identity: the operator's judgment belongs to the Ticket, not
@@ -896,9 +932,9 @@ const MIGRATION_V14_TO_V15 = `
  * same answer. Nothing prunes the flags: the plane already never deletes a
  * ticket row.
  */
-const MIGRATION_V20_TO_V21_IGNORED =
+const MIGRATION_V21_TO_V22_IGNORED =
 	"ALTER TABLE tickets ADD COLUMN ignored INTEGER NOT NULL DEFAULT 0;";
-const MIGRATION_V20_TO_V21_IGNORED_AT = "ALTER TABLE tickets ADD COLUMN ignored_at TEXT;";
+const MIGRATION_V21_TO_V22_IGNORED_AT = "ALTER TABLE tickets ADD COLUMN ignored_at TEXT;";
 
 /** Open state synchronously after creating its parent directory. */
 export function openFactoryState(path: string, now?: () => number): FactoryState {
@@ -1049,6 +1085,10 @@ export class FactoryState {
 			// stays a no-op for it.
 			if (!this.hasColumn("work_queue", "is_automatic")) this.db.exec(MIGRATION_V18_TO_V19);
 			if (!this.hasTable("queue_pause")) this.db.exec(MIGRATION_V19_TO_V20_QUEUE_PAUSE);
+			// The axis table is asked for by name, the way the queue pause is: a
+			// file the step already seeded keeps its stored answer, and an older
+			// file opens grouped at `none` (user story 57).
+			if (!this.hasTable("grouping_axis")) this.db.exec(MIGRATION_V20_TO_V21_GROUPING_AXIS);
 			// Ask the file, not the stamp: a re-labeled newer file already lacks
 			// the retired column and the referenced-issues table, so each drop
 			// runs only when the fact is still present.
@@ -1058,8 +1098,8 @@ export class FactoryState {
 			// Ask the file, not the stamp: the same build-early risk the queue's own
 			// columns carry, and each half asks on its own, so a file that holds one
 			// of the two cells heals the missing half and keeps the other.
-			if (!this.hasColumn("tickets", "ignored")) this.db.exec(MIGRATION_V20_TO_V21_IGNORED);
-			if (!this.hasColumn("tickets", "ignored_at")) this.db.exec(MIGRATION_V20_TO_V21_IGNORED_AT);
+			if (!this.hasColumn("tickets", "ignored")) this.db.exec(MIGRATION_V21_TO_V22_IGNORED);
+			if (!this.hasColumn("tickets", "ignored_at")) this.db.exec(MIGRATION_V21_TO_V22_IGNORED_AT);
 			this.db.exec("DELETE FROM schema_version");
 			this.db.prepare("INSERT INTO schema_version(version) VALUES (?)").run(SCHEMA_VERSION);
 			this.db.exec("COMMIT");
@@ -1250,6 +1290,12 @@ export class FactoryState {
 			)[0];
 			if (facts == null) continue;
 			const handoff = this.handoffFor(row.identity);
+			// One match answers both facts the list reads: the task the machine
+			// suggests and the name of the position that suggests it. The name is
+			// derived here and never stored, and no rule but the list's grouping
+			// reads it (issue #159).
+			const listed = storedMemberships.filter((membership) => membership.active);
+			const matched = matchState(listed, states);
 			tickets.push({
 				identity: row.identity,
 				title: facts.title,
@@ -1268,11 +1314,8 @@ export class FactoryState {
 				externalUpdatedAt: facts.externalUpdatedAt,
 				repositoryRef: facts.repository,
 				memberships: storedMemberships.map(({ active: _active, ...membership }) => membership),
-				suggestedTaskType: selectTaskType(
-					storedMemberships.filter((membership) => membership.active),
-					states,
-					fallbackTaskType,
-				),
+				suggestedTaskType: taskTypeOfMatch(matched, fallbackTaskType),
+				matchedStateName: matched === null ? null : matched.name,
 				actionable,
 				handoffRecoveryRequired: pending,
 				leftover: this.leftoverEnvironment(row.identity),
@@ -1614,6 +1657,44 @@ export class FactoryState {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new StateError(`cannot store the queue pause at ${this.path}: ${message}`);
+		}
+	}
+
+	/**
+	 * The Grouping axis of one section's list (ADR 0058, issue #159): the fact
+	 * the shell reads at boot, the way it reads the Auto-handoff mode and the
+	 * queue pause.
+	 *
+	 * It is stored, never derived: the key that changes the axis writes the new
+	 * value at once, and a restart finds the grouping where the operator left it.
+	 * A section with no stored row, and a value the plane does not name, both
+	 * read as `none`, the flat list, so an older file and a hand-edited one open
+	 * ungrouped instead of failing the startup.
+	 */
+	groupingAxis(section: GroupedSection): GroupingAxis {
+		const row = this.db.prepare("SELECT axis FROM grouping_axis WHERE section = ?").get(section) as
+			| { axis: string }
+			| undefined;
+		return row !== undefined && isGroupingAxis(row.axis) ? row.axis : DEFAULT_GROUPING_AXIS;
+	}
+
+	/**
+	 * Store the Grouping axis of one section. The write is the fact the next
+	 * startup and the next dev reload read back, so it is durable the moment it
+	 * returns. A write that fails throws a StateError naming the state file;
+	 * the caller decides what the operator sees, and the in-session view still
+	 * stands (ADR 0058).
+	 */
+	setGroupingAxis(section: GroupedSection, axis: GroupingAxis): void {
+		try {
+			this.db
+				.prepare(
+					"INSERT INTO grouping_axis(section, axis) VALUES (?, ?) ON CONFLICT(section) DO UPDATE SET axis = excluded.axis",
+				)
+				.run(section, axis);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new StateError(`cannot store the grouping axis at ${this.path}: ${message}`);
 		}
 	}
 
@@ -4051,14 +4132,6 @@ function utf8Suffix(value: string, maxBytes: number): string {
 	return suffix;
 }
 
-function attentionGroup(ticket: Ticket): number {
-	if (ticket.state === "awaiting") return 0;
-	if (ticket.state === "running") return 1;
-	if (ticket.state === "handed-off") return 2;
-	if (ticket.state === "open" && ticket.actionable) return 3;
-	if (ticket.state === "open") return 4;
-	return 5;
-}
 function jsonStringArray(value: string): string[] {
 	try {
 		const parsed: unknown = JSON.parse(value);

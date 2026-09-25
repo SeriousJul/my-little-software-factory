@@ -1041,6 +1041,9 @@ function stubTicket(
 		externalUpdatedAt: membership.externalUpdatedAt,
 		memberships: [membership],
 		suggestedTaskType: "implement",
+		// The projection derives the matched State's name; these fixtures stand on
+		// no State, so the `position` grouping files them as `unmatched`.
+		matchedStateName: null,
 		actionable: true,
 		handoffRecoveryRequired: false,
 		ignored: false,

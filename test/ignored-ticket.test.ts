@@ -18,6 +18,7 @@ import { join } from "node:path";
 import type { AppProps } from "../src/components/app.ts";
 import type { FactoryConfig } from "../src/config.ts";
 import type { FetchedTicket } from "../src/domain/ticket.ts";
+import { withIssueReferences } from "../src/domain/ticket.ts";
 import { agentNameFor } from "../src/naming.ts";
 import { type FactoryState, openFactoryState } from "../src/state.ts";
 import {
@@ -1240,6 +1241,156 @@ describe("the ignored marker's frame", () => {
 				WIDTH,
 				HEIGHT,
 				props,
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0042, ADR 0060: a Ticket the operator put away can also be a Ticket the
+	 * covered rule takes out of the list - the fixing pull request appears on a
+	 * later refresh, after the ignore. The pile is the ledger of the operator's own
+	 * act, so the row stands there and nowhere else, and `f` is the only way to
+	 * reach the key that puts it back.
+	 */
+	test("the pile reaches a Ticket the covered rule also hides", async () => {
+		const state = openFactoryState(statePath());
+		const pull = (closes: boolean): FetchedTicket => ({
+			identity: "github:github.com:P_9",
+			sourceKind: "github-pull-request",
+			externalKey: "#9",
+			sourceState: "open",
+			url: "https://github.com/acme/factory/pull/9",
+			title: "Add the retry policy",
+			description: "The implementation of #5.",
+			labels: [],
+			externalUpdatedAt: "2026-08-31T12:00:00Z",
+			repository: {
+				identity: repoIdentity,
+				displayName: "acme/factory",
+				cloneUrl: `https://${repoIdentity}.git`,
+			},
+			attributes: closes
+				? withIssueReferences({}, [{ identity: null, number: 5, repository: "acme/factory" }])
+				: {},
+		});
+		const withPull = success([...twoTickets(), pull(true)]);
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch({ name: "issues", kind: "github-issues" }, success(twoTickets()));
+		// The ignore lands first, while the Ticket is only ignored.
+		expect(state.setTicketIgnored(FIRST, true, null).ok).toBe(true);
+		const runner = emptyAgentRunner();
+		const src = new FakeSource("issues", "github-issues", success(twoTickets()));
+		try {
+			await withApp(
+				async (setup) => {
+					// The ignore stands before the boot, so the first frame shows the
+					// row that stayed.
+					await listed(setup, src, SECOND_LEAD);
+					// The fixing pull request appears on the next refresh: the covered rule
+					// now hides the same row the ignore hides.
+					await settle(setup, 1_000);
+					await refreshed(setup, src, withPull);
+					const active = await awaitFrame(
+						setup,
+						(f) => ticketRowHolds(f, SECOND_LEAD) && !ticketRowHolds(f, FIRST_LEAD),
+						"the covered row to leave the active view",
+					);
+					// Neither the drawn rows nor the count shows it, and the header still
+					// names the pile the flag made.
+					expect(headerRow(active)).toContain("ignored: 1");
+					// `f` reaches the row: the pile holds what no other view shows.
+					const pile = await press(
+						setup,
+						"f",
+						"the pile",
+						(f) => ticketRowHolds(f, FIRST_LEAD),
+					);
+					expect(pile).toContain("ignored");
+					expect(detailPaneText(pile)).toContain(firstTitle);
+					expect(actionBarRowOf(pile)).toContain("i Un-ignore");
+					// And `all` does not show it: the covered rule still holds the list.
+					await press(setup, "f", "every row", (f) => ticketRowHolds(f, SECOND_LEAD));
+					const every = await settle(setup);
+					expect(ticketRowHolds(every, FIRST_LEAD)).toBe(false);
+					expect(headerRow(every)).toContain("ignored: 1");
+					// The same key on that piled row takes the Ticket back, and the row
+					// returns to standing under the covered rule alone. The cycle runs
+					// active, ignored, all, so two presses walk from `all` back to the pile.
+					await press(setup, "f", "the active rows", (f) => !ticketRowHolds(f, FIRST_LEAD));
+					await press(setup, "f", "the pile again", (f) => ticketRowHolds(f, FIRST_LEAD));
+					const cleared = await press(setup, "i", "the clear", (f) =>
+						messageRowOf(f).includes("is not ignored"),
+					);
+					expect(headerRow(cleared)).not.toContain("ignored:");
+					expect(state.ignoredTickets().has(FIRST)).toBe(false);
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: fixtureConfig(), state, sources: [src], runner, pollIntervalMs: 60_000 },
+			);
+		} finally {
+			state.close();
+		}
+	});
+
+	/**
+	 * ADR 0060, user story 19: the held count and the bell that rings on it are
+	 * the machine's own facts, and the ignored count is the operator's view of a
+	 * pile. On a row too short for both conditional cells, the view fact is the
+	 * one that goes. The bell's own flash lasts one moment in the running app, so
+	 * `test/section-header.test.ts` measures it at the component seam; the held
+	 * cell is a steady fact, and this measures it where the operator reads it.
+	 */
+	test("a narrow frame cuts the ignored cell before the held count", async () => {
+		const state = openFactoryState(statePath());
+		const outcome = success(twoTickets());
+		state.initializeSources([{ name: "issues", kind: "github-issues" }]);
+		state.applyFetch({ name: "issues", kind: "github-issues" }, outcome);
+		// One held turn rests on the operator's decision, and one open Ticket is
+		// judged out of the list: the two conditional cells, side by side.
+		const attempt = seedInFlightTurn(state, outcome, FIRST);
+		state.settleTurn({
+			ticketIdentity: FIRST,
+			handoffId: attempt,
+			taskType: "implement",
+			agentType: "pi",
+			message: "the turn failed",
+			turnLog: [{ kind: "text", text: "the turn failed" }],
+			completedAt: "2026-08-31T11:00:00Z",
+			cause: "failed",
+		});
+		expect(state.setTicketIgnored(SECOND, true, null).ok).toBe(true);
+		const src = new FakeSource("issues", "github-issues", outcome);
+		try {
+			await withApp(
+				async (setup) => {
+					// Wide enough for both: the row names the held turn and the pile.
+					setup.resize(72, HEIGHT);
+					src.settle(outcome);
+					const wide = await awaitFrame(
+						setup,
+						(f) => headerRow(f).includes("held") && headerRow(f).includes("ignored"),
+						"the header's two conditional cells",
+					);
+					expect(headerRow(wide)).toContain("held: 1");
+					expect(headerRow(wide)).toContain("ignored: 1");
+					// A row that cannot hold both spends its last cells on the machine's
+					// fact: the held count stands and the ignored count is cut.
+					setup.resize(56, HEIGHT);
+					const narrow = await awaitFrame(
+						setup,
+						(f) => headerRow(f).includes("held") && !headerRow(f).includes("ignored"),
+						"the cut that drops the ignored cell",
+					);
+					expect(headerRow(narrow)).toContain("Tickets");
+					expect(headerRow(narrow)).toContain("held");
+					expect(headerRow(narrow)).not.toContain("ignored");
+				},
+				WIDTH,
+				HEIGHT,
+				{ config: fixtureConfig(), state, sources: [src], runner: emptyAgentRunner(), pollIntervalMs: 60_000 },
 			);
 		} finally {
 			state.close();

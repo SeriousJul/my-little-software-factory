@@ -109,6 +109,7 @@ describe("the shared control gallery", () => {
 			"consultation-detail-unscheduled",
 			"consultation-unscheduled-actions",
 			"consultation-detail-queued",
+			"ticket-groups",
 			"work-queue",
 			"work-force-dispatch",
 			"work-queue-item-consultation",
@@ -153,6 +154,29 @@ describe("the shared control gallery", () => {
 		expect(frameText(next)).toContain(
 			"Unavailable: Launch Consultation: initial input cannot be empty",
 		);
+	});
+
+	// Issue #159: the grouped Ticket list is a test surface, so the states a
+	// reviewer must see - a grouped list, a collapsed Group with its held count,
+	// and the cursor at rest on a Group header - are asserted here rather than
+	// in a private sketch.
+	test("the grouped Ticket list shows its Groups, its fold, and its header cursor", async () => {
+		const setup = await gallery("ticket-groups", 120, 34);
+		const text = frameText(setup.captureCharFrame());
+		// A Group header stands above each run, and it carries the count of the
+		// rows it holds and the held count above zero.
+		expect(text).toContain("▾ acme/billing 2 held 1");
+		expect(text).toContain("▾ acme/factory 2");
+		// A collapsed Group shows nothing but its header, and the fold rides on
+		// the glyph: the header still names what the fold hides.
+		expect(text).toContain("▸ acme/billing 2 held 1");
+		// The cursor rests on a Group header, and the marker column reads the
+		// same at either kind of row.
+		expect(text).toContain("❯ ▾ implement 3 held 1");
+		// The axis names itself in the hint the bar carries, and the Message
+		// lines are the words the press leaves on the line.
+		expect(text).toContain("Ticket list grouped by repository");
+		expect(text).toContain("Ticket list grouping off: the flat list");
 	});
 
 	test("the Type-ahead example shows its search and answers a query", async () => {
@@ -386,9 +410,20 @@ describe("the shared control gallery", () => {
 		expect(spanColors(setup, "Launch Consultation")).toEqual([[255, 255, 255]]);
 	});
 
+	/**
+	 * The Ticket ignore example (ADR 0060): the bar's flip, the header's cell for
+	 * the pile, and the three obligations the key refuses.
+	 *
+	 * Every refusal's words come from the catalogue through the gallery, so a
+	 * change to the refusal's sentence fails here rather than drifting between a
+	 * literal picture and the live frame. The example opens tall: three bars and
+	 * three Message rows stand in it beside the header and the note.
+	 */
 	test("the Ticket ignore example holds the flip and the three refusals", async () => {
-		const setup = await gallery("ticket-ignore", 120, 24);
-		const text = frameText(setup.captureCharFrame());
+		const setup = await gallery("ticket-ignore", 120, 30);
+		const charFrame = setup.captureCharFrame();
+		const text = frameText(charFrame);
+		const lines = rowsOf(charFrame);
 		expect(text).toContain(stateLine("ticket-ignore"));
 		// The bar's flip, in the words the two rows read: the key beside an
 		// active row puts the Ticket away, the key beside a piled row takes it
@@ -397,13 +432,21 @@ describe("the shared control gallery", () => {
 		expect(text).toContain("i Un-ignore");
 		// The header's conditional cell for the pile the filter hides.
 		expect(text).toContain("ignored: 1");
-		// The three obligations the key refuses, in the one sentence the write
-		// shares with the control.
-		expect(text).toContain("the selected Ticket cannot be ignored: it awaits a decision");
-		expect(text).toContain(
-			"the selected Ticket cannot be ignored: its held turn awaits a decision",
-		);
-		expect(text).toContain("the selected Ticket cannot be ignored: its Agent is missing");
+		// Each obligation states its own clause once, on one Message row, and on
+		// the bar that refuses it: no duplicated picture, and the refused key
+		// still stands dimmed on its row's bar rather than vanishing from it.
+		for (const clause of [
+			"it awaits a decision",
+			"its held turn awaits a decision",
+			"its Agent is missing",
+		]) {
+			const stated = lines.filter((line) => line.includes(clause));
+			expect(stated).toHaveLength(1);
+			expect(stated[0]).toContain(`the selected Ticket cannot be ignored: ${clause}`);
+		}
+		// The active row's own bar names the key, and each of the three refused
+		// rows names it on its bar.
+		expect(lines.filter((line) => line.includes("i Ignore")).length).toBe(4);
 	});
 
 	test("the List filter example holds the cycle's three hints and the queue refusal", async () => {

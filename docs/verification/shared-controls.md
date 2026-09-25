@@ -15,6 +15,56 @@ See [the shared control standard](../development/shared-controls.md) for what th
 requires, and [ADR 0014](../adr/0014-shared-modules-own-control-behavior.md) for
 who owns control behavior.
 
+## The grouped Ticket list (issue #159, ADR 0058 and ADR 0059)
+
+Status: the automated checks pass. The `Tab` axis cycle, each axis's Groups, the
+flat `none` list, the fold by key and by mouse, the cursor at rest on a Group
+header and every refusal there, the detail pane holding its ticket, the Group
+order against the attention order, the counts on a header and on the Section
+header, the header-only short frame, the Group header at the plane's minimum
+width - where the marker column and a double-digit count with a held turn spend
+the pane's whole budget, in the open and the folded frame, and again with a
+three-digit count that costs more than the budget holds - the empty grouped
+message, and the axis surviving a restart were measured through the real App
+frame harness at fixed terminal sizes on a real state file with a fake command
+runner and fake sources, in `test/ticket-grouping-frame.test.ts`. The durable
+fact is measured in `test/state.test.ts` (the getter and setter round trip, the
+default on a fresh file, the v20 to v21 step, and the absence of any fold
+table), the derived Workflow state's name in the same file's projection walk,
+and the shared mechanism's ownership in
+`test/shared-control-architecture.test.ts`. The folded Group, the collapsed
+Group's held count, and the cursor on a header are asserted on the gallery's own
+`ticket-groups` example in `test/shared-gallery.test.ts`; the catalogue's hint
+for every split axis, its refusal of the bar's hint at `none`, and its refusals
+on a header in `test/controls.test.ts`; the axis control's and the fold's guide
+rows in `test/key-guide.test.ts`; and the two rows' presence in the mode's own
+Key guide frame in `test/app.test.ts`.
+
+`bun run lint`, `bun run typecheck`, and one full `bun run test` ran on this
+change with no other `bun test` process on the machine (load average 3.1, the
+suite green at 2064 tests over 84 files, no skips). The
+grouping frames were each confirmed red by deletion: keying the fold store on
+one axis instead of the operator's own leaves "an axis visited twice comes back
+with its own folds" red, reading the header fact outside the Ticket modes leaves
+"a Group header under the Ticket cursor gives no other section a fold" red, and
+handing the narrow header's budget a floor of one cell leaves "a Group header at
+the minimum width drops its value before it wraps" red on a header that wrapped
+its held count onto a second window row.
+
+ADR 0060's Ignored ticket is recorded as sitting in no Group and counted by no
+Group header. The ignore is not implemented on this branch, so nothing here
+measures it; what the grouping leaves for it is a construction rather than a
+gate: the axis slices the rows the list already shows, so a Ticket that leaves
+those rows leaves every Group and every header count with no rule to write.
+
+What was not measured: no terminal walk of the grouped list was run in Ghostty
+or foot. The keyboard targets below were verified on the flat list before this
+feature, and the grouping frames are automated only, so the grouped frame is
+recorded as not walked by hand on a real terminal, and the screen-reader path is
+unverified here as it is everywhere else in this record: a frame snapshot and a
+key press say nothing about what a screen reader reads, and the Group header's
+role is not announced by anything the plane controls.
+
 ## What is verified automatically
 
 Every check below runs in `bun run lint`, `bun run typecheck`,
@@ -244,8 +294,8 @@ Goto control in the Consultation base modes (`g`) focuses the Agent pane while
 it is alive in the last poll and states its reason otherwise; it is a
 navigation, and it never changes the Consultation. Its confirmation is a
 result on the Message line, never a warning, and it names the workspace
-herdr shows, so the operator can switch herdr's view there: since herdr 0.9
-a CLI focus no longer moves an attached client's view.
+herdr moved the view into: the Goto is the plane's one focus move, and a
+focus request moves every attached client's view (ADR 0061).
 
 The automatic suite covers the record's parsing and caps (`test/turn-log.test.ts`),
 the body's selection and rows (`test/consultation-detail.test.ts`), Goto's
@@ -984,3 +1034,92 @@ branch, rebased on origin/main: `bun run lint` and `bun run typecheck` pass,
 and `bun run test` passes in full (1816 pass, 0 skip, 0 fail, 75 files,
 twice in a row, about 38 s per run, on Bun 1.4.2, no concurrent `bun test`
 on the machine), no test skipped.
+
+## The close that moves no view (issue #158, ADR 0061)
+
+The rule is one sentence: the control plane never moves herdr's view on its
+own. It asks for no focus when it builds an environment, and it asks for none
+when it ends one. Goto, key `g`, is the one focus move the plane makes, and
+the operator makes it at the key.
+
+The proof runs at two seams, and neither reaches a herdr session.
+
+The frame seam drives the real screens and reads the command list the injected
+runner recorded. `test/herdr-view-frame.test.ts` walks three of the four flows
+the rule touches: the Close action on a worktree cycle, the Decision screen's
+route close of the settled workspace, and the same close for an item that
+waited in the Work queue and runs at the freed seat with no keypress beside
+it. Each asserts the herdr work that ran and that no focus command ran with
+it. The fourth flow, the Consultation close of a workspace, is proven at its
+own frame seam: the close case in `test/consultation-frame.test.ts` walks the
+confirmation panel through the real UI and asserts the same absence beside
+the workspace, tab, and pane closes. Two more cases stand beside them: the
+Close cleanup herdr refuses still reports its reason on the Message line and
+still records the surviving environment as the ticket's leftover, and Goto
+still asks herdr for the Agent's pane and still names the workspace the view
+landed in. The handoff that follows a route still builds its environment with
+every create stating its `--no-focus` and no create asking herdr for the view
+with `--focus`.
+
+The static seam is a declared dependency rule, not a behavior test
+(`test/herdr-view-architecture.test.ts`). It scans the plane's own sources and
+refuses a workspace focus command anywhere in them, refuses a tab or a pane
+focus, allows an agent focus command only at the Goto seam in
+`src/components/app.ts`, refuses a control-plane workspace id (the thread that
+aimed the old compensating call is retired, so no new file can re-add the
+move unnoticed), and refuses a herdr create whose argv does not state its
+no-focus default. The create check reads each argv on its own: an assembled
+argv must carry its `--no-focus` push between the declaration and the runner
+call, so a file that says `--no-focus` once and creates elsewhere, or pushes
+the flag after the call, fails it. An argv a function returns, or one passed
+to the runner under another name, stays outside the scan; the file's header
+states both limits. The ask side of the rule has no such limit: herdr's
+`--focus` flag is refused as a token wherever a source carries it, which
+covers `worktree open` and a `pane move --focus` beside a create, because
+herdr applies its flags in argv order and a create that states its default
+and then asks for focus moves every attached client. That refusal carries its
+own positive control, a case that feeds the pattern the argv herdr takes and
+the plane's real default, so an empty offender list cannot come from a
+pattern that matches nothing. The re-ordered push was verified to turn the
+check red in this rework, as was re-adding a `workspace focus` after a
+worktree removal, which turns the frame case red. The `--focus` ask was
+verified red on both create shapes: beside the `--no-focus` of an inline
+workspace create, and pushed onto the assembled tab create after its default.
+Each also turns the route and build frame cases red, because the fake runner
+keys its answers on the exact argv a create sends.
+
+The unit seams flipped rather than duplicated. The handoff module's Close
+cleanup tests now name the absence, the dispatch rig test that used to require
+the focus command requires its absence, and the Consultation operations
+harness test does the same; each keeps its other assertions.
+
+The herdr facts are read from herdr 0.9.1 source, and ADR 0061 names the two
+places: `src/server/headless/client_views.rs`, where a public-socket request
+moves every attached shell client only for `workspace.focus`, `tab.focus`,
+`pane.focus`, `agent.focus`, and a create that asks for focus, and
+`src/server/clients.rs`, where a client keeps its viewed workspace while that
+workspace exists and falls back to the session focus only when it no longer
+does. The behavior was read from that version; the plane has not been checked
+against a later one.
+
+**Incomplete: the live herdr walk.** The suite cannot observe a window, so no
+test here claims what the operator sees. Two cases stay with the operator on
+herdr 0.9.1, and neither has been run:
+
+1. A Close cleanup of a worktree workspace while another workspace is viewed:
+   herdr's view stays on the workspace the operator was reading, and the two-hop
+   jump to the plane is gone.
+2. A queued route item's close that lands while the view is elsewhere: the view
+   stays where it was, with no keypress beside the close.
+
+Until the operator runs them, this is evidence from the command seam and the
+herdr source, not from a window. The one jump that survives by design is
+herdr's own: when the plane closes the one workspace the client is viewing,
+herdr moves that client, because the workspace it was looking at no longer
+exists.
+
+`bun run lint` and `bun run typecheck` pass. `bun run test` passes in full at
+the pushed state: 2028 pass, 0 skip, 0 fail, 85 files, on Bun 1.4.2, with no
+other `bun test` process on the machine. The screen-reader target remains
+unverified, and the terminal walks recorded earlier in this file have not been
+re-run.

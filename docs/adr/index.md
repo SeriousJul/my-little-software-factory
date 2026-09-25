@@ -69,3 +69,4 @@ body states the context, the decision, and the consequences.
 - [ADR 0058: The grouping axis is factory state and the folds are not](./0058-the-grouping-axis-is-factory-state-and-the-folds-are-not.md)
 - [ADR 0059: A Group presents the attention order and never a new sort](./0059-a-group-presents-the-attention-order-and-never-a-new-sort.md)
 - [ADR 0060: An operator ignores a ticket out of the factory's way](./0060-an-operator-ignores-a-ticket-out-of-the-factorys-way.md)
+- [ADR 0061: The control plane never moves herdr's view on its own](./0061-the-control-plane-never-moves-herdr-s-view-on-its-own.md)

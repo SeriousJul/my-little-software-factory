@@ -36,10 +36,11 @@ interface SectionHeaderProps {
 	/** The held count: shown only when it is above zero (user story 15). */
 	held?: number;
 	/**
-	 * The ignored count (ADR 0060): the rows the List filter hides. Shown only
-	 * when it is above zero, the way the held count is, and it carries no bell and
-	 * no click - the header's click already toggles the section, and the held bell
-	 * carries a fact the ignore cannot hold.
+	 * The ignored count (ADR 0060): the pile, every row the flag stands on. Shown
+	 * only when it is above zero, the way the held count is, and it carries no bell
+	 * and no click - the header's click already toggles the section, and the held
+	 * bell carries a fact the ignore cannot hold. It is the row's last cell: where
+	 * a narrow frame cuts, the held count and its bell stand.
 	 */
 	ignored?: number;
 	/**
@@ -72,8 +73,8 @@ interface SectionHeaderProps {
  *
  * The row carries the section name, the count facts the section reports, and
  * the marker that says the section is expanded. The Tickets section reports
- * steady counts - open, running, awaiting - plus the conditional ignored count
- * the List filter hides (ADR 0060) and the held count with its bell, and the
+ * steady counts - open, running, awaiting - plus the held count with its bell
+ * and the conditional ignored count of the pile (ADR 0060), and the
  * Consultations section reports the Consultation facts with
  * their bell and the new-output fact (user stories 11 through 16). The row
  * truncates at the end rather than wrapping: the Main view's rows are fixed,
@@ -118,14 +119,16 @@ export function SectionHeader({
 					? `awaiting response: ${awaitingResponse}  recovery: ${recovery}`
 					: `awaiting ${awaitingResponse}  recovery ${recovery}`;
 	// The section name leads so a truncation never hides it, the held count
-	// shows only when it is above zero (a steady zero holds no row), the ignored
-	// count shows beside it for the same reason (ADR 0060), and the bells sit by
-	// the facts they ring on.
+	// shows only when it is above zero (a steady zero holds no row), and the
+	// ignored count shows for the same reason (ADR 0060). The two conditional
+	// cells stand in the machine's own order: the held count and the bell that
+	// rings on it come first, so a narrow row spends its last cells on the view
+	// fact and never on a decision the operator owes.
 	const facts =
 		section === "tickets"
-			? `  ${counts}${ignored > 0 ? `  ${wide ? `ignored: ${ignored}` : `ignored ${ignored}`}` : ""}${
-					held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""
-				}${heldBell ? "  !!!" : ""}`
+			? `  ${counts}${held > 0 ? `  ${wide ? `held: ${held}` : `held ${held}`}` : ""}${
+					heldBell ? "  !!!" : ""
+				}${ignored > 0 ? `  ${wide ? `ignored: ${ignored}` : `ignored ${ignored}`}` : ""}`
 			: section === "work"
 				? `  ${counts}`
 				: `  ${counts}${bell ? "  !!!" : ""}${newOutput ? "  new output" : ""}`;

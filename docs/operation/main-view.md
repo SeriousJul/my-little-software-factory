@@ -75,10 +75,13 @@ The mode the bar and the guide state derives from the section that holds the
 cursor and its focused pane.
 
 The Ticket header always shows the pipeline counts - open, running, and
-awaiting - with the held count appended only when it is non-zero, and the
-ignored count appended beside it, also only when it is non-zero (ADR 0060).
-The ignored cell counts the Tickets the flag names, so the header says
-the list is filtered before the operator looks for a row that is not there.
+awaiting - then the held count with its bell marker and then the ignored count,
+each of the last two only when it is non-zero (ADR 0060). The order is the
+machine's: a held turn is a decision the plane waits on and an ignore is a
+judgment it does not, so a row too short for both conditional cells spends its
+last cells on the pile and never on the held count or its bell. The ignored cell
+counts the Tickets the flag names, so the header says the list is filtered before
+the operator looks for a row that is not there.
 All four counts, and the held-count bell, read the machine's active view rather
 than the operator's List filter, so a cycle of `f` moves none of them and rings
 nothing. The
@@ -133,13 +136,85 @@ pile when the cycle ends and the ticket rests. The flag stays set under both, so
 the row wears `ignored` beside its own state badge while its work runs, and the
 `i` line says whether the act took the row or kept it. `f` cycles the list through
 the active rows, the pile the flag names, and both, and the filter opens on the
-active rows at every boot. The detail pane names the ignore, the moment it was
-set, and the key that clears it.
+active rows at every boot. The pile is the ledger of the operator's own acts: it
+holds every row the flag stands on, so a ticket that is ignored *and* covered -
+one whose fixing pull request appeared after the ignore - stands in the pile and
+in no other view, and the same key reaches it there. The detail pane names the
+ignore, the moment it was set, and the key that clears it.
 The ticket list no longer carries a rank: the ticket priority is retired in
 favor of the queue's order (ADR 0050), and the detail pane holds no priority
 row and the list no key that raises, lowers, or clears a rank. `+` and `-`
 are the Work queue's keys for the item under the cursor (ADR 0049), and the
 Ticket section names them nowhere.
+
+### Groups and the Grouping axis
+
+`Tab` splits the Ticket section's list into **Groups**: runs of ticket rows that
+share one value of one **Grouping axis** - `none`, `repository`, `source`,
+`task`, `state`, or `position` - each run under a **Group header** the operator
+can collapse (issue #159). One press steps to the next axis in that fixed order,
+so `none`, the flat list, is always one press away, and the control answers from
+the Ticket list and the Ticket detail alike. The Action bar hint names the axis
+in effect, the Message line states it on every change, and the Key guide carries
+both the axis control and the fold.
+
+A **Group is a presentation of the list order and never a new sort** (ADR 0059).
+The Groups stand by the best Attention band among the tickets they hold, then by
+the newest external update in the Group, then by the Group value; the order
+inside a Group is the order the flat list holds, band rules and all. A group key
+is a fact of the ticket, never a face the row wears: a Queue wait's `queued`
+badge groups under `open`, a Starting window's spinner under `handed-off`, and a
+held turn under `awaiting`, because the badge is a presentation. The Task axis
+reads the row's own badge rule, so `parked` and `unknown` are Groups of their
+own; the Position axis reads the Workflow state the machine matched on this read
+- derived from the source facts on every read and never stored - and files a
+ticket no state matches under `unmatched`.
+
+The header carries its ticket count and, above zero, its held count, with no
+axis prefix, and the fold rides on the glyph beside it, never on a color. The
+line follows the list pane's rule for its ticket rows: a field is dropped, never
+wrapped. Where the pane is too narrow for everything, the Group's value gives up
+its tail and then its last cell, and the ticket count gives up before the held
+count does, because a wrapped header would cost the window a row and split the
+count a fold exists to keep. Member
+rows keep every cell they had in the flat list. `x` is resolved by the facts
+under the cursor: on a Group header it folds that Group and lands the cursor
+there, and anywhere else in the Ticket section - and in any other section - it
+keeps the Section toggle. A collapsed Ticket section draws no header, so there
+its `x` is the Section toggle and the Ticket controls keep working on the ticket
+the detail pane shows. A left click on a header folds the same Group. Every
+Ticket control refuses where the cursor stands on a header, in the catalogue's
+own words for no selection, and the detail pane keeps the last ticket it showed.
+
+**A fold hides rows and never facts** (ADR 0059). The Section header's counts,
+the mode line, the Parallel limit, the Pickup, the Top-up, the handoff gates,
+and every Decision route read the same facts with a Group open or shut, and the
+Work queue's order stays the order of work. The plane never opens a Group by
+itself: a ticket that moves into a folded Group, or a held turn that arrives
+behind a fold, changes no fold. There is no collapse-all and no expand-all - the
+axis cycle to `none` is the one escape hatch - and a Group with no tickets never
+appears, so a repository or a feed that has gone leaves no ghost header.
+
+Each header costs one window row, so a short terminal's list window can hold
+nothing but headers; it still reads, because each header carries its counts, and
+one press returns the flat list.
+
+The Action bar hint names the axis wherever the list is split; the flat list
+states no axis, because it hides no split to name, and the control's row in the
+Key guide is there whatever the axis in effect. The Message line is a notice, so
+the axis a press chose yields its place on the line to a fact an operation wrote
+- which is why the split also stands in the headers themselves and in the hint.
+
+The axis is **factory state on the state file**, stored per section the way the
+Auto-handoff mode (ADR 0036) and the queue pause (ADR 0052) are (ADR 0058): a
+restart and a dev reload find the split where the operator left it, and a fresh
+file starts at `none`. A state file that will not take the write is reported on
+the Message line, and the view the operator asked for still stands for the run.
+**Collapsed Groups are session facts**: they live in memory for the run, keyed by
+the axis and the Group value, so an axis visited twice comes back as it was left
+and a restart never brings back a fold that hides a decision the operator owes.
+A plane with no state file keeps the axis in memory too, and grouping degrades
+to session-only instead of refusing the key.
 
 When the Message line is truncated, press `m` in a base pane or `F2` in any
 mode to read the captured message in the Message view. The Message line and
@@ -186,9 +261,10 @@ minimum of three content rows, so the list the operator works in gets the
 room. The floor this sets is 27 rows (ADR 0049): the shortest terminal the
 control plane draws its three sections at. The
 Ticket header always shows the pipeline counts - open, running, and awaiting,
-in the labelled form on a terminal of at least 60 columns and the short form
-below - appends the ignored count and the held count with its bell marker only
-when each is non-zero (ADR 0060), and truncates at the row's end so a narrow
+in the labelled form on a terminal 60 columns and wider and the bare form
+below - appends the held count with its bell marker and then the ignored count
+only when each is non-zero, the held cell first so a short row cuts the view
+fact and not the machine's (ADR 0060), and truncates at the row's end so a narrow
 terminal never hides the section's own name. The Consultation header carries that section's attention facts, its
 awaiting-response and recovery counts, the bell marker while the bell rings,
 and "new output" while that fact holds, so a Consultation that needs

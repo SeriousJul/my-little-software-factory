@@ -15,7 +15,7 @@
 import { createElement, useTerminalDimensions } from "@opentui/react";
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
-import type { Ticket } from "../../domain/ticket.ts";
+import type { Completion, Ticket } from "../../domain/ticket.ts";
 import type { Consultation, WorkQueueItem } from "../../state.ts";
 import { currentThemeResolution } from "../../theme-source.ts";
 import type { TurnLogEntry } from "../../turn-log.ts";
@@ -24,8 +24,8 @@ import { ActionPanel } from "../action-panel.ts";
 import { consultationClosePanel } from "../consultation-close-panel.ts";
 import { ConsultationDetail, consultationDetailLines } from "../consultation-detail.ts";
 import { consultationRecoveryPanel } from "../consultation-recovery-panel.ts";
-import { useControlDispatch } from "../control-dispatch.ts";
-import { type ControlContext, contextFor } from "../controls.ts";
+import { refusalText, useControlDispatch } from "../control-dispatch.ts";
+import { availabilityFor, type ControlContext, contextFor, controlById } from "../controls.ts";
 import { EMPTY_TURN_LOG_NOTE, turnLogBody } from "../decision-modal.ts";
 import { type MessageFact, messageRowElement } from "../messages.ts";
 import {
@@ -41,12 +41,14 @@ import { SectionHeader } from "../section-header.ts";
 import { truncateToWidth } from "../text.ts";
 import { paint } from "../theme.ts";
 import { ticketCloseDialog } from "../ticket-close.ts";
+import { TicketList } from "../ticket-list.ts";
 import { KeyGuide } from "../utility.ts";
 import { workQueueDetailLines } from "../work-queue-detail.ts";
 import { WorkQueueList, type WorkQueueRow } from "../work-queue-list.ts";
 import { ActionItem, ChoiceRow } from "./choices.ts";
 import { DraftField, type FieldFacts, type FieldHandle, TextField } from "./fields.ts";
 import { copySelectionWith } from "./form.ts";
+import { ticketRows } from "./grouping.ts";
 import {
 	controlInk,
 	inkForTheme,
@@ -450,6 +452,55 @@ function decisionModalRegions(
 	);
 }
 
+/**
+ * One Ticket for the grouped-list example: a repository, a state, and a
+ * suggested task, with no source membership and no Handoff.
+ */
+function groupTicket(
+	number: number,
+	repository: string,
+	title: string,
+	state: "open" | "running" | "awaiting",
+	taskType: string,
+): Ticket {
+	const base = sampleTicket(state);
+	return {
+		...base,
+		identity: `github:github.com:I_${number}`,
+		title,
+		repository,
+		repositoryRef: {
+			identity: `github.com/${repository}`,
+			displayName: repository,
+			cloneUrl: "",
+		},
+		handoff: state === "open" ? null : base.handoff,
+		suggestedTaskType: taskType,
+		matchedStateName: null,
+		lastCompletion: null,
+	};
+}
+
+/** A settled turn that holds its decision, so a Group header counts it. */
+function heldCompletion(): Completion {
+	const at = "2026-02-17T10:00:00.000Z";
+	return {
+		taskType: "implement",
+		transition: null,
+		agentType: "pi",
+		agentName: "hold-the-failed-turn",
+		model: "",
+		thinking: "",
+		contextWindow: "",
+		completedAt: at,
+		message: "The turn failed.",
+		turnLog: [{ kind: "text", text: "The turn failed." }],
+		cause: "failed",
+		detail: "",
+		decision: null,
+	};
+}
+
 /** The Ticket the Ticket-Goto and Ticket-Close examples render under. */
 function sampleTicket(
 	state: "running" | "awaiting" | "open",
@@ -514,6 +565,7 @@ function sampleTicket(
 		externalUpdatedAt: now,
 		memberships: [],
 		suggestedTaskType: "implement",
+		matchedStateName: null,
 		actionable: true,
 		handoffRecoveryRequired: false,
 		ignored,
@@ -544,12 +596,15 @@ function ticketGotoContext(paneAlive: boolean): ControlContext {
  * example shows the bar's flip beside the refusals the same key states.
  */
 function ticketIgnoreContext(
-	state: "open" | "awaiting" | "running",
+	state: "open" | "awaiting" | "held" | "running",
 	ignored: boolean,
 	marker: "missing" | null = null,
 ): ControlContext {
+	const ticket = sampleTicket(state === "held" ? "awaiting" : state, "worktree", ignored);
 	return contextFor(ignored ? "ticket-detail" : "ticket-list", {
-		selectedTicket: sampleTicket(state, "worktree", ignored),
+		// The held row is the awaiting one with its failed turn still undecided:
+		// the fact `obligationOf` reads for the `held` clause of the refusal.
+		selectedTicket: state === "held" ? { ...ticket, lastCompletion: heldCompletion() } : ticket,
 		selectedTicketMarker: marker,
 		listCanMove: true,
 		detailCanScroll: true,
@@ -559,6 +614,14 @@ function ticketIgnoreContext(
 		messageTruncated: false,
 		consultationTypesConfigured: true,
 	});
+}
+
+/** The refusal the ignore states for one row's facts, in the catalogue's own
+ * words: the example reads the availability the frame reads, so the sentence
+ * on the line and the sentence the control answers with are one sentence. */
+function ticketIgnoreRefusal(context: ControlContext): string {
+	const control = controlById("ticket-ignore");
+	return refusalText(control, availabilityFor(control, context));
 }
 
 /** The context the List-filter example runs on (ADR 0060): the filter's own
@@ -888,87 +951,86 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 	{
 		// The Ticket section's `i` (ADR 0060): the bar's label flips between the
 		// Ignore an active row offers and the Un-ignore a piled row offers, and the
-		// three obligations the key refuses state their reasons on the Message line.
+		// three obligations the key refuses each stand on their own bar and their
+		// own line. Every refusal's words come from the catalogue itself, through
+		// `availabilityFor`, so the example cannot drift from the sentence the frame
+		// writes - which is what the gallery holds a reviewer to see.
 		id: "ticket-ignore",
 		state: "Ticket ignore: the flip, and the three obligations the key refuses",
-		render: (columns, _holds, _inputActive, _wiring) => [
-			// The bar beside an active row: the key puts the Ticket away.
-			createElement(ActionBar, {
-				key: "ignore-bar",
-				mode: "ticket-list",
-				context: ticketIgnoreContext("open", false),
-				width: columns.contentWidth,
-			}),
-			// The bar beside a piled row: the same key takes it back.
-			createElement(ActionBar, {
-				key: "unignore-bar",
-				mode: "ticket-detail",
-				context: ticketIgnoreContext("open", true),
-				width: columns.contentWidth,
-			}),
-			// A piled row's own face: the marker rides the trailing lane beside the
-			// state badge, in the written word the no-color frame keeps.
-			createElement(SectionHeader, {
-				key: "tickets-header",
-				section: "tickets",
-				active: true,
-				terminalWidth: columns.contentWidth,
-				width: columns.contentWidth,
-				expanded: true,
-				open: 0,
-				running: 0,
-				awaiting: 0,
-				ignored: 1,
-				onToggle: () => undefined,
-			}),
-			// The three refusals, in the one sentence the key and the write share.
-			messageRowElement(
-				{
-					severity: "warning",
-					text: "the selected Ticket cannot be ignored: it awaits a decision",
-				},
-				columns.contentWidth,
-			),
-			messageRowElement(
-				{
-					severity: "warning",
-					text: "the selected Ticket cannot be ignored: its held turn awaits a decision",
-				},
-				columns.contentWidth,
-			),
-			// The awaiting and held rows, on the bars that refuse them: the key is
-			// there, dimmed, and the reason is one press away.
-			createElement(ActionBar, {
-				key: "awaiting-refused",
-				mode: "ticket-list",
-				context: ticketIgnoreContext("awaiting", false),
-				width: columns.contentWidth,
-			}),
-			// The missing Agent's refusal reads the marker the row's own badge
-			// wears, and the refused key leaves no hint on the bar.
-			messageRowElement(
-				{
-					severity: "warning",
-					text: "the selected Ticket cannot be ignored: its Agent is missing",
-				},
-				columns.contentWidth,
-			),
-			messageRowElement(
-				{
-					severity: "warning",
-					text: "the selected Ticket cannot be ignored: its Agent is missing",
-				},
-				columns.contentWidth,
-			),
-			createElement(
-				"text",
-				{ key: "ticket-ignore-note", fg: paint("subtext0") },
-				truncateToWidth(
-					"the flag is factory state on the state file, and the plane writes nothing to the source",
+		render: (columns, _holds, _inputActive, _wiring) => {
+			// The three rows the key refuses, on the facts each obligation reads: the
+			// awaiting state, the held turn beside its undecided decision, and the
+			// last poll's missing-Agent marker - the same marker the row's badge wears.
+			const awaiting = ticketIgnoreContext("awaiting", false);
+			const held = ticketIgnoreContext("held", false);
+			const missing = ticketIgnoreContext("running", false, "missing");
+			const refusedBar = (key: string, context: ControlContext) =>
+				createElement(ActionBar, {
+					key,
+					mode: context.mode,
+					context,
+					width: columns.contentWidth,
+				});
+			return [
+				// The bar beside an active row: the key puts the Ticket away.
+				createElement(ActionBar, {
+					key: "ignore-bar",
+					mode: "ticket-list",
+					context: ticketIgnoreContext("open", false),
+					width: columns.contentWidth,
+				}),
+				// The bar beside a piled row: the same key takes it back.
+				createElement(ActionBar, {
+					key: "unignore-bar",
+					mode: "ticket-detail",
+					context: ticketIgnoreContext("open", true),
+					width: columns.contentWidth,
+				}),
+				// A piled row's own face: the marker rides the trailing lane beside the
+				// state badge, in the written word the no-color frame keeps.
+				createElement(SectionHeader, {
+					key: "tickets-header",
+					section: "tickets",
+					active: true,
+					terminalWidth: columns.contentWidth,
+					width: columns.contentWidth,
+					expanded: true,
+					open: 0,
+					running: 0,
+					awaiting: 0,
+					ignored: 1,
+					onToggle: () => undefined,
+				}),
+				// The awaiting row: the key is there, dimmed, and the reason is one
+				// press away on the line the operator already watches.
+				refusedBar("awaiting-refused", awaiting),
+				messageRowElement(
+					{ severity: "warning", text: ticketIgnoreRefusal(awaiting) },
 					columns.contentWidth,
 				),
-			),
-		],
+				// The held row: the same sentence, in the held turn's own clause.
+				refusedBar("held-refused", held),
+				messageRowElement(
+					{ severity: "warning", text: ticketIgnoreRefusal(held) },
+					columns.contentWidth,
+				),
+				// The missing Agent's refusal reads the marker the row's own badge
+				// wears, and the refused key leaves no hint on the bar.
+				refusedBar("missing-refused", missing),
+				messageRowElement(
+					{ severity: "warning", text: ticketIgnoreRefusal(missing) },
+					columns.contentWidth,
+				),
+				createElement(
+					"text",
+					{ key: "ticket-ignore-note", fg: paint("subtext0") },
+					truncateToWidth(
+						"the flag is factory state on the state file, and the plane writes nothing to the source",
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 	{
 		// The Ticket section's `f` (ADR 0060): the hint names the view the cycle
@@ -1419,6 +1481,119 @@ export const GALLERY_EXAMPLES: readonly GalleryExample[] = [
 				onWheel: () => undefined,
 			}),
 		],
+	},
+	{
+		// The grouped Ticket list (issue #159): the rows the Grouping axis
+		// splits, the Group header above each run, a collapsed Group that keeps
+		// its count and its held count at the fold, and the cursor at rest on a
+		// header, where the bar names the fold and no Ticket is selected.
+		id: "ticket-groups",
+		state: "grouped list, collapsed Group with a held count, and the cursor on a header",
+		rows: 26,
+		render: (columns) => {
+			const listed = [
+				groupTicket(1, "acme/billing", "Webhook retry policy", "open", "implement"),
+				{
+					...groupTicket(2, "acme/billing", "Hold the failed turn", "awaiting", "implement"),
+					lastCompletion: heldCompletion(),
+				},
+				groupTicket(3, "acme/factory", "Split the gallery view", "open", "review"),
+				groupTicket(4, "acme/factory", "Park the legacy importer", "running", "fix"),
+			];
+			const bar = (key: string, header: boolean) =>
+				createElement(ActionBar, {
+					key,
+					mode: "ticket-list",
+					context: contextFor("ticket-list", {
+						listCanMove: true,
+						detailCanScroll: false,
+						selectedTicket: header ? undefined : listed[0],
+						groupingAxis: "repository",
+						groupHeaderSelected: header,
+						selectedGroupHeader: header
+							? { value: "acme/billing", count: 2, held: 1, collapsed: false }
+							: null,
+						sourceCount: 0,
+						refreshingSourceCount: 0,
+						handoffActive: false,
+						messageTruncated: false,
+						consultationTypesConfigured: true,
+					}),
+					width: columns.contentWidth,
+				});
+			const folded = new Set<string>(["acme/billing"]);
+			return [
+				createElement(TicketList, {
+					key: "grouped",
+					rows: ticketRows(listed, "repository", {}),
+					selectedIndex: 1,
+					focused: true,
+					height: 9,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(TicketList, {
+					key: "folded",
+					rows: ticketRows(listed, "repository", { repository: folded }),
+					selectedIndex: 0,
+					focused: true,
+					height: 5,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				createElement(TicketList, {
+					key: "on-header",
+					rows: ticketRows(listed, "task", {}),
+					selectedIndex: 0,
+					focused: true,
+					height: 6,
+					markerOf: () => null,
+					limitReached: () => false,
+					starting: () => false,
+					queueWait: () => false,
+					active: true,
+					onFocus: () => undefined,
+					onSelect: () => undefined,
+					onMove: () => undefined,
+				}),
+				bar("bar-row", false),
+				bar("bar-header", true),
+				// The two Message lines the axis control leaves in turn: the
+				// split the press chose, and the way back to the flat list.
+				messageRowElement(
+					{ severity: "info", text: "Ticket list grouped by repository" },
+					columns.contentWidth,
+				),
+				messageRowElement(
+					{ severity: "info", text: "Ticket list grouping off: the flat list" },
+					columns.contentWidth,
+				),
+				createElement(
+					"text",
+					{
+						key: "groups-note",
+						style: { width: "100%", height: 1 },
+						fg: controlInk().detail.fg ?? undefined,
+					},
+					truncateToWidth(
+						"Tab cycles the grouping axis; x on a Group header folds that Group, and x anywhere else folds the Section",
+						columns.contentWidth,
+					),
+				),
+			];
+		},
 	},
 	{
 		// The Work queue's list (ADR 0034): the rows in the shared order with

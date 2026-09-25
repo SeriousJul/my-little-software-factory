@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-24
+Revised 2026-09-25: the first version of this decision lifted an ignore by itself, in a pass of the observation cycle beside the settle and the missing facts, and cleared the flag when it did. That lift is withdrawn here. The flag now stands until the operator's own key clears it, and the list rule reveals a row instead of unwriting a flag; see **The ignore ends where an obligation begins** and **The reveal is the section's own key** below, and the lift's entry in **Considered options**. Every other decision in this record stands as accepted.
 
 ## Context
 
@@ -135,6 +136,17 @@ are.
 
 ## Considered options
 
+- **The lift: the plane clears the flag itself when an obligation appears.** The
+  first version of this decision held it, in a pass that ran after the settle and
+  the missing facts wrote theirs, so the row that came back was a flag the plane
+  had unwritten and the cause could be named. It was measured away. A cleared
+  flag no longer gates the restart walk, so in auto mode an ignored Ticket whose
+  Agent went missing still took an automatic Restart one poll later, and the
+  operator could not put the work away again, because `i` refuses a missing Agent:
+  the one surface the obligation exists to keep was gone by the time it stood.
+  The reveal in this decision costs no write, gates as long as the operator let it
+  stand, and needs no ordering against the Top-up, because there is no pass to
+  place.
 - **A label write plus a Workflow parking state.** Rejected: the ignore is one
   operator's judgment on one machine, not a statement to the team; the plane's
   write surface stays the settle-time fire and the recorded-skip re-fire
@@ -165,7 +177,9 @@ are.
 ## Consequences
 
 - The state file gains the flag and the moment it was set, and the migration
-  follows the file's own rule: ask the file, not the stamp.
+  follows the file's own rule: ask the file, not the stamp. The step is version
+  22, the two columns on the ticket row: ADR 0058's Grouping axis took version 21
+  while this work was open, so the ignore lands behind it.
 - The Ticket header's `open` count stops counting ignored tickets, so the counts
   no longer match the source's own list, on purpose. The `ignored n` cell is the
   only bridge, and it is a count, not a filter control. The count, the four
@@ -211,3 +225,11 @@ are.
   lists own rather than the Consultation section alone.
 - `CONTEXT.md` names the **Ignored ticket** and the **List filter**, and the
   List filter entry keeps itself apart from the Grouping axis and the fold.
+- The pile is the ledger of the operator's own acts, so the `ignored` view reads
+  the flag over the projection that stands before the list rule, while the drawn
+  rows and the active view both keep ADR 0042's covered rule. A Ticket that is
+  ignored *and* covered therefore stands in the pile and in no other view: the
+  covered rule takes it from the list, and the flag keeps it in the ledger. It is
+  the one state where the two causes do not agree on one row, and it is settled
+  for the operator's sake - a row the `ignored` view hides is a row the `i` key
+  cannot reach, and only that key clears a flag.

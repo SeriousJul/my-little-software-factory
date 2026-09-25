@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-22
+Superseded in part by ADR 0061: the `workspace focus` the plane sent after this close no longer runs, and it is retired there. The close, its reach, its timing at the ask, and everything it keeps on disk stand. Where this page says the close takes the herdr view of the environment, or ends the view of the environment, it names that environment's own record inside herdr, the workspace or tab herdr holds for it, and never the operator's herdr view: after ADR 0061 the plane moves no view on a close.
 
 ## Context
 

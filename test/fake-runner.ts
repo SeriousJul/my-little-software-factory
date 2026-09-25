@@ -24,6 +24,27 @@ export interface RecordedCommand {
 	args: readonly string[];
 }
 
+/**
+ * The herdr commands that move the operator's view: a focus request on a
+ * workspace, a tab, a pane, or an Agent.
+ *
+ * The negative assertion of ADR 0061 reads this instead of a substring
+ * match, because `--no-focus` rides on every create the plane sends and a
+ * plain `"focus"` test would read those as a move.
+ *
+ * A create that asks for focus is a view move too by the ADR's own fact list,
+ * and this helper cannot see it: it reads the four focus commands, not a
+ * flag. `test/herdr-view-architecture.test.ts` owns that half from both
+ * sides, refusing a herdr create whose argv does not state `--no-focus` and
+ * refusing the `--focus` token wherever a source carries it, so no create the
+ * plane builds can ask herdr for the view.
+ */
+export function herdrFocusCommands(commands: readonly string[]): string[] {
+	return commands.filter((command) =>
+		/^herdr (?:workspace|tab|pane|agent) focus(?:\s|$)/u.test(command),
+	);
+}
+
 export class FakeRunner implements CommandRunner {
 	readonly calls: RecordedCommand[] = [];
 	/** The agent kinds this runner was asked for a Model list, in call order. */
