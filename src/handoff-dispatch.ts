@@ -837,9 +837,10 @@ class HandoffDispatchModule implements HandoffDispatch {
 		const ticket = this.state
 			// The ignore is an automatic gate and never a hard start gate (ADR 0060):
 			// the only item an ignored Ticket can hold is one the operator asked for by
-			// hand, so the Pickup starts it. The read takes every row the list rule
-			// leaves, because the operator's filter says nothing about any Ticket.
-			.visibleTickets(this.config().workflowStates, this.config().defaultTaskType, "all")
+			// hand, so the Pickup starts it. This read resolves a Ticket by identity, so
+			// it takes the whole projection: the operator's List filter and ADR 0042's
+			// covered rule say nothing about which Ticket the queue asked for.
+			.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 			.find((candidate) => candidate.identity === item.ticketIdentity);
 		if (ticket === undefined) {
 			// The claim's hard checks passed but the projection holds no ticket
@@ -1472,13 +1473,13 @@ class HandoffDispatchModule implements HandoffDispatch {
 				}
 				continue;
 			}
-			// The fresh projection when the ticket is visible, else the claim's
-			// snapshot: the handoff runs on the ticket it claimed. The read takes
-			// every row the list rule leaves (ADR 0060): a start the operator asked
-			// for by hand runs on an ignored Ticket too.
+			// The fresh projection when the ticket is still in it, else the claim's
+			// snapshot: the handoff runs on the ticket it claimed. This is an identity
+			// read, so it takes the whole projection - the operator's List filter and
+			// the list rule's two causes say nothing about which Ticket the claim made.
 			const snapshot =
 				this.state
-					.visibleTickets(this.config().workflowStates, this.config().defaultTaskType, "all")
+					.projectedTickets(this.config().workflowStates, this.config().defaultTaskType)
 					.find((candidate) => candidate.identity === next.ticket.identity) ?? next.ticket;
 			this.runClaimedHandoff({ ...next, ticket: snapshot }, next.onStarted);
 		}

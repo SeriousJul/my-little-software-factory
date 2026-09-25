@@ -61,7 +61,7 @@
  */
 
 import type { FactoryConfig, TransitionOutcome } from "./config.ts";
-import { type Completion, isHeldCompletion, type Ticket } from "./domain/ticket.ts";
+import { type Completion, isHeldCompletion, type Ticket, ticketIgnored } from "./domain/ticket.ts";
 import { baseChoice, resolveHandoffChoice } from "./handoff.ts";
 import type { DispatchResult, HandoffIntent } from "./handoff-dispatch.ts";
 import { type HerdrAgent, ownAgentInPane } from "./herdr.ts";
@@ -1209,19 +1209,25 @@ export class ObservationCoordinator {
 		// The pile, in one read for the walk that holds an identity and no row
 		// (ADR 0060): the in-flight tickets the Restart walk reads carry no flag of
 		// their own, so one read answers the whole cycle in place of one query per
-		// candidate. Every other walk asks the row it already holds.
+		// candidate. Every other walk asks `ticketIgnored` of the row it holds.
 		const ignored = this.state.ignoredTickets();
+		// The list, in one read. The continuation and re-fired-skip walks take the
+		// active view: the rows the whole list rule leaves. The open-ticket add takes
+		// the `all` view instead - every row the covered rule leaves, the ignore aside
+		// - and gates the flag on its own, so the gate is the walk's own test and not
+		// an accident of which view it happens to read.
+		const list = this.state.ticketListViews(config.workflowStates, config.defaultTaskType, "all");
+		const tickets = list.active;
 		// 1. Continuation: the awaiting tickets whose latest settled turn
 		// fired a transition that auto-advances into a position the machine
 		// still offers a task for, in the ticket list's order.
-		const tickets = this.state.visibleTickets(config.workflowStates, config.defaultTaskType);
 		for (const ticket of tickets) {
 			if (ticket.state !== "awaiting") continue;
 			// The ignore gate (ADR 0060): an ignored Ticket is no automatic start.
 			// The row is here in the active view the whole time its Agent works or
 			// its decision stays owed, so this test - not the filter - is what holds
-			// the machine out, and it reads the flag the projection already carries.
-			if (ticket.ignored) continue;
+			// the machine out, and it is the one gate predicate on the row's flag.
+			if (ticketIgnored(ticket)) continue;
 			const position = this.continuationPosition(ticket);
 			if (position === null) continue;
 			const completion = this.state.lastCompletion(ticket.identity);
@@ -1290,9 +1296,9 @@ export class ObservationCoordinator {
 			// The ignore gate (ADR 0060): this walk reads the projection before the
 			// list rule on purpose, because ADR 0042's route must reach its position
 			// even when the row is withheld, and a resting ignored position is
-			// withheld while a live one is listed. Either way the flag on the row the
-			// walk holds is what answers.
-			if (position.ignored) continue;
+			// withheld while a live one is listed. Either way the one gate predicate on
+			// the row the walk holds is what answers.
+			if (ticketIgnored(position)) continue;
 			if (position.suggestedTaskType !== outcome.positionTaskType) continue;
 			// One test of the position's standing. The projection builds
 			// `actionable` from the open state, so it holds every position that
@@ -1402,12 +1408,13 @@ export class ObservationCoordinator {
 		// the handoff limit, re-verified since its last cycle ended, offering a
 		// task, and past the Same-type hold. A full parallel seat is no longer
 		// a hold here: the item rests in the queue until a seat frees.
-		for (const ticket of tickets) {
+		for (const ticket of list.rows) {
 			if (ticket.state !== "open" || !ticket.actionable) continue;
-			// The ignore gate (ADR 0060): the list rule withholds a resting ignored
-			// row from the active view this walk reads, and the flag on the row the
-			// walk holds is the same rule stated once.
-			if (ticket.ignored) continue;
+			// The ignore gate (ADR 0060), on this walk's own read: the `all` view holds
+			// every row the covered rule leaves, so a resting ignored row stands here
+			// and this test is the one that holds it out. The gate is the flag on the
+			// row, never the filter that drew it.
+			if (ticketIgnored(ticket)) continue;
 			if (ticket.handoffCount >= config.maxHandoffsPerTicket) continue;
 			// The ticket's last cycle may have ended on a source change the agent
 			// made (a merged pull request, a closed issue). Its membership still
@@ -1510,9 +1517,9 @@ export class ObservationCoordinator {
 			.find((candidate) => candidate.identity === outcome.positionTicketIdentity);
 		if (position === undefined) return null;
 		// The ignore gate (ADR 0060): the route starts an Agent on the position,
-		// and the position is read from the projection before the list rule, so
-		// the flag on the row this walk holds is what answers.
-		if (position.ignored) return null;
+		// and the position is read from the projection before the list rule, so the
+		// one gate predicate on the row this walk holds is what answers.
+		if (ticketIgnored(position)) return null;
 		if (position.state !== "open" && position.state !== "awaiting") return null;
 		if (position.suggestedTaskType !== outcome.positionTaskType) return null;
 		// The actionable fact is the open position's: an awaiting position is

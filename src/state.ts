@@ -382,13 +382,20 @@ export interface HandoffTicket {
  */
 export interface TicketListViews {
 	/** The rows the Ticket section draws, in the operator's List filter. */
-	rows: Ticket[];
+	rows: readonly Ticket[];
 	/** The active view: the machine's rows, the header's counts, and the bell. */
-	active: Ticket[];
+	active: readonly Ticket[];
 	/** The rows the flag names: the pile the `ignored` view shows and the header count. */
-	ignored: Ticket[];
-	/** Every projected row, before the list rule: the reads that resolve a Ticket by identity. */
-	all: Ticket[];
+	ignored: readonly Ticket[];
+	/**
+	 * The whole projection, before the list rule: the reads that resolve a Ticket
+	 * by identity, never the rows the operator happens to be shown.
+	 *
+	 * It is not the `all` value of the List filter. That view is the *list*: the
+	 * covered rule still holds its rows out, and only the ignore's withhold is
+	 * lifted. This is the projection the list rule is applied to.
+	 */
+	projection: readonly Ticket[];
 }
 
 /**
@@ -401,8 +408,16 @@ export interface TicketListViews {
  * and a new view of the list rule cannot be forgotten at a call site.
  */
 export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListViews {
+	// Each view is its own array, so an in-place reorder of one can never reach
+	// another: the shell's whole point is that its three views agree, and that
+	// agreement is a fact of the rule, not of an alias.
 	const rows = [...projection];
-	return { rows, active: rows, ignored: [], all: rows };
+	return {
+		rows,
+		active: [...rows],
+		ignored: [],
+		projection: [...rows],
+	};
 }
 
 /**
@@ -418,14 +433,17 @@ export function inMemoryTicketViews(projection: readonly Ticket[]): TicketListVi
  * then the ticket identity (ADR 0050) - the order every view shares and never
  * replaces.
  *
- * The three views answer three different questions, and only the first two
- * apply the covered rule. The drawn rows and the active view are the list, so a
+ * The four views answer four different questions, and only the first two apply
+ * the covered rule. The drawn rows and the active view are the list, so a
  * covered row stands in neither. The pile is the ledger of the operator's own
  * acts: every row the flag stands on, covered or not, live or at rest, because
  * the only way to clear an ignore is to reach the row and press the key, and a
  * Ticket that is both flagged and covered would otherwise stand in no view at
  * all. The header's ignored count names that ledger, so the number and the
- * `ignored` view always hold the same rows.
+ * `ignored` view always hold the same rows. The fourth view is the projection
+ * itself, the read every identity-resolving read takes, and the `all` value of
+ * the List filter is not it: `all` is the list with the ignore's withhold
+ * lifted, so a covered row stays out of it.
  *
  * The state's read and the in-memory shell that holds no SQLite state both
  * come through here, so the rule is one rule and no screen re-applies either
@@ -454,7 +472,7 @@ export function listTicketViews(
 		rows: filter === "active" ? active : filter === "ignored" ? ignored : listed,
 		active,
 		ignored,
-		all: [...projection],
+		projection: [...projection],
 	};
 }
 
@@ -1329,13 +1347,15 @@ export class FactoryState {
 	/**
 	 * Current visible ticket projection, ordered for operator attention.
 	 *
-	 * The one list rule, in one read: see `listTicketViews`.
+	 * The one list rule, in one read: see `listTicketViews`. The rows are a
+	 * read-only view of the list rule's answer: `rows` can be the same array the
+	 * active view holds, so no caller may reorder one in place.
 	 */
 	visibleTickets(
 		states: readonly WorkflowState[],
 		fallbackTaskType: string,
 		filter: TicketListFilter = "active",
-	): Ticket[] {
+	): readonly Ticket[] {
 		return this.ticketListViews(states, fallbackTaskType, filter).rows;
 	}
 
@@ -1778,12 +1798,11 @@ export class FactoryState {
 	/**
 	 * The pile, in one read (ADR 0060): every Ticket identity the flag stands on.
 	 *
-	 * The ignore's own gate, and the one read of it. A walk that holds a projected
-	 * row asks that row - `ticket.ignored` is the same flag - and the Restart walk,
-	 * which reads the in-flight rows that carry no flag of their own, asks this
-	 * once per cycle instead of one query per candidate. The gate takes the flag,
-	 * not the row's face: an ignored Ticket whose row the list reveals for its live
-	 * work is still no automatic start.
+	 * The identity form of `ticketIgnored`, and the gate's one read for a walk
+	 * whose rows carry no flag of their own: the Restart walk walks the in-flight
+	 * tickets, which the projection does not reach, so it asks this once per cycle
+	 * instead of one query per candidate. The header's ignored count and the
+	 * `ignored` view take the same flag off the projection in `listTicketViews`.
 	 */
 	ignoredTickets(): Set<string> {
 		const rows = this.db.prepare("SELECT identity FROM tickets WHERE ignored = 1").all() as Array<{

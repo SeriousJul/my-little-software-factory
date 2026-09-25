@@ -321,7 +321,6 @@ export interface Ticket extends TicketIgnoreFacts {
 export type TicketMarker = "blocked" | "missing";
 
 /**
-/**
  * The Ticket section's List filter (ADR 0060): the operator's view of which
  * rows exist in the list.
  *
@@ -387,6 +386,25 @@ export function ignoreRefusal(obligation: TicketObligation | null): string | nul
 }
 
 /**
+ * Whether the operator has judged this Ticket out of the factory's way (ADR 0060).
+ *
+ * The one gate on automatic work, named: `ignored means no automatic start, no
+ * exception`, and every Top-up walk that holds a projected row asks this
+ * predicate instead of re-stating the rule at its own site. It takes the flag
+ * and never the row's face - an ignored Ticket whose row the list reveals for
+ * its live work is still no automatic start - and it is a gate on the
+ * machine's own starts only: the Pickup, the asked-for start, and the
+ * force-dispatch run past it.
+ *
+ * The Restart walk reads the in-flight rows, which carry no flag of their own,
+ * so it asks `FactoryState.ignoredTickets` once per cycle: the same column on
+ * the same row, read by identity instead of by row.
+ */
+export function ticketIgnored(ticket: TicketIgnoreFacts): boolean {
+	return ticket.ignored;
+}
+
+/**
  * Whether the ignore takes this Ticket's row out of the list (ADR 0060).
  *
  * The ignore hides a resting Ticket and never a live one: a Ticket with an
@@ -403,8 +421,8 @@ export function ignoreRefusal(obligation: TicketObligation | null): string | nul
  * the rule hides no obligation at all: an ignored Held turn never stalls the
  * factory behind an empty list.
  */
-export function ignoreWithholdsRow(ticket: { ignored: boolean; state: TicketState }): boolean {
-	return ticket.ignored && ticket.state === "open";
+export function ignoreWithholdsRow(ticket: TicketIgnoreFacts & { state: TicketState }): boolean {
+	return ticketIgnored(ticket) && ticket.state === "open";
 }
 
 /**
